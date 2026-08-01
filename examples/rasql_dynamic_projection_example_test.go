@@ -8,7 +8,6 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -36,6 +35,11 @@ func Example_rasql_dynamic_projection() {
 		ID     int `rasql:"id"`
 		UserID int `rasql:"user_id"`
 		Total  int `rasql:"total"`
+	}
+	// A local result type makes the custom projection as easy to read as a table row.
+	type orderSummary struct {
+		UserID int64
+		Email  string
 	}
 	orders := rasql.MustTable[orderRow](schema.Table{
 		Name: "orders",
@@ -92,33 +96,23 @@ func Example_rasql_dynamic_projection() {
 		}
 	}
 
-	// Use the raw builder when a join or projection has no single row type.
-	rows, err := client.SelectFrom(users.Ref()).
+	// DecodeFrom maps the selected names into orderSummary's exported fields.
+	rows, err := rasql.DecodeFrom[orderSummary](client, users.Ref()).
 		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
-		Project(query.Project(userID), query.Project(email)).
+		Project(query.Project(userID).As("user_id"), query.Project(email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
 		Query(ctx)
 	if err != nil {
-		fmt.Printf("failed to query order totals: %s\n", err)
+		fmt.Printf("failed to build order totals query: %s\n", err)
 		return
 	}
-	for result, err := range rows {
+	for summary, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query order totals: %s\n", err)
 			return
 		}
-		userIDValue, err := row.Get[int64](result, "id")
-		if err != nil {
-			fmt.Printf("failed to read user ID: %s\n", err)
-			return
-		}
-		emailValue, err := row.Get[string](result, "email")
-		if err != nil {
-			fmt.Printf("failed to read email: %s\n", err)
-			return
-		}
-		fmt.Println(userIDValue, emailValue)
+		fmt.Println(summary.UserID, summary.Email)
 	}
 
 	// Output:

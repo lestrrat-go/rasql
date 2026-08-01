@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"unicode"
 )
 
 // Get decodes the named value in r as T.
@@ -20,7 +21,7 @@ func Get[T any](r Row, name string) (T, error) {
 	return result, nil
 }
 
-// Decode populates T from fields tagged with their source column name.
+// Decode populates T from rasql-tagged fields or snake-cased exported field names.
 func Decode[T any](r Row) (T, error) {
 	var result T
 	destination := reflect.ValueOf(&result).Elem()
@@ -32,16 +33,23 @@ func Decode[T any](r Row) (T, error) {
 	typeOfResult := destination.Type()
 	for index := range destination.NumField() {
 		field := typeOfResult.Field(index)
-		columnName, ok := field.Tag.Lookup("rasql")
-		if !ok || columnName == "-" {
+		columnName, tagged := field.Tag.Lookup("rasql")
+		if columnName == "-" {
 			continue
 		}
-		columnName, _, _ = strings.Cut(columnName, ",")
-		if columnName == "" {
-			return result, fmt.Errorf("row: field %s has an empty rasql column name", field.Name)
-		}
 		if field.PkgPath != "" {
-			return result, fmt.Errorf("row: field %s for column %q is not exported", field.Name, columnName)
+			if tagged {
+				return result, fmt.Errorf("row: field %s for column %q is not exported", field.Name, columnName)
+			}
+			continue
+		}
+		if tagged {
+			columnName, _, _ = strings.Cut(columnName, ",")
+			if columnName == "" {
+				return result, fmt.Errorf("row: field %s has an empty rasql column name", field.Name)
+			}
+		} else {
+			columnName = snakeCase(field.Name)
 		}
 		fields++
 		value, ok := r.values[columnName]
@@ -53,9 +61,24 @@ func Decode[T any](r Row) (T, error) {
 		}
 	}
 	if fields == 0 {
-		return result, fmt.Errorf("row: decode destination %T has no rasql fields", result)
+		return result, fmt.Errorf("row: decode destination %T has no exported fields", result)
 	}
 	return result, nil
+}
+
+func snakeCase(value string) string {
+	runes := []rune(value)
+	var result strings.Builder
+	result.Grow(len(value))
+	for index, current := range runes {
+		if index > 0 && unicode.IsUpper(current) &&
+			(unicode.IsLower(runes[index-1]) || unicode.IsDigit(runes[index-1]) ||
+				(unicode.IsUpper(runes[index-1]) && index+1 < len(runes) && unicode.IsLower(runes[index+1]))) {
+			result.WriteByte('_')
+		}
+		result.WriteRune(unicode.ToLower(current))
+	}
+	return result.String()
 }
 
 func assign(destination reflect.Value, value any) error {

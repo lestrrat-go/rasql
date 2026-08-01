@@ -22,9 +22,27 @@ func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
 	return TypedSelectBuilder[T]{builder: client.SelectFrom(reference).Select(columns...)}
 }
 
+// DecodeFrom starts a typed fluent SELECT builder for a custom result shape.
+// Projected column names map to T's rasql tags or snake-cased exported field names.
+func DecodeFrom[T any](client Client, table query.TableRef) TypedSelectBuilder[T] {
+	return TypedSelectBuilder[T]{builder: client.SelectFrom(table)}
+}
+
 // TypedSelectBuilder builds a SELECT that decodes rows as T.
 type TypedSelectBuilder[T any] struct {
 	builder SelectBuilder
+}
+
+// Project adds projections created through the basic query API.
+func (b TypedSelectBuilder[T]) Project(projections ...query.Projection) TypedSelectBuilder[T] {
+	b.builder = b.builder.Project(projections...)
+	return b
+}
+
+// Join adds joins created through the basic query API.
+func (b TypedSelectBuilder[T]) Join(joins ...query.Join) TypedSelectBuilder[T] {
+	b.builder = b.builder.Join(joins...)
+	return b
 }
 
 // Where sets the predicate using an expression created through the basic query API.

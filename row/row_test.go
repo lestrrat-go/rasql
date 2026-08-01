@@ -88,15 +88,22 @@ func TestGetAndDecodePopulateTypedValues(t *testing.T) {
 	require.Equal(t, int64(42), id)
 
 	type user struct {
-		ID       int64   `rasql:"id"`
-		Email    string  `rasql:"email"`
-		Nickname *string `rasql:"nickname"`
+		ID       int64
+		Email    string
+		Nickname *string
 	}
 	decoded, err := row.Decode[user](result)
 	require.NoError(t, err)
 	require.Equal(t, int64(42), decoded.ID)
 	require.Equal(t, "ada@example.com", decoded.Email)
 	require.Nil(t, decoded.Nickname)
+
+	type summary struct {
+		UserID int64 `rasql:"id"`
+	}
+	aliased, err := row.Decode[summary](result)
+	require.NoError(t, err)
+	require.Equal(t, int64(42), aliased.UserID)
 }
 
 func TestDecodeRejectsMissingColumnsAndUnsupportedDestinations(t *testing.T) {

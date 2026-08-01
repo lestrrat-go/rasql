@@ -121,6 +121,50 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestDecodeFromDecodesProjectedRows(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTableRef(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT \"users\".\"id\" AS \"user_id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
+		WithArgs(42).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "email"}).AddRow(int64(42), "ada@example.com"))
+
+	type summary struct {
+		UserID int64
+		Email  string
+	}
+	rows, err := rasql.DecodeFrom[summary](client, users).
+		Project(query.Project(id).As("user_id"), query.Project(email)).
+		Where(query.Equal(id, query.Bind(42))).
+		Query(t.Context())
+	require.NoError(t, err)
+	decoded := make([]summary, 0)
+	for value, err := range rows {
+		require.NoError(t, err)
+		decoded = append(decoded, value)
+	}
+	require.Equal(t, []summary{{UserID: 42, Email: "ada@example.com"}}, decoded)
+}
+
 func TestClientQueryAllowsDebugQueryer(t *testing.T) {
 	queryer := &debugQueryer{}
 	client, err := rasql.New(queryer, dialect.PostgreSQL())

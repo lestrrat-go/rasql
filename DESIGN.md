@@ -49,7 +49,7 @@ The public API starts with descriptors rather than a global registry. Applicatio
 
 Statements are immutable after construction. The basic `query` API exposes validated statement values. The `render` fluent builder owns a dialect and returns parameterized SQL, while the root `rasql` fluent builder owns a client and executes the query directly.
 
-Query execution returns a rangeable `iter.Seq2` sequence plus any construction error. A sequence yields rows lazily and then at most one execution or scanning error, which keeps row resources open only while the caller ranges over them. Typed queries decode each yielded row before it reaches the loop; `All` and `One` remain collection helpers built on the same sequence.
+Query execution returns a rangeable `iter.Seq2` sequence plus any construction error. A sequence yields rows lazily and then at most one execution or scanning error, which keeps row resources open only while the caller ranges over them. `SelectFrom` infers its result type from a `rasql.Table`; `DecodeFrom` maps a custom projection into an explicit result type. Both decode each yielded row before it reaches the loop, while `All` and `One` remain collection helpers built on the same sequence.
 
 Result decoding uses typed destinations or typed column descriptors. It must preserve `NULL` distinctly from a zero value. The initial supported primitives are boolean, integer, floating point, string, byte slice, time, and nullable forms. Custom types enter through explicit codecs.
 
