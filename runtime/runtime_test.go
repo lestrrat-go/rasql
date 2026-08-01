@@ -46,6 +46,38 @@ func TestClientQueryExecutesParameterizedSelect(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := runtime.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTableRef(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
+		WithArgs(42).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
+
+	rows, err := client.SelectFrom(users).
+		Select("id", "email").
+		WhereEqual("id", 42).
+		Query(t.Context())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestNewRejectsNilDependencies(t *testing.T) {
 	_, err := runtime.New(nil, dialect.PostgreSQL())
 	require.Error(t, err)
