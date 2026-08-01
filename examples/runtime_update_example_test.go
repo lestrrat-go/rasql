@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/runtime"
 )
 
@@ -34,29 +33,8 @@ func Example_runtime_update() {
 		return
 	}
 
-	id, err := users.Ref().Column("id")
-	if err != nil {
-		fmt.Printf("failed to find users.id: %s\n", err)
-		return
-	}
-	email, err := users.Ref().Column("email")
-	if err != nil {
-		fmt.Printf("failed to find users.email: %s\n", err)
-		return
-	}
-	// Write statements stay immutable. WithWhere returns the UPDATE statement
-	// that client.Exec renders and executes with its bound values.
-	update, err := query.NewUpdate(users.Ref(), query.Set(email, query.Bind("grace@example.com")))
-	if err != nil {
-		fmt.Printf("failed to build update: %s\n", err)
-		return
-	}
-	update, err = update.WithWhere(query.Equal(id, query.Bind(42)))
-	if err != nil {
-		fmt.Printf("failed to add update predicate: %s\n", err)
-		return
-	}
-	if _, err := client.Exec(ctx, update); err != nil {
+	// Update matches the row's primary key and writes its non-key fields.
+	if _, err := runtime.Update(ctx, client, users, UserRow{ID: 42, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}
