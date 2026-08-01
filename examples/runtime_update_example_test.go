@@ -10,7 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_runtime_write() {
+func Example_runtime_update() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -29,6 +29,10 @@ func Example_runtime_write() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
 
 	id, err := users.Ref().Column("id")
 	if err != nil {
@@ -40,12 +44,6 @@ func Example_runtime_write() {
 		fmt.Printf("failed to find users.email: %s\n", err)
 		return
 	}
-
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
-		fmt.Printf("failed to insert user: %s\n", err)
-		return
-	}
-
 	// Write statements stay immutable. WithWhere returns the UPDATE statement
 	// that client.Exec renders and executes with its bound values.
 	update, err := query.NewUpdate(users.Ref(), query.Set(email, query.Bind("grace@example.com")))

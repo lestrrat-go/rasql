@@ -367,11 +367,11 @@ func Example_runtime_dynamic_projection() {
 source: [examples/runtime_dynamic_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_dynamic_projection_example_test.go)
 <!-- END INCLUDE -->
 
-# Execute writes
+# Insert a typed row
 
-Use `runtime.Insert` for a typed row. Build an immutable `query` statement for a custom update.
+Use `runtime.Insert` when a generated row maps directly to every table column.
 
-<!-- INCLUDE(examples/runtime_write_example_test.go) -->
+<!-- INCLUDE(examples/runtime_insert_example_test.go) -->
 ```go
 package examples_test
 
@@ -381,11 +381,10 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_runtime_write() {
+func Example_runtime_insert() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -405,6 +404,68 @@ func Example_runtime_write() {
 		return
 	}
 
+	// Insert uses the tagged fields in UserRow as values for the users table.
+	result, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"})
+	if err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		fmt.Printf("failed to count inserted users: %s\n", err)
+		return
+	}
+	fmt.Printf("%d user inserted\n", inserted)
+
+	// Output:
+	// 1 user inserted
+}
+```
+source: [examples/runtime_insert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_insert_example_test.go)
+<!-- END INCLUDE -->
+
+# Update a row
+
+Use an immutable `query.Update` when the update needs a custom assignment or predicate.
+
+<!-- INCLUDE(examples/runtime_update_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/runtime"
+)
+
+func Example_runtime_update() {
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+
+	client, err := runtime.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create runtime client: %s\n", err)
+		return
+	}
+	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+
 	id, err := users.Ref().Column("id")
 	if err != nil {
 		fmt.Printf("failed to find users.id: %s\n", err)
@@ -415,12 +476,6 @@ func Example_runtime_write() {
 		fmt.Printf("failed to find users.email: %s\n", err)
 		return
 	}
-
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
-		fmt.Printf("failed to insert user: %s\n", err)
-		return
-	}
-
 	// Write statements stay immutable. WithWhere returns the UPDATE statement
 	// that client.Exec renders and executes with its bound values.
 	update, err := query.NewUpdate(users.Ref(), query.Set(email, query.Bind("grace@example.com")))
@@ -449,7 +504,7 @@ func Example_runtime_write() {
 	// grace@example.com
 }
 ```
-source: [examples/runtime_write_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_write_example_test.go)
+source: [examples/runtime_update_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_update_example_test.go)
 <!-- END INCLUDE -->
 
 # Debug a query
