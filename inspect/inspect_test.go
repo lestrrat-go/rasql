@@ -1,0 +1,67 @@
+package inspect_test
+
+import (
+	"database/sql/driver"
+	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/schema"
+	"github.com/stretchr/testify/require"
+)
+
+func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	columnsQuery := "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position"
+	primaryKeyQuery := "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position"
+	mock.ExpectQuery(columnsQuery).
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
+			AddRow("id", "bigint", "NO", nil).
+			AddRow("email", "character varying", "YES", driver.Value(nil)))
+	mock.ExpectQuery(primaryKeyQuery).
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.TypeInteger},
+		{Name: "email", Type: schema.TypeText, Nullable: true},
+	}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
+func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery("PRAGMA table_info(\"events\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
+			AddRow(0, "sequence", "INTEGER", 1, nil, 2).
+			AddRow(1, "stream_id", "TEXT", 1, nil, 1).
+			AddRow(2, "payload", "BLOB", 0, nil, 0))
+
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []string{"stream_id", "sequence"}, table.PrimaryKey)
+	require.Equal(t, schema.TypeBytes, table.Columns[2].Type)
+	require.True(t, table.Columns[2].Nullable)
+}
