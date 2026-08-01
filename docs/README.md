@@ -15,10 +15,10 @@ Pages 3 through 5 are independent of each other. Read the first two, then jump t
 
 ## About the code blocks
 
-Every Go block in these pages is copied from a runnable example in [`examples/`](../examples/). `go test ./examples/` runs each one and compares its output, and `TestDocExamplesMatchSource` fails if a page drifts from its source file. After editing an example, refresh the pages with:
+Each Go block that links to a source file is copied from a runnable example in [`examples/`](../examples/). `go test ./examples/` runs each one and compares its output, and `TestDocExamplesMatchSource` fails if a page drifts from its source file. Shorter blocks without a link illustrate one call and are not executed. After editing an example, refresh the pages with:
 
 ```sh
 go test ./examples/ -update-docs
 ```
 
-Never edit a Go block in a page by hand. The next update run overwrites it.
+Never edit a linked block by hand. The next update run overwrites it.
