@@ -1,6 +1,8 @@
 package runtime_test
 
 import (
+	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -76,6 +78,18 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestClientQueryAllowsDebugQueryer(t *testing.T) {
+	queryer := &debugQueryer{}
+	client, err := runtime.New(queryer, dialect.PostgreSQL())
+	require.NoError(t, err)
+
+	rows, err := client.Query(t.Context(), selectStatement(t))
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	require.Equal(t, "SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)", queryer.query)
+	require.Equal(t, []any{42}, queryer.arguments)
 }
 
 func TestNewRejectsNilDependencies(t *testing.T) {
@@ -203,4 +217,15 @@ func selectStatement(t *testing.T) query.Select {
 	statement, err = statement.WithWhere(query.Equal(id, query.Bind(42)))
 	require.NoError(t, err)
 	return statement
+}
+
+type debugQueryer struct {
+	query     string
+	arguments []any
+}
+
+func (q *debugQueryer) QueryContext(_ context.Context, query string, arguments ...any) (*sql.Rows, error) {
+	q.query = query
+	q.arguments = append([]any(nil), arguments...)
+	return nil, nil
 }

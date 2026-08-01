@@ -14,7 +14,8 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Queryer is implemented by *sql.DB and *sql.Tx.
+// Queryer executes rendered SELECT statements. It is implemented by *sql.DB and *sql.Tx.
+// A debug Queryer may return nil rows after logging a query; Client treats that as no result rows.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -70,6 +71,9 @@ func (c Client) QueryRendered(ctx context.Context, statement render.Statement) (
 	rows, err := c.queryer.QueryContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
 		return nil, fmt.Errorf("runtime: execute query: %w", err)
+	}
+	if rows == nil {
+		return nil, nil
 	}
 	return collect(rows)
 }
