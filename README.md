@@ -23,9 +23,19 @@ import (
 )
 
 func Example_schema_table_definition() {
-	// schema.Table declares database structure. NewTable validates the
-	// descriptor and returns an independent copy for application configuration.
-	table, err := schema.NewTable(usersTableDefinition())
+	// Describe each database table once with schema.Table. The same descriptor
+	// can later supply a reusable query.TableRef or generate DDL.
+	table, err := schema.NewTable(schema.Table{
+		// Name is the database table identifier.
+		Name: "users",
+		// Columns list each database column and its dialect-neutral logical type.
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		// PrimaryKey names columns from Columns that uniquely identify each row.
+		PrimaryKey: []string{"id"},
+	})
 	if err != nil {
 		fmt.Printf("failed to define table: %s\n", err)
 		return
@@ -35,17 +45,6 @@ func Example_schema_table_definition() {
 
 	// Output:
 	// users: 2 columns
-}
-
-func usersTableDefinition() schema.Table {
-	return schema.Table{
-		Name: "users",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
-		},
-		PrimaryKey: []string{"id"},
-	}
 }
 ```
 source: [examples/schema_table_definition_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_example_test.go)
