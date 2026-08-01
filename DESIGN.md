@@ -8,10 +8,10 @@ The first release does not include a migration planner or executor. It describes
 
 ## Design decisions
 
-* Schema definitions and dynamic builders share the same public descriptors and query representation. Static templates compile to precompiled parameterized statements with the same rendering and runtime execution boundary.
+* Schema definitions and dynamic builders share the same public descriptors and query representation. Static templates compile to precompiled parameterized statements with the same rendering and root-package execution boundary.
 * Values always travel separately from SQL text. Renderers create placeholders and an ordered argument list; no public API interpolates values into SQL.
 * The core model uses logical SQL types. Dialects decide how those types map to DDL, bind values, placeholders, identifiers, and capability-specific syntax.
-* The runtime builds on `database/sql` first. Database-specific driver helpers can be added later without changing the core query or schema APIs.
+* The root `rasql` package builds on `database/sql` first and registers the bundled SQLite driver. Database-specific driver helpers can be added later without changing the core query or schema APIs.
 * Result access is explicit and typed. A caller selects a typed column or destination instead of receiving a map with unchecked assertions.
 * Schema inspection normalizes live metadata into the same schema descriptors used by Go definitions. Generation turns normalized descriptors into deterministic Go source.
 * Generated source, rendered SQL, and errors must be deterministic. Identical inputs produce identical output regardless of map iteration order.
@@ -25,30 +25,29 @@ The first release does not include a migration planner or executor. It describes
 | `query` | Dialect-neutral statements and expressions with validation. | `schema` |
 | `render` | Converts a validated query into SQL text and ordered arguments. | `dialect`, `query` |
 | `row` | Typed column descriptors and result decoding. | Go standard library |
-| `runtime` | Executes rendered statements through `database/sql`. | `render`, `row` |
+| `rasql` | Executes statements, decodes typed rows, and provides the default fluent API. | `schema`, `dialect`, `query`, `render`, `row`, `database/sql` |
 | `inspect` | Reads database metadata and returns normalized schema descriptors. | `schema`, `dialect` |
 | `template` and `cmd/rasqlgen` | Compiles static query templates and schema snapshots into Go source. | public packages only |
 
 The dependency flow is deliberately one-way:
 
 ```text
-schema ──> dialect ──> render ──> runtime
-   │                     ▲          │
-   ├────> query ─────────┘          ▼
-   ├────> inspect              database/sql
-   └────> template / rasqlgen
-                │
-                ▼
-            generated Go
+schema ──> dialect ──┐
+   │                 ├──> render ──┐
+   ├────> query ────┘              │
+   ├────> inspect                  ├──> rasql ──> database/sql
+   └────> template / rasqlgen      │
+                │                  │
+                └──> generated Go ┘
 ```
 
-`query` must not import a concrete dialect. `dialect` must not import query or runtime. Generated code must call only stable public packages, never `internal` packages.
+`query` must not import a concrete dialect. `dialect` must not import query or `rasql`. Generated code must call only stable public packages, never `internal` packages.
 
 ## Public API shape
 
-The public API starts with descriptors rather than a global registry. Applications can create a `schema.Table` directly, while generated code exposes reusable `query.TableRef` values. This keeps multiple schemas and test fixtures isolated in the same process.
+The public API starts with descriptors rather than a global registry. Applications can create a `schema.Table` directly, while generated code exposes typed `rasql.Table` values that retain reusable `query.TableRef` values. This keeps multiple schemas and test fixtures isolated in the same process.
 
-Statements are immutable after construction. The basic `query` API exposes validated statement values. The `render` fluent builder owns a dialect and returns parameterized SQL, while the `runtime` fluent builder owns a client and executes the query directly.
+Statements are immutable after construction. The basic `query` API exposes validated statement values. The `render` fluent builder owns a dialect and returns parameterized SQL, while the root `rasql` fluent builder owns a client and executes the query directly.
 
 Result decoding uses typed destinations or typed column descriptors. It must preserve `NULL` distinctly from a zero value. The initial supported primitives are boolean, integer, floating point, string, byte slice, time, and nullable forms. Custom types enter through explicit codecs.
 
@@ -70,7 +69,7 @@ Inspectors use a small adapter for each database metadata surface. They normaliz
 
 Validation and rendering expose typed errors. Decoding, inspection, and execution errors include the operation and affected identifier when known, but never include unredacted bound values by default.
 
-The runtime accepts `context.Context` for every database operation. It leaves transaction ownership with the caller and provides helpers that accept `*sql.DB` or `*sql.Tx` without starting hidden transactions.
+The root `rasql` API accepts `context.Context` for every database operation. It leaves transaction ownership with the caller and provides helpers that accept `*sql.DB` or `*sql.Tx` without starting hidden transactions.
 
 ## Testing strategy
 
@@ -87,10 +86,10 @@ Each slice is a focused commit or a small series of commits that remains buildab
 5. `feat: add dialect capabilities` adds dialect interfaces and isolated identifier, placeholder, and type-mapping tests.
 6. `feat: add select query model` adds immutable expressions and `SELECT` statements with validation, without rendering.
 7. `feat: render select statements` renders the first query slice for all four dialects with SQL and argument-order golden tests.
-8. `feat: add typed row decoding` and `feat: add database runtime` add typed primitives and `database/sql` execution.
+8. `feat: add typed row decoding` and `feat: add database client` add typed primitives and `database/sql` execution through `rasql`.
 9. `feat: add write query models`, `feat: render write statements`, and `feat: add dialect upserts` add writes, returning, and dialect-specific upserts.
 10. `feat: render schema definitions` and `feat: execute schema definitions` add DDL rendering and execution.
 11. `feat: inspect live schemas` and `feat: generate schema source` add metadata normalization and deterministic schema generation.
 12. `feat: compile static query templates` and `feat: add rasql generator command` add restricted templates and the CLI.
 
-The work begins with a single dialect-neutral vertical slice through schema, query, rendering, runtime, and row decoding before extending all features across every dialect. This validates the public API before the dialect matrix grows.
+The work begins with a single dialect-neutral vertical slice through schema, query, rendering, `rasql`, and row decoding before extending all features across every dialect. This validates the public API before the dialect matrix grows.

@@ -38,8 +38,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "CreatedAt")
 	require.Contains(t, string(source), "`rasql:\"email\"`")
 	require.Contains(t, string(source), "`rasql:\"created_at\"`")
-	require.Contains(t, string(source), "var Orders = runtime.MustTable[OrdersRow](query.MustNewTableRef")
-	require.Contains(t, string(source), "var Users = runtime.MustTable[UsersRow](query.MustNewTableRef")
+	require.Contains(t, string(source), "var Orders = rasql.MustTable[OrdersRow](schema.Table{")
+	require.Contains(t, string(source), "var Users = rasql.MustTable[UsersRow](schema.Table{")
 	require.Less(t, stringIndex(t, source, "var Orders"), stringIndex(t, source, "var Users"))
 
 	directory, err := os.MkdirTemp(".", ".tmp-schema-*")

@@ -64,7 +64,7 @@ rasqlgen schema \
   -output internal/store/rasql_gen.go
 ```
 
-Repeat `-table` for each table. Generated code exports `store.Users` as a typed `runtime.Table[store.UsersRow]`; call `store.Users.Ref()` for its reusable `query.TableRef`.
+Repeat `-table` for each table. Generated code exports `store.Users` as a typed `rasql.Table[store.UsersRow]`; call `store.Users.Ref()` for its reusable `query.TableRef`.
 
 # Inspect a SQLite table
 
@@ -79,15 +79,15 @@ import (
 	"database/sql"
 	"fmt"
 
+	_ "github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
-	_ "github.com/lestrrat-go/rasql/runtime"
 )
 
 func Example_inspect_sqlite_table() {
 	// This example reads an existing SQLite table into a normalized schema.Table.
 	ctx := context.Background()
-	// The runtime package registers the pure-Go SQLite driver as "sqlite".
+	// The rasql package registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
@@ -124,9 +124,9 @@ source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestr
 
 # Query a generated table
 
-Importing `runtime` registers the pure-Go SQLite driver as `sqlite`. This runnable example uses an in-memory database, so it creates the table, inserts data, and issues the query in one chain.
+Importing `rasql` registers the pure-Go SQLite driver as `sqlite`. This runnable example uses an in-memory database, so it creates the table, inserts data, and issues the query in one chain.
 
-<!-- INCLUDE(examples/runtime_sqlite_query_example_test.go) -->
+<!-- INCLUDE(examples/rasql_sqlite_query_example_test.go) -->
 ```go
 package examples_test
 
@@ -135,14 +135,14 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_runtime_sqlite_query() {
+func Example_rasql_sqlite_query() {
 	// This example creates, inserts, and reads one generated row with SQLite.
 	ctx := context.Background()
-	// Importing runtime registers the pure-Go SQLite driver as "sqlite".
+	// Importing rasql registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
@@ -153,24 +153,24 @@ func Example_runtime_sqlite_query() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 	// Create the schema described by the generated table reference.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert encodes UserRow's tagged fields as bound values.
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
-	user, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
+	user, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -182,14 +182,14 @@ func Example_runtime_sqlite_query() {
 	// ada@example.com
 }
 ```
-source: [examples/runtime_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_sqlite_query_example_test.go)
+source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_sqlite_query_example_test.go)
 <!-- END INCLUDE -->
 
 # Query multiple typed rows
 
 Use `All` when the result has the generated row type, including when ordering, paging, or limiting the result.
 
-<!-- INCLUDE(examples/runtime_typed_query_example_test.go) -->
+<!-- INCLUDE(examples/rasql_typed_query_example_test.go) -->
 ```go
 package examples_test
 
@@ -198,11 +198,11 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_runtime_typed_query() {
+func Example_rasql_typed_query() {
 	// This example pages through several users and decodes them as UserRow values.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -215,23 +215,23 @@ func Example_runtime_typed_query() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users reference.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	// Use runtime.Insert for each fixture row so setup follows the public API.
+	// Use rasql.Insert for each fixture row so setup follows the public API.
 	for _, user := range []UserRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		if _, err := runtime.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -239,7 +239,7 @@ func Example_runtime_typed_query() {
 
 	// SelectFrom knows the UsersRow result type from users. It selects every
 	// column, then All decodes every matching row into that type.
-	found, err := runtime.SelectFrom(client, users).
+	found, err := rasql.SelectFrom(client, users).
 		OrderAsc("email").
 		Offset(1).
 		Limit(2).
@@ -257,14 +257,14 @@ func Example_runtime_typed_query() {
 	// cyd@example.com
 }
 ```
-source: [examples/runtime_typed_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_typed_query_example_test.go)
+source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_typed_query_example_test.go)
 <!-- END INCLUDE -->
 
 # Build a dynamic projection
 
 Use the raw builder for joins and result shapes that do not map to one generated row type. Read its dynamic rows with `row.Get[T]`.
 
-<!-- INCLUDE(examples/runtime_dynamic_projection_example_test.go) -->
+<!-- INCLUDE(examples/rasql_dynamic_projection_example_test.go) -->
 ```go
 package examples_test
 
@@ -273,14 +273,14 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/row"
-	"github.com/lestrrat-go/rasql/runtime"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-func Example_runtime_dynamic_projection() {
+func Example_rasql_dynamic_projection() {
 	// This example joins users and orders, then reads an ad hoc result shape.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -293,18 +293,18 @@ func Example_runtime_dynamic_projection() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// A typed descriptor makes orders usable with runtime.Insert as well.
+	// A typed descriptor makes orders usable with rasql.Insert as well.
 	type orderRow struct {
 		ID     int `rasql:"id"`
 		UserID int `rasql:"user_id"`
 		Total  int `rasql:"total"`
 	}
-	orders := runtime.MustTable[orderRow](query.MustNewTableRef(schema.Table{
+	orders := rasql.MustTable[orderRow](schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -312,13 +312,13 @@ func Example_runtime_dynamic_projection() {
 			{Name: "total", Type: schema.TypeInteger},
 		},
 		PrimaryKey: []string{"id"},
-	}))
+	})
 	// Create both descriptors before querying their joined rows.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := runtime.Create(ctx, client, orders); err != nil {
+	if err := rasql.Create(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -344,8 +344,8 @@ func Example_runtime_dynamic_projection() {
 		fmt.Printf("failed to find orders.total: %s\n", err)
 		return
 	}
-	// Populate both tables through the typed runtime API.
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	// Populate both tables through the typed rasql API.
+	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -353,7 +353,7 @@ func Example_runtime_dynamic_projection() {
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {
-		if _, err := runtime.Insert(ctx, client, orders, order); err != nil {
+		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -386,14 +386,14 @@ func Example_runtime_dynamic_projection() {
 	// 1 ada@example.com
 }
 ```
-source: [examples/runtime_dynamic_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_dynamic_projection_example_test.go)
+source: [examples/rasql_dynamic_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_dynamic_projection_example_test.go)
 <!-- END INCLUDE -->
 
 # Insert a typed row
 
-Use `runtime.Insert` when a generated row maps directly to every table column.
+Use `rasql.Insert` when a generated row maps directly to every table column.
 
-<!-- INCLUDE(examples/runtime_insert_example_test.go) -->
+<!-- INCLUDE(examples/rasql_insert_example_test.go) -->
 ```go
 package examples_test
 
@@ -402,11 +402,11 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_runtime_insert() {
+func Example_rasql_insert() {
 	// This example inserts one generated row without constructing query.Insert.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -419,19 +419,19 @@ func Example_runtime_insert() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users reference.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
 	// Insert uses the tagged fields in UserRow as values for the users table.
-	result, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"})
+	result, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -447,14 +447,14 @@ func Example_runtime_insert() {
 	// 1 user inserted
 }
 ```
-source: [examples/runtime_insert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_insert_example_test.go)
+source: [examples/rasql_insert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_insert_example_test.go)
 <!-- END INCLUDE -->
 
 # Update a row
 
-Use `runtime.Update` to match a typed row's primary key and write its non-key fields.
+Use `rasql.Update` to match a typed row's primary key and write its non-key fields.
 
-<!-- INCLUDE(examples/runtime_update_example_test.go) -->
+<!-- INCLUDE(examples/rasql_update_example_test.go) -->
 ```go
 package examples_test
 
@@ -463,11 +463,11 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_runtime_update() {
+func Example_rasql_update() {
 	// This example changes a generated row by using its primary-key field.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -480,29 +480,29 @@ func Example_runtime_update() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users reference.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert one row so the update has a persistent target.
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 	// Update matches the row's primary key and writes its non-key fields.
-	if _, err := runtime.Update(ctx, client, users, UserRow{ID: 42, Email: "grace@example.com"}); err != nil {
+	if _, err := rasql.Update(ctx, client, users, UserRow{ID: 42, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}
 
-	user, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
+	user, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
@@ -513,14 +513,14 @@ func Example_runtime_update() {
 	// grace@example.com
 }
 ```
-source: [examples/runtime_update_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_update_example_test.go)
+source: [examples/rasql_update_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_update_example_test.go)
 <!-- END INCLUDE -->
 
 # Debug a query
 
-`runtime.Client` also accepts a `runtime.Queryer`, so a debug implementation can print generated SQL without connecting to a database.
+`rasql.Client` also accepts a `rasql.Queryer`, so a debug implementation can print generated SQL without connecting to a database.
 
-<!-- INCLUDE(examples/runtime_debug_query_example_test.go) -->
+<!-- INCLUDE(examples/rasql_debug_query_example_test.go) -->
 ```go
 package examples_test
 
@@ -529,11 +529,11 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/runtime"
 )
 
-// statementPrinter is a debug-only runtime.Queryer. It follows the same
+// statementPrinter is a debug-only rasql.Queryer. It follows the same
 // QueryContext contract as *sql.DB, but prints statements instead of running them.
 type statementPrinter struct{}
 
@@ -543,18 +543,18 @@ func (statementPrinter) QueryContext(_ context.Context, query string, arguments 
 	return nil, nil
 }
 
-func Example_runtime_debug_query() {
+func Example_rasql_debug_query() {
 	// This example prints the SQL for a typed query without opening a database.
-	// runtime.New accepts *sql.DB, *sql.Tx, or another runtime.Queryer. This
+	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Queryer. This
 	// debug Queryer lets the example show the generated statement without a database.
-	client, err := runtime.New(statementPrinter{}, dialect.PostgreSQL())
+	client, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
-	rows, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).All(context.Background())
+	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).All(context.Background())
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -568,7 +568,7 @@ func Example_runtime_debug_query() {
 	// 0 result rows
 }
 ```
-source: [examples/runtime_debug_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_debug_query_example_test.go)
+source: [examples/rasql_debug_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_debug_query_example_test.go)
 <!-- END INCLUDE -->
 
 # Static templates
@@ -601,7 +601,7 @@ func Example_query_static() {
 		return
 	}
 	// Bind requires each named value exactly once and returns a precompiled,
-	// parameterized statement that runtime.Client can execute directly.
+	// parameterized statement that rasql.Client can execute directly.
 	statement, err := compiled.Bind(map[string]any{"email": "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to bind template: %s\n", err)
@@ -623,7 +623,7 @@ source: [examples/query_static_example_test.go](https://github.com/lestrrat-go/r
 
 Pass the bound statement to `QueryRendered` to run it with the same client used for dynamic queries.
 
-<!-- INCLUDE(examples/runtime_static_template_example_test.go) -->
+<!-- INCLUDE(examples/rasql_static_template_example_test.go) -->
 ```go
 package examples_test
 
@@ -632,14 +632,14 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/row"
-	"github.com/lestrrat-go/rasql/runtime"
 	querytemplate "github.com/lestrrat-go/rasql/template"
 )
 
-func Example_runtime_static_template() {
-	// This example binds a static template and executes it through runtime.Client.
+func Example_rasql_static_template() {
+	// This example binds a static template and executes it through rasql.Client.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -651,18 +651,18 @@ func Example_runtime_static_template() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users reference.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert a row that the bound template will find.
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -703,14 +703,14 @@ func Example_runtime_static_template() {
 	// ada@example.com
 }
 ```
-source: [examples/runtime_static_template_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_static_template_example_test.go)
+source: [examples/rasql_static_template_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_static_template_example_test.go)
 <!-- END INCLUDE -->
 
 The project requires Go 1.26 or newer and uses parameterized types where they improve type safety or avoid conversions.
 
-The `schema`, `query`, `render`, `row`, and `runtime` packages cover the main application path. The `inspect` package normalizes live table columns and primary keys. The `generate` and `template` packages produce deterministic Go source.
+The root `rasql` package covers the main application path. The `schema`, `query`, `render`, `row`, and `dialect` packages expose lower-level building blocks. The `inspect` package normalizes live table columns and primary keys. The `generate` and `template` packages produce deterministic Go source.
 
-`rasqlgen schema` reads PostgreSQL metadata with `-dsn` and `-table`, or accepts a JSON schema snapshot with `-input`. It generates typed `runtime.Table` descriptors with reusable `query.TableRef` values. `rasqlgen query` generates a parameterized Go function from a restricted SQL template. Both commands reject unchecked template actions and preserve values as bound arguments.
+`rasqlgen schema` reads PostgreSQL metadata with `-dsn` and `-table`, or accepts a JSON schema snapshot with `-input`. It generates typed `rasql.Table` descriptors with reusable `query.TableRef` values. `rasqlgen query` generates a parameterized Go function from a restricted SQL template. Both commands reject unchecked template actions and preserve values as bound arguments.
 
 Runnable documentation examples live in [`examples/`](examples/) as executable Go examples.
 

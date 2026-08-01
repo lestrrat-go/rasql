@@ -42,8 +42,7 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	if containsTime(clones) {
 		source.WriteString("\t\"time\"\n\n")
 	}
-	source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
-	source.WriteString("\t\"github.com/lestrrat-go/rasql/runtime\"\n")
+	source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
 	source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
 	source.WriteString(")\n\n")
 	for _, table := range clones {
@@ -51,11 +50,11 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 		source.WriteString("\n")
 		source.WriteString("var ")
 		source.WriteString(variableName(table.Name))
-		source.WriteString(" = runtime.MustTable[")
+		source.WriteString(" = rasql.MustTable[")
 		source.WriteString(rowTypeName(table.Name))
-		source.WriteString("](query.MustNewTableRef(")
+		source.WriteString("](")
 		writeTable(&source, table, "")
-		source.WriteString("))\n\n")
+		source.WriteString(")\n\n")
 	}
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {

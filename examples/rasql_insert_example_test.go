@@ -5,11 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_runtime_insert() {
+func Example_rasql_insert() {
 	// This example inserts one generated row without constructing query.Insert.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -22,19 +22,19 @@ func Example_runtime_insert() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users reference.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
 	// Insert uses the tagged fields in UserRow as values for the users table.
-	result, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"})
+	result, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return

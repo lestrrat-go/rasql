@@ -5,14 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_runtime_sqlite_query() {
+func Example_rasql_sqlite_query() {
 	// This example creates, inserts, and reads one generated row with SQLite.
 	ctx := context.Background()
-	// Importing runtime registers the pure-Go SQLite driver as "sqlite".
+	// Importing rasql registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
@@ -23,24 +23,24 @@ func Example_runtime_sqlite_query() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 	// Create the schema described by the generated table reference.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert encodes UserRow's tagged fields as bound values.
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
-	user, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
+	user, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

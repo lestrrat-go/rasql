@@ -5,14 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/row"
-	"github.com/lestrrat-go/rasql/runtime"
 	querytemplate "github.com/lestrrat-go/rasql/template"
 )
 
-func Example_runtime_static_template() {
-	// This example binds a static template and executes it through runtime.Client.
+func Example_rasql_static_template() {
+	// This example binds a static template and executes it through rasql.Client.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -24,18 +24,18 @@ func Example_runtime_static_template() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users reference.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert a row that the bound template will find.
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

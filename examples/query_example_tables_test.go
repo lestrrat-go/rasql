@@ -1,8 +1,7 @@
 package examples_test
 
 import (
-	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/runtime"
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -15,11 +14,11 @@ type UserRow struct {
 }
 
 // users keeps the generated row type and reusable query reference together.
-var users = runtime.MustTable[UserRow](query.MustNewTableRef(schema.Table{
+var users = rasql.MustTable[UserRow](schema.Table{
 	Name: "users",
 	Columns: []schema.Column{
 		{Name: "id", Type: schema.TypeInteger},
 		{Name: "email", Type: schema.TypeText},
 	},
 	PrimaryKey: []string{"id"},
-}))
+})

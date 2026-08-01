@@ -5,14 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/row"
-	"github.com/lestrrat-go/rasql/runtime"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-func Example_runtime_dynamic_projection() {
+func Example_rasql_dynamic_projection() {
 	// This example joins users and orders, then reads an ad hoc result shape.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -25,18 +25,18 @@ func Example_runtime_dynamic_projection() {
 	database.SetMaxOpenConns(1)
 
 	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := runtime.New(database, dialect.SQLite())
+	client, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// A typed descriptor makes orders usable with runtime.Insert as well.
+	// A typed descriptor makes orders usable with rasql.Insert as well.
 	type orderRow struct {
 		ID     int `rasql:"id"`
 		UserID int `rasql:"user_id"`
 		Total  int `rasql:"total"`
 	}
-	orders := runtime.MustTable[orderRow](query.MustNewTableRef(schema.Table{
+	orders := rasql.MustTable[orderRow](schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -44,13 +44,13 @@ func Example_runtime_dynamic_projection() {
 			{Name: "total", Type: schema.TypeInteger},
 		},
 		PrimaryKey: []string{"id"},
-	}))
+	})
 	// Create both descriptors before querying their joined rows.
-	if err := runtime.Create(ctx, client, users); err != nil {
+	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := runtime.Create(ctx, client, orders); err != nil {
+	if err := rasql.Create(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -76,8 +76,8 @@ func Example_runtime_dynamic_projection() {
 		fmt.Printf("failed to find orders.total: %s\n", err)
 		return
 	}
-	// Populate both tables through the typed runtime API.
-	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	// Populate both tables through the typed rasql API.
+	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -85,7 +85,7 @@ func Example_runtime_dynamic_projection() {
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {
-		if _, err := runtime.Insert(ctx, client, orders, order); err != nil {
+		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}

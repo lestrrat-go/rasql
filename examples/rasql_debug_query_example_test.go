@@ -5,11 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/runtime"
 )
 
-// statementPrinter is a debug-only runtime.Queryer. It follows the same
+// statementPrinter is a debug-only rasql.Queryer. It follows the same
 // QueryContext contract as *sql.DB, but prints statements instead of running them.
 type statementPrinter struct{}
 
@@ -19,18 +19,18 @@ func (statementPrinter) QueryContext(_ context.Context, query string, arguments 
 	return nil, nil
 }
 
-func Example_runtime_debug_query() {
+func Example_rasql_debug_query() {
 	// This example prints the SQL for a typed query without opening a database.
-	// runtime.New accepts *sql.DB, *sql.Tx, or another runtime.Queryer. This
+	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Queryer. This
 	// debug Queryer lets the example show the generated statement without a database.
-	client, err := runtime.New(statementPrinter{}, dialect.PostgreSQL())
+	client, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
 	if err != nil {
-		fmt.Printf("failed to create runtime client: %s\n", err)
+		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
-	rows, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).All(context.Background())
+	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).All(context.Background())
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
