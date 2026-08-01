@@ -1,6 +1,8 @@
 package render
 
 import (
+	"fmt"
+
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 )
@@ -67,6 +69,9 @@ func (b SelectBuilder) Where(expression query.Expression) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
 		return b
+	}
+	if expression == nil {
+		return b.withError(fmt.Errorf("WHERE expression must not be nil"))
 	}
 	b.where = expression
 	b.hasWhere = true
