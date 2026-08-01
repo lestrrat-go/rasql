@@ -7,7 +7,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -65,23 +64,8 @@ func Example_rasql_quickstart() {
 	}
 	fmt.Println(len(found), found[0].Email)
 
-	// Deletes have no typed helper, so they are built through the query package.
-	id, err := users.Ref().Column("id")
-	if err != nil {
-		fmt.Printf("failed to find users.id: %s\n", err)
-		return
-	}
-	statement, err := query.NewDelete(users.Ref())
-	if err != nil {
-		fmt.Printf("failed to build delete: %s\n", err)
-		return
-	}
-	statement, err = statement.WithWhere(query.Equal(id, query.Bind(1)))
-	if err != nil {
-		fmt.Printf("failed to build delete predicate: %s\n", err)
-		return
-	}
-	result, err := client.Exec(ctx, statement)
+	// DeleteFrom builds the predicate from column names, like the select builder.
+	result, err := rasql.DeleteFrom(client, users).WhereEqual("id", 1).Exec(ctx)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
