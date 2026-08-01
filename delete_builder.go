@@ -21,7 +21,7 @@ type DeleteBuilder struct {
 // DeleteFrom starts a fluent DELETE builder for table.
 // Exec deletes every row when no predicate is set.
 func DeleteFrom[T any](client Client, table Table[T]) DeleteBuilder {
-	return client.DeleteFrom(table.Ref())
+	return client.DeleteFrom(table.QueryTable())
 }
 
 // DeleteFrom starts a fluent DELETE builder using table as its target.
@@ -44,15 +44,12 @@ func (b DeleteBuilder) Where(expression query.Expression) DeleteBuilder {
 	return b
 }
 
-// WhereEqual sets an equality predicate for a target-table column and binds value.
-// It replaces any predicate set before it.
-func (b DeleteBuilder) WhereEqual(columnName string, value any) DeleteBuilder {
+// WhereEqual sets an equality predicate for column and binds value.
+// It replaces any predicate set before it. Build and Exec reject a column whose
+// table is not the delete target.
+func (b DeleteBuilder) WhereEqual(column query.Column, value any) DeleteBuilder {
 	if b.err != nil {
 		return b
-	}
-	column, err := b.from.Column(columnName)
-	if err != nil {
-		return b.withError(fmt.Errorf("rasql: build DELETE: %w", err))
 	}
 	return b.Where(query.Equal(column, query.Bind(value)))
 }

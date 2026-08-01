@@ -162,7 +162,7 @@ func Example_rasql_typed_query() {
 	// SelectFrom knows the UsersRow result type from users. Query yields decoded
 	// rows directly, so the loop does not need manual scanning or conversion.
 	rows, err := rasql.SelectFrom(client, users).
-		OrderAsc("email").
+		OrderAsc(users.Email).
 		Offset(1).
 		Limit(2).
 		Query(ctx)
@@ -282,23 +282,14 @@ func Example_rasql_dynamic_projection() {
 		return
 	}
 
-	// Column references keep the dynamic query validated as it is assembled.
-	userID, err := users.Ref().Column("id")
-	if err != nil {
-		fmt.Printf("failed to find users.id: %s\n", err)
-		return
-	}
-	email, err := users.Ref().Column("email")
-	if err != nil {
-		fmt.Printf("failed to find users.email: %s\n", err)
-		return
-	}
-	orderUserID, err := orders.Ref().Column("user_id")
+	// orders has no generated column fields, so its columns are looked up by name.
+	// That lookup validates them against the descriptor as the query is assembled.
+	orderUserID, err := orders.Column("user_id")
 	if err != nil {
 		fmt.Printf("failed to find orders.user_id: %s\n", err)
 		return
 	}
-	total, err := orders.Ref().Column("total")
+	total, err := orders.Column("total")
 	if err != nil {
 		fmt.Printf("failed to find orders.total: %s\n", err)
 		return
@@ -319,9 +310,9 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
-	rows, err := rasql.DecodeFrom[orderSummary](client, users.Ref()).
-		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
-		Project(query.Project(userID).As("user_id"), query.Project(email)).
+	rows, err := rasql.DecodeFrom[orderSummary](client, users).
+		Join(rasql.InnerJoin(orders, query.Equal(users.ID, orderUserID))).
+		Project(query.Project(users.ID).As("user_id"), query.Project(users.Email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
 		Query(ctx)
@@ -385,7 +376,7 @@ func Example_rasql_debug_query() {
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
 	count := 0
-	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(context.Background())
+	rows, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).Query(context.Background())
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

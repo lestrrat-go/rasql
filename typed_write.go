@@ -94,7 +94,7 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 }
 
 func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]reflect.Value, error) {
-	reference := table.Ref()
+	reference := table.QueryTable()
 	definition := reference.Definition()
 	if err := definition.Validate(); err != nil {
 		return query.Table{}, nil, fmt.Errorf("table reference: %w", err)

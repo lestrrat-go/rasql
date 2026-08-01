@@ -48,7 +48,7 @@ func Example_rasql_typed_query() {
 	// SelectFrom knows the UsersRow result type from users. Query yields decoded
 	// rows directly, so the loop does not need manual scanning or conversion.
 	rows, err := rasql.SelectFrom(client, users).
-		OrderAsc("email").
+		OrderAsc(users.Email).
 		Offset(1).
 		Limit(2).
 		Query(ctx)

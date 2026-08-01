@@ -13,7 +13,7 @@ import (
 // SelectFrom starts a typed fluent SELECT builder for table.
 // It selects every table column by default so All and One can decode T.
 func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
-	reference := table.Ref()
+	reference := table.QueryTable()
 	definition := reference.Definition()
 	columns := make([]string, len(definition.Columns))
 	for index, column := range definition.Columns {
@@ -23,9 +23,30 @@ func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
 }
 
 // DecodeFrom starts a typed fluent SELECT builder for a custom result shape.
-// Projected column names map to T's rasql tags or snake-cased exported field names.
-func DecodeFrom[T any](client Client, table query.Table) TypedSelectBuilder[T] {
-	return TypedSelectBuilder[T]{builder: client.SelectFrom(table)}
+// R is explicit and T is inferred from table. Projected column names map to R's
+// rasql tags or snake-cased exported field names.
+func DecodeFrom[R any, T any](client Client, table Table[T]) TypedSelectBuilder[R] {
+	return TypedSelectBuilder[R]{builder: client.SelectFrom(table.QueryTable())}
+}
+
+// DecodeQueryFrom starts a typed fluent SELECT builder for a table with no Go row type.
+// Projected column names map to R's rasql tags or snake-cased exported field names.
+func DecodeQueryFrom[R any](client Client, table query.Table) TypedSelectBuilder[R] {
+	return TypedSelectBuilder[R]{builder: client.SelectFrom(table)}
+}
+
+// InnerJoin returns an INNER JOIN on table with on as its condition.
+// It adapts a typed table for the dialect-neutral query API, which cannot
+// import this package.
+func InnerJoin[T any](table Table[T], on query.Expression) query.Join {
+	return query.InnerJoin(table.QueryTable(), on)
+}
+
+// LeftJoin returns a LEFT JOIN on table with on as its condition.
+// It adapts a typed table for the dialect-neutral query API, which cannot
+// import this package.
+func LeftJoin[T any](table Table[T], on query.Expression) query.Join {
+	return query.LeftJoin(table.QueryTable(), on)
 }
 
 // TypedSelectBuilder builds a SELECT that decodes rows as T.
@@ -51,9 +72,10 @@ func (b TypedSelectBuilder[T]) Where(expression query.Expression) TypedSelectBui
 	return b
 }
 
-// WhereEqual sets an equality predicate for a primary-table column and binds value.
-func (b TypedSelectBuilder[T]) WhereEqual(columnName string, value any) TypedSelectBuilder[T] {
-	b.builder = b.builder.WhereEqual(columnName, value)
+// WhereEqual sets an equality predicate for column and binds value.
+// Build and Query reject a column whose table is not part of the statement.
+func (b TypedSelectBuilder[T]) WhereEqual(column query.Column, value any) TypedSelectBuilder[T] {
+	b.builder = b.builder.Where(query.Equal(column, query.Bind(value)))
 	return b
 }
 
@@ -63,15 +85,15 @@ func (b TypedSelectBuilder[T]) Order(orders ...query.Order) TypedSelectBuilder[T
 	return b
 }
 
-// OrderAsc adds ascending ordering for a primary-table column.
-func (b TypedSelectBuilder[T]) OrderAsc(columnName string) TypedSelectBuilder[T] {
-	b.builder = b.builder.OrderAsc(columnName)
+// OrderAsc adds ascending ordering for column.
+func (b TypedSelectBuilder[T]) OrderAsc(column query.Column) TypedSelectBuilder[T] {
+	b.builder = b.builder.Order(query.Asc(column))
 	return b
 }
 
-// OrderDesc adds descending ordering for a primary-table column.
-func (b TypedSelectBuilder[T]) OrderDesc(columnName string) TypedSelectBuilder[T] {
-	b.builder = b.builder.OrderDesc(columnName)
+// OrderDesc adds descending ordering for column.
+func (b TypedSelectBuilder[T]) OrderDesc(column query.Column) TypedSelectBuilder[T] {
+	b.builder = b.builder.Order(query.Desc(column))
 	return b
 }
 
