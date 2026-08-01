@@ -1,4 +1,5 @@
 // Package runtime executes rendered queries through database/sql.
+// Importing runtime also registers the SQLite driver as "sqlite".
 package runtime
 
 import (
