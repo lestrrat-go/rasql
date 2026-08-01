@@ -5,13 +5,29 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/query"
 )
 
+// ColumnValuer is implemented by row types that supply their own column values.
+// Insert and Update prefer it over struct tags, so a generated row type carries
+// its own mapping instead of restating it as a tag.
+//
+// One shape is mapped by its tags even though it satisfies ColumnValuer: a
+// struct that embeds a ColumnValuer, tags fields of its own, and declares no
+// ColumnValue. Go promotes the embedded ColumnValue to the outer struct, where
+// it knows nothing about the fields declared around it, so the tags win.
+// Declaring ColumnValue on the outer type maps such a struct by method again,
+// whether or not its tags stay.
+type ColumnValuer interface {
+	ColumnValue(name string) (any, bool)
+}
+
 // Insert encodes value's rasql-tagged fields and writes it to table.
-// Value must have one exported tagged field for every table column.
+// Value must have one exported tagged field for every table column,
+// or implement ColumnValuer.
 func Insert[T any](ctx context.Context, client Client, table Table[T], value T) (sql.Result, error) {
 	statement, err := typedInsert(table, value)
 	if err != nil {
@@ -22,7 +38,8 @@ func Insert[T any](ctx context.Context, client Client, table Table[T], value T) 
 
 // Update encodes value's rasql-tagged fields and updates its table row.
 // It matches primary-key fields and updates every non-primary-key column.
-// Value must have one exported tagged field for every table column.
+// Value must have one exported tagged field for every table column,
+// or implement ColumnValuer.
 func Update[T any](ctx context.Context, client Client, table Table[T], value T) (sql.Result, error) {
 	statement, err := typedUpdate(table, value)
 	if err != nil {
@@ -40,13 +57,12 @@ func typedInsert[T any](table Table[T], value T) (query.Insert, error) {
 	columns := make([]query.Column, len(definition.Columns))
 	values := make([]query.Expression, len(definition.Columns))
 	for index, definitionColumn := range definition.Columns {
-		field := fields[definitionColumn.Name]
 		column, err := reference.Column(definitionColumn.Name)
 		if err != nil {
 			return query.Insert{}, err
 		}
 		columns[index] = column
-		values[index] = query.Bind(field.Interface())
+		values[index] = query.Bind(fields[definitionColumn.Name])
 	}
 	return query.NewInsert(reference, columns, values)
 }
@@ -74,10 +90,10 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 		}
 		field := fields[definitionColumn.Name]
 		if _, primaryKey := primaryKeys[definitionColumn.Name]; primaryKey {
-			predicates = append(predicates, query.Equal(column, query.Bind(field.Interface())))
+			predicates = append(predicates, query.Equal(column, query.Bind(field)))
 			continue
 		}
-		assignments = append(assignments, query.Set(column, query.Bind(field.Interface())))
+		assignments = append(assignments, query.Set(column, query.Bind(field)))
 	}
 	if len(assignments) == 0 {
 		return query.Update{}, fmt.Errorf("table %q has no non-primary-key columns", definition.Name)
@@ -93,7 +109,7 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 	return statement.WithWhere(query.And(predicates...))
 }
 
-func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]reflect.Value, error) {
+func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]any, error) {
 	reference := table.QueryTable()
 	definition := reference.Definition()
 	if err := definition.Validate(); err != nil {
@@ -107,11 +123,29 @@ func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]ref
 		}
 		record = record.Elem()
 	}
+
+	// A row type that states its own mapping needs no tags, so it is asked for
+	// each column of the definition and nothing is read by reflection. A
+	// ColumnValue promoted from an embedded field is not that statement when the
+	// row type tags fields of its own, so the tags are read instead.
+	// A ColumnValue the row type declares itself is always that statement.
+	if valuer, ok := columnValuer(value); ok && !tagsShadowEmbeddedValuer(record) {
+		fields := make(map[string]any, len(definition.Columns))
+		for _, definitionColumn := range definition.Columns {
+			columnValue, ok := valuer.ColumnValue(definitionColumn.Name)
+			if !ok {
+				return query.Table{}, nil, fmt.Errorf("row value %T supplies no value for column %q", value, definitionColumn.Name)
+			}
+			fields[definitionColumn.Name] = columnValue
+		}
+		return reference, fields, nil
+	}
+
 	if record.Kind() != reflect.Struct {
 		return query.Table{}, nil, fmt.Errorf("row value %T must be a struct", value)
 	}
 
-	fields := make(map[string]reflect.Value, record.NumField())
+	fields := make(map[string]any, record.NumField())
 	recordType := record.Type()
 	for index := range record.NumField() {
 		field := recordType.Field(index)
@@ -132,7 +166,7 @@ func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]ref
 		if _, exists := definition.Column(columnName); !exists {
 			return query.Table{}, nil, fmt.Errorf("field %s references unknown column %q", field.Name, columnName)
 		}
-		fields[columnName] = record.Field(index)
+		fields[columnName] = record.Field(index).Interface()
 	}
 	for _, definitionColumn := range definition.Columns {
 		if _, ok := fields[definitionColumn.Name]; !ok {
@@ -140,4 +174,88 @@ func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]ref
 		}
 	}
 	return reference, fields, nil
+}
+
+// columnValuer reports whether value or its address supplies its own column
+// values. Taking the address as well means a value receiver and a pointer
+// receiver both match.
+func columnValuer[T any](value T) (ColumnValuer, bool) {
+	if valuer, ok := any(value).(ColumnValuer); ok {
+		return valuer, true
+	}
+	valuer, ok := any(&value).(ColumnValuer)
+	return valuer, ok
+}
+
+var columnValuerType = reflect.TypeFor[ColumnValuer]()
+
+// tagsShadowEmbeddedValuer reports whether record embeds a ColumnValuer, tags
+// fields of its own, and declares no ColumnValue of its own. An interface
+// assertion cannot tell a promoted ColumnValue from one the row type declares,
+// and a promoted one maps only the embedded fields, so such a row type is mapped
+// by its tags. A row type that declares ColumnValue itself keeps the
+// ColumnValuer path, because that method is the mapping it states and Go
+// dispatches to it.
+func tagsShadowEmbeddedValuer(record reflect.Value) bool {
+	if record.Kind() != reflect.Struct {
+		return false
+	}
+	recordType := record.Type()
+	embedded := false
+	tagged := false
+	for index := range recordType.NumField() {
+		field := recordType.Field(index)
+		if columnName, ok := field.Tag.Lookup("rasql"); ok && columnName != "-" {
+			tagged = true
+		}
+		if field.Anonymous && implementsColumnValuer(field.Type) {
+			embedded = true
+		}
+	}
+	if !embedded || !tagged {
+		return false
+	}
+	return !declaresColumnValue(recordType)
+}
+
+// implementsColumnValuer reports whether fieldType or its pointer supplies its
+// own column values, so an embedded value and an embedded pointer both count.
+func implementsColumnValuer(fieldType reflect.Type) bool {
+	if fieldType.Implements(columnValuerType) {
+		return true
+	}
+	return reflect.PointerTo(fieldType).Implements(columnValuerType)
+}
+
+// generatedMethodFile is the file name the Go compiler reports for a method it
+// generates rather than one a package declares, such as the wrapper that
+// promotes an embedded field's method to the outer struct.
+const generatedMethodFile = "<autogenerated>"
+
+// declaresColumnValue reports whether rowType declares ColumnValue itself rather
+// than promoting it from an embedded field. Both rowType and its pointer are
+// asked, because a value receiver is declared on the value type and a pointer
+// receiver on the pointer type.
+func declaresColumnValue(rowType reflect.Type) bool {
+	if declaresColumnValueMethod(rowType) {
+		return true
+	}
+	return declaresColumnValueMethod(reflect.PointerTo(rowType))
+}
+
+// declaresColumnValueMethod reports whether methodType's ColumnValue is written
+// in a source file. The pointer type's copy of a value-receiver method is
+// compiler-generated like a promoted one, so only the pair of checks in
+// declaresColumnValue distinguishes the two cases.
+func declaresColumnValueMethod(methodType reflect.Type) bool {
+	method, ok := methodType.MethodByName("ColumnValue")
+	if !ok {
+		return false
+	}
+	function := runtime.FuncForPC(method.Func.Pointer())
+	if function == nil {
+		return false
+	}
+	file, _ := function.FileLine(method.Func.Pointer())
+	return file != generatedMethodFile
 }

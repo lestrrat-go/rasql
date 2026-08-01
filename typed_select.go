@@ -23,14 +23,16 @@ func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
 }
 
 // DecodeFrom starts a typed fluent SELECT builder for a custom result shape.
-// R is explicit and T is inferred from table. Projected column names map to R's
-// rasql tags or snake-cased exported field names.
+// R is explicit and T is inferred from table. R is mapped by its DecodeRow
+// method when it has one, and projected column names map to R's rasql tags or
+// snake-cased exported field names otherwise.
 func DecodeFrom[R any, T any](client Client, table Table[T]) TypedSelectBuilder[R] {
 	return TypedSelectBuilder[R]{builder: client.SelectFrom(table.QueryTable())}
 }
 
 // DecodeQueryFrom starts a typed fluent SELECT builder for a table with no Go row type.
-// Projected column names map to R's rasql tags or snake-cased exported field names.
+// R is mapped by its DecodeRow method when it has one, and projected column names
+// map to R's rasql tags or snake-cased exported field names otherwise.
 func DecodeQueryFrom[R any](client Client, table query.Table) TypedSelectBuilder[R] {
 	return TypedSelectBuilder[R]{builder: client.SelectFrom(table)}
 }

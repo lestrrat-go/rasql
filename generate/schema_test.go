@@ -18,14 +18,58 @@ const generatedUsageTest = `package generated_test
 
 import (
 	"testing"
+	"time"
 
 	"example.com/generated"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/row"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
+	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
+	result, err := row.New(
+		[]string{"id", "email", "created_at"},
+		[]any{int64(7), "ada@example.com", createdAt},
+	)
+	require.NoError(t, err)
+
+	// row.Decode finds DecodeRow on *UsersRow, so no tag is read.
+	decoded, err := row.Decode[generated.UsersRow](result)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), decoded.ID)
+	require.NotNil(t, decoded.Email)
+	require.Equal(t, "ada@example.com", *decoded.Email)
+	require.Equal(t, createdAt, decoded.CreatedAt)
+
+	// A nullable column decodes into a nil pointer rather than failing.
+	nullEmail, err := row.New(
+		[]string{"id", "email", "created_at"},
+		[]any{int64(7), nil, createdAt},
+	)
+	require.NoError(t, err)
+	decoded, err = row.Decode[generated.UsersRow](nullEmail)
+	require.NoError(t, err)
+	require.Nil(t, decoded.Email)
+
+	// A missing column is reported by the generated DecodeRow.
+	partial, err := row.New([]string{"id"}, []any{int64(7)})
+	require.NoError(t, err)
+	_, err = row.Decode[generated.UsersRow](partial)
+	require.ErrorContains(t, err, ` + "`" + `column "email" is not present` + "`" + `)
+}
+
+func TestGeneratedRowSuppliesItsOwnColumnValues(t *testing.T) {
+	var valuer rasql.ColumnValuer = generated.UsersRow{ID: 7}
+	value, ok := valuer.ColumnValue("id")
+	require.True(t, ok)
+	require.Equal(t, int64(7), value)
+	_, ok = valuer.ColumnValue("nickname")
+	require.False(t, ok)
+}
 
 func TestGeneratedColumnFields(t *testing.T) {
 	users := generated.Users()
@@ -111,9 +155,18 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "type UsersRow struct")
 	require.Contains(t, string(source), "Email")
 	require.Contains(t, string(source), "CreatedAt")
-	require.Contains(t, string(source), "`rasql:\"email\"`")
-	require.Contains(t, string(source), "`rasql:\"created_at\"`")
+	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
+	require.Contains(t, string(source), "func (r *UsersRow) DecodeRow(src row.Row) error {")
+	require.Contains(t, string(source), "if err := row.Assign(src, \"id\", &r.ID); err != nil {")
+	require.Contains(t, string(source), "if err := row.Assign(src, \"email\", &r.Email); err != nil {")
+	require.Contains(t, string(source), "\treturn row.Assign(src, \"created_at\", &r.CreatedAt)\n")
+	require.Contains(t, string(source), "func (r UsersRow) ColumnValue(name string) (any, bool) {")
+	require.Contains(t, string(source), "\tcase \"created_at\":\n\t\treturn r.CreatedAt, true\n")
+	require.Contains(t, string(source), "\treturn nil, false\n")
+	// A nullable column is a pointer field, and DecodeRow must assign through it.
+	require.Contains(t, string(source), "\tEmail     *string\n")
 	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/row\"")
 	require.Contains(t, string(source), "type UsersTable struct {\n\trasql.Table[UsersRow]\n")
 	require.Contains(t, string(source), "\tCreatedAt query.Column\n")
 	require.Contains(t, string(source), "func newUsersTable(table rasql.Table[UsersRow]) UsersTable {")
@@ -171,7 +224,7 @@ func TestSchemaRejectsInvalidPackageName(t *testing.T) {
 }
 
 func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
-	for _, columnName := range []string{"table", "as", "query_table", "column"} {
+	for _, columnName := range []string{"table", "as", "query_table", "column", "decode_row", "column_value"} {
 		t.Run(columnName, func(t *testing.T) {
 			_, err := generate.Schema("generated", schema.Table{
 				Name: "users",
