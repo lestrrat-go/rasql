@@ -66,9 +66,85 @@ Repeat `-table` for each table. Generated code exports `store.Users` as a reusab
 
 # Query a generated table
 
-Create `runtime.Client` with the application's `*sql.DB` once, then issue a query in one chain. This runnable example uses a debug `runtime.Queryer` that prints the generated statement.
+Importing `runtime` registers the pure-Go SQLite driver as `sqlite`. This runnable example uses an in-memory database, so it creates the table, inserts data, and issues the query in one chain.
 
-<!-- INCLUDE(examples/runtime_query_example_test.go) -->
+<!-- INCLUDE(examples/runtime_sqlite_query_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/row"
+	"github.com/lestrrat-go/rasql/runtime"
+)
+
+func Example_runtime_sqlite_query() {
+	ctx := context.Background()
+	// Importing runtime registers the pure-Go SQLite driver as "sqlite".
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+
+	client, err := runtime.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create runtime client: %s\n", err)
+		return
+	}
+	if err := client.CreateTable(ctx, users.Table()); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", 42, "ada@example.com"); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+
+	// users is a reusable query.TableRef with the shape emitted by rasqlgen.
+	rows, err := client.SelectFrom(users).
+		Select("id", "email").
+		WhereEqual("id", 42).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+	if len(rows) != 1 {
+		fmt.Printf("expected one user, got %d\n", len(rows))
+		return
+	}
+	email, err := row.String("email")
+	if err != nil {
+		fmt.Printf("failed to create email column: %s\n", err)
+		return
+	}
+	userEmail, err := email.Get(rows[0])
+	if err != nil {
+		fmt.Printf("failed to read email: %s\n", err)
+		return
+	}
+
+	fmt.Println(userEmail)
+
+	// Output:
+	// ada@example.com
+}
+```
+source: [examples/runtime_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_sqlite_query_example_test.go)
+<!-- END INCLUDE -->
+
+# Debug a query
+
+`runtime.Client` also accepts a `runtime.Queryer`, so a debug implementation can print generated SQL without connecting to a database.
+
+<!-- INCLUDE(examples/runtime_debug_query_example_test.go) -->
 ```go
 package examples_test
 
@@ -91,7 +167,7 @@ func (statementPrinter) QueryContext(_ context.Context, query string, arguments 
 	return nil, nil
 }
 
-func Example_runtime_query() {
+func Example_runtime_debug_query() {
 	// runtime.New accepts *sql.DB, *sql.Tx, or another runtime.Queryer. This
 	// debug Queryer lets the example show the generated statement without a database.
 	client, err := runtime.New(statementPrinter{}, dialect.PostgreSQL())
@@ -118,7 +194,7 @@ func Example_runtime_query() {
 	// 0 result rows
 }
 ```
-source: [examples/runtime_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_query_example_test.go)
+source: [examples/runtime_debug_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_debug_query_example_test.go)
 <!-- END INCLUDE -->
 
 # Static templates
