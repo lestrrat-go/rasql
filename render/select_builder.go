@@ -1,13 +1,19 @@
-package query
+package render
 
-// SelectBuilder builds a SELECT statement through an immutable fluent API.
+import (
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+)
+
+// SelectBuilder builds parameterized SQL through an immutable fluent API.
 type SelectBuilder struct {
-	from        TableRef
-	projections []Projection
-	joins       []Join
-	where       Expression
+	dialect     dialect.Dialect
+	from        query.TableRef
+	projections []query.Projection
+	joins       []query.Join
+	where       query.Expression
 	hasWhere    bool
-	orders      []Order
+	orders      []query.Order
 	limit       int
 	hasLimit    bool
 	offset      int
@@ -15,9 +21,9 @@ type SelectBuilder struct {
 	err         error
 }
 
-// SelectFrom starts a fluent SELECT builder using from as its primary table.
-func SelectFrom(from TableRef) SelectBuilder {
-	return SelectBuilder{from: from}
+// SelectFrom starts a fluent SELECT builder for d using from as its primary table.
+func SelectFrom(d dialect.Dialect, from query.TableRef) SelectBuilder {
+	return SelectBuilder{dialect: d, from: from}
 }
 
 // Select adds columns from the primary table by name.
@@ -31,13 +37,13 @@ func (b SelectBuilder) Select(columns ...string) SelectBuilder {
 		if err != nil {
 			return b.withError(err)
 		}
-		b.projections = append(b.projections, Project(column))
+		b.projections = append(b.projections, query.Project(column))
 	}
 	return b
 }
 
 // Project adds projections created through the basic query API.
-func (b SelectBuilder) Project(projections ...Projection) SelectBuilder {
+func (b SelectBuilder) Project(projections ...query.Projection) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
 		return b
@@ -47,7 +53,7 @@ func (b SelectBuilder) Project(projections ...Projection) SelectBuilder {
 }
 
 // Join adds joins created through the basic query API.
-func (b SelectBuilder) Join(joins ...Join) SelectBuilder {
+func (b SelectBuilder) Join(joins ...query.Join) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
 		return b
@@ -57,7 +63,7 @@ func (b SelectBuilder) Join(joins ...Join) SelectBuilder {
 }
 
 // Where sets the predicate using an expression created through the basic query API.
-func (b SelectBuilder) Where(expression Expression) SelectBuilder {
+func (b SelectBuilder) Where(expression query.Expression) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
 		return b
@@ -77,13 +83,13 @@ func (b SelectBuilder) WhereEqual(columnName string, value any) SelectBuilder {
 	if err != nil {
 		return b.withError(err)
 	}
-	b.where = Equal(column, Bind(value))
+	b.where = query.Equal(column, query.Bind(value))
 	b.hasWhere = true
 	return b
 }
 
 // Order adds ordering created through the basic query API.
-func (b SelectBuilder) Order(orders ...Order) SelectBuilder {
+func (b SelectBuilder) Order(orders ...query.Order) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
 		return b
@@ -124,46 +130,46 @@ func (b SelectBuilder) Offset(offset int) SelectBuilder {
 	return b
 }
 
-// Build turns b into a validated Select using NewSelect and its With methods.
-func (b SelectBuilder) Build() (Select, error) {
+// Build validates b and returns its parameterized SQL statement.
+func (b SelectBuilder) Build() (Statement, error) {
 	if b.err != nil {
-		return Select{}, b.err
+		return Statement{}, b.err
 	}
-	statement, err := NewSelect(b.from, b.projections...)
+	statement, err := query.NewSelect(b.from, b.projections...)
 	if err != nil {
-		return Select{}, err
+		return Statement{}, err
 	}
 	for _, join := range b.joins {
 		statement, err = statement.WithJoin(join)
 		if err != nil {
-			return Select{}, err
+			return Statement{}, err
 		}
 	}
 	if b.hasWhere {
 		statement, err = statement.WithWhere(b.where)
 		if err != nil {
-			return Select{}, err
+			return Statement{}, err
 		}
 	}
 	if len(b.orders) > 0 {
 		statement, err = statement.WithOrder(b.orders...)
 		if err != nil {
-			return Select{}, err
+			return Statement{}, err
 		}
 	}
 	if b.hasLimit {
 		statement, err = statement.WithLimit(b.limit)
 		if err != nil {
-			return Select{}, err
+			return Statement{}, err
 		}
 	}
 	if b.hasOffset {
 		statement, err = statement.WithOffset(b.offset)
 		if err != nil {
-			return Select{}, err
+			return Statement{}, err
 		}
 	}
-	return statement, nil
+	return Select(b.dialect, statement)
 }
 
 func (b SelectBuilder) orderColumn(name string, descending bool) SelectBuilder {
@@ -176,10 +182,10 @@ func (b SelectBuilder) orderColumn(name string, descending bool) SelectBuilder {
 		return b.withError(err)
 	}
 	if descending {
-		b.orders = append(b.orders, Desc(column))
+		b.orders = append(b.orders, query.Desc(column))
 		return b
 	}
-	b.orders = append(b.orders, Asc(column))
+	b.orders = append(b.orders, query.Asc(column))
 	return b
 }
 
@@ -192,8 +198,8 @@ func (b SelectBuilder) withError(err error) SelectBuilder {
 
 func (b SelectBuilder) clone() SelectBuilder {
 	copy := b
-	copy.projections = append([]Projection(nil), b.projections...)
-	copy.joins = append([]Join(nil), b.joins...)
-	copy.orders = append([]Order(nil), b.orders...)
+	copy.projections = append([]query.Projection(nil), b.projections...)
+	copy.joins = append([]query.Join(nil), b.joins...)
+	copy.orders = append([]query.Order(nil), b.orders...)
 	return copy
 }
