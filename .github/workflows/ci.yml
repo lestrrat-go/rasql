@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Go checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+      - run: go test ./...
+      - run: go vet ./...
+
+  integration:
+    name: ${{ matrix.name }} integration
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: PostgreSQL
+            image: postgres:17-alpine
+            port_mapping: 5432:5432
+            health_command: pg_isready -U rasql -d rasql
+            postgres_dsn: postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable
+          - name: MySQL
+            image: mysql:8.4
+            port_mapping: 3306:3306
+            health_command: mysqladmin ping -h 127.0.0.1 -urasql -prasql
+            mysql_dsn: rasql:rasql@tcp(127.0.0.1:3306)/rasql?parseTime=true
+    services:
+      database:
+        image: ${{ matrix.image }}
+        env:
+          MYSQL_DATABASE: rasql
+          MYSQL_PASSWORD: rasql
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_USER: rasql
+          POSTGRES_DB: rasql
+          POSTGRES_PASSWORD: rasql
+          POSTGRES_USER: rasql
+        ports:
+          - ${{ matrix.port_mapping }}
+        options: >-
+          --health-cmd "${{ matrix.health_command }}"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+      - name: Run database integration test
+        env:
+          RASQL_TEST_MYSQL_DSN: ${{ matrix.mysql_dsn }}
+          RASQL_TEST_POSTGRES_DSN: ${{ matrix.postgres_dsn }}
+        run: go test ./... -run '^TestDatabaseIntegration$' -count=1
