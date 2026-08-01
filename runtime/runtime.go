@@ -112,29 +112,33 @@ func (c Client) ExecRendered(ctx context.Context, statement render.Statement) (s
 	return result, nil
 }
 
-// CreateTable renders and executes a table definition followed by its indexes.
-// Callers that require atomic DDL should construct the Client with a *sql.Tx.
-func (c Client) CreateTable(ctx context.Context, table schema.Table) error {
-	if isNil(c.queryer) || isNil(c.dialect) {
+func createTable(ctx context.Context, client Client, table schema.Table) error {
+	if isNil(client.queryer) || isNil(client.dialect) {
 		return fmt.Errorf("runtime: invalid client")
 	}
-	statement, err := render.CreateTable(c.dialect, table)
+	statement, err := render.CreateTable(client.dialect, table)
 	if err != nil {
 		return fmt.Errorf("runtime: render CREATE TABLE: %w", err)
 	}
-	if _, err := c.ExecRendered(ctx, statement); err != nil {
+	if _, err := client.ExecRendered(ctx, statement); err != nil {
 		return fmt.Errorf("runtime: execute CREATE TABLE: %w", err)
 	}
-	indexes, err := render.CreateIndexes(c.dialect, table)
+	indexes, err := render.CreateIndexes(client.dialect, table)
 	if err != nil {
 		return fmt.Errorf("runtime: render CREATE INDEX: %w", err)
 	}
 	for _, index := range indexes {
-		if _, err := c.ExecRendered(ctx, index); err != nil {
+		if _, err := client.ExecRendered(ctx, index); err != nil {
 			return fmt.Errorf("runtime: execute CREATE INDEX: %w", err)
 		}
 	}
 	return nil
+}
+
+// Create renders and executes table's definition followed by its indexes.
+// Callers that require atomic DDL should construct the Client with a *sql.Tx.
+func Create[T any](ctx context.Context, client Client, table Table[T]) error {
+	return createTable(ctx, client, table.Ref().Table())
 }
 
 func collect(rows *sql.Rows) ([]row.Row, error) {

@@ -210,7 +210,7 @@ func TestClientQueryRenderedExecutesStaticStatement(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestClientCreateTableExecutesTableAndIndexes(t *testing.T) {
+func TestCreateExecutesTableAndIndexes(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -232,12 +232,20 @@ func TestClientCreateTableExecutesTableAndIndexes(t *testing.T) {
 			Columns: []string{"email"},
 		}},
 	}
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	reference, err := query.NewTableRef(table)
+	require.NoError(t, err)
+	users, err := runtime.NewTable[user](reference)
+	require.NoError(t, err)
 	mock.ExpectExec("CREATE TABLE \"users\" (\"id\" BIGINT NOT NULL, \"email\" TEXT NOT NULL, PRIMARY KEY (\"id\"))").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX \"users_email_idx\" ON \"users\" (\"email\")").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	require.NoError(t, client.CreateTable(t.Context(), table))
+	require.NoError(t, runtime.Create(t.Context(), client, users))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
