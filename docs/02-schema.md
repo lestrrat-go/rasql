@@ -90,7 +90,9 @@ users := rasql.MustTable[UserRow](definition)
 
 Each field's `rasql` tag names the column it holds. `MustTable` panics on an invalid descriptor and suits generated or otherwise constant tables; `NewTable` returns the error instead, for descriptors assembled at runtime.
 
-`users.Column(name)` returns a `query.Column` for a column of the table, and `users.QueryTable()` returns the underlying `query.Table`. The lower-level `query` package works in terms of those two types, and [Querying](03-querying.md) uses them for joins and projections. Tables written by [`rasqlgen`](06-rasqlgen.md) go further and expose one field per column, so `users.ID` needs no lookup and no error check. A hand-written table gets the same benefit by wrapping the descriptor the way the generator does, which [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows in full.
+A `rasql.Table[T]` is half of a table value rather than the whole of it. Wrap it in a type holding one `query.Column` field per column, so that `users.ID` is the column reference the builders take. That is the shape [`rasqlgen`](06-rasqlgen.md) emits, the shape every example on these pages uses, and the shape a hand-written table should have too. [Getting started](01-getting-started.md#the-table-used-throughout-the-documentation) shows the full wrapper for the `users` table, and [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows what the fields are worth.
+
+Two methods remain for code that only learns a column name while it runs. `users.Column(name)` looks a column up and returns a `query.Column` with an error, and `users.QueryTable()` returns the underlying `query.Table` that the lower-level `query` package works in terms of, which [Querying](03-querying.md) uses for joins and projections.
 
 ## Read a table out of a database
 
