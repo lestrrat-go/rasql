@@ -1,10 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +24,45 @@ func TestRunSchemaGeneratesSource(t *testing.T) {
 	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
 	source, err := os.ReadFile(output)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var Users = schema.Table")
+	require.Contains(t, string(source), "var Users = query.MustNewTableRef")
+}
+
+func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	previousOpenDatabase := openDatabase
+	openDatabase = func(driverName string, dataSourceName string) (*sql.DB, error) {
+		require.Equal(t, "pgx", driverName)
+		require.Equal(t, "postgres://example", dataSourceName)
+		return database, nil
+	}
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+	})
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
+			AddRow("id", "bigint", "NO", nil))
+	mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+
+	output := filepath.Join(directory, "schema.go")
+	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output})
+	require.NoError(t, err)
+	source, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "var Users = query.MustNewTableRef")
 }
 
 func TestRunQueryGeneratesSource(t *testing.T) {

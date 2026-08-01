@@ -1,18 +1,25 @@
-// rasqlgen generates Go source from rasql schema snapshots and query templates.
+// rasqlgen generates Go source from rasql schemas and query templates.
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/schema"
 	querytemplate "github.com/lestrrat-go/rasql/template"
 )
+
+var openDatabase = sql.Open
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -38,21 +45,57 @@ func run(args []string) error {
 func runSchema(args []string) error {
 	flags := flag.NewFlagSet("schema", flag.ContinueOnError)
 	input := flags.String("input", "", "path to a JSON array of schema tables")
+	dsn := flags.String("dsn", "", "PostgreSQL connection string")
+	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
+	var tableNames tableNames
+	flags.Var(&tableNames, "table", "database table to generate; repeat for multiple tables")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "path for generated Go source")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *input == "" || *packageName == "" || *output == "" {
-		return errors.New("schema requires -input, -package, and -output")
+	if *packageName == "" || *output == "" {
+		return errors.New("schema requires -package and -output")
 	}
-	data, err := os.ReadFile(*input)
-	if err != nil {
-		return fmt.Errorf("read schema input: %w", err)
+	if *input != "" && *dsn != "" {
+		return errors.New("schema accepts either -input or -dsn, not both")
 	}
 	var tables []schema.Table
-	if err := json.Unmarshal(data, &tables); err != nil {
-		return fmt.Errorf("decode schema input: %w", err)
+	switch {
+	case *input != "":
+		data, err := os.ReadFile(*input)
+		if err != nil {
+			return fmt.Errorf("read schema input: %w", err)
+		}
+		if err := json.Unmarshal(data, &tables); err != nil {
+			return fmt.Errorf("decode schema input: %w", err)
+		}
+	case *dsn != "":
+		if len(tableNames) == 0 {
+			return errors.New("schema with -dsn requires at least one -table")
+		}
+		d, err := builtinDialect(*dialectName)
+		if err != nil {
+			return err
+		}
+		if d.Name() != dialect.PostgreSQL().Name() {
+			return fmt.Errorf("schema direct inspection supports PostgreSQL, not %q", d.Name())
+		}
+		database, err := openDatabase("pgx", *dsn)
+		if err != nil {
+			return fmt.Errorf("open PostgreSQL database: %w", err)
+		}
+		defer database.Close()
+		inspector, err := inspect.New(database, d)
+		if err != nil {
+			return err
+		}
+		tables, err = inspectTables(context.Background(), inspector, tableNames)
+		if err != nil {
+			return err
+		}
+	default:
+		return errors.New("schema requires either -input or -dsn")
 	}
 	source, err := generate.Schema(*packageName, tables...)
 	if err != nil {
@@ -61,6 +104,29 @@ func runSchema(args []string) error {
 	if err := os.WriteFile(*output, source, 0o600); err != nil {
 		return fmt.Errorf("write schema output: %w", err)
 	}
+	return nil
+}
+
+func inspectTables(ctx context.Context, inspector inspect.Inspector, names []string) ([]schema.Table, error) {
+	tables := make([]schema.Table, len(names))
+	for index, name := range names {
+		table, err := inspector.Table(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		tables[index] = table
+	}
+	return tables, nil
+}
+
+type tableNames []string
+
+func (names *tableNames) String() string {
+	return strings.Join(*names, ",")
+}
+
+func (names *tableNames) Set(name string) error {
+	*names = append(*names, name)
 	return nil
 }
 
