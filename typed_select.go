@@ -150,6 +150,9 @@ func (b TypedSelectBuilder[T]) One(ctx context.Context) (T, error) {
 		}
 		result = value
 		count++
+		if count > 1 {
+			return zero, fmt.Errorf("rasql: expected one row, got %d", count)
+		}
 	}
 	if count != 1 {
 		return zero, fmt.Errorf("rasql: expected one row, got %d", count)

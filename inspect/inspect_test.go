@@ -45,6 +45,44 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 }
 
+func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	primaryKeyQuery := "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position"
+	mock.ExpectQuery(columnsQuery).
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default"}).
+			AddRow("id", "bigint", "NO", nil).
+			AddRow("active", "tinyint(1)", "NO", nil).
+			AddRow("login_attempts", "tinyint", "NO", nil))
+	mock.ExpectQuery(primaryKeyQuery).
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.TypeInteger},
+		{Name: "active", Type: schema.TypeBoolean},
+		{Name: "login_attempts", Type: schema.TypeInteger},
+	}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+
+	source, err := generate.Schema("generated", table)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*Active\s+bool\s+`+"`rasql:\"active\"`"+`$`, string(source))
+	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64\s+`+"`rasql:\"login_attempts\"`"+`$`, string(source))
+}
+
 func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)

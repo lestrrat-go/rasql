@@ -55,9 +55,11 @@ source: [examples/schema_table_definition_example_test.go](https://github.com/le
 # Generate from PostgreSQL
 
 Generate reusable table references directly from a live PostgreSQL database.
+Run the generator from your Go module without installing a binary first:
 
 ```sh
-rasqlgen schema \
+mkdir -p internal/store
+go run github.com/lestrrat-go/rasql/cmd/rasqlgen@latest schema \
   -dsn "$DATABASE_URL" \
   -table users \
   -package store \
