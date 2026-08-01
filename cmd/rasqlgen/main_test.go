@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,4 +85,58 @@ func TestRunQueryGeneratesSource(t *testing.T) {
 
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	require.Error(t, run([]string{"unknown"}))
+}
+
+func TestRunHelp(t *testing.T) {
+	previousCommandOutput := commandOutput
+	output := new(bytes.Buffer)
+	commandOutput = output
+	t.Cleanup(func() {
+		commandOutput = previousCommandOutput
+	})
+
+	testCases := []struct {
+		name     string
+		args     []string
+		expected string
+	}{
+		{
+			name:     "global",
+			args:     []string{"-h"},
+			expected: "Usage: rasqlgen <command> [flags]",
+		},
+		{
+			name:     "schema",
+			args:     []string{"schema", "-h"},
+			expected: "Usage of schema:",
+		},
+		{
+			name:     "query",
+			args:     []string{"query", "-h"},
+			expected: "Usage of query:",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			output.Reset()
+			err := run(testCase.args)
+			require.ErrorIs(t, err, flag.ErrHelp)
+			require.Contains(t, output.String(), testCase.expected)
+		})
+	}
+}
+
+func TestRunRejectsInvalidFlag(t *testing.T) {
+	previousCommandOutput := commandOutput
+	output := new(bytes.Buffer)
+	commandOutput = output
+	t.Cleanup(func() {
+		commandOutput = previousCommandOutput
+	})
+
+	err := run([]string{"schema", "-unknown"})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, flag.ErrHelp)
+	require.Contains(t, output.String(), "flag provided but not defined: -unknown")
 }

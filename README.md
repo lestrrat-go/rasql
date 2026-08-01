@@ -59,7 +59,8 @@ Run the generator from your Go module without installing a binary first:
 
 ```sh
 mkdir -p internal/store
-go run github.com/lestrrat-go/rasql/cmd/rasqlgen@latest schema \
+go get github.com/lestrrat-go/rasql/cmd/rasqlgen@latest
+go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
   -dsn "$DATABASE_URL" \
   -table users \
   -package store \

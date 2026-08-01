@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -19,10 +20,16 @@ import (
 	querytemplate "github.com/lestrrat-go/rasql/template"
 )
 
-var openDatabase = sql.Open
+var (
+	openDatabase            = sql.Open
+	commandOutput io.Writer = os.Stderr
+)
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -33,6 +40,9 @@ func run(args []string) error {
 		return errors.New("usage: rasqlgen <schema|query> [flags]")
 	}
 	switch args[0] {
+	case "-h", "-help", "--help":
+		printUsage(commandOutput)
+		return flag.ErrHelp
 	case "schema":
 		return runSchema(args[1:])
 	case "query":
@@ -42,8 +52,18 @@ func run(args []string) error {
 	}
 }
 
+func printUsage(output io.Writer) {
+	fmt.Fprintln(output, "Usage: rasqlgen <command> [flags]")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Commands:")
+	fmt.Fprintln(output, "  schema    Generate Go source from a schema")
+	fmt.Fprintln(output, "  query     Generate Go source from a SQL template")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Run 'rasqlgen <command> -h' for command flags.")
+}
+
 func runSchema(args []string) error {
-	flags := flag.NewFlagSet("schema", flag.ContinueOnError)
+	flags := newFlagSet("schema")
 	input := flags.String("input", "", "path to a JSON array of schema tables")
 	dsn := flags.String("dsn", "", "PostgreSQL connection string")
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
@@ -131,7 +151,7 @@ func (names *tableNames) Set(name string) error {
 }
 
 func runQuery(args []string) error {
-	flags := flag.NewFlagSet("query", flag.ContinueOnError)
+	flags := newFlagSet("query")
 	input := flags.String("input", "", "path to a static SQL template")
 	functionName := flags.String("function", "", "generated function name")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, sqlite, or spanner")
@@ -167,6 +187,12 @@ func runQuery(args []string) error {
 		return fmt.Errorf("write query output: %w", err)
 	}
 	return nil
+}
+
+func newFlagSet(name string) *flag.FlagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(commandOutput)
+	return flags
 }
 
 func builtinDialect(name string) (dialect.Dialect, error) {
