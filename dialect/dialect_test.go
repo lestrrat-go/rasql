@@ -76,4 +76,6 @@ func TestBuiltinCapabilities(t *testing.T) {
 	require.True(t, dialect.SQLite().Supports(dialect.CapabilityConflictTarget))
 	require.False(t, dialect.MySQL().Supports(dialect.CapabilityReturning))
 	require.False(t, dialect.Spanner().Supports(dialect.CapabilityUpsert))
+	require.Equal(t, dialect.PrimaryKeySuffix, dialect.Spanner().TablePrimaryKeyStyle())
+	require.Equal(t, dialect.PrimaryKeyInline, dialect.PostgreSQL().TablePrimaryKeyStyle())
 }

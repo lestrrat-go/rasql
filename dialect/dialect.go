@@ -16,12 +16,21 @@ const (
 	CapabilityConflictTarget
 )
 
+// PrimaryKeyStyle controls where CREATE TABLE renders its primary key.
+type PrimaryKeyStyle uint8
+
+const (
+	PrimaryKeyInline PrimaryKeyStyle = iota
+	PrimaryKeySuffix
+)
+
 // Dialect defines database-specific SQL rendering rules.
 type Dialect interface {
 	Name() string
 	QuoteIdentifier(string) (string, error)
 	Placeholder(int) (string, error)
 	TypeName(schema.LogicalType) (string, error)
+	TablePrimaryKeyStyle() PrimaryKeyStyle
 	Supports(Capability) bool
 }
 
@@ -31,6 +40,7 @@ func PostgreSQL() Dialect {
 		name:         "postgresql",
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
+		primaryKey:   PrimaryKeyInline,
 		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
@@ -51,6 +61,7 @@ func MySQL() Dialect {
 		name:         "mysql",
 		quote:        '`',
 		placeholder:  questionPlaceholder,
+		primaryKey:   PrimaryKeyInline,
 		capabilities: CapabilityUpsert,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
@@ -71,6 +82,7 @@ func SQLite() Dialect {
 		name:         "sqlite",
 		quote:        '"',
 		placeholder:  questionPlaceholder,
+		primaryKey:   PrimaryKeyInline,
 		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "INTEGER",
@@ -91,6 +103,7 @@ func Spanner() Dialect {
 		name:        "spanner",
 		quote:       '`',
 		placeholder: namedPlaceholder,
+		primaryKey:  PrimaryKeySuffix,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOL",
 			schema.TypeInteger: "INT64",
@@ -108,6 +121,7 @@ type builtin struct {
 	name         string
 	quote        rune
 	placeholder  func(int) string
+	primaryKey   PrimaryKeyStyle
 	capabilities Capability
 	types        map[schema.LogicalType]string
 }
@@ -136,6 +150,10 @@ func (d builtin) TypeName(logicalType schema.LogicalType) (string, error) {
 		return "", fmt.Errorf("dialect %s: unsupported logical type %q", d.name, logicalType)
 	}
 	return typeName, nil
+}
+
+func (d builtin) TablePrimaryKeyStyle() PrimaryKeyStyle {
+	return d.primaryKey
 }
 
 func (d builtin) Supports(capability Capability) bool {
