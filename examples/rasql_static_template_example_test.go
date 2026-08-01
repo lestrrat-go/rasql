@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/row"
 	querytemplate "github.com/lestrrat-go/rasql/template"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_static_template() {

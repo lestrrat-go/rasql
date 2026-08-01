@@ -7,12 +7,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_sqlite_query() {
 	// This example creates, inserts, and reads one generated row with SQLite.
 	ctx := context.Background()
-	// Importing rasql registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Printf("failed to open SQLite database: %s\n", err)

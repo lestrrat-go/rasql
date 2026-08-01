@@ -126,15 +126,6 @@ func TestClientQueryAllowsDebugQueryer(t *testing.T) {
 	require.Equal(t, []any{42}, queryer.arguments)
 }
 
-func TestSQLiteDriverIsRegistered(t *testing.T) {
-	database, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, database.Close())
-	})
-	require.NoError(t, database.PingContext(t.Context()))
-}
-
 func TestNewRejectsNilDependencies(t *testing.T) {
 	_, err := rasql.New(nil, dialect.PostgreSQL())
 	require.Error(t, err)

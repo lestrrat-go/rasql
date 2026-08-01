@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_typed_query() {

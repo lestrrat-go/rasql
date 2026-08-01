@@ -10,6 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_dynamic_projection() {

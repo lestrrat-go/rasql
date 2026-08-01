@@ -79,15 +79,14 @@ import (
 	"database/sql"
 	"fmt"
 
-	_ "github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_inspect_sqlite_table() {
 	// This example reads an existing SQLite table into a normalized schema.Table.
 	ctx := context.Background()
-	// The rasql package registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
@@ -124,7 +123,7 @@ source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestr
 
 # Query a generated table
 
-Importing `rasql` registers the pure-Go SQLite driver as `sqlite`. This runnable example uses an in-memory database, so it creates the table, inserts data, and issues the query in one chain.
+Each SQLite example imports the pure-Go driver directly. This runnable example uses an in-memory database, so it creates the table, inserts data, and issues the query in one chain.
 
 <!-- INCLUDE(examples/rasql_sqlite_query_example_test.go) -->
 ```go
@@ -137,12 +136,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_sqlite_query() {
 	// This example creates, inserts, and reads one generated row with SQLite.
 	ctx := context.Background()
-	// Importing rasql registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
@@ -200,6 +199,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_typed_query() {
@@ -278,6 +278,7 @@ import (
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_dynamic_projection() {
@@ -404,6 +405,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_insert() {
@@ -465,6 +467,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_update() {
@@ -636,6 +639,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/row"
 	querytemplate "github.com/lestrrat-go/rasql/template"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_static_template() {

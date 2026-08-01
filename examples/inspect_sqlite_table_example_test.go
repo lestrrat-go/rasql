@@ -5,15 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 
-	_ "github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_inspect_sqlite_table() {
 	// This example reads an existing SQLite table into a normalized schema.Table.
 	ctx := context.Background()
-	// The rasql package registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Printf("failed to open SQLite database: %s\n", err)

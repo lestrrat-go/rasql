@@ -11,7 +11,7 @@ The first release does not include a migration planner or executor. It describes
 * Schema definitions and dynamic builders share the same public descriptors and query representation. Static templates compile to precompiled parameterized statements with the same rendering and root-package execution boundary.
 * Values always travel separately from SQL text. Renderers create placeholders and an ordered argument list; no public API interpolates values into SQL.
 * The core model uses logical SQL types. Dialects decide how those types map to DDL, bind values, placeholders, identifiers, and capability-specific syntax.
-* The root `rasql` package builds on `database/sql` first and registers the bundled SQLite driver. Database-specific driver helpers can be added later without changing the core query or schema APIs.
+* The root `rasql` package builds on `database/sql` first. Applications import their selected database driver where they open a connection. Database-specific driver helpers can be added later without changing the core query or schema APIs.
 * Result access is explicit and typed. A caller selects a typed column or destination instead of receiving a map with unchecked assertions.
 * Schema inspection normalizes live metadata into the same schema descriptors used by Go definitions. Generation turns normalized descriptors into deterministic Go source.
 * Generated source, rendered SQL, and errors must be deterministic. Identical inputs produce identical output regardless of map iteration order.
