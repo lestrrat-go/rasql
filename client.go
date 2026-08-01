@@ -136,7 +136,7 @@ func createTable(ctx context.Context, client Client, table schema.Table) error {
 // Create renders and executes table's definition followed by its indexes.
 // Callers that require atomic DDL should construct the Client with a *sql.Tx.
 func Create[T any](ctx context.Context, client Client, table Table[T]) error {
-	return createTable(ctx, client, table.Ref().Table())
+	return createTable(ctx, client, table.Ref().Definition())
 }
 
 func collect(rows *sql.Rows) ([]row.Row, error) {

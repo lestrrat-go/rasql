@@ -36,7 +36,7 @@ func typedInsert[T any](table Table[T], value T) (query.Insert, error) {
 	if err != nil {
 		return query.Insert{}, err
 	}
-	definition := reference.Table()
+	definition := reference.Definition()
 	columns := make([]query.Column, len(definition.Columns))
 	values := make([]query.Expression, len(definition.Columns))
 	for index, definitionColumn := range definition.Columns {
@@ -56,7 +56,7 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 	if err != nil {
 		return query.Update{}, err
 	}
-	definition := reference.Table()
+	definition := reference.Definition()
 	if len(definition.PrimaryKey) == 0 {
 		return query.Update{}, fmt.Errorf("table %q has no primary key", definition.Name)
 	}
@@ -95,7 +95,7 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 
 func typedRowFields[T any](table Table[T], value T) (query.TableRef, map[string]reflect.Value, error) {
 	reference := table.Ref()
-	definition := reference.Table()
+	definition := reference.Definition()
 	if err := definition.Validate(); err != nil {
 		return query.TableRef{}, nil, fmt.Errorf("table reference: %w", err)
 	}

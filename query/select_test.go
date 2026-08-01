@@ -98,7 +98,7 @@ func TestTableRefCopiesDescriptor(t *testing.T) {
 
 	_, err = users.Column("id")
 	require.NoError(t, err)
-	require.Equal(t, []string{"id"}, users.Table().PrimaryKey)
+	require.Equal(t, []string{"id"}, users.Definition().PrimaryKey)
 }
 
 func TestMustNewTableRef(t *testing.T) {

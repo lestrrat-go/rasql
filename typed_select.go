@@ -13,7 +13,7 @@ import (
 // It selects every table column by default so All and One can decode T.
 func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
 	reference := table.Ref()
-	definition := reference.Table()
+	definition := reference.Definition()
 	columns := make([]string, len(definition.Columns))
 	for index, column := range definition.Columns {
 		columns[index] = column.Name

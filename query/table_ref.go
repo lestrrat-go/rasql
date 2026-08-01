@@ -54,8 +54,8 @@ func (t TableRef) Alias() string {
 	return t.alias
 }
 
-// Table returns a copy of the underlying schema descriptor.
-func (t TableRef) Table() schema.Table {
+// Definition returns a copy of the underlying schema descriptor.
+func (t TableRef) Definition() schema.Table {
 	return t.table.Clone()
 }
 
