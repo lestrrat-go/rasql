@@ -46,9 +46,9 @@ schema ──> dialect ──> render ──> runtime
 
 ## Public API shape
 
-The public API starts with descriptors rather than a global registry. Applications create or generate a `schema.Table`, keep its typed columns together, and pass them to query builders. This keeps multiple schemas and test fixtures isolated in the same process.
+The public API starts with descriptors rather than a global registry. Applications can create a `schema.Table` directly, while generated code exposes reusable `query.TableRef` values. This keeps multiple schemas and test fixtures isolated in the same process.
 
-Statements are immutable after construction. Builders may use mutable local state, but `Build` returns a validated query value that can be rendered repeatedly for any supported dialect. Rendering returns a small value containing SQL and arguments, along with an error for unsupported syntax or invalid identifiers.
+Statements are immutable after construction. The basic `query` API exposes validated statement values. The `render` fluent builder owns a dialect and returns parameterized SQL, while the `runtime` fluent builder owns a client and executes the query directly.
 
 Result decoding uses typed destinations or typed column descriptors. It must preserve `NULL` distinctly from a zero value. The initial supported primitives are boolean, integer, floating point, string, byte slice, time, and nullable forms. Custom types enter through explicit codecs.
 
@@ -64,7 +64,7 @@ The first query slice supports `SELECT`, predicates, joins, ordering, limit, and
 
 Schema descriptors include names, columns, nullability, defaults, primary keys, foreign keys, unique constraints, checks, and indexes.
 
-Inspectors use a small adapter for each database metadata surface. They normalize column identifiers, types, nullability, defaults, and primary keys into `schema` values without attempting to infer application names or Go types. The generator owns Go naming rules and writes a stable file header, imports, and table descriptors.
+Inspectors use a small adapter for each database metadata surface. They normalize column identifiers, types, nullability, defaults, and primary keys into `schema` values without attempting to infer application names or Go types. The PostgreSQL `rasqlgen schema` path connects directly to inspect named tables. The generator owns Go naming rules and writes stable table-reference source.
 
 ## Errors and observability
 

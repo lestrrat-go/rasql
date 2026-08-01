@@ -50,7 +50,40 @@ func Example_schema_table_definition() {
 source: [examples/schema_table_definition_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_example_test.go)
 <!-- END INCLUDE -->
 
-# SYNOPSIS
+# Generate from PostgreSQL
+
+Generate reusable table references directly from a live PostgreSQL database.
+
+```sh
+rasqlgen schema \
+  -dsn "$DATABASE_URL" \
+  -table users \
+  -package store \
+  -output internal/store/rasql_gen.go
+```
+
+Repeat `-table` for each table. Generated code exports `store.Users` as a reusable `query.TableRef`; call `store.Users.Table()` when a schema descriptor is required.
+
+# Query a generated table
+
+Create the client once, then build and execute a basic query in one chain.
+
+```go
+client, err := runtime.New(db, dialect.PostgreSQL())
+if err != nil {
+	return err
+}
+
+rows, err := client.SelectFrom(store.Users).
+	Select("id", "email").
+	WhereEqual("id", 42).
+	Query(ctx)
+if err != nil {
+	return err
+}
+```
+
+# Render a dynamic query
 
 <!-- INCLUDE(examples/query_dynamic_example_test.go) -->
 ```go
@@ -137,7 +170,7 @@ The project requires Go 1.26 or newer and uses parameterized types where they im
 
 The `schema`, `query`, `render`, `row`, and `runtime` packages cover the main application path. The `inspect` package normalizes live table columns and primary keys. The `generate` and `template` packages produce deterministic Go source.
 
-`rasqlgen schema` generates Go table descriptors from a JSON schema snapshot. `rasqlgen query` generates a parameterized Go function from a restricted SQL template. Both commands reject unchecked template actions and preserve values as bound arguments.
+`rasqlgen schema` reads PostgreSQL metadata with `-dsn` and `-table`, or accepts a JSON schema snapshot with `-input`. It generates reusable `query.TableRef` values. `rasqlgen query` generates a parameterized Go function from a restricted SQL template. Both commands reject unchecked template actions and preserve values as bound arguments.
 
 Runnable documentation examples live in [`examples/`](examples/) as executable Go examples.
 
