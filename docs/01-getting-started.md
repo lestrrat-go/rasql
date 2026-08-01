@@ -111,6 +111,9 @@ import (
 
 func Example_rasql_sqlite_query() {
 	// This example creates, inserts, and reads one generated row with SQLite.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

@@ -109,8 +109,9 @@ import (
 
 func Example_rasql_quickstart() {
 	// This example runs one insert, read, update, and delete against a table
-	// descriptor. users and UserRow have the shape rasqlgen emits, so an
-	// application generating into package store would use store.Users() here.
+	// descriptor. users and UserRow are declared in query_example_tables_test.go
+	// with the shape rasqlgen emits; an application that generated into package
+	// store would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
