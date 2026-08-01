@@ -94,6 +94,43 @@ func TestReturningRequiresDialectCapability(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
+	users, id, email := writeTable(t)
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = EXCLUDED.\"email\"",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "INSERT INTO `users` (`id`, `email`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `email` = VALUES(`email`)",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = EXCLUDED.\"email\"",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Upsert(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{1, "ada@example.com"}, rendered.Args())
+		})
+	}
+
+	_, err = render.Upsert(dialect.Spanner(), statement)
+	require.Error(t, err)
+}
+
 func writeTable(t *testing.T) (query.TableRef, query.Column, query.Column) {
 	t.Helper()
 	users, err := query.NewTableRef(schema.Table{

@@ -23,6 +23,23 @@ func (c Column) Source() TableRef {
 	return c.source
 }
 
+// ExcludedColumn references the incoming value of a column during an upsert.
+type ExcludedColumn struct {
+	column Column
+}
+
+func (ExcludedColumn) expression() {}
+
+// Excluded references the incoming value for column in an upsert assignment.
+func Excluded(column Column) ExcludedColumn {
+	return ExcludedColumn{column: column}
+}
+
+// Column returns the incoming column.
+func (c ExcludedColumn) Column() Column {
+	return c.column
+}
+
 // Value is a bound SQL argument. Its value is never interpolated into SQL text.
 type Value struct {
 	value any

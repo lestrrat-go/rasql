@@ -48,6 +48,17 @@ func validateExpression(expression Expression, sources map[string]struct{}, path
 			return validationError(path, "references unknown column %q", expression.name)
 		}
 		return nil
+	case ExcludedColumn:
+		if err := expression.column.source.validate(); err != nil {
+			return validationError(path, "%s", err)
+		}
+		if _, exists := sources[expression.column.source.key()]; !exists {
+			return validationError(path, "references table %q outside the statement", expression.column.source.Qualifier())
+		}
+		if _, exists := expression.column.source.table.Column(expression.column.name); !exists {
+			return validationError(path, "references unknown column %q", expression.column.name)
+		}
+		return nil
 	case Value:
 		return nil
 	case Binary:

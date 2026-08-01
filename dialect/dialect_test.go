@@ -78,4 +78,6 @@ func TestBuiltinCapabilities(t *testing.T) {
 	require.False(t, dialect.Spanner().Supports(dialect.CapabilityUpsert))
 	require.Equal(t, dialect.PrimaryKeySuffix, dialect.Spanner().TablePrimaryKeyStyle())
 	require.Equal(t, dialect.PrimaryKeyInline, dialect.PostgreSQL().TablePrimaryKeyStyle())
+	require.Equal(t, dialect.UpsertOnConflict, dialect.PostgreSQL().UpsertStyle())
+	require.Equal(t, dialect.UpsertDuplicateKey, dialect.MySQL().UpsertStyle())
 }

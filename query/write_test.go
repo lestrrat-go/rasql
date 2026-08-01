@@ -56,3 +56,23 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	_, err = query.NewUpdate(users, query.Set(email, query.And(id)))
 	require.Error(t, err)
 }
+
+func TestUpsertValidatesConflictAssignments(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+
+	upsert, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+	require.NoError(t, upsert.Validate())
+
+	_, err = query.NewUpsert(insert, nil, nil)
+	require.Error(t, err)
+	_, err = query.NewUpsert(insert, []query.Column{id, id}, nil)
+	require.Error(t, err)
+}

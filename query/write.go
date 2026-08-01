@@ -8,6 +8,113 @@ type WriteStatement interface {
 	writeStatement()
 }
 
+// Upsert is an immutable INSERT statement with conflict handling.
+type Upsert struct {
+	insert      Insert
+	conflict    []Column
+	assignments []Assignment
+	returning   []Projection
+}
+
+func (Upsert) writeStatement() {}
+
+// NewUpsert creates a validated upsert statement.
+// Conflict columns identify an optional explicit conflict target. Assignments set
+// target columns when a conflict occurs.
+func NewUpsert(insert Insert, conflict []Column, assignments []Assignment) (Upsert, error) {
+	statement := Upsert{
+		insert:      insert.clone(),
+		conflict:    append([]Column(nil), conflict...),
+		assignments: append([]Assignment(nil), assignments...),
+	}
+	if err := statement.Validate(); err != nil {
+		return Upsert{}, err
+	}
+	return statement, nil
+}
+
+// WithReturning returns a copy of s with returning projections.
+func (s Upsert) WithReturning(projections ...Projection) (Upsert, error) {
+	copy := s.clone()
+	copy.returning = append(copy.returning, projections...)
+	if err := copy.Validate(); err != nil {
+		return Upsert{}, err
+	}
+	return copy, nil
+}
+
+// Insert returns the underlying insert operation.
+func (s Upsert) Insert() Insert {
+	return s.insert.clone()
+}
+
+// ConflictColumns returns a copy of the explicit conflict target.
+func (s Upsert) ConflictColumns() []Column {
+	return append([]Column(nil), s.conflict...)
+}
+
+// Assignments returns a copy of conflict-update assignments.
+func (s Upsert) Assignments() []Assignment {
+	return append([]Assignment(nil), s.assignments...)
+}
+
+// Returning returns a copy of the returning projections.
+func (s Upsert) Returning() []Projection {
+	return append([]Projection(nil), s.returning...)
+}
+
+// Validate reports whether s is internally consistent.
+func (s Upsert) Validate() error {
+	if len(s.insert.returning) > 0 {
+		return validationError("insert.returning", "must be set on the upsert")
+	}
+	if err := s.insert.Validate(); err != nil {
+		return validationError("insert", "%s", err)
+	}
+	if len(s.conflict) == 0 && len(s.assignments) == 0 {
+		return validationError("upsert", "requires conflict columns or assignments")
+	}
+	sources, err := validateWriteTarget(s.insert.into, "insert.into")
+	if err != nil {
+		return err
+	}
+	conflicts := make(map[string]struct{}, len(s.conflict))
+	for i, column := range s.conflict {
+		path := fmt.Sprintf("conflict[%d]", i)
+		if err := validateTargetColumn(column, s.insert.into, path); err != nil {
+			return err
+		}
+		if _, exists := conflicts[column.Name()]; exists {
+			return validationError(path, "duplicates column %q", column.Name())
+		}
+		conflicts[column.Name()] = struct{}{}
+	}
+	assigned := make(map[string]struct{}, len(s.assignments))
+	for i, assignment := range s.assignments {
+		path := fmt.Sprintf("assignments[%d]", i)
+		if err := validateTargetColumn(assignment.column, s.insert.into, path+".column"); err != nil {
+			return err
+		}
+		if _, exists := assigned[assignment.column.Name()]; exists {
+			return validationError(path+".column", "duplicates column %q", assignment.column.Name())
+		}
+		assigned[assignment.column.Name()] = struct{}{}
+		if err := validateExpression(assignment.value, sources, path+".value"); err != nil {
+			return err
+		}
+	}
+	return validateProjections(s.returning, sources, "returning")
+}
+
+func (s Upsert) clone() Upsert {
+	copy := s
+	copy.insert = s.insert.clone()
+	copy.conflict = append([]Column(nil), s.conflict...)
+	copy.assignments = append([]Assignment(nil), s.assignments...)
+	copy.returning = append([]Projection(nil), s.returning...)
+	return copy
+}
+
 // Assignment sets column to expression in an UPDATE statement.
 type Assignment struct {
 	column Column

@@ -24,6 +24,15 @@ const (
 	PrimaryKeySuffix
 )
 
+// UpsertStyle identifies a dialect's conflict-handling syntax.
+type UpsertStyle uint8
+
+const (
+	UpsertUnsupported UpsertStyle = iota
+	UpsertOnConflict
+	UpsertDuplicateKey
+)
+
 // Dialect defines database-specific SQL rendering rules.
 type Dialect interface {
 	Name() string
@@ -31,6 +40,7 @@ type Dialect interface {
 	Placeholder(int) (string, error)
 	TypeName(schema.LogicalType) (string, error)
 	TablePrimaryKeyStyle() PrimaryKeyStyle
+	UpsertStyle() UpsertStyle
 	Supports(Capability) bool
 }
 
@@ -41,6 +51,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		primaryKey:   PrimaryKeyInline,
+		upsert:       UpsertOnConflict,
 		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
@@ -62,6 +73,7 @@ func MySQL() Dialect {
 		quote:        '`',
 		placeholder:  questionPlaceholder,
 		primaryKey:   PrimaryKeyInline,
+		upsert:       UpsertDuplicateKey,
 		capabilities: CapabilityUpsert,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
@@ -83,6 +95,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		primaryKey:   PrimaryKeyInline,
+		upsert:       UpsertOnConflict,
 		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "INTEGER",
@@ -104,6 +117,7 @@ func Spanner() Dialect {
 		quote:       '`',
 		placeholder: namedPlaceholder,
 		primaryKey:  PrimaryKeySuffix,
+		upsert:      UpsertUnsupported,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOL",
 			schema.TypeInteger: "INT64",
@@ -122,6 +136,7 @@ type builtin struct {
 	quote        rune
 	placeholder  func(int) string
 	primaryKey   PrimaryKeyStyle
+	upsert       UpsertStyle
 	capabilities Capability
 	types        map[schema.LogicalType]string
 }
@@ -154,6 +169,10 @@ func (d builtin) TypeName(logicalType schema.LogicalType) (string, error) {
 
 func (d builtin) TablePrimaryKeyStyle() PrimaryKeyStyle {
 	return d.primaryKey
+}
+
+func (d builtin) UpsertStyle() UpsertStyle {
+	return d.upsert
 }
 
 func (d builtin) Supports(capability Capability) bool {
