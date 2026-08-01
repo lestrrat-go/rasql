@@ -86,12 +86,14 @@ The descriptor is a package-level variable, which Go cannot mark constant, so it
 
 ### What the column fields catch
 
-A column named by a string is checked when the query runs. The untyped builder works that way, and a typo survives until execution:
+A column named by a string is checked when the query runs, so these two lines are indistinguishable until then:
 
 ```go
-rows, err := client.SelectFrom(store.Users().QueryTable()).WhereEqual("emial", 42).Query(ctx)
-// rasql: render SELECT: query column: table "users" has no column "emial"
+client.SelectFrom(store.Users().QueryTable()).WhereEqual("id", 42)
+client.SelectFrom(store.Users().QueryTable()).WhereEqual("emial", 42)
 ```
+
+The second one fails on execution with `rasql: render SELECT: query column: table "users" has no column "emial"`, wherever the query first runs.
 
 The typed builder takes a `query.Column` instead, so the same typo stops at the compiler:
 

@@ -35,8 +35,8 @@ type UserRow struct {
 	Email string `rasql:"email"`
 }
 
-// UsersTable embeds the typed table and adds one query.Column field per column.
-// The query builders take those fields, so no column is named by a string.
+// UsersTable embeds the typed table and exposes one field per column, so a
+// mistyped column name fails to compile instead of failing at run time.
 type UsersTable struct {
 	rasql.Table[UserRow]
 	ID    query.Column
