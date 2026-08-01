@@ -18,10 +18,16 @@ type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
+// Execer executes statements that do not return rows.
+type Execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 // Client executes queries for a fixed SQL dialect.
 // Its methods are safe for concurrent use when its Queryer is safe for concurrent use.
 type Client struct {
 	queryer Queryer
+	execer  Execer
 	dialect dialect.Dialect
 }
 
@@ -33,7 +39,11 @@ func New(queryer Queryer, d dialect.Dialect) (Client, error) {
 	if isNil(d) {
 		return Client{}, fmt.Errorf("runtime: dialect must not be nil")
 	}
-	return Client{queryer: queryer, dialect: d}, nil
+	client := Client{queryer: queryer, dialect: d}
+	if execer, ok := queryer.(Execer); ok {
+		client.execer = execer
+	}
+	return client, nil
 }
 
 // Query renders statement, executes it, and returns its result rows.
@@ -50,6 +60,25 @@ func (c Client) Query(ctx context.Context, statement query.Select) ([]row.Row, e
 		return nil, fmt.Errorf("runtime: execute SELECT: %w", err)
 	}
 	return collect(rows)
+}
+
+// Exec renders and executes a write statement.
+func (c Client) Exec(ctx context.Context, statement query.WriteStatement) (sql.Result, error) {
+	if isNil(c.queryer) || isNil(c.dialect) {
+		return nil, fmt.Errorf("runtime: invalid client")
+	}
+	if isNil(c.execer) {
+		return nil, fmt.Errorf("runtime: queryer does not support ExecContext")
+	}
+	rendered, err := render.Write(c.dialect, statement)
+	if err != nil {
+		return nil, fmt.Errorf("runtime: render write statement: %w", err)
+	}
+	result, err := c.execer.ExecContext(ctx, rendered.SQL(), rendered.Args()...)
+	if err != nil {
+		return nil, fmt.Errorf("runtime: execute write statement: %w", err)
+	}
+	return result, nil
 }
 
 func collect(rows *sql.Rows) ([]row.Row, error) {

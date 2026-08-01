@@ -60,6 +60,44 @@ func TestNewRejectsNilDependencies(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestClientExecExecutesParameterizedInsert(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := runtime.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTableRef(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	statement, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(42), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
+		WithArgs(42, "ada@example.com").
+		WillReturnResult(sqlmock.NewResult(42, 1))
+
+	result, err := client.Exec(t.Context(), statement)
+	require.NoError(t, err)
+	rows, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rows)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
 	users, err := query.NewTableRef(schema.Table{
