@@ -45,42 +45,39 @@ func (e *Error) Unwrap() error {
 
 // Select renders statement for d.
 func Select(d dialect.Dialect, statement query.Select) (Statement, error) {
+	return renderStatement(d, "SELECT", statement.Validate, func(renderer *renderer) error {
+		return renderer.writeSelect(statement)
+	})
+}
+
+func renderStatement(d dialect.Dialect, operation string, validate func() error, write func(*renderer) error) (Statement, error) {
 	if isNilDialect(d) {
 		return Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
-	if err := statement.Validate(); err != nil {
-		return Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid SELECT statement: %w", err)}
+	if err := validate(); err != nil {
+		return Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid %s statement: %w", operation, err)}
 	}
-
-	renderer := selectRenderer{dialect: d}
-	if err := renderer.write(statement); err != nil {
+	renderer := renderer{dialect: d}
+	if err := write(&renderer); err != nil {
 		return Statement{}, &Error{Dialect: d.Name(), Err: err}
 	}
 	return Statement{sql: renderer.builder.String(), args: renderer.args}, nil
 }
 
-type selectRenderer struct {
+type renderer struct {
 	dialect dialect.Dialect
 	builder strings.Builder
 	args    []any
 }
 
-func (r *selectRenderer) write(statement query.Select) error {
+func (r *renderer) writeSelect(statement query.Select) error {
 	r.builder.WriteString("SELECT ")
 	for i, projection := range statement.Projections() {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
-		if err := r.writeExpression(projection.Expression()); err != nil {
+		if err := r.writeProjection(projection); err != nil {
 			return err
-		}
-		if projection.Alias() != "" {
-			alias, err := r.quoteIdentifier(projection.Alias())
-			if err != nil {
-				return err
-			}
-			r.builder.WriteString(" AS ")
-			r.builder.WriteString(alias)
 		}
 	}
 
@@ -137,7 +134,7 @@ func (r *selectRenderer) write(statement query.Select) error {
 	return nil
 }
 
-func (r *selectRenderer) writeTable(table query.TableRef) error {
+func (r *renderer) writeTable(table query.TableRef) error {
 	name, err := r.quoteIdentifier(table.Name())
 	if err != nil {
 		return err
@@ -155,7 +152,23 @@ func (r *selectRenderer) writeTable(table query.TableRef) error {
 	return nil
 }
 
-func (r *selectRenderer) writeExpression(expression query.Expression) error {
+func (r *renderer) writeProjection(projection query.Projection) error {
+	if err := r.writeExpression(projection.Expression()); err != nil {
+		return err
+	}
+	if projection.Alias() == "" {
+		return nil
+	}
+	alias, err := r.quoteIdentifier(projection.Alias())
+	if err != nil {
+		return err
+	}
+	r.builder.WriteString(" AS ")
+	r.builder.WriteString(alias)
+	return nil
+}
+
+func (r *renderer) writeExpression(expression query.Expression) error {
 	switch expression := expression.(type) {
 	case query.Column:
 		qualifier, err := r.quoteIdentifier(expression.Source().Qualifier())
@@ -222,7 +235,7 @@ func (r *selectRenderer) writeExpression(expression query.Expression) error {
 	}
 }
 
-func (r *selectRenderer) writeArgument(value any) error {
+func (r *renderer) writeArgument(value any) error {
 	placeholder, err := r.dialect.Placeholder(len(r.args) + 1)
 	if err != nil {
 		return fmt.Errorf("placeholder: %w", err)
@@ -232,7 +245,7 @@ func (r *selectRenderer) writeArgument(value any) error {
 	return nil
 }
 
-func (r *selectRenderer) quoteIdentifier(name string) (string, error) {
+func (r *renderer) quoteIdentifier(name string) (string, error) {
 	quoted, err := r.dialect.QuoteIdentifier(name)
 	if err != nil {
 		return "", fmt.Errorf("identifier %q: %w", name, err)
