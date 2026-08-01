@@ -60,7 +60,7 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -131,7 +131,7 @@ func TestDecodeFromDecodesProjectedRows(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -203,7 +203,7 @@ func TestClientExecExecutesParameterizedInsert(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -347,7 +347,7 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},

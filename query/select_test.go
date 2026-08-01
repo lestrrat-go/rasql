@@ -10,11 +10,11 @@ import (
 )
 
 func TestSelectBuildsImmutableStatement(t *testing.T) {
-	users, err := query.NewTableRef(usersTable())
+	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
 	users, err = users.As("u")
 	require.NoError(t, err)
-	orders, err := query.NewTableRef(ordersTable())
+	orders, err := query.NewTable(ordersTable())
 	require.NoError(t, err)
 	orders, err = orders.As("o")
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestSelectBuildsImmutableStatement(t *testing.T) {
 }
 
 func TestSelectRejectsInvalidStatements(t *testing.T) {
-	users, err := query.NewTableRef(usersTable())
+	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	_, err = statement.WithLimit(-1)
 	requireQueryValidationError(t, err)
 
-	other, err := query.NewTableRef(ordersTable())
+	other, err := query.NewTable(ordersTable())
 	require.NoError(t, err)
 	otherID, err := other.Column("id")
 	require.NoError(t, err)
@@ -80,17 +80,17 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	requireQueryValidationError(t, err)
 }
 
-func TestTableRefRejectsUnknownColumn(t *testing.T) {
-	users, err := query.NewTableRef(usersTable())
+func TestTableRejectsUnknownColumn(t *testing.T) {
+	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
 
 	_, err = users.Column("missing")
 	require.Error(t, err)
 }
 
-func TestTableRefCopiesDescriptor(t *testing.T) {
+func TestTableCopiesDescriptor(t *testing.T) {
 	descriptor := usersTable()
-	users, err := query.NewTableRef(descriptor)
+	users, err := query.NewTable(descriptor)
 	require.NoError(t, err)
 
 	descriptor.Columns[0].Name = "changed"
@@ -101,13 +101,13 @@ func TestTableRefCopiesDescriptor(t *testing.T) {
 	require.Equal(t, []string{"id"}, users.Definition().PrimaryKey)
 }
 
-func TestMustNewTableRef(t *testing.T) {
-	users := query.MustNewTableRef(usersTable())
+func TestMustNewTable(t *testing.T) {
+	users := query.MustNewTable(usersTable())
 	_, err := users.Column("id")
 	require.NoError(t, err)
 
 	require.Panics(t, func() {
-		query.MustNewTableRef(schema.Table{})
+		query.MustNewTable(schema.Table{})
 	})
 }
 
