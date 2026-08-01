@@ -14,7 +14,7 @@ import (
 func Example_rasql_quickstart() {
 	// This example runs one insert, read, update, and delete against a table
 	// descriptor. users and UserRow have the shape rasqlgen emits, so an
-	// application generating into package store would use store.Users here.
+	// application generating into package store would use store.Users() here.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
