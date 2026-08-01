@@ -30,7 +30,7 @@ func Example_runtime_static_template() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", 42, "ada@example.com"); err != nil {
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

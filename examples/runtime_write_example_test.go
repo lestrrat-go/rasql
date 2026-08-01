@@ -41,12 +41,7 @@ func Example_runtime_write() {
 		return
 	}
 
-	insert, err := query.NewInsert(users.Ref(), []query.Column{id, email}, []query.Expression{query.Bind(42), query.Bind("ada@example.com")})
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := client.Exec(ctx, insert); err != nil {
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

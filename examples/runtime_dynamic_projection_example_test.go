@@ -27,7 +27,12 @@ func Example_runtime_dynamic_projection() {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
-	orders := query.MustNewTableRef(schema.Table{
+	type orderRow struct {
+		ID     int `rasql:"id"`
+		UserID int `rasql:"user_id"`
+		Total  int `rasql:"total"`
+	}
+	orders := runtime.MustTable[orderRow](query.MustNewTableRef(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -35,21 +40,13 @@ func Example_runtime_dynamic_projection() {
 			{Name: "total", Type: schema.TypeInteger},
 		},
 		PrimaryKey: []string{"id"},
-	})
+	}))
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := client.CreateTable(ctx, orders.Table()); err != nil {
+	if err := client.CreateTable(ctx, orders.Ref().Table()); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
-		return
-	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", 1, "ada@example.com"); err != nil {
-		fmt.Printf("failed to insert user: %s\n", err)
-		return
-	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO orders (id, user_id, total) VALUES (?, ?, ?), (?, ?, ?)", 1, 1, 50, 2, 1, 10); err != nil {
-		fmt.Printf("failed to insert orders: %s\n", err)
 		return
 	}
 
@@ -63,20 +60,33 @@ func Example_runtime_dynamic_projection() {
 		fmt.Printf("failed to find users.email: %s\n", err)
 		return
 	}
-	orderUserID, err := orders.Column("user_id")
+	orderUserID, err := orders.Ref().Column("user_id")
 	if err != nil {
 		fmt.Printf("failed to find orders.user_id: %s\n", err)
 		return
 	}
-	total, err := orders.Column("total")
+	total, err := orders.Ref().Column("total")
 	if err != nil {
 		fmt.Printf("failed to find orders.total: %s\n", err)
 		return
 	}
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+	for _, order := range []orderRow{
+		{ID: 1, UserID: 1, Total: 50},
+		{ID: 2, UserID: 1, Total: 10},
+	} {
+		if _, err := runtime.Insert(ctx, client, orders, order); err != nil {
+			fmt.Printf("failed to insert order: %s\n", err)
+			return
+		}
+	}
 
 	// Use the raw builder when a join or projection has no single row type.
 	rows, err := client.SelectFrom(users.Ref()).
-		Join(query.InnerJoin(orders, query.Equal(userID, orderUserID))).
+		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
 		Project(query.Project(userID), query.Project(email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).

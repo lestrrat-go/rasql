@@ -28,9 +28,15 @@ func Example_runtime_typed_query() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?), (?, ?), (?, ?)", 1, "ada@example.com", 2, "bob@example.com", 3, "cyd@example.com"); err != nil {
-		fmt.Printf("failed to insert users: %s\n", err)
-		return
+	for _, user := range []UserRow{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+		{ID: 3, Email: "cyd@example.com"},
+	} {
+		if _, err := runtime.Insert(ctx, client, users, user); err != nil {
+			fmt.Printf("failed to insert user: %s\n", err)
+			return
+		}
 	}
 
 	// SelectFrom knows the UsersRow result type from users. It selects every

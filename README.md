@@ -154,7 +154,7 @@ func Example_runtime_sqlite_query() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", 42, "ada@example.com"); err != nil {
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -211,9 +211,15 @@ func Example_runtime_typed_query() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?), (?, ?), (?, ?)", 1, "ada@example.com", 2, "bob@example.com", 3, "cyd@example.com"); err != nil {
-		fmt.Printf("failed to insert users: %s\n", err)
-		return
+	for _, user := range []UserRow{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+		{ID: 3, Email: "cyd@example.com"},
+	} {
+		if _, err := runtime.Insert(ctx, client, users, user); err != nil {
+			fmt.Printf("failed to insert user: %s\n", err)
+			return
+		}
 	}
 
 	// SelectFrom knows the UsersRow result type from users. It selects every
@@ -274,7 +280,12 @@ func Example_runtime_dynamic_projection() {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
-	orders := query.MustNewTableRef(schema.Table{
+	type orderRow struct {
+		ID     int `rasql:"id"`
+		UserID int `rasql:"user_id"`
+		Total  int `rasql:"total"`
+	}
+	orders := runtime.MustTable[orderRow](query.MustNewTableRef(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -282,21 +293,13 @@ func Example_runtime_dynamic_projection() {
 			{Name: "total", Type: schema.TypeInteger},
 		},
 		PrimaryKey: []string{"id"},
-	})
+	}))
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := client.CreateTable(ctx, orders.Table()); err != nil {
+	if err := client.CreateTable(ctx, orders.Ref().Table()); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
-		return
-	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", 1, "ada@example.com"); err != nil {
-		fmt.Printf("failed to insert user: %s\n", err)
-		return
-	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO orders (id, user_id, total) VALUES (?, ?, ?), (?, ?, ?)", 1, 1, 50, 2, 1, 10); err != nil {
-		fmt.Printf("failed to insert orders: %s\n", err)
 		return
 	}
 
@@ -310,20 +313,33 @@ func Example_runtime_dynamic_projection() {
 		fmt.Printf("failed to find users.email: %s\n", err)
 		return
 	}
-	orderUserID, err := orders.Column("user_id")
+	orderUserID, err := orders.Ref().Column("user_id")
 	if err != nil {
 		fmt.Printf("failed to find orders.user_id: %s\n", err)
 		return
 	}
-	total, err := orders.Column("total")
+	total, err := orders.Ref().Column("total")
 	if err != nil {
 		fmt.Printf("failed to find orders.total: %s\n", err)
 		return
 	}
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+	for _, order := range []orderRow{
+		{ID: 1, UserID: 1, Total: 50},
+		{ID: 2, UserID: 1, Total: 10},
+	} {
+		if _, err := runtime.Insert(ctx, client, orders, order); err != nil {
+			fmt.Printf("failed to insert order: %s\n", err)
+			return
+		}
+	}
 
 	// Use the raw builder when a join or projection has no single row type.
 	rows, err := client.SelectFrom(users.Ref()).
-		Join(query.InnerJoin(orders, query.Equal(userID, orderUserID))).
+		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
 		Project(query.Project(userID), query.Project(email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
@@ -353,7 +369,7 @@ source: [examples/runtime_dynamic_projection_example_test.go](https://github.com
 
 # Execute writes
 
-Build an immutable write statement with `query`, then pass it to `runtime.Client.Exec`.
+Use `runtime.Insert` for a typed row. Build an immutable `query` statement for a custom update.
 
 <!-- INCLUDE(examples/runtime_write_example_test.go) -->
 ```go
@@ -400,12 +416,7 @@ func Example_runtime_write() {
 		return
 	}
 
-	insert, err := query.NewInsert(users.Ref(), []query.Column{id, email}, []query.Expression{query.Bind(42), query.Bind("ada@example.com")})
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := client.Exec(ctx, insert); err != nil {
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -580,7 +591,7 @@ func Example_runtime_static_template() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", 42, "ada@example.com"); err != nil {
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

@@ -29,11 +29,12 @@ func Example_runtime_sqlite_query() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := database.ExecContext(ctx, "INSERT INTO users (id, email) VALUES (?, ?)", 42, "ada@example.com"); err != nil {
+	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
+	// users is a typed table descriptor with the shape emitted by rasqlgen.
 	user, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
