@@ -1,17 +1,15 @@
 # rasql
 
-`rasql` (pronounced ras-cal)` is an all-in-one SQL tool for Go.
+`rasql` (pronounced “rascal”) is an all-in-one SQL tool for Go.
 
-It aims to support:
+It aims to provide:
 
-* Supports Pg/MySQL/SQLite/Spanner dialects
-* Schema definition as Go code
-  * Schema generation from live-database metadata
-* Type-safe access to resultset values
-* Dynamic query building at runtime
-* Static query building using templates
+* PostgreSQL, MySQL, SQLite, and Google Cloud Spanner dialects.
+* Schema definitions written as Go code, including generation from live database metadata.
+* Type-safe result-set access.
+* Dynamic query building at runtime.
+* Static query building with templates.
 
-Iternals:
+The project requires Go 1.26 or newer and uses parameterized types where they improve type safety or avoid conversions.
 
-* Go 1.26+
-* Extensive use of parameterized types for maximum efficiency
+See [DESIGN.md](DESIGN.md) for the architecture, boundaries, and planned implementation slices.
