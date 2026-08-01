@@ -37,6 +37,8 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
+	eventID, err := events.Column("id")
+	require.NoError(t, err)
 	require.NoError(t, rasql.Create(t.Context(), client, events))
 
 	expected := event{
@@ -47,7 +49,7 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 	_, err = rasql.Insert(t.Context(), client, events, expected)
 	require.NoError(t, err)
 
-	actual, err := rasql.SelectFrom(client, events).WhereEqual("id", expected.ID).One(t.Context())
+	actual, err := rasql.SelectFrom(client, events).WhereEqual(eventID, expected.ID).One(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
 }
