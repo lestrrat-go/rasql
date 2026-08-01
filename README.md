@@ -65,32 +65,14 @@ import (
 )
 
 func Example_query_dynamic() {
-	// users is a pre-built table reference reused by each users query.
-	// Column references are tied to this table reference. They can be used for
-	// projections, predicates, joins, and ordering without manually qualifying
-	// their SQL identifiers.
-	id, err := users.Column("id")
-	if err != nil {
-		fmt.Printf("failed to select id column: %s\n", err)
-		return
-	}
-	email, err := users.Column("email")
-	if err != nil {
-		fmt.Printf("failed to select email column: %s\n", err)
-		return
-	}
-	// NewSelect returns an immutable statement. Each With method returns a new
-	// validated statement, so the original can be safely reused by another path.
-	statement, err := query.NewSelect(users, query.Project(id), query.Project(email))
+	// SelectFrom starts an immutable fluent builder from a reusable table
+	// reference. Select validates column names, and WhereEqual binds its value.
+	statement, err := query.SelectFrom(users).
+		Select("id", "email").
+		WhereEqual("id", 42).
+		Build()
 	if err != nil {
 		fmt.Printf("failed to build select: %s\n", err)
-		return
-	}
-	// Bind keeps the value separate from SQL text. The renderer assigns the
-	// placeholder syntax required by the selected database dialect.
-	statement, err = statement.WithWhere(query.Equal(id, query.Bind(42)))
-	if err != nil {
-		fmt.Printf("failed to add predicate: %s\n", err)
 		return
 	}
 	// The rendered statement contains SQL and arguments ready for runtime.Client
