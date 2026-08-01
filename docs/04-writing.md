@@ -149,16 +149,120 @@ source: [examples/rasql_update_example_test.go](https://github.com/lestrrat-go/r
 
 The row identifies itself, so there is no separate predicate to keep in step with it. A table without a primary key cannot be updated this way; build an `UPDATE` through the `query` package instead.
 
+## Delete rows
+
+`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` names a column, `Where` takes any predicate from the `query` package, and `Exec` runs the statement.
+
+<!-- INCLUDE(examples/rasql_delete_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_delete() {
+	// This example deletes rows by column name and by a query expression.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+	// Create the table described by the generated users reference.
+	if err := rasql.Create(ctx, client, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+	for id, email := range map[int64]string{1: "ada@example.com", 2: "grace@example.com", 3: "edsger@example.com"} {
+		if _, err := rasql.Insert(ctx, client, users, UserRow{ID: id, Email: email}); err != nil {
+			fmt.Printf("failed to insert user: %s\n", err)
+			return
+		}
+	}
+
+	// WhereEqual names a column of the target table and binds the value.
+	result, err := rasql.DeleteFrom(client, users).WhereEqual("id", 1).Exec(ctx)
+	if err != nil {
+		fmt.Printf("failed to delete user: %s\n", err)
+		return
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		fmt.Printf("failed to count deleted users: %s\n", err)
+		return
+	}
+	fmt.Printf("%d user deleted by id\n", deleted)
+
+	// Where takes any predicate built through the query package.
+	id, err := users.Ref().Column("id")
+	if err != nil {
+		fmt.Printf("failed to find users.id: %s\n", err)
+		return
+	}
+	result, err = rasql.DeleteFrom(client, users).Where(query.GreaterThan(id, query.Bind(2))).Exec(ctx)
+	if err != nil {
+		fmt.Printf("failed to delete users: %s\n", err)
+		return
+	}
+	deleted, err = result.RowsAffected()
+	if err != nil {
+		fmt.Printf("failed to count deleted users: %s\n", err)
+		return
+	}
+	fmt.Printf("%d user deleted by predicate\n", deleted)
+
+	// Build renders the statement without executing it, which shows that a
+	// builder with no predicate deletes every row.
+	statement, err := rasql.DeleteFrom(client, users).Build()
+	if err != nil {
+		fmt.Printf("failed to build delete: %s\n", err)
+		return
+	}
+	fmt.Println(statement.SQL())
+
+	// Output:
+	// 1 user deleted by id
+	// 1 user deleted by predicate
+	// DELETE FROM "users"
+}
+```
+source: [examples/rasql_delete_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_delete_example_test.go)
+<!-- END INCLUDE -->
+
+A delete matches whatever the predicate matches, so it is not tied to a primary key the way `Update` is. A builder with no predicate deletes every row of the table; `Build` renders the statement without executing it when you want to see the SQL first.
+
 ## Statements the typed helpers do not cover
 
-`Client.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for a partial update, a conditional delete, or conflict handling.
+`Client.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for a partial update, conflict handling, or a `RETURNING` clause.
 
 ```go
-statement, err := query.NewDelete(users.Ref())
+id, err := users.Ref().Column("id")
 if err != nil {
 	return err
 }
-id, err := users.Ref().Column("id")
+email, err := users.Ref().Column("email")
+if err != nil {
+	return err
+}
+statement, err := query.NewUpdate(users.Ref(), query.Set(email, query.Bind("ada@example.com")))
 if err != nil {
 	return err
 }

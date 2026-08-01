@@ -77,7 +77,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -135,23 +134,8 @@ func Example_rasql_quickstart() {
 	}
 	fmt.Println(len(found), found[0].Email)
 
-	// Deletes have no typed helper, so they are built through the query package.
-	id, err := users.Ref().Column("id")
-	if err != nil {
-		fmt.Printf("failed to find users.id: %s\n", err)
-		return
-	}
-	statement, err := query.NewDelete(users.Ref())
-	if err != nil {
-		fmt.Printf("failed to build delete: %s\n", err)
-		return
-	}
-	statement, err = statement.WithWhere(query.Equal(id, query.Bind(1)))
-	if err != nil {
-		fmt.Printf("failed to build delete predicate: %s\n", err)
-		return
-	}
-	result, err := client.Exec(ctx, statement)
+	// DeleteFrom builds the predicate from column names, like the select builder.
+	result, err := rasql.DeleteFrom(client, users).WhereEqual("id", 1).Exec(ctx)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -174,7 +158,7 @@ source: [examples/rasql_quickstart_example_test.go](https://github.com/lestrrat-
 
 `users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(client, store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()`, `dialect.MySQL()`, or `dialect.Spanner()` to run the same code against another database; only the driver and the DSN change with it.
 
-Inserts, updates, and typed selects have dedicated helpers. Deletes and anything else beyond them are built through the `query` package and run with `client.Exec`, as the last step shows.
+Inserts, updates, deletes, and typed selects have dedicated helpers. Upserts, `RETURNING`, and anything else beyond them are built through the `query` package and run with `client.Exec`.
 
 The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since an in-memory database belongs to one connection. A real application also creates its tables through migrations rather than `rasql.Create`.
 
@@ -185,7 +169,7 @@ The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since
 | [Getting started](docs/01-getting-started.md) | Installing, creating a client, and running a first query. |
 | [Schemas](docs/02-schema.md) | Describing tables in Go and reading them back from a live database. |
 | [Querying](docs/03-querying.md) | Typed selects, joins, custom projections, and seeing the generated SQL. |
-| [Writing rows](docs/04-writing.md) | Creating tables and inserting or updating typed rows. |
+| [Writing rows](docs/04-writing.md) | Creating tables and inserting, updating, or deleting rows. |
 | [Static templates](docs/05-templates.md) | Compiling SQL text with named binds into parameterized statements. |
 | [`rasqlgen`](docs/06-rasqlgen.md) | Generating Go source from a database, a schema snapshot, or a template. |
 
