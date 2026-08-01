@@ -36,8 +36,6 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	previousOpenDatabase := openDatabase
@@ -56,6 +54,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	mock.ExpectClose()
 
 	output := filepath.Join(directory, "schema.go")
 	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output})
