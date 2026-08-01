@@ -62,7 +62,7 @@ rasqlgen schema \
   -output internal/store/rasql_gen.go
 ```
 
-Repeat `-table` for each table. Generated code exports `store.Users` as a reusable `query.TableRef`; call `store.Users.Table()` when a schema descriptor is required.
+Repeat `-table` for each table. Generated code exports `store.Users` as a typed `runtime.Table[store.UsersRow]`; call `store.Users.Ref()` for its reusable `query.TableRef`.
 
 # Query a generated table
 
@@ -78,7 +78,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/runtime"
 )
 
@@ -98,7 +97,7 @@ func Example_runtime_sqlite_query() {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
-	if err := client.CreateTable(ctx, users.Table()); err != nil {
+	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -107,31 +106,14 @@ func Example_runtime_sqlite_query() {
 		return
 	}
 
-	// users is a reusable query.TableRef with the shape emitted by rasqlgen.
-	rows, err := client.SelectFrom(users).
-		Select("id", "email").
-		WhereEqual("id", 42).
-		Query(ctx)
+	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	user, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
 	}
-	if len(rows) != 1 {
-		fmt.Printf("expected one user, got %d\n", len(rows))
-		return
-	}
-	email, err := row.String("email")
-	if err != nil {
-		fmt.Printf("failed to create email column: %s\n", err)
-		return
-	}
-	userEmail, err := email.Get(rows[0])
-	if err != nil {
-		fmt.Printf("failed to read email: %s\n", err)
-		return
-	}
 
-	fmt.Println(userEmail)
+	fmt.Println(user.Email)
 
 	// Output:
 	// ada@example.com
@@ -176,11 +158,8 @@ func Example_runtime_debug_query() {
 		return
 	}
 
-	// users is a reusable query.TableRef with the shape emitted by rasqlgen.
-	rows, err := client.SelectFrom(users).
-		Select("id", "email").
-		WhereEqual("id", 42).
-		Query(context.Background())
+	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	rows, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).All(context.Background())
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -248,7 +227,7 @@ The project requires Go 1.26 or newer and uses parameterized types where they im
 
 The `schema`, `query`, `render`, `row`, and `runtime` packages cover the main application path. The `inspect` package normalizes live table columns and primary keys. The `generate` and `template` packages produce deterministic Go source.
 
-`rasqlgen schema` reads PostgreSQL metadata with `-dsn` and `-table`, or accepts a JSON schema snapshot with `-input`. It generates reusable `query.TableRef` values. `rasqlgen query` generates a parameterized Go function from a restricted SQL template. Both commands reject unchecked template actions and preserve values as bound arguments.
+`rasqlgen schema` reads PostgreSQL metadata with `-dsn` and `-table`, or accepts a JSON schema snapshot with `-input`. It generates typed `runtime.Table` descriptors with reusable `query.TableRef` values. `rasqlgen query` generates a parameterized Go function from a restricted SQL template. Both commands reject unchecked template actions and preserve values as bound arguments.
 
 Runnable documentation examples live in [`examples/`](examples/) as executable Go examples.
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/runtime"
 )
 
@@ -26,7 +25,7 @@ func Example_runtime_sqlite_query() {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
-	if err := client.CreateTable(ctx, users.Table()); err != nil {
+	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -35,30 +34,13 @@ func Example_runtime_sqlite_query() {
 		return
 	}
 
-	rows, err := client.SelectFrom(users).
-		Select("id", "email").
-		WhereEqual("id", 42).
-		Query(ctx)
+	user, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
 	}
-	if len(rows) != 1 {
-		fmt.Printf("expected one user, got %d\n", len(rows))
-		return
-	}
-	email, err := row.String("email")
-	if err != nil {
-		fmt.Printf("failed to create email column: %s\n", err)
-		return
-	}
-	userEmail, err := email.Get(rows[0])
-	if err != nil {
-		fmt.Printf("failed to read email: %s\n", err)
-		return
-	}
 
-	fmt.Println(userEmail)
+	fmt.Println(user.Email)
 
 	// Output:
 	// ada@example.com

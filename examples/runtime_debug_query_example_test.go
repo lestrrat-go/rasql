@@ -28,11 +28,8 @@ func Example_runtime_debug_query() {
 		return
 	}
 
-	// users is a reusable query.TableRef with the shape emitted by rasqlgen.
-	rows, err := client.SelectFrom(users).
-		Select("id", "email").
-		WhereEqual("id", 42).
-		Query(context.Background())
+	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	rows, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).All(context.Background())
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
