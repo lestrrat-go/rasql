@@ -168,7 +168,7 @@ The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since
 | --- | --- |
 | [Getting started](docs/01-getting-started.md) | Installing, creating a client, and running a first query. |
 | [Schemas](docs/02-schema.md) | Describing tables in Go and reading them back from a live database. |
-| [Querying](docs/03-querying.md) | Typed selects, joins, custom projections, and seeing the generated SQL. |
+| [Querying](docs/03-querying.md) | Typed selects, joins, custom projections, and a reference table for every operation and predicate. |
 | [Writing rows](docs/04-writing.md) | Creating tables and inserting, updating, or deleting rows. |
 | [Static templates](docs/05-templates.md) | Compiling SQL text with named binds into parameterized statements. |
 | [`rasqlgen`](docs/06-rasqlgen.md) | Generating Go source from a database, a schema snapshot, or a template. |
