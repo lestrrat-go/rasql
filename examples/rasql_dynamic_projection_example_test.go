@@ -14,6 +14,9 @@ import (
 
 func Example_rasql_dynamic_projection() {
 	// This example joins users and orders, then reads an ad hoc result shape.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

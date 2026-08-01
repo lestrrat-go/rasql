@@ -38,6 +38,9 @@ import (
 
 func Example_rasql_insert() {
 	// This example inserts one generated row without constructing query.Insert.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -102,6 +105,9 @@ import (
 
 func Example_rasql_update() {
 	// This example changes a generated row by using its primary-key field.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -172,6 +178,9 @@ import (
 
 func Example_rasql_delete() {
 	// This example deletes rows by a generated column and by a query expression.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
