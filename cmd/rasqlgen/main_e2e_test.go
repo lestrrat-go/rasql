@@ -41,7 +41,8 @@ func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
 
 	source, err := os.ReadFile(output)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var Users = rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "var usersTable = rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "func Users() rasql.Table[UsersRow] {")
 
 	command = exec.CommandContext(t.Context(), "go", "test", "./...")
 	command.Dir = consumer

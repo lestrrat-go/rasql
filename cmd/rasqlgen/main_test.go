@@ -26,7 +26,8 @@ func TestRunSchemaGeneratesSource(t *testing.T) {
 	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
 	source, err := os.ReadFile(output)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var Users = rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "var usersTable = rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "func Users() rasql.Table[UsersRow] {")
 }
 
 func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
@@ -63,7 +64,8 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	source, err := os.ReadFile(output)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var Users = rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "var usersTable = rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "func Users() rasql.Table[UsersRow] {")
 }
 
 func TestRunQueryGeneratesSource(t *testing.T) {
