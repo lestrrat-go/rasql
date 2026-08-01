@@ -1,0 +1,60 @@
+package template_test
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/template"
+	"github.com/stretchr/testify/require"
+)
+
+func TestTemplateCompilesAndBindsInPlaceholderOrder(t *testing.T) {
+	parsed, err := template.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}} OR backup_email = {{ bind \"email\" }} AND active = {{bind \"active\"}}")
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, "SELECT id FROM users WHERE email = $1 OR backup_email = $2 AND active = $3", compiled.SQL())
+	require.Equal(t, []string{"email", "active"}, compiled.ParameterNames())
+
+	statement, err := compiled.Bind(map[string]any{"email": "ada@example.com", "active": true})
+	require.NoError(t, err)
+	require.Equal(t, []any{"ada@example.com", "ada@example.com", true}, statement.Args())
+	require.NotContains(t, statement.SQL(), "ada@example.com")
+
+	_, err = compiled.Bind(map[string]any{"email": "ada@example.com"})
+	require.Error(t, err)
+	_, err = compiled.Bind(map[string]any{"email": "ada@example.com", "active": true, "unused": 1})
+	require.Error(t, err)
+}
+
+func TestTemplateRejectsUnrestrictedActions(t *testing.T) {
+	_, err := template.Parse("bad", "SELECT {{ .Value }}")
+	require.Error(t, err)
+	_, err = template.Parse("bad", "SELECT {{bind \"not-valid\"}}")
+	require.Error(t, err)
+}
+
+func TestGoSourceCompiles(t *testing.T) {
+	parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	source, err := compiled.GoSource("generated", "UserByID")
+	require.NoError(t, err)
+
+	directory, err := os.MkdirTemp(".", ".tmp-template-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "query.go"), source, 0o600))
+	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+	command := exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
