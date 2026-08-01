@@ -29,7 +29,7 @@ func Example_runtime_sqlite_query() {
 		return
 	}
 	// Create the schema described by the generated table reference.
-	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
+	if err := runtime.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

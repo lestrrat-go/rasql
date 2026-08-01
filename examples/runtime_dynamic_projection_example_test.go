@@ -46,11 +46,11 @@ func Example_runtime_dynamic_projection() {
 		PrimaryKey: []string{"id"},
 	}))
 	// Create both descriptors before querying their joined rows.
-	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
+	if err := runtime.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := client.CreateTable(ctx, orders.Ref().Table()); err != nil {
+	if err := runtime.Create(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}

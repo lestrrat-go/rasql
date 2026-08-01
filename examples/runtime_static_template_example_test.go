@@ -30,7 +30,7 @@ func Example_runtime_static_template() {
 		return
 	}
 	// Create the table described by the generated users reference.
-	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
+	if err := runtime.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
