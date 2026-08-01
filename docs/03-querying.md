@@ -2,7 +2,7 @@
 
 `rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
 
-Columns come from the generated table value: `users.ID` is a `query.Column` bound to the `users` table, so a misspelled column name is a compile error rather than a database one.
+Columns come from the generated table value, so `users.ID` is a `query.Column` already bound to the `users` table. A misspelled `users.Emial` is a compile error rather than a failed query, which [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) demonstrates along with the cases that still fail at run time.
 
 Every builder is immutable. Each call returns a new builder, so a partly built query can be shared or reused without one caller's `Limit` leaking into another's.
 

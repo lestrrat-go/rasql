@@ -35,8 +35,8 @@ type UserRow struct {
 	Email string `rasql:"email"`
 }
 
-// UsersTable embeds the typed table and exposes one field per column, so a
-// mistyped column name fails to compile instead of failing at run time.
+// UsersTable embeds the typed table and adds one query.Column field per column.
+// The query builders take those fields, so no column is named by a string.
 type UsersTable struct {
 	rasql.Table[UserRow]
 	ID    query.Column
@@ -73,7 +73,11 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
 <!-- END INCLUDE -->
 
-Three things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. The embedded `rasql.Table[UserRow]` binds that row type to a validated table description, so the compiler knows what a query against `users` returns. The `ID` and `Email` fields are the column references the query builders take, so a misspelled column name is a compile error. [Schemas](02-schema.md) covers how to write these by hand, and [`rasqlgen`](06-rasqlgen.md) covers how to generate them.
+Three things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. The embedded `rasql.Table[UserRow]` binds that row type to a validated table description, so the compiler knows what a query against `users` returns. The `ID` and `Email` fields are the column references the query builders take.
+
+Those fields are the reason a filter never spells a column as a string. `WhereEqual(users.ID, 42)` builds, while `WhereEqual(users.Emial, 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.Column` and not a name. [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows what that covers and the three cases it does not.
+
+[Schemas](02-schema.md) covers how to write these tables by hand, and [`rasqlgen`](06-rasqlgen.md) covers how to generate them.
 
 ## Create a client
 

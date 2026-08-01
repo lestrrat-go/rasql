@@ -65,7 +65,7 @@ func Users() UsersTable {
 }
 ```
 
-The descriptor stays unexported so no importer can replace it; `store.Users()` hands out a copy. Its column fields are what the query builders take, so `store.Users().ID` cannot name a column the table does not have.
+The descriptor stays unexported so no importer can replace it; `store.Users()` hands out a copy. Its column fields are what the query builders take, so `WhereEqual(users.ID, 42)` builds while a misspelled `users.Emial` does not compile. See [what the column fields catch](docs/06-rasqlgen.md#what-the-column-fields-catch).
 
 Writing the same descriptors by hand works too, and generating from a checked-in JSON snapshot keeps builds offline. See [Schemas](docs/02-schema.md) and [`rasqlgen`](docs/06-rasqlgen.md).
 

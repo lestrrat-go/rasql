@@ -68,6 +68,24 @@ func TestGeneratedSelfJoinRendersAlias(t *testing.T) {
 }
 `
 
+// rejectedUsageSource must not compile. It names a column field that does not
+// exist and passes a column name where a query.Column is required.
+const rejectedUsageSource = `package rejected
+
+import (
+	"context"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+)
+
+func Rejected(ctx context.Context, client rasql.Client) {
+	users := generated.Users()
+	_, _ = rasql.SelectFrom(client, users).WhereEqual(users.Emial, 42).One(ctx)
+	_, _ = rasql.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
+}
+`
+
 func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	users := schema.Table{
 		Name: "users",
@@ -131,6 +149,20 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	command.Dir = directory
 	output, err = command.CombinedOutput()
 	require.NoErrorf(t, err, "go test output:\n%s", output)
+
+	// docs/06-rasqlgen.md promises that a misspelled column field and a column
+	// named by string both fail to compile. Build a package that does each and
+	// require the compiler to say so, so the documentation cannot drift.
+	rejected := filepath.Join(directory, "rejected")
+	require.NoError(t, os.MkdirAll(rejected, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(rejected, "rejected.go"), []byte(rejectedUsageSource), 0o600))
+
+	command = exec.CommandContext(t.Context(), "go", "build", "./rejected")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.Errorf(t, err, "misspelled column field compiled:\n%s", output)
+	require.Contains(t, string(output), "users.Emial undefined")
+	require.Contains(t, string(output), "as query.Column value")
 }
 
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {
