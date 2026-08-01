@@ -13,6 +13,7 @@ import (
 )
 
 func Example_runtime_dynamic_projection() {
+	// This example joins users and orders, then reads an ad hoc result shape.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -20,13 +21,16 @@ func Example_runtime_dynamic_projection() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// A typed descriptor makes orders usable with runtime.Insert as well.
 	type orderRow struct {
 		ID     int `rasql:"id"`
 		UserID int `rasql:"user_id"`
@@ -41,6 +45,7 @@ func Example_runtime_dynamic_projection() {
 		},
 		PrimaryKey: []string{"id"},
 	}))
+	// Create both descriptors before querying their joined rows.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -50,6 +55,7 @@ func Example_runtime_dynamic_projection() {
 		return
 	}
 
+	// Column references keep the dynamic query validated as it is assembled.
 	userID, err := users.Ref().Column("id")
 	if err != nil {
 		fmt.Printf("failed to find users.id: %s\n", err)
@@ -70,6 +76,7 @@ func Example_runtime_dynamic_projection() {
 		fmt.Printf("failed to find orders.total: %s\n", err)
 		return
 	}
+	// Populate both tables through the typed runtime API.
 	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return

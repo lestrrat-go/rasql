@@ -10,6 +10,7 @@ import (
 )
 
 func Example_runtime_sqlite_query() {
+	// This example creates, inserts, and reads one generated row with SQLite.
 	ctx := context.Background()
 	// Importing runtime registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
@@ -18,17 +19,21 @@ func Example_runtime_sqlite_query() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// Create the schema described by the generated table reference.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
+	// Insert encodes UserRow's tagged fields as bound values.
 	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return

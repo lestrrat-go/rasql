@@ -7,11 +7,14 @@ import (
 )
 
 // UserRow and users have the same shape as values emitted by rasqlgen.
+// UserRow and users have the shape rasqlgen creates for a table definition.
+// The other examples use them as if they came from generated source.
 type UserRow struct {
 	ID    int64  `rasql:"id"`
 	Email string `rasql:"email"`
 }
 
+// users keeps the generated row type and reusable query reference together.
 var users = runtime.MustTable[UserRow](query.MustNewTableRef(schema.Table{
 	Name: "users",
 	Columns: []schema.Column{

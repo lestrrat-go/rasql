@@ -10,6 +10,7 @@ import (
 )
 
 func Example_runtime_typed_query() {
+	// This example pages through several users and decodes them as UserRow values.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -17,17 +18,21 @@ func Example_runtime_typed_query() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// Create the table described by the generated users reference.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
+	// Use runtime.Insert for each fixture row so setup follows the public API.
 	for _, user := range []UserRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},

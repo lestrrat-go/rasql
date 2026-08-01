@@ -23,6 +23,7 @@ import (
 )
 
 func Example_schema_table_definition() {
+	// This example defines one reusable table descriptor in Go code.
 	// Describe each database table once with schema.Table. The same descriptor
 	// can later supply a reusable query.TableRef or generate DDL.
 	table := schema.Table{
@@ -36,6 +37,7 @@ func Example_schema_table_definition() {
 		// PrimaryKey names columns from Columns that uniquely identify each row.
 		PrimaryKey: []string{"id"},
 	}
+	// Validate the descriptor before it is used to create references or DDL.
 	if err := table.Validate(); err != nil {
 		fmt.Printf("failed to define table: %s\n", err)
 		return
@@ -83,6 +85,7 @@ import (
 )
 
 func Example_inspect_sqlite_table() {
+	// This example reads an existing SQLite table into a normalized schema.Table.
 	ctx := context.Background()
 	// The runtime package registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
@@ -91,11 +94,13 @@ func Example_inspect_sqlite_table() {
 		return
 	}
 	defer database.Close()
+	// Pretend this DDL already exists in an application-owned SQLite database.
 	if _, err := database.ExecContext(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, nickname TEXT)"); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
+	// The inspector uses the dialect to normalize native column metadata.
 	inspector, err := inspect.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
@@ -135,6 +140,7 @@ import (
 )
 
 func Example_runtime_sqlite_query() {
+	// This example creates, inserts, and reads one generated row with SQLite.
 	ctx := context.Background()
 	// Importing runtime registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
@@ -143,17 +149,21 @@ func Example_runtime_sqlite_query() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// Create the schema described by the generated table reference.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
+	// Insert encodes UserRow's tagged fields as bound values.
 	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -193,6 +203,7 @@ import (
 )
 
 func Example_runtime_typed_query() {
+	// This example pages through several users and decodes them as UserRow values.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -200,17 +211,21 @@ func Example_runtime_typed_query() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// Create the table described by the generated users reference.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
+	// Use runtime.Insert for each fixture row so setup follows the public API.
 	for _, user := range []UserRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
@@ -266,6 +281,7 @@ import (
 )
 
 func Example_runtime_dynamic_projection() {
+	// This example joins users and orders, then reads an ad hoc result shape.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -273,13 +289,16 @@ func Example_runtime_dynamic_projection() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// A typed descriptor makes orders usable with runtime.Insert as well.
 	type orderRow struct {
 		ID     int `rasql:"id"`
 		UserID int `rasql:"user_id"`
@@ -294,6 +313,7 @@ func Example_runtime_dynamic_projection() {
 		},
 		PrimaryKey: []string{"id"},
 	}))
+	// Create both descriptors before querying their joined rows.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -303,6 +323,7 @@ func Example_runtime_dynamic_projection() {
 		return
 	}
 
+	// Column references keep the dynamic query validated as it is assembled.
 	userID, err := users.Ref().Column("id")
 	if err != nil {
 		fmt.Printf("failed to find users.id: %s\n", err)
@@ -323,6 +344,7 @@ func Example_runtime_dynamic_projection() {
 		fmt.Printf("failed to find orders.total: %s\n", err)
 		return
 	}
+	// Populate both tables through the typed runtime API.
 	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -385,6 +407,7 @@ import (
 )
 
 func Example_runtime_insert() {
+	// This example inserts one generated row without constructing query.Insert.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -392,13 +415,16 @@ func Example_runtime_insert() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// Create the table described by the generated users reference.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -442,6 +468,7 @@ import (
 )
 
 func Example_runtime_update() {
+	// This example changes a generated row by using its primary-key field.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -449,17 +476,21 @@ func Example_runtime_update() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// Create the table described by the generated users reference.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
+	// Insert one row so the update has a persistent target.
 	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -513,6 +544,7 @@ func (statementPrinter) QueryContext(_ context.Context, query string, arguments 
 }
 
 func Example_runtime_debug_query() {
+	// This example prints the SQL for a typed query without opening a database.
 	// runtime.New accepts *sql.DB, *sql.Tx, or another runtime.Queryer. This
 	// debug Queryer lets the example show the generated statement without a database.
 	client, err := runtime.New(statementPrinter{}, dialect.PostgreSQL())
@@ -553,6 +585,7 @@ import (
 )
 
 func Example_query_static() {
+	// This example compiles a named static query and binds one value to it.
 	// Templates accept SQL text and only {{bind "name"}} actions. Values cannot
 	// become SQL text because every action becomes a dialect placeholder.
 	parsed, err := querytemplate.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}}")
@@ -606,6 +639,7 @@ import (
 )
 
 func Example_runtime_static_template() {
+	// This example binds a static template and executes it through runtime.Client.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -613,32 +647,39 @@ func Example_runtime_static_template() {
 		return
 	}
 	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
+	// A Client couples a database handle with the dialect used to render SQL.
 	client, err := runtime.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
+	// Create the table described by the generated users reference.
 	if err := client.CreateTable(ctx, users.Ref().Table()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
+	// Insert a row that the bound template will find.
 	if _, err := runtime.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
+	// Parse accepts only SQL text and named bind actions.
 	parsed, err := querytemplate.Parse("user_by_email", "SELECT id, email FROM users WHERE email = {{bind \"email\"}}")
 	if err != nil {
 		fmt.Printf("failed to parse template: %s\n", err)
 		return
 	}
+	// Compile converts named binds into the selected dialect's placeholders.
 	compiled, err := parsed.Compile(dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to compile template: %s\n", err)
 		return
 	}
+	// Bind supplies values without putting them into the SQL text.
 	statement, err := compiled.Bind(map[string]any{"email": "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to bind template: %s\n", err)

@@ -8,6 +8,7 @@ import (
 )
 
 func Example_query_static() {
+	// This example compiles a named static query and binds one value to it.
 	// Templates accept SQL text and only {{bind "name"}} actions. Values cannot
 	// become SQL text because every action becomes a dialect placeholder.
 	parsed, err := querytemplate.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}}")

@@ -7,6 +7,7 @@ import (
 )
 
 func Example_schema_table_definition() {
+	// This example defines one reusable table descriptor in Go code.
 	// Describe each database table once with schema.Table. The same descriptor
 	// can later supply a reusable query.TableRef or generate DDL.
 	table := schema.Table{
@@ -20,6 +21,7 @@ func Example_schema_table_definition() {
 		// PrimaryKey names columns from Columns that uniquely identify each row.
 		PrimaryKey: []string{"id"},
 	}
+	// Validate the descriptor before it is used to create references or DDL.
 	if err := table.Validate(); err != nil {
 		fmt.Printf("failed to define table: %s\n", err)
 		return

@@ -20,6 +20,7 @@ func (statementPrinter) QueryContext(_ context.Context, query string, arguments 
 }
 
 func Example_runtime_debug_query() {
+	// This example prints the SQL for a typed query without opening a database.
 	// runtime.New accepts *sql.DB, *sql.Tx, or another runtime.Queryer. This
 	// debug Queryer lets the example show the generated statement without a database.
 	client, err := runtime.New(statementPrinter{}, dialect.PostgreSQL())

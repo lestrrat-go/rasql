@@ -11,6 +11,7 @@ import (
 )
 
 func Example_inspect_sqlite_table() {
+	// This example reads an existing SQLite table into a normalized schema.Table.
 	ctx := context.Background()
 	// The runtime package registers the pure-Go SQLite driver as "sqlite".
 	database, err := sql.Open("sqlite", ":memory:")
@@ -19,11 +20,13 @@ func Example_inspect_sqlite_table() {
 		return
 	}
 	defer database.Close()
+	// Pretend this DDL already exists in an application-owned SQLite database.
 	if _, err := database.ExecContext(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, nickname TEXT)"); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
+	// The inspector uses the dialect to normalize native column metadata.
 	inspector, err := inspect.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
