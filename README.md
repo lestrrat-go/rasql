@@ -64,43 +64,61 @@ rasqlgen schema \
 
 Repeat `-table` for each table. Generated code exports `store.Users` as a reusable `query.TableRef`; call `store.Users.Table()` when a schema descriptor is required.
 
-# Build a dynamic query
+# Query a generated table
 
-Pass the generated table reference to the fluent builder. This example shows the parameterized statement that `runtime.Client` can execute.
+Create `runtime.Client` with the application's `*sql.DB` once, then issue a query in one chain. This runnable example uses a debug `runtime.Queryer` that prints the generated statement.
 
-<!-- INCLUDE(examples/query_dynamic_example_test.go) -->
+<!-- INCLUDE(examples/runtime_query_example_test.go) -->
 ```go
 package examples_test
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/runtime"
 )
 
-func Example_query_dynamic() {
-	// users is a reusable query.TableRef with the shape emitted by rasqlgen.
-	// SelectFrom starts a fluent builder. Build returns the parameterized SQL
-	// statement that runtime.Client can execute.
-	statement, err := render.SelectFrom(dialect.PostgreSQL(), users).
-		Select("id", "email").
-		WhereEqual("id", 42).
-		Build()
+// statementPrinter is a debug-only runtime.Queryer. It follows the same
+// QueryContext contract as *sql.DB, but prints statements instead of running them.
+type statementPrinter struct{}
+
+func (statementPrinter) QueryContext(_ context.Context, query string, arguments ...any) (*sql.Rows, error) {
+	fmt.Println(query)
+	fmt.Printf("%v\n", arguments)
+	return nil, nil
+}
+
+func Example_runtime_query() {
+	// runtime.New accepts *sql.DB, *sql.Tx, or another runtime.Queryer. This
+	// debug Queryer lets the example show the generated statement without a database.
+	client, err := runtime.New(statementPrinter{}, dialect.PostgreSQL())
 	if err != nil {
-		fmt.Printf("failed to build select: %s\n", err)
+		fmt.Printf("failed to create runtime client: %s\n", err)
 		return
 	}
 
-	fmt.Println(statement.SQL())
-	fmt.Println(statement.Args())
+	// users is a reusable query.TableRef with the shape emitted by rasqlgen.
+	rows, err := client.SelectFrom(users).
+		Select("id", "email").
+		WhereEqual("id", 42).
+		Query(context.Background())
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+
+	fmt.Printf("%d result rows\n", len(rows))
 
 	// Output:
 	// SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)
 	// [42]
+	// 0 result rows
 }
 ```
-source: [examples/query_dynamic_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_dynamic_example_test.go)
+source: [examples/runtime_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_query_example_test.go)
 <!-- END INCLUDE -->
 
 # Static templates
