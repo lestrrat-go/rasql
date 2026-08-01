@@ -79,8 +79,10 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 
 	source, err := generate.Schema("generated", table)
 	require.NoError(t, err)
-	require.Regexp(t, `(?m)^\s*Active\s+bool\s+`+"`rasql:\"active\"`"+`$`, string(source))
-	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64\s+`+"`rasql:\"login_attempts\"`"+`$`, string(source))
+	require.Regexp(t, `(?m)^\s*Active\s+bool$`, string(source))
+	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64$`, string(source))
+	require.Contains(t, string(source), `row.Assign(src, "active", &r.Active)`)
+	require.Contains(t, string(source), `row.Assign(src, "login_attempts", &r.LoginAttempts)`)
 }
 
 func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
@@ -129,6 +131,6 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 
 	source, err := generate.Schema("generated", table)
 	require.NoError(t, err)
-	require.Regexp(t, `(?m)^\s*ID\s+int64\s+`+"`rasql:\"id\"`"+`$`, string(source))
+	require.Regexp(t, `(?m)^\s*ID\s+int64$`, string(source))
 	require.NotContains(t, string(source), "ID *int64")
 }

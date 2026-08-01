@@ -23,22 +23,49 @@ var timeLayouts = []string{
 	"2006-01-02",
 }
 
+// Decoder is implemented by row types that map result columns themselves.
+// Decode prefers it over struct tags and snake-cased field names, so a
+// generated row type carries its own mapping instead of restating it as a tag.
+// A single result value is decoded by ColumnDecoder instead.
+type Decoder interface {
+	DecodeRow(Row) error
+}
+
 // Get decodes the named value in r as T.
 func Get[T any](r Row, name string) (T, error) {
 	var result T
-	value, ok := r.values[name]
-	if !ok {
-		return result, fmt.Errorf("row: column %q is not present", name)
-	}
-	if err := assign(reflect.ValueOf(&result).Elem(), value); err != nil {
-		return result, fmt.Errorf("row: decode column %q: %w", name, err)
+	if err := Assign(r, name, &result); err != nil {
+		return result, err
 	}
 	return result, nil
 }
 
-// Decode populates T from rasql-tagged fields or snake-cased exported field names.
+// Assign decodes the named value in r into destination.
+func Assign[T any](r Row, name string, destination *T) error {
+	if destination == nil {
+		return fmt.Errorf("row: destination for column %q must not be nil", name)
+	}
+	value, ok := r.values[name]
+	if !ok {
+		return fmt.Errorf("row: column %q is not present", name)
+	}
+	if err := assign(reflect.ValueOf(destination).Elem(), value); err != nil {
+		return fmt.Errorf("row: decode column %q: %w", name, err)
+	}
+	return nil
+}
+
+// Decode populates T through its DecodeRow method when it has one, and from
+// rasql-tagged fields or snake-cased exported field names otherwise.
 func Decode[T any](r Row) (T, error) {
 	var result T
+	if decoder, ok := any(&result).(Decoder); ok {
+		if err := decoder.DecodeRow(r); err != nil {
+			return result, fmt.Errorf("row: decode %T: %w", result, err)
+		}
+		return result, nil
+	}
+
 	destination := reflect.ValueOf(&result).Elem()
 	if destination.Kind() != reflect.Struct {
 		return result, fmt.Errorf("row: decode destination %T must be a struct", result)

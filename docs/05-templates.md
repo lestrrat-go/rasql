@@ -159,7 +159,8 @@ source: [examples/rasql_static_template_example_test.go](https://github.com/lest
 | Call | Gives |
 | --- | --- |
 | `row.Get[T](result, "email")` | One named value, decoded as `T`. |
-| `row.Decode[T](result)` | A whole struct, matching `rasql` tags or snake-cased field names. |
+| `row.Assign(result, "email", &value)` | The same value, decoded into an existing destination. |
+| `row.Decode[T](result)` | A whole struct, through its `DecodeRow` method when it has one, and matching `rasql` tags or snake-cased field names otherwise. |
 | `row.String("email")` and friends | A reusable typed column, decoded with `Column.Get(result)`. |
 
 ## Generate a function instead
