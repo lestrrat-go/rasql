@@ -28,7 +28,7 @@ func Example_rasql_sqlite_query() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the schema described by the generated table reference.
+	// Create the schema described by the generated table descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -40,7 +40,7 @@ func Example_rasql_sqlite_query() {
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
-	user, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
+	user, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).One(ctx)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

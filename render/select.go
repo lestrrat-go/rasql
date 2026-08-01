@@ -134,7 +134,7 @@ func (r *renderer) writeSelect(statement query.Select) error {
 	return nil
 }
 
-func (r *renderer) writeTable(table query.TableRef) error {
+func (r *renderer) writeTable(table query.Table) error {
 	name, err := r.quoteIdentifier(table.Name())
 	if err != nil {
 		return err

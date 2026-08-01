@@ -138,7 +138,7 @@ func (a Assignment) Value() Expression {
 
 // Insert is an immutable single-row INSERT statement.
 type Insert struct {
-	into      TableRef
+	into      Table
 	columns   []Column
 	values    []Expression
 	returning []Projection
@@ -147,7 +147,7 @@ type Insert struct {
 func (Insert) writeStatement() {}
 
 // NewInsert creates a validated INSERT statement.
-func NewInsert(into TableRef, columns []Column, values []Expression) (Insert, error) {
+func NewInsert(into Table, columns []Column, values []Expression) (Insert, error) {
 	statement := Insert{
 		into:    into,
 		columns: append([]Column(nil), columns...),
@@ -170,7 +170,7 @@ func (s Insert) WithReturning(projections ...Projection) (Insert, error) {
 }
 
 // Into returns the target table.
-func (s Insert) Into() TableRef {
+func (s Insert) Into() Table {
 	return s.into
 }
 
@@ -228,7 +228,7 @@ func (s Insert) clone() Insert {
 
 // Update is an immutable UPDATE statement.
 type Update struct {
-	table     TableRef
+	table     Table
 	sets      []Assignment
 	where     Expression
 	returning []Projection
@@ -237,7 +237,7 @@ type Update struct {
 func (Update) writeStatement() {}
 
 // NewUpdate creates a validated UPDATE statement.
-func NewUpdate(table TableRef, assignments ...Assignment) (Update, error) {
+func NewUpdate(table Table, assignments ...Assignment) (Update, error) {
 	statement := Update{table: table, sets: append([]Assignment(nil), assignments...)}
 	if err := statement.Validate(); err != nil {
 		return Update{}, err
@@ -266,7 +266,7 @@ func (s Update) WithReturning(projections ...Projection) (Update, error) {
 }
 
 // Table returns the target table.
-func (s Update) Table() TableRef {
+func (s Update) Table() Table {
 	return s.table
 }
 
@@ -325,7 +325,7 @@ func (s Update) clone() Update {
 
 // Delete is an immutable DELETE statement.
 type Delete struct {
-	from      TableRef
+	from      Table
 	where     Expression
 	returning []Projection
 }
@@ -333,7 +333,7 @@ type Delete struct {
 func (Delete) writeStatement() {}
 
 // NewDelete creates a validated DELETE statement.
-func NewDelete(from TableRef) (Delete, error) {
+func NewDelete(from Table) (Delete, error) {
 	statement := Delete{from: from}
 	if err := statement.Validate(); err != nil {
 		return Delete{}, err
@@ -363,7 +363,7 @@ func (s Delete) WithReturning(projections ...Projection) (Delete, error) {
 }
 
 // From returns the target table.
-func (s Delete) From() TableRef {
+func (s Delete) From() Table {
 	return s.from
 }
 
@@ -391,7 +391,7 @@ func (s Delete) Validate() error {
 	return validateProjections(s.returning, sources, "returning")
 }
 
-func validateWriteTarget(table TableRef, path string) (map[string]struct{}, error) {
+func validateWriteTarget(table Table, path string) (map[string]struct{}, error) {
 	if err := table.validate(); err != nil {
 		return nil, validationError(path, "%s", err)
 	}
@@ -401,14 +401,14 @@ func validateWriteTarget(table TableRef, path string) (map[string]struct{}, erro
 	return map[string]struct{}{table.key(): {}}, nil
 }
 
-func validateTargetColumn(column Column, table TableRef, path string) error {
+func validateTargetColumn(column Column, table Table, path string) error {
 	if err := column.source.validate(); err != nil {
 		return validationError(path, "%s", err)
 	}
 	if column.source.key() != table.key() {
 		return validationError(path, "belongs to table %q instead of target %q", column.source.Qualifier(), table.Qualifier())
 	}
-	if _, exists := table.table.Column(column.name); !exists {
+	if _, exists := table.definition.Column(column.name); !exists {
 		return validationError(path, "references unknown column %q", column.name)
 	}
 	return nil

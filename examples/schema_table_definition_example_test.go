@@ -9,7 +9,7 @@ import (
 func Example_schema_table_definition() {
 	// This example defines one reusable table descriptor in Go code.
 	// Describe each database table once with schema.Table. The same descriptor
-	// can later supply a reusable query.TableRef or generate DDL.
+	// can later supply a reusable query.Table or generate DDL.
 	table := schema.Table{
 		// Name is the database table identifier.
 		Name: "users",

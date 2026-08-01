@@ -72,6 +72,8 @@ func testDatabaseIntegration(t *testing.T, driverName string, dsn string, d dial
 	}
 	records, err := rasql.NewTable[record](integrationTable())
 	require.NoError(t, err)
+	recordID, err := records.Column("id")
+	require.NoError(t, err)
 
 	_, err = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS rasql_integration_records")
 	require.NoError(t, err)
@@ -92,11 +94,11 @@ func testDatabaseIntegration(t *testing.T, driverName string, dsn string, d dial
 	_, err = rasql.Update(t.Context(), client, records, first)
 	require.NoError(t, err)
 
-	actual, err := rasql.SelectFrom(client, records).WhereEqual("id", first.ID).One(t.Context())
+	actual, err := rasql.SelectFrom(client, records).WhereEqual(recordID, first.ID).One(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, first, actual)
 
-	all, err := rasql.SelectFrom(client, records).OrderAsc("id").All(t.Context())
+	all, err := rasql.SelectFrom(client, records).OrderAsc(recordID).All(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, []record{first, second}, all)
 

@@ -12,7 +12,7 @@ import (
 )
 
 func Example_rasql_delete() {
-	// This example deletes rows by column name and by a query expression.
+	// This example deletes rows by a generated column and by a query expression.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -29,7 +29,7 @@ func Example_rasql_delete() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the table described by the generated users reference.
+	// Create the table described by the generated users descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -41,8 +41,8 @@ func Example_rasql_delete() {
 		}
 	}
 
-	// WhereEqual names a column of the target table and binds the value.
-	result, err := rasql.DeleteFrom(client, users).WhereEqual("id", 1).Exec(ctx)
+	// WhereEqual takes a column of the target table and binds the value.
+	result, err := rasql.DeleteFrom(client, users).WhereEqual(users.ID, 1).Exec(ctx)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -55,12 +55,7 @@ func Example_rasql_delete() {
 	fmt.Printf("%d user deleted by id\n", deleted)
 
 	// Where takes any predicate built through the query package.
-	id, err := users.Ref().Column("id")
-	if err != nil {
-		fmt.Printf("failed to find users.id: %s\n", err)
-		return
-	}
-	result, err = rasql.DeleteFrom(client, users).Where(query.GreaterThan(id, query.Bind(2))).Exec(ctx)
+	result, err = rasql.DeleteFrom(client, users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return

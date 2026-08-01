@@ -44,7 +44,7 @@ func validateExpression(expression Expression, sources map[string]struct{}, path
 		if _, exists := sources[expression.source.key()]; !exists {
 			return validationError(path, "references table %q outside the statement", expression.source.Qualifier())
 		}
-		if _, exists := expression.source.table.Column(expression.name); !exists {
+		if _, exists := expression.source.definition.Column(expression.name); !exists {
 			return validationError(path, "references unknown column %q", expression.name)
 		}
 		return nil
@@ -55,7 +55,7 @@ func validateExpression(expression Expression, sources map[string]struct{}, path
 		if _, exists := sources[expression.column.source.key()]; !exists {
 			return validationError(path, "references table %q outside the statement", expression.column.source.Qualifier())
 		}
-		if _, exists := expression.column.source.table.Column(expression.column.name); !exists {
+		if _, exists := expression.column.source.definition.Column(expression.column.name); !exists {
 			return validationError(path, "references unknown column %q", expression.column.name)
 		}
 		return nil

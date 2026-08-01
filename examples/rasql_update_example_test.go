@@ -28,7 +28,7 @@ func Example_rasql_update() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the table described by the generated users reference.
+	// Create the table described by the generated users descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -45,7 +45,7 @@ func Example_rasql_update() {
 		return
 	}
 
-	user, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
+	user, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).One(ctx)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return

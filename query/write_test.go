@@ -8,7 +8,7 @@ import (
 )
 
 func TestWriteStatementsValidate(t *testing.T) {
-	users, err := query.NewTableRef(usersTable())
+	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
 	id, err := users.Column("id")
 	require.NoError(t, err)
@@ -35,7 +35,7 @@ func TestWriteStatementsValidate(t *testing.T) {
 }
 
 func TestWriteStatementsRejectInvalidInput(t *testing.T) {
-	users, err := query.NewTableRef(usersTable())
+	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
 	id, err := users.Column("id")
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 }
 
 func TestUpsertValidatesConflictAssignments(t *testing.T) {
-	users, err := query.NewTableRef(usersTable())
+	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
 	id, err := users.Column("id")
 	require.NoError(t, err)

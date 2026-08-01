@@ -52,7 +52,7 @@ func TestSelectRejectsNilDialect(t *testing.T) {
 
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -62,7 +62,7 @@ func selectStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 	users, err = users.As("u")
 	require.NoError(t, err)
-	orders, err := query.NewTableRef(schema.Table{
+	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},

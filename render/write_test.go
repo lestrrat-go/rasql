@@ -131,9 +131,9 @@ func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
 	require.Error(t, err)
 }
 
-func writeTable(t *testing.T) (query.TableRef, query.Column, query.Column) {
+func writeTable(t *testing.T) (query.Table, query.Column, query.Column) {
 	t.Helper()
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},

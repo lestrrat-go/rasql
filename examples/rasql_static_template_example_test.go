@@ -30,7 +30,7 @@ func Example_rasql_static_template() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the table described by the generated users reference.
+	// Create the table described by the generated users descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
