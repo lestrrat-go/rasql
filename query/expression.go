@@ -7,7 +7,7 @@ type Expression interface {
 
 // Column is a typed reference to a table column.
 type Column struct {
-	source TableRef
+	source Table
 	name   string
 }
 
@@ -19,7 +19,7 @@ func (c Column) Name() string {
 }
 
 // Source returns the table that owns the column.
-func (c Column) Source() TableRef {
+func (c Column) Source() Table {
 	return c.source
 }
 

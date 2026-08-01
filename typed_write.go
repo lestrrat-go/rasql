@@ -93,22 +93,22 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 	return statement.WithWhere(query.And(predicates...))
 }
 
-func typedRowFields[T any](table Table[T], value T) (query.TableRef, map[string]reflect.Value, error) {
+func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]reflect.Value, error) {
 	reference := table.Ref()
 	definition := reference.Definition()
 	if err := definition.Validate(); err != nil {
-		return query.TableRef{}, nil, fmt.Errorf("table reference: %w", err)
+		return query.Table{}, nil, fmt.Errorf("table reference: %w", err)
 	}
 
 	record := reflect.ValueOf(value)
 	for record.Kind() == reflect.Pointer {
 		if record.IsNil() {
-			return query.TableRef{}, nil, fmt.Errorf("row value must not be nil")
+			return query.Table{}, nil, fmt.Errorf("row value must not be nil")
 		}
 		record = record.Elem()
 	}
 	if record.Kind() != reflect.Struct {
-		return query.TableRef{}, nil, fmt.Errorf("row value %T must be a struct", value)
+		return query.Table{}, nil, fmt.Errorf("row value %T must be a struct", value)
 	}
 
 	fields := make(map[string]reflect.Value, record.NumField())
@@ -121,22 +121,22 @@ func typedRowFields[T any](table Table[T], value T) (query.TableRef, map[string]
 		}
 		columnName, _, _ = strings.Cut(columnName, ",")
 		if columnName == "" {
-			return query.TableRef{}, nil, fmt.Errorf("field %s has an empty rasql column name", field.Name)
+			return query.Table{}, nil, fmt.Errorf("field %s has an empty rasql column name", field.Name)
 		}
 		if field.PkgPath != "" {
-			return query.TableRef{}, nil, fmt.Errorf("field %s for column %q is not exported", field.Name, columnName)
+			return query.Table{}, nil, fmt.Errorf("field %s for column %q is not exported", field.Name, columnName)
 		}
 		if _, exists := fields[columnName]; exists {
-			return query.TableRef{}, nil, fmt.Errorf("multiple fields are tagged for column %q", columnName)
+			return query.Table{}, nil, fmt.Errorf("multiple fields are tagged for column %q", columnName)
 		}
 		if _, exists := definition.Column(columnName); !exists {
-			return query.TableRef{}, nil, fmt.Errorf("field %s references unknown column %q", field.Name, columnName)
+			return query.Table{}, nil, fmt.Errorf("field %s references unknown column %q", field.Name, columnName)
 		}
 		fields[columnName] = record.Field(index)
 	}
 	for _, definitionColumn := range definition.Columns {
 		if _, ok := fields[definitionColumn.Name]; !ok {
-			return query.TableRef{}, nil, fmt.Errorf("row value has no field tagged for column %q", definitionColumn.Name)
+			return query.Table{}, nil, fmt.Errorf("row value has no field tagged for column %q", definitionColumn.Name)
 		}
 	}
 	return reference, fields, nil

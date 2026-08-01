@@ -40,17 +40,17 @@ const (
 // Join adds a joined table to a SELECT statement.
 type Join struct {
 	kind   JoinType
-	source TableRef
+	source Table
 	on     Expression
 }
 
 // InnerJoin returns an INNER JOIN.
-func InnerJoin(source TableRef, on Expression) Join {
+func InnerJoin(source Table, on Expression) Join {
 	return Join{kind: JoinInner, source: source, on: on}
 }
 
 // LeftJoin returns a LEFT JOIN.
-func LeftJoin(source TableRef, on Expression) Join {
+func LeftJoin(source Table, on Expression) Join {
 	return Join{kind: JoinLeft, source: source, on: on}
 }
 
@@ -60,7 +60,7 @@ func (j Join) Type() JoinType {
 }
 
 // Source returns the joined table.
-func (j Join) Source() TableRef {
+func (j Join) Source() Table {
 	return j.source
 }
 
@@ -98,7 +98,7 @@ func (o Order) Descending() bool {
 // Select is an immutable SELECT statement.
 type Select struct {
 	projections []Projection
-	from        TableRef
+	from        Table
 	joins       []Join
 	where       Expression
 	orderBy     []Order
@@ -109,7 +109,7 @@ type Select struct {
 }
 
 // NewSelect creates a validated SELECT statement.
-func NewSelect(from TableRef, projections ...Projection) (Select, error) {
+func NewSelect(from Table, projections ...Projection) (Select, error) {
 	statement := Select{
 		from:        from,
 		projections: append([]Projection(nil), projections...),
@@ -178,7 +178,7 @@ func (s Select) Projections() []Projection {
 }
 
 // From returns the statement's primary table.
-func (s Select) From() TableRef {
+func (s Select) From() Table {
 	return s.from
 }
 

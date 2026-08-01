@@ -24,7 +24,7 @@ func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
 
 // DecodeFrom starts a typed fluent SELECT builder for a custom result shape.
 // Projected column names map to T's rasql tags or snake-cased exported field names.
-func DecodeFrom[T any](client Client, table query.TableRef) TypedSelectBuilder[T] {
+func DecodeFrom[T any](client Client, table query.Table) TypedSelectBuilder[T] {
 	return TypedSelectBuilder[T]{builder: client.SelectFrom(table)}
 }
 

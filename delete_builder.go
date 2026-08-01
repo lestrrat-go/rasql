@@ -12,7 +12,7 @@ import (
 // DeleteBuilder builds and executes a DELETE statement through an immutable fluent API.
 type DeleteBuilder struct {
 	client   Client
-	from     query.TableRef
+	from     query.Table
 	where    query.Expression
 	hasWhere bool
 	err      error
@@ -26,7 +26,7 @@ func DeleteFrom[T any](client Client, table Table[T]) DeleteBuilder {
 
 // DeleteFrom starts a fluent DELETE builder using table as its target.
 // Exec deletes every row when no predicate is set.
-func (c Client) DeleteFrom(table query.TableRef) DeleteBuilder {
+func (c Client) DeleteFrom(table query.Table) DeleteBuilder {
 	return DeleteBuilder{client: c, from: table}
 }
 

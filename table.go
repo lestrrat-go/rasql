@@ -9,12 +9,12 @@ import (
 
 // Table associates a reusable table reference with the Go type for one of its rows.
 type Table[T any] struct {
-	reference query.TableRef
+	reference query.Table
 }
 
 // NewTable creates a typed table from a validated schema definition.
 func NewTable[T any](definition schema.Table) (Table[T], error) {
-	reference, err := query.NewTableRef(definition)
+	reference, err := query.NewTable(definition)
 	if err != nil {
 		return Table[T]{}, fmt.Errorf("rasql: table definition: %w", err)
 	}
@@ -32,6 +32,6 @@ func MustTable[T any](definition schema.Table) Table[T] {
 }
 
 // Ref returns the underlying reusable table reference.
-func (t Table[T]) Ref() query.TableRef {
+func (t Table[T]) Ref() query.Table {
 	return t.reference
 }

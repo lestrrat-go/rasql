@@ -17,7 +17,7 @@ type SelectBuilder struct {
 }
 
 // SelectFrom starts a fluent SELECT builder using table as its primary table.
-func (c Client) SelectFrom(table query.TableRef) SelectBuilder {
+func (c Client) SelectFrom(table query.Table) SelectBuilder {
 	return SelectBuilder{client: c, builder: render.SelectFrom(c.dialect, table)}
 }
 
