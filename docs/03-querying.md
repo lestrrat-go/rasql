@@ -1,0 +1,322 @@
+# Querying
+
+`rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
+
+Every builder is immutable. Each call returns a new builder, so a partly built query can be shared or reused without one caller's `Limit` leaking into another's.
+
+## Select typed rows
+
+`SelectFrom` knows the row type from the table descriptor, so it selects every column and decodes each result into that type.
+
+<!-- INCLUDE(examples/rasql_typed_query_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_typed_query() {
+	// This example pages through several users and decodes them as UserRow values.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+	// Create the table described by the generated users reference.
+	if err := rasql.Create(ctx, client, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+	// Use rasql.Insert for each fixture row so setup follows the public API.
+	for _, user := range []UserRow{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+		{ID: 3, Email: "cyd@example.com"},
+	} {
+		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+			fmt.Printf("failed to insert user: %s\n", err)
+			return
+		}
+	}
+
+	// SelectFrom knows the UsersRow result type from users. Query yields decoded
+	// rows directly, so the loop does not need manual scanning or conversion.
+	rows, err := rasql.SelectFrom(client, users).
+		OrderAsc("email").
+		Offset(1).
+		Limit(2).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+	for found, err := range rows {
+		if err != nil {
+			fmt.Printf("failed to query users: %s\n", err)
+			return
+		}
+		fmt.Println(found.Email)
+	}
+
+	// Output:
+	// bob@example.com
+	// cyd@example.com
+}
+```
+source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_typed_query_example_test.go)
+<!-- END INCLUDE -->
+
+Three methods run the statement:
+
+| Method | Returns | Use when |
+| --- | --- | --- |
+| `Query(ctx)` | A rangeable `iter.Seq2[T, error]`. | The result is large, or processing can stop early. |
+| `All(ctx)` | `[]T`. | The whole result fits in memory comfortably. |
+| `One(ctx)` | `T`. | Exactly one row is expected; anything else is an error. |
+
+All three report validation and rendering problems as the returned error before any row is read. `Query` yields rows first and at most one error after them, so a loop checks the error on each step and stops when it is non-nil.
+
+`Build()` skips execution and returns the rendered `render.Statement`, which carries the SQL text and its ordered arguments. It is the direct way to log or test a statement.
+
+## Filter, order, and page
+
+`WhereEqual`, `OrderAsc`, and `OrderDesc` take a column of the primary table by name and cover the common cases without importing the `query` package. `Limit` and `Offset` page the result, and `Select` narrows the projection to named columns.
+
+For anything richer, `Where` and `Order` accept expressions from the `query` package:
+
+```go
+minimum, err := users.Ref().Column("id")
+if err != nil {
+	return err
+}
+rows, err := rasql.SelectFrom(client, users).
+	Where(query.And(
+		query.GreaterThan(minimum, query.Bind(10)),
+		query.IsNotNull(minimum),
+	)).
+	Order(query.Desc(minimum)).
+	Query(ctx)
+```
+
+`Ref().Column(name)` looks the column up in the descriptor and fails when the table has no such column, so a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
+
+The expression set covers comparisons (`Equal`, `NotEqual`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `Like`, and the general `Compare`), logic (`And`, `Or`, `Negate`), and null tests (`IsNull`, `IsNotNull`).
+
+## Decode a custom shape
+
+A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise.
+
+<!-- INCLUDE(examples/rasql_dynamic_projection_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_dynamic_projection() {
+	// This example joins users and orders, then reads an ad hoc result shape.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+	// A typed descriptor makes orders usable with rasql.Insert as well.
+	type orderRow struct {
+		ID     int `rasql:"id"`
+		UserID int `rasql:"user_id"`
+		Total  int `rasql:"total"`
+	}
+	// A local result type makes the custom projection as easy to read as a table row.
+	type orderSummary struct {
+		UserID int64
+		Email  string
+	}
+	orders := rasql.MustTable[orderRow](schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "total", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	// Create both descriptors before querying their joined rows.
+	if err := rasql.Create(ctx, client, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+	if err := rasql.Create(ctx, client, orders); err != nil {
+		fmt.Printf("failed to create orders table: %s\n", err)
+		return
+	}
+
+	// Column references keep the dynamic query validated as it is assembled.
+	userID, err := users.Ref().Column("id")
+	if err != nil {
+		fmt.Printf("failed to find users.id: %s\n", err)
+		return
+	}
+	email, err := users.Ref().Column("email")
+	if err != nil {
+		fmt.Printf("failed to find users.email: %s\n", err)
+		return
+	}
+	orderUserID, err := orders.Ref().Column("user_id")
+	if err != nil {
+		fmt.Printf("failed to find orders.user_id: %s\n", err)
+		return
+	}
+	total, err := orders.Ref().Column("total")
+	if err != nil {
+		fmt.Printf("failed to find orders.total: %s\n", err)
+		return
+	}
+	// Populate both tables through the typed rasql API.
+	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+	for _, order := range []orderRow{
+		{ID: 1, UserID: 1, Total: 50},
+		{ID: 2, UserID: 1, Total: 10},
+	} {
+		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
+			fmt.Printf("failed to insert order: %s\n", err)
+			return
+		}
+	}
+
+	// DecodeFrom maps the selected names into orderSummary's exported fields.
+	rows, err := rasql.DecodeFrom[orderSummary](client, users.Ref()).
+		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
+		Project(query.Project(userID).As("user_id"), query.Project(email)).
+		Where(query.GreaterThan(total, query.Bind(20))).
+		Order(query.Desc(total)).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to build order totals query: %s\n", err)
+		return
+	}
+	for summary, err := range rows {
+		if err != nil {
+			fmt.Printf("failed to query order totals: %s\n", err)
+			return
+		}
+		fmt.Println(summary.UserID, summary.Email)
+	}
+
+	// Output:
+	// 1 ada@example.com
+}
+```
+source: [examples/rasql_dynamic_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_dynamic_projection_example_test.go)
+<!-- END INCLUDE -->
+
+`Join` takes `query.InnerJoin` or `query.LeftJoin` with the join condition. `Project` selects expressions rather than plain column names, and `As` renames one so it lines up with a field of the result type. Because the projection is explicit here, the result type only needs fields for the columns actually selected.
+
+## See the SQL without a database
+
+`rasql.New` accepts any `rasql.Queryer`, not only `*sql.DB` and `*sql.Tx`. A few lines of debug implementation print statements instead of running them, which is useful for checking what a builder produces against each dialect.
+
+<!-- INCLUDE(examples/rasql_debug_query_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+)
+
+// statementPrinter is a debug-only rasql.Queryer. It follows the same
+// QueryContext contract as *sql.DB, but prints statements instead of running them.
+type statementPrinter struct{}
+
+func (statementPrinter) QueryContext(_ context.Context, query string, arguments ...any) (*sql.Rows, error) {
+	fmt.Println(query)
+	fmt.Printf("%v\n", arguments)
+	return nil, nil
+}
+
+func Example_rasql_debug_query() {
+	// This example prints the SQL for a typed query without opening a database.
+	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Queryer. This
+	// debug Queryer lets the example show the generated statement without a database.
+	client, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+
+	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	count := 0
+	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(context.Background())
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+	for _, err := range rows {
+		if err != nil {
+			fmt.Printf("failed to query users: %s\n", err)
+			return
+		}
+		count++
+	}
+
+	fmt.Printf("%d result rows\n", count)
+
+	// Output:
+	// SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)
+	// [42]
+	// 0 result rows
+}
+```
+source: [examples/rasql_debug_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_debug_query_example_test.go)
+<!-- END INCLUDE -->
+
+A debug `Queryer` may return `nil` rows after logging; `Client` treats that as an empty result rather than an error. When only the SQL is wanted and no execution at all, `Build()` returns it without a client.
+
+## Next
+
+[Writing rows](04-writing.md) covers inserts and updates, and [Static templates](05-templates.md) covers fixed SQL text with named binds.
