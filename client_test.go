@@ -3,6 +3,8 @@ package rasql_test
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"iter"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -31,8 +33,7 @@ func TestClientQueryExecutesParameterizedSelect(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	rows, err := client.Query(t.Context(), statement)
-	require.NoError(t, err)
+	rows := collectRows(t, client.Query(t.Context(), statement))
 	require.Len(t, rows, 1)
 
 	id, err := row.Int64("id")
@@ -71,11 +72,10 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	rows, err := client.SelectFrom(users).
+	rows := collectRows(t, client.SelectFrom(users).
 		Select("id", "email").
 		WhereEqual("id", 42).
-		Query(t.Context())
-	require.NoError(t, err)
+		Query(t.Context()))
 	require.Len(t, rows, 1)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -108,9 +108,12 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	decoded, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).One(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, user{ID: 42, Email: "ada@example.com"}, decoded)
+	decoded := make([]user, 0)
+	for value, err := range rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(t.Context()) {
+		require.NoError(t, err)
+		decoded = append(decoded, value)
+	}
+	require.Equal(t, []user{{ID: 42, Email: "ada@example.com"}}, decoded)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -119,8 +122,7 @@ func TestClientQueryAllowsDebugQueryer(t *testing.T) {
 	client, err := rasql.New(queryer, dialect.PostgreSQL())
 	require.NoError(t, err)
 
-	rows, err := client.Query(t.Context(), selectStatement(t))
-	require.NoError(t, err)
+	rows := collectRows(t, client.Query(t.Context(), selectStatement(t)))
 	require.Empty(t, rows)
 	require.Equal(t, "SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)", queryer.query)
 	require.Equal(t, []any{42}, queryer.arguments)
@@ -194,10 +196,62 @@ func TestClientQueryRenderedExecutesStaticStatement(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM users WHERE id = $1").WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
 
-	rows, err := client.QueryRendered(t.Context(), statement)
-	require.NoError(t, err)
+	rows := collectRows(t, client.QueryRendered(t.Context(), statement))
 	require.Len(t, rows, 1)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestClientQueryClosesRowsWhenIterationStops(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement := selectStatement(t)
+	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
+		WithArgs(42).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).
+			AddRow(int64(42), "ada@example.com").
+			AddRow(int64(43), "bob@example.com")).
+		RowsWillBeClosed()
+
+	for result, err := range client.Query(t.Context(), statement) {
+		require.NoError(t, err)
+		id, err := row.Get[int64](result, "id")
+		require.NoError(t, err)
+		require.Equal(t, int64(42), id)
+		break
+	}
+}
+
+func TestClientQueryYieldsExecutionError(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement := selectStatement(t)
+	expected := errors.New("database unavailable")
+	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
+		WithArgs(42).
+		WillReturnError(expected)
+
+	count := 0
+	for _, err := range client.Query(t.Context(), statement) {
+		require.ErrorIs(t, err, expected)
+		count++
+	}
+	require.Equal(t, 1, count)
 }
 
 func TestCreateExecutesTableAndIndexes(t *testing.T) {
@@ -268,4 +322,14 @@ func (q *debugQueryer) QueryContext(_ context.Context, query string, arguments .
 	q.query = query
 	q.arguments = append([]any(nil), arguments...)
 	return nil, nil
+}
+
+func collectRows(t *testing.T, sequence iter.Seq2[row.Row, error]) []row.Row {
+	t.Helper()
+	result := make([]row.Row, 0)
+	for value, err := range sequence {
+		require.NoError(t, err)
+		result = append(result, value)
+	}
+	return result
 }

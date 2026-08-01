@@ -3,6 +3,7 @@ package rasql
 import (
 	"context"
 	"fmt"
+	"iter"
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
@@ -73,36 +74,56 @@ func (b TypedSelectBuilder[T]) Build() (render.Statement, error) {
 	return b.builder.Build()
 }
 
-// All builds, executes, and decodes every result row as T.
-func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
-	rows, err := b.builder.Query(ctx)
-	if err != nil {
-		return nil, err
-	}
-	decoded := make([]T, len(rows))
-	for index, result := range rows {
-		value, err := row.Decode[T](result)
-		if err != nil {
-			return nil, fmt.Errorf("rasql: decode row %d: %w", index, err)
+// Query returns a rangeable sequence that decodes each result row as T.
+// It yields one final error instead of a value when execution or decoding fails.
+func (b TypedSelectBuilder[T]) Query(ctx context.Context) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
+		index := 0
+		for result, err := range b.builder.Query(ctx) {
+			if err != nil {
+				yield(zero, err)
+				return
+			}
+			decoded, err := row.Decode[T](result)
+			if err != nil {
+				yield(zero, fmt.Errorf("rasql: decode row %d: %w", index, err))
+				return
+			}
+			index++
+			if !yield(decoded, nil) {
+				return
+			}
 		}
-		decoded[index] = value
+	}
+}
+
+// All collects every row from Query.
+func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
+	decoded := make([]T, 0)
+	for value, err := range b.Query(ctx) {
+		if err != nil {
+			return nil, err
+		}
+		decoded = append(decoded, value)
 	}
 	return decoded, nil
 }
 
-// One builds, executes, and decodes exactly one result row as T.
+// One returns exactly one row from Query.
 func (b TypedSelectBuilder[T]) One(ctx context.Context) (T, error) {
 	var zero T
-	rows, err := b.builder.Query(ctx)
-	if err != nil {
-		return zero, err
+	var result T
+	count := 0
+	for value, err := range b.Query(ctx) {
+		if err != nil {
+			return zero, err
+		}
+		result = value
+		count++
 	}
-	if len(rows) != 1 {
-		return zero, fmt.Errorf("rasql: expected one row, got %d", len(rows))
+	if count != 1 {
+		return zero, fmt.Errorf("rasql: expected one row, got %d", count)
 	}
-	decoded, err := row.Decode[T](rows[0])
-	if err != nil {
-		return zero, fmt.Errorf("rasql: decode row: %w", err)
-	}
-	return decoded, nil
+	return result, nil
 }

@@ -93,27 +93,28 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// Use the raw builder when a join or projection has no single row type.
-	rows, err := client.SelectFrom(users.Ref()).
+	for result, err := range client.SelectFrom(users.Ref()).
 		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
 		Project(query.Project(userID), query.Project(email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
-		Query(ctx)
-	if err != nil {
-		fmt.Printf("failed to query order totals: %s\n", err)
-		return
+		Query(ctx) {
+		if err != nil {
+			fmt.Printf("failed to query order totals: %s\n", err)
+			return
+		}
+		userIDValue, err := row.Get[int64](result, "id")
+		if err != nil {
+			fmt.Printf("failed to read user ID: %s\n", err)
+			return
+		}
+		emailValue, err := row.Get[string](result, "email")
+		if err != nil {
+			fmt.Printf("failed to read email: %s\n", err)
+			return
+		}
+		fmt.Println(userIDValue, emailValue)
 	}
-	userIDValue, err := row.Get[int64](rows[0], "id")
-	if err != nil {
-		fmt.Printf("failed to read user ID: %s\n", err)
-		return
-	}
-	emailValue, err := row.Get[string](rows[0], "email")
-	if err != nil {
-		fmt.Printf("failed to read email: %s\n", err)
-		return
-	}
-	fmt.Println(userIDValue, emailValue)
 
 	// Output:
 	// 1 ada@example.com

@@ -186,7 +186,7 @@ source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrra
 
 # Query multiple typed rows
 
-Use `All` when the result has the generated row type, including when ordering, paging, or limiting the result.
+Use `Query` when the result has the generated row type, including when ordering, paging, or limiting the result.
 
 <!-- INCLUDE(examples/rasql_typed_query_example_test.go) -->
 ```go
@@ -237,19 +237,18 @@ func Example_rasql_typed_query() {
 		}
 	}
 
-	// SelectFrom knows the UsersRow result type from users. It selects every
-	// column, then All decodes every matching row into that type.
-	found, err := rasql.SelectFrom(client, users).
+	// SelectFrom knows the UsersRow result type from users. Query yields decoded
+	// rows directly, so the loop does not need manual scanning or conversion.
+	for found, err := range rasql.SelectFrom(client, users).
 		OrderAsc("email").
 		Offset(1).
 		Limit(2).
-		All(ctx)
-	if err != nil {
-		fmt.Printf("failed to query users: %s\n", err)
-		return
-	}
-	for _, user := range found {
-		fmt.Println(user.Email)
+		Query(ctx) {
+		if err != nil {
+			fmt.Printf("failed to query users: %s\n", err)
+			return
+		}
+		fmt.Println(found.Email)
 	}
 
 	// Output:
@@ -361,27 +360,28 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// Use the raw builder when a join or projection has no single row type.
-	rows, err := client.SelectFrom(users.Ref()).
+	for result, err := range client.SelectFrom(users.Ref()).
 		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
 		Project(query.Project(userID), query.Project(email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
-		Query(ctx)
-	if err != nil {
-		fmt.Printf("failed to query order totals: %s\n", err)
-		return
+		Query(ctx) {
+		if err != nil {
+			fmt.Printf("failed to query order totals: %s\n", err)
+			return
+		}
+		userIDValue, err := row.Get[int64](result, "id")
+		if err != nil {
+			fmt.Printf("failed to read user ID: %s\n", err)
+			return
+		}
+		emailValue, err := row.Get[string](result, "email")
+		if err != nil {
+			fmt.Printf("failed to read email: %s\n", err)
+			return
+		}
+		fmt.Println(userIDValue, emailValue)
 	}
-	userIDValue, err := row.Get[int64](rows[0], "id")
-	if err != nil {
-		fmt.Printf("failed to read user ID: %s\n", err)
-		return
-	}
-	emailValue, err := row.Get[string](rows[0], "email")
-	if err != nil {
-		fmt.Printf("failed to read email: %s\n", err)
-		return
-	}
-	fmt.Println(userIDValue, emailValue)
 
 	// Output:
 	// 1 ada@example.com
@@ -557,13 +557,16 @@ func Example_rasql_debug_query() {
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
-	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).All(context.Background())
-	if err != nil {
-		fmt.Printf("failed to query users: %s\n", err)
-		return
+	count := 0
+	for _, err := range rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(context.Background()) {
+		if err != nil {
+			fmt.Printf("failed to query users: %s\n", err)
+			return
+		}
+		count++
 	}
 
-	fmt.Printf("%d result rows\n", len(rows))
+	fmt.Printf("%d result rows\n", count)
 
 	// Output:
 	// SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)
@@ -690,18 +693,19 @@ func Example_rasql_static_template() {
 		return
 	}
 
-	// QueryRendered executes the dialect-specific statement produced by the template.
-	rows, err := client.QueryRendered(ctx, statement)
-	if err != nil {
-		fmt.Printf("failed to query user: %s\n", err)
-		return
+	// QueryRendered yields each row from the dialect-specific template statement.
+	for result, err := range client.QueryRendered(ctx, statement) {
+		if err != nil {
+			fmt.Printf("failed to query user: %s\n", err)
+			return
+		}
+		email, err := row.Get[string](result, "email")
+		if err != nil {
+			fmt.Printf("failed to read email: %s\n", err)
+			return
+		}
+		fmt.Println(email)
 	}
-	email, err := row.Get[string](rows[0], "email")
-	if err != nil {
-		fmt.Printf("failed to read email: %s\n", err)
-		return
-	}
-	fmt.Println(email)
 
 	// Output:
 	// ada@example.com

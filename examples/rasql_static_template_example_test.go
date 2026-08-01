@@ -60,18 +60,19 @@ func Example_rasql_static_template() {
 		return
 	}
 
-	// QueryRendered executes the dialect-specific statement produced by the template.
-	rows, err := client.QueryRendered(ctx, statement)
-	if err != nil {
-		fmt.Printf("failed to query user: %s\n", err)
-		return
+	// QueryRendered yields each row from the dialect-specific template statement.
+	for result, err := range client.QueryRendered(ctx, statement) {
+		if err != nil {
+			fmt.Printf("failed to query user: %s\n", err)
+			return
+		}
+		email, err := row.Get[string](result, "email")
+		if err != nil {
+			fmt.Printf("failed to read email: %s\n", err)
+			return
+		}
+		fmt.Println(email)
 	}
-	email, err := row.Get[string](rows[0], "email")
-	if err != nil {
-		fmt.Printf("failed to read email: %s\n", err)
-		return
-	}
-	fmt.Println(email)
 
 	// Output:
 	// ada@example.com

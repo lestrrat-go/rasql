@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"iter"
 	"reflect"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -47,34 +48,73 @@ func New(queryer Queryer, d dialect.Dialect) (Client, error) {
 	return client, nil
 }
 
-// Query renders statement, executes it, and returns its result rows.
-func (c Client) Query(ctx context.Context, statement query.Select) ([]row.Row, error) {
-	if isNil(c.queryer) || isNil(c.dialect) {
-		return nil, fmt.Errorf("rasql: invalid client")
+// Query returns a rangeable sequence of rows from statement.
+// It yields one final error instead of a row when rendering or execution fails.
+func (c Client) Query(ctx context.Context, statement query.Select) iter.Seq2[row.Row, error] {
+	return func(yield func(row.Row, error) bool) {
+		if isNil(c.queryer) || isNil(c.dialect) {
+			yield(row.Row{}, fmt.Errorf("rasql: invalid client"))
+			return
+		}
+		rendered, err := render.Select(c.dialect, statement)
+		if err != nil {
+			yield(row.Row{}, fmt.Errorf("rasql: render SELECT: %w", err))
+			return
+		}
+		c.QueryRendered(ctx, rendered)(yield)
 	}
-	rendered, err := render.Select(c.dialect, statement)
-	if err != nil {
-		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
-	}
-	return c.QueryRendered(ctx, rendered)
 }
 
-// QueryRendered executes a pre-rendered parameterized statement.
-func (c Client) QueryRendered(ctx context.Context, statement render.Statement) ([]row.Row, error) {
-	if isNil(c.queryer) || isNil(c.dialect) {
-		return nil, fmt.Errorf("rasql: invalid client")
+// QueryRendered returns a rangeable sequence of rows from statement.
+// It yields one final error instead of a row when execution or scanning fails.
+func (c Client) QueryRendered(ctx context.Context, statement render.Statement) iter.Seq2[row.Row, error] {
+	return func(yield func(row.Row, error) bool) {
+		if isNil(c.queryer) || isNil(c.dialect) {
+			yield(row.Row{}, fmt.Errorf("rasql: invalid client"))
+			return
+		}
+		if statement.SQL() == "" {
+			yield(row.Row{}, fmt.Errorf("rasql: statement SQL must not be empty"))
+			return
+		}
+		rows, err := c.queryer.QueryContext(ctx, statement.SQL(), statement.Args()...)
+		if err != nil {
+			yield(row.Row{}, fmt.Errorf("rasql: execute query: %w", err))
+			return
+		}
+		if rows == nil {
+			return
+		}
+		defer rows.Close()
+
+		names, err := rows.Columns()
+		if err != nil {
+			yield(row.Row{}, fmt.Errorf("rasql: read result columns: %w", err))
+			return
+		}
+		for rows.Next() {
+			values := make([]any, len(names))
+			destinations := make([]any, len(values))
+			for index := range values {
+				destinations[index] = &values[index]
+			}
+			if err := rows.Scan(destinations...); err != nil {
+				yield(row.Row{}, fmt.Errorf("rasql: scan result row: %w", err))
+				return
+			}
+			decoded, err := row.New(names, values)
+			if err != nil {
+				yield(row.Row{}, fmt.Errorf("rasql: create result row: %w", err))
+				return
+			}
+			if !yield(decoded, nil) {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			yield(row.Row{}, fmt.Errorf("rasql: iterate result rows: %w", err))
+		}
 	}
-	if statement.SQL() == "" {
-		return nil, fmt.Errorf("rasql: statement SQL must not be empty")
-	}
-	rows, err := c.queryer.QueryContext(ctx, statement.SQL(), statement.Args()...)
-	if err != nil {
-		return nil, fmt.Errorf("rasql: execute query: %w", err)
-	}
-	if rows == nil {
-		return nil, nil
-	}
-	return collect(rows)
 }
 
 // Exec renders and executes a write statement.
@@ -137,35 +177,6 @@ func createTable(ctx context.Context, client Client, table schema.Table) error {
 // Callers that require atomic DDL should construct the Client with a *sql.Tx.
 func Create[T any](ctx context.Context, client Client, table Table[T]) error {
 	return createTable(ctx, client, table.Ref().Definition())
-}
-
-func collect(rows *sql.Rows) ([]row.Row, error) {
-	defer rows.Close()
-
-	names, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("rasql: read result columns: %w", err)
-	}
-	result := make([]row.Row, 0)
-	for rows.Next() {
-		values := make([]any, len(names))
-		destinations := make([]any, len(values))
-		for index := range values {
-			destinations[index] = &values[index]
-		}
-		if err := rows.Scan(destinations...); err != nil {
-			return nil, fmt.Errorf("rasql: scan result row: %w", err)
-		}
-		decoded, err := row.New(names, values)
-		if err != nil {
-			return nil, fmt.Errorf("rasql: create result row: %w", err)
-		}
-		result = append(result, decoded)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rasql: iterate result rows: %w", err)
-	}
-	return result, nil
 }
 
 func isNil(value any) bool {
