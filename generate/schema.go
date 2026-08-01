@@ -39,15 +39,23 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	source.WriteString(packageName)
 	source.WriteString("\n\n")
 	source.WriteString("import (\n")
+	if containsTime(clones) {
+		source.WriteString("\t\"time\"\n\n")
+	}
 	source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
+	source.WriteString("\t\"github.com/lestrrat-go/rasql/runtime\"\n")
 	source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
 	source.WriteString(")\n\n")
 	for _, table := range clones {
+		writeRowType(&source, table)
+		source.WriteString("\n")
 		source.WriteString("var ")
 		source.WriteString(variableName(table.Name))
-		source.WriteString(" = query.MustNewTableRef(")
+		source.WriteString(" = runtime.MustTable[")
+		source.WriteString(rowTypeName(table.Name))
+		source.WriteString("](query.MustNewTableRef(")
 		writeTable(&source, table, "")
-		source.WriteString(")\n\n")
+		source.WriteString("))\n\n")
 	}
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
@@ -57,16 +65,33 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 }
 
 func validateVariableNames(tables []schema.Table) error {
-	names := make(map[string]struct{}, len(tables))
+	names := make(map[string]struct{}, len(tables)*2)
 	for _, table := range tables {
-		name := variableName(table.Name)
-		if name == "" || !token.IsIdentifier(name) {
+		variable := variableName(table.Name)
+		if variable == "" || !token.IsIdentifier(variable) {
 			return fmt.Errorf("generate: table %q cannot become a Go identifier", table.Name)
 		}
-		if _, exists := names[name]; exists {
-			return fmt.Errorf("generate: table %q duplicates generated variable %q", table.Name, name)
+		if _, exists := names[variable]; exists {
+			return fmt.Errorf("generate: table %q duplicates generated name %q", table.Name, variable)
 		}
-		names[name] = struct{}{}
+		names[variable] = struct{}{}
+		rowType := rowTypeName(table.Name)
+		if _, exists := names[rowType]; exists {
+			return fmt.Errorf("generate: table %q duplicates generated name %q", table.Name, rowType)
+		}
+		names[rowType] = struct{}{}
+
+		fields := make(map[string]struct{}, len(table.Columns))
+		for _, column := range table.Columns {
+			field := fieldName(column.Name)
+			if field == "" || !token.IsIdentifier(field) {
+				return fmt.Errorf("generate: column %q on table %q cannot become a Go field", column.Name, table.Name)
+			}
+			if _, exists := fields[field]; exists {
+				return fmt.Errorf("generate: column %q on table %q duplicates generated field %q", column.Name, table.Name, field)
+			}
+			fields[field] = struct{}{}
+		}
 	}
 	return nil
 }
@@ -86,6 +111,89 @@ func variableName(name string) string {
 		}
 	}
 	return result.String()
+}
+
+func rowTypeName(tableName string) string {
+	return variableName(tableName) + "Row"
+}
+
+func fieldName(name string) string {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '_'
+	})
+	var result strings.Builder
+	for _, part := range parts {
+		switch strings.ToLower(part) {
+		case "api":
+			result.WriteString("API")
+		case "id":
+			result.WriteString("ID")
+		case "json":
+			result.WriteString("JSON")
+		case "url":
+			result.WriteString("URL")
+		case "uuid":
+			result.WriteString("UUID")
+		default:
+			for index, r := range part {
+				if index == 0 {
+					result.WriteRune(unicode.ToUpper(r))
+					continue
+				}
+				result.WriteRune(r)
+			}
+		}
+	}
+	return result.String()
+}
+
+func containsTime(tables []schema.Table) bool {
+	for _, table := range tables {
+		for _, column := range table.Columns {
+			if column.Type == schema.TypeTime {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func writeRowType(source *bytes.Buffer, table schema.Table) {
+	source.WriteString("type ")
+	source.WriteString(rowTypeName(table.Name))
+	source.WriteString(" struct {\n")
+	for _, column := range table.Columns {
+		source.WriteString("\t")
+		source.WriteString(fieldName(column.Name))
+		source.WriteByte(' ')
+		if column.Nullable {
+			source.WriteByte('*')
+		}
+		source.WriteString(rowFieldType(column.Type))
+		source.WriteString(" `rasql:")
+		source.WriteString(quote(column.Name))
+		source.WriteString("`\n")
+	}
+	source.WriteString("}\n")
+}
+
+func rowFieldType(logicalType schema.LogicalType) string {
+	switch logicalType {
+	case schema.TypeBoolean:
+		return "bool"
+	case schema.TypeInteger:
+		return "int64"
+	case schema.TypeFloat:
+		return "float64"
+	case schema.TypeText, schema.TypeUUID:
+		return "string"
+	case schema.TypeBytes, schema.TypeJSON:
+		return "[]byte"
+	case schema.TypeTime:
+		return "time.Time"
+	default:
+		return "any"
+	}
 }
 
 func writeTable(source *bytes.Buffer, table schema.Table, indent string) {

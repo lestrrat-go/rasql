@@ -17,6 +17,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
 			{Name: "email", Type: schema.TypeText, Nullable: true},
+			{Name: "created_at", Type: schema.TypeTime},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -31,8 +32,14 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 
 	source, err := generate.Schema("generated", users, orders)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var Orders = query.MustNewTableRef")
-	require.Contains(t, string(source), "var Users = query.MustNewTableRef")
+	require.Contains(t, string(source), "type OrdersRow struct")
+	require.Contains(t, string(source), "type UsersRow struct")
+	require.Contains(t, string(source), "Email")
+	require.Contains(t, string(source), "CreatedAt")
+	require.Contains(t, string(source), "`rasql:\"email\"`")
+	require.Contains(t, string(source), "`rasql:\"created_at\"`")
+	require.Contains(t, string(source), "var Orders = runtime.MustTable[OrdersRow](query.MustNewTableRef")
+	require.Contains(t, string(source), "var Users = runtime.MustTable[UsersRow](query.MustNewTableRef")
 	require.Less(t, stringIndex(t, source, "var Orders"), stringIndex(t, source, "var Users"))
 
 	directory, err := os.MkdirTemp(".", ".tmp-schema-*")
@@ -44,9 +51,14 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
 
-	command := exec.CommandContext(t.Context(), "go", "test", ".")
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
 	command.Dir = directory
 	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
 	require.NoErrorf(t, err, "go test output:\n%s", output)
 }
 
