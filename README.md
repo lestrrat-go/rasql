@@ -64,66 +64,43 @@ rasqlgen schema \
 
 Repeat `-table` for each table. Generated code exports `store.Users` as a reusable `query.TableRef`; call `store.Users.Table()` when a schema descriptor is required.
 
-# Query a generated table
+# Build a dynamic query
 
-Create `runtime.Client` once from the application's `*sql.DB`, then issue a query in one chain. The output comment shows the result returned for the selected user.
+Pass the generated table reference to the fluent builder. This example shows the parameterized statement that `runtime.Client` can execute.
 
-<!-- INCLUDE(examples/runtime_query_example_test.go) -->
+<!-- INCLUDE(examples/query_dynamic_example_test.go) -->
 ```go
 package examples_test
 
 import (
-	"context"
 	"fmt"
 
-	"github.com/lestrrat-go/rasql/row"
-	"github.com/lestrrat-go/rasql/runtime"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/render"
 )
 
-func queryGeneratedUser(ctx context.Context, client runtime.Client) {
-	// Create client once at application startup with
-	// runtime.New(db, dialect.PostgreSQL()). Users is the reusable query.TableRef
-	// emitted by rasqlgen.
-	rows, err := client.SelectFrom(users).
+func Example_query_dynamic() {
+	// users is a reusable query.TableRef with the shape emitted by rasqlgen.
+	// SelectFrom starts a fluent builder. Build returns the parameterized SQL
+	// statement that runtime.Client can execute.
+	statement, err := render.SelectFrom(dialect.PostgreSQL(), users).
 		Select("id", "email").
 		WhereEqual("id", 42).
-		Query(ctx)
+		Build()
 	if err != nil {
-		fmt.Printf("failed to query users: %s\n", err)
-		return
-	}
-	if len(rows) == 0 {
-		fmt.Println("no user found")
-		return
-	}
-	id, err := row.Int64("id")
-	if err != nil {
-		fmt.Printf("failed to create id column: %s\n", err)
-		return
-	}
-	email, err := row.String("email")
-	if err != nil {
-		fmt.Printf("failed to create email column: %s\n", err)
-		return
-	}
-	userID, err := id.Get(rows[0])
-	if err != nil {
-		fmt.Printf("failed to read id: %s\n", err)
-		return
-	}
-	userEmail, err := email.Get(rows[0])
-	if err != nil {
-		fmt.Printf("failed to read email: %s\n", err)
+		fmt.Printf("failed to build select: %s\n", err)
 		return
 	}
 
-	fmt.Printf("%d %s\n", userID, userEmail)
+	fmt.Println(statement.SQL())
+	fmt.Println(statement.Args())
 
-	// OUTPUT:
-	// 42 ada@example.com
+	// Output:
+	// SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)
+	// [42]
 }
 ```
-source: [examples/runtime_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/runtime_query_example_test.go)
+source: [examples/query_dynamic_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_dynamic_example_test.go)
 <!-- END INCLUDE -->
 
 # Static templates
