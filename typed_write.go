@@ -13,6 +13,12 @@ import (
 // ColumnValuer is implemented by row types that supply their own column values.
 // Insert and Update prefer it over struct tags, so a generated row type carries
 // its own mapping instead of restating it as a tag.
+//
+// One shape is mapped by its tags even though it satisfies ColumnValuer: a
+// struct that embeds a ColumnValuer and also tags fields of its own. Go promotes
+// the embedded ColumnValue to the outer struct, where it knows nothing about the
+// fields declared around it, so the tags win. Declare ColumnValue on the outer
+// type and drop the tags to map such a struct by method instead.
 type ColumnValuer interface {
 	ColumnValue(name string) (any, bool)
 }
@@ -117,8 +123,10 @@ func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]any
 	}
 
 	// A row type that states its own mapping needs no tags, so it is asked for
-	// each column of the definition and nothing is read by reflection.
-	if valuer, ok := columnValuer(value); ok {
+	// each column of the definition and nothing is read by reflection. A
+	// ColumnValue promoted from an embedded field is not that statement when the
+	// row type tags fields of its own, so the tags are read instead.
+	if valuer, ok := columnValuer(value); ok && !tagsShadowEmbeddedValuer(record) {
 		fields := make(map[string]any, len(definition.Columns))
 		for _, definitionColumn := range definition.Columns {
 			columnValue, ok := valuer.ColumnValue(definitionColumn.Name)
@@ -174,4 +182,38 @@ func columnValuer[T any](value T) (ColumnValuer, bool) {
 	}
 	valuer, ok := any(&value).(ColumnValuer)
 	return valuer, ok
+}
+
+var columnValuerType = reflect.TypeFor[ColumnValuer]()
+
+// tagsShadowEmbeddedValuer reports whether record embeds a ColumnValuer and
+// also tags fields of its own. An interface assertion cannot tell a promoted
+// ColumnValue from one the row type declares, and a promoted one maps only the
+// embedded fields, so such a row type is mapped by its tags.
+func tagsShadowEmbeddedValuer(record reflect.Value) bool {
+	if record.Kind() != reflect.Struct {
+		return false
+	}
+	recordType := record.Type()
+	embedded := false
+	tagged := false
+	for index := range recordType.NumField() {
+		field := recordType.Field(index)
+		if columnName, ok := field.Tag.Lookup("rasql"); ok && columnName != "-" {
+			tagged = true
+		}
+		if field.Anonymous && implementsColumnValuer(field.Type) {
+			embedded = true
+		}
+	}
+	return embedded && tagged
+}
+
+// implementsColumnValuer reports whether fieldType or its pointer supplies its
+// own column values, so an embedded value and an embedded pointer both count.
+func implementsColumnValuer(fieldType reflect.Type) bool {
+	if fieldType.Implements(columnValuerType) {
+		return true
+	}
+	return reflect.PointerTo(fieldType).Implements(columnValuerType)
 }

@@ -112,7 +112,7 @@ A generated row type carries no `rasql` tags. The generator already knows which 
 | `row.Decoder` | `DecodeRow(row.Row) error` | `row.Decode`, and through it every typed select. |
 | `rasql.ColumnValuer` | `ColumnValue(name string) (any, bool)` | `rasql.Insert` and `rasql.Update`. |
 
-`row.Decode` looks for `DecodeRow` first and falls back to tags and snake-cased field names, and `Insert` and `Update` do the same with `ColumnValue`. Nothing about hand-written row types changes: tags stay the documented default for them, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). Writing both methods by hand states the mapping three times — once in the fields, once in `DecodeRow`, once in `ColumnValue` — and nothing checks that the three agree, which is a job for the generator rather than for a person.
+`row.Decode` looks for `DecodeRow` first and falls back to tags and snake-cased field names, and `Insert` and `Update` look for `ColumnValue` the same way. Embedding is the one place where the two directions differ, which the trap below covers. Nothing about hand-written row types changes: tags stay the documented default for them, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). Writing both methods by hand states the mapping three times — once in the fields, once in `DecodeRow`, once in `ColumnValue` — and nothing checks that the three agree, which is a job for the generator rather than for a person.
 
 `DecodeRow` is still the escape hatch for a mapping a tag cannot express, because it is ordinary code and can do more than name a column. A field computed from two columns is the usual case:
 
@@ -148,6 +148,8 @@ type userWithRole struct {
 ```
 
 Decoding a `userWithRole` runs `UsersRow.DecodeRow`, fills the embedded fields, and leaves `Role` at its zero value without reporting an error. Declare a `DecodeRow` on the outer type that calls the embedded one and then assigns the extra fields, or give the outer type its own named field instead of embedding.
+
+Embedding promotes `ColumnValue` in the same way, and the write side does not follow that promotion blindly. `Insert` and `Update` map a struct that embeds a `ColumnValuer` and also carries `rasql` tags of its own by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing, such as the `userWithRole` above, is still mapped by its promoted `ColumnValue`. Declaring `ColumnValue` on the outer type and dropping the tags maps a tagged wrapper by method again.
 
 ### What the column fields catch
 
