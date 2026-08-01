@@ -73,7 +73,7 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
 <!-- END INCLUDE -->
 
-Two things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. `users` is a `rasql.Table[UserRow]`, which binds that row type to a validated table description, so the compiler knows what a query against `users` returns. [Schemas](02-schema.md) covers how to write these by hand, and [`rasqlgen`](06-rasqlgen.md) covers how to generate them.
+Three things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. The embedded `rasql.Table[UserRow]` binds that row type to a validated table description, so the compiler knows what a query against `users` returns. The `ID` and `Email` fields are the column references the query builders take, so a misspelled column name is a compile error. [Schemas](02-schema.md) covers how to write these by hand, and [`rasqlgen`](06-rasqlgen.md) covers how to generate them.
 
 ## Create a client
 
@@ -123,7 +123,7 @@ func Example_rasql_sqlite_query() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the schema described by the generated table reference.
+	// Create the schema described by the generated table descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return

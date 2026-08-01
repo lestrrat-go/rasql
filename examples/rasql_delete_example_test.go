@@ -12,7 +12,7 @@ import (
 )
 
 func Example_rasql_delete() {
-	// This example deletes rows by column name and by a query expression.
+	// This example deletes rows by a generated column and by a query expression.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -29,7 +29,7 @@ func Example_rasql_delete() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the table described by the generated users reference.
+	// Create the table described by the generated users descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return

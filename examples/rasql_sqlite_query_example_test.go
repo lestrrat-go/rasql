@@ -28,7 +28,7 @@ func Example_rasql_sqlite_query() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the schema described by the generated table reference.
+	// Create the schema described by the generated table descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
