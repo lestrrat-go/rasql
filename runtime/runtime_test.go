@@ -6,6 +6,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/runtime"
 	"github.com/lestrrat-go/rasql/schema"
@@ -95,6 +96,27 @@ func TestClientExecExecutesParameterizedInsert(t *testing.T) {
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
 	require.Equal(t, int64(1), rows)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestClientQueryRenderedExecutesStaticStatement(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := runtime.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement, err := render.Precompiled("SELECT id FROM users WHERE id = $1", 42)
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT id FROM users WHERE id = $1").WithArgs(42).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
+
+	rows, err := client.QueryRendered(t.Context(), statement)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

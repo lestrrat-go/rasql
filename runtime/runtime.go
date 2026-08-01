@@ -55,9 +55,20 @@ func (c Client) Query(ctx context.Context, statement query.Select) ([]row.Row, e
 	if err != nil {
 		return nil, fmt.Errorf("runtime: render SELECT: %w", err)
 	}
-	rows, err := c.queryer.QueryContext(ctx, rendered.SQL(), rendered.Args()...)
+	return c.QueryRendered(ctx, rendered)
+}
+
+// QueryRendered executes a pre-rendered parameterized statement.
+func (c Client) QueryRendered(ctx context.Context, statement render.Statement) ([]row.Row, error) {
+	if isNil(c.queryer) || isNil(c.dialect) {
+		return nil, fmt.Errorf("runtime: invalid client")
+	}
+	if statement.SQL() == "" {
+		return nil, fmt.Errorf("runtime: statement SQL must not be empty")
+	}
+	rows, err := c.queryer.QueryContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
-		return nil, fmt.Errorf("runtime: execute SELECT: %w", err)
+		return nil, fmt.Errorf("runtime: execute query: %w", err)
 	}
 	return collect(rows)
 }
@@ -74,9 +85,23 @@ func (c Client) Exec(ctx context.Context, statement query.WriteStatement) (sql.R
 	if err != nil {
 		return nil, fmt.Errorf("runtime: render write statement: %w", err)
 	}
-	result, err := c.execer.ExecContext(ctx, rendered.SQL(), rendered.Args()...)
+	return c.ExecRendered(ctx, rendered)
+}
+
+// ExecRendered executes a pre-rendered parameterized statement.
+func (c Client) ExecRendered(ctx context.Context, statement render.Statement) (sql.Result, error) {
+	if isNil(c.queryer) || isNil(c.dialect) {
+		return nil, fmt.Errorf("runtime: invalid client")
+	}
+	if isNil(c.execer) {
+		return nil, fmt.Errorf("runtime: queryer does not support ExecContext")
+	}
+	if statement.SQL() == "" {
+		return nil, fmt.Errorf("runtime: statement SQL must not be empty")
+	}
+	result, err := c.execer.ExecContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
-		return nil, fmt.Errorf("runtime: execute write statement: %w", err)
+		return nil, fmt.Errorf("runtime: execute statement: %w", err)
 	}
 	return result, nil
 }
