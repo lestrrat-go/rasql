@@ -135,6 +135,9 @@ import (
 
 func Example_rasql_typed_query() {
 	// This example pages through several users and decodes them as UserRow values.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -258,6 +261,9 @@ import (
 
 func Example_rasql_dynamic_projection() {
 	// This example joins users and orders, then reads an ad hoc result shape.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -396,7 +402,8 @@ func Example_rasql_debug_query() {
 		return
 	}
 
-	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	// users is declared in query_example_tables_test.go with the shape rasqlgen
+	// emits; an application would write store.Users() instead.
 	count := 0
 	rows, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).Query(context.Background())
 	if err != nil {

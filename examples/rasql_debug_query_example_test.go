@@ -29,7 +29,8 @@ func Example_rasql_debug_query() {
 		return
 	}
 
-	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	// users is declared in query_example_tables_test.go with the shape rasqlgen
+	// emits; an application would write store.Users() instead.
 	count := 0
 	rows, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).Query(context.Background())
 	if err != nil {
