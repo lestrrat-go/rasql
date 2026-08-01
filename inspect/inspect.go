@@ -97,7 +97,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 		if err != nil {
 			return schema.Table{}, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
-		column := schema.Column{Name: name, Type: logicalType, Nullable: notNull == 0, Default: text(defaultValue)}
+		column := schema.Column{Name: name, Type: logicalType, Nullable: notNull == 0 && primaryPosition == 0, Default: text(defaultValue)}
 		columns = append(columns, column)
 		if primaryPosition > 0 {
 			primaryColumns = append(primaryColumns, primaryColumn{position: primaryPosition, name: name})

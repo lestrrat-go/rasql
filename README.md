@@ -564,7 +564,7 @@ func Example_rasql_debug_query() {
 	count := 0
 	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(context.Background())
 	if err != nil {
-		fmt.Printf("failed to build users query: %s\n", err)
+		fmt.Printf("failed to query users: %s\n", err)
 		return
 	}
 	for _, err := range rows {
@@ -705,7 +705,7 @@ func Example_rasql_static_template() {
 	// QueryRendered creates the rangeable sequence from the template statement.
 	rows, err := client.QueryRendered(ctx, statement)
 	if err != nil {
-		fmt.Printf("failed to build user query: %s\n", err)
+		fmt.Printf("failed to query user: %s\n", err)
 		return
 	}
 	for result, err := range rows {

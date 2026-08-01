@@ -103,13 +103,7 @@ func Nullable[T any](decoder Decoder[T]) Decoder[Null[T]] {
 
 // Bool decodes a boolean result value.
 func Bool(name string) (Column[bool], error) {
-	return NewColumn(name, DecoderFunc[bool](func(value any) (bool, error) {
-		decoded, ok := value.(bool)
-		if !ok {
-			return false, typeError("boolean", value)
-		}
-		return decoded, nil
-	}))
+	return NewColumn(name, DecoderFunc[bool](decodeBool))
 }
 
 // Int64 decodes an integer result value.
@@ -161,13 +155,7 @@ func Bytes(name string) (Column[[]byte], error) {
 
 // Time decodes a timestamp result value.
 func Time(name string) (Column[time.Time], error) {
-	return NewColumn(name, DecoderFunc[time.Time](func(value any) (time.Time, error) {
-		decoded, ok := value.(time.Time)
-		if !ok {
-			return time.Time{}, typeError("time.Time", value)
-		}
-		return decoded, nil
-	}))
+	return NewColumn(name, DecoderFunc[time.Time](decodeTime))
 }
 
 func cloneValue(value any) any {

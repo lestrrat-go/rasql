@@ -53,6 +53,27 @@ func TestTypedColumnsDecodeValues(t *testing.T) {
 	require.Equal(t, []byte("payload"), gotPayload)
 }
 
+func TestTypedColumnsDecodeSQLiteValues(t *testing.T) {
+	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
+	result, err := row.New(
+		[]string{"active", "created_at"},
+		[]any{int64(1), createdAt.String()},
+	)
+	require.NoError(t, err)
+
+	active, err := row.Bool("active")
+	require.NoError(t, err)
+	when, err := row.Time("created_at")
+	require.NoError(t, err)
+
+	gotActive, err := active.Get(result)
+	require.NoError(t, err)
+	require.True(t, gotActive)
+	gotWhen, err := when.Get(result)
+	require.NoError(t, err)
+	require.Equal(t, createdAt, gotWhen)
+}
+
 func TestNullableDecoderPreservesNull(t *testing.T) {
 	result, err := row.New([]string{"name"}, []any{nil})
 	require.NoError(t, err)

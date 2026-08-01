@@ -5,8 +5,23 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 	"unicode"
 )
+
+var timeType = reflect.TypeFor[time.Time]()
+
+var timeLayouts = []string{
+	time.RFC3339Nano,
+	"2006-01-02 15:04:05.999999999 -0700 MST",
+	"2006-01-02 15:04:05.999999999-07:00",
+	"2006-01-02T15:04:05.999999999-07:00",
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02T15:04:05.999999999",
+	"2006-01-02 15:04",
+	"2006-01-02T15:04",
+	"2006-01-02",
+}
 
 // Get decodes the named value in r as T.
 func Get[T any](r Row, name string) (T, error) {
@@ -107,6 +122,14 @@ func assign(destination reflect.Value, value any) error {
 			return nil
 		}
 	}
+	if destination.Type() == timeType {
+		decoded, err := decodeTime(value)
+		if err != nil {
+			return err
+		}
+		destination.Set(reflect.ValueOf(decoded))
+		return nil
+	}
 
 	source := reflect.ValueOf(value)
 	if source.Type().AssignableTo(destination.Type()) {
@@ -151,10 +174,12 @@ func assign(destination reflect.Value, value any) error {
 			}
 		}
 	case reflect.Bool:
-		if source.Kind() == reflect.Bool {
-			destination.SetBool(source.Bool())
-			return nil
+		decoded, err := decodeBool(value)
+		if err != nil {
+			return err
 		}
+		destination.SetBool(decoded)
+		return nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if isSignedInteger(source.Kind()) {
 			value := source.Int()
@@ -187,6 +212,49 @@ func assign(destination reflect.Value, value any) error {
 		}
 	}
 	return fmt.Errorf("expected %s, got %T", destination.Type(), value)
+}
+
+func decodeBool(value any) (bool, error) {
+	decoded := reflect.ValueOf(value)
+	switch decoded.Kind() {
+	case reflect.Bool:
+		return decoded.Bool(), nil
+	case reflect.Int64:
+		switch decoded.Int() {
+		case 0:
+			return false, nil
+		case 1:
+			return true, nil
+		default:
+			return false, fmt.Errorf("expected boolean integer 0 or 1, got %d", decoded.Int())
+		}
+	default:
+		return false, typeError("boolean", value)
+	}
+}
+
+func decodeTime(value any) (time.Time, error) {
+	switch decoded := value.(type) {
+	case time.Time:
+		return decoded, nil
+	case string:
+		return parseTime(decoded)
+	case []byte:
+		return parseTime(string(decoded))
+	default:
+		return time.Time{}, typeError("time.Time", value)
+	}
+}
+
+func parseTime(value string) (time.Time, error) {
+	value, _, _ = strings.Cut(value, " m=")
+	for _, layout := range timeLayouts {
+		decoded, err := time.Parse(layout, value)
+		if err == nil {
+			return decoded, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid time.Time value %q", value)
 }
 
 func isSignedInteger(kind reflect.Kind) bool {
