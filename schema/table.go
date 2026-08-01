@@ -51,14 +51,6 @@ type Table struct {
 	ForeignKeys       []ForeignKey
 }
 
-// NewTable validates descriptor and returns a copy that does not share slices with descriptor.
-func NewTable(descriptor Table) (Table, error) {
-	if err := descriptor.Validate(); err != nil {
-		return Table{}, err
-	}
-	return descriptor.Clone(), nil
-}
-
 // Clone returns a copy of t that does not share slices with t.
 func (t Table) Clone() Table {
 	clone := t

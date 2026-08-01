@@ -8,10 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewTableCopiesDescriptor(t *testing.T) {
+func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor := validTable()
-	table, err := schema.NewTable(descriptor)
-	require.NoError(t, err)
+	table := descriptor.Clone()
 
 	descriptor.Columns[0].Name = "changed"
 	descriptor.PrimaryKey[0] = "changed"
@@ -25,8 +24,8 @@ func TestNewTableCopiesDescriptor(t *testing.T) {
 }
 
 func TestTableColumn(t *testing.T) {
-	table, err := schema.NewTable(validTable())
-	require.NoError(t, err)
+	table := validTable()
+	require.NoError(t, table.Validate())
 
 	column, ok := table.Column("customer_id")
 	require.True(t, ok)

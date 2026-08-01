@@ -62,8 +62,8 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 	if err != nil {
 		return schema.Table{}, err
 	}
-	table, err := schema.NewTable(schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey})
-	if err != nil {
+	table := schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
+	if err := table.Validate(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
@@ -113,8 +113,8 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	for index, column := range primaryColumns {
 		primaryKey[index] = column.name
 	}
-	table, err := schema.NewTable(schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey})
-	if err != nil {
+	table := schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
+	if err := table.Validate(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil

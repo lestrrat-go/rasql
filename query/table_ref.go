@@ -15,11 +15,10 @@ type TableRef struct {
 
 // NewTableRef validates table and returns a reference to it.
 func NewTableRef(table schema.Table) (TableRef, error) {
-	validated, err := schema.NewTable(table)
-	if err != nil {
+	if err := table.Validate(); err != nil {
 		return TableRef{}, fmt.Errorf("query table reference: %w", err)
 	}
-	return TableRef{table: validated}, nil
+	return TableRef{table: table.Clone()}, nil
 }
 
 // As returns a copy of t with alias as its SQL alias.

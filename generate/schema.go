@@ -21,11 +21,10 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	}
 	clones := make([]schema.Table, len(tables))
 	for i, table := range tables {
-		validated, err := schema.NewTable(table)
-		if err != nil {
+		if err := table.Validate(); err != nil {
 			return nil, fmt.Errorf("generate: table at index %d: %w", i, err)
 		}
-		clones[i] = validated
+		clones[i] = table.Clone()
 	}
 	sort.Slice(clones, func(left, right int) bool {
 		return clones[left].Name < clones[right].Name

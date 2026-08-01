@@ -9,7 +9,7 @@ import (
 func Example_schema_table_definition() {
 	// Describe each database table once with schema.Table. The same descriptor
 	// can later supply a reusable query.TableRef or generate DDL.
-	table, err := schema.NewTable(schema.Table{
+	table := schema.Table{
 		// Name is the database table identifier.
 		Name: "users",
 		// Columns list each database column and its dialect-neutral logical type.
@@ -19,8 +19,8 @@ func Example_schema_table_definition() {
 		},
 		// PrimaryKey names columns from Columns that uniquely identify each row.
 		PrimaryKey: []string{"id"},
-	})
-	if err != nil {
+	}
+	if err := table.Validate(); err != nil {
 		fmt.Printf("failed to define table: %s\n", err)
 		return
 	}

@@ -88,6 +88,19 @@ func TestTableRefRejectsUnknownColumn(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTableRefCopiesDescriptor(t *testing.T) {
+	descriptor := usersTable()
+	users, err := query.NewTableRef(descriptor)
+	require.NoError(t, err)
+
+	descriptor.Columns[0].Name = "changed"
+	descriptor.PrimaryKey[0] = "changed"
+
+	_, err = users.Column("id")
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, users.Table().PrimaryKey)
+}
+
 func requireQueryValidationError(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
