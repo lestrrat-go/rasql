@@ -93,12 +93,17 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// Use the raw builder when a join or projection has no single row type.
-	for result, err := range client.SelectFrom(users.Ref()).
+	rows, err := client.SelectFrom(users.Ref()).
 		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
 		Project(query.Project(userID), query.Project(email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
-		Query(ctx) {
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query order totals: %s\n", err)
+		return
+	}
+	for result, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query order totals: %s\n", err)
 			return

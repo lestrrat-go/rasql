@@ -31,7 +31,12 @@ func Example_rasql_debug_query() {
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
 	count := 0
-	for _, err := range rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(context.Background()) {
+	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(context.Background())
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+	for _, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query users: %s\n", err)
 			return

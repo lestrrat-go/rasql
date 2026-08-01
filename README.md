@@ -239,11 +239,16 @@ func Example_rasql_typed_query() {
 
 	// SelectFrom knows the UsersRow result type from users. Query yields decoded
 	// rows directly, so the loop does not need manual scanning or conversion.
-	for found, err := range rasql.SelectFrom(client, users).
+	rows, err := rasql.SelectFrom(client, users).
 		OrderAsc("email").
 		Offset(1).
 		Limit(2).
-		Query(ctx) {
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+	for found, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query users: %s\n", err)
 			return
@@ -360,12 +365,17 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// Use the raw builder when a join or projection has no single row type.
-	for result, err := range client.SelectFrom(users.Ref()).
+	rows, err := client.SelectFrom(users.Ref()).
 		Join(query.InnerJoin(orders.Ref(), query.Equal(userID, orderUserID))).
 		Project(query.Project(userID), query.Project(email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
-		Query(ctx) {
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to build order totals query: %s\n", err)
+		return
+	}
+	for result, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query order totals: %s\n", err)
 			return
@@ -558,7 +568,12 @@ func Example_rasql_debug_query() {
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
 	count := 0
-	for _, err := range rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(context.Background()) {
+	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(context.Background())
+	if err != nil {
+		fmt.Printf("failed to build users query: %s\n", err)
+		return
+	}
+	for _, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query users: %s\n", err)
 			return
@@ -693,8 +708,13 @@ func Example_rasql_static_template() {
 		return
 	}
 
-	// QueryRendered yields each row from the dialect-specific template statement.
-	for result, err := range client.QueryRendered(ctx, statement) {
+	// QueryRendered creates the rangeable sequence from the template statement.
+	rows, err := client.QueryRendered(ctx, statement)
+	if err != nil {
+		fmt.Printf("failed to build user query: %s\n", err)
+		return
+	}
+	for result, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query user: %s\n", err)
 			return

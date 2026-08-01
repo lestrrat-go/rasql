@@ -75,12 +75,15 @@ func (b TypedSelectBuilder[T]) Build() (render.Statement, error) {
 }
 
 // Query returns a rangeable sequence that decodes each result row as T.
-// It yields one final error instead of a value when execution or decoding fails.
-func (b TypedSelectBuilder[T]) Query(ctx context.Context) iter.Seq2[T, error] {
+func (b TypedSelectBuilder[T]) Query(ctx context.Context) (iter.Seq2[T, error], error) {
+	rows, err := b.builder.Query(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return func(yield func(T, error) bool) {
 		var zero T
 		index := 0
-		for result, err := range b.builder.Query(ctx) {
+		for result, err := range rows {
 			if err != nil {
 				yield(zero, err)
 				return
@@ -95,13 +98,17 @@ func (b TypedSelectBuilder[T]) Query(ctx context.Context) iter.Seq2[T, error] {
 				return
 			}
 		}
-	}
+	}, nil
 }
 
 // All collects every row from Query.
 func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
+	rows, err := b.Query(ctx)
+	if err != nil {
+		return nil, err
+	}
 	decoded := make([]T, 0)
-	for value, err := range b.Query(ctx) {
+	for value, err := range rows {
 		if err != nil {
 			return nil, err
 		}
@@ -113,9 +120,13 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
 // One returns exactly one row from Query.
 func (b TypedSelectBuilder[T]) One(ctx context.Context) (T, error) {
 	var zero T
+	rows, err := b.Query(ctx)
+	if err != nil {
+		return zero, err
+	}
 	var result T
 	count := 0
-	for value, err := range b.Query(ctx) {
+	for value, err := range rows {
 		if err != nil {
 			return zero, err
 		}

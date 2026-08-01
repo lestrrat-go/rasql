@@ -60,8 +60,13 @@ func Example_rasql_static_template() {
 		return
 	}
 
-	// QueryRendered yields each row from the dialect-specific template statement.
-	for result, err := range client.QueryRendered(ctx, statement) {
+	// QueryRendered creates the rangeable sequence from the template statement.
+	rows, err := client.QueryRendered(ctx, statement)
+	if err != nil {
+		fmt.Printf("failed to query user: %s\n", err)
+		return
+	}
+	for result, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query user: %s\n", err)
 			return

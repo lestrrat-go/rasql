@@ -47,11 +47,16 @@ func Example_rasql_typed_query() {
 
 	// SelectFrom knows the UsersRow result type from users. Query yields decoded
 	// rows directly, so the loop does not need manual scanning or conversion.
-	for found, err := range rasql.SelectFrom(client, users).
+	rows, err := rasql.SelectFrom(client, users).
 		OrderAsc("email").
 		Offset(1).
 		Limit(2).
-		Query(ctx) {
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+	for found, err := range rows {
 		if err != nil {
 			fmt.Printf("failed to query users: %s\n", err)
 			return

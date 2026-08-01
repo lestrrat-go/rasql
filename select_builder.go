@@ -86,15 +86,11 @@ func (b SelectBuilder) Build() (render.Statement, error) {
 	return b.builder.Build()
 }
 
-// Query returns a rangeable sequence of rows from the built statement.
-// It yields one final error instead of a row when rendering or execution fails.
-func (b SelectBuilder) Query(ctx context.Context) iter.Seq2[row.Row, error] {
-	return func(yield func(row.Row, error) bool) {
-		statement, err := b.Build()
-		if err != nil {
-			yield(row.Row{}, fmt.Errorf("rasql: render SELECT: %w", err))
-			return
-		}
-		b.client.QueryRendered(ctx, statement)(yield)
+// Query builds the statement and returns a rangeable sequence of rows.
+func (b SelectBuilder) Query(ctx context.Context) (iter.Seq2[row.Row, error], error) {
+	statement, err := b.Build()
+	if err != nil {
+		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
+	return b.client.QueryRendered(ctx, statement)
 }

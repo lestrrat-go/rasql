@@ -48,35 +48,30 @@ func New(queryer Queryer, d dialect.Dialect) (Client, error) {
 	return client, nil
 }
 
-// Query returns a rangeable sequence of rows from statement.
-// It yields one final error instead of a row when rendering or execution fails.
-func (c Client) Query(ctx context.Context, statement query.Select) iter.Seq2[row.Row, error] {
-	return func(yield func(row.Row, error) bool) {
-		if isNil(c.queryer) || isNil(c.dialect) {
-			yield(row.Row{}, fmt.Errorf("rasql: invalid client"))
-			return
-		}
-		rendered, err := render.Select(c.dialect, statement)
-		if err != nil {
-			yield(row.Row{}, fmt.Errorf("rasql: render SELECT: %w", err))
-			return
-		}
-		c.QueryRendered(ctx, rendered)(yield)
+// Query renders statement and returns a rangeable sequence of rows.
+// It reports validation and rendering errors before iteration starts.
+func (c Client) Query(ctx context.Context, statement query.Select) (iter.Seq2[row.Row, error], error) {
+	if isNil(c.queryer) || isNil(c.dialect) {
+		return nil, fmt.Errorf("rasql: invalid client")
 	}
+	rendered, err := render.Select(c.dialect, statement)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	return c.QueryRendered(ctx, rendered)
 }
 
 // QueryRendered returns a rangeable sequence of rows from statement.
-// It yields one final error instead of a row when execution or scanning fails.
-func (c Client) QueryRendered(ctx context.Context, statement render.Statement) iter.Seq2[row.Row, error] {
+// It reports validation errors before iteration starts and yields execution or
+// scanning errors instead of rows while it is ranged over.
+func (c Client) QueryRendered(ctx context.Context, statement render.Statement) (iter.Seq2[row.Row, error], error) {
+	if isNil(c.queryer) || isNil(c.dialect) {
+		return nil, fmt.Errorf("rasql: invalid client")
+	}
+	if statement.SQL() == "" {
+		return nil, fmt.Errorf("rasql: statement SQL must not be empty")
+	}
 	return func(yield func(row.Row, error) bool) {
-		if isNil(c.queryer) || isNil(c.dialect) {
-			yield(row.Row{}, fmt.Errorf("rasql: invalid client"))
-			return
-		}
-		if statement.SQL() == "" {
-			yield(row.Row{}, fmt.Errorf("rasql: statement SQL must not be empty"))
-			return
-		}
 		rows, err := c.queryer.QueryContext(ctx, statement.SQL(), statement.Args()...)
 		if err != nil {
 			yield(row.Row{}, fmt.Errorf("rasql: execute query: %w", err))
@@ -114,7 +109,7 @@ func (c Client) QueryRendered(ctx context.Context, statement render.Statement) i
 		if err := rows.Err(); err != nil {
 			yield(row.Row{}, fmt.Errorf("rasql: iterate result rows: %w", err))
 		}
-	}
+	}, nil
 }
 
 // Exec renders and executes a write statement.
