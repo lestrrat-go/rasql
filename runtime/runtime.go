@@ -11,6 +11,7 @@ import (
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/row"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // Queryer is implemented by *sql.DB and *sql.Tx.
@@ -104,6 +105,31 @@ func (c Client) ExecRendered(ctx context.Context, statement render.Statement) (s
 		return nil, fmt.Errorf("runtime: execute statement: %w", err)
 	}
 	return result, nil
+}
+
+// CreateTable renders and executes a table definition followed by its indexes.
+// Callers that require atomic DDL should construct the Client with a *sql.Tx.
+func (c Client) CreateTable(ctx context.Context, table schema.Table) error {
+	if isNil(c.queryer) || isNil(c.dialect) {
+		return fmt.Errorf("runtime: invalid client")
+	}
+	statement, err := render.CreateTable(c.dialect, table)
+	if err != nil {
+		return fmt.Errorf("runtime: render CREATE TABLE: %w", err)
+	}
+	if _, err := c.ExecRendered(ctx, statement); err != nil {
+		return fmt.Errorf("runtime: execute CREATE TABLE: %w", err)
+	}
+	indexes, err := render.CreateIndexes(c.dialect, table)
+	if err != nil {
+		return fmt.Errorf("runtime: render CREATE INDEX: %w", err)
+	}
+	for _, index := range indexes {
+		if _, err := c.ExecRendered(ctx, index); err != nil {
+			return fmt.Errorf("runtime: execute CREATE INDEX: %w", err)
+		}
+	}
+	return nil
 }
 
 func collect(rows *sql.Rows) ([]row.Row, error) {

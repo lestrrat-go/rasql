@@ -120,6 +120,37 @@ func TestClientQueryRenderedExecutesStaticStatement(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestClientCreateTableExecutesTableAndIndexes(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := runtime.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	table := schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.Index{{
+			Name:    "users_email_idx",
+			Columns: []string{"email"},
+		}},
+	}
+	mock.ExpectExec("CREATE TABLE \"users\" (\"id\" BIGINT NOT NULL, \"email\" TEXT NOT NULL, PRIMARY KEY (\"id\"))").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX \"users_email_idx\" ON \"users\" (\"email\")").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	require.NoError(t, client.CreateTable(t.Context(), table))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
 	users, err := query.NewTableRef(schema.Table{
