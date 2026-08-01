@@ -2,6 +2,8 @@
 
 The root package writes a typed row without building a statement by hand. For anything the typed helpers do not cover, the `query` package builds the statement and `Client.Exec` runs it.
 
+Every write operation, predicate, and statement constructor is listed in the [operation reference](03-querying.md#operation-reference).
+
 ## Create a table
 
 `rasql.Create` renders a table descriptor as DDL and executes it, then creates its indexes.

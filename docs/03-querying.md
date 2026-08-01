@@ -4,6 +4,108 @@
 
 Every builder is immutable. Each call returns a new builder, so a partly built query can be shared or reused without one caller's `Limit` leaking into another's.
 
+## Operation reference
+
+The tables in this section enumerate every operation the public API offers. The sections after them show the common ones in use.
+
+### Statements
+
+| Operation | Entry point | Result |
+| --- | --- | --- |
+| `SELECT` decoded as a table's row type | `rasql.SelectFrom(client, table)` | `TypedSelectBuilder[T]` |
+| `SELECT` decoded as a custom type | `rasql.DecodeFrom[T](client, table.Ref())` | `TypedSelectBuilder[T]` |
+| `SELECT` without decoding | `client.SelectFrom(table.Ref())` | `SelectBuilder`, yielding `row.Row` |
+| `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
+| `UPDATE` of one typed row by primary key | `rasql.Update(ctx, client, table, value)` | `sql.Result` |
+| `DELETE` by predicate | `rasql.DeleteFrom(client, table)` | `DeleteBuilder` |
+| `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |
+| Upsert, `RETURNING`, partial update | `query.New…` then `client.Exec(ctx, statement)` | `sql.Result` |
+| Compiled [static template](05-templates.md) | `client.ExecRendered(ctx, statement)` | `sql.Result` |
+
+Writes are covered in [Writing rows](04-writing.md); the rest of this page covers reads.
+
+### Select builder methods
+
+`✓` marks the builders that carry the method. The typed builder comes from `SelectFrom` and `DecodeFrom`, the untyped one from `client.SelectFrom`.
+
+| Method | Effect | Typed | Untyped |
+| --- | --- | --- | --- |
+| `Select(names…)` | Adds primary-table columns by name. | | ✓ |
+| `Project(projections…)` | Adds projections built with `query.Project`. | ✓ | ✓ |
+| `Join(joins…)` | Adds a join built with `query.InnerJoin` or `query.LeftJoin`. | ✓ | ✓ |
+| `Where(expression)` | Sets the predicate from a `query` expression. | ✓ | ✓ |
+| `WhereEqual(name, value)` | Sets `column = value` for a primary-table column. | ✓ | ✓ |
+| `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. | ✓ | ✓ |
+| `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. | ✓ | ✓ |
+| `Limit(n)`, `Offset(n)` | Pages the result. | ✓ | ✓ |
+| `Build()` | Renders `render.Statement` without executing. | ✓ | ✓ |
+| `Query(ctx)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. | ✓ | ✓ |
+| `All(ctx)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
+| `One(ctx)` | Executes and returns one `T`; any other row count is an error. | ✓ | |
+
+`Where` and `WhereEqual` each replace the predicate set before them; combine conditions with `query.And` or `query.Or` rather than by calling them twice.
+
+### Delete builder methods
+
+| Method | Effect |
+| --- | --- |
+| `Where(expression)` | Sets the predicate from a `query` expression. |
+| `WhereEqual(name, value)` | Sets `column = value` for a column of the target table. |
+| `Build()` | Renders `render.Statement` without executing. |
+| `Exec(ctx)` | Executes and returns `sql.Result`. |
+
+### Where conditions
+
+Every constructor below takes and returns `query.Expression`, so conditions nest freely.
+
+| Constructor | Renders |
+| --- | --- |
+| `query.Equal(left, right)` | `left = right` |
+| `query.NotEqual(left, right)` | `left <> right` |
+| `query.GreaterThan(left, right)` | `left > right` |
+| `query.GreaterThanOrEqual(left, right)` | `left >= right` |
+| `query.LessThan(left, right)` | `left < right` |
+| `query.LessThanOrEqual(left, right)` | `left <= right` |
+| `query.Like(left, right)` | `left LIKE right` |
+| `query.Compare(left, operator, right)` | Any of the operators above, named by a `query.Operator…` constant. |
+| `query.IsNull(expression)` | `expression IS NULL` |
+| `query.IsNotNull(expression)` | `expression IS NOT NULL` |
+| `query.And(expressions…)` | `(a AND b …)` |
+| `query.Or(expressions…)` | `(a OR b …)` |
+| `query.Negate(expression)` | `NOT (expression)` |
+
+### Operands
+
+| Constructor | Produces |
+| --- | --- |
+| `table.Ref().Column(name)` | A column reference validated against the descriptor. |
+| `query.Bind(value)` | A bound argument, rendered as the dialect's placeholder. |
+| `query.Excluded(column)` | The proposed value of a column in an upsert. |
+
+### Projections, joins, and ordering
+
+| Constructor | Produces |
+| --- | --- |
+| `query.Project(expression)` | A projected expression. |
+| `query.Project(expression).As(alias)` | The same projection under a result name. |
+| `query.InnerJoin(table.Ref(), on)` | An inner join with its condition. |
+| `query.LeftJoin(table.Ref(), on)` | A left outer join with its condition. |
+| `query.Asc(expression)`, `query.Desc(expression)` | Ordering for `Order`. |
+
+### Statement constructors
+
+The builders cover the common statements. These constructors build the same statements directly, and `client.Exec` runs any of them.
+
+| Constructor | Statement |
+| --- | --- |
+| `query.NewSelect(from, projections…)` | `SELECT` |
+| `query.NewInsert(into, columns, values)` | `INSERT` |
+| `query.NewUpdate(table, assignments…)` | `UPDATE`, with `query.Set(column, expression)` per assignment. |
+| `query.NewDelete(from)` | `DELETE` |
+| `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. |
+
+Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write. Each returns a new validated statement rather than changing the one it was called on.
+
 ## Select typed rows
 
 `SelectFrom` knows the row type from the table descriptor, so it selects every column and decodes each result into that type.
@@ -84,21 +186,13 @@ func Example_rasql_typed_query() {
 source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_typed_query_example_test.go)
 <!-- END INCLUDE -->
 
-Three methods run the statement:
-
-| Method | Returns | Use when |
-| --- | --- | --- |
-| `Query(ctx)` | A rangeable `iter.Seq2[T, error]`. | The result is large, or processing can stop early. |
-| `All(ctx)` | `[]T`. | The whole result fits in memory comfortably. |
-| `One(ctx)` | `T`. | Exactly one row is expected; anything else is an error. |
-
-All three report validation and rendering problems as the returned error before any row is read. `Query` yields rows first and at most one error after them, so a loop checks the error on each step and stops when it is non-nil.
+`Query`, `All`, and `One` run the statement, as listed under [Select builder methods](#select-builder-methods). All three report validation and rendering problems as the returned error before any row is read. `Query` yields rows first and at most one error after them, so a loop checks the error on each step and stops when it is non-nil.
 
 `Build()` skips execution and returns the rendered `render.Statement`, which carries the SQL text and its ordered arguments. It is the direct way to log or test a statement.
 
 ## Filter, order, and page
 
-`WhereEqual`, `OrderAsc`, and `OrderDesc` take a column of the primary table by name and cover the common cases without importing the `query` package. `Limit` and `Offset` page the result, and `Select` narrows the projection to named columns.
+`WhereEqual`, `OrderAsc`, and `OrderDesc` take a column of the primary table by name and cover the common cases without importing the `query` package. `Limit` and `Offset` page the result. The untyped builder from `client.SelectFrom` also has `Select`, which narrows the projection to named columns.
 
 For anything richer, `Where` and `Order` accept expressions from the `query` package:
 
@@ -118,7 +212,7 @@ rows, err := rasql.SelectFrom(client, users).
 
 `Ref().Column(name)` looks the column up in the descriptor and fails when the table has no such column, so a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
 
-The expression set covers comparisons (`Equal`, `NotEqual`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `Like`, and the general `Compare`), logic (`And`, `Or`, `Negate`), and null tests (`IsNull`, `IsNotNull`).
+[Where conditions](#where-conditions) lists every comparison, logical connective, and null test the expression set offers.
 
 ## Decode a custom shape
 
@@ -319,4 +413,4 @@ A debug `Queryer` may return `nil` rows after logging; `Client` treats that as a
 
 ## Next
 
-[Writing rows](04-writing.md) covers inserts and updates, and [Static templates](05-templates.md) covers fixed SQL text with named binds.
+[Writing rows](04-writing.md) covers inserts, updates, and deletes, and [Static templates](05-templates.md) covers fixed SQL text with named binds.
