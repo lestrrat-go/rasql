@@ -14,7 +14,7 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Schema returns formatted Go source declaring tables in packageName.
+// Schema returns formatted Go source declaring reusable table references in packageName.
 func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	if !token.IsIdentifier(packageName) {
 		return nil, fmt.Errorf("generate: invalid package name %q", packageName)
@@ -38,13 +38,16 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	source.WriteString("package ")
 	source.WriteString(packageName)
 	source.WriteString("\n\n")
-	source.WriteString("import \"github.com/lestrrat-go/rasql/schema\"\n\n")
+	source.WriteString("import (\n")
+	source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
+	source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
+	source.WriteString(")\n\n")
 	for _, table := range clones {
 		source.WriteString("var ")
 		source.WriteString(variableName(table.Name))
-		source.WriteString(" = ")
+		source.WriteString(" = query.MustNewTableRef(")
 		writeTable(&source, table, "")
-		source.WriteString("\n\n")
+		source.WriteString(")\n\n")
 	}
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {

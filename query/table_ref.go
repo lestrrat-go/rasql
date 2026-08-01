@@ -21,6 +21,16 @@ func NewTableRef(table schema.Table) (TableRef, error) {
 	return TableRef{table: table.Clone()}, nil
 }
 
+// MustNewTableRef returns a table reference for table or panics when table is invalid.
+// It is intended for generated or otherwise static schema descriptors.
+func MustNewTableRef(table schema.Table) TableRef {
+	reference, err := NewTableRef(table)
+	if err != nil {
+		panic(fmt.Sprintf("query table reference: %s", err))
+	}
+	return reference
+}
+
 // As returns a copy of t with alias as its SQL alias.
 func (t TableRef) As(alias string) (TableRef, error) {
 	if err := t.validate(); err != nil {

@@ -101,6 +101,16 @@ func TestTableRefCopiesDescriptor(t *testing.T) {
 	require.Equal(t, []string{"id"}, users.Table().PrimaryKey)
 }
 
+func TestMustNewTableRef(t *testing.T) {
+	users := query.MustNewTableRef(usersTable())
+	_, err := users.Column("id")
+	require.NoError(t, err)
+
+	require.Panics(t, func() {
+		query.MustNewTableRef(schema.Table{})
+	})
+}
+
 func requireQueryValidationError(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)

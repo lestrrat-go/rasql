@@ -31,8 +31,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 
 	source, err := generate.Schema("generated", users, orders)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var Orders = schema.Table")
-	require.Contains(t, string(source), "var Users = schema.Table")
+	require.Contains(t, string(source), "var Orders = query.MustNewTableRef")
+	require.Contains(t, string(source), "var Users = query.MustNewTableRef")
 	require.Less(t, stringIndex(t, source, "var Orders"), stringIndex(t, source, "var Users"))
 
 	directory, err := os.MkdirTemp(".", ".tmp-schema-*")
