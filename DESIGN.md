@@ -45,11 +45,13 @@ schema ──> dialect ──┐
 
 ## Public API shape
 
-The public API starts with descriptors rather than a global registry. Applications can create a `schema.Table` directly, while generated code exposes typed `rasql.Table` values that retain reusable `query.TableRef` values. This keeps multiple schemas and test fixtures isolated in the same process.
+The public API starts with descriptors rather than a global registry. Applications can create a `schema.Table` directly, while generated code exposes typed `rasql.Table` values that retain reusable `query.Table` values. This keeps multiple schemas and test fixtures isolated in the same process.
+
+`rasql.Table[T]` is an interface implemented only inside `rasql`, so a generated table type can embed it and add one `query.Column` field per column. Application code then names a column as a struct field rather than a string, and never names a table type of its own.
 
 Statements are immutable after construction. The basic `query` API exposes validated statement values. The `render` fluent builder owns a dialect and returns parameterized SQL, while the root `rasql` fluent builder owns a client and executes the query directly.
 
-Query execution returns a rangeable `iter.Seq2` sequence plus any construction error. A sequence yields rows lazily and then at most one execution or scanning error, which keeps row resources open only while the caller ranges over them. `SelectFrom` infers its result type from a `rasql.Table`; `DecodeFrom` maps a custom projection into an explicit result type. Both decode each yielded row before it reaches the loop, while `All` and `One` remain collection helpers built on the same sequence.
+Query execution returns a rangeable `iter.Seq2` sequence plus any construction error. A sequence yields rows lazily and then at most one execution or scanning error, which keeps row resources open only while the caller ranges over them. `SelectFrom` infers its result type from a `rasql.Table`; `DecodeFrom` maps a custom projection into an explicit result type, and `DecodeQueryFrom` does the same for a `query.Table` with no Go row type. Both decode each yielded row before it reaches the loop, while `All` and `One` remain collection helpers built on the same sequence.
 
 Result decoding uses typed destinations or typed column descriptors. It must preserve `NULL` distinctly from a zero value. The initial supported primitives are boolean, integer, floating point, string, byte slice, time, and nullable forms. Custom types enter through explicit codecs.
 

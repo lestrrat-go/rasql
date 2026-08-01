@@ -54,7 +54,7 @@ func Example_rasql_insert() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the table described by the generated users reference.
+	// Create the table described by the generated users descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -118,7 +118,7 @@ func Example_rasql_update() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the table described by the generated users reference.
+	// Create the table described by the generated users descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -153,7 +153,7 @@ The row identifies itself, so there is no separate predicate to keep in step wit
 
 ## Delete rows
 
-`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` names a column, `Where` takes any predicate from the `query` package, and `Exec` runs the statement.
+`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` takes a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement.
 
 <!-- INCLUDE(examples/rasql_delete_example_test.go) -->
 ```go
@@ -171,7 +171,7 @@ import (
 )
 
 func Example_rasql_delete() {
-	// This example deletes rows by column name and by a query expression.
+	// This example deletes rows by a generated column and by a query expression.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -188,7 +188,7 @@ func Example_rasql_delete() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the table described by the generated users reference.
+	// Create the table described by the generated users descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -251,19 +251,11 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 `Client.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for a partial update, conflict handling, or a `RETURNING` clause.
 
 ```go
-id, err := users.Ref().Column("id")
+statement, err := query.NewUpdate(users.QueryTable(), query.Set(users.Email, query.Bind("ada@example.com")))
 if err != nil {
 	return err
 }
-email, err := users.Ref().Column("email")
-if err != nil {
-	return err
-}
-statement, err := query.NewUpdate(users.Ref(), query.Set(email, query.Bind("ada@example.com")))
-if err != nil {
-	return err
-}
-statement, err = statement.WithWhere(query.LessThan(id, query.Bind(100)))
+statement, err = statement.WithWhere(query.LessThan(users.ID, query.Bind(100)))
 if err != nil {
 	return err
 }
