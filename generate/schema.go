@@ -48,13 +48,10 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	for _, table := range clones {
 		writeRowType(&source, table)
 		source.WriteString("\n")
-		source.WriteString("var ")
-		source.WriteString(variableName(table.Name))
-		source.WriteString(" = rasql.MustTable[")
-		source.WriteString(rowTypeName(table.Name))
-		source.WriteString("](")
-		writeTable(&source, table, "")
-		source.WriteString(")\n\n")
+		writeTableDescriptor(&source, table)
+		source.WriteString("\n")
+		writeTableAccessor(&source, table)
+		source.WriteString("\n")
 	}
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
@@ -116,6 +113,19 @@ func rowTypeName(tableName string) string {
 	return variableName(tableName) + "Row"
 }
 
+// descriptorName returns the unexported variable name backing an accessor.
+// variableName always upper-cases its first rune, so distinct accessors keep
+// distinct descriptors.
+func descriptorName(tableName string) string {
+	accessor := variableName(tableName)
+	if accessor == "" {
+		return ""
+	}
+	runes := []rune(accessor)
+	runes[0] = unicode.ToLower(runes[0])
+	return string(runes) + "Table"
+}
+
 func fieldName(name string) string {
 	parts := strings.FieldsFunc(name, func(r rune) bool {
 		return r == '_'
@@ -155,6 +165,35 @@ func containsTime(tables []schema.Table) bool {
 		}
 	}
 	return false
+}
+
+// writeTableDescriptor writes the unexported variable holding the table.
+// Keeping it unexported means importers reach the table only through the
+// accessor and cannot replace it.
+func writeTableDescriptor(source *bytes.Buffer, table schema.Table) {
+	source.WriteString("var ")
+	source.WriteString(descriptorName(table.Name))
+	source.WriteString(" = rasql.MustTable[")
+	source.WriteString(rowTypeName(table.Name))
+	source.WriteString("](")
+	writeTable(source, table, "")
+	source.WriteString(")\n")
+}
+
+func writeTableAccessor(source *bytes.Buffer, table schema.Table) {
+	accessor := variableName(table.Name)
+	source.WriteString("// ")
+	source.WriteString(accessor)
+	source.WriteString(" returns the descriptor for the ")
+	source.WriteString(quote(table.Name))
+	source.WriteString(" table.\n")
+	source.WriteString("func ")
+	source.WriteString(accessor)
+	source.WriteString("() rasql.Table[")
+	source.WriteString(rowTypeName(table.Name))
+	source.WriteString("] {\n\treturn ")
+	source.WriteString(descriptorName(table.Name))
+	source.WriteString("\n}\n")
 }
 
 func writeRowType(source *bytes.Buffer, table schema.Table) {
