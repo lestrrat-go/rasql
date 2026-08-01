@@ -12,7 +12,7 @@ import (
 // DeleteBuilder builds and executes a DELETE statement through an immutable fluent API.
 type DeleteBuilder struct {
 	client   Client
-	from     query.TableRef
+	from     query.Table
 	where    query.Expression
 	hasWhere bool
 	err      error
@@ -21,12 +21,12 @@ type DeleteBuilder struct {
 // DeleteFrom starts a fluent DELETE builder for table.
 // Exec deletes every row when no predicate is set.
 func DeleteFrom[T any](client Client, table Table[T]) DeleteBuilder {
-	return client.DeleteFrom(table.Ref())
+	return client.DeleteFrom(table.QueryTable())
 }
 
 // DeleteFrom starts a fluent DELETE builder using table as its target.
 // Exec deletes every row when no predicate is set.
-func (c Client) DeleteFrom(table query.TableRef) DeleteBuilder {
+func (c Client) DeleteFrom(table query.Table) DeleteBuilder {
 	return DeleteBuilder{client: c, from: table}
 }
 
@@ -44,15 +44,12 @@ func (b DeleteBuilder) Where(expression query.Expression) DeleteBuilder {
 	return b
 }
 
-// WhereEqual sets an equality predicate for a target-table column and binds value.
-// It replaces any predicate set before it.
-func (b DeleteBuilder) WhereEqual(columnName string, value any) DeleteBuilder {
+// WhereEqual sets an equality predicate for column and binds value.
+// It replaces any predicate set before it. Build and Exec reject a column whose
+// table is not the delete target.
+func (b DeleteBuilder) WhereEqual(column query.Column, value any) DeleteBuilder {
 	if b.err != nil {
 		return b
-	}
-	column, err := b.from.Column(columnName)
-	if err != nil {
-		return b.withError(fmt.Errorf("rasql: build DELETE: %w", err))
 	}
 	return b.Where(query.Equal(column, query.Bind(value)))
 }

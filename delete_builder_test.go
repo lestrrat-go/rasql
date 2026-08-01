@@ -47,7 +47,10 @@ func TestDeleteFrom(t *testing.T) {
 			WithArgs(42).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		result, err := rasql.DeleteFrom(client, deleteUsersTable(t)).WhereEqual("id", 42).Exec(t.Context())
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		result, err := rasql.DeleteFrom(client, users).WhereEqual(id, 42).Exec(t.Context())
 		require.NoError(t, err)
 		rows, err := result.RowsAffected()
 		require.NoError(t, err)
@@ -56,7 +59,7 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("Where takes a query expression", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		email, err := users.Ref().Column("email")
+		email, err := users.Column("email")
 		require.NoError(t, err)
 		statement, err := rasql.DeleteFrom(clientForBuild(t), users).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
@@ -72,9 +75,18 @@ func TestDeleteFrom(t *testing.T) {
 		require.Equal(t, "DELETE FROM \"users\"", statement.SQL())
 	})
 
-	t.Run("unknown column reports an error", func(t *testing.T) {
-		_, err := rasql.DeleteFrom(clientForBuild(t), deleteUsersTable(t)).WhereEqual("nope", 1).Build()
-		require.ErrorContains(t, err, "nope")
+	t.Run("column from another table reports an error", func(t *testing.T) {
+		other, err := rasql.NewTable[deleteUser](schema.Table{
+			Name:       "archived_users",
+			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			PrimaryKey: []string{"id"},
+		})
+		require.NoError(t, err)
+		archivedID, err := other.Column("id")
+		require.NoError(t, err)
+
+		_, err = rasql.DeleteFrom(clientForBuild(t), deleteUsersTable(t)).WhereEqual(archivedID, 1).Build()
+		require.ErrorContains(t, err, "archived_users")
 	})
 
 	t.Run("nil expression reports an error", func(t *testing.T) {
@@ -84,10 +96,12 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("Client.DeleteFrom builds the same statement", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		client := clientForBuild(t)
-		fromClient, err := client.DeleteFrom(users.Ref()).WhereEqual("id", 42).Build()
+		id, err := users.Column("id")
 		require.NoError(t, err)
-		typed, err := rasql.DeleteFrom(client, users).WhereEqual("id", 42).Build()
+		client := clientForBuild(t)
+		fromClient, err := client.DeleteFrom(users.QueryTable()).WhereEqual(id, 42).Build()
+		require.NoError(t, err)
+		typed, err := rasql.DeleteFrom(client, users).WhereEqual(id, 42).Build()
 		require.NoError(t, err)
 		require.Equal(t, typed.SQL(), fromClient.SQL())
 	})

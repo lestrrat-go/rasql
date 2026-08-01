@@ -28,7 +28,7 @@ func Example_rasql_typed_query() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	// Create the table described by the generated users reference.
+	// Create the table described by the generated users descriptor.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
@@ -48,7 +48,7 @@ func Example_rasql_typed_query() {
 	// SelectFrom knows the UsersRow result type from users. Query yields decoded
 	// rows directly, so the loop does not need manual scanning or conversion.
 	rows, err := rasql.SelectFrom(client, users).
-		OrderAsc("email").
+		OrderAsc(users.Email).
 		Offset(1).
 		Limit(2).
 		Query(ctx)

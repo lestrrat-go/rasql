@@ -60,7 +60,7 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -106,11 +106,13 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	}
 	users, err := rasql.NewTable[user](table)
 	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
 	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	rows, err := rasql.SelectFrom(client, users).WhereEqual("id", 42).Query(t.Context())
+	rows, err := rasql.SelectFrom(client, users).WhereEqual(id, 42).Query(t.Context())
 	require.NoError(t, err)
 	decoded := make([]user, 0)
 	for value, err := range rows {
@@ -121,7 +123,7 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDecodeFromDecodesProjectedRows(t *testing.T) {
+func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -131,7 +133,7 @@ func TestDecodeFromDecodesProjectedRows(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -152,7 +154,7 @@ func TestDecodeFromDecodesProjectedRows(t *testing.T) {
 		UserID int64
 		Email  string
 	}
-	rows, err := rasql.DecodeFrom[summary](client, users).
+	rows, err := rasql.DecodeQueryFrom[summary](client, users).
 		Project(query.Project(id).As("user_id"), query.Project(email)).
 		Where(query.Equal(id, query.Bind(42))).
 		Query(t.Context())
@@ -203,7 +205,7 @@ func TestClientExecExecutesParameterizedInsert(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -347,7 +349,7 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},

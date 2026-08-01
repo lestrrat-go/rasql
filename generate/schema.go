@@ -14,7 +14,18 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Schema returns formatted Go source declaring reusable table references in packageName.
+// reservedFieldNames holds the identifiers a generated table type already uses.
+// A column whose generated field name lands on one of them is rejected, because
+// the field would shadow the embedded rasql.Table or its methods.
+var reservedFieldNames = map[string]struct{}{
+	"As":         {},
+	"Column":     {},
+	"QueryTable": {},
+	"Table":      {},
+	"tableRow":   {},
+}
+
+// Schema returns formatted Go source declaring reusable table descriptors in packageName.
 func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	if !token.IsIdentifier(packageName) {
 		return nil, fmt.Errorf("generate: invalid package name %q", packageName)
@@ -38,19 +49,29 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	source.WriteString("package ")
 	source.WriteString(packageName)
 	source.WriteString("\n\n")
-	source.WriteString("import (\n")
-	if containsTime(clones) {
-		source.WriteString("\t\"time\"\n\n")
+	// An empty schema declares nothing, so importing anything would not compile.
+	if len(clones) > 0 {
+		source.WriteString("import (\n")
+		if containsTime(clones) {
+			source.WriteString("\t\"time\"\n\n")
+		}
+		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
+		source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
+		source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
+		source.WriteString(")\n\n")
 	}
-	source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
-	source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
-	source.WriteString(")\n\n")
 	for _, table := range clones {
 		writeRowType(&source, table)
+		source.WriteString("\n")
+		writeTableType(&source, table)
+		source.WriteString("\n")
+		writeTableConstructor(&source, table)
 		source.WriteString("\n")
 		writeTableDescriptor(&source, table)
 		source.WriteString("\n")
 		writeTableAccessor(&source, table)
+		source.WriteString("\n")
+		writeTableAs(&source, table)
 		source.WriteString("\n")
 	}
 	formatted, err := format.Source(source.Bytes())
@@ -71,17 +92,26 @@ func validateVariableNames(tables []schema.Table) error {
 			return fmt.Errorf("generate: table %q duplicates generated name %q", table.Name, variable)
 		}
 		names[variable] = struct{}{}
-		rowType := rowTypeName(table.Name)
-		if _, exists := names[rowType]; exists {
-			return fmt.Errorf("generate: table %q duplicates generated name %q", table.Name, rowType)
+		for _, generated := range []string{
+			rowTypeName(table.Name),
+			tableTypeName(table.Name),
+			constructorName(table.Name),
+			descriptorName(table.Name),
+		} {
+			if _, exists := names[generated]; exists {
+				return fmt.Errorf("generate: table %q duplicates generated name %q", table.Name, generated)
+			}
+			names[generated] = struct{}{}
 		}
-		names[rowType] = struct{}{}
 
 		fields := make(map[string]struct{}, len(table.Columns))
 		for _, column := range table.Columns {
 			field := fieldName(column.Name)
 			if field == "" || !token.IsIdentifier(field) {
 				return fmt.Errorf("generate: column %q on table %q cannot become a Go field", column.Name, table.Name)
+			}
+			if _, exists := reservedFieldNames[field]; exists {
+				return fmt.Errorf("generate: column %q on table %q uses reserved generated field %q", column.Name, table.Name, field)
 			}
 			if _, exists := fields[field]; exists {
 				return fmt.Errorf("generate: column %q on table %q duplicates generated field %q", column.Name, table.Name, field)
@@ -111,6 +141,18 @@ func variableName(name string) string {
 
 func rowTypeName(tableName string) string {
 	return variableName(tableName) + "Row"
+}
+
+// tableTypeName returns the exported wrapper type holding the typed table and
+// its column fields.
+func tableTypeName(tableName string) string {
+	return variableName(tableName) + "Table"
+}
+
+// constructorName returns the unexported function binding every column field to
+// one table value. As reuses it to rebind columns to an alias.
+func constructorName(tableName string) string {
+	return "new" + tableTypeName(tableName)
 }
 
 // descriptorName returns the unexported variable name backing an accessor.
@@ -167,17 +209,63 @@ func containsTime(tables []schema.Table) bool {
 	return false
 }
 
+// writeTableType writes the exported wrapper type: the typed table plus one
+// query.Column field per column, so a mistyped column name fails to compile.
+func writeTableType(source *bytes.Buffer, table schema.Table) {
+	typeName := tableTypeName(table.Name)
+	source.WriteString("// ")
+	source.WriteString(typeName)
+	source.WriteString(" is the generated table type for the ")
+	source.WriteString(quote(table.Name))
+	source.WriteString(" table.\n")
+	source.WriteString("type ")
+	source.WriteString(typeName)
+	source.WriteString(" struct {\n\trasql.Table[")
+	source.WriteString(rowTypeName(table.Name))
+	source.WriteString("]\n")
+	for _, column := range table.Columns {
+		source.WriteString("\t")
+		source.WriteString(fieldName(column.Name))
+		source.WriteString(" query.Column\n")
+	}
+	source.WriteString("}\n")
+}
+
+// writeTableConstructor writes the function binding every column field to table.
+func writeTableConstructor(source *bytes.Buffer, table schema.Table) {
+	typeName := tableTypeName(table.Name)
+	source.WriteString("func ")
+	source.WriteString(constructorName(table.Name))
+	source.WriteString("(table rasql.Table[")
+	source.WriteString(rowTypeName(table.Name))
+	source.WriteString("]) ")
+	source.WriteString(typeName)
+	source.WriteString(" {\n\treturn ")
+	source.WriteString(typeName)
+	source.WriteString("{\n\t\tTable: table,\n")
+	for _, column := range table.Columns {
+		source.WriteString("\t\t")
+		source.WriteString(fieldName(column.Name))
+		source.WriteString(": rasql.MustColumn(table, ")
+		source.WriteString(quote(column.Name))
+		source.WriteString("),\n")
+	}
+	source.WriteString("\t}\n}\n")
+}
+
 // writeTableDescriptor writes the unexported variable holding the table.
 // Keeping it unexported means importers reach the table only through the
 // accessor and cannot replace it.
 func writeTableDescriptor(source *bytes.Buffer, table schema.Table) {
 	source.WriteString("var ")
 	source.WriteString(descriptorName(table.Name))
-	source.WriteString(" = rasql.MustTable[")
+	source.WriteString(" = ")
+	source.WriteString(constructorName(table.Name))
+	source.WriteString("(rasql.MustTable[")
 	source.WriteString(rowTypeName(table.Name))
 	source.WriteString("](")
 	writeTable(source, table, "")
-	source.WriteString(")\n")
+	source.WriteString("))\n")
 }
 
 func writeTableAccessor(source *bytes.Buffer, table schema.Table) {
@@ -189,11 +277,29 @@ func writeTableAccessor(source *bytes.Buffer, table schema.Table) {
 	source.WriteString(" table.\n")
 	source.WriteString("func ")
 	source.WriteString(accessor)
-	source.WriteString("() rasql.Table[")
-	source.WriteString(rowTypeName(table.Name))
-	source.WriteString("] {\n\treturn ")
+	source.WriteString("() ")
+	source.WriteString(tableTypeName(table.Name))
+	source.WriteString(" {\n\treturn ")
 	source.WriteString(descriptorName(table.Name))
 	source.WriteString("\n}\n")
+}
+
+// writeTableAs writes the alias constructor. It rebinds every column through the
+// table constructor, so an aliased table qualifies its columns with the alias.
+func writeTableAs(source *bytes.Buffer, table schema.Table) {
+	typeName := tableTypeName(table.Name)
+	source.WriteString("// As returns the table under alias, with every column rebound to it.\n")
+	source.WriteString("func (t ")
+	source.WriteString(typeName)
+	source.WriteString(") As(alias string) (")
+	source.WriteString(typeName)
+	source.WriteString(", error) {\n")
+	source.WriteString("\taliased, err := rasql.As(t.Table, alias)\n")
+	source.WriteString("\tif err != nil {\n\t\treturn ")
+	source.WriteString(typeName)
+	source.WriteString("{}, err\n\t}\n\treturn ")
+	source.WriteString(constructorName(table.Name))
+	source.WriteString("(aliased), nil\n}\n")
 }
 
 func writeRowType(source *bytes.Buffer, table schema.Table) {

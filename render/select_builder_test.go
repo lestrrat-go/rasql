@@ -70,9 +70,9 @@ func TestSelectBuilderReportsBuildErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
-func fluentUsers(t *testing.T) query.TableRef {
+func fluentUsers(t *testing.T) query.Table {
 	t.Helper()
-	users, err := query.NewTableRef(schema.Table{
+	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
