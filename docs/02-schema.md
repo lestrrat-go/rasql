@@ -90,7 +90,7 @@ users := rasql.MustTable[UserRow](definition)
 
 Each field's `rasql` tag names the column it holds. `MustTable` panics on an invalid descriptor and suits generated or otherwise constant tables; `NewTable` returns the error instead, for descriptors assembled at runtime.
 
-`users.Column(name)` returns a `query.Column` for a column of the table, and `users.QueryTable()` returns the underlying `query.Table`. The lower-level `query` package works in terms of those two types, and [Querying](03-querying.md) uses them for joins and projections. Tables written by [`rasqlgen`](06-rasqlgen.md) go further and expose one field per column, so `users.ID` needs no lookup and no error check.
+`users.Column(name)` returns a `query.Column` for a column of the table, and `users.QueryTable()` returns the underlying `query.Table`. The lower-level `query` package works in terms of those two types, and [Querying](03-querying.md) uses them for joins and projections. Tables written by [`rasqlgen`](06-rasqlgen.md) go further and expose one field per column, so `users.ID` needs no lookup and no error check. A hand-written table gets the same benefit by wrapping the descriptor the way the generator does, which [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows in full.
 
 ## Read a table out of a database
 

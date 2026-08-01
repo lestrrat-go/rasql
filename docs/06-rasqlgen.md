@@ -84,6 +84,52 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 
 The descriptor is a package-level variable, which Go cannot mark constant, so it stays unexported and only the accessor is exported. Importing code therefore cannot swap the descriptor out from under the rest of the program.
 
+### What the column fields catch
+
+A column named by a string is checked when the query runs. The untyped builder works that way, and a typo survives until execution:
+
+```go
+rows, err := client.SelectFrom(store.Users().QueryTable()).WhereEqual("emial", 42).Query(ctx)
+// rasql: render SELECT: query column: table "users" has no column "emial"
+```
+
+The typed builder takes a `query.Column` instead, so the same typo stops at the compiler:
+
+```go
+users := store.Users()
+rasql.SelectFrom(client, users).WhereEqual(users.ID, 42)    // builds
+rasql.SelectFrom(client, users).WhereEqual(users.Emial, 42) // does not
+```
+
+```
+users.Emial undefined (type UsersTable has no field or method Emial)
+```
+
+Passing a name instead of a field does not compile either:
+
+```
+cannot use "id" (untyped string constant) as query.Column value in argument to
+rasql.SelectFrom(client, users).WhereEqual
+```
+
+Three things make that work. The generator derives each field from the same descriptor it renders SQL from, so the field list and the table cannot drift apart. The builders accept a `query.Column` rather than a name, so there is no string left to misspell. Each field is bound to its table once, when the table value is built, which is why `As` rebuilds them and an aliased table qualifies its columns correctly.
+
+The payoff arrives at the next migration. Drop or rename a column, regenerate, and every use of the old field stops compiling, instead of failing one query at a time in production.
+
+Three mistakes still reach run time. A column of another table is a valid `query.Column`, so it compiles and fails when the statement is built:
+
+```
+query: where.left: references table "orders" outside the statement
+```
+
+A lookup by name is checked when it runs, since the name is only known then:
+
+```go
+column, err := users.Column("emial") // query column: table "users" has no column "emial"
+```
+
+The value side of a comparison is `any`, so nothing stops a text column from being compared against a number. The database reports that one.
+
 Names come from the table and column names. Underscore-separated parts are capitalized, and `id`, `api`, `json`, `url`, and `uuid` become `ID`, `API`, `JSON`, `URL`, and `UUID`. A nullable column becomes a pointer field on the row type. Logical types map as follows:
 
 | Logical type | Generated Go type |
