@@ -32,11 +32,11 @@ func New(names []string, values []any) (Row, error) {
 // Column is a typed reference to a result column.
 type Column[T any] struct {
 	name    string
-	decoder Decoder[T]
+	decoder ColumnDecoder[T]
 }
 
 // NewColumn creates a typed result column using decoder.
-func NewColumn[T any](name string, decoder Decoder[T]) (Column[T], error) {
+func NewColumn[T any](name string, decoder ColumnDecoder[T]) (Column[T], error) {
 	if name == "" {
 		return Column[T]{}, fmt.Errorf("row: column name must not be empty")
 	}
@@ -68,16 +68,17 @@ func (c Column[T]) Get(r Row) (T, error) {
 	return decoded, nil
 }
 
-// Decoder converts a database result value into T.
-type Decoder[T any] interface {
+// ColumnDecoder converts one database result value into T.
+// NewColumn is what takes it; a whole row is decoded by Decoder instead.
+type ColumnDecoder[T any] interface {
 	Decode(any) (T, error)
 }
 
-// DecoderFunc adapts a function into a Decoder.
-type DecoderFunc[T any] func(any) (T, error)
+// ColumnDecoderFunc adapts a function into a ColumnDecoder.
+type ColumnDecoderFunc[T any] func(any) (T, error)
 
 // Decode converts value with f.
-func (f DecoderFunc[T]) Decode(value any) (T, error) {
+func (f ColumnDecoderFunc[T]) Decode(value any) (T, error) {
 	return f(value)
 }
 
@@ -88,8 +89,8 @@ type Null[T any] struct {
 }
 
 // Nullable wraps decoder so it accepts a NULL result value.
-func Nullable[T any](decoder Decoder[T]) Decoder[Null[T]] {
-	return DecoderFunc[Null[T]](func(value any) (Null[T], error) {
+func Nullable[T any](decoder ColumnDecoder[T]) ColumnDecoder[Null[T]] {
+	return ColumnDecoderFunc[Null[T]](func(value any) (Null[T], error) {
 		if value == nil {
 			return Null[T]{}, nil
 		}
@@ -103,12 +104,12 @@ func Nullable[T any](decoder Decoder[T]) Decoder[Null[T]] {
 
 // Bool decodes a boolean result value.
 func Bool(name string) (Column[bool], error) {
-	return NewColumn(name, DecoderFunc[bool](decodeBool))
+	return NewColumn(name, ColumnDecoderFunc[bool](decodeBool))
 }
 
 // Int64 decodes an integer result value.
 func Int64(name string) (Column[int64], error) {
-	return NewColumn(name, DecoderFunc[int64](func(value any) (int64, error) {
+	return NewColumn(name, ColumnDecoderFunc[int64](func(value any) (int64, error) {
 		decoded, ok := value.(int64)
 		if !ok {
 			return 0, typeError("int64", value)
@@ -119,7 +120,7 @@ func Int64(name string) (Column[int64], error) {
 
 // Float64 decodes a floating-point result value.
 func Float64(name string) (Column[float64], error) {
-	return NewColumn(name, DecoderFunc[float64](func(value any) (float64, error) {
+	return NewColumn(name, ColumnDecoderFunc[float64](func(value any) (float64, error) {
 		decoded, ok := value.(float64)
 		if !ok {
 			return 0, typeError("float64", value)
@@ -130,7 +131,7 @@ func Float64(name string) (Column[float64], error) {
 
 // String decodes a text result value.
 func String(name string) (Column[string], error) {
-	return NewColumn(name, DecoderFunc[string](func(value any) (string, error) {
+	return NewColumn(name, ColumnDecoderFunc[string](func(value any) (string, error) {
 		switch decoded := value.(type) {
 		case string:
 			return decoded, nil
@@ -144,7 +145,7 @@ func String(name string) (Column[string], error) {
 
 // Bytes decodes a byte-slice result value and returns an independent slice.
 func Bytes(name string) (Column[[]byte], error) {
-	return NewColumn(name, DecoderFunc[[]byte](func(value any) ([]byte, error) {
+	return NewColumn(name, ColumnDecoderFunc[[]byte](func(value any) ([]byte, error) {
 		decoded, ok := value.([]byte)
 		if !ok {
 			return nil, typeError("[]byte", value)
@@ -155,7 +156,7 @@ func Bytes(name string) (Column[[]byte], error) {
 
 // Time decodes a timestamp result value.
 func Time(name string) (Column[time.Time], error) {
-	return NewColumn(name, DecoderFunc[time.Time](decodeTime))
+	return NewColumn(name, ColumnDecoderFunc[time.Time](decodeTime))
 }
 
 func cloneValue(value any) any {

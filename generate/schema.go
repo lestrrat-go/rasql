@@ -16,13 +16,16 @@ import (
 
 // reservedFieldNames holds the identifiers a generated table type already uses.
 // A column whose generated field name lands on one of them is rejected, because
-// the field would shadow the embedded rasql.Table or its methods.
+// the field would shadow the embedded rasql.Table or its methods, or collide
+// with a mapping method declared on the row type.
 var reservedFieldNames = map[string]struct{}{
-	"As":         {},
-	"Column":     {},
-	"QueryTable": {},
-	"Table":      {},
-	"tableRow":   {},
+	"As":          {},
+	"Column":      {},
+	"ColumnValue": {},
+	"DecodeRow":   {},
+	"QueryTable":  {},
+	"Table":       {},
+	"tableRow":    {},
 }
 
 // Schema returns formatted Go source declaring reusable table descriptors in packageName.
@@ -57,11 +60,16 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 		}
 		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
+		source.WriteString("\t\"github.com/lestrrat-go/rasql/row\"\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
 		source.WriteString(")\n\n")
 	}
 	for _, table := range clones {
 		writeRowType(&source, table)
+		source.WriteString("\n")
+		writeRowDecode(&source, table)
+		source.WriteString("\n")
+		writeRowColumnValue(&source, table)
 		source.WriteString("\n")
 		writeTableType(&source, table)
 		source.WriteString("\n")
@@ -314,11 +322,60 @@ func writeRowType(source *bytes.Buffer, table schema.Table) {
 			source.WriteByte('*')
 		}
 		source.WriteString(rowFieldType(column.Type))
-		source.WriteString(" `rasql:")
-		source.WriteString(quote(column.Name))
-		source.WriteString("`\n")
+		source.WriteString("\n")
 	}
 	source.WriteString("}\n")
+}
+
+// writeRowDecode writes the row.Decoder implementation. The generator
+// already knows which column feeds which field, so the row type states that
+// mapping directly instead of restating it as a tag for reflection to parse.
+func writeRowDecode(source *bytes.Buffer, table schema.Table) {
+	typeName := rowTypeName(table.Name)
+	source.WriteString("// DecodeRow assigns each result column to its field.\n")
+	source.WriteString("func (r *")
+	source.WriteString(typeName)
+	source.WriteString(") DecodeRow(src row.Row) error {\n")
+	last := len(table.Columns) - 1
+	for index, column := range table.Columns {
+		if index == last {
+			source.WriteString("\treturn ")
+			writeRowAssign(source, column)
+			source.WriteString("\n")
+			break
+		}
+		source.WriteString("\tif err := ")
+		writeRowAssign(source, column)
+		source.WriteString("; err != nil {\n\t\treturn err\n\t}\n")
+	}
+	source.WriteString("}\n")
+}
+
+func writeRowAssign(source *bytes.Buffer, column schema.Column) {
+	source.WriteString("row.Assign(src, ")
+	source.WriteString(quote(column.Name))
+	source.WriteString(", &r.")
+	source.WriteString(fieldName(column.Name))
+	source.WriteString(")")
+}
+
+// writeRowColumnValue writes the rasql.ColumnValuer implementation, which is
+// the write-direction counterpart of DecodeRow.
+func writeRowColumnValue(source *bytes.Buffer, table schema.Table) {
+	typeName := rowTypeName(table.Name)
+	source.WriteString("// ColumnValue returns the value of the named column.\n")
+	source.WriteString("func (r ")
+	source.WriteString(typeName)
+	source.WriteString(") ColumnValue(name string) (any, bool) {\n")
+	source.WriteString("\tswitch name {\n")
+	for _, column := range table.Columns {
+		source.WriteString("\tcase ")
+		source.WriteString(quote(column.Name))
+		source.WriteString(":\n\t\treturn r.")
+		source.WriteString(fieldName(column.Name))
+		source.WriteString(", true\n")
+	}
+	source.WriteString("\t}\n\treturn nil, false\n}\n")
 }
 
 func rowFieldType(logicalType schema.LogicalType) string {
