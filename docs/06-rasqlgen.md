@@ -149,7 +149,7 @@ type userWithRole struct {
 
 Decoding a `userWithRole` runs `UsersRow.DecodeRow`, fills the embedded fields, and leaves `Role` at its zero value without reporting an error. Declare a `DecodeRow` on the outer type that calls the embedded one and then assigns the extra fields, or give the outer type its own named field instead of embedding.
 
-Embedding promotes `ColumnValue` in the same way, and the write side does not follow that promotion blindly. `Insert` and `Update` map a struct that embeds a `ColumnValuer` and also carries `rasql` tags of its own by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing, such as the `userWithRole` above, is still mapped by its promoted `ColumnValue`. Declaring `ColumnValue` on the outer type and dropping the tags maps a tagged wrapper by method again.
+Embedding promotes `ColumnValue` in the same way, and the write side does not follow that promotion blindly. `Insert` and `Update` map a struct that embeds a `ColumnValuer`, carries `rasql` tags of its own, and declares no `ColumnValue` by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing, such as the `userWithRole` above, is still mapped by its promoted `ColumnValue`. Declaring `ColumnValue` on the outer type maps a tagged wrapper by method again, because Go dispatches to the declared method rather than to the promoted one, and the tags may stay or go.
 
 ### What the column fields catch
 

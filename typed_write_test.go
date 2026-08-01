@@ -168,6 +168,45 @@ type taggedWrapperUser struct {
 	Email string `rasql:"email"`
 }
 
+// declaringWrapperUser embeds the same row type, tags fields of its own, and
+// declares ColumnValue as well. Its tags are crossed and its embedded fields
+// hold values of their own, so the embedded mapping, the tag mapping, and the
+// declared method each name a different value for every column. Go dispatches to
+// the declared method, so the writes must follow it.
+type declaringWrapperUser struct {
+	mappedUser
+	ID    int64  `rasql:"email"`
+	Email string `rasql:"id"`
+}
+
+func (u declaringWrapperUser) ColumnValue(name string) (any, bool) {
+	switch name {
+	case "id":
+		return u.ID, true
+	case "email":
+		return u.Email, true
+	}
+	return nil, false
+}
+
+// pointerDeclaringWrapperUser is the same shape with a pointer receiver, which
+// is the other place a row type can declare its mapping method.
+type pointerDeclaringWrapperUser struct {
+	mappedUser
+	ID    int64  `rasql:"email"`
+	Email string `rasql:"id"`
+}
+
+func (u *pointerDeclaringWrapperUser) ColumnValue(name string) (any, bool) {
+	switch name {
+	case "id":
+		return u.ID, true
+	case "email":
+		return u.Email, true
+	}
+	return nil, false
+}
+
 // partiallyMappedUser omits one column of its table.
 type partiallyMappedUser struct {
 	ID int64
@@ -321,6 +360,125 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		_, err = rasql.Update(t.Context(), client, users, value)
+		require.NoError(t, err)
+	})
+}
+
+func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
+	table := schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	// The embedded values, the crossed tags, and the declared method each name a
+	// different value for both columns, so the arguments below name which mapping
+	// ran: the declared method binds 42 and method@example.com, the tags bind
+	// method@example.com and 42, and the promoted method binds 7 and
+	// embedded@example.com.
+	value := declaringWrapperUser{
+		mappedUser: mappedUser{ID: 7, Email: "embedded@example.com"},
+		ID:         42,
+		Email:      "method@example.com",
+	}
+	pointerValue := pointerDeclaringWrapperUser{
+		mappedUser: mappedUser{ID: 7, Email: "embedded@example.com"},
+		ID:         42,
+		Email:      "method@example.com",
+	}
+
+	t.Run("go dispatches to the declared method", func(t *testing.T) {
+		columnValue, ok := value.ColumnValue("id")
+		require.True(t, ok)
+		require.Equal(t, int64(42), columnValue)
+		columnValue, ok = pointerValue.ColumnValue("email")
+		require.True(t, ok)
+		require.Equal(t, "method@example.com", columnValue)
+	})
+
+	t.Run("insert", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users, err := rasql.NewTable[declaringWrapperUser](table)
+		require.NoError(t, err)
+		mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
+			WithArgs(int64(42), "method@example.com").
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		_, err = rasql.Insert(t.Context(), client, users, value)
+		require.NoError(t, err)
+	})
+
+	t.Run("update", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users, err := rasql.NewTable[declaringWrapperUser](table)
+		require.NoError(t, err)
+		mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
+			WithArgs("method@example.com", int64(42)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		_, err = rasql.Update(t.Context(), client, users, value)
+		require.NoError(t, err)
+	})
+
+	t.Run("insert with a pointer receiver", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users, err := rasql.NewTable[pointerDeclaringWrapperUser](table)
+		require.NoError(t, err)
+		mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
+			WithArgs(int64(42), "method@example.com").
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		_, err = rasql.Insert(t.Context(), client, users, pointerValue)
+		require.NoError(t, err)
+	})
+
+	t.Run("update with a pointer receiver", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users, err := rasql.NewTable[pointerDeclaringWrapperUser](table)
+		require.NoError(t, err)
+		mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
+			WithArgs("method@example.com", int64(42)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		_, err = rasql.Update(t.Context(), client, users, pointerValue)
 		require.NoError(t, err)
 	})
 }
