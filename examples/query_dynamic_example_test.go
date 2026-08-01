@@ -6,25 +6,10 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 func Example_query_dynamic() {
-	// schema.Table declares the columns available to the query builder. A table
-	// reference validates the descriptor once and keeps the query isolated from
-	// other tables that may have the same column names.
-	users, err := query.NewTableRef(schema.Table{
-		Name: "users",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
-		},
-		PrimaryKey: []string{"id"},
-	})
-	if err != nil {
-		fmt.Printf("failed to create table reference: %s\n", err)
-		return
-	}
+	// users is a pre-built table reference reused by each users query.
 	// Column references are tied to this table reference. They can be used for
 	// projections, predicates, joins, and ordering without manually qualifying
 	// their SQL identifiers.

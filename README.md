@@ -10,6 +10,47 @@ It provides:
 * Dynamic query building at runtime.
 * Static query building with templates.
 
+# Define a table
+
+<!-- INCLUDE(examples/schema_table_definition_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/schema"
+)
+
+func Example_schema_table_definition() {
+	// schema.Table declares database structure. NewTable validates the
+	// descriptor and returns an independent copy for application configuration.
+	table, err := schema.NewTable(usersTableDefinition())
+	if err != nil {
+		fmt.Printf("failed to define table: %s\n", err)
+		return
+	}
+
+	fmt.Printf("%s: %d columns\n", table.Name, len(table.Columns))
+
+	// Output:
+	// users: 2 columns
+}
+
+func usersTableDefinition() schema.Table {
+	return schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	}
+}
+```
+source: [examples/schema_table_definition_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_example_test.go)
+<!-- END INCLUDE -->
+
 # SYNOPSIS
 
 <!-- INCLUDE(examples/query_dynamic_example_test.go) -->
@@ -22,25 +63,10 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 func Example_query_dynamic() {
-	// schema.Table declares the columns available to the query builder. A table
-	// reference validates the descriptor once and keeps the query isolated from
-	// other tables that may have the same column names.
-	users, err := query.NewTableRef(schema.Table{
-		Name: "users",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
-		},
-		PrimaryKey: []string{"id"},
-	})
-	if err != nil {
-		fmt.Printf("failed to create table reference: %s\n", err)
-		return
-	}
+	// users is a pre-built table reference reused by each users query.
 	// Column references are tied to this table reference. They can be used for
 	// projections, predicates, joins, and ordering without manually qualifying
 	// their SQL identifiers.
