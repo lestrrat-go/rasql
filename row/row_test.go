@@ -76,6 +76,42 @@ func TestTypedColumnsRejectWrongType(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGetAndDecodePopulateTypedValues(t *testing.T) {
+	result, err := row.New(
+		[]string{"id", "email", "nickname"},
+		[]any{int64(42), []byte("ada@example.com"), nil},
+	)
+	require.NoError(t, err)
+
+	id, err := row.Get[int64](result, "id")
+	require.NoError(t, err)
+	require.Equal(t, int64(42), id)
+
+	type user struct {
+		ID       int64   `rasql:"id"`
+		Email    string  `rasql:"email"`
+		Nickname *string `rasql:"nickname"`
+	}
+	decoded, err := row.Decode[user](result)
+	require.NoError(t, err)
+	require.Equal(t, int64(42), decoded.ID)
+	require.Equal(t, "ada@example.com", decoded.Email)
+	require.Nil(t, decoded.Nickname)
+}
+
+func TestDecodeRejectsMissingColumnsAndUnsupportedDestinations(t *testing.T) {
+	result, err := row.New([]string{"id"}, []any{int64(42)})
+	require.NoError(t, err)
+
+	type user struct {
+		Email string `rasql:"email"`
+	}
+	_, err = row.Decode[user](result)
+	require.Error(t, err)
+	_, err = row.Decode[string](result)
+	require.Error(t, err)
+}
+
 func TestNewRejectsInvalidShape(t *testing.T) {
 	_, err := row.New([]string{"id"}, nil)
 	require.Error(t, err)

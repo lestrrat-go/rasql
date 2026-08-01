@@ -80,6 +80,41 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := runtime.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	reference, err := query.NewTableRef(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := runtime.NewTable[user](reference)
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
+		WithArgs(42).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
+
+	decoded, err := runtime.SelectFrom(client, users).WhereEqual("id", 42).One(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, user{ID: 42, Email: "ada@example.com"}, decoded)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestClientQueryAllowsDebugQueryer(t *testing.T) {
 	queryer := &debugQueryer{}
 	client, err := runtime.New(queryer, dialect.PostgreSQL())
