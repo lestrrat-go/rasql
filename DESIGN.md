@@ -8,7 +8,7 @@ The first release does not include a migration planner or executor. It describes
 
 ## Design decisions
 
-* Schema definitions, generated schema code, dynamic builders, and static templates share the same public descriptors and query representation.
+* Schema definitions and dynamic builders share the same public descriptors and query representation. Static templates compile to precompiled parameterized statements with the same rendering and runtime execution boundary.
 * Values always travel separately from SQL text. Renderers create placeholders and an ordered argument list; no public API interpolates values into SQL.
 * The core model uses logical SQL types. Dialects decide how those types map to DDL, bind values, placeholders, identifiers, and capability-specific syntax.
 * The runtime builds on `database/sql` first. Database-specific driver helpers can be added later without changing the core query or schema APIs.
@@ -62,13 +62,13 @@ The first query slice supports `SELECT`, predicates, joins, ordering, limit, and
 
 ## Schema and inspection
 
-Schema descriptors include names, columns, nullability, defaults, primary keys, foreign keys, unique constraints, checks, and indexes. They retain source positions when created from Go declarations so validation errors can identify the declaration that needs attention.
+Schema descriptors include names, columns, nullability, defaults, primary keys, foreign keys, unique constraints, checks, and indexes.
 
-Inspectors use a small adapter for each database metadata surface. They normalize identifiers, types, and constraints into `schema` values without attempting to infer application names or Go types. The generator owns Go naming rules and writes a stable file header, imports, table descriptors, columns, and optional codecs.
+Inspectors use a small adapter for each database metadata surface. They normalize column identifiers, types, nullability, defaults, and primary keys into `schema` values without attempting to infer application names or Go types. The generator owns Go naming rules and writes a stable file header, imports, and table descriptors.
 
 ## Errors and observability
 
-Validation, rendering, decoding, inspection, and execution errors use distinct exported error types or sentinel categories. Errors include the statement operation, dialect, and affected identifier when known, but never include unredacted bound values by default.
+Validation and rendering expose typed errors. Decoding, inspection, and execution errors include the operation and affected identifier when known, but never include unredacted bound values by default.
 
 The runtime accepts `context.Context` for every database operation. It leaves transaction ownership with the caller and provides helpers that accept `*sql.DB` or `*sql.Tx` without starting hidden transactions.
 
@@ -78,19 +78,19 @@ Package tests cover schema validation, query validation, codecs, and capability 
 
 ## Focused implementation slices
 
-Each slice should be one commit or a small series of commits that remains buildable and has tests for the new public behavior.
+Each slice is a focused commit or a small series of commits that remains buildable and has tests for the new public behavior.
 
 1. `docs: add project overview` imports the agreed project goal. This is the initial commit.
 2. `docs: add initial architecture design` records boundaries, supported behavior, and the implementation order.
-3. `chore: initialize Go module` adds the module, supported Go version, lint configuration, and a minimal package test.
+3. `chore: initialize Go module` adds the module and supported Go version.
 4. `feat: add schema descriptors` adds logical types, tables, columns, constraints, validation, and tests without database access.
 5. `feat: add dialect capabilities` adds dialect interfaces and isolated identifier, placeholder, and type-mapping tests.
 6. `feat: add select query model` adds immutable expressions and `SELECT` statements with validation, without rendering.
 7. `feat: render select statements` renders the first query slice for all four dialects with SQL and argument-order golden tests.
-8. `feat: add database runtime` executes rendered statements through `database/sql` and adds typed row decoding for the initial primitives.
-9. `feat: add write statements` adds insert, update, and delete in independent commits, followed by returning and upsert capability commits.
-10. `feat: inspect live schemas` adds metadata adapters and normalized schema fixtures one dialect at a time.
-11. `feat: generate schema source` adds deterministic Go generation from inspected schemas.
-12. `feat: compile static queries` adds templates and `rasqlgen`, reusing the query model and renderer.
+8. `feat: add typed row decoding` and `feat: add database runtime` add typed primitives and `database/sql` execution.
+9. `feat: add write query models`, `feat: render write statements`, and `feat: add dialect upserts` add writes, returning, and dialect-specific upserts.
+10. `feat: render schema definitions` and `feat: execute schema definitions` add DDL rendering and execution.
+11. `feat: inspect live schemas` and `feat: generate schema source` add metadata normalization and deterministic schema generation.
+12. `feat: compile static query templates` and `feat: add rasql generator command` add restricted templates and the CLI.
 
 The work begins with a single dialect-neutral vertical slice through schema, query, rendering, runtime, and row decoding before extending all features across every dialect. This validates the public API before the dialect matrix grows.
