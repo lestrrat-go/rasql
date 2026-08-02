@@ -1,27 +1,28 @@
-package main
+package store
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Member, Project, and Task map the application's SQLite tables. In a larger
-// application, rasqlgen can generate descriptors with the same shape.
-type Member struct {
+type member struct {
 	ID    int64  `rasql:"id"`
 	Name  string `rasql:"name"`
 	Email string `rasql:"email"`
 }
 
-type Project struct {
+type project struct {
 	ID       int64  `rasql:"id"`
 	OwnerID  int64  `rasql:"owner_id"`
 	Name     string `rasql:"name"`
 	Archived bool   `rasql:"archived"`
 }
 
-type Task struct {
+type task struct {
 	ID         int64  `rasql:"id"`
 	ProjectID  int64  `rasql:"project_id"`
 	AssigneeID int64  `rasql:"assignee_id"`
@@ -30,15 +31,15 @@ type Task struct {
 	Priority   int64  `rasql:"priority"`
 }
 
-type MembersTable struct {
-	rasql.Table[Member]
+type membersTable struct {
+	rasql.Table[member]
 	ID    query.Column
 	Name  query.Column
 	Email query.Column
 }
 
-func newMembersTable(table rasql.Table[Member]) MembersTable {
-	return MembersTable{
+func newMembersTable(table rasql.Table[member]) membersTable {
+	return membersTable{
 		Table: table,
 		ID:    rasql.MustColumn(table, "id"),
 		Name:  rasql.MustColumn(table, "name"),
@@ -46,16 +47,16 @@ func newMembersTable(table rasql.Table[Member]) MembersTable {
 	}
 }
 
-type ProjectsTable struct {
-	rasql.Table[Project]
+type projectsTable struct {
+	rasql.Table[project]
 	ID       query.Column
 	OwnerID  query.Column
 	Name     query.Column
 	Archived query.Column
 }
 
-func newProjectsTable(table rasql.Table[Project]) ProjectsTable {
-	return ProjectsTable{
+func newProjectsTable(table rasql.Table[project]) projectsTable {
+	return projectsTable{
 		Table:    table,
 		ID:       rasql.MustColumn(table, "id"),
 		OwnerID:  rasql.MustColumn(table, "owner_id"),
@@ -64,8 +65,8 @@ func newProjectsTable(table rasql.Table[Project]) ProjectsTable {
 	}
 }
 
-type TasksTable struct {
-	rasql.Table[Task]
+type tasksTable struct {
+	rasql.Table[task]
 	ID         query.Column
 	ProjectID  query.Column
 	AssigneeID query.Column
@@ -74,8 +75,8 @@ type TasksTable struct {
 	Priority   query.Column
 }
 
-func newTasksTable(table rasql.Table[Task]) TasksTable {
-	return TasksTable{
+func newTasksTable(table rasql.Table[task]) tasksTable {
+	return tasksTable{
 		Table:      table,
 		ID:         rasql.MustColumn(table, "id"),
 		ProjectID:  rasql.MustColumn(table, "project_id"),
@@ -86,7 +87,7 @@ func newTasksTable(table rasql.Table[Task]) TasksTable {
 	}
 }
 
-var members = newMembersTable(rasql.MustTable[Member](schema.Table{
+var members = newMembersTable(rasql.MustTable[member](schema.Table{
 	Name: "members",
 	Columns: []schema.Column{
 		{Name: "id", Type: schema.TypeInteger},
@@ -99,7 +100,7 @@ var members = newMembersTable(rasql.MustTable[Member](schema.Table{
 	}},
 }))
 
-var projects = newProjectsTable(rasql.MustTable[Project](schema.Table{
+var projects = newProjectsTable(rasql.MustTable[project](schema.Table{
 	Name: "projects",
 	Columns: []schema.Column{
 		{Name: "id", Type: schema.TypeInteger},
@@ -115,7 +116,7 @@ var projects = newProjectsTable(rasql.MustTable[Project](schema.Table{
 	}},
 }))
 
-var tasks = newTasksTable(rasql.MustTable[Task](schema.Table{
+var tasks = newTasksTable(rasql.MustTable[task](schema.Table{
 	Name: "tasks",
 	Columns: []schema.Column{
 		{Name: "id", Type: schema.TypeInteger},
@@ -146,3 +147,17 @@ var tasks = newTasksTable(rasql.MustTable[Task](schema.Table{
 		},
 	},
 }))
+
+// CreateSchema renders and executes the Taskboard schema through rasql.
+func CreateSchema(ctx context.Context, client rasql.Client) error {
+	if err := rasql.Create(ctx, client, members); err != nil {
+		return fmt.Errorf("create members table: %w", err)
+	}
+	if err := rasql.Create(ctx, client, projects); err != nil {
+		return fmt.Errorf("create projects table: %w", err)
+	}
+	if err := rasql.Create(ctx, client, tasks); err != nil {
+		return fmt.Errorf("create tasks table: %w", err)
+	}
+	return nil
+}
