@@ -69,17 +69,17 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname"}).
-			AddRow("uq_users_email", "email").
-			AddRow("uq_users_tenant_email", "tenant_id").
-			AddRow("uq_users_tenant_email", "email"))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct"}).
+			AddRow("uq_users_email", "email", false, false, false).
+			AddRow("uq_users_tenant_email", "tenant_id", false, false, false).
+			AddRow("uq_users_tenant_email", "email", false, false, false))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression"}).
-			AddRow("chk_users_email", "email <> ''"))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit"}).
+			AddRow("chk_users_email", "email <> ''", false))
+	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*operator_class_metadata\\.opcdefault.*index_collation\\.collation_oid <> attribute\\.attcollation").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
 	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname FROM pg_catalog\\.pg_index").
@@ -88,11 +88,11 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 			AddRow("users_email_idx", false, "email").
 			AddRow("users_tenant_email_idx", true, "tenant_id").
 			AddRow("users_tenant_email_idx", true, "email"))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, referenced_namespace\\.nspname = current_schema\\(\\), constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action"}).
-			AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a").
-			AddRow("fk_users_account", "tenant_id", "accounts", "tenant_id", "c", "a"))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns"}).
+			AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", true, false, false, false).
+			AddRow("fk_users_account", "tenant_id", "accounts", "tenant_id", "c", "a", "s", true, false, false, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -144,36 +144,141 @@ func TestPostgreSQLInspectorRejectsUnsupportedIndex(t *testing.T) {
 	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname"}))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit"}))
+	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*operator_class_metadata\\.opcdefault.*index_collation\\.collation_oid <> attribute\\.attcollation").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}).AddRow("users_email_partial_idx"))
 
 	_, err = inspector.Table(t.Context(), "users")
-	require.EqualError(t, err, "inspect: index \"users_email_partial_idx\" cannot be represented: rasql supports only non-partial B-tree indexes with simple ascending columns and no included columns")
+	require.EqualError(t, err, "inspect: index \"users_email_partial_idx\" cannot be represented: rasql supports only non-partial B-tree indexes with simple ascending columns, no included columns, default operator classes and collations, and distinct nulls")
+}
+
+func TestPostgreSQLInspectorRejectsUnsupportedUniqueConstraint(t *testing.T) {
+	tests := []struct {
+		name              string
+		deferrable        bool
+		initiallyDeferred bool
+		nullsNotDistinct  bool
+	}{
+		{name: "deferrable", deferrable: true},
+		{name: "initially deferred", deferrable: true, initiallyDeferred: true},
+		{name: "nulls not distinct", nullsNotDistinct: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inspector, mock := newPostgreSQLInspector(t)
+			expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
+			mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct FROM pg_catalog\\.pg_constraint").
+				WithArgs("users").
+				WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct"}).
+					AddRow("uq_users_email", "email", test.deferrable, test.initiallyDeferred, test.nullsNotDistinct))
+
+			_, err := inspector.Table(t.Context(), "users")
+			require.EqualError(t, err, "inspect: unique constraint \"uq_users_email\" cannot be represented: rasql supports only non-deferrable unique constraints with distinct nulls")
+		})
+	}
+}
+
+func TestPostgreSQLInspectorRejectsNoInheritCheck(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit"}).
+			AddRow("chk_users_email", "email <> ''", true))
+
+	_, err := inspector.Table(t.Context(), "users")
+	require.EqualError(t, err, "inspect: check constraint \"chk_users_email\" cannot be represented: rasql does not support NO INHERIT check constraints")
+}
+
+func TestPostgreSQLInspectorRejectsUnsupportedForeignKey(t *testing.T) {
+	tests := []struct {
+		name              string
+		matchType         string
+		inCurrentSchema   bool
+		deferrable        bool
+		initiallyDeferred bool
+		deleteSetColumns  bool
+		want              string
+	}{
+		{name: "match full", matchType: "f", inCurrentSchema: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql supports only MATCH SIMPLE foreign keys"},
+		{name: "referenced table outside current schema", matchType: "s", want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql supports references only in the current schema"},
+		{name: "deferrable", matchType: "s", inCurrentSchema: true, deferrable: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql supports only non-deferrable foreign keys"},
+		{name: "initially deferred", matchType: "s", inCurrentSchema: true, deferrable: true, initiallyDeferred: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql supports only non-deferrable foreign keys"},
+		{name: "partial delete set columns", matchType: "s", inCurrentSchema: true, deleteSetColumns: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support column lists for ON DELETE SET NULL or SET DEFAULT"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inspector, mock := newPostgreSQLInspector(t)
+			expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
+			expectPostgreSQLMetadataBeforeForeignKeys(mock, "users")
+			mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, referenced_namespace\\.nspname = current_schema\\(\\), constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL FROM pg_catalog\\.pg_constraint").
+				WithArgs("users").
+				WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns"}).
+					AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", test.matchType, test.inCurrentSchema, test.deferrable, test.initiallyDeferred, test.deleteSetColumns))
+
+			_, err := inspector.Table(t.Context(), "users")
+			require.EqualError(t, err, test.want)
+		})
+	}
+}
+
+func newPostgreSQLInspector(t *testing.T) (inspect.Inspector, sqlmock.Sqlmock) {
+	t.Helper()
+
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	return inspector, mock
+}
+
+func expectPostgreSQLColumnsAndPrimaryKey(mock sqlmock.Sqlmock, tableName string) {
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+		WithArgs(tableName).
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
+			AddRow("id", "bigint", "NO", nil))
+	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints").
+		WithArgs(tableName).
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
 }
 
 func expectPostgreSQLEmptyMetadata(mock sqlmock.Sqlmock, tableName string) {
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname FROM pg_catalog\\.pg_constraint").
+	expectPostgreSQLMetadataBeforeForeignKeys(mock, tableName)
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, referenced_namespace\\.nspname = current_schema\\(\\), constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL FROM pg_catalog\\.pg_constraint").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname"}))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns"}))
+}
+
+func expectPostgreSQLMetadataBeforeForeignKeys(mock sqlmock.Sqlmock, tableName string) {
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct FROM pg_catalog\\.pg_constraint").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit FROM pg_catalog\\.pg_constraint").
+		WithArgs(tableName).
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit"}))
+	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*operator_class_metadata\\.opcdefault.*index_collation\\.collation_oid <> attribute\\.attcollation").
 		WithArgs(tableName).
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
 	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname FROM pg_catalog\\.pg_index").
 		WithArgs(tableName).
 		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname"}))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname").
-		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action"}))
 }
 
 func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
