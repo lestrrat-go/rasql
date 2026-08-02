@@ -14,6 +14,8 @@ const (
 	CapabilityReturning Capability = 1 << iota
 	CapabilityUpsert
 	CapabilityConflictTarget
+	CapabilityDefaultValues
+	CapabilityEmptyInsert
 )
 
 // PrimaryKeyStyle controls where CREATE TABLE renders its primary key.
@@ -52,7 +54,7 @@ func PostgreSQL() Dialect {
 		placeholder:  dollarPlaceholder,
 		primaryKey:   PrimaryKeyInline,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
 			schema.TypeInteger: "BIGINT",
@@ -74,7 +76,7 @@ func MySQL() Dialect {
 		placeholder:  questionPlaceholder,
 		primaryKey:   PrimaryKeyInline,
 		upsert:       UpsertDuplicateKey,
-		capabilities: CapabilityUpsert,
+		capabilities: CapabilityUpsert | CapabilityEmptyInsert,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
 			schema.TypeInteger: "BIGINT",
@@ -96,7 +98,7 @@ func SQLite() Dialect {
 		placeholder:  questionPlaceholder,
 		primaryKey:   PrimaryKeyInline,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "INTEGER",
 			schema.TypeInteger: "INTEGER",

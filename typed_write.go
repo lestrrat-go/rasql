@@ -26,9 +26,16 @@ type ColumnValuer interface {
 
 // Insert encodes value's rasql-tagged fields and writes it to table.
 // Value must have one exported tagged field for every table column,
+// or implement ColumnValuer.
+func Insert[T any](ctx context.Context, client Client, table Table[T], value T) (sql.Result, error) {
+	return InsertWithOptions(ctx, client, table, value)
+}
+
+// InsertWithOptions encodes value's rasql-tagged fields and writes it to table.
+// Value must have one exported tagged field for every table column,
 // or implement ColumnValuer. DefaultColumns omits named columns so the
 // database applies their defaults.
-func Insert[T any](ctx context.Context, client Client, table Table[T], value T, options ...InsertOption) (sql.Result, error) {
+func InsertWithOptions[T any](ctx context.Context, client Client, table Table[T], value T, options ...InsertOption) (sql.Result, error) {
 	defaults, err := insertDefaults(options)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: configure INSERT: %w", err)
@@ -40,7 +47,7 @@ func Insert[T any](ctx context.Context, client Client, table Table[T], value T, 
 	return client.Exec(ctx, statement)
 }
 
-// InsertOption configures Insert.
+// InsertOption configures InsertWithOptions.
 type InsertOption interface {
 	applyInsert(*insertConfig) error
 }
@@ -119,7 +126,7 @@ func typedInsert[T any](table Table[T], value T, defaultColumns map[string]struc
 		values = append(values, query.Bind(fields[definitionColumn.Name]))
 	}
 	if len(columns) == 0 {
-		return query.Insert{}, fmt.Errorf("table %q has no columns to insert after selecting database defaults", definition.Name)
+		return query.NewDefaultInsert(reference)
 	}
 	return query.NewInsert(reference, columns, values)
 }

@@ -87,7 +87,7 @@ The value must carry one exported tagged field for every column of the table, so
 
 ## Use database defaults
 
-Pass `rasql.DefaultColumns` to omit named columns from an insert. The database supplies those values. `Insert` never treats a Go zero value as absent, so every column not named by `DefaultColumns` remains a bound value.
+Pass `rasql.DefaultColumns` to `rasql.InsertWithOptions` to omit named columns from an insert. The database supplies those values. `InsertWithOptions` never treats a Go zero value as absent, so every column not named by `DefaultColumns` remains a bound value. When every column is named, PostgreSQL, MySQL, and SQLite render an all-default insert; Spanner requires at least one column value.
 
 <!-- INCLUDE(examples/rasql_insert_defaults_example_test.go) -->
 ```go
@@ -184,7 +184,7 @@ func Example_rasql_insert_defaults() {
 	}
 
 	// Name each database-assigned column. Email remains an explicit empty string.
-	if _, err := rasql.Insert(ctx, client, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
+	if _, err := rasql.InsertWithOptions(ctx, client, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
 		fmt.Printf("failed to insert default user: %s\n", err)
 		return
 	}

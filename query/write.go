@@ -138,10 +138,11 @@ func (a Assignment) Value() Expression {
 
 // Insert is an immutable single-row INSERT statement.
 type Insert struct {
-	into      Table
-	columns   []Column
-	values    []Expression
-	returning []Projection
+	into          Table
+	columns       []Column
+	values        []Expression
+	defaultValues bool
+	returning     []Projection
 }
 
 func (Insert) writeStatement() {}
@@ -153,6 +154,16 @@ func NewInsert(into Table, columns []Column, values []Expression) (Insert, error
 		columns: append([]Column(nil), columns...),
 		values:  append([]Expression(nil), values...),
 	}
+	if err := statement.Validate(); err != nil {
+		return Insert{}, err
+	}
+	return statement, nil
+}
+
+// NewDefaultInsert creates a validated INSERT statement that uses the database
+// defaults for every column.
+func NewDefaultInsert(into Table) (Insert, error) {
+	statement := Insert{into: into, defaultValues: true}
 	if err := statement.Validate(); err != nil {
 		return Insert{}, err
 	}
@@ -184,6 +195,12 @@ func (s Insert) Values() []Expression {
 	return append([]Expression(nil), s.values...)
 }
 
+// UsesDefaultValues reports whether s uses the database defaults for every
+// column.
+func (s Insert) UsesDefaultValues() bool {
+	return s.defaultValues
+}
+
 // Returning returns a copy of the returning projections.
 func (s Insert) Returning() []Projection {
 	return append([]Projection(nil), s.returning...)
@@ -194,6 +211,15 @@ func (s Insert) Validate() error {
 	sources, err := validateWriteTarget(s.into, "into")
 	if err != nil {
 		return err
+	}
+	if s.defaultValues {
+		if len(s.columns) > 0 {
+			return validationError("columns", "must be empty for a default-values insert")
+		}
+		if len(s.values) > 0 {
+			return validationError("values", "must be empty for a default-values insert")
+		}
+		return validateProjections(s.returning, sources, "returning")
 	}
 	if len(s.columns) == 0 {
 		return validationError("columns", "must not be empty")

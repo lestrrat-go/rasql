@@ -94,6 +94,41 @@ func TestReturningRequiresDialectCapability(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestDefaultInsertRendersDialectSyntax(t *testing.T) {
+	users, _, _ := writeTable(t)
+	statement, err := query.NewDefaultInsert(users)
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "INSERT INTO \"users\" DEFAULT VALUES",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "INSERT INTO `users` () VALUES ()",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "INSERT INTO \"users\" DEFAULT VALUES",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Insert(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Empty(t, rendered.Args())
+		})
+	}
+
+	_, err = render.Insert(dialect.Spanner(), statement)
+	require.ErrorContains(t, err, "default-values INSERT is not supported")
+}
+
 func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
 	users, id, email := writeTable(t)
 	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})

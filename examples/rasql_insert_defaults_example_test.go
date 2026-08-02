@@ -91,7 +91,7 @@ func Example_rasql_insert_defaults() {
 	}
 
 	// Name each database-assigned column. Email remains an explicit empty string.
-	if _, err := rasql.Insert(ctx, client, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
+	if _, err := rasql.InsertWithOptions(ctx, client, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
 		fmt.Printf("failed to insert default user: %s\n", err)
 		return
 	}
