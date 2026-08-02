@@ -44,7 +44,68 @@ func TestGoSourceCompiles(t *testing.T) {
 	require.NoError(t, err)
 	source, err := compiled.GoSource("generated", "UserByID")
 	require.NoError(t, err)
+	requireGeneratedSourceCompiles(t, source)
+}
 
+func TestGoSourceCompilesWithCollidingGeneratedNames(t *testing.T) {
+	parsed, err := template.Parse("user_by_values", "SELECT id FROM users WHERE first = {{bind \"render\"}} OR second = {{bind \"rasqlrender\"}} OR third = {{bind \"rasqlrender1\"}}")
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	source, err := compiled.GoSource("generated", "rasqlrender2")
+	require.NoError(t, err)
+	requireGeneratedSourceCompiles(t, source)
+}
+
+func TestGoSourceCompilesWithPredeclaredFunctionNames(t *testing.T) {
+	parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+
+	for _, functionName := range []string{"any", "error"} {
+		t.Run(functionName, func(t *testing.T) {
+			source, err := compiled.GoSource("generated", functionName)
+			require.NoError(t, err)
+			requireGeneratedSourceCompiles(t, source)
+		})
+	}
+}
+
+func TestGoSourceRejectsNamesThatCannotCompile(t *testing.T) {
+	parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name         string
+		packageName  string
+		functionName string
+	}{
+		{name: "blank package", packageName: "_", functionName: "UserByID"},
+		{name: "blank function", packageName: "generated", functionName: "_"},
+		{name: "init function", packageName: "generated", functionName: "init"},
+		{name: "main entry point", packageName: "main", functionName: "main"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := compiled.GoSource(test.packageName, test.functionName)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestGoSourceRejectsBlankParameterName(t *testing.T) {
+	parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"_\"}}")
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	_, err = compiled.GoSource("generated", "UserByID")
+	require.Error(t, err)
+}
+
+func requireGeneratedSourceCompiles(t *testing.T, source []byte) {
+	t.Helper()
 	directory, err := os.MkdirTemp(".", ".tmp-template-*")
 	require.NoError(t, err)
 	t.Cleanup(func() {

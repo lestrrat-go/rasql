@@ -225,7 +225,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen query \
   -output internal/store/user_by_email_gen.go
 ```
 
-Every flag is required. `-dialect` accepts `postgresql` (or `postgres`), `mysql`, `sqlite`, and `spanner`.
+Every flag is required. `-dialect` accepts `postgresql` (or `postgres`), `mysql`, `sqlite`, and `spanner`. The package, function, and bind names must be usable Go identifiers. The function name cannot be `init`, and `main` cannot be generated in package `main`.
 
 The input is a static template, so it holds SQL text plus `{{bind "name"}}` actions and nothing else:
 
