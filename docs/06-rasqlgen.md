@@ -112,7 +112,7 @@ A generated row type carries no `rasql` tags. The generator already knows which 
 | `row.Decoder` | `DecodeRow(row.Row) error` | `row.Decode`, and through it every typed select. |
 | `rasql.ColumnValuer` | `ColumnValue(name string) (any, bool)` | `rasql.Insert` and `rasql.Update`. |
 
-`row.Decode` looks for `DecodeRow` first and falls back to tags and snake-cased field names, and `Insert` and `Update` look for `ColumnValue` the same way. Embedding is the one place where the two directions differ, which the trap below covers. Nothing about hand-written row types changes: tags stay the documented default for them, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). Writing both methods by hand states the mapping three times — once in the fields, once in `DecodeRow`, once in `ColumnValue` — and nothing checks that the three agree, which is a job for the generator rather than for a person.
+`row.Decode` looks for `DecodeRow` first and falls back to tags and snake-cased field names, and `Insert` and `Update` look for `ColumnValue` the same way. Neither direction follows a mapping method promoted from an embedded field blindly, which the trap below covers. Nothing about hand-written row types changes: tags stay the documented default for them, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). Writing both methods by hand states the mapping three times — once in the fields, once in `DecodeRow`, once in `ColumnValue` — and nothing checks that the three agree, which is a job for the generator rather than for a person.
 
 `DecodeRow` is still the escape hatch for a mapping a tag cannot express, because it is ordinary code and can do more than name a column. A field computed from two columns is the usual case:
 
@@ -143,13 +143,15 @@ One trap is worth stating plainly. Embedding a row type promotes its `DecodeRow`
 ```go
 type userWithRole struct {
 	store.UsersRow        // promotes DecodeRow
-	Role           string // never assigned
+	Role           string
 }
 ```
 
-Decoding a `userWithRole` runs `UsersRow.DecodeRow`, fills the embedded fields, and leaves `Role` at its zero value without reporting an error. Declare a `DecodeRow` on the outer type that calls the embedded one and then assigns the extra fields, or give the outer type its own named field instead of embedding.
+`row.Decode` does not follow that promotion blindly. It maps a struct that embeds a `row.Decoder`, declares mappable fields of its own, and declares no `DecodeRow` by those fields, because a promoted `DecodeRow` fills the embedded fields and knows nothing about the ones declared around them. Decoding a `userWithRole` therefore maps the embedded `store.UsersRow` like any other field, and fails with `row: column "users_row" is not present` instead of leaving `Role` at its zero value without reporting anything. Declare a `DecodeRow` on the outer type that calls the embedded one and then assigns the extra fields, or give the outer type its own named field instead of embedding. Tagging the embedded field `rasql:"-"` maps the wrapper by its own fields alone and leaves the embedded ones zero. A wrapper that declares no field of its own is still mapped by its promoted `DecodeRow`.
 
-Embedding promotes `ColumnValue` in the same way, and the write side does not follow that promotion blindly. `Insert` and `Update` map a struct that embeds a `ColumnValuer`, carries `rasql` tags of its own, and declares no `ColumnValue` by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing, such as the `userWithRole` above, is still mapped by its promoted `ColumnValue`. Declaring `ColumnValue` on the outer type maps a tagged wrapper by method again, because Go dispatches to the declared method rather than to the promoted one, and the tags may stay or go.
+Embedding promotes `ColumnValue` in the same way, and the write side reads it the same way. `Insert` and `Update` map a struct that embeds a `ColumnValuer`, carries `rasql` tags of its own, and declares no `ColumnValue` by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing, such as the `userWithRole` above, is still mapped by its promoted `ColumnValue`. Declaring the mapping method on the outer type — `DecodeRow` for reads, `ColumnValue` for writes — maps such a wrapper by method again, because Go dispatches to the declared method rather than to the promoted one, and the tags may stay or go.
+
+Which fields put a wrapper on the field path is where the two directions still differ. The read side maps tagged fields and untagged exported ones, so any exported field of its own is enough — embedded or named, as long as it is not the embedded field supplying the promoted `DecodeRow` — while the write side reads tags only.
 
 ### What the column fields catch
 
