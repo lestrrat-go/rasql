@@ -19,6 +19,7 @@ The tables in this section enumerate every operation the public API offers. The 
 | `SELECT` decoded from a table with no row type | `rasql.DecodeQueryFrom[R](client, queryTable)` | `TypedSelectBuilder[R]` |
 | `SELECT` without decoding | `client.SelectFrom(table.QueryTable())` | `SelectBuilder`, yielding `row.Row` |
 | `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
+| `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, client, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
 | `UPDATE` of one typed row by primary key | `rasql.Update(ctx, client, table, value)` | `sql.Result` |
 | `DELETE` by predicate | `rasql.DeleteFrom(client, table)` | `DeleteBuilder` |
 | `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |

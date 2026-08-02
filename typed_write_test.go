@@ -1,6 +1,8 @@
 package rasql_test
 
 import (
+	"context"
+	"database/sql"
 	"reflect"
 	"runtime"
 	"strings"
@@ -12,6 +14,10 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+type insertCompatibilityUser struct{}
+
+var _ func(context.Context, rasql.Client, rasql.Table[insertCompatibilityUser], insertCompatibilityUser) (sql.Result, error) = rasql.Insert[insertCompatibilityUser]
 
 func TestInsertExecutesTypedRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -47,6 +53,115 @@ func TestInsertExecutesTypedRow(t *testing.T) {
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rows)
+}
+
+// generatedDefaultUser has the method-based mapping rasqlgen writes for a row
+// type, including fields whose values come from database defaults on insert.
+type generatedDefaultUser struct {
+	ID     int64
+	Email  string
+	Status string
+}
+
+func (u generatedDefaultUser) ColumnValue(name string) (any, bool) {
+	switch name {
+	case "id":
+		return u.ID, true
+	case "email":
+		return u.Email, true
+	case "status":
+		return u.Status, true
+	}
+	return nil, false
+}
+
+func TestInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[generatedDefaultUser](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger, Default: "generated_user_id()"},
+			{Name: "email", Type: schema.TypeText},
+			{Name: "status", Type: schema.TypeText, Default: "'pending'"},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	// id and status are omitted even though the generated row maps every
+	// column. email is bound as an empty string, proving its zero value is not
+	// mistaken for an absent value.
+	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES ($1)").
+		WithArgs("").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	_, err = rasql.InsertWithOptions(
+		t.Context(),
+		client,
+		users,
+		generatedDefaultUser{Email: ""},
+		rasql.DefaultColumns("id", "status"),
+	)
+	require.NoError(t, err)
+}
+
+func TestInsertRejectsUnknownDefaultColumn(t *testing.T) {
+	table := schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[user](table)
+	require.NoError(t, err)
+
+	_, err = rasql.InsertWithOptions(t.Context(), rasql.Client{}, users, user{}, rasql.DefaultColumns("missing"))
+	require.ErrorContains(t, err, "has no column \"missing\" selected for a database default")
+}
+
+func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[user](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger, Default: "next_user_id()"},
+			{Name: "email", Type: schema.TypeText, Default: "'unknown'"},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	mock.ExpectExec("INSERT INTO \"users\" DEFAULT VALUES").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	_, err = rasql.InsertWithOptions(t.Context(), client, users, user{}, rasql.DefaultColumns("id", "email"))
+	require.NoError(t, err)
 }
 
 func TestUpdateExecutesTypedRow(t *testing.T) {
