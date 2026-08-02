@@ -21,6 +21,20 @@ func New(client rasql.Client) Repository {
 
 // SeedDemo writes the example's initial Taskboard data.
 func (repository Repository) SeedDemo(ctx context.Context) error {
+	existing, err := rasql.DecodeFrom[member](repository.client, members).
+		Project(
+			query.Project(members.ID),
+			query.Project(members.Name),
+			query.Project(members.Email),
+		).
+		Limit(1).
+		All(ctx)
+	if err != nil {
+		return fmt.Errorf("read existing demo members: %w", err)
+	}
+	if len(existing) > 0 {
+		return nil
+	}
 	for _, member := range []member{
 		{ID: 1, Name: "Ada Lovelace", Email: "ada@example.com"},
 		{ID: 2, Name: "Grace Hopper", Email: "grace@example.com"},

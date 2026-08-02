@@ -2,143 +2,15 @@ package migrate_test
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/migrate"
-	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
-
-func TestCatalogOrdersInitialMigrationByForeignKey(t *testing.T) {
-	users := schema.Table{
-		Name: "users",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-		},
-		PrimaryKey: []string{"id"},
-	}
-	orders := schema.Table{
-		Name: "orders",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-		},
-		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
-			Name:              "orders_user_fk",
-			Columns:           []string{"user_id"},
-			ReferencedTable:   "users",
-			ReferencedColumns: []string{"id"},
-		}},
-	}
-	catalog, err := migrate.NewCatalog(orders, users)
-	require.NoError(t, err)
-
-	migration, err := catalog.InitialMigration("001_initial")
-	require.NoError(t, err)
-	require.Len(t, migration.Operations, 2)
-	first, ok := migration.Operations[0].(migrate.CreateTable)
-	require.True(t, ok)
-	require.Equal(t, "users", first.Table.Name)
-	second, ok := migration.Operations[1].(migrate.CreateTable)
-	require.True(t, ok)
-	require.Equal(t, "orders", second.Table.Name)
-
-	tables := catalog.Tables()
-	tables[0].Name = "changed"
-	require.Equal(t, "orders", catalog.Tables()[0].Name)
-}
-
-func TestCatalogRejectsInvalidForeignKeyTargetsAndCycles(t *testing.T) {
-	missingTarget, err := migrate.NewCatalog(schema.Table{
-		Name: "orders",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-		},
-		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
-			Columns:           []string{"user_id"},
-			ReferencedTable:   "users",
-			ReferencedColumns: []string{"id"},
-		}},
-	})
-	require.ErrorContains(t, err, "outside the catalog")
-	require.Equal(t, migrate.Catalog{}, missingTarget)
-
-	first := schema.Table{
-		Name: "first",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "second_id", Type: schema.TypeInteger},
-		},
-		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
-			Columns:           []string{"second_id"},
-			ReferencedTable:   "second",
-			ReferencedColumns: []string{"id"},
-		}},
-	}
-	second := schema.Table{
-		Name: "second",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "first_id", Type: schema.TypeInteger},
-		},
-		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
-			Columns:           []string{"first_id"},
-			ReferencedTable:   "first",
-			ReferencedColumns: []string{"id"},
-		}},
-	}
-	catalog, err := migrate.NewCatalog(first, second)
-	require.NoError(t, err)
-	_, err = catalog.InitialMigration("001_initial")
-	require.ErrorContains(t, err, "foreign-key cycle")
-}
-
-func TestMigrationRenderUsesDialectDDL(t *testing.T) {
-	migration := migrate.Migration{
-		ID: "002_user_indexes",
-		Operations: []migrate.Operation{
-			migrate.AddColumn{Table: "users", Column: schema.Column{Name: "nickname", Type: schema.TypeText, Nullable: true}},
-			migrate.CreateIndex{Table: "users", Index: schema.Index{Name: "users_nickname_idx", Columns: []string{"nickname"}}},
-			migrate.DropIndex{Table: "users", Name: "users_legacy_idx"},
-		},
-	}
-
-	postgres, err := migration.Render(dialect.PostgreSQL())
-	require.NoError(t, err)
-	require.Equal(t, []string{
-		`ALTER TABLE "users" ADD COLUMN "nickname" TEXT`,
-		`CREATE INDEX "users_nickname_idx" ON "users" ("nickname")`,
-		`DROP INDEX "users_legacy_idx"`,
-	}, statements(postgres))
-
-	mysql, err := migration.Render(dialect.MySQL())
-	require.NoError(t, err)
-	require.Equal(t, []string{
-		"ALTER TABLE `users` ADD COLUMN `nickname` TEXT",
-		"CREATE INDEX `users_nickname_idx` ON `users` (`nickname`)",
-		"DROP INDEX `users_legacy_idx` ON `users`",
-	}, statements(mysql))
-}
-
-func TestMigrationRejectsUnsafeAddColumn(t *testing.T) {
-	migration := migrate.Migration{
-		ID: "002_add_required_column",
-		Operations: []migrate.Operation{
-			migrate.AddColumn{Table: "users", Column: schema.Column{Name: "name", Type: schema.TypeText}},
-		},
-	}
-	_, err := migration.Render(dialect.SQLite())
-	require.ErrorContains(t, err, "must be nullable or have a default")
-}
 
 func TestRunnerAppliesSQLiteMigrationsAndDetectsDrift(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
@@ -150,24 +22,8 @@ func TestRunnerAppliesSQLiteMigrationsAndDetectsDrift(t *testing.T) {
 	runner, err := migrate.New(database, dialect.SQLite())
 	require.NoError(t, err)
 
-	createUsers := migrate.Migration{
-		ID: "001_create_users",
-		Operations: []migrate.Operation{
-			migrate.CreateTable{Table: schema.Table{
-				Name: "users",
-				Columns: []schema.Column{
-					{Name: "id", Type: schema.TypeInteger},
-				},
-				PrimaryKey: []string{"id"},
-			}},
-		},
-	}
-	addNickname := migrate.Migration{
-		ID: "002_add_nickname",
-		Operations: []migrate.Operation{
-			migrate.AddColumn{Table: "users", Column: schema.Column{Name: "nickname", Type: schema.TypeText, Nullable: true}},
-		},
-	}
+	createUsers := sqlMigration("001_create_users", `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY)`)
+	addNickname := sqlMigration("002_add_nickname", `ALTER TABLE "users" ADD COLUMN "nickname" TEXT`)
 
 	require.NoError(t, runner.Apply(t.Context(), addNickname, createUsers))
 	require.NoError(t, runner.Apply(t.Context(), createUsers, addNickname))
@@ -189,9 +45,7 @@ func TestRunnerAppliesSQLiteMigrationsAndDetectsDrift(t *testing.T) {
 	require.Equal(t, []string{"001_create_users", "002_add_nickname"}, ids)
 
 	drifted := addNickname
-	drifted.Operations = []migrate.Operation{
-		migrate.AddColumn{Table: "users", Column: schema.Column{Name: "display_name", Type: schema.TypeText, Nullable: true}},
-	}
+	drifted.Statements[0].Source = "002_display_name.sql"
 	err = runner.Apply(t.Context(), createUsers, drifted)
 	require.ErrorContains(t, err, "checksum does not match")
 }
@@ -206,18 +60,11 @@ func TestRunnerRollsBackFailedSQLiteMigration(t *testing.T) {
 	runner, err := migrate.New(database, dialect.SQLite())
 	require.NoError(t, err)
 
-	failing := migrate.Migration{
-		ID: "001_create_events",
-		Operations: []migrate.Operation{
-			migrate.CreateTable{Table: schema.Table{
-				Name:       "events",
-				Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
-				PrimaryKey: []string{"id"},
-			}},
-			migrate.CreateIndex{Table: "events", Index: schema.Index{Name: "events_id_idx", Columns: []string{"id"}}},
-			migrate.CreateIndex{Table: "events", Index: schema.Index{Name: "events_id_idx", Columns: []string{"id"}}},
-		},
-	}
+	failing := sqlMigration("001_create_events",
+		`CREATE TABLE "events" ("id" INTEGER PRIMARY KEY)`,
+		`CREATE INDEX "events_id_idx" ON "events" ("id")`,
+		`CREATE INDEX "events_id_idx" ON "events" ("id")`,
+	)
 	err = runner.Apply(t.Context(), failing)
 	require.ErrorContains(t, err, "execute migration")
 
@@ -236,28 +83,9 @@ func TestRunnerRejectsRecordedMigrationAfterAMissingMigration(t *testing.T) {
 	runner, err := migrate.New(database, dialect.SQLite())
 	require.NoError(t, err)
 
-	first := migrate.Migration{
-		ID: "001_create_users",
-		Operations: []migrate.Operation{
-			migrate.CreateTable{Table: schema.Table{
-				Name:       "users",
-				Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
-				PrimaryKey: []string{"id"},
-			}},
-		},
-	}
-	second := migrate.Migration{
-		ID: "002_add_nickname",
-		Operations: []migrate.Operation{
-			migrate.AddColumn{Table: "users", Column: schema.Column{Name: "nickname", Type: schema.TypeText, Nullable: true}},
-		},
-	}
-	third := migrate.Migration{
-		ID: "003_add_display_name",
-		Operations: []migrate.Operation{
-			migrate.AddColumn{Table: "users", Column: schema.Column{Name: "display_name", Type: schema.TypeText, Nullable: true}},
-		},
-	}
+	first := sqlMigration("001_create_users", `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY)`)
+	second := sqlMigration("002_add_nickname", `ALTER TABLE "users" ADD COLUMN "nickname" TEXT`)
+	third := sqlMigration("003_add_display_name", `ALTER TABLE "users" ADD COLUMN "display_name" TEXT`)
 	require.NoError(t, runner.Apply(t.Context(), first, third))
 	err = runner.Apply(t.Context(), first, second, third)
 	require.ErrorContains(t, err, "recorded after a missing migration")
@@ -272,16 +100,42 @@ func TestRunnerRejectsUnspecifiedRecordedMigration(t *testing.T) {
 	database.SetMaxOpenConns(1)
 	runner, err := migrate.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	first := createUsersMigration()
-	second := migrate.Migration{
-		ID: "002_add_nickname",
-		Operations: []migrate.Operation{
-			migrate.AddColumn{Table: "users", Column: schema.Column{Name: "nickname", Type: schema.TypeText, Nullable: true}},
-		},
-	}
+	first := sqlMigration("001_create_users", `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY)`)
+	second := sqlMigration("002_add_nickname", `ALTER TABLE "users" ADD COLUMN "nickname" TEXT`)
 	require.NoError(t, runner.Apply(t.Context(), first, second))
 	err = runner.Apply(t.Context(), first)
 	require.ErrorContains(t, err, "was not supplied")
+}
+
+func TestRunnerStatusReportsPendingAppliedChangedAndUnknown(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+	runner, err := migrate.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	migration := sqlMigration("001_create_users", `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY)`)
+
+	status, err := runner.Status(t.Context(), migration)
+	require.NoError(t, err)
+	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusPending}}, status)
+	require.NoError(t, runner.Apply(t.Context(), migration))
+
+	status, err = runner.Status(t.Context(), migration)
+	require.NoError(t, err)
+	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusApplied}}, status)
+
+	changed := migration
+	changed.Statements[0].SQL = `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY, "email" TEXT)`
+	status, err = runner.Status(t.Context(), changed)
+	require.NoError(t, err)
+	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusChanged}}, status)
+
+	status, err = runner.Status(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusUnknown}}, status)
 }
 
 func TestRunnerUsesPostgreSQLTransactionAndHistoryLock(t *testing.T) {
@@ -294,6 +148,7 @@ func TestRunnerUsesPostgreSQLTransactionAndHistoryLock(t *testing.T) {
 	})
 	runner, err := migrate.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
+	migration := sqlMigration("001_create_users", `CREATE TABLE "users" ("id" BIGINT NOT NULL, PRIMARY KEY ("id"))`)
 
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS "rasql_schema_migrations" ("id" TEXT NOT NULL PRIMARY KEY, "checksum" TEXT NOT NULL, "applied_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -302,14 +157,14 @@ func TestRunnerUsesPostgreSQLTransactionAndHistoryLock(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT "id", "checksum" FROM "rasql_schema_migrations" ORDER BY "id"`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum"}))
-	mock.ExpectExec(`CREATE TABLE "users" ("id" BIGINT NOT NULL, PRIMARY KEY ("id"))`).
+	mock.ExpectExec(migration.Statements[0].SQL).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO "rasql_schema_migrations" ("id", "checksum") VALUES ($1, $2)`).
 		WithArgs("001_create_users", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, runner.Apply(t.Context(), createUsersMigration()))
+	require.NoError(t, runner.Apply(t.Context(), migration))
 }
 
 func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
@@ -322,6 +177,7 @@ func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
 	})
 	runner, err := migrate.New(database, dialect.MySQL())
 	require.NoError(t, err)
+	migration := sqlMigration("001_create_users", "CREATE TABLE `users` (`id` BIGINT NOT NULL, PRIMARY KEY (`id`))")
 
 	mock.ExpectQuery("SELECT GET_LOCK(?, ?)").
 		WithArgs("rasql_schema_migrations", 30).
@@ -330,7 +186,7 @@ func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT `id`, `checksum` FROM `rasql_schema_migrations` ORDER BY `id`").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum"}))
-	mock.ExpectExec("CREATE TABLE `users` (`id` BIGINT NOT NULL, PRIMARY KEY (`id`))").
+	mock.ExpectExec(migration.Statements[0].SQL).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO `rasql_schema_migrations` (`id`, `checksum`) VALUES (?, ?)").
 		WithArgs("001_create_users", sqlmock.AnyArg()).
@@ -339,7 +195,19 @@ func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
 		WithArgs("rasql_schema_migrations").
 		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
 
-	require.NoError(t, runner.Apply(t.Context(), createUsersMigration()))
+	require.NoError(t, runner.Apply(t.Context(), migration))
+}
+
+func TestRunnerRejectsInvalidSQLSource(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	runner, err := migrate.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	err = runner.Apply(t.Context(), migrate.Migration{ID: "001", Statements: []migrate.Statement{{Source: "001.sql"}}})
+	require.ErrorContains(t, err, "is empty")
 }
 
 func TestNewRejectsUnsupportedRunnerDialects(t *testing.T) {
@@ -352,23 +220,13 @@ func TestNewRejectsUnsupportedRunnerDialects(t *testing.T) {
 	require.ErrorContains(t, err, "not supported")
 }
 
-func statements(rendered []render.Statement) []string {
-	statements := make([]string, len(rendered))
-	for index, statement := range rendered {
-		statements[index] = statement.SQL()
+func sqlMigration(id string, sqlSources ...string) migrate.Migration {
+	statements := make([]migrate.Statement, len(sqlSources))
+	for index, source := range sqlSources {
+		statements[index] = migrate.Statement{
+			Source: fmt.Sprintf("%03d.sql", index+1),
+			SQL:    source,
+		}
 	}
-	return statements
-}
-
-func createUsersMigration() migrate.Migration {
-	return migrate.Migration{
-		ID: "001_create_users",
-		Operations: []migrate.Operation{
-			migrate.CreateTable{Table: schema.Table{
-				Name:       "users",
-				Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
-				PrimaryKey: []string{"id"},
-			}},
-		},
-	}
+	return migrate.Migration{ID: id, Statements: statements}
 }

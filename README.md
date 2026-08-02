@@ -10,7 +10,7 @@ It gives an application one model for schema definitions, dynamic queries, stati
 * Dynamic query building at runtime.
 * Static query building with templates.
 
-`rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. It also describes and inspects schemas for use in application code and migration planning.
+`rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. Run checked-in SQL migration directories with [`rasqlmigrate`](docs/07-migrations.md), or use the `migrate` package from a separate administrative program. It also describes and inspects schemas for use in application code and migration planning.
 
 ## Requirements
 
@@ -192,7 +192,7 @@ The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since
 
 ## Sample application
 
-The [Taskboard sample](sample/taskboard/) is a standalone HTTP application whose schema descriptors render SQLite DDL through `rasql.Create`. Its Taskboard page shows typed descriptors, inserts, an update, and a joined query in one small application.
+The [Taskboard sample](sample/taskboard/) is a standalone HTTP application whose checked-in SQLite SQL migrations run with `rasqlmigrate` before startup. Its Taskboard page shows typed descriptors, inserts, an update, and a joined query in one small application.
 
 ```sh
 cd sample/taskboard
