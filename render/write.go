@@ -68,6 +68,17 @@ func (r *renderer) writeInsertBase(statement query.Insert) error {
 	}
 	r.builder.WriteString("INSERT INTO ")
 	r.builder.WriteString(table)
+	if statement.UsesDefaultValues() {
+		switch {
+		case r.dialect.Supports(dialect.CapabilityDefaultValues):
+			r.builder.WriteString(" DEFAULT VALUES")
+		case r.dialect.Supports(dialect.CapabilityEmptyInsert):
+			r.builder.WriteString(" () VALUES ()")
+		default:
+			return fmt.Errorf("default-values INSERT is not supported")
+		}
+		return nil
+	}
 	r.builder.WriteString(" (")
 	for i, column := range statement.Columns() {
 		if i > 0 {
@@ -96,6 +107,9 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 	style := r.dialect.UpsertStyle()
 	if !r.dialect.Supports(dialect.CapabilityUpsert) || style == dialect.UpsertUnsupported {
 		return fmt.Errorf("upsert is not supported")
+	}
+	if statement.Insert().UsesDefaultValues() && !r.dialect.Supports(dialect.CapabilityDefaultValuesUpsert) {
+		return fmt.Errorf("default-values upsert is not supported")
 	}
 	if err := r.writeInsertBase(statement.Insert()); err != nil {
 		return err

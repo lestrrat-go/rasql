@@ -21,6 +21,13 @@ func TestWriteStatementsValidate(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, insert.Validate())
 
+	defaultInsert, err := query.NewDefaultInsert(users)
+	require.NoError(t, err)
+	require.True(t, defaultInsert.UsesDefaultValues())
+	require.Empty(t, defaultInsert.Columns())
+	require.Empty(t, defaultInsert.Values())
+	require.NoError(t, defaultInsert.Validate())
+
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
 	update, err = update.WithWhere(query.Equal(id, query.Bind(1)))

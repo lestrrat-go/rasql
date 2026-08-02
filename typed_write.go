@@ -28,11 +28,64 @@ type ColumnValuer interface {
 // Value must have one exported tagged field for every table column,
 // or implement ColumnValuer.
 func Insert[T any](ctx context.Context, client Client, table Table[T], value T) (sql.Result, error) {
-	statement, err := typedInsert(table, value)
+	return InsertWithOptions(ctx, client, table, value)
+}
+
+// InsertWithOptions encodes value's rasql-tagged fields and writes it to table.
+// Value must have one exported tagged field for every table column,
+// or implement ColumnValuer. DefaultColumns omits named columns so the
+// database applies their defaults.
+func InsertWithOptions[T any](ctx context.Context, client Client, table Table[T], value T, options ...InsertOption) (sql.Result, error) {
+	defaults, err := insertDefaults(options)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: configure INSERT: %w", err)
+	}
+	statement, err := typedInsert(table, value, defaults)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: build INSERT: %w", err)
 	}
 	return client.Exec(ctx, statement)
+}
+
+// InsertOption configures InsertWithOptions.
+type InsertOption interface {
+	applyInsert(*insertConfig) error
+}
+
+type insertConfig struct {
+	defaultColumns map[string]struct{}
+}
+
+type defaultColumnsOption []string
+
+// DefaultColumns omits columns from an INSERT so the database applies their
+// defaults. Every selected column must belong to the target table. A selected
+// column's Go value is ignored, while unselected zero values are still bound.
+func DefaultColumns(columns ...string) InsertOption {
+	return defaultColumnsOption(append([]string(nil), columns...))
+}
+
+func (columns defaultColumnsOption) applyInsert(config *insertConfig) error {
+	for _, name := range columns {
+		if _, exists := config.defaultColumns[name]; exists {
+			return fmt.Errorf("column %q is selected more than once for a database default", name)
+		}
+		config.defaultColumns[name] = struct{}{}
+	}
+	return nil
+}
+
+func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
+	config := insertConfig{defaultColumns: make(map[string]struct{})}
+	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("insert option must not be nil")
+		}
+		if err := option.applyInsert(&config); err != nil {
+			return nil, err
+		}
+	}
+	return config.defaultColumns, nil
 }
 
 // Update encodes value's rasql-tagged fields and updates its table row.
@@ -47,21 +100,33 @@ func Update[T any](ctx context.Context, client Client, table Table[T], value T) 
 	return client.Exec(ctx, statement)
 }
 
-func typedInsert[T any](table Table[T], value T) (query.Insert, error) {
+func typedInsert[T any](table Table[T], value T, defaultColumns map[string]struct{}) (query.Insert, error) {
 	reference, fields, err := typedRowFields(table, value)
 	if err != nil {
 		return query.Insert{}, err
 	}
 	definition := reference.Definition()
-	columns := make([]query.Column, len(definition.Columns))
-	values := make([]query.Expression, len(definition.Columns))
-	for index, definitionColumn := range definition.Columns {
+	for name := range defaultColumns {
+		if _, exists := definition.Column(name); !exists {
+			return query.Insert{}, fmt.Errorf("table %q has no column %q selected for a database default", definition.Name, name)
+		}
+	}
+
+	columns := make([]query.Column, 0, len(definition.Columns)-len(defaultColumns))
+	values := make([]query.Expression, 0, len(definition.Columns)-len(defaultColumns))
+	for _, definitionColumn := range definition.Columns {
+		if _, useDefault := defaultColumns[definitionColumn.Name]; useDefault {
+			continue
+		}
 		column, err := reference.Column(definitionColumn.Name)
 		if err != nil {
 			return query.Insert{}, err
 		}
-		columns[index] = column
-		values[index] = query.Bind(fields[definitionColumn.Name])
+		columns = append(columns, column)
+		values = append(values, query.Bind(fields[definitionColumn.Name]))
+	}
+	if len(columns) == 0 {
+		return query.NewDefaultInsert(reference)
 	}
 	return query.NewInsert(reference, columns, values)
 }
