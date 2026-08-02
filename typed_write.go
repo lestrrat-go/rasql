@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/lestrrat-go/rasql/internal/method"
 	"github.com/lestrrat-go/rasql/query"
 )
 
@@ -285,7 +286,7 @@ func tagsShadowEmbeddedValuer(record reflect.Value) (bool, error) {
 	if !embedded || !tagged {
 		return false, nil
 	}
-	declared, err := declaresMethod(recordType, "ColumnValue")
+	declared, err := method.Declared(recordType, "ColumnValue")
 	if err != nil {
 		return false, err
 	}
