@@ -61,7 +61,7 @@ func (repository Repository) SeedDemo(ctx context.Context) error {
 
 // OpenTasks returns the unfinished tasks for projectID in display order.
 func (repository Repository) OpenTasks(ctx context.Context, projectID int64) ([]taskboard.Summary, error) {
-	rows, err := rasql.DecodeFrom[taskboard.Summary](repository.client, tasks).
+	return rasql.DecodeFrom[taskboard.Summary](repository.client, tasks).
 		Join(rasql.InnerJoin(projects, query.Equal(tasks.ProjectID, projects.ID))).
 		Project(
 			query.Project(tasks.Title),
@@ -72,17 +72,5 @@ func (repository Repository) OpenTasks(ctx context.Context, projectID int64) ([]
 			query.NotEqual(tasks.Status, query.Bind("done")),
 		)).
 		Order(query.Asc(tasks.Priority), query.Asc(tasks.ID)).
-		Query(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]taskboard.Summary, 0)
-	for task, err := range rows {
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, task)
-	}
-	return result, nil
+		All(ctx)
 }
