@@ -10,6 +10,7 @@ These pages explain how to use `rasql` in an application. For what `rasql` is an
 4. [Writing rows](04-writing.md) creates tables and inserts, updates, or deletes rows.
 5. [Static templates](05-templates.md) compiles fixed SQL text with named binds.
 6. [`rasqlgen`](06-rasqlgen.md) generates Go source from a live database, a schema snapshot, or a template.
+7. [Migrations](07-migrations.md) applies forward-only DDL migrations.
 
 Pages 3 through 5 are independent of each other. Read the first two, then jump to whichever fits the task.
 
