@@ -90,6 +90,10 @@ func runSchema(args []string) error {
 		if err := json.Unmarshal(data, &tables); err != nil {
 			return fmt.Errorf("decode schema input: %w", err)
 		}
+		tables, err = filterTables(tables, tableNames)
+		if err != nil {
+			return err
+		}
 	case *dsn != "":
 		if len(tableNames) == 0 {
 			return errors.New("schema with -dsn requires at least one -table")
@@ -137,6 +141,31 @@ func inspectTables(ctx context.Context, inspector inspect.Inspector, names []str
 		tables[index] = table
 	}
 	return tables, nil
+}
+
+func filterTables(tables []schema.Table, names []string) ([]schema.Table, error) {
+	if len(names) == 0 {
+		return tables, nil
+	}
+	requested := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		requested[name] = struct{}{}
+	}
+	filtered := make([]schema.Table, 0, len(tables))
+	found := make(map[string]struct{}, len(names))
+	for _, table := range tables {
+		if _, ok := requested[table.Name]; !ok {
+			continue
+		}
+		filtered = append(filtered, table)
+		found[table.Name] = struct{}{}
+	}
+	for _, name := range names {
+		if _, ok := found[name]; !ok {
+			return nil, fmt.Errorf("schema input has no table %q", name)
+		}
+	}
+	return filtered, nil
 }
 
 type tableNames []string
