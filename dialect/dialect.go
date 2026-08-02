@@ -16,6 +16,7 @@ const (
 	CapabilityConflictTarget
 	CapabilityDefaultValues
 	CapabilityEmptyInsert
+	CapabilityDefaultValuesUpsert
 )
 
 // PrimaryKeyStyle controls where CREATE TABLE renders its primary key.
@@ -54,7 +55,7 @@ func PostgreSQL() Dialect {
 		placeholder:  dollarPlaceholder,
 		primaryKey:   PrimaryKeyInline,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
 			schema.TypeInteger: "BIGINT",
@@ -76,7 +77,7 @@ func MySQL() Dialect {
 		placeholder:  questionPlaceholder,
 		primaryKey:   PrimaryKeyInline,
 		upsert:       UpsertDuplicateKey,
-		capabilities: CapabilityUpsert | CapabilityEmptyInsert,
+		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
 			schema.TypeInteger: "BIGINT",

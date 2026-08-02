@@ -1,6 +1,7 @@
 package render_test
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -8,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
@@ -164,6 +166,52 @@ func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
 
 	_, err = render.Upsert(dialect.Spanner(), statement)
 	require.Error(t, err)
+}
+
+func TestSQLiteUpsertExecutes(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	users, id, email := writeTable(t)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY, \"email\" TEXT NOT NULL)")
+	require.NoError(t, err)
+
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+	rendered, err := render.Upsert(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), rendered.SQL(), rendered.Args()...)
+	require.NoError(t, err)
+
+	insert, err = query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("grace@example.com")})
+	require.NoError(t, err)
+	statement, err = query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+	rendered, err = render.Upsert(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), rendered.SQL(), rendered.Args()...)
+	require.NoError(t, err)
+
+	var actual string
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT \"email\" FROM \"users\" WHERE \"id\" = 1").Scan(&actual))
+	require.Equal(t, "grace@example.com", actual)
+}
+
+func TestSQLiteDefaultValuesUpsertIsRejected(t *testing.T) {
+	users, id, email := writeTable(t)
+	insert, err := query.NewDefaultInsert(users)
+	require.NoError(t, err)
+	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+
+	_, err = render.Upsert(dialect.SQLite(), statement)
+	require.ErrorContains(t, err, "default-values upsert is not supported")
 }
 
 func writeTable(t *testing.T) (query.Table, query.Column, query.Column) {

@@ -108,6 +108,9 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 	if !r.dialect.Supports(dialect.CapabilityUpsert) || style == dialect.UpsertUnsupported {
 		return fmt.Errorf("upsert is not supported")
 	}
+	if statement.Insert().UsesDefaultValues() && !r.dialect.Supports(dialect.CapabilityDefaultValuesUpsert) {
+		return fmt.Errorf("default-values upsert is not supported")
+	}
 	if err := r.writeInsertBase(statement.Insert()); err != nil {
 		return err
 	}
