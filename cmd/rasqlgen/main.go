@@ -147,17 +147,23 @@ func filterTables(tables []schema.Table, names []string) ([]schema.Table, error)
 	if len(names) == 0 {
 		return tables, nil
 	}
-	byName := make(map[string]schema.Table, len(tables))
-	for _, table := range tables {
-		byName[table.Name] = table
+	requested := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		requested[name] = struct{}{}
 	}
-	filtered := make([]schema.Table, len(names))
-	for index, name := range names {
-		table, ok := byName[name]
-		if !ok {
+	filtered := make([]schema.Table, 0, len(tables))
+	found := make(map[string]struct{}, len(names))
+	for _, table := range tables {
+		if _, ok := requested[table.Name]; !ok {
+			continue
+		}
+		filtered = append(filtered, table)
+		found[table.Name] = struct{}{}
+	}
+	for _, name := range names {
+		if _, ok := found[name]; !ok {
 			return nil, fmt.Errorf("schema input has no table %q", name)
 		}
-		filtered[index] = table
 	}
 	return filtered, nil
 }

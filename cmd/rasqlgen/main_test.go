@@ -51,6 +51,26 @@ func TestRunSchemaFiltersInputTables(t *testing.T) {
 	require.NotContains(t, string(source), "func Orders() OrdersTable {")
 }
 
+func TestRunSchemaRejectsDuplicateFilteredInputTables(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	input := filepath.Join(directory, "schema.json")
+	output := filepath.Join(directory, "schema.go")
+	data := []byte(`[
+		{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
+		{"Name":"users","Columns":[{"Name":"email","Type":"text"}],"PrimaryKey":["email"]}
+	]`)
+	require.NoError(t, os.WriteFile(input, data, 0o600))
+
+	err = run([]string{"schema", "-input", input, "-table", "users", "-package", "generated", "-output", output})
+	require.ErrorContains(t, err, `generate: table "users" duplicates generated name "Users"`)
+	_, err = os.Stat(output)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestRunSchemaRejectsUnknownInputTable(t *testing.T) {
 	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
 	require.NoError(t, err)
