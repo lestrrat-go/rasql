@@ -10,7 +10,7 @@ It gives an application one model for schema definitions, dynamic queries, stati
 * Dynamic query building at runtime.
 * Static query building with templates.
 
-`rasql` does not plan or run migrations. It describes and inspects schemas, and provides the pieces a migration tool can build on.
+`rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. It also describes and inspects schemas for use in application code and migration planning.
 
 ## Requirements
 
@@ -211,6 +211,7 @@ Open <http://127.0.0.1:8080/> in another terminal.
 | [Writing rows](docs/04-writing.md) | Creating tables and inserting, updating, or deleting rows. |
 | [Static templates](docs/05-templates.md) | Compiling SQL text with named binds into parameterized statements. |
 | [`rasqlgen`](docs/06-rasqlgen.md) | Generating Go source from a database, a schema snapshot, or a template. |
+| [Migrations](docs/07-migrations.md) | Applying ordered forward-only DDL migrations. |
 
 The API reference lives at [pkg.go.dev](https://pkg.go.dev/github.com/lestrrat-go/rasql). Each code block that links to a source file is a runnable Go example from [`examples/`](examples/), verified by `go test`.
 
@@ -227,6 +228,7 @@ Most applications only import the root `rasql` package plus `dialect` and `schem
 | `render` | Turns a validated query into SQL text and an ordered argument list. |
 | `row` | Provides typed column access and result decoding. |
 | `inspect` | Reads live database metadata into `schema` descriptors. |
+| `migrate` | Plans and executes forward-only DDL migrations with durable history. |
 | `template`, `generate`, `cmd/rasqlgen` | Compile templates and descriptors into deterministic Go source. |
 
 See [DESIGN.md](DESIGN.md) for the architecture and the reasoning behind these boundaries.
