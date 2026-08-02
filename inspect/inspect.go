@@ -210,7 +210,7 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 	}
 	defer rows.Close()
 
-	constraints := make([]schema.UniqueConstraint, 0)
+	var constraints []schema.UniqueConstraint
 	for rows.Next() {
 		var name string
 		var column string
@@ -235,7 +235,7 @@ func (i Inspector) readChecks(ctx context.Context, query string, argument any) (
 	}
 	defer rows.Close()
 
-	checks := make([]schema.CheckConstraint, 0)
+	var checks []schema.CheckConstraint
 	for rows.Next() {
 		var name string
 		var expression string
@@ -277,7 +277,7 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any) 
 	}
 	defer rows.Close()
 
-	indexes := make([]schema.Index, 0)
+	var indexes []schema.Index
 	for rows.Next() {
 		var name string
 		var unique bool
@@ -303,7 +303,7 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 	}
 	defer rows.Close()
 
-	keys := make([]schema.ForeignKey, 0)
+	var keys []schema.ForeignKey
 	for rows.Next() {
 		var name string
 		var column string
