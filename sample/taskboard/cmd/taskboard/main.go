@@ -40,14 +40,14 @@ func main() {
 }
 
 func newServer(ctx context.Context) (web.Server, *sql.DB, error) {
-	database, err := sql.Open("sqlite", ":memory:")
+	database, err := sql.Open("sqlite", databaseDSN())
 	if err != nil {
 		return web.Server{}, nil, fmt.Errorf("open SQLite database: %w", err)
 	}
 	database.SetMaxOpenConns(1)
 
-	// SQLite enables foreign keys per connection, so keep its configuration and
-	// the in-memory database on this single connection.
+	// SQLite enables foreign keys per connection, so keep its configuration on
+	// the application's single connection.
 	if _, err := database.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
 		_ = database.Close()
 		return web.Server{}, nil, fmt.Errorf("enable SQLite foreign keys: %w", err)
@@ -56,10 +56,6 @@ func newServer(ctx context.Context) (web.Server, *sql.DB, error) {
 	if err != nil {
 		_ = database.Close()
 		return web.Server{}, nil, fmt.Errorf("create rasql client: %w", err)
-	}
-	if err := store.CreateSchema(ctx, client); err != nil {
-		_ = database.Close()
-		return web.Server{}, nil, fmt.Errorf("create taskboard schema: %w", err)
 	}
 	repository := store.New(client)
 	if err := repository.SeedDemo(ctx); err != nil {
@@ -74,4 +70,11 @@ func listenAddress() string {
 		return address
 	}
 	return "127.0.0.1:8080"
+}
+
+func databaseDSN() string {
+	if dsn := os.Getenv("TASKBOARD_DSN"); dsn != "" {
+		return dsn
+	}
+	return "taskboard.db"
 }
