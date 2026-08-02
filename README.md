@@ -192,12 +192,14 @@ The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since
 
 ## Sample application
 
-The [Taskboard sample](sample/taskboard/) is a standalone Go module whose schema descriptors render SQLite DDL through `rasql.Create`. It shows typed descriptors, inserts, an update, and a joined query in one small application.
+The [Taskboard sample](sample/taskboard/) is a standalone HTTP application whose schema descriptors render SQLite DDL through `rasql.Create`. Its Taskboard page shows typed descriptors, inserts, an update, and a joined query in one small application.
 
 ```sh
 cd sample/taskboard
 go run ./cmd/taskboard
 ```
+
+Open <http://127.0.0.1:8080/> in another terminal.
 
 ## Documentation
 
