@@ -94,7 +94,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, os.RemoveAll(directory))
 	})
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -108,13 +108,28 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	t.Cleanup(func() {
 		openDatabase = previousOpenDatabase
 	})
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
 			AddRow("id", "bigint", "NO", nil))
-	mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression"}))
+	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname FROM pg_catalog\\.pg_index").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action"}))
 	mock.ExpectClose()
 
 	output := filepath.Join(directory, "schema.go")

@@ -35,7 +35,7 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 	return Inspector{queryer: queryer, dialect: d}, nil
 }
 
-// Table reads the columns and primary key for tableName.
+// Table reads the supported schema metadata for tableName.
 func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, error) {
 	if err := schema.ValidateIdentifier(tableName); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: invalid table name: %w", err)
@@ -63,6 +63,35 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 		return schema.Table{}, err
 	}
 	table := schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
+	if queries.uniqueConstraints != "" {
+		table.UniqueConstraints, err = i.readUniqueConstraints(ctx, queries.uniqueConstraints, queries.argument(tableName))
+		if err != nil {
+			return schema.Table{}, err
+		}
+	}
+	if queries.checks != "" {
+		table.Checks, err = i.readChecks(ctx, queries.checks, queries.argument(tableName))
+		if err != nil {
+			return schema.Table{}, err
+		}
+	}
+	if queries.unsupportedIndexes != "" {
+		if err := i.rejectUnsupportedIndexes(ctx, queries.unsupportedIndexes, queries.argument(tableName)); err != nil {
+			return schema.Table{}, err
+		}
+	}
+	if queries.indexes != "" {
+		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.argument(tableName))
+		if err != nil {
+			return schema.Table{}, err
+		}
+	}
+	if queries.foreignKeys != "" {
+		table.ForeignKeys, err = i.readForeignKeys(ctx, queries.foreignKeys, queries.argument(tableName))
+		if err != nil {
+			return schema.Table{}, err
+		}
+	}
 	if err := table.Validate(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
@@ -174,10 +203,172 @@ func (i Inspector) readPrimaryKey(ctx context.Context, query string, argument an
 	return columns, nil
 }
 
+func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argument any) ([]schema.UniqueConstraint, error) {
+	rows, err := i.queryer.QueryContext(ctx, query, argument)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read unique constraints: %w", err)
+	}
+	defer rows.Close()
+
+	constraints := make([]schema.UniqueConstraint, 0)
+	for rows.Next() {
+		var name string
+		var column string
+		if err := rows.Scan(&name, &column); err != nil {
+			return nil, fmt.Errorf("inspect: scan unique constraint: %w", err)
+		}
+		if len(constraints) == 0 || constraints[len(constraints)-1].Name != name {
+			constraints = append(constraints, schema.UniqueConstraint{Name: name})
+		}
+		constraints[len(constraints)-1].Columns = append(constraints[len(constraints)-1].Columns, column)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate unique constraints: %w", err)
+	}
+	return constraints, nil
+}
+
+func (i Inspector) readChecks(ctx context.Context, query string, argument any) ([]schema.CheckConstraint, error) {
+	rows, err := i.queryer.QueryContext(ctx, query, argument)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read check constraints: %w", err)
+	}
+	defer rows.Close()
+
+	checks := make([]schema.CheckConstraint, 0)
+	for rows.Next() {
+		var name string
+		var expression string
+		if err := rows.Scan(&name, &expression); err != nil {
+			return nil, fmt.Errorf("inspect: scan check constraint: %w", err)
+		}
+		checks = append(checks, schema.CheckConstraint{Name: name, Expression: expression})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate check constraints: %w", err)
+	}
+	return checks, nil
+}
+
+func (i Inspector) rejectUnsupportedIndexes(ctx context.Context, query string, argument any) error {
+	rows, err := i.queryer.QueryContext(ctx, query, argument)
+	if err != nil {
+		return fmt.Errorf("inspect: read unsupported indexes: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("inspect: iterate unsupported indexes: %w", err)
+		}
+		return nil
+	}
+	var name string
+	if err := rows.Scan(&name); err != nil {
+		return fmt.Errorf("inspect: scan unsupported index: %w", err)
+	}
+	return fmt.Errorf("inspect: index %q cannot be represented: rasql supports only non-partial B-tree indexes with simple ascending columns and no included columns", name)
+}
+
+func (i Inspector) readIndexes(ctx context.Context, query string, argument any) ([]schema.Index, error) {
+	rows, err := i.queryer.QueryContext(ctx, query, argument)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read indexes: %w", err)
+	}
+	defer rows.Close()
+
+	indexes := make([]schema.Index, 0)
+	for rows.Next() {
+		var name string
+		var unique bool
+		var column string
+		if err := rows.Scan(&name, &unique, &column); err != nil {
+			return nil, fmt.Errorf("inspect: scan index: %w", err)
+		}
+		if len(indexes) == 0 || indexes[len(indexes)-1].Name != name {
+			indexes = append(indexes, schema.Index{Name: name, Unique: unique})
+		}
+		indexes[len(indexes)-1].Columns = append(indexes[len(indexes)-1].Columns, column)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate indexes: %w", err)
+	}
+	return indexes, nil
+}
+
+func (i Inspector) readForeignKeys(ctx context.Context, query string, argument any) ([]schema.ForeignKey, error) {
+	rows, err := i.queryer.QueryContext(ctx, query, argument)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read foreign keys: %w", err)
+	}
+	defer rows.Close()
+
+	keys := make([]schema.ForeignKey, 0)
+	for rows.Next() {
+		var name string
+		var column string
+		var referencedTable string
+		var referencedColumn string
+		var deleteAction string
+		var updateAction string
+		if err := rows.Scan(&name, &column, &referencedTable, &referencedColumn, &deleteAction, &updateAction); err != nil {
+			return nil, fmt.Errorf("inspect: scan foreign key: %w", err)
+		}
+		onDelete, err := referenceAction(deleteAction)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: foreign key %q: %w", name, err)
+		}
+		onUpdate, err := referenceAction(updateAction)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: foreign key %q: %w", name, err)
+		}
+		if len(keys) == 0 || keys[len(keys)-1].Name != name {
+			keys = append(keys, schema.ForeignKey{
+				Name:            name,
+				ReferencedTable: referencedTable,
+				OnDelete:        onDelete,
+				OnUpdate:        onUpdate,
+			})
+		}
+		key := &keys[len(keys)-1]
+		if key.ReferencedTable != referencedTable || key.OnDelete != onDelete || key.OnUpdate != onUpdate {
+			return nil, fmt.Errorf("inspect: foreign key %q has inconsistent metadata", name)
+		}
+		key.Columns = append(key.Columns, column)
+		key.ReferencedColumns = append(key.ReferencedColumns, referencedColumn)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate foreign keys: %w", err)
+	}
+	return keys, nil
+}
+
+func referenceAction(code string) (schema.ReferenceAction, error) {
+	switch code {
+	case "a":
+		return schema.ReferenceActionNoAction, nil
+	case "r":
+		return schema.ReferenceActionRestrict, nil
+	case "c":
+		return schema.ReferenceActionCascade, nil
+	case "n":
+		return schema.ReferenceActionSetNull, nil
+	case "d":
+		return schema.ReferenceActionSetDefault, nil
+	default:
+		return "", fmt.Errorf("unsupported reference action %q", code)
+	}
+}
+
 type informationQueries struct {
-	columns    string
-	primaryKey string
-	named      bool
+	columns            string
+	primaryKey         string
+	uniqueConstraints  string
+	checks             string
+	unsupportedIndexes string
+	indexes            string
+	foreignKeys        string
+	named              bool
 }
 
 func (q informationQueries) argument(tableName string) any {
@@ -191,8 +382,13 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 	switch name {
 	case "postgresql":
 		return informationQueries{
-			columns:    "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
-			primaryKey: "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
+			columns:            "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
+			primaryKey:         "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
+			uniqueConstraints:  "SELECT constraint_data.conname, attribute.attname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
+			checks:             "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true) FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",
+			unsupportedIndexes: "SELECT index_data.relname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND (index_metadata.indexprs IS NOT NULL OR index_metadata.indpred IS NOT NULL OR index_metadata.indnkeyatts <> index_metadata.indnatts OR access_method.amname <> 'btree' OR EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0)) ORDER BY index_data.relname",
+			indexes:            "SELECT index_data.relname, index_metadata.indisunique, attribute.attname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam JOIN LATERAL unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND index_metadata.indexprs IS NULL AND index_metadata.indpred IS NULL AND index_metadata.indnkeyatts = index_metadata.indnatts AND access_method.amname = 'btree' AND NOT EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) ORDER BY index_data.relname, key_column.ordinal_position",
+			foreignKeys:        "SELECT constraint_data.conname, local_attribute.attname, referenced_table.relname, referenced_attribute.attname, constraint_data.confdeltype, constraint_data.confupdtype FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS referenced_table ON referenced_table.oid = constraint_data.confrelid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS local_key(attribute_number, ordinal_position) ON TRUE JOIN LATERAL unnest(constraint_data.confkey) WITH ORDINALITY AS referenced_key(attribute_number, ordinal_position) ON referenced_key.ordinal_position = local_key.ordinal_position JOIN pg_catalog.pg_attribute AS local_attribute ON local_attribute.attrelid = constraint_data.conrelid AND local_attribute.attnum = local_key.attribute_number JOIN pg_catalog.pg_attribute AS referenced_attribute ON referenced_attribute.attrelid = constraint_data.confrelid AND referenced_attribute.attnum = referenced_key.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'f' ORDER BY constraint_data.conname, local_key.ordinal_position",
 		}, nil
 	case "mysql":
 		return informationQueries{

@@ -30,7 +30,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | `-package` | Package name for the generated file. Required. |
 | `-output` | Path of the generated file. Required. |
 
-Supply either `-dsn` or `-input`, never both. Direct inspection currently supports PostgreSQL only; the command bundles the pgx driver, so nothing needs importing to use `-dsn`.
+Supply either `-dsn` or `-input`, never both. Direct inspection currently supports PostgreSQL only; the command bundles the pgx driver, so nothing needs importing to use `-dsn`. It preserves columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys. It reports an error for an index form that the schema descriptor cannot reproduce.
 
 `-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.Table` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name.
 
