@@ -1,9 +1,6 @@
 package store
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -147,17 +144,3 @@ var tasks = newTasksTable(rasql.MustTable[task](schema.Table{
 		},
 	},
 }))
-
-// CreateSchema renders and executes the Taskboard schema through rasql.
-func CreateSchema(ctx context.Context, client rasql.Client) error {
-	if err := rasql.Create(ctx, client, members); err != nil {
-		return fmt.Errorf("create members table: %w", err)
-	}
-	if err := rasql.Create(ctx, client, projects); err != nil {
-		return fmt.Errorf("create projects table: %w", err)
-	}
-	if err := rasql.Create(ctx, client, tasks); err != nil {
-		return fmt.Errorf("create tasks table: %w", err)
-	}
-	return nil
-}

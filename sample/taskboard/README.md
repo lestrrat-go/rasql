@@ -1,8 +1,9 @@
 # Taskboard sample application
 
-This standalone module runs a small SQLite Taskboard web application. The schema descriptors in `internal/store` create members, projects, tasks, constraints, and an index through `rasql.Create`. The repository uses the same descriptors to insert rows, update a task, and serve the open tasks page.
+This standalone module runs a small SQLite Taskboard web application. The application only opens and queries its database. Run its checked-in SQLite SQL migrations with `rasqlmigrate` before starting it.
 
-- `cmd/taskboard` wires the SQLite database, rasql client, and HTTP server.
+- `cmd/taskboard` opens the SQLite database, then wires the rasql client and HTTP server.
+- `migrations` holds the ordered schema changes applied before the application starts.
 - `internal/store` owns schema descriptors and persistence through rasql.
 - `internal/taskboard` owns the taskboard view model.
 - `internal/web` owns HTTP request handling and server lifecycle.
@@ -10,10 +11,18 @@ This standalone module runs a small SQLite Taskboard web application. The schema
 Run it from this directory:
 
 ```sh
-go run ./cmd/taskboard
+go run ../../cmd/rasqlmigrate plan \
+  -dir migrations/sqlite
+
+go run ../../cmd/rasqlmigrate apply \
+  -dir migrations/sqlite \
+  -dialect sqlite \
+  -dsn taskboard.db
+
+TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 ```
 
-Open <http://127.0.0.1:8080/> to see the Taskboard page. Set `TASKBOARD_ADDR` to use another listener address.
+Open <http://127.0.0.1:8080/> to see the Taskboard page. Set `TASKBOARD_ADDR` to use another listener address. Set `TASKBOARD_DSN` to use a different SQLite database path.
 
 Run its integration test with:
 

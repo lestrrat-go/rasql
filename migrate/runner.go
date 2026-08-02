@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -73,15 +72,15 @@ func NewWithHistoryTable(database *sql.DB, d dialect.Dialect, historyTable strin
 	}, nil
 }
 
-// Apply renders and executes migrations in ID order.
+// Apply executes migrations in ID order.
 // PostgreSQL and SQLite apply a complete migration atomically. MySQL DDL may
 // commit implicitly, so a failure can leave completed statements in place and
 // the migration unrecorded; resolve that state before running Apply again.
 func (r Runner) Apply(ctx context.Context, migrations ...Migration) error {
-	if r.database == nil || r.dialect == nil || r.historyTable == "" || r.historySQL == "" || r.idSQL == "" || r.checksumSQL == "" || r.appliedAtSQL == "" {
-		return fmt.Errorf("migrate: invalid runner")
+	if err := r.validate(); err != nil {
+		return err
 	}
-	prepared, err := prepareMigrations(r.dialect, migrations)
+	prepared, err := prepareMigrations(migrations)
 	if err != nil {
 		return err
 	}
@@ -103,28 +102,34 @@ func (r Runner) Apply(ctx context.Context, migrations ...Migration) error {
 	}
 }
 
+func (r Runner) validate() error {
+	if r.database == nil || r.dialect == nil || r.historyTable == "" || r.historySQL == "" || r.idSQL == "" || r.checksumSQL == "" || r.appliedAtSQL == "" {
+		return fmt.Errorf("migrate: invalid runner")
+	}
+	return nil
+}
+
 type preparedMigration struct {
 	id         string
-	statements []render.Statement
+	statements []Statement
 	checksum   string
 }
 
-func prepareMigrations(d dialect.Dialect, migrations []Migration) ([]preparedMigration, error) {
+func prepareMigrations(migrations []Migration) ([]preparedMigration, error) {
 	prepared := make([]preparedMigration, len(migrations))
 	ids := make(map[string]struct{}, len(migrations))
 	for index, migration := range migrations {
 		if _, exists := ids[migration.ID]; exists {
 			return nil, fmt.Errorf("migrate: duplicate migration ID %q", migration.ID)
 		}
-		statements, err := migration.Render(d)
-		if err != nil {
+		if err := migration.validate(); err != nil {
 			return nil, err
 		}
 		ids[migration.ID] = struct{}{}
 		prepared[index] = preparedMigration{
 			id:         migration.ID,
-			statements: statements,
-			checksum:   checksum(statements),
+			statements: append([]Statement(nil), migration.Statements...),
+			checksum:   checksum(migration.Statements),
 		}
 	}
 	sort.Slice(prepared, func(left, right int) bool {
@@ -232,9 +237,9 @@ func (r Runner) applyPrepared(ctx context.Context, queries queryer, executions e
 			continue
 		}
 		pending = true
-		for index, statement := range migration.statements {
-			if _, err := executions.ExecContext(ctx, statement.SQL(), statement.Args()...); err != nil {
-				return fmt.Errorf("migrate: execute migration %q statement %d: %w", migration.id, index+1, err)
+		for _, statement := range migration.statements {
+			if _, err := executions.ExecContext(ctx, statement.SQL); err != nil {
+				return fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
 			}
 		}
 		if err := r.record(ctx, executions, migration); err != nil {
