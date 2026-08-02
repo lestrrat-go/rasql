@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -50,7 +51,7 @@ func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, e
 }
 
 func (i Inspector) informationSchemaTable(ctx context.Context, tableName string) (schema.Table, error) {
-	queries, err := informationSchemaQueries(i.dialect.Name())
+	queries, err := i.informationSchemaQueries(ctx)
 	if err != nil {
 		return schema.Table{}, err
 	}
@@ -96,6 +97,44 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 		return schema.Table{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
+}
+
+func (i Inspector) informationSchemaQueries(ctx context.Context) (informationQueries, error) {
+	if i.dialect.Name() != "postgresql" {
+		return informationSchemaQueries(i.dialect.Name())
+	}
+	version, err := i.postgreSQLServerVersion(ctx)
+	if err != nil {
+		return informationQueries{}, err
+	}
+	return postgreSQLInformationQueries(version), nil
+}
+
+func (i Inspector) postgreSQLServerVersion(ctx context.Context) (int, error) {
+	rows, err := i.queryer.QueryContext(ctx, "SHOW server_version_num")
+	if err != nil {
+		return 0, fmt.Errorf("inspect: read PostgreSQL server version: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("inspect: iterate PostgreSQL server version: %w", err)
+		}
+		return 0, fmt.Errorf("inspect: read PostgreSQL server version: no result")
+	}
+	var value string
+	if err := rows.Scan(&value); err != nil {
+		return 0, fmt.Errorf("inspect: scan PostgreSQL server version: %w", err)
+	}
+	version, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("inspect: parse PostgreSQL server version %q: %w", value, err)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("inspect: iterate PostgreSQL server version: %w", err)
+	}
+	return version, nil
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
@@ -217,11 +256,19 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 		var deferrable bool
 		var initiallyDeferred bool
 		var nullsNotDistinct bool
-		if err := rows.Scan(&name, &column, &deferrable, &initiallyDeferred, &nullsNotDistinct); err != nil {
+		var includesColumns bool
+		var temporal bool
+		if err := rows.Scan(&name, &column, &deferrable, &initiallyDeferred, &nullsNotDistinct, &includesColumns, &temporal); err != nil {
 			return nil, fmt.Errorf("inspect: scan unique constraint: %w", err)
 		}
 		if deferrable || initiallyDeferred || nullsNotDistinct {
 			return nil, fmt.Errorf("inspect: unique constraint %q cannot be represented: rasql supports only non-deferrable unique constraints with distinct nulls", name)
+		}
+		if includesColumns {
+			return nil, fmt.Errorf("inspect: unique constraint %q cannot be represented: rasql does not support unique constraints with included columns", name)
+		}
+		if temporal {
+			return nil, fmt.Errorf("inspect: unique constraint %q cannot be represented: rasql does not support temporal unique constraints", name)
 		}
 		if len(constraints) == 0 || constraints[len(constraints)-1].Name != name {
 			constraints = append(constraints, schema.UniqueConstraint{Name: name})
@@ -246,11 +293,19 @@ func (i Inspector) readChecks(ctx context.Context, query string, argument any) (
 		var name string
 		var expression string
 		var noInherit bool
-		if err := rows.Scan(&name, &expression, &noInherit); err != nil {
+		var validated bool
+		var enforced bool
+		if err := rows.Scan(&name, &expression, &noInherit, &validated, &enforced); err != nil {
 			return nil, fmt.Errorf("inspect: scan check constraint: %w", err)
 		}
 		if noInherit {
 			return nil, fmt.Errorf("inspect: check constraint %q cannot be represented: rasql does not support NO INHERIT check constraints", name)
+		}
+		if !validated {
+			return nil, fmt.Errorf("inspect: check constraint %q cannot be represented: rasql does not support NOT VALID check constraints", name)
+		}
+		if !enforced {
+			return nil, fmt.Errorf("inspect: check constraint %q cannot be represented: rasql does not support NOT ENFORCED check constraints", name)
 		}
 		checks = append(checks, schema.CheckConstraint{Name: name, Expression: expression})
 	}
@@ -277,7 +332,7 @@ func (i Inspector) rejectUnsupportedIndexes(ctx context.Context, query string, a
 	if err := rows.Scan(&name); err != nil {
 		return fmt.Errorf("inspect: scan unsupported index: %w", err)
 	}
-	return fmt.Errorf("inspect: index %q cannot be represented: rasql supports only non-partial B-tree indexes with simple ascending columns, no included columns, default operator classes and collations, and distinct nulls", name)
+	return fmt.Errorf("inspect: index %q cannot be represented: rasql supports only valid, non-partial B-tree indexes with simple ascending columns, no included columns, default operator classes and collations, and distinct nulls", name)
 }
 
 func (i Inspector) readIndexes(ctx context.Context, query string, argument any) ([]schema.Index, error) {
@@ -326,7 +381,10 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 		var deferrable bool
 		var initiallyDeferred bool
 		var deleteSetColumns bool
-		if err := rows.Scan(&name, &column, &referencedTable, &referencedColumn, &deleteAction, &updateAction, &matchType, &referencedInCurrentSchema, &deferrable, &initiallyDeferred, &deleteSetColumns); err != nil {
+		var validated bool
+		var enforced bool
+		var temporal bool
+		if err := rows.Scan(&name, &column, &referencedTable, &referencedColumn, &deleteAction, &updateAction, &matchType, &referencedInCurrentSchema, &deferrable, &initiallyDeferred, &deleteSetColumns, &validated, &enforced, &temporal); err != nil {
 			return nil, fmt.Errorf("inspect: scan foreign key: %w", err)
 		}
 		if matchType != "s" {
@@ -340,6 +398,15 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 		}
 		if deleteSetColumns {
 			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support column lists for ON DELETE SET NULL or SET DEFAULT", name)
+		}
+		if !validated {
+			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support NOT VALID foreign keys", name)
+		}
+		if !enforced {
+			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support NOT ENFORCED foreign keys", name)
+		}
+		if temporal {
+			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support temporal foreign keys", name)
 		}
 		onDelete, err := referenceAction(deleteAction)
 		if err != nil {
@@ -407,16 +474,6 @@ func (q informationQueries) argument(tableName string) any {
 
 func informationSchemaQueries(name string) (informationQueries, error) {
 	switch name {
-	case "postgresql":
-		return informationQueries{
-			columns:            "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
-			primaryKey:         "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
-			uniqueConstraints:  "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, index_metadata.indnullsnotdistinct FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
-			checks:             "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",
-			unsupportedIndexes: "SELECT index_data.relname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND (index_metadata.indexprs IS NOT NULL OR index_metadata.indpred IS NOT NULL OR index_metadata.indnkeyatts <> index_metadata.indnatts OR access_method.amname <> 'btree' OR index_metadata.indnullsnotdistinct OR EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) OR EXISTS (SELECT 1 FROM unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number JOIN LATERAL unnest(index_metadata.indclass::oid[]) WITH ORDINALITY AS operator_class(operator_class_oid, ordinal_position) ON operator_class.ordinal_position = key_column.ordinal_position JOIN pg_catalog.pg_opclass AS operator_class_metadata ON operator_class_metadata.oid = operator_class.operator_class_oid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE NOT operator_class_metadata.opcdefault OR index_collation.collation_oid <> attribute.attcollation)) ORDER BY index_data.relname",
-			indexes:            "SELECT index_data.relname, index_metadata.indisunique, attribute.attname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam JOIN LATERAL unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND index_metadata.indexprs IS NULL AND index_metadata.indpred IS NULL AND index_metadata.indnkeyatts = index_metadata.indnatts AND access_method.amname = 'btree' AND NOT EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) ORDER BY index_data.relname, key_column.ordinal_position",
-			foreignKeys:        "SELECT constraint_data.conname, local_attribute.attname, referenced_table.relname, referenced_attribute.attname, constraint_data.confdeltype, constraint_data.confupdtype, constraint_data.confmatchtype, referenced_namespace.nspname = current_schema(), constraint_data.condeferrable, constraint_data.condeferred, constraint_data.confdelsetcols IS NOT NULL FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS referenced_table ON referenced_table.oid = constraint_data.confrelid JOIN pg_catalog.pg_namespace AS referenced_namespace ON referenced_namespace.oid = referenced_table.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS local_key(attribute_number, ordinal_position) ON TRUE JOIN LATERAL unnest(constraint_data.confkey) WITH ORDINALITY AS referenced_key(attribute_number, ordinal_position) ON referenced_key.ordinal_position = local_key.ordinal_position JOIN pg_catalog.pg_attribute AS local_attribute ON local_attribute.attrelid = constraint_data.conrelid AND local_attribute.attnum = local_key.attribute_number JOIN pg_catalog.pg_attribute AS referenced_attribute ON referenced_attribute.attrelid = constraint_data.confrelid AND referenced_attribute.attnum = referenced_key.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'f' ORDER BY constraint_data.conname, local_key.ordinal_position",
-		}, nil
 	case "mysql":
 		return informationQueries{
 			columns:    "SELECT column_name, column_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
@@ -431,6 +488,36 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 	default:
 		return informationQueries{}, fmt.Errorf("inspect: unsupported dialect %q", name)
 	}
+}
+
+const (
+	postgreSQL15Version = 150000
+	postgreSQL16Version = 160000
+	postgreSQL18Version = 180000
+)
+
+func postgreSQLInformationQueries(version int) informationQueries {
+	nullsNotDistinct := postgreSQLCatalogBoolean(version, postgreSQL15Version, "index_metadata.indnullsnotdistinct")
+	deleteSetColumns := postgreSQLCatalogBoolean(version, postgreSQL16Version, "constraint_data.confdelsetcols IS NOT NULL")
+	enforced := postgreSQLCatalogBoolean(version, postgreSQL18Version, "constraint_data.conenforced")
+	temporal := postgreSQLCatalogBoolean(version, postgreSQL18Version, "constraint_data.conperiod")
+
+	return informationQueries{
+		columns:            "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
+		primaryKey:         "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
+		uniqueConstraints:  "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", index_metadata.indnkeyatts <> index_metadata.indnatts, " + temporal + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
+		checks:             "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",
+		unsupportedIndexes: "SELECT index_data.relname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND (NOT index_metadata.indisvalid OR index_metadata.indexprs IS NOT NULL OR index_metadata.indpred IS NOT NULL OR index_metadata.indnkeyatts <> index_metadata.indnatts OR access_method.amname <> 'btree' OR " + nullsNotDistinct + " OR EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) OR EXISTS (SELECT 1 FROM unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number JOIN LATERAL unnest(index_metadata.indclass::oid[]) WITH ORDINALITY AS operator_class(operator_class_oid, ordinal_position) ON operator_class.ordinal_position = key_column.ordinal_position JOIN pg_catalog.pg_opclass AS operator_class_metadata ON operator_class_metadata.oid = operator_class.operator_class_oid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE NOT operator_class_metadata.opcdefault OR index_collation.collation_oid <> attribute.attcollation)) ORDER BY index_data.relname",
+		indexes:            "SELECT index_data.relname, index_metadata.indisunique, attribute.attname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam JOIN LATERAL unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND index_metadata.indisvalid AND index_metadata.indexprs IS NULL AND index_metadata.indpred IS NULL AND index_metadata.indnkeyatts = index_metadata.indnatts AND access_method.amname = 'btree' AND NOT EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) ORDER BY index_data.relname, key_column.ordinal_position",
+		foreignKeys:        "SELECT constraint_data.conname, local_attribute.attname, referenced_table.relname, referenced_attribute.attname, constraint_data.confdeltype, constraint_data.confupdtype, constraint_data.confmatchtype, referenced_namespace.nspname = current_schema(), constraint_data.condeferrable, constraint_data.condeferred, " + deleteSetColumns + ", constraint_data.convalidated, " + enforced + ", " + temporal + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS referenced_table ON referenced_table.oid = constraint_data.confrelid JOIN pg_catalog.pg_namespace AS referenced_namespace ON referenced_namespace.oid = referenced_table.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS local_key(attribute_number, ordinal_position) ON TRUE JOIN LATERAL unnest(constraint_data.confkey) WITH ORDINALITY AS referenced_key(attribute_number, ordinal_position) ON referenced_key.ordinal_position = local_key.ordinal_position JOIN pg_catalog.pg_attribute AS local_attribute ON local_attribute.attrelid = constraint_data.conrelid AND local_attribute.attnum = local_key.attribute_number JOIN pg_catalog.pg_attribute AS referenced_attribute ON referenced_attribute.attrelid = constraint_data.confrelid AND referenced_attribute.attnum = referenced_key.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'f' ORDER BY constraint_data.conname, local_key.ordinal_position",
+	}
+}
+
+func postgreSQLCatalogBoolean(version int, introducedVersion int, column string) string {
+	if version >= introducedVersion {
+		return column
+	}
+	return "FALSE"
 }
 
 func normalizeType(dialectName string, databaseType string) (schema.LogicalType, error) {
