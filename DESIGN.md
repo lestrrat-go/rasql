@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`rasql` is a Go SQL toolkit that gives applications one model for schema definitions, dynamic queries, static queries, result decoding, and database inspection. It produces parameterized SQL for PostgreSQL, MySQL, SQLite, and Google Cloud Spanner without hiding dialect differences that affect correctness.
+`rasql` is a Go SQL toolkit that gives applications one model for schema definitions, dynamic queries, static queries, result decoding, database inspection, and forward-only DDL migrations. It produces parameterized SQL for PostgreSQL, MySQL, SQLite, and Google Cloud Spanner without hiding dialect differences that affect correctness.
 
-The first release does not include a migration planner or executor. It describes schemas and queries, inspects existing schemas, and provides the pieces that another migration tool can use.
+The migration package applies ordered, forward-only DDL operations for PostgreSQL, MySQL, and SQLite. It keeps an ID and checksum history, orders initial table creation by foreign-key dependencies, and rejects a changed or skipped migration. It does not automatically repair a live schema or synthesize migrations from a schema difference.
 
 ## Design decisions
 
@@ -27,6 +27,7 @@ The first release does not include a migration planner or executor. It describes
 | `row` | Typed column descriptors and result decoding. | Go standard library |
 | `rasql` | Executes statements, decodes typed rows, and provides the default fluent API. | `schema`, `dialect`, `query`, `render`, `row`, `database/sql` |
 | `inspect` | Reads database metadata and returns normalized schema descriptors. | `schema`, `dialect` |
+| `migrate` | Plans and applies forward-only DDL migrations. | `schema`, `dialect`, `render`, `database/sql` |
 | `template` and `cmd/rasqlgen` | Compiles static query templates and schema snapshots into Go source. | public packages only |
 
 The dependency flow is deliberately one-way:

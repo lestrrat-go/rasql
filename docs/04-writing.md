@@ -16,7 +16,7 @@ if err := rasql.Create(ctx, client, users); err != nil {
 
 Each statement runs on its own. To create several tables atomically, build the client from a `*sql.Tx` and commit once every `Create` has succeeded.
 
-Most applications manage schema changes with a migration tool instead. `rasql` has no migration planner; `Create` exists for tests, examples, and one-shot setup.
+Most applications manage schema changes with [`migrate`](07-migrations.md). `Create` remains useful for tests, examples, and one-shot setup.
 
 ## Insert a row
 
