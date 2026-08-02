@@ -1,6 +1,9 @@
 package rasql_test
 
 import (
+	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -198,6 +201,103 @@ type pointerDeclaringWrapperUser struct {
 }
 
 func (u *pointerDeclaringWrapperUser) ColumnValue(name string) (any, bool) {
+	switch name {
+	case "id":
+		return u.ID, true
+	case "email":
+		return u.Email, true
+	}
+	return nil, false
+}
+
+// pointerMappedUser supplies its own column values through a pointer receiver
+// and embeds nothing, so its value type carries no ColumnValue at all.
+type pointerMappedUser struct {
+	ID    int64
+	Email string
+}
+
+func (u *pointerMappedUser) ColumnValue(name string) (any, bool) {
+	switch name {
+	case "id":
+		return u.ID, true
+	case "email":
+		return u.Email, true
+	}
+	return nil, false
+}
+
+// pointerReceiverWrapperUser embeds a row type whose ColumnValue has a pointer
+// receiver, so the promoted method reaches the outer type only through its
+// pointer. That is the same method set a row type takes when it declares
+// ColumnValue with a pointer receiver of its own.
+type pointerReceiverWrapperUser struct {
+	pointerMappedUser
+}
+
+// taggedPointerReceiverWrapperUser is that shape with tags of its own.
+type taggedPointerReceiverWrapperUser struct {
+	pointerMappedUser
+	ID    int64  `rasql:"id"`
+	Email string `rasql:"email"`
+}
+
+// pointerWrappedUser embeds a pointer to a row type that supplies its own column
+// values and tags no field of its own, so only the promoted ColumnValue can map
+// it.
+type pointerWrappedUser struct {
+	*mappedUser
+}
+
+// taggedPointerWrapperUser embeds the same pointer and tags fields of its own, so
+// the promoted ColumnValue and the tags name different values for every column.
+type taggedPointerWrapperUser struct {
+	*mappedUser
+	ID    int64  `rasql:"id"`
+	Email string `rasql:"email"`
+}
+
+// declaringPointerWrapperUser embeds the same pointer, tags fields of its own,
+// and declares ColumnValue with a pointer receiver, so the embedded mapping, the
+// tag mapping, and the declared method each name a different value.
+type declaringPointerWrapperUser struct {
+	*mappedUser
+	ID    int64  `rasql:"email"`
+	Email string `rasql:"id"`
+}
+
+func (u *declaringPointerWrapperUser) ColumnValue(name string) (any, bool) {
+	switch name {
+	case "id":
+		return u.ID, true
+	case "email":
+		return u.Email, true
+	}
+	return nil, false
+}
+
+// interfaceWrappedUser embeds the interface itself rather than a row type, which
+// is the third way Go promotes ColumnValue to an outer struct.
+type interfaceWrappedUser struct {
+	rasql.ColumnValuer
+}
+
+// taggedInterfaceWrapperUser embeds the interface and tags fields of its own.
+type taggedInterfaceWrapperUser struct {
+	rasql.ColumnValuer
+	ID    int64  `rasql:"id"`
+	Email string `rasql:"email"`
+}
+
+// declaringInterfaceWrapperUser embeds the interface, tags fields of its own, and
+// declares ColumnValue with a value receiver.
+type declaringInterfaceWrapperUser struct {
+	rasql.ColumnValuer
+	ID    int64  `rasql:"email"`
+	Email string `rasql:"id"`
+}
+
+func (u declaringInterfaceWrapperUser) ColumnValue(name string) (any, bool) {
 	switch name {
 	case "id":
 		return u.ID, true
@@ -481,6 +581,307 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 		_, err = rasql.Update(t.Context(), client, users, pointerValue)
 		require.NoError(t, err)
 	})
+}
+
+// usersTable is the table the mapping fixtures above are written against.
+func usersTable() schema.Table {
+	return schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	}
+}
+
+// requireInsertBinds requires that inserting value binds id and email, which
+// names which of the candidate mappings the write side followed.
+func requireInsertBinds[T any](t *testing.T, value T, id int64, email string) {
+	t.Helper()
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[T](usersTable())
+	require.NoError(t, err)
+	mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
+		WithArgs(id, email).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	_, err = rasql.Insert(t.Context(), client, users, value)
+	require.NoError(t, err)
+}
+
+// requireUpdateBinds is requireInsertBinds for the other write.
+func requireUpdateBinds[T any](t *testing.T, value T, id int64, email string) {
+	t.Helper()
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[T](usersTable())
+	require.NoError(t, err)
+	mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
+		WithArgs(email, id).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	_, err = rasql.Update(t.Context(), client, users, value)
+	require.NoError(t, err)
+}
+
+// TestWritesRouteEveryEmbeddingShape covers the shapes an embedded ColumnValuer
+// can take beyond the embedded value field the tests above use: an embedded
+// pointer, an embedded interface, and a row type whose only ColumnValue has a
+// pointer receiver. Each shape is written three ways -- without tags, with tags,
+// and with tags plus a declared ColumnValue -- because the write side routes the
+// three differently.
+func TestWritesRouteEveryEmbeddingShape(t *testing.T) {
+	t.Run("pointer receiver without embedding", func(t *testing.T) {
+		// The row type declares its mapping, so the method binds these values
+		// even though no field of it is tagged.
+		value := pointerMappedUser{ID: 42, Email: "ada@example.com"}
+		requireInsertBinds(t, value, 42, "ada@example.com")
+		requireUpdateBinds(t, value, 42, "ada@example.com")
+	})
+
+	t.Run("embedded pointer-receiver method without tags of its own", func(t *testing.T) {
+		// The promoted method reaches this row type only through its pointer,
+		// which is where Insert and Update look for it.
+		value := pointerReceiverWrapperUser{pointerMappedUser{ID: 42, Email: "ada@example.com"}}
+		requireInsertBinds(t, value, 42, "ada@example.com")
+		requireUpdateBinds(t, value, 42, "ada@example.com")
+	})
+
+	t.Run("embedded pointer-receiver method with tags of its own", func(t *testing.T) {
+		value := taggedPointerReceiverWrapperUser{
+			pointerMappedUser: pointerMappedUser{ID: 7, Email: "embedded@example.com"},
+			ID:                42,
+			Email:             "ada@example.com",
+		}
+		requireInsertBinds(t, value, 42, "ada@example.com")
+		requireUpdateBinds(t, value, 42, "ada@example.com")
+	})
+
+	t.Run("embedded pointer without tags of its own", func(t *testing.T) {
+		// The wrapper tags nothing, so the promoted ColumnValue maps it.
+		value := pointerWrappedUser{&mappedUser{ID: 42, Email: "ada@example.com"}}
+		requireInsertBinds(t, value, 42, "ada@example.com")
+		requireUpdateBinds(t, value, 42, "ada@example.com")
+	})
+
+	t.Run("embedded pointer with tags of its own", func(t *testing.T) {
+		// The embedded values differ from the outer tagged ones, so binding the
+		// outer ones proves the tags mapped it rather than the promoted method.
+		value := taggedPointerWrapperUser{
+			mappedUser: &mappedUser{ID: 7, Email: "embedded@example.com"},
+			ID:         42,
+			Email:      "ada@example.com",
+		}
+		requireInsertBinds(t, value, 42, "ada@example.com")
+		requireUpdateBinds(t, value, 42, "ada@example.com")
+	})
+
+	t.Run("embedded pointer with a declared method", func(t *testing.T) {
+		// The declared method binds 42 and method@example.com, the crossed tags
+		// would bind method@example.com and 42, and the promoted method would
+		// bind 7 and embedded@example.com.
+		value := declaringPointerWrapperUser{
+			mappedUser: &mappedUser{ID: 7, Email: "embedded@example.com"},
+			ID:         42,
+			Email:      "method@example.com",
+		}
+		requireInsertBinds(t, value, 42, "method@example.com")
+		requireUpdateBinds(t, value, 42, "method@example.com")
+	})
+
+	t.Run("embedded interface without tags of its own", func(t *testing.T) {
+		value := interfaceWrappedUser{mappedUser{ID: 42, Email: "ada@example.com"}}
+		requireInsertBinds(t, value, 42, "ada@example.com")
+		requireUpdateBinds(t, value, 42, "ada@example.com")
+	})
+
+	t.Run("embedded interface with tags of its own", func(t *testing.T) {
+		value := taggedInterfaceWrapperUser{
+			ColumnValuer: mappedUser{ID: 7, Email: "embedded@example.com"},
+			ID:           42,
+			Email:        "ada@example.com",
+		}
+		requireInsertBinds(t, value, 42, "ada@example.com")
+		requireUpdateBinds(t, value, 42, "ada@example.com")
+	})
+
+	t.Run("embedded interface with a declared method", func(t *testing.T) {
+		value := declaringInterfaceWrapperUser{
+			ColumnValuer: mappedUser{ID: 7, Email: "embedded@example.com"},
+			ID:           42,
+			Email:        "method@example.com",
+		}
+		requireInsertBinds(t, value, 42, "method@example.com")
+		requireUpdateBinds(t, value, 42, "method@example.com")
+	})
+}
+
+const (
+	// autogeneratedFile is the file name the Go toolchain reports for a method it
+	// generates rather than one a package declares.
+	autogeneratedFile = "<autogenerated>"
+	// originPremise states what the write side reads that file name for, so a Go
+	// release that reports another name is told what it broke.
+	originPremise = "rasql tells a ColumnValue a row type declares from one Go promotes out of an embedded field by the file this build reports for the method, and nothing else reflect can see separates the two. Insert and Update route a row type that embeds a ColumnValuer by that answer, so a build that reports another name binds the wrong values for such a row type."
+
+	originNone      = "none"
+	originGenerated = "generated"
+	originDeclared  = "declared"
+)
+
+// TestGeneratedMethodsReportGeneratedFile states the toolchain premise the write
+// side rests on, for every shape it routes by. It fails on a Go release that
+// reports a promoted method as declared, or a declared one as generated, rather
+// than leaving that release to mis-bind a write.
+func TestGeneratedMethodsReportGeneratedFile(t *testing.T) {
+	// Every fixture named here is declared in this file, so a declared
+	// ColumnValue must be reported as coming from it.
+	const declaringFile = "typed_write_test.go"
+
+	for _, testCase := range []struct {
+		name          string
+		rowType       reflect.Type
+		valueOrigin   string
+		pointerOrigin string
+	}{
+		{
+			name:          "value receiver",
+			rowType:       reflect.TypeFor[mappedUser](),
+			valueOrigin:   originDeclared,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "pointer receiver",
+			rowType:       reflect.TypeFor[pointerMappedUser](),
+			valueOrigin:   originNone,
+			pointerOrigin: originDeclared,
+		},
+		{
+			name:          "embedded value",
+			rowType:       reflect.TypeFor[wrappedUser](),
+			valueOrigin:   originGenerated,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "embedded value with tags",
+			rowType:       reflect.TypeFor[taggedWrapperUser](),
+			valueOrigin:   originGenerated,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "embedded value with a value-receiver method",
+			rowType:       reflect.TypeFor[declaringWrapperUser](),
+			valueOrigin:   originDeclared,
+			pointerOrigin: originGenerated,
+		},
+		{
+			// The declared method shadows the promoted one, and a pointer
+			// receiver keeps it out of the value type's method set, so the value
+			// type carries no ColumnValue at all.
+			name:          "embedded value with a pointer-receiver method",
+			rowType:       reflect.TypeFor[pointerDeclaringWrapperUser](),
+			valueOrigin:   originNone,
+			pointerOrigin: originDeclared,
+		},
+		{
+			// This is the shape above with the method promoted rather than
+			// declared. The two are the same method set, and the file name is
+			// all that separates them.
+			name:          "embedded pointer-receiver method",
+			rowType:       reflect.TypeFor[pointerReceiverWrapperUser](),
+			valueOrigin:   originNone,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "embedded pointer-receiver method with tags",
+			rowType:       reflect.TypeFor[taggedPointerReceiverWrapperUser](),
+			valueOrigin:   originNone,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "embedded pointer",
+			rowType:       reflect.TypeFor[pointerWrappedUser](),
+			valueOrigin:   originGenerated,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "embedded pointer with tags",
+			rowType:       reflect.TypeFor[taggedPointerWrapperUser](),
+			valueOrigin:   originGenerated,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "embedded pointer with a pointer-receiver method",
+			rowType:       reflect.TypeFor[declaringPointerWrapperUser](),
+			valueOrigin:   originNone,
+			pointerOrigin: originDeclared,
+		},
+		{
+			name:          "embedded interface",
+			rowType:       reflect.TypeFor[interfaceWrappedUser](),
+			valueOrigin:   originGenerated,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "embedded interface with tags",
+			rowType:       reflect.TypeFor[taggedInterfaceWrapperUser](),
+			valueOrigin:   originGenerated,
+			pointerOrigin: originGenerated,
+		},
+		{
+			name:          "embedded interface with a value-receiver method",
+			rowType:       reflect.TypeFor[declaringInterfaceWrapperUser](),
+			valueOrigin:   originDeclared,
+			pointerOrigin: originGenerated,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			requireMethodOrigin(t, testCase.rowType, testCase.valueOrigin, declaringFile)
+			requireMethodOrigin(t, reflect.PointerTo(testCase.rowType), testCase.pointerOrigin, declaringFile)
+		})
+	}
+}
+
+// requireMethodOrigin requires that this Go build reports methodType's
+// ColumnValue as want.
+func requireMethodOrigin(t *testing.T, methodType reflect.Type, want string, declaringFile string) {
+	t.Helper()
+
+	method, ok := methodType.MethodByName("ColumnValue")
+	if want == originNone {
+		require.Falsef(t, ok, "%s carries no ColumnValue in its method set, and this Go build reports one. %s", methodType, originPremise)
+		return
+	}
+	require.Truef(t, ok, "%s carries a ColumnValue in its method set, and this Go build reports none. %s", methodType, originPremise)
+
+	pointer := method.Func.Pointer()
+	function := runtime.FuncForPC(pointer)
+	require.NotNilf(t, function, "this Go build reports no function at all for %s.ColumnValue. %s", methodType, originPremise)
+	file, _ := function.FileLine(pointer)
+
+	if want == originGenerated {
+		require.Equalf(t, autogeneratedFile, file, "the Go toolchain generates %s.ColumnValue, and this build reports its file as %q rather than %q. %s", methodType, file, autogeneratedFile, originPremise)
+		return
+	}
+	require.Truef(t, strings.HasSuffix(file, declaringFile), "%s.ColumnValue is declared in %s, and this Go build reports its file as %q. %s", methodType, declaringFile, file, originPremise)
 }
 
 func TestInsertRejectsMissingTaggedColumn(t *testing.T) {
