@@ -42,6 +42,10 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 		{Name: "email", Type: schema.TypeText, Nullable: true},
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
+	require.Nil(t, table.UniqueConstraints)
+	require.Nil(t, table.Checks)
+	require.Nil(t, table.Indexes)
+	require.Nil(t, table.ForeignKeys)
 }
 
 func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
