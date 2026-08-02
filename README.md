@@ -190,6 +190,15 @@ Inserts, updates, deletes, and typed selects have dedicated helpers. Upserts, `R
 
 The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since an in-memory database belongs to one connection. A real application also creates its tables through migrations rather than `rasql.Create`.
 
+## Sample application
+
+The [Taskboard sample](sample/taskboard/) is a standalone Go module with a checked-in SQLite DDL. It shows typed descriptors, inserts, an update, and a joined query in one small application.
+
+```sh
+cd sample/taskboard
+go run .
+```
+
 ## Documentation
 
 | Page | Covers |
