@@ -248,6 +248,7 @@ func (i Inspector) readPrimaryKey(ctx context.Context, query string, argument an
 }
 
 func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argument any) ([]schema.UniqueConstraint, error) {
+	// PostgreSQL 18 permits NOT ENFORCED only for CHECK and foreign-key constraints, so a UNIQUE NOT ENFORCED catalog row cannot exist.
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read unique constraints: %w", err)
