@@ -292,6 +292,39 @@ type skippedFieldedDecoderWrapper struct {
 	Email               string `rasql:"email"`
 }
 
+// Label is a column value a row type embeds rather than names, so the field it
+// declares is anonymous and exported at once. The field path maps such a field
+// like any other, so it is a field of the wrapper's own just as a named one is.
+type Label string
+
+// anonymousFieldedDecoderWrapper embeds the exported row type and one exported
+// anonymous field of its own, tagged.
+type anonymousFieldedDecoderWrapper struct {
+	ExportedDecodedUser
+	Label `rasql:"label"`
+}
+
+// untaggedAnonymousFieldedDecoderWrapper is that shape without a tag, so the
+// field path names the column by snake-casing the field name.
+type untaggedAnonymousFieldedDecoderWrapper struct {
+	ExportedDecodedUser
+	Label
+}
+
+// unexportedAnonymousFieldedDecoderWrapper embeds an unexported self-decoding row
+// type, which the field path skips, so the anonymous field of its own is the only
+// one it maps.
+type unexportedAnonymousFieldedDecoderWrapper struct {
+	selfDecodedUser
+	Label `rasql:"label"`
+}
+
+// untaggedUnexportedAnonymousFieldedDecoderWrapper is that shape without a tag.
+type untaggedUnexportedAnonymousFieldedDecoderWrapper struct {
+	selfDecodedUser
+	Label
+}
+
 // pointerFieldedDecoderWrapper embeds the row type by pointer, which promotes
 // DecodeRow just as an embedded value does while leaving the pointer nil.
 type pointerFieldedDecoderWrapper struct {
@@ -330,8 +363,8 @@ func (u *pointerDecodingWrapper) DecodeRow(r row.Row) error {
 
 func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
 	result, err := row.New(
-		[]string{"id", "email", "nickname"},
-		[]any{int64(42), []byte("ada@example.com"), int64(7)},
+		[]string{"id", "email", "nickname", "label"},
+		[]any{int64(42), []byte("ada@example.com"), int64(7), []byte("ada")},
 	)
 	require.NoError(t, err)
 
@@ -365,6 +398,39 @@ func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "ada@example.com", decoded.Email)
 		require.Equal(t, ExportedDecodedUser{}, decoded.ExportedDecodedUser)
+	})
+
+	t.Run("tagged anonymous field", func(t *testing.T) {
+		// The tagged anonymous Label is a mappable field of the wrapper, so the
+		// wrapper takes the field path rather than the promoted DecodeRow. The
+		// embedded row type is exported, so the field path maps it too and finds
+		// no column named after it, which is what it does for a named field of an
+		// exported type in the same shape.
+		_, err := row.Decode[anonymousFieldedDecoderWrapper](result)
+		require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+	})
+
+	t.Run("untagged anonymous field", func(t *testing.T) {
+		_, err := row.Decode[untaggedAnonymousFieldedDecoderWrapper](result)
+		require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+	})
+
+	t.Run("tagged anonymous field over an unexported decoder", func(t *testing.T) {
+		// The field path skips the unexported embedded field and maps Label, so
+		// the decode succeeds. The promoted DecodeRow would have filled the
+		// embedded fields and left Label empty.
+		decoded, err := row.Decode[unexportedAnonymousFieldedDecoderWrapper](result)
+		require.NoError(t, err)
+		require.Equal(t, Label("ada"), decoded.Label)
+		require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+	})
+
+	t.Run("untagged anonymous field over an unexported decoder", func(t *testing.T) {
+		// Label carries no tag here, so the column is its snake-cased field name.
+		decoded, err := row.Decode[untaggedUnexportedAnonymousFieldedDecoderWrapper](result)
+		require.NoError(t, err)
+		require.Equal(t, Label("ada"), decoded.Label)
+		require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
 	})
 }
 

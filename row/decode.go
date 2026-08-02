@@ -146,10 +146,11 @@ func fieldsShadowEmbeddedDecoder(rowType reflect.Type) (bool, error) {
 	declares := false
 	for index := range rowType.NumField() {
 		field := rowType.Field(index)
-		if field.Anonymous {
-			if implementsDecoder(field.Type) {
-				embedded = true
-			}
+		// Only the anonymous field that supplies the promoted DecodeRow is
+		// skipped. Any other anonymous field is one the field path maps like a
+		// named one, so it counts as a mappable field of the row type's own.
+		if field.Anonymous && implementsDecoder(field.Type) {
+			embedded = true
 			continue
 		}
 		if field.PkgPath != "" {

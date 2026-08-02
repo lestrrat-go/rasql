@@ -151,7 +151,7 @@ type userWithRole struct {
 
 Embedding promotes `ColumnValue` in the same way, and the write side reads it the same way. `Insert` and `Update` map a struct that embeds a `ColumnValuer`, carries `rasql` tags of its own, and declares no `ColumnValue` by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing, such as the `userWithRole` above, is still mapped by its promoted `ColumnValue`. Declaring the mapping method on the outer type — `DecodeRow` for reads, `ColumnValue` for writes — maps such a wrapper by method again, because Go dispatches to the declared method rather than to the promoted one, and the tags may stay or go.
 
-Which fields put a wrapper on the field path is where the two directions still differ. The read side maps tagged fields and untagged exported ones, so any exported field of its own is enough, while the write side reads tags only.
+Which fields put a wrapper on the field path is where the two directions still differ. The read side maps tagged fields and untagged exported ones, so any exported field of its own is enough — embedded or named, as long as it is not the embedded field supplying the promoted `DecodeRow` — while the write side reads tags only.
 
 ### What the column fields catch
 
