@@ -315,18 +315,13 @@ func assign(destination reflect.Value, value any) error {
 
 func decodeBool(value any) (bool, error) {
 	decoded := reflect.ValueOf(value)
-	switch decoded.Kind() {
-	case reflect.Bool:
+	switch {
+	case decoded.Kind() == reflect.Bool:
 		return decoded.Bool(), nil
-	case reflect.Int64:
-		switch decoded.Int() {
-		case 0:
-			return false, nil
-		case 1:
-			return true, nil
-		default:
-			return false, fmt.Errorf("expected boolean integer 0 or 1, got %d", decoded.Int())
-		}
+	case isSignedInteger(decoded.Kind()):
+		return decoded.Int() != 0, nil
+	case isUnsignedInteger(decoded.Kind()):
+		return decoded.Uint() != 0, nil
 	default:
 		return false, typeError("boolean", value)
 	}

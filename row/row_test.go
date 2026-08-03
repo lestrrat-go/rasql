@@ -180,6 +180,39 @@ func TestAssignDecodesIntoDestination(t *testing.T) {
 	})
 }
 
+// TestAssignDecodesBoolFromAnyNonzeroInteger pins MySQL's documented boolean
+// semantics: TINYINT accepts the full signed range regardless of its display
+// width, and any nonzero value (not just 1) is true. Both the text and binary
+// driver protocols deliver int64 for a tiny field, and unsigned driver values
+// must be covered too.
+func TestAssignDecodesBoolFromAnyNonzeroInteger(t *testing.T) {
+	result, err := row.New(
+		[]string{"zero", "two", "unsigned_two", "negative_one", "not_an_integer"},
+		[]any{int64(0), int64(2), uint64(2), int64(-1), "true"},
+	)
+	require.NoError(t, err)
+
+	var zero bool
+	require.NoError(t, row.Assign(result, "zero", &zero))
+	require.False(t, zero)
+
+	var two bool
+	require.NoError(t, row.Assign(result, "two", &two))
+	require.True(t, two)
+
+	var unsignedTwo bool
+	require.NoError(t, row.Assign(result, "unsigned_two", &unsignedTwo))
+	require.True(t, unsignedTwo)
+
+	var negativeOne bool
+	require.NoError(t, row.Assign(result, "negative_one", &negativeOne))
+	require.True(t, negativeOne)
+
+	var notAnInteger bool
+	err = row.Assign(result, "not_an_integer", &notAnInteger)
+	require.ErrorContains(t, err, `row: decode column "not_an_integer"`)
+}
+
 // selfDecodedUser maps its own columns and carries a tag that names a different
 // column, so a decode through the tag is distinguishable from one through the method.
 type selfDecodedUser struct {
