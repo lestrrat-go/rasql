@@ -84,7 +84,15 @@ func (server Server) Run(ctx context.Context) (*Controller, error) {
 		case err := <-serve:
 			controller.setErr(serverError(err))
 		case <-ctx.Done():
-			_ = httpServer.Close()
+			shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			shutdownErr := httpServer.Shutdown(shutdownContext)
+			cancel()
+			if shutdownErr != nil {
+				_ = httpServer.Close()
+				<-serve
+				controller.setErr(shutdownErr)
+				return
+			}
 			controller.setErr(serverError(<-serve))
 		}
 	}()
