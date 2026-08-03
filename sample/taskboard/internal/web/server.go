@@ -63,6 +63,9 @@ func NewServer(address string, handler http.Handler) Server {
 
 // Run binds the listener and serves requests until ctx is cancelled.
 func (server Server) Run(ctx context.Context) (*Controller, error) {
+	if ctx == nil {
+		return nil, errors.New("taskboard: context must not be nil")
+	}
 	listener, err := net.Listen("tcp", server.address)
 	if err != nil {
 		return nil, err
