@@ -99,6 +99,9 @@ func runSchema(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if rest := flags.Args(); len(rest) > 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(rest, " "))
+	}
 	if *packageName == "" || *output == "" {
 		return errors.New("schema requires -package and -output")
 	}
@@ -218,6 +221,9 @@ func runQuery(args []string) error {
 	output := flags.String("output", "", "path for generated Go source")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if rest := flags.Args(); len(rest) > 0 {
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(rest, " "))
 	}
 	if *input == "" || *functionName == "" || *dialectName == "" || *packageName == "" || *output == "" {
 		return errors.New("query requires -input, -function, -dialect, -package, and -output")

@@ -260,6 +260,60 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+func TestRunRejectsUnexpectedArguments(t *testing.T) {
+	previousCommandOutput := commandOutput
+	output := new(bytes.Buffer)
+	commandOutput = output
+	t.Cleanup(func() {
+		commandOutput = previousCommandOutput
+	})
+
+	testCases := []struct {
+		name         string
+		inputName    string
+		inputContent string
+		buildArgs    func(input, output string) []string
+	}{
+		{
+			name:         "schema",
+			inputName:    "schema.json",
+			inputContent: `[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`,
+			buildArgs: func(input, output string) []string {
+				return []string{"schema", "-input", input, "-package", "generated", "-output", output, "ignored", "-table", "users"}
+			},
+		},
+		{
+			name:         "query",
+			inputName:    "user.sql",
+			inputContent: `SELECT id FROM users WHERE id = {{bind "id"}}`,
+			buildArgs: func(input, output string) []string {
+				return []string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", output, "ignored"}
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			output.Reset()
+			directory, err := os.MkdirTemp(".", ".tmp-unexpected-args-*")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, os.RemoveAll(directory))
+			})
+			input := filepath.Join(directory, testCase.inputName)
+			generated := filepath.Join(directory, "generated.go")
+			require.NoError(t, os.WriteFile(input, []byte(testCase.inputContent), 0o600))
+
+			err = run(testCase.buildArgs(input, generated))
+			require.Error(t, err)
+			require.ErrorContains(t, err, "unexpected arguments")
+			require.NotErrorIs(t, err, flag.ErrHelp)
+			_, statErr := os.Stat(generated)
+			require.ErrorIs(t, statErr, os.ErrNotExist)
+		})
+	}
+}
+
 func TestRunRejectsInvalidFlag(t *testing.T) {
 	previousCommandOutput := commandOutput
 	output := new(bytes.Buffer)
