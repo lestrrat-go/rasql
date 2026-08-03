@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,10 +28,10 @@ type Inspector struct {
 
 // New creates an Inspector. It does not open a connection or start a transaction.
 func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
-	if queryer == nil {
+	if isNil(queryer) {
 		return Inspector{}, fmt.Errorf("inspect: queryer must not be nil")
 	}
-	if d == nil {
+	if isNil(d) {
 		return Inspector{}, fmt.Errorf("inspect: dialect must not be nil")
 	}
 	return Inspector{queryer: queryer, dialect: d}, nil
@@ -41,7 +42,7 @@ func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, e
 	if err := schema.ValidateIdentifier(tableName); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: invalid table name: %w", err)
 	}
-	if i.queryer == nil || i.dialect == nil {
+	if isNil(i.queryer) || isNil(i.dialect) {
 		return schema.Table{}, fmt.Errorf("inspect: invalid inspector")
 	}
 	if i.dialect.Name() == "sqlite" {
@@ -617,5 +618,18 @@ func text(value any) string {
 		return string(value)
 	default:
 		return fmt.Sprint(value)
+	}
+}
+
+func isNil(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflectValue := reflect.ValueOf(value)
+	switch reflectValue.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return reflectValue.IsNil()
+	default:
+		return false
 	}
 }
