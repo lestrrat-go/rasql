@@ -555,8 +555,10 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 			return schema.TypeBoolean, nil
 		case "SMALLINT", "INTEGER", "BIGINT":
 			return schema.TypeInteger, nil
-		case "REAL", "DOUBLE PRECISION", "NUMERIC", "DECIMAL":
+		case "REAL", "DOUBLE PRECISION":
 			return schema.TypeFloat, nil
+		case "NUMERIC", "DECIMAL":
+			return "", fmt.Errorf("exact decimal type %q cannot be represented: rasql has no exact decimal logical type", databaseType)
 		case "TEXT", "CHARACTER VARYING", "CHARACTER", "VARCHAR", "CHAR":
 			return schema.TypeText, nil
 		case "BYTEA":
@@ -574,7 +576,9 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 			return schema.TypeBoolean, nil
 		case strings.Contains(typeName, "INT"):
 			return schema.TypeInteger, nil
-		case strings.Contains(typeName, "FLOAT") || strings.Contains(typeName, "DOUBLE") || strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC"):
+		case strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC"):
+			return "", fmt.Errorf("exact decimal type %q cannot be represented: rasql has no exact decimal logical type", databaseType)
+		case strings.Contains(typeName, "FLOAT") || strings.Contains(typeName, "DOUBLE"):
 			return schema.TypeFloat, nil
 		case strings.Contains(typeName, "BLOB") || strings.Contains(typeName, "BINARY"):
 			return schema.TypeBytes, nil
