@@ -18,8 +18,15 @@ import (
 type Template struct {
 	name        string
 	text        string
+	parts       []templatePart
 	parameters  []string
 	uniqueNames []string
+}
+
+type templatePart struct {
+	text       string
+	bindIndex  int
+	isBindPart bool
 }
 
 // Parse validates source and returns a restricted SQL template.
@@ -32,6 +39,7 @@ func Parse(name string, source string) (Template, error) {
 	}
 
 	var text strings.Builder
+	parts := make([]templatePart, 0)
 	parameters := make([]string, 0)
 	uniqueNames := make([]string, 0)
 	seen := make(map[string]struct{})
@@ -40,9 +48,14 @@ func Parse(name string, source string) (Template, error) {
 		start := strings.Index(remaining, "{{")
 		if start < 0 {
 			text.WriteString(remaining)
+			parts = append(parts, templatePart{text: remaining})
 			break
 		}
-		text.WriteString(remaining[:start])
+		literal := remaining[:start]
+		text.WriteString(literal)
+		if literal != "" {
+			parts = append(parts, templatePart{text: literal})
+		}
 		remaining = remaining[start+2:]
 		end := strings.Index(remaining, "}}")
 		if end < 0 {
@@ -52,7 +65,9 @@ func Parse(name string, source string) (Template, error) {
 		if err != nil {
 			return Template{}, fmt.Errorf("template %q: %w", name, err)
 		}
-		text.WriteString(marker(len(parameters)))
+		bindIndex := len(parameters)
+		text.WriteString(marker(bindIndex))
+		parts = append(parts, templatePart{bindIndex: bindIndex, isBindPart: true})
 		parameters = append(parameters, parameter)
 		if _, exists := seen[parameter]; !exists {
 			seen[parameter] = struct{}{}
@@ -60,7 +75,7 @@ func Parse(name string, source string) (Template, error) {
 		}
 		remaining = remaining[end+2:]
 	}
-	return Template{name: name, text: text.String(), parameters: parameters, uniqueNames: uniqueNames}, nil
+	return Template{name: name, text: text.String(), parts: parts, parameters: parameters, uniqueNames: uniqueNames}, nil
 }
 
 func parseBindAction(action string) (string, error) {
@@ -86,17 +101,18 @@ func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
 	if t.name == "" || t.text == "" {
 		return Compiled{}, fmt.Errorf("template: invalid template")
 	}
-	sql := t.text
+	placeholders := make([]string, len(t.parameters))
 	for index := range t.parameters {
 		placeholder, err := d.Placeholder(index + 1)
 		if err != nil {
 			return Compiled{}, fmt.Errorf("template %q: placeholder %d: %w", t.name, index+1, err)
 		}
-		sql = strings.Replace(sql, marker(index), placeholder, 1)
+		placeholders[index] = placeholder
 	}
+
 	return Compiled{
 		name:        t.name,
-		sql:         sql,
+		sql:         renderTemplateParts(t.parts, placeholders),
 		parameters:  append([]string(nil), t.parameters...),
 		uniqueNames: append([]string(nil), t.uniqueNames...),
 	}, nil
@@ -232,6 +248,18 @@ func availableGoIdentifier(base string, reserved map[string]struct{}) string {
 
 func marker(index int) string {
 	return fmt.Sprintf("\x00rasql-bind-%d\x00", index)
+}
+
+func renderTemplateParts(parts []templatePart, placeholders []string) string {
+	var sql strings.Builder
+	for _, part := range parts {
+		if part.isBindPart {
+			sql.WriteString(placeholders[part.bindIndex])
+			continue
+		}
+		sql.WriteString(part.text)
+	}
+	return sql.String()
 }
 
 func contains(values []string, target string) bool {
