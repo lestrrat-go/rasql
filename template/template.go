@@ -86,28 +86,17 @@ func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
 	if t.name == "" || t.text == "" {
 		return Compiled{}, fmt.Errorf("template: invalid template")
 	}
-	var sql strings.Builder
-	sql.Grow(len(t.text))
-	offset := 0
+	sql := t.text
 	for index := range t.parameters {
-		bindMarker := marker(index)
-		markerOffset := strings.Index(t.text[offset:], bindMarker)
-		if markerOffset < 0 {
-			return Compiled{}, fmt.Errorf("template %q: invalid template", t.name)
-		}
-		markerOffset += offset
-		sql.WriteString(t.text[offset:markerOffset])
 		placeholder, err := d.Placeholder(index + 1)
 		if err != nil {
 			return Compiled{}, fmt.Errorf("template %q: placeholder %d: %w", t.name, index+1, err)
 		}
-		sql.WriteString(placeholder)
-		offset = markerOffset + len(bindMarker)
+		sql = strings.Replace(sql, marker(index), placeholder, 1)
 	}
-	sql.WriteString(t.text[offset:])
 	return Compiled{
 		name:        t.name,
-		sql:         sql.String(),
+		sql:         sql,
 		parameters:  append([]string(nil), t.parameters...),
 		uniqueNames: append([]string(nil), t.uniqueNames...),
 	}, nil

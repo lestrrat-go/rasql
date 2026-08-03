@@ -30,6 +30,16 @@ func TestTemplateCompilesAndBindsInPlaceholderOrder(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTemplateCompileReplacesFirstMarkerAcrossWholeText(t *testing.T) {
+	const literalMarker = "\x00rasql-bind-1\x00"
+	parsed, err := template.Parse("marker_collision", literalMarker+"{{bind \"a\"}}{{bind \"b\"}}")
+	require.NoError(t, err)
+
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, "$2$1"+literalMarker, compiled.SQL())
+}
+
 func TestTemplateRejectsUnrestrictedActions(t *testing.T) {
 	_, err := template.Parse("bad", "SELECT {{ .Value }}")
 	require.Error(t, err)
