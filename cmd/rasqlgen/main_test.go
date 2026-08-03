@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
@@ -161,6 +166,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	t.Cleanup(func() {
 		openDatabase = previousOpenDatabase
 	})
+	mock.ExpectBegin()
 	mock.ExpectQuery("SHOW server_version_num").
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow("180000"))
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
@@ -188,6 +194,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, referenced_namespace\\.nspname = current_schema\\(\\), constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}))
+	mock.ExpectCommit()
 	mock.ExpectClose()
 
 	output := filepath.Join(directory, "schema.go")
@@ -197,6 +204,154 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{")
 	require.Contains(t, string(source), "func Users() UsersTable {")
+}
+
+func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	output := filepath.Join(directory, "schema.go")
+
+	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-timeout", "0s", "-package", "generated", "-output", output})
+	require.ErrorContains(t, err, "schema -timeout must be positive")
+	_, err = os.Stat(output)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRunSchemaInspectionRespectsTimeout(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	previousOpenDatabase := openDatabase
+	openDatabase = func(driverName string, dataSourceName string) (*sql.DB, error) {
+		return database, nil
+	}
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+	})
+	mock.ExpectBegin()
+	mock.ExpectQuery("SHOW server_version_num").WillDelayFor(500 * time.Millisecond)
+	mock.ExpectRollback()
+	mock.ExpectClose()
+
+	output := filepath.Join(directory, "schema.go")
+	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-timeout", "20ms", "-package", "generated", "-output", output})
+	require.ErrorContains(t, err, "read PostgreSQL server version")
+	_, err = os.Stat(output)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRunSchemaRejectsTransactionBeginFailure(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	previousOpenDatabase := openDatabase
+	openDatabase = func(driverName string, dataSourceName string) (*sql.DB, error) {
+		return database, nil
+	}
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+	})
+	mock.ExpectBegin().WillReturnError(errors.New("connection refused"))
+	mock.ExpectClose()
+
+	output := filepath.Join(directory, "schema.go")
+	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output})
+	require.ErrorContains(t, err, "begin PostgreSQL inspection transaction")
+	require.ErrorContains(t, err, "connection refused")
+	_, err = os.Stat(output)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// recordingTxDriver is a minimal driver.Driver that records the
+// driver.TxOptions its single connection receives through ConnBeginTx.
+// sqlmock does not expose driver.TxOptions, so this drives the assertion
+// that rasqlgen opens its inspection transaction as repeatable-read,
+// read-only.
+type recordingTxDriver struct {
+	recorded chan driver.TxOptions
+}
+
+func (d *recordingTxDriver) Open(name string) (driver.Conn, error) {
+	return &recordingTxConn{driver: d}, nil
+}
+
+type recordingTxConn struct {
+	driver *recordingTxDriver
+}
+
+func (c *recordingTxConn) Prepare(query string) (driver.Stmt, error) {
+	return nil, errors.New("recordingTxConn: Prepare not supported")
+}
+
+func (c *recordingTxConn) Close() error {
+	return nil
+}
+
+func (c *recordingTxConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("recordingTxConn: Begin not supported, expected BeginTx")
+}
+
+func (c *recordingTxConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	c.driver.recorded <- opts
+	return recordingTxTx{}, nil
+}
+
+type recordingTxTx struct{}
+
+func (recordingTxTx) Commit() error   { return nil }
+func (recordingTxTx) Rollback() error { return nil }
+
+var recordingTxDriverCounter int64
+
+func TestRunSchemaBeginsRepeatableReadReadOnlyTransaction(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+
+	driverName := fmt.Sprintf("rasqlgen-recording-tx-driver-%d", atomic.AddInt64(&recordingTxDriverCounter, 1))
+	recorder := &recordingTxDriver{recorded: make(chan driver.TxOptions, 1)}
+	sql.Register(driverName, recorder)
+
+	previousOpenDatabase := openDatabase
+	openDatabase = func(driverNameArgument string, dataSourceName string) (*sql.DB, error) {
+		return sql.Open(driverName, dataSourceName)
+	}
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+	})
+
+	output := filepath.Join(directory, "schema.go")
+	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output})
+	require.Error(t, err)
+
+	select {
+	case opts := <-recorder.recorded:
+		require.Equal(t, sql.LevelRepeatableRead, sql.IsolationLevel(opts.Isolation))
+		require.True(t, opts.ReadOnly)
+	default:
+		t.Fatal("BeginTx was not called")
+	}
+	_, err = os.Stat(output)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestRunQueryGeneratesSource(t *testing.T) {
