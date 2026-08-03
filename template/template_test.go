@@ -1,6 +1,7 @@
 package template_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,6 +149,43 @@ func TestTemplateRejectsUnrestrictedActions(t *testing.T) {
 	require.Error(t, err)
 	_, err = template.Parse("bad", "SELECT {{bind \"not-valid\"}}")
 	require.Error(t, err)
+}
+
+func TestTemplateCompileRejectsNilPointerDialect(t *testing.T) {
+	var nilDialect *nilPointerDialect
+
+	t.Run("with bind action", func(t *testing.T) {
+		parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+		require.NoError(t, err)
+
+		var compiled template.Compiled
+		require.NotPanics(t, func() {
+			compiled, err = parsed.Compile(nilDialect)
+		})
+		require.Zero(t, compiled)
+		require.EqualError(t, err, `template "user_by_id": dialect must not be nil`)
+	})
+
+	t.Run("without bind action", func(t *testing.T) {
+		parsed, err := template.Parse("select_one", "SELECT 1")
+		require.NoError(t, err)
+
+		var compiled template.Compiled
+		require.NotPanics(t, func() {
+			compiled, err = parsed.Compile(nilDialect)
+		})
+		require.Zero(t, compiled)
+		require.EqualError(t, err, `template "select_one": dialect must not be nil`)
+	})
+}
+
+type nilPointerDialect struct {
+	markerDialect
+	prefix string
+}
+
+func (d *nilPointerDialect) Placeholder(position int) (string, error) {
+	return fmt.Sprintf("%s%d", d.prefix, position), nil
 }
 
 type markerDialect struct{}
