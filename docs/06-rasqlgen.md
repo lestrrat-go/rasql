@@ -25,14 +25,14 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | --- | --- |
 | `-dsn` | PostgreSQL connection string to inspect. |
 | `-input` | Path to a JSON array of table descriptors, instead of `-dsn`. |
-| `-table` | Table to generate; repeat it for each table. Required with `-dsn`; filters a JSON snapshot from `-input`. |
+| `-table` | Table to generate; repeat it for each table. Required with `-dsn`; filters a JSON snapshot from `-input`. Passing the same table name twice is an error. |
 | `-dialect` | Dialect for `-dsn`, defaulting to `postgresql`. |
 | `-package` | Package name for the generated file. Required. |
 | `-output` | Path of the generated file. Required. |
 
 Supply either `-dsn` or `-input`, never both. Direct inspection currently supports PostgreSQL only; the command bundles the pgx driver, so nothing needs importing to use `-dsn`. It preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys. It reports an error when an index or constraint has metadata that the schema descriptor cannot reproduce.
 
-`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.Table` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name.
+`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.Table` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, whether with `-input` or `-dsn`, is rejected as a flag-parsing error rather than silently collapsed to one table.
 
 ### What it generates
 
