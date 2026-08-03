@@ -44,11 +44,6 @@ func TestCreateTableRendersDialectTypesAndConstraints(t *testing.T) {
 	require.Equal(t, "CREATE TABLE \"orders\" (\"id\" BIGINT NOT NULL, \"customer_id\" BIGINT NOT NULL, \"metadata\" JSONB, PRIMARY KEY (\"id\"), CONSTRAINT \"orders_customer_key\" UNIQUE (\"customer_id\"), CONSTRAINT \"orders_id_check\" CHECK (id > 0), CONSTRAINT \"orders_customer_fk\" FOREIGN KEY (\"customer_id\") REFERENCES \"customers\" (\"id\") ON DELETE CASCADE)", rendered.SQL())
 	require.Empty(t, rendered.Args())
 
-	rendered, err = render.CreateTable(dialect.Spanner(), table)
-	require.NoError(t, err)
-	require.Contains(t, rendered.SQL(), "`metadata` JSON")
-	require.Contains(t, rendered.SQL(), ") PRIMARY KEY (`id`)")
-
 	indexes, err := render.CreateIndexes(dialect.MySQL(), table)
 	require.NoError(t, err)
 	require.Equal(t, []string{"CREATE INDEX `orders_customer_idx` ON `orders` (`customer_id`)"}, sqls(indexes))

@@ -4,7 +4,7 @@
 
 It gives an application one model for schema definitions, dynamic queries, static queries, result decoding, and database inspection. Every statement it produces is parameterized: values travel as bound arguments, never as SQL text.
 
-* PostgreSQL, MySQL, SQLite, and Google Cloud Spanner dialects.
+* PostgreSQL, MySQL, and SQLite dialects.
 * Schema definitions written as Go code, including generation from live database metadata.
 * Type-safe result-set access.
 * Dynamic query building at runtime.
@@ -184,7 +184,7 @@ func Example_rasql_quickstart() {
 source: [examples/rasql_quickstart_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_quickstart_example_test.go)
 <!-- END INCLUDE -->
 
-`users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(client, store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()`, `dialect.MySQL()`, or `dialect.Spanner()` to run the same code against another database; only the driver and the DSN change with it.
+`users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(client, store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()` or `dialect.MySQL()` to run the same code against another database; only the driver and the DSN change with it.
 
 Inserts, updates, deletes, and typed selects have dedicated helpers. Upserts, `RETURNING`, and anything else beyond them are built through the `query` package and run with `client.Exec`.
 

@@ -493,13 +493,9 @@ type informationQueries struct {
 	unsupportedIndexes              string
 	indexes                         string
 	foreignKeys                     string
-	named                           bool
 }
 
-func (q informationQueries) argument(tableName string) any {
-	if q.named {
-		return sql.Named("table_name", tableName)
-	}
+func (informationQueries) argument(tableName string) any {
 	return tableName
 }
 
@@ -509,12 +505,6 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 		return informationQueries{
 			columns:    "SELECT column_name, column_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
 			primaryKey: "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
-		}, nil
-	case "spanner":
-		return informationQueries{
-			columns:    "SELECT COLUMN_NAME, SPANNER_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @table_name ORDER BY ORDINAL_POSITION",
-			primaryKey: "SELECT INDEX_COLUMNS.COLUMN_NAME FROM INFORMATION_SCHEMA.INDEXES JOIN INFORMATION_SCHEMA.INDEX_COLUMNS ON INDEXES.INDEX_NAME = INDEX_COLUMNS.INDEX_NAME AND INDEXES.TABLE_NAME = INDEX_COLUMNS.TABLE_NAME WHERE INDEXES.TABLE_NAME = @table_name AND INDEXES.INDEX_TYPE = 'PRIMARY_KEY' ORDER BY INDEX_COLUMNS.ORDINAL_POSITION",
-			named:      true,
 		}, nil
 	default:
 		return informationQueries{}, fmt.Errorf("inspect: unsupported dialect %q", name)
@@ -612,23 +602,6 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 			return schema.TypeTime, nil
 		case strings.Contains(typeName, "UUID"):
 			return schema.TypeUUID, nil
-		}
-	case "spanner":
-		switch typeName {
-		case "BOOL":
-			return schema.TypeBoolean, nil
-		case "INT64":
-			return schema.TypeInteger, nil
-		case "FLOAT64":
-			return schema.TypeFloat, nil
-		case "BYTES", "BYTES(MAX)":
-			return schema.TypeBytes, nil
-		case "TIMESTAMP", "DATE":
-			return schema.TypeTime, nil
-		case "JSON":
-			return schema.TypeJSON, nil
-		case "STRING", "STRING(MAX)", "STRING(36)":
-			return schema.TypeText, nil
 		}
 	}
 	return "", fmt.Errorf("unsupported %s type %q", dialectName, databaseType)

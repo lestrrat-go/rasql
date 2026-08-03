@@ -183,7 +183,7 @@ func runQuery(args []string) error {
 	flags := newFlagSet("query")
 	input := flags.String("input", "", "path to a static SQL template")
 	functionName := flags.String("function", "", "generated function name")
-	dialectName := flags.String("dialect", "", "postgresql, mysql, sqlite, or spanner")
+	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "path for generated Go source")
 	if err := flags.Parse(args); err != nil {
@@ -232,8 +232,6 @@ func builtinDialect(name string) (dialect.Dialect, error) {
 		return dialect.MySQL(), nil
 	case "sqlite":
 		return dialect.SQLite(), nil
-	case "spanner":
-		return dialect.Spanner(), nil
 	default:
 		return nil, fmt.Errorf("unsupported dialect %q", name)
 	}

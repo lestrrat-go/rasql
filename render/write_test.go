@@ -49,12 +49,6 @@ func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 			update:  "UPDATE \"users\" SET \"email\" = ? WHERE (\"users\".\"id\" = ?)",
 			delete:  "DELETE FROM \"users\" WHERE (\"users\".\"id\" = ?)",
 		},
-		"spanner": {
-			dialect: dialect.Spanner(),
-			insert:  "INSERT INTO `users` (`id`, `email`) VALUES (@p1, @p2)",
-			update:  "UPDATE `users` SET `email` = @p1 WHERE (`users`.`id` = @p2)",
-			delete:  "DELETE FROM `users` WHERE (`users`.`id` = @p1)",
-		},
 	}
 
 	for name, test := range tests {
@@ -127,8 +121,6 @@ func TestDefaultInsertRendersDialectSyntax(t *testing.T) {
 		})
 	}
 
-	_, err = render.Insert(dialect.Spanner(), statement)
-	require.ErrorContains(t, err, "default-values INSERT is not supported")
 }
 
 func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
@@ -164,8 +156,6 @@ func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
 		})
 	}
 
-	_, err = render.Upsert(dialect.Spanner(), statement)
-	require.Error(t, err)
 }
 
 func TestSQLiteUpsertExecutes(t *testing.T) {
