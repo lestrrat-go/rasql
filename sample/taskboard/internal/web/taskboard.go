@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 
 	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
@@ -24,15 +25,21 @@ type taskboardPage struct {
 }
 
 type taskboardHandler struct {
-	tasks taskboard.TaskReader
-	page  *template.Template
+	tasks  taskboard.TaskReader
+	page   *template.Template
+	logger *slog.Logger
 }
 
 // NewTaskboardHandler returns the Taskboard HTTP routes.
 func NewTaskboardHandler(tasks taskboard.TaskReader) http.Handler {
+	return newTaskboardHandler(tasks, slog.Default())
+}
+
+func newTaskboardHandler(tasks taskboard.TaskReader, logger *slog.Logger) http.Handler {
 	handler := taskboardHandler{
-		tasks: tasks,
-		page:  template.Must(template.New("taskboard").Parse(taskboardTemplate)),
+		tasks:  tasks,
+		page:   template.Must(template.New("taskboard").Parse(taskboardTemplate)),
+		logger: logger,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handler.showTasks)
@@ -43,6 +50,7 @@ func NewTaskboardHandler(tasks taskboard.TaskReader) http.Handler {
 func (handler taskboardHandler) showTasks(response http.ResponseWriter, request *http.Request) {
 	tasks, err := handler.tasks.OpenTasks(request.Context(), 100)
 	if err != nil {
+		handler.logger.Error("read open tasks", "error", err)
 		http.Error(response, "taskboard is unavailable", http.StatusInternalServerError)
 		return
 	}
