@@ -4,6 +4,7 @@ package inspect
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -13,6 +14,31 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 )
+
+// ErrTableNotFound is the sentinel wrapped by every [TableNotFoundError], so
+// callers that only need a presence check can use errors.Is instead of
+// errors.As.
+var ErrTableNotFound = errors.New("inspect: table not found")
+
+// TableNotFoundError reports that a requested table has no metadata in the
+// inspected scope. It distinguishes a lookup miss (misspelled or wrong-schema
+// table name) from a malformed table descriptor.
+type TableNotFoundError struct {
+	// Table is the requested table name.
+	Table string
+	// Scope describes where the lookup searched, such as "the current schema".
+	Scope string
+}
+
+func (e *TableNotFoundError) Error() string {
+	return fmt.Sprintf("inspect: table %q not found in %s", e.Table, e.Scope)
+}
+
+// Unwrap exposes ErrTableNotFound so errors.Is(err, ErrTableNotFound) works
+// alongside errors.As against *TableNotFoundError.
+func (e *TableNotFoundError) Unwrap() error {
+	return ErrTableNotFound
+}
 
 // Queryer is implemented by *sql.DB and *sql.Tx.
 type Queryer interface {
@@ -59,6 +85,19 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 	columns, err := i.readColumns(ctx, queries.columns, queries.argument(tableName))
 	if err != nil {
 		return schema.Table{}, err
+	}
+	if len(columns) == 0 {
+		if i.dialect.Name() == "postgresql" {
+			exists, err := i.postgreSQLTableExists(ctx, tableName)
+			if err != nil {
+				return schema.Table{}, err
+			}
+			if exists {
+				return schema.Table{}, fmt.Errorf("inspect: table %q cannot be represented: rasql does not support zero-column tables", tableName)
+			}
+			return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current schema"}
+		}
+		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
 	}
 	primaryKey, err := i.readPrimaryKey(ctx, queries.primaryKey, queries.argument(tableName))
 	if err != nil {
@@ -143,6 +182,33 @@ func (i Inspector) postgreSQLServerVersion(ctx context.Context) (int, error) {
 	return version, nil
 }
 
+// postgreSQLTableExists reports whether tableName exists in the current
+// schema. It is used only after readColumns returns no rows, to distinguish
+// an absent table from a genuinely zero-column one: PostgreSQL permits
+// CREATE TABLE t (), so an empty column set alone cannot tell the two apart.
+func (i Inspector) postgreSQLTableExists(ctx context.Context, tableName string) (bool, error) {
+	rows, err := i.queryer.QueryContext(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)", tableName)
+	if err != nil {
+		return false, fmt.Errorf("inspect: check table %q existence: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("inspect: iterate table %q existence: %w", tableName, err)
+		}
+		return false, fmt.Errorf("inspect: check table %q existence: no result", tableName)
+	}
+	var exists bool
+	if err := rows.Scan(&exists); err != nil {
+		return false, fmt.Errorf("inspect: scan table %q existence: %w", tableName, err)
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("inspect: iterate table %q existence: %w", tableName, err)
+	}
+	return exists, nil
+}
+
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
 	query := "PRAGMA table_info(\"" + tableName + "\")"
 	rows, err := i.queryer.QueryContext(ctx, query)
@@ -179,6 +245,9 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	}
 	if err := rows.Err(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: iterate SQLite columns: %w", err)
+	}
+	if len(columns) == 0 {
+		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
 	sort.Slice(primaryColumns, func(left, right int) bool {
 		return primaryColumns[left].position < primaryColumns[right].position

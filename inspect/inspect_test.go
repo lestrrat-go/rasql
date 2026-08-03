@@ -3,6 +3,7 @@ package inspect_test
 import (
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -678,4 +679,86 @@ func TestNewRejectsTypedNilDependencies(t *testing.T) {
 		_, err = inspector.Table(t.Context(), "users")
 	})
 	require.ErrorContains(t, err, "invalid inspector")
+}
+
+func TestPostgreSQLInspectorReportsTableNotFoundWhenAbsent(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}))
+	mock.ExpectQuery("SELECT EXISTS \\(SELECT 1 FROM information_schema\\.tables WHERE table_schema = current_schema\\(\\) AND table_name = \\$1\\)").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	_, err = inspector.Table(t.Context(), "widgets")
+	require.Error(t, err)
+	require.ErrorIs(t, err, inspect.ErrTableNotFound)
+	var notFound *inspect.TableNotFoundError
+	require.ErrorAs(t, err, &notFound)
+	require.Equal(t, "widgets", notFound.Table)
+	require.Contains(t, err.Error(), `"widgets"`)
+	require.Contains(t, err.Error(), "current schema")
+	require.NotContains(t, err.Error(), "normalize table")
+}
+
+func TestPostgreSQLInspectorReportsZeroColumnTableWhenPresent(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}))
+	mock.ExpectQuery("SELECT EXISTS \\(SELECT 1 FROM information_schema\\.tables WHERE table_schema = current_schema\\(\\) AND table_name = \\$1\\)").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+	_, err = inspector.Table(t.Context(), "widgets")
+	require.Error(t, err)
+	var notFound *inspect.TableNotFoundError
+	require.False(t, errors.As(err, &notFound))
+	require.False(t, errors.Is(err, inspect.ErrTableNotFound))
+	require.Contains(t, err.Error(), `"widgets"`)
+	require.Contains(t, err.Error(), "zero-column")
+}
+
+func TestSQLiteInspectorReportsTableNotFound(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery("PRAGMA table_info(\"ghosts\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}))
+
+	_, err = inspector.Table(t.Context(), "ghosts")
+	require.Error(t, err)
+	require.ErrorIs(t, err, inspect.ErrTableNotFound)
+	var notFound *inspect.TableNotFoundError
+	require.ErrorAs(t, err, &notFound)
+	require.Equal(t, "ghosts", notFound.Table)
+	require.Contains(t, err.Error(), `"ghosts"`)
+	require.NotContains(t, err.Error(), "normalize table")
 }
