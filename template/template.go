@@ -122,8 +122,9 @@ func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
 			if _, exists := replaced[candidate]; exists {
 				sql.WriteString(candidate)
 			} else {
-				sql.WriteString(placeholder)
 				replaced[candidate] = struct{}{}
+				remaining = placeholder + remaining[end+1:]
+				continue
 			}
 		}
 		remaining = remaining[end+1:]

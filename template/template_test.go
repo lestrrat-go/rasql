@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/template"
 	"github.com/stretchr/testify/require"
 )
@@ -50,11 +51,50 @@ func TestTemplateCompilePreservesRepeatedLiteralMarker(t *testing.T) {
 	require.Equal(t, "$1"+literalMarker+literalMarker+"$2", compiled.SQL())
 }
 
+func TestTemplateCompilePreservesCustomDialectMarkerPlaceholders(t *testing.T) {
+	const marker = "\x00rasql-bind-1\x00"
+	parsed, err := template.Parse("custom_dialect_marker", "{{bind \"a\"}}{{bind \"b\"}}")
+	require.NoError(t, err)
+
+	compiled, err := parsed.Compile(markerDialect{})
+	require.NoError(t, err)
+	require.Equal(t, "p2"+marker, compiled.SQL())
+}
+
 func TestTemplateRejectsUnrestrictedActions(t *testing.T) {
 	_, err := template.Parse("bad", "SELECT {{ .Value }}")
 	require.Error(t, err)
 	_, err = template.Parse("bad", "SELECT {{bind \"not-valid\"}}")
 	require.Error(t, err)
+}
+
+type markerDialect struct{}
+
+func (markerDialect) Name() string {
+	return "marker"
+}
+
+func (markerDialect) QuoteIdentifier(name string) (string, error) {
+	return name, nil
+}
+
+func (markerDialect) Placeholder(position int) (string, error) {
+	if position == 1 {
+		return "\x00rasql-bind-1\x00", nil
+	}
+	return "p2", nil
+}
+
+func (markerDialect) TypeName(schema.LogicalType) (string, error) {
+	return "", nil
+}
+
+func (markerDialect) UpsertStyle() dialect.UpsertStyle {
+	return dialect.UpsertUnsupported
+}
+
+func (markerDialect) Supports(dialect.Capability) bool {
+	return false
 }
 
 func TestGoSourceCompiles(t *testing.T) {
