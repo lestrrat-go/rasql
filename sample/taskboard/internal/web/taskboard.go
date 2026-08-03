@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 
 	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
@@ -36,12 +37,16 @@ type taskboardHandler struct {
 	logger *slog.Logger
 }
 
-// NewTaskboardHandler returns the Taskboard HTTP routes.
-func NewTaskboardHandler(tasks taskboard.TaskReader) http.Handler {
+// NewTaskboardHandler returns the Taskboard HTTP routes. It returns an error
+// if tasks is nil.
+func NewTaskboardHandler(tasks taskboard.TaskReader) (http.Handler, error) {
 	return newTaskboardHandler(tasks, slog.Default())
 }
 
-func newTaskboardHandler(tasks taskboard.TaskReader, logger *slog.Logger) http.Handler {
+func newTaskboardHandler(tasks taskboard.TaskReader, logger *slog.Logger) (http.Handler, error) {
+	if isNilTaskReader(tasks) {
+		return nil, fmt.Errorf("taskboard: tasks must not be nil")
+	}
 	handler := taskboardHandler{
 		tasks:  tasks,
 		page:   template.Must(template.New("taskboard").Parse(taskboardTemplate)),
@@ -50,7 +55,22 @@ func newTaskboardHandler(tasks taskboard.TaskReader, logger *slog.Logger) http.H
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", handler.showTasks)
 	mux.HandleFunc("GET /healthz", health)
-	return mux
+	return mux, nil
+}
+
+// isNilTaskReader reports whether tasks is a nil interface value or a
+// non-nil interface holding a nil pointer, map, slice, chan, or func.
+func isNilTaskReader(tasks taskboard.TaskReader) bool {
+	if tasks == nil {
+		return true
+	}
+	value := reflect.ValueOf(tasks)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (handler taskboardHandler) showTasks(response http.ResponseWriter, request *http.Request) {

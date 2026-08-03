@@ -10,13 +10,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
 )
 
 func TestTaskboardHandlerLogsStoreErrors(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&output, nil))
-	handler := newTaskboardHandler(failingTaskReader{}, logger)
+	handler, err := newTaskboardHandler(failingTaskReader{}, logger)
+	require.NoError(t, err)
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
