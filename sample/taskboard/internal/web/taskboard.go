@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
 )
@@ -16,12 +17,17 @@ const taskboardTemplate = `<!doctype html>
 <main>
 <h1>Website refresh</h1>
 <ul>{{range .Tasks}}<li>P{{.Priority}} {{.Title}}</li>{{end}}</ul>
+<nav>{{if .PreviousPage}}<a href="/?page={{.PreviousPage}}">Previous</a>{{end}}{{if .NextPage}}<a href="/?page={{.NextPage}}">Next</a>{{end}}</nav>
 </main>
 </body>
 </html>`
 
+const taskboardPageSize = 50
+
 type taskboardPage struct {
-	Tasks []taskboard.Summary
+	Tasks        []taskboard.Summary
+	PreviousPage int
+	NextPage     int
 }
 
 type taskboardHandler struct {
@@ -48,16 +54,52 @@ func newTaskboardHandler(tasks taskboard.TaskReader, logger *slog.Logger) http.H
 }
 
 func (handler taskboardHandler) showTasks(response http.ResponseWriter, request *http.Request) {
-	tasks, err := handler.tasks.OpenTasks(request.Context(), 100)
+	offset, err := taskboardOffset(request)
+	if err != nil {
+		http.Error(response, "page must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	tasks, err := handler.tasks.OpenTasks(request.Context(), 100, taskboardPageSize+1, offset)
 	if err != nil {
 		handler.logger.Error("read open tasks", "error", err)
 		http.Error(response, "taskboard is unavailable", http.StatusInternalServerError)
 		return
 	}
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := handler.page.Execute(response, taskboardPage{Tasks: tasks}); err != nil {
+	page := taskboardPage{Tasks: tasks}
+	if offset > 0 {
+		page.PreviousPage = offset / taskboardPageSize
+	}
+	if len(tasks) > taskboardPageSize {
+		page.Tasks = tasks[:taskboardPageSize]
+		nextPage := offset/taskboardPageSize + 2
+		if nextPage <= maximumTaskboardPage() {
+			page.NextPage = nextPage
+		}
+	}
+	if err := handler.page.Execute(response, page); err != nil {
 		return
 	}
+}
+
+func taskboardOffset(request *http.Request) (int, error) {
+	value := request.URL.Query().Get("page")
+	if value == "" {
+		return 0, nil
+	}
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 {
+		return 0, fmt.Errorf("invalid page %q", value)
+	}
+	if page > maximumTaskboardPage() {
+		return 0, fmt.Errorf("invalid page %q", value)
+	}
+	return (page - 1) * taskboardPageSize, nil
+}
+
+func maximumTaskboardPage() int {
+	maxOffset := int(^uint(0) >> 1)
+	return maxOffset/taskboardPageSize + 1
 }
 
 func health(response http.ResponseWriter, _ *http.Request) {
