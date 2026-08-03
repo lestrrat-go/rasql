@@ -31,8 +31,8 @@ func TestTaskboardHandlerRendersOpenTasks(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "P1 Draft rollout plan") {
 		t.Errorf("response body = %q, want task", response.Body.String())
 	}
-	if reader.limit != 50 || reader.offset != 0 {
-		t.Errorf("page = limit %d, offset %d, want limit 50, offset 0", reader.limit, reader.offset)
+	if reader.limit != 51 || reader.offset != 0 {
+		t.Errorf("page = limit %d, offset %d, want limit 51, offset 0", reader.limit, reader.offset)
 	}
 }
 
@@ -62,8 +62,50 @@ func TestTaskboardHandlerRequestsSelectedPage(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
 	}
-	if reader.limit != 50 || reader.offset != 50 {
-		t.Errorf("page = limit %d, offset %d, want limit 50, offset 50", reader.limit, reader.offset)
+	if reader.limit != 51 || reader.offset != 50 {
+		t.Errorf("page = limit %d, offset %d, want limit 51, offset 50", reader.limit, reader.offset)
+	}
+}
+
+func TestTaskboardHandlerHidesNextOnFinalFullPage(t *testing.T) {
+	reader := &fakeTaskReader{tasks: make([]taskboard.Summary, 50)}
+	handler := web.NewTaskboardHandler(reader)
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
+	}
+	if reader.limit != 51 {
+		t.Errorf("limit = %d, want 51", reader.limit)
+	}
+	if strings.Contains(response.Body.String(), ">Next</a>") {
+		t.Errorf("response body = %q, want no next page", response.Body.String())
+	}
+}
+
+func TestTaskboardHandlerShowsNextForFollowingPage(t *testing.T) {
+	tasks := append(make([]taskboard.Summary, 50), taskboard.Summary{Title: "Following task"})
+	reader := &fakeTaskReader{tasks: tasks}
+	handler := web.NewTaskboardHandler(reader)
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
+	}
+	if !strings.Contains(response.Body.String(), ">Next</a>") {
+		t.Errorf("response body = %q, want next page", response.Body.String())
+	}
+	if strings.Count(response.Body.String(), "<li>") != 50 {
+		t.Errorf("response body = %q, want 50 tasks", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "Following task") {
+		t.Errorf("response body = %q, rendered task from following page", response.Body.String())
 	}
 }
 

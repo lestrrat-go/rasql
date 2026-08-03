@@ -59,7 +59,7 @@ func (handler taskboardHandler) showTasks(response http.ResponseWriter, request 
 		http.Error(response, "page must be a positive integer", http.StatusBadRequest)
 		return
 	}
-	tasks, err := handler.tasks.OpenTasks(request.Context(), 100, taskboardPageSize, offset)
+	tasks, err := handler.tasks.OpenTasks(request.Context(), 100, taskboardPageSize+1, offset)
 	if err != nil {
 		handler.logger.Error("read open tasks", "error", err)
 		http.Error(response, "taskboard is unavailable", http.StatusInternalServerError)
@@ -70,7 +70,8 @@ func (handler taskboardHandler) showTasks(response http.ResponseWriter, request 
 	if offset > 0 {
 		page.PreviousPage = offset / taskboardPageSize
 	}
-	if len(tasks) == taskboardPageSize {
+	if len(tasks) > taskboardPageSize {
+		page.Tasks = tasks[:taskboardPageSize]
 		page.NextPage = offset/taskboardPageSize + 2
 	}
 	if err := handler.page.Execute(response, page); err != nil {
