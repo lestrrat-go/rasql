@@ -212,6 +212,8 @@ Names come from the table and column names. Underscore-separated parts are capit
 | `bytes`, `json` | `[]byte` |
 | `time` | `time.Time` |
 
+A `boolean` column decodes from any integer value, not just 0 and 1: zero decodes as `false`, and any nonzero value decodes as `true`.
+
 The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `QueryTable`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `DecodeRow` or `ColumnValue`, because those belong to the row type's own mapping methods.
 
 ## `rasqlgen query`
