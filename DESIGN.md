@@ -29,6 +29,7 @@ The migration package applies ordered, forward-only native SQL migrations for Po
 | `inspect` | Reads database metadata and returns normalized schema descriptors. | `schema`, `dialect` |
 | `migrate` | Checksums, reports status, and applies forward-only native SQL migrations. | `schema`, `dialect`, `database/sql` |
 | `migrate/diff` | Loads desired-schema sources, owns dialect-neutral diff plans, and writes reviewed migration directories. | Go standard library |
+| `migrate/diff/mysql` | Compares supported MySQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-mysql/query` |
 | `migrate/diff/postgresql` | Compares supported PostgreSQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-pg/query` |
 | `cmd/rasqlmigrate` | Runs checked-in SQL migration directories and generates reviewed dialect-specific migrations without application Go code. | `migrate`, `migrate/diff`, supported database drivers |
 | `template` and `cmd/rasqlgen` | Compiles static query templates and schema snapshots into Go source. | public packages only |

@@ -10,7 +10,7 @@ It gives an application one model for schema definitions, dynamic queries, stati
 * Dynamic query building at runtime.
 * Static query building with templates.
 
-`rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. Run checked-in SQL migration directories with [`rasqlmigrate`](docs/07-migrations.md), and generate reviewed PostgreSQL migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
+`rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. Run checked-in SQL migration directories with [`rasqlmigrate`](docs/07-migrations.md), and generate reviewed PostgreSQL or MySQL migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
 
 ## Requirements
 
