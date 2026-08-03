@@ -56,7 +56,7 @@ type Server struct {
 	handler http.Handler
 }
 
-// NewServer creates an HTTP server that listens on address.
+// NewServer creates an HTTP server that listens on address. A nil handler uses http.DefaultServeMux.
 func NewServer(address string, handler http.Handler) Server {
 	return Server{address: address, handler: handler}
 }
