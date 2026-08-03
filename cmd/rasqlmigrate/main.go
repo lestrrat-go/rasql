@@ -18,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	_ "modernc.org/sqlite"
 )
@@ -79,7 +80,7 @@ func printUsage(output io.Writer) {
 
 func runDiff(args []string) error {
 	flags := newFlagSet("diff")
-	dialectName := flags.String("dialect", "", "schema dialect; PostgreSQL is currently supported")
+	dialectName := flags.String("dialect", "", "schema dialect; PostgreSQL and MySQL are currently supported")
 	fromDirectory := flags.String("from", "", "baseline desired-schema directory")
 	toDirectory := flags.String("to", "", "target desired-schema directory")
 	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
@@ -132,6 +133,8 @@ func schemaAnalyzer(name string) (diff.Analyzer, error) {
 	switch name {
 	case "postgres", "postgresql":
 		return postgresql.New(), nil
+	case "mysql":
+		return mysql.New(), nil
 	default:
 		return nil, fmt.Errorf("unsupported schema diff dialect %q", name)
 	}

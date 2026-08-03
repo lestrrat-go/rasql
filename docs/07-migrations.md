@@ -77,9 +77,9 @@ rasqlmigrate verify \
 
 `status` reports `applied`, `pending`, `changed`, `out_of_order`, and `unknown` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
 
-## Generate PostgreSQL migrations
+## Generate PostgreSQL and MySQL migrations
 
-`rasqlmigrate diff` compares two PostgreSQL desired-schema directories without connecting to a database. Each directory holds supported natural DDL: `CREATE TABLE` statements and named `CREATE INDEX` statements. It parses source files recursively, then prints a proposed raw SQL migration for review.
+`rasqlmigrate diff` compares two PostgreSQL or MySQL desired-schema directories without connecting to a database. Each directory holds supported natural DDL: `CREATE TABLE` statements and named `CREATE INDEX` statements. It parses source files recursively, then prints a proposed raw SQL migration for review.
 
 ```text
 db/schema/
@@ -110,7 +110,17 @@ rasqlmigrate diff \
   -output db/migrations/postgresql/002_add_member_email
 ```
 
-The first PostgreSQL slice generates new tables, new nullable columns, new required columns with defaults, and ordinary named indexes. It refuses to infer renames, removals, changed columns or constraints, required columns without a backfill, and `CREATE INDEX CONCURRENTLY`. Write those migrations by hand.
+Use the same workflow for MySQL with `-dialect mysql` and MySQL schema and migration directories:
+
+```sh
+rasqlmigrate diff \
+  -dialect mysql \
+  -from db/schema/mysql-v1.1 \
+  -to db/schema/mysql-v1.2 \
+  -output db/migrations/mysql/002_add_member_email
+```
+
+The first PostgreSQL and MySQL slices generate new tables, new nullable columns, new required columns with defaults, and ordinary named indexes. They refuse to infer renames, removals, changed columns or constraints, and required columns without a backfill. The PostgreSQL adapter also refuses `CREATE INDEX CONCURRENTLY`. Write those migrations by hand.
 
 The generated files use the normal migration format. Review them, then apply them with `rasqlmigrate apply`. Do not edit a generated migration after it has been applied.
 
