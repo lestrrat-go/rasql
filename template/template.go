@@ -86,17 +86,51 @@ func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
 	if t.name == "" || t.text == "" {
 		return Compiled{}, fmt.Errorf("template: invalid template")
 	}
-	sql := t.text
+	placeholders := make(map[string]string, len(t.parameters))
 	for index := range t.parameters {
 		placeholder, err := d.Placeholder(index + 1)
 		if err != nil {
 			return Compiled{}, fmt.Errorf("template %q: placeholder %d: %w", t.name, index+1, err)
 		}
-		sql = strings.Replace(sql, marker(index), placeholder, 1)
+		placeholders[marker(index)] = placeholder
+	}
+
+	const markerPrefix = "\x00rasql-bind-"
+	var sql strings.Builder
+	sql.Grow(len(t.text))
+	replaced := make(map[string]struct{}, len(placeholders))
+	remaining := t.text
+	for remaining != "" {
+		start := strings.Index(remaining, markerPrefix)
+		if start < 0 {
+			sql.WriteString(remaining)
+			break
+		}
+		end := strings.IndexByte(remaining[start+len(markerPrefix):], '\x00')
+		if end < 0 {
+			sql.WriteString(remaining)
+			break
+		}
+		end += start + len(markerPrefix)
+
+		candidate := remaining[start : end+1]
+		placeholder, ok := placeholders[candidate]
+		if !ok {
+			sql.WriteString(remaining[:end+1])
+		} else {
+			sql.WriteString(remaining[:start])
+			if _, exists := replaced[candidate]; exists {
+				sql.WriteString(candidate)
+			} else {
+				sql.WriteString(placeholder)
+				replaced[candidate] = struct{}{}
+			}
+		}
+		remaining = remaining[end+1:]
 	}
 	return Compiled{
 		name:        t.name,
-		sql:         sql,
+		sql:         sql.String(),
 		parameters:  append([]string(nil), t.parameters...),
 		uniqueNames: append([]string(nil), t.uniqueNames...),
 	}, nil

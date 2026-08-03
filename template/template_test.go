@@ -40,6 +40,16 @@ func TestTemplateCompileReplacesFirstMarkerAcrossWholeText(t *testing.T) {
 	require.Equal(t, "$2$1"+literalMarker, compiled.SQL())
 }
 
+func TestTemplateCompilePreservesRepeatedLiteralMarker(t *testing.T) {
+	const literalMarker = "\x00rasql-bind-0\x00"
+	parsed, err := template.Parse("repeated_marker_collision", literalMarker+"{{bind \"a\"}}"+literalMarker+"{{bind \"b\"}}")
+	require.NoError(t, err)
+
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, "$1"+literalMarker+literalMarker+"$2", compiled.SQL())
+}
+
 func TestTemplateRejectsUnrestrictedActions(t *testing.T) {
 	_, err := template.Parse("bad", "SELECT {{ .Value }}")
 	require.Error(t, err)
