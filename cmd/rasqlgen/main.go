@@ -23,7 +23,32 @@ import (
 var (
 	openDatabase            = sql.Open
 	commandOutput io.Writer = os.Stderr
+	// maxInputBytes caps how much of a -input file rasqlgen reads into
+	// memory. It is a var, not a const, so tests can lower it.
+	maxInputBytes = 64 << 20
 )
+
+// readInputFile reads path through a size-limited reader, rejecting the
+// input once it exceeds maxInputBytes. A Stat-based size check is not
+// enough here: a fifo or character device reports size 0 regardless of how
+// much data it actually produces, so only reading through a limit catches
+// an oversized input reliably.
+func readInputFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxInputBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxInputBytes {
+		return nil, fmt.Errorf("input file %s exceeds maximum size of %d bytes", path, maxInputBytes)
+	}
+	return data, nil
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -64,7 +89,7 @@ func printUsage(output io.Writer) {
 
 func runSchema(args []string) error {
 	flags := newFlagSet("schema")
-	input := flags.String("input", "", "path to a JSON array of schema tables")
+	input := flags.String("input", "", "path to a JSON array of schema tables (max 64 MiB)")
 	dsn := flags.String("dsn", "", "PostgreSQL connection string")
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
 	var tableNames tableNames
@@ -83,7 +108,7 @@ func runSchema(args []string) error {
 	var tables []schema.Table
 	switch {
 	case *input != "":
-		data, err := os.ReadFile(*input)
+		data, err := readInputFile(*input)
 		if err != nil {
 			return fmt.Errorf("read schema input: %w", err)
 		}
@@ -186,7 +211,7 @@ func (names *tableNames) Set(name string) error {
 
 func runQuery(args []string) error {
 	flags := newFlagSet("query")
-	input := flags.String("input", "", "path to a static SQL template")
+	input := flags.String("input", "", "path to a static SQL template (max 64 MiB)")
 	functionName := flags.String("function", "", "generated function name")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	packageName := flags.String("package", "", "generated package name")
@@ -197,7 +222,7 @@ func runQuery(args []string) error {
 	if *input == "" || *functionName == "" || *dialectName == "" || *packageName == "" || *output == "" {
 		return errors.New("query requires -input, -function, -dialect, -package, and -output")
 	}
-	data, err := os.ReadFile(*input)
+	data, err := readInputFile(*input)
 	if err != nil {
 		return fmt.Errorf("read query input: %w", err)
 	}
