@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -166,7 +167,7 @@ func runSchema(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(*output, source, 0o600); err != nil {
+	if err := writeGeneratedFile(*output, source); err != nil {
 		return fmt.Errorf("write schema output: %w", err)
 	}
 	return nil
@@ -258,7 +259,7 @@ func runQuery(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(*output, source, 0o600); err != nil {
+	if err := writeGeneratedFile(*output, source); err != nil {
 		return fmt.Errorf("write query output: %w", err)
 	}
 	return nil
@@ -287,6 +288,42 @@ func parseCommandFlags(flags *flag.FlagSet, args []string) error {
 // holding spaces cannot be mistaken for several arguments.
 func unexpectedArgumentsError(rest []string) error {
 	return fmt.Errorf("unexpected arguments: %q", rest)
+}
+
+// writeGeneratedFile writes source to path without ever truncating an
+// existing file in place. It writes to a temporary file in the same
+// directory as path, then renames the temporary file over path only after
+// the write fully succeeds, so a failure at any point along the way leaves
+// path untouched instead of empty or partially written.
+func writeGeneratedFile(path string, source []byte) error {
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	removeTemporary := true
+	defer func() {
+		if removeTemporary {
+			_ = os.Remove(temporary.Name())
+		}
+	}()
+
+	if _, err := temporary.Write(source); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary.Name(), path); err != nil {
+		return err
+	}
+	removeTemporary = false
+	return nil
 }
 
 func newFlagSet(name string) *flag.FlagSet {

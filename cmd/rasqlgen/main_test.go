@@ -9,8 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -144,6 +147,102 @@ func TestRunSchemaRejectsDuplicateTableFlag(t *testing.T) {
 			require.ErrorIs(t, err, os.ErrNotExist)
 		})
 	}
+}
+
+// TestRunSchemaPreservesExistingOutputWhenWriteFails proves that a run
+// which fails partway through writing the generated file does not clobber
+// a pre-existing output file. Duplicate table names (the fixture used by
+// TestRunSchemaRejectsDuplicateFilteredInputTables) are rejected by
+// generate.Schema before any file is opened, so that fixture cannot
+// exercise the truncate-then-fail defect this test targets: it never
+// reaches the write step under either the old or the new code. This test
+// instead uses a valid schema and forces the write itself to fail
+// partway, by lowering RLIMIT_FSIZE for the duration of the call, which is
+// what actually reproduces "truncation happens at open, before any byte is
+// written."
+func TestRunSchemaPreservesExistingOutputWhenWriteFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("RLIMIT_FSIZE is not available on windows")
+	}
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	input := filepath.Join(directory, "schema.json")
+	output := filepath.Join(directory, "schema.go")
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	require.NoError(t, os.WriteFile(input, data, 0o600))
+	sentinel := []byte("SENTINEL-DATA-DO-NOT-TRUNCATE")
+	require.NoError(t, os.WriteFile(output, sentinel, 0o600))
+
+	// Catching SIGXFSZ turns an over-limit write into an EFBIG error
+	// instead of the default action, which terminates the process.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGXFSZ)
+	t.Cleanup(func() {
+		signal.Stop(signals)
+	})
+
+	var limit syscall.Rlimit
+	require.NoError(t, syscall.Getrlimit(syscall.RLIMIT_FSIZE, &limit))
+	original := limit
+	limit.Cur = 1
+	require.NoError(t, syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limit))
+
+	runErr := run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
+
+	require.NoError(t, syscall.Setrlimit(syscall.RLIMIT_FSIZE, &original))
+
+	require.Error(t, runErr)
+	got, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Equal(t, sentinel, got)
+}
+
+// TestRunSchemaSuccessLeavesNoTemporaryFile confirms that a successful run
+// cleans up after itself: only the input and the final output file remain
+// in the output directory, with no leftover temporary file from the
+// write-then-rename sequence.
+func TestRunSchemaSuccessLeavesNoTemporaryFile(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	input := filepath.Join(directory, "schema.json")
+	output := filepath.Join(directory, "schema.go")
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	require.NoError(t, os.WriteFile(input, data, 0o600))
+
+	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
+
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	require.ElementsMatch(t, []string{"schema.json", "schema.go"}, names)
+}
+
+// TestRunSchemaOutputDirectoryMissingReturnsError confirms that an -output
+// path inside a nonexistent directory surfaces as an error, since
+// writeGeneratedFile's os.CreateTemp call can fail before its cleanup
+// defer is registered.
+func TestRunSchemaOutputDirectoryMissingReturnsError(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	input := filepath.Join(directory, "schema.json")
+	output := filepath.Join(directory, "missing", "schema.go")
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	require.NoError(t, os.WriteFile(input, data, 0o600))
+
+	err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
+	require.Error(t, err)
 }
 
 func TestRunSchemaInspectsPostgreSQL(t *testing.T) {

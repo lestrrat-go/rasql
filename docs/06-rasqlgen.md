@@ -256,4 +256,6 @@ Put the command in a `go:generate` line beside the package it writes into:
 //go:generate go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema -input schema.json -package store -output rasql_gen.go
 ```
 
+The output file is replaced atomically: `rasqlgen` writes to a temporary file beside it and renames the temporary file into place, so a failed or interrupted run leaves the existing generated file untouched instead of empty or truncated.
+
 Then `go generate ./...` refreshes everything. Because output is deterministic, a CI job can regenerate and fail when `git diff` is not empty, which catches a generated file that drifted from its source.
