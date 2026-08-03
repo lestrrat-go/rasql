@@ -68,10 +68,7 @@ func (server Server) Run(ctx context.Context) (*Controller, error) {
 		return nil, err
 	}
 
-	httpServer := &http.Server{
-		Handler:           server.handler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	httpServer := newHTTPServer(server.handler)
 	controller := &Controller{
 		done:    make(chan struct{}),
 		address: listener.Addr().String(),
@@ -92,6 +89,15 @@ func (server Server) Run(ctx context.Context) (*Controller, error) {
 		}
 	}()
 	return controller, nil
+}
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       time.Minute,
+	}
 }
 
 func serverError(err error) error {
