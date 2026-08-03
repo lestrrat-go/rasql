@@ -24,6 +24,8 @@ TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 
 Open <http://127.0.0.1:8080/> to see the Taskboard page. Set `TASKBOARD_ADDR` to use another listener address. Set `TASKBOARD_DSN` to use a different SQLite database path.
 
+`GET /healthz` is a liveness probe reporting process health. It always returns `200 ok` without querying the database, so a store outage does not restart or kill an otherwise healthy process.
+
 Run its integration test with:
 
 ```sh
