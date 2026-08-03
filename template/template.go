@@ -86,57 +86,23 @@ func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
 	if t.name == "" || t.text == "" {
 		return Compiled{}, fmt.Errorf("template: invalid template")
 	}
-	placeholders := make(map[string]string, len(t.parameters))
+	placeholders := make([]string, len(t.parameters))
 	for index := range t.parameters {
 		placeholder, err := d.Placeholder(index + 1)
 		if err != nil {
 			return Compiled{}, fmt.Errorf("template %q: placeholder %d: %w", t.name, index+1, err)
 		}
-		placeholders[marker(index)] = placeholder
+		placeholders[index] = placeholder
 	}
 
-	const markerPrefix = "\x00rasql-bind-"
+	parts := scanMarkerParts(t.text)
+	for index, placeholder := range placeholders {
+		parts = replaceFirstMarker(parts, marker(index), placeholder)
+	}
 	var sql strings.Builder
 	sql.Grow(len(t.text))
-	replaced := make(map[string]struct{}, len(placeholders))
-	remaining := t.text
-	for remaining != "" {
-		start := strings.Index(remaining, markerPrefix)
-		if start < 0 {
-			sql.WriteString(remaining)
-			break
-		}
-		end := strings.IndexByte(remaining[start+len(markerPrefix):], '\x00')
-		if end < 0 {
-			sql.WriteString(remaining)
-			break
-		}
-		end += start + len(markerPrefix)
-
-		index := remaining[start+len(markerPrefix) : end]
-		if index == "" || strings.IndexFunc(index, func(r rune) bool {
-			return r < '0' || r > '9'
-		}) >= 0 {
-			sql.WriteString(remaining[:start+len(markerPrefix)])
-			remaining = remaining[start+len(markerPrefix):]
-			continue
-		}
-
-		candidate := remaining[start : end+1]
-		placeholder, ok := placeholders[candidate]
-		if !ok {
-			sql.WriteString(remaining[:end+1])
-		} else {
-			sql.WriteString(remaining[:start])
-			if _, exists := replaced[candidate]; exists {
-				sql.WriteString(candidate)
-			} else {
-				replaced[candidate] = struct{}{}
-				remaining = placeholder + remaining[end+1:]
-				continue
-			}
-		}
-		remaining = remaining[end+1:]
+	for _, part := range parts {
+		sql.WriteString(part.text)
 	}
 	return Compiled{
 		name:        t.name,
@@ -276,6 +242,62 @@ func availableGoIdentifier(base string, reserved map[string]struct{}) string {
 
 func marker(index int) string {
 	return fmt.Sprintf("\x00rasql-bind-%d\x00", index)
+}
+
+type markerPart struct {
+	text     string
+	isMarker bool
+}
+
+func scanMarkerParts(text string) []markerPart {
+	const markerPrefix = "\x00rasql-bind-"
+
+	parts := make([]markerPart, 0)
+	remaining := text
+	for remaining != "" {
+		start := strings.Index(remaining, markerPrefix)
+		if start < 0 {
+			parts = append(parts, markerPart{text: remaining})
+			break
+		}
+		end := strings.IndexByte(remaining[start+len(markerPrefix):], '\x00')
+		if end < 0 {
+			parts = append(parts, markerPart{text: remaining})
+			break
+		}
+		end += start + len(markerPrefix)
+
+		index := remaining[start+len(markerPrefix) : end]
+		if index == "" || strings.IndexFunc(index, func(r rune) bool {
+			return r < '0' || r > '9'
+		}) >= 0 {
+			parts = append(parts, markerPart{text: remaining[:start+len(markerPrefix)]})
+			remaining = remaining[start+len(markerPrefix):]
+			continue
+		}
+
+		if start > 0 {
+			parts = append(parts, markerPart{text: remaining[:start]})
+		}
+		parts = append(parts, markerPart{text: remaining[start : end+1], isMarker: true})
+		remaining = remaining[end+1:]
+	}
+	return parts
+}
+
+func replaceFirstMarker(parts []markerPart, target string, replacement string) []markerPart {
+	for index, part := range parts {
+		if !part.isMarker || part.text != target {
+			continue
+		}
+		replacementParts := scanMarkerParts(replacement)
+		updated := make([]markerPart, 0, len(parts)-1+len(replacementParts))
+		updated = append(updated, parts[:index]...)
+		updated = append(updated, replacementParts...)
+		updated = append(updated, parts[index+1:]...)
+		return updated
+	}
+	return parts
 }
 
 func contains(values []string, target string) bool {

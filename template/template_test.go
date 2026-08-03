@@ -76,6 +76,16 @@ func TestTemplateCompilePreservesCustomDialectMarkerPlaceholders(t *testing.T) {
 	require.Equal(t, "p2"+marker, compiled.SQL())
 }
 
+func TestTemplateCompilePreservesMarkerReplacementOrderAcrossMarkerDialect(t *testing.T) {
+	const literalMarker = "\x00rasql-bind-1\x00"
+	parsed, err := template.Parse("cross_marker_collision", literalMarker+"{{bind \"a\"}}{{bind \"b\"}}")
+	require.NoError(t, err)
+
+	compiled, err := parsed.Compile(crossMarkerDialect{})
+	require.NoError(t, err)
+	require.Equal(t, "\x00rasql-bind-0\x00p1"+literalMarker, compiled.SQL())
+}
+
 func TestTemplateRejectsUnrestrictedActions(t *testing.T) {
 	_, err := template.Parse("bad", "SELECT {{ .Value }}")
 	require.Error(t, err)
@@ -98,6 +108,17 @@ func (markerDialect) Placeholder(position int) (string, error) {
 		return "\x00rasql-bind-1\x00", nil
 	}
 	return "p2", nil
+}
+
+type crossMarkerDialect struct {
+	markerDialect
+}
+
+func (crossMarkerDialect) Placeholder(position int) (string, error) {
+	if position == 1 {
+		return "p1", nil
+	}
+	return "\x00rasql-bind-0\x00", nil
 }
 
 func (markerDialect) TypeName(schema.LogicalType) (string, error) {
