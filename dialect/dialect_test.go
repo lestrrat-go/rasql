@@ -33,12 +33,6 @@ func TestBuiltinsRenderIdentifiersAndPlaceholders(t *testing.T) {
 			placeholder: "?",
 			typeName:    "BLOB",
 		},
-		"spanner": {
-			dialect:     dialect.Spanner(),
-			identifier:  "`order`",
-			placeholder: "@p2",
-			typeName:    "BYTES(MAX)",
-		},
 	}
 
 	for name, test := range tests {
@@ -59,7 +53,7 @@ func TestBuiltinsRenderIdentifiersAndPlaceholders(t *testing.T) {
 }
 
 func TestBuiltinsRejectInvalidInput(t *testing.T) {
-	for _, test := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite(), dialect.Spanner()} {
+	for _, test := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
 		_, err := test.QuoteIdentifier("not-valid")
 		require.Error(t, err)
 
@@ -80,10 +74,6 @@ func TestBuiltinCapabilities(t *testing.T) {
 	require.True(t, dialect.MySQL().Supports(dialect.CapabilityEmptyInsert))
 	require.False(t, dialect.SQLite().Supports(dialect.CapabilityDefaultValuesUpsert))
 	require.False(t, dialect.MySQL().Supports(dialect.CapabilityReturning))
-	require.False(t, dialect.Spanner().Supports(dialect.CapabilityUpsert))
-	require.False(t, dialect.Spanner().Supports(dialect.CapabilityDefaultValues))
-	require.Equal(t, dialect.PrimaryKeySuffix, dialect.Spanner().TablePrimaryKeyStyle())
-	require.Equal(t, dialect.PrimaryKeyInline, dialect.PostgreSQL().TablePrimaryKeyStyle())
 	require.Equal(t, dialect.UpsertOnConflict, dialect.PostgreSQL().UpsertStyle())
 	require.Equal(t, dialect.UpsertDuplicateKey, dialect.MySQL().UpsertStyle())
 }

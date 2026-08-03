@@ -210,16 +210,6 @@ func TestRunnerRejectsInvalidSQLSource(t *testing.T) {
 	require.ErrorContains(t, err, "is empty")
 }
 
-func TestNewRejectsUnsupportedRunnerDialects(t *testing.T) {
-	database, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, database.Close())
-	})
-	_, err = migrate.New(database, dialect.Spanner())
-	require.ErrorContains(t, err, "not supported")
-}
-
 func sqlMigration(id string, sqlSources ...string) migrate.Migration {
 	statements := make([]migrate.Statement, len(sqlSources))
 	for index, source := range sqlSources {

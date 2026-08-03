@@ -89,7 +89,7 @@ client, err := rasql.New(database, dialect.SQLite())
 
 `rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Queryer`, which `*sql.DB` and `*sql.Tx` both do. Pass a `*sql.Tx` to run a group of statements in one transaction, or a custom implementation to inspect SQL without a database, as [Querying](03-querying.md) shows.
 
-Pick the dialect that matches the database: `dialect.PostgreSQL()`, `dialect.MySQL()`, `dialect.SQLite()`, or `dialect.Spanner()`. The dialect decides how identifiers are quoted, how placeholders are numbered, how logical column types become DDL, and which syntax the renderer may use.
+Pick the dialect that matches the database: `dialect.PostgreSQL()`, `dialect.MySQL()`, or `dialect.SQLite()`. The dialect decides how identifiers are quoted, how placeholders are numbered, how logical column types become DDL, and which syntax the renderer may use.
 
 A `Client` is a value, not a handle to close. It is safe for concurrent use whenever the `Queryer` inside it is, so `*sql.DB` based clients can be shared across goroutines.
 

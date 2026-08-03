@@ -87,7 +87,7 @@ The value must carry one exported tagged field for every column of the table, so
 
 ## Use database defaults
 
-Pass `rasql.DefaultColumns` to `rasql.InsertWithOptions` to omit named columns from an insert. The database supplies those values. `InsertWithOptions` never treats a Go zero value as absent, so every column not named by `DefaultColumns` remains a bound value. When every column is named, PostgreSQL, MySQL, and SQLite render an all-default insert; Spanner requires at least one column value.
+Pass `rasql.DefaultColumns` to `rasql.InsertWithOptions` to omit named columns from an insert. The database supplies those values. `InsertWithOptions` never treats a Go zero value as absent, so every column not named by `DefaultColumns` remains a bound value. When every column is named, PostgreSQL, MySQL, and SQLite render an all-default insert.
 
 <!-- INCLUDE(examples/rasql_insert_defaults_example_test.go) -->
 ```go

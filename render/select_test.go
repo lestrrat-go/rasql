@@ -28,10 +28,6 @@ func TestSelectRendersForBuiltInDialects(t *testing.T) {
 			dialect: dialect.SQLite(),
 			sql:     "SELECT \"u\".\"id\" AS \"user_id\" FROM \"users\" AS \"u\" INNER JOIN \"orders\" AS \"o\" ON (\"u\".\"id\" = \"o\".\"user_id\") WHERE ((\"o\".\"amount\" > ?) AND (\"o\".\"user_id\" IS NOT NULL)) ORDER BY \"o\".\"amount\" DESC LIMIT ? OFFSET ?",
 		},
-		"spanner": {
-			dialect: dialect.Spanner(),
-			sql:     "SELECT `u`.`id` AS `user_id` FROM `users` AS `u` INNER JOIN `orders` AS `o` ON (`u`.`id` = `o`.`user_id`) WHERE ((`o`.`amount` > @p1) AND (`o`.`user_id` IS NOT NULL)) ORDER BY `o`.`amount` DESC LIMIT @p2 OFFSET @p3",
-		},
 	}
 
 	for name, test := range tests {
