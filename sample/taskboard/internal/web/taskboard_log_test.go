@@ -34,6 +34,6 @@ func TestTaskboardHandlerLogsStoreErrors(t *testing.T) {
 
 type failingTaskReader struct{}
 
-func (failingTaskReader) OpenTasks(context.Context, int64) ([]taskboard.Summary, error) {
+func (failingTaskReader) OpenTasks(context.Context, int64, int, int) ([]taskboard.Summary, error) {
 	return nil, errors.New("database failed")
 }
