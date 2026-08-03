@@ -62,7 +62,12 @@ func newServer(ctx context.Context) (web.Server, *sql.DB, error) {
 		_ = database.Close()
 		return web.Server{}, nil, fmt.Errorf("seed taskboard: %w", err)
 	}
-	return web.NewServer(listenAddress(), web.NewTaskboardHandler(repository)), database, nil
+	handler, err := web.NewTaskboardHandler(repository)
+	if err != nil {
+		_ = database.Close()
+		return web.Server{}, nil, fmt.Errorf("create taskboard handler: %w", err)
+	}
+	return web.NewServer(listenAddress(), handler), database, nil
 }
 
 func listenAddress() string {

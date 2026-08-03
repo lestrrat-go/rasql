@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
 	"github.com/lestrrat-go/rasql/sample/taskboard/internal/web"
 )
@@ -17,7 +19,8 @@ func TestTaskboardHandlerRendersOpenTasks(t *testing.T) {
 	reader := &fakeTaskReader{
 		tasks: []taskboard.Summary{{Title: "Draft rollout plan", Priority: 1}},
 	}
-	handler := web.NewTaskboardHandler(reader)
+	handler, err := web.NewTaskboardHandler(reader)
+	require.NoError(t, err)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 
@@ -38,7 +41,8 @@ func TestTaskboardHandlerRendersOpenTasks(t *testing.T) {
 }
 
 func TestTaskboardHandlerHidesStoreErrors(t *testing.T) {
-	handler := web.NewTaskboardHandler(&fakeTaskReader{err: errors.New("database failed")})
+	handler, err := web.NewTaskboardHandler(&fakeTaskReader{err: errors.New("database failed")})
+	require.NoError(t, err)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 
@@ -54,7 +58,8 @@ func TestTaskboardHandlerHidesStoreErrors(t *testing.T) {
 
 func TestTaskboardHandlerRequestsSelectedPage(t *testing.T) {
 	reader := &fakeTaskReader{tasks: []taskboard.Summary{{Title: "Review onboarding emails", Priority: 2}}}
-	handler := web.NewTaskboardHandler(reader)
+	handler, err := web.NewTaskboardHandler(reader)
+	require.NoError(t, err)
 	request := httptest.NewRequest(http.MethodGet, "/?page=2", nil)
 	response := httptest.NewRecorder()
 
@@ -70,7 +75,8 @@ func TestTaskboardHandlerRequestsSelectedPage(t *testing.T) {
 
 func TestTaskboardHandlerHidesNextOnFinalFullPage(t *testing.T) {
 	reader := &fakeTaskReader{tasks: make([]taskboard.Summary, 50)}
-	handler := web.NewTaskboardHandler(reader)
+	handler, err := web.NewTaskboardHandler(reader)
+	require.NoError(t, err)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 
@@ -90,7 +96,8 @@ func TestTaskboardHandlerHidesNextOnFinalFullPage(t *testing.T) {
 func TestTaskboardHandlerShowsNextForFollowingPage(t *testing.T) {
 	tasks := append(make([]taskboard.Summary, 50), taskboard.Summary{Title: "Following task"})
 	reader := &fakeTaskReader{tasks: tasks}
-	handler := web.NewTaskboardHandler(reader)
+	handler, err := web.NewTaskboardHandler(reader)
+	require.NoError(t, err)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 
@@ -113,7 +120,8 @@ func TestTaskboardHandlerShowsNextForFollowingPage(t *testing.T) {
 func TestTaskboardHandlerHidesNextOnMaximumPage(t *testing.T) {
 	tasks := append(make([]taskboard.Summary, 50), taskboard.Summary{Title: "Following task"})
 	reader := &fakeTaskReader{tasks: tasks}
-	handler := web.NewTaskboardHandler(reader)
+	handler, err := web.NewTaskboardHandler(reader)
+	require.NoError(t, err)
 	maxOffset := int(^uint(0) >> 1)
 	maximumPage := maxOffset/50 + 1
 	request := httptest.NewRequest(http.MethodGet, "/?page="+strconv.Itoa(maximumPage), nil)
@@ -131,7 +139,8 @@ func TestTaskboardHandlerHidesNextOnMaximumPage(t *testing.T) {
 
 func TestTaskboardHandlerRejectsInvalidPage(t *testing.T) {
 	reader := &fakeTaskReader{}
-	handler := web.NewTaskboardHandler(reader)
+	handler, err := web.NewTaskboardHandler(reader)
+	require.NoError(t, err)
 	request := httptest.NewRequest(http.MethodGet, "/?page=0", nil)
 	response := httptest.NewRecorder()
 
@@ -143,6 +152,13 @@ func TestTaskboardHandlerRejectsInvalidPage(t *testing.T) {
 	if reader.limit != 0 || reader.offset != 0 {
 		t.Errorf("reader was called with limit %d and offset %d", reader.limit, reader.offset)
 	}
+}
+
+func TestNewTaskboardHandlerRejectsNilTaskReader(t *testing.T) {
+	handler, err := web.NewTaskboardHandler(nil)
+
+	require.Error(t, err)
+	require.Nil(t, handler)
 }
 
 type fakeTaskReader struct {
