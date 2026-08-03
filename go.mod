@@ -1,11 +1,12 @@
 module github.com/lestrrat-go/rasql
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/lestrrat-go/rasql-pg v0.0.0-20260803045404-7e3faf0c19bd
 	github.com/stretchr/testify v1.11.1
 	modernc.org/sqlite v1.55.0
 )

@@ -70,7 +70,7 @@ func TestNewServerServesTaskboard(t *testing.T) {
 
 func applyMigrations(t *testing.T, databasePath string) {
 	t.Helper()
-	command := exec.CommandContext(t.Context(), "go", "run", "../../cmd/rasqlmigrate", "apply", "-dir", "migrations/sqlite", "-dialect", "sqlite", "-dsn", databasePath)
+	command := exec.CommandContext(t.Context(), "go", "-C", "../..", "run", "./cmd/rasqlmigrate", "apply", "-dir", "sample/taskboard/migrations/sqlite", "-dialect", "sqlite", "-dsn", databasePath)
 	command.Dir = filepath.Join("..", "..")
 	output, err := command.CombinedOutput()
 	if err != nil {

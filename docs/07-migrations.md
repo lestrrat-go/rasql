@@ -77,8 +77,45 @@ rasqlmigrate verify \
 
 `status` reports `applied`, `pending`, `changed`, `out_of_order`, and `unknown` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
 
+## Generate PostgreSQL migrations
+
+`rasqlmigrate diff` compares two PostgreSQL desired-schema directories without connecting to a database. Each directory holds supported natural DDL: `CREATE TABLE` statements and named `CREATE INDEX` statements. It parses source files recursively, then prints a proposed raw SQL migration for review.
+
+```text
+db/schema/
+  postgresql-v1.1/
+    tables/members.sql
+  postgresql-v1.2/
+    tables/members.sql
+db/migrations/
+  postgresql/
+```
+
+Preview the generated migration before writing it:
+
+```sh
+rasqlmigrate diff \
+  -dialect postgresql \
+  -from db/schema/postgresql-v1.1 \
+  -to db/schema/postgresql-v1.2
+```
+
+Pass a new migration directory to write one SQL source file for each generated statement:
+
+```sh
+rasqlmigrate diff \
+  -dialect postgresql \
+  -from db/schema/postgresql-v1.1 \
+  -to db/schema/postgresql-v1.2 \
+  -output db/migrations/postgresql/002_add_member_email
+```
+
+The first PostgreSQL slice generates new tables, new nullable columns, new required columns with defaults, and ordinary named indexes. It refuses to infer renames, removals, changed columns or constraints, required columns without a backfill, and `CREATE INDEX CONCURRENTLY`. Write those migrations by hand.
+
+The generated files use the normal migration format. Review them, then apply them with `rasqlmigrate apply`. Do not edit a generated migration after it has been applied.
+
 ## Go API
 
 `migrate.Runner` is available when an application needs to embed migration execution in a separate administrative program. Each `migrate.Statement` holds a source name and native SQL text. Supply the complete migration set to `Runner.Apply`; it orders migrations by ID and rejects duplicate IDs, missing recorded migrations, skipped migrations, and changed source checksums.
 
-The runner does not infer migrations from Go table descriptors, compare live schemas, or repair a database automatically. `inspect` can still compare supported metadata outside the migration runner.
+The runner does not infer migrations from Go table descriptors, compare live schemas, or repair a database automatically. The PostgreSQL diff command compares checked-in desired-schema sources instead. `inspect` can still compare supported metadata outside the migration runner.
