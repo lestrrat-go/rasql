@@ -102,6 +102,10 @@ func maximumTaskboardPage() int {
 	return maxOffset/taskboardPageSize + 1
 }
 
+// health serves /healthz, a liveness probe reporting only that the process
+// is up. It deliberately does not query the database: a liveness probe that
+// depended on the store would let a store outage restart or kill an
+// otherwise healthy process instead of letting it recover on its own.
 func health(response http.ResponseWriter, _ *http.Request) {
 	if _, err := fmt.Fprintln(response, "ok"); err != nil {
 		return
