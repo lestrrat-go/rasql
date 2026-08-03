@@ -265,6 +265,60 @@ func TestGoSourceRejectsBlankParameterName(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGoSourceRejectsInvalidCompiledTemplate(t *testing.T) {
+	t.Run("zero value", func(t *testing.T) {
+		var compiled template.Compiled
+		source, err := compiled.GoSource("generated", "Query")
+		require.Nil(t, source)
+		require.EqualError(t, err, "template: invalid compiled template")
+	})
+
+	t.Run("blank placeholder", func(t *testing.T) {
+		parsed, err := template.Parse("user_by_id", "{{bind \"id\"}}")
+		require.NoError(t, err)
+		compiled, err := parsed.Compile(blankPlaceholderDialect{})
+		require.NoError(t, err)
+
+		source, err := compiled.GoSource("generated", "Query")
+		require.Nil(t, source)
+		require.EqualError(t, err, "template: invalid compiled template")
+
+		_, err = compiled.Bind(map[string]any{"id": 1})
+		require.EqualError(t, err, "template: invalid compiled template")
+	})
+
+	t.Run("whitespace only sql", func(t *testing.T) {
+		parsed, err := template.Parse("whitespace_only", "{{bind \"id\"}}")
+		require.NoError(t, err)
+		compiled, err := parsed.Compile(whitespacePlaceholderDialect{})
+		require.NoError(t, err)
+		require.Equal(t, "   ", compiled.SQL())
+
+		source, err := compiled.GoSource("generated", "Query")
+		require.Nil(t, source)
+		require.EqualError(t, err, "template: invalid compiled template")
+
+		_, err = compiled.Bind(map[string]any{"id": 1})
+		require.EqualError(t, err, "template: invalid compiled template")
+	})
+}
+
+type blankPlaceholderDialect struct {
+	markerDialect
+}
+
+func (blankPlaceholderDialect) Placeholder(int) (string, error) {
+	return "", nil
+}
+
+type whitespacePlaceholderDialect struct {
+	markerDialect
+}
+
+func (whitespacePlaceholderDialect) Placeholder(int) (string, error) {
+	return "   ", nil
+}
+
 func requireGeneratedSourceCompiles(t *testing.T, source []byte) {
 	t.Helper()
 	directory, err := os.MkdirTemp(".", ".tmp-template-*")
