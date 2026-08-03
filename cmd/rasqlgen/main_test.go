@@ -207,17 +207,51 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 }
 
 func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
-	output := filepath.Join(directory, "schema.go")
+	sources := []struct {
+		name string
+		args func(input, output string) []string
+	}{
+		{
+			name: "input",
+			args: func(input, output string) []string {
+				return []string{"schema", "-input", input, "-package", "generated", "-output", output}
+			},
+		},
+		{
+			name: "dsn",
+			args: func(input, output string) []string {
+				return []string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output}
+			},
+		},
+	}
+	timeouts := []struct {
+		name  string
+		value string
+	}{
+		{name: "zero", value: "0s"},
+		{name: "negative", value: "-5s"},
+	}
 
-	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-timeout", "0s", "-package", "generated", "-output", output})
-	require.ErrorContains(t, err, "schema -timeout must be positive")
-	_, err = os.Stat(output)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	for _, source := range sources {
+		for _, timeout := range timeouts {
+			t.Run(source.name+"/"+timeout.name, func(t *testing.T) {
+				directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					require.NoError(t, os.RemoveAll(directory))
+				})
+				input := filepath.Join(directory, "schema.json")
+				output := filepath.Join(directory, "schema.go")
+				data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+				require.NoError(t, os.WriteFile(input, data, 0o600))
+
+				err = run(append(source.args(input, output), "-timeout", timeout.value))
+				require.ErrorContains(t, err, "schema -timeout must be positive")
+				_, err = os.Stat(output)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			})
+		}
+	}
 }
 
 func TestRunSchemaInspectionRespectsTimeout(t *testing.T) {

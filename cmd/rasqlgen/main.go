@@ -101,6 +101,9 @@ func runSchema(args []string) error {
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
+	if *timeout <= 0 {
+		return fmt.Errorf("schema -timeout must be positive, got %s", *timeout)
+	}
 	if *packageName == "" || *output == "" {
 		return errors.New("schema requires -package and -output")
 	}
@@ -124,9 +127,6 @@ func runSchema(args []string) error {
 	case *dsn != "":
 		if len(tableNames) == 0 {
 			return errors.New("schema with -dsn requires at least one -table")
-		}
-		if *timeout <= 0 {
-			return fmt.Errorf("schema -timeout must be positive, got %s", *timeout)
 		}
 		d, err := builtinDialect(*dialectName)
 		if err != nil {

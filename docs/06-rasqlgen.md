@@ -29,7 +29,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | `-input` | Path to a JSON array of table descriptors, instead of `-dsn`. |
 | `-table` | Table to generate; repeat it for each table. Required with `-dsn`; filters a JSON snapshot from `-input`. Passing the same table name twice is an error. |
 | `-dialect` | Dialect for `-dsn`, defaulting to `postgresql`. |
-| `-timeout` | Deadline for `-dsn` metadata inspection, defaulting to 30s. Does not apply to `-input`. |
+| `-timeout` | Deadline for `-dsn` metadata inspection, defaulting to 30s. The deadline does not apply to `-input`, but every `schema` invocation rejects a zero or negative value. |
 | `-package` | Package name for the generated file. Required. |
 | `-output` | Path of the generated file. Required. |
 
