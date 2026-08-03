@@ -46,6 +46,9 @@ func MustTable[T any](definition schema.Table) Table[T] {
 // also rebinds their column fields; this one serves dynamic code and the
 // generated implementation.
 func As[T any](table Table[T], alias string) (Table[T], error) {
+	if isNil(table) {
+		return nil, fmt.Errorf("rasql: table alias: %w", fmt.Errorf("table must not be nil"))
+	}
 	aliased, err := table.QueryTable().As(alias)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table alias: %w", err)
@@ -56,6 +59,9 @@ func As[T any](table Table[T], alias string) (Table[T], error) {
 // MustColumn looks up name on table and panics when it is absent.
 // It exists for generated code, where the name comes from the descriptor itself.
 func MustColumn[T any](table Table[T], name string) query.Column {
+	if isNil(table) {
+		panic("rasql: table column: table must not be nil")
+	}
 	column, err := table.Column(name)
 	if err != nil {
 		panic(fmt.Sprintf("rasql: table column: %s", err))

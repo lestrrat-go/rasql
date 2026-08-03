@@ -14,6 +14,7 @@ import (
 type SelectBuilder struct {
 	client  Client
 	builder render.SelectBuilder
+	err     error
 }
 
 // SelectFrom starts a fluent SELECT builder using table as its primary table.
@@ -83,6 +84,9 @@ func (b SelectBuilder) Offset(offset int) SelectBuilder {
 
 // Build validates and renders the statement without executing it.
 func (b SelectBuilder) Build() (render.Statement, error) {
+	if b.err != nil {
+		return render.Statement{}, b.err
+	}
 	return b.builder.Build()
 }
 
@@ -93,4 +97,11 @@ func (b SelectBuilder) Query(ctx context.Context) (iter.Seq2[row.Row, error], er
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
 	return b.client.QueryRendered(ctx, statement)
+}
+
+func (b SelectBuilder) withError(err error) SelectBuilder {
+	if b.err == nil {
+		b.err = err
+	}
+	return b
 }
