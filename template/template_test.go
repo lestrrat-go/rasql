@@ -51,6 +51,21 @@ func TestTemplateCompilePreservesRepeatedLiteralMarker(t *testing.T) {
 	require.Equal(t, "$1"+literalMarker+literalMarker+"$2", compiled.SQL())
 }
 
+func TestTemplateCompilePreservesMalformedMarkerPrefix(t *testing.T) {
+	const malformedMarkerPrefix = "\x00rasql-bind-junk"
+	parsed, err := template.Parse("malformed_marker_prefix", malformedMarkerPrefix+"{{bind \"a\"}}")
+	require.NoError(t, err)
+
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, malformedMarkerPrefix+"$1", compiled.SQL())
+
+	statement, err := compiled.Bind(map[string]any{"a": 1})
+	require.NoError(t, err)
+	require.Equal(t, malformedMarkerPrefix+"$1", statement.SQL())
+	require.Equal(t, []any{1}, statement.Args())
+}
+
 func TestTemplateCompilePreservesCustomDialectMarkerPlaceholders(t *testing.T) {
 	const marker = "\x00rasql-bind-1\x00"
 	parsed, err := template.Parse("custom_dialect_marker", "{{bind \"a\"}}{{bind \"b\"}}")

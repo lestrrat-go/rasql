@@ -113,6 +113,15 @@ func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
 		}
 		end += start + len(markerPrefix)
 
+		index := remaining[start+len(markerPrefix) : end]
+		if index == "" || strings.IndexFunc(index, func(r rune) bool {
+			return r < '0' || r > '9'
+		}) >= 0 {
+			sql.WriteString(remaining[:start+len(markerPrefix)])
+			remaining = remaining[start+len(markerPrefix):]
+			continue
+		}
+
 		candidate := remaining[start : end+1]
 		placeholder, ok := placeholders[candidate]
 		if !ok {
