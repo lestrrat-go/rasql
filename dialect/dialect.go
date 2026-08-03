@@ -19,14 +19,6 @@ const (
 	CapabilityDefaultValuesUpsert
 )
 
-// PrimaryKeyStyle controls where CREATE TABLE renders its primary key.
-type PrimaryKeyStyle uint8
-
-const (
-	PrimaryKeyInline PrimaryKeyStyle = iota
-	PrimaryKeySuffix
-)
-
 // UpsertStyle identifies a dialect's conflict-handling syntax.
 type UpsertStyle uint8
 
@@ -42,7 +34,6 @@ type Dialect interface {
 	QuoteIdentifier(string) (string, error)
 	Placeholder(int) (string, error)
 	TypeName(schema.LogicalType) (string, error)
-	TablePrimaryKeyStyle() PrimaryKeyStyle
 	UpsertStyle() UpsertStyle
 	Supports(Capability) bool
 }
@@ -53,7 +44,6 @@ func PostgreSQL() Dialect {
 		name:         "postgresql",
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
-		primaryKey:   PrimaryKeyInline,
 		upsert:       UpsertOnConflict,
 		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert,
 		types: map[schema.LogicalType]string{
@@ -75,7 +65,6 @@ func MySQL() Dialect {
 		name:         "mysql",
 		quote:        '`',
 		placeholder:  questionPlaceholder,
-		primaryKey:   PrimaryKeyInline,
 		upsert:       UpsertDuplicateKey,
 		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert,
 		types: map[schema.LogicalType]string{
@@ -97,7 +86,6 @@ func SQLite() Dialect {
 		name:         "sqlite",
 		quote:        '"',
 		placeholder:  questionPlaceholder,
-		primaryKey:   PrimaryKeyInline,
 		upsert:       UpsertOnConflict,
 		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues,
 		types: map[schema.LogicalType]string{
@@ -113,32 +101,10 @@ func SQLite() Dialect {
 	}
 }
 
-// Spanner returns the Google Cloud Spanner dialect.
-func Spanner() Dialect {
-	return builtin{
-		name:        "spanner",
-		quote:       '`',
-		placeholder: namedPlaceholder,
-		primaryKey:  PrimaryKeySuffix,
-		upsert:      UpsertUnsupported,
-		types: map[schema.LogicalType]string{
-			schema.TypeBoolean: "BOOL",
-			schema.TypeInteger: "INT64",
-			schema.TypeFloat:   "FLOAT64",
-			schema.TypeText:    "STRING(MAX)",
-			schema.TypeBytes:   "BYTES(MAX)",
-			schema.TypeTime:    "TIMESTAMP",
-			schema.TypeJSON:    "JSON",
-			schema.TypeUUID:    "STRING(36)",
-		},
-	}
-}
-
 type builtin struct {
 	name         string
 	quote        rune
 	placeholder  func(int) string
-	primaryKey   PrimaryKeyStyle
 	upsert       UpsertStyle
 	capabilities Capability
 	types        map[schema.LogicalType]string
@@ -170,10 +136,6 @@ func (d builtin) TypeName(logicalType schema.LogicalType) (string, error) {
 	return typeName, nil
 }
 
-func (d builtin) TablePrimaryKeyStyle() PrimaryKeyStyle {
-	return d.primaryKey
-}
-
 func (d builtin) UpsertStyle() UpsertStyle {
 	return d.upsert
 }
@@ -188,8 +150,4 @@ func dollarPlaceholder(position int) string {
 
 func questionPlaceholder(int) string {
 	return "?"
-}
-
-func namedPlaceholder(position int) string {
-	return fmt.Sprintf("@p%d", position)
 }

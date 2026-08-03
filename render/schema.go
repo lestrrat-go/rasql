@@ -59,18 +59,12 @@ func (r *renderer) writeCreateTable(table schema.Table) error {
 		}
 		definitions = append(definitions, definition)
 	}
-	primaryKeySuffix := ""
 	if len(table.PrimaryKey) > 0 {
 		columns, err := r.quotedNames(table.PrimaryKey)
 		if err != nil {
 			return err
 		}
-		primaryKey := "PRIMARY KEY (" + strings.Join(columns, ", ") + ")"
-		if r.dialect.TablePrimaryKeyStyle() == dialect.PrimaryKeySuffix {
-			primaryKeySuffix = " " + primaryKey
-		} else {
-			definitions = append(definitions, primaryKey)
-		}
+		definitions = append(definitions, "PRIMARY KEY ("+strings.Join(columns, ", ")+")")
 	}
 	for _, constraint := range table.UniqueConstraints {
 		columns, err := r.quotedNames(constraint.Columns)
@@ -107,7 +101,6 @@ func (r *renderer) writeCreateTable(table schema.Table) error {
 	}
 	r.builder.WriteString(strings.Join(definitions, ", "))
 	r.builder.WriteByte(')')
-	r.builder.WriteString(primaryKeySuffix)
 	return nil
 }
 
