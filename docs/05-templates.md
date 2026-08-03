@@ -2,7 +2,7 @@
 
 A static template is SQL text written by hand, with named placeholders for the values. Use it when a query is fixed and reads better as SQL than as builder calls, or when it uses syntax the `query` package does not model.
 
-The template language is deliberately tiny. Text is copied through as SQL, and the only action allowed is `{{bind "name"}}`. There is no way to write a template action that becomes SQL text, so a template cannot interpolate a value into the statement even by mistake.
+The template language is deliberately tiny. Text is copied through as SQL, and the only action allowed is `{{bind "name"}}`. The `{{` delimiter is reserved, so SQL text and comments cannot contain that literal sequence. There is no way to write a template action that becomes SQL text, so a template cannot interpolate a value into the statement even by mistake.
 
 ## Compile and bind
 
