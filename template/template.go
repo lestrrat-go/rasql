@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/format"
 	"go/token"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -93,9 +94,25 @@ func parseBindAction(action string) (string, error) {
 	return name, nil
 }
 
+// isNilDialect reports whether d is nil, including a typed nil held in a
+// non-nil dialect.Dialect interface value (for example a nil *T pointer
+// implementation).
+func isNilDialect(d dialect.Dialect) bool {
+	if d == nil {
+		return true
+	}
+	value := reflect.ValueOf(d)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 // Compile renders template placeholders for d.
 func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
-	if d == nil {
+	if isNilDialect(d) {
 		return Compiled{}, fmt.Errorf("template %q: dialect must not be nil", t.name)
 	}
 	if t.name == "" || t.text == "" {
