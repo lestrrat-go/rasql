@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -106,6 +107,25 @@ func TestTaskboardHandlerShowsNextForFollowingPage(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "Following task") {
 		t.Errorf("response body = %q, rendered task from following page", response.Body.String())
+	}
+}
+
+func TestTaskboardHandlerHidesNextOnMaximumPage(t *testing.T) {
+	tasks := append(make([]taskboard.Summary, 50), taskboard.Summary{Title: "Following task"})
+	reader := &fakeTaskReader{tasks: tasks}
+	handler := web.NewTaskboardHandler(reader)
+	maxOffset := int(^uint(0) >> 1)
+	maximumPage := maxOffset/50 + 1
+	request := httptest.NewRequest(http.MethodGet, "/?page="+strconv.Itoa(maximumPage), nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
+	}
+	if strings.Contains(response.Body.String(), ">Next</a>") {
+		t.Errorf("response body = %q, want no next page", response.Body.String())
 	}
 }
 

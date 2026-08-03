@@ -72,7 +72,10 @@ func (handler taskboardHandler) showTasks(response http.ResponseWriter, request 
 	}
 	if len(tasks) > taskboardPageSize {
 		page.Tasks = tasks[:taskboardPageSize]
-		page.NextPage = offset/taskboardPageSize + 2
+		nextPage := offset/taskboardPageSize + 2
+		if nextPage <= maximumTaskboardPage() {
+			page.NextPage = nextPage
+		}
 	}
 	if err := handler.page.Execute(response, page); err != nil {
 		return
@@ -88,11 +91,15 @@ func taskboardOffset(request *http.Request) (int, error) {
 	if err != nil || page < 1 {
 		return 0, fmt.Errorf("invalid page %q", value)
 	}
-	maxOffset := int(^uint(0) >> 1)
-	if page > maxOffset/taskboardPageSize+1 {
+	if page > maximumTaskboardPage() {
 		return 0, fmt.Errorf("invalid page %q", value)
 	}
 	return (page - 1) * taskboardPageSize, nil
+}
+
+func maximumTaskboardPage() int {
+	maxOffset := int(^uint(0) >> 1)
+	return maxOffset/taskboardPageSize + 1
 }
 
 func health(response http.ResponseWriter, _ *http.Request) {
