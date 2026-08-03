@@ -111,6 +111,9 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 	if statement.Insert().UsesDefaultValues() && !r.dialect.Supports(dialect.CapabilityDefaultValuesUpsert) {
 		return fmt.Errorf("default-values upsert is not supported")
 	}
+	if len(statement.ConflictColumns()) > 0 && !r.dialect.Supports(dialect.CapabilityConflictTarget) {
+		return fmt.Errorf("explicit conflict target is not supported")
+	}
 	if err := r.writeInsertBase(statement.Insert()); err != nil {
 		return err
 	}

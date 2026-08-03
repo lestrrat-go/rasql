@@ -68,6 +68,7 @@ func TestBuiltinsRejectInvalidInput(t *testing.T) {
 func TestBuiltinCapabilities(t *testing.T) {
 	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityReturning))
 	require.True(t, dialect.SQLite().Supports(dialect.CapabilityConflictTarget))
+	require.False(t, dialect.MySQL().Supports(dialect.CapabilityConflictTarget))
 	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityDefaultValues))
 	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityDefaultValuesUpsert))
 	require.True(t, dialect.MySQL().Supports(dialect.CapabilityDefaultValuesUpsert))

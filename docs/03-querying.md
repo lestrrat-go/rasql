@@ -112,7 +112,7 @@ The builders cover the common statements. These constructors build the same stat
 | `query.NewInsert(into, columns, values)` | `INSERT` |
 | `query.NewUpdate(table, assignments…)` | `UPDATE`, with `query.Set(column, expression)` per assignment. |
 | `query.NewDelete(from)` | `DELETE` |
-| `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. |
+| `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |
 
 Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write. Each returns a new validated statement rather than changing the one it was called on.
 

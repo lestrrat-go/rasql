@@ -129,33 +129,50 @@ func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
 	require.NoError(t, err)
 	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
 	require.NoError(t, err)
+	mysqlStatement, err := query.NewUpsert(insert, nil, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
 
 	tests := map[string]struct {
-		dialect dialect.Dialect
-		sql     string
+		dialect   dialect.Dialect
+		statement query.Upsert
+		sql       string
 	}{
 		"postgresql": {
-			dialect: dialect.PostgreSQL(),
-			sql:     "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = EXCLUDED.\"email\"",
+			dialect:   dialect.PostgreSQL(),
+			statement: statement,
+			sql:       "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = EXCLUDED.\"email\"",
 		},
 		"mysql": {
-			dialect: dialect.MySQL(),
-			sql:     "INSERT INTO `users` (`id`, `email`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `email` = VALUES(`email`)",
+			dialect:   dialect.MySQL(),
+			statement: mysqlStatement,
+			sql:       "INSERT INTO `users` (`id`, `email`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `email` = VALUES(`email`)",
 		},
 		"sqlite": {
-			dialect: dialect.SQLite(),
-			sql:     "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = EXCLUDED.\"email\"",
+			dialect:   dialect.SQLite(),
+			statement: statement,
+			sql:       "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = EXCLUDED.\"email\"",
 		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			rendered, err := render.Upsert(test.dialect, statement)
+			rendered, err := render.Upsert(test.dialect, test.statement)
 			require.NoError(t, err)
 			require.Equal(t, test.sql, rendered.SQL())
 			require.Equal(t, []any{1, "ada@example.com"}, rendered.Args())
 		})
 	}
 
+}
+
+func TestMySQLUpsertRejectsConflictTarget(t *testing.T) {
+	users, id, email := writeTable(t)
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+
+	_, err = render.Upsert(dialect.MySQL(), statement)
+	require.ErrorContains(t, err, "explicit conflict target is not supported")
 }
 
 func TestSQLiteUpsertExecutes(t *testing.T) {
