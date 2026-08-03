@@ -32,7 +32,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 
 Supply either `-dsn` or `-input`, never both. Direct inspection currently supports PostgreSQL only; the command bundles the pgx driver, so nothing needs importing to use `-dsn`. It preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys. It reports an error when an index or constraint has metadata that the schema descriptor cannot reproduce.
 
-`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.Table` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, whether with `-input` or `-dsn`, is rejected as a flag-parsing error rather than silently collapsed to one table.
+`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.Table` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, whether with `-input` or `-dsn`, is rejected as a flag-parsing error rather than silently collapsed to one table. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
 
 ### What it generates
 
@@ -227,7 +227,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen query \
   -output internal/store/user_by_email_gen.go
 ```
 
-Every flag is required. `-dialect` accepts `postgresql` (or `postgres`), `mysql`, and `sqlite`. The package, function, and bind names must be usable Go identifiers. The function name cannot be `init`, and `main` cannot be generated in package `main`.
+Every flag is required. `-dialect` accepts `postgresql` (or `postgres`), `mysql`, and `sqlite`. The package, function, and bind names must be usable Go identifiers. The function name cannot be `init`, and `main` cannot be generated in package `main`. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
 
 The input is a static template, so it holds SQL text plus `{{bind "name"}}` actions and nothing else:
 
