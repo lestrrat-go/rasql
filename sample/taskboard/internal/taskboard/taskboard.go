@@ -12,5 +12,5 @@ type Summary struct {
 
 // TaskReader supplies the open tasks shown by the Taskboard view.
 type TaskReader interface {
-	OpenTasks(context.Context, int64) ([]Summary, error)
+	OpenTasks(context.Context, int64, int, int) ([]Summary, error)
 }
