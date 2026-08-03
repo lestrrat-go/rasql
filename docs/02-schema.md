@@ -56,7 +56,7 @@ source: [examples/schema_table_definition_example_test.go](https://github.com/le
 | `Indexes` | Secondary indexes. |
 | `ForeignKeys` | References to other tables, with their update and delete actions. |
 
-Call `Validate` before using a descriptor. It reports a `*schema.ValidationError` naming the part that is wrong, such as a primary key that lists a column the table does not declare. `MustTable` and `NewTable` validate as well, so a separate `Validate` call is only needed for a descriptor built at runtime that is not immediately turned into a table.
+Call `Validate` before using a descriptor. It reports a `*schema.ValidationError` naming the part that is wrong, such as a primary key that lists a column the table does not declare. Non-empty names given to `UniqueConstraints`, `Checks`, and `ForeignKeys` must be unique across all three, since a dialect renders them together into one `CREATE TABLE` constraint list. `MustTable` and `NewTable` validate as well, so a separate `Validate` call is only needed for a descriptor built at runtime that is not immediately turned into a table.
 
 ## Logical column types
 
