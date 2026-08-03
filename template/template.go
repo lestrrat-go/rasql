@@ -138,7 +138,7 @@ func (c Compiled) ParameterNames() []string {
 
 // Bind supplies all named values and returns a parameterized statement.
 func (c Compiled) Bind(values map[string]any) (render.Statement, error) {
-	if c.name == "" || c.sql == "" {
+	if c.name == "" || strings.TrimSpace(c.sql) == "" {
 		return render.Statement{}, fmt.Errorf("template: invalid compiled template")
 	}
 	args := make([]any, len(c.parameters))
@@ -163,6 +163,9 @@ func (c Compiled) Bind(values map[string]any) (render.Statement, error) {
 
 // GoSource returns a Go function that creates this static statement.
 func (c Compiled) GoSource(packageName string, functionName string) ([]byte, error) {
+	if c.name == "" || strings.TrimSpace(c.sql) == "" {
+		return nil, fmt.Errorf("template: invalid compiled template")
+	}
 	if !isUsableGoIdentifier(packageName) {
 		return nil, fmt.Errorf("template: invalid package name %q", packageName)
 	}
