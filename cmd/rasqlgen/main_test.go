@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -271,4 +272,72 @@ func TestRunRejectsInvalidFlag(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, flag.ErrHelp)
 	require.Contains(t, output.String(), "flag provided but not defined: -unknown")
+}
+
+func TestRunSchemaRejectsOversizedInput(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	previousMaxInputBytes := maxInputBytes
+	maxInputBytes = 128
+	t.Cleanup(func() {
+		maxInputBytes = previousMaxInputBytes
+	})
+
+	validInput := filepath.Join(directory, "schema.json")
+	validOutput := filepath.Join(directory, "schema.go")
+	validData := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	require.LessOrEqual(t, len(validData), maxInputBytes)
+	require.NoError(t, os.WriteFile(validInput, validData, 0o600))
+
+	require.NoError(t, run([]string{"schema", "-input", validInput, "-package", "generated", "-output", validOutput}))
+	_, err = os.Stat(validOutput)
+	require.NoError(t, err)
+
+	oversizedInput := filepath.Join(directory, "oversized-schema.json")
+	oversizedOutput := filepath.Join(directory, "oversized-schema.go")
+	oversizedData := bytes.Repeat([]byte("x"), maxInputBytes+1)
+	require.NoError(t, os.WriteFile(oversizedInput, oversizedData, 0o600))
+
+	err = run([]string{"schema", "-input", oversizedInput, "-package", "generated", "-output", oversizedOutput})
+	require.ErrorContains(t, err, oversizedInput)
+	require.ErrorContains(t, err, fmt.Sprintf("%d bytes", maxInputBytes))
+	_, err = os.Stat(oversizedOutput)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRunQueryRejectsOversizedInput(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-query-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	previousMaxInputBytes := maxInputBytes
+	maxInputBytes = 128
+	t.Cleanup(func() {
+		maxInputBytes = previousMaxInputBytes
+	})
+
+	validInput := filepath.Join(directory, "user.sql")
+	validOutput := filepath.Join(directory, "query.go")
+	validData := []byte(`SELECT id FROM users WHERE id = {{bind "id"}}`)
+	require.LessOrEqual(t, len(validData), maxInputBytes)
+	require.NoError(t, os.WriteFile(validInput, validData, 0o600))
+
+	require.NoError(t, run([]string{"query", "-input", validInput, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", validOutput}))
+	_, err = os.Stat(validOutput)
+	require.NoError(t, err)
+
+	oversizedInput := filepath.Join(directory, "oversized-user.sql")
+	oversizedOutput := filepath.Join(directory, "oversized-query.go")
+	oversizedData := bytes.Repeat([]byte("x"), maxInputBytes+1)
+	require.NoError(t, os.WriteFile(oversizedInput, oversizedData, 0o600))
+
+	err = run([]string{"query", "-input", oversizedInput, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", oversizedOutput})
+	require.ErrorContains(t, err, oversizedInput)
+	require.ErrorContains(t, err, fmt.Sprintf("%d bytes", maxInputBytes))
+	_, err = os.Stat(oversizedOutput)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
