@@ -113,30 +113,35 @@ func (t Table) Validate() error {
 	if err := validateColumnList("primary_key", t.PrimaryKey, columns, false); err != nil {
 		return err
 	}
-	if err := validateNamedColumnLists("unique_constraints", t.UniqueConstraints, columns); err != nil {
+	constraintNames := make(map[string]string)
+	if err := validateNamedColumnLists("unique_constraints", t.UniqueConstraints, columns, constraintNames); err != nil {
 		return err
 	}
-	if err := validateChecks(t.Checks); err != nil {
+	if err := validateChecks(t.Checks, constraintNames); err != nil {
 		return err
 	}
 	if err := validateIndexes(t.Indexes, columns); err != nil {
 		return err
 	}
-	return validateForeignKeys(t.ForeignKeys, columns)
+	return validateForeignKeys(t.ForeignKeys, columns, constraintNames)
 }
 
-func validateNamedColumnLists(path string, constraints []UniqueConstraint, columns map[string]struct{}) error {
-	names := make(map[string]struct{}, len(constraints))
+// validateNamedColumnLists validates constraints and records each non-empty
+// name in constraintNames, keyed by the name and mapping to the descriptor
+// path that first used it. This lets callers detect a name reused across
+// different kinds of constraints (unique, check, foreign key), since the
+// renderer emits all of them into a single CREATE TABLE constraint namespace.
+func validateNamedColumnLists(path string, constraints []UniqueConstraint, columns map[string]struct{}, constraintNames map[string]string) error {
 	for i, constraint := range constraints {
 		itemPath := fmt.Sprintf("%s[%d]", path, i)
 		if constraint.Name != "" {
 			if err := ValidateIdentifier(constraint.Name); err != nil {
 				return validationError(itemPath+".name", "%s", err)
 			}
-			if _, exists := names[constraint.Name]; exists {
-				return validationError(itemPath+".name", "duplicates constraint %q", constraint.Name)
+			if owner, exists := constraintNames[constraint.Name]; exists {
+				return validationError(itemPath+".name", "duplicates constraint %q declared at %s", constraint.Name, owner)
 			}
-			names[constraint.Name] = struct{}{}
+			constraintNames[constraint.Name] = itemPath
 		}
 		if err := validateColumnList(itemPath+".columns", constraint.Columns, columns, true); err != nil {
 			return err
@@ -145,18 +150,17 @@ func validateNamedColumnLists(path string, constraints []UniqueConstraint, colum
 	return nil
 }
 
-func validateChecks(checks []CheckConstraint) error {
-	names := make(map[string]struct{}, len(checks))
+func validateChecks(checks []CheckConstraint, constraintNames map[string]string) error {
 	for i, check := range checks {
 		path := fmt.Sprintf("checks[%d]", i)
 		if check.Name != "" {
 			if err := ValidateIdentifier(check.Name); err != nil {
 				return validationError(path+".name", "%s", err)
 			}
-			if _, exists := names[check.Name]; exists {
-				return validationError(path+".name", "duplicates constraint %q", check.Name)
+			if owner, exists := constraintNames[check.Name]; exists {
+				return validationError(path+".name", "duplicates constraint %q declared at %s", check.Name, owner)
 			}
-			names[check.Name] = struct{}{}
+			constraintNames[check.Name] = path
 		}
 		if check.Expression == "" {
 			return validationError(path+".expression", "must not be empty")
@@ -183,18 +187,17 @@ func validateIndexes(indexes []Index, columns map[string]struct{}) error {
 	return nil
 }
 
-func validateForeignKeys(keys []ForeignKey, columns map[string]struct{}) error {
-	names := make(map[string]struct{}, len(keys))
+func validateForeignKeys(keys []ForeignKey, columns map[string]struct{}, constraintNames map[string]string) error {
 	for i, key := range keys {
 		path := fmt.Sprintf("foreign_keys[%d]", i)
 		if key.Name != "" {
 			if err := ValidateIdentifier(key.Name); err != nil {
 				return validationError(path+".name", "%s", err)
 			}
-			if _, exists := names[key.Name]; exists {
-				return validationError(path+".name", "duplicates foreign key %q", key.Name)
+			if owner, exists := constraintNames[key.Name]; exists {
+				return validationError(path+".name", "duplicates constraint %q declared at %s", key.Name, owner)
 			}
-			names[key.Name] = struct{}{}
+			constraintNames[key.Name] = path
 		}
 		if err := validateColumnList(path+".columns", key.Columns, columns, true); err != nil {
 			return err

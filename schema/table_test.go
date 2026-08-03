@@ -73,6 +73,54 @@ func TestTableValidate(t *testing.T) {
 				ReferencedColumns: []string{"id"},
 			}},
 		},
+		"unique constraint name duplicates check name": {
+			Name: "orders",
+			Columns: []schema.Column{
+				{Name: "id", Type: schema.TypeInteger},
+			},
+			UniqueConstraints: []schema.UniqueConstraint{{
+				Name:    "dup",
+				Columns: []string{"id"},
+			}},
+			Checks: []schema.CheckConstraint{{
+				Name:       "dup",
+				Expression: "id > 0",
+			}},
+		},
+		"unique constraint name duplicates foreign key name": {
+			Name: "orders",
+			Columns: []schema.Column{
+				{Name: "id", Type: schema.TypeInteger},
+				{Name: "org_id", Type: schema.TypeInteger},
+			},
+			UniqueConstraints: []schema.UniqueConstraint{{
+				Name:    "dup",
+				Columns: []string{"id"},
+			}},
+			ForeignKeys: []schema.ForeignKey{{
+				Name:              "dup",
+				Columns:           []string{"org_id"},
+				ReferencedTable:   "orgs",
+				ReferencedColumns: []string{"id"},
+			}},
+		},
+		"check name duplicates foreign key name": {
+			Name: "orders",
+			Columns: []schema.Column{
+				{Name: "id", Type: schema.TypeInteger},
+				{Name: "org_id", Type: schema.TypeInteger},
+			},
+			Checks: []schema.CheckConstraint{{
+				Name:       "dup",
+				Expression: "id > 0",
+			}},
+			ForeignKeys: []schema.ForeignKey{{
+				Name:              "dup",
+				Columns:           []string{"org_id"},
+				ReferencedTable:   "orgs",
+				ReferencedColumns: []string{"id"},
+			}},
+		},
 	}
 
 	for name, table := range tests {
@@ -84,6 +132,51 @@ func TestTableValidate(t *testing.T) {
 			require.True(t, errors.As(err, &validationErr))
 		})
 	}
+}
+
+func TestTableValidateDuplicateConstraintNameReportsPath(t *testing.T) {
+	table := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+		},
+		UniqueConstraints: []schema.UniqueConstraint{{
+			Name:    "dup",
+			Columns: []string{"id"},
+		}},
+		Checks: []schema.CheckConstraint{{
+			Name:       "dup",
+			Expression: "id > 0",
+		}},
+	}
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "checks[0].name")
+	require.ErrorContains(t, err, "duplicates constraint")
+}
+
+func TestTableValidateAllowsRepeatedEmptyConstraintNames(t *testing.T) {
+	table := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "org_id", Type: schema.TypeInteger},
+		},
+		UniqueConstraints: []schema.UniqueConstraint{{
+			Columns: []string{"id"},
+		}},
+		Checks: []schema.CheckConstraint{{
+			Expression: "id > 0",
+		}},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"org_id"},
+			ReferencedTable:   "orgs",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	require.NoError(t, table.Validate())
 }
 
 func TestValidateIdentifier(t *testing.T) {
