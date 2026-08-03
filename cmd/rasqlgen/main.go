@@ -100,7 +100,7 @@ func runSchema(args []string) error {
 		return err
 	}
 	if rest := flags.Args(); len(rest) > 0 {
-		return fmt.Errorf("unexpected arguments: %s", strings.Join(rest, " "))
+		return unexpectedArgumentsError(rest)
 	}
 	if *packageName == "" || *output == "" {
 		return errors.New("schema requires -package and -output")
@@ -223,7 +223,7 @@ func runQuery(args []string) error {
 		return err
 	}
 	if rest := flags.Args(); len(rest) > 0 {
-		return fmt.Errorf("unexpected arguments: %s", strings.Join(rest, " "))
+		return unexpectedArgumentsError(rest)
 	}
 	if *input == "" || *functionName == "" || *dialectName == "" || *packageName == "" || *output == "" {
 		return errors.New("query requires -input, -function, -dialect, -package, and -output")
@@ -252,6 +252,13 @@ func runQuery(args []string) error {
 		return fmt.Errorf("write query output: %w", err)
 	}
 	return nil
+}
+
+// unexpectedArgumentsError reports the leftover arguments a command did not consume.
+// Every argument is quoted, so an empty argument stays visible and an argument
+// holding spaces cannot be mistaken for several arguments.
+func unexpectedArgumentsError(rest []string) error {
+	return fmt.Errorf("unexpected arguments: %q", rest)
 }
 
 func newFlagSet(name string) *flag.FlagSet {

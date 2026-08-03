@@ -268,27 +268,69 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 		commandOutput = previousCommandOutput
 	})
 
+	const schemaContent = `[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`
+	const queryContent = `SELECT id FROM users WHERE id = {{bind "id"}}`
+
 	testCases := []struct {
 		name         string
 		inputName    string
 		inputContent string
 		buildArgs    func(input, output string) []string
+		expected     string
 	}{
 		{
 			name:         "schema",
 			inputName:    "schema.json",
-			inputContent: `[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`,
+			inputContent: schemaContent,
 			buildArgs: func(input, output string) []string {
 				return []string{"schema", "-input", input, "-package", "generated", "-output", output, "ignored", "-table", "users"}
 			},
+			expected: `unexpected arguments: ["ignored" "-table" "users"]`,
+		},
+		{
+			name:         "schema with an empty argument",
+			inputName:    "schema.json",
+			inputContent: schemaContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"schema", "-input", input, "-package", "generated", "-output", output, ""}
+			},
+			expected: `unexpected arguments: [""]`,
+		},
+		{
+			name:         "schema with an argument holding a space",
+			inputName:    "schema.json",
+			inputContent: schemaContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"schema", "-input", input, "-package", "generated", "-output", output, "one two"}
+			},
+			expected: `unexpected arguments: ["one two"]`,
 		},
 		{
 			name:         "query",
 			inputName:    "user.sql",
-			inputContent: `SELECT id FROM users WHERE id = {{bind "id"}}`,
+			inputContent: queryContent,
 			buildArgs: func(input, output string) []string {
 				return []string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", output, "ignored"}
 			},
+			expected: `unexpected arguments: ["ignored"]`,
+		},
+		{
+			name:         "query with an empty argument",
+			inputName:    "user.sql",
+			inputContent: queryContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", output, ""}
+			},
+			expected: `unexpected arguments: [""]`,
+		},
+		{
+			name:         "query with an argument holding a space",
+			inputName:    "user.sql",
+			inputContent: queryContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", output, "one two"}
+			},
+			expected: `unexpected arguments: ["one two"]`,
 		},
 	}
 
@@ -305,8 +347,7 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 			require.NoError(t, os.WriteFile(input, []byte(testCase.inputContent), 0o600))
 
 			err = run(testCase.buildArgs(input, generated))
-			require.Error(t, err)
-			require.ErrorContains(t, err, "unexpected arguments")
+			require.EqualError(t, err, testCase.expected)
 			require.NotErrorIs(t, err, flag.ErrHelp)
 			_, statErr := os.Stat(generated)
 			require.ErrorIs(t, statErr, os.ErrNotExist)
