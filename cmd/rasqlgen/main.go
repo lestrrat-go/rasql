@@ -68,7 +68,7 @@ func runSchema(args []string) error {
 	dsn := flags.String("dsn", "", "PostgreSQL connection string")
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
 	var tableNames tableNames
-	flags.Var(&tableNames, "table", "database table to generate; repeat for multiple tables")
+	flags.Var(&tableNames, "table", "database table to generate; repeat for multiple tables (duplicate values are rejected)")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "path for generated Go source")
 	if err := flags.Parse(args); err != nil {
@@ -175,6 +175,11 @@ func (names *tableNames) String() string {
 }
 
 func (names *tableNames) Set(name string) error {
+	for _, existing := range *names {
+		if existing == name {
+			return fmt.Errorf("duplicate -table %q", name)
+		}
+	}
 	*names = append(*names, name)
 	return nil
 }
