@@ -17,6 +17,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/migrate"
+	"github.com/lestrrat-go/rasql/migrate/diff"
+	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	_ "modernc.org/sqlite"
 )
 
@@ -37,7 +39,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: rasqlmigrate <new|plan|apply|status|verify> [flags]")
+		return errors.New("usage: rasqlmigrate <new|diff|plan|apply|status|verify> [flags]")
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -45,6 +47,8 @@ func run(args []string) error {
 		return flag.ErrHelp
 	case "new":
 		return runNew(args[1:])
+	case "diff":
+		return runDiff(args[1:])
 	case "plan":
 		return runPlan(args[1:])
 	case "apply":
@@ -63,6 +67,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Commands:")
 	fmt.Fprintln(output, "  new      Create a directory for one migration")
+	fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
 	fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
 	fmt.Fprintln(output, "  apply    Apply pending migrations")
 	fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
@@ -70,6 +75,66 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "A migration directory contains ordered .sql files. Each file contains one native SQL statement.")
 	fmt.Fprintln(output, "Run 'rasqlmigrate <command> -h' for command flags.")
+}
+
+func runDiff(args []string) error {
+	flags := newFlagSet("diff")
+	dialectName := flags.String("dialect", "", "schema dialect; PostgreSQL is currently supported")
+	fromDirectory := flags.String("from", "", "baseline desired-schema directory")
+	toDirectory := flags.String("to", "", "target desired-schema directory")
+	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *dialectName == "" || *fromDirectory == "" || *toDirectory == "" {
+		return errors.New("diff requires -dialect, -from, and -to")
+	}
+	analyzer, err := schemaAnalyzer(*dialectName)
+	if err != nil {
+		return err
+	}
+	baselineSources, err := diff.LoadSources(*fromDirectory)
+	if err != nil {
+		return err
+	}
+	baseline, err := analyzer.Parse(baselineSources)
+	if err != nil {
+		return fmt.Errorf("parse baseline desired schema: %w", err)
+	}
+	targetSources, err := diff.LoadSources(*toDirectory)
+	if err != nil {
+		return err
+	}
+	target, err := analyzer.Parse(targetSources)
+	if err != nil {
+		return fmt.Errorf("parse target desired schema: %w", err)
+	}
+	plan, err := analyzer.Diff(baseline, target)
+	if err != nil {
+		return err
+	}
+	if plan.Empty() {
+		fmt.Fprintln(commandOutput, "no schema changes")
+		return nil
+	}
+	if *outputDirectory == "" {
+		writeDiffPlan(commandOutput, plan)
+		return nil
+	}
+	if err := diff.WriteMigration(*outputDirectory, plan); err != nil {
+		return err
+	}
+	fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
+	return nil
+}
+
+func schemaAnalyzer(name string) (diff.Analyzer, error) {
+	switch name {
+	case "postgres", "postgresql":
+		return postgresql.New(), nil
+	default:
+		return nil, fmt.Errorf("unsupported schema diff dialect %q", name)
+	}
 }
 
 func runNew(args []string) error {
@@ -335,6 +400,19 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 			if !strings.HasSuffix(statement.SQL, "\n") {
 				fmt.Fprintln(output)
 			}
+		}
+	}
+}
+
+func writeDiffPlan(output io.Writer, plan diff.Plan) {
+	for index, statement := range plan.Statements {
+		if index > 0 {
+			fmt.Fprintln(output)
+		}
+		fmt.Fprintf(output, "-- %s: %s\n", statement.Source, statement.Summary)
+		fmt.Fprint(output, statement.SQL)
+		if !strings.HasSuffix(statement.SQL, "\n") {
+			fmt.Fprintln(output)
 		}
 	}
 }

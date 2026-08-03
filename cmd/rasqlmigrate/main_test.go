@@ -24,6 +24,24 @@ func TestRunNewCreatesMigrationDirectory(t *testing.T) {
 	require.Error(t, run([]string{"new", "-dir", directory, "-id", ".hidden"}))
 }
 
+func TestRunDiffPreviewsAndWritesPostgreSQLMigration(t *testing.T) {
+	baseline := filepath.Join(t.TempDir(), "baseline")
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, baseline, "tables/members.sql", "CREATE TABLE members (id bigint PRIMARY KEY);\n")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id bigint PRIMARY KEY, email text);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{"diff", "-dialect", "postgresql", "-from", baseline, "-to", target}))
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+
+	migrationDirectory := filepath.Join(t.TempDir(), "002_add_member_email")
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"diff", "-dialect", "postgresql", "-from", baseline, "-to", target, "-output", migrationDirectory}))
+	require.Equal(t, "created "+migrationDirectory+"\n", outputBuffer.String())
+	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
+	require.NoError(t, err)
+	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
+}
+
 func TestRunPlanPrintsSQLSources(t *testing.T) {
 	directory := newTestDirectory(t)
 	writeTestSQL(t, directory, "001_create_users", "001_create_users.sql", "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n")
@@ -103,4 +121,11 @@ func writeTestSQL(t *testing.T, directory string, migrationID string, filename s
 	migrationDirectory := filepath.Join(directory, migrationID)
 	require.NoError(t, os.MkdirAll(migrationDirectory, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(migrationDirectory, filename), []byte(source), 0o600))
+}
+
+func writeTestSchema(t *testing.T, directory string, filename string, source string) {
+	t.Helper()
+	path := filepath.Join(directory, filename)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
 }

@@ -4,7 +4,7 @@
 
 `rasql` is a Go SQL toolkit that gives applications one model for schema definitions, dynamic queries, static queries, result decoding, database inspection, and forward-only DDL migrations. It produces parameterized SQL for PostgreSQL, MySQL, SQLite, and Google Cloud Spanner without hiding dialect differences that affect correctness.
 
-The migration package applies ordered, forward-only native SQL migrations for PostgreSQL, MySQL, and SQLite. It keeps an ID and checksum history, preserves source order, and rejects a changed or skipped migration. It does not parse or render migration SQL, automatically repair a live schema, or synthesize migrations from a schema difference.
+The migration package applies ordered, forward-only native SQL migrations for PostgreSQL, MySQL, and SQLite. It keeps an ID and checksum history, preserves source order, and rejects a changed or skipped migration. Its optional desired-schema diff adapters parse and render dialect-specific SQL to generate reviewed migrations. The runner does not parse migration SQL, automatically repair a live schema, or synthesize migrations from a live schema difference.
 
 ## Design decisions
 
@@ -28,7 +28,9 @@ The migration package applies ordered, forward-only native SQL migrations for Po
 | `rasql` | Executes statements, decodes typed rows, and provides the default fluent API. | `schema`, `dialect`, `query`, `render`, `row`, `database/sql` |
 | `inspect` | Reads database metadata and returns normalized schema descriptors. | `schema`, `dialect` |
 | `migrate` | Checksums, reports status, and applies forward-only native SQL migrations. | `schema`, `dialect`, `database/sql` |
-| `cmd/rasqlmigrate` | Runs checked-in SQL migration directories without application Go code. | `migrate`, supported database drivers |
+| `migrate/diff` | Loads desired-schema sources, owns dialect-neutral diff plans, and writes reviewed migration directories. | Go standard library |
+| `migrate/diff/postgresql` | Compares supported PostgreSQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-pg/query` |
+| `cmd/rasqlmigrate` | Runs checked-in SQL migration directories and generates reviewed dialect-specific migrations without application Go code. | `migrate`, `migrate/diff`, supported database drivers |
 | `template` and `cmd/rasqlgen` | Compiles static query templates and schema snapshots into Go source. | public packages only |
 
 The dependency flow is deliberately one-way:
