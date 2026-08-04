@@ -4,6 +4,7 @@ package inspect
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -13,6 +14,31 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 )
+
+// ErrTableNotFound is the sentinel wrapped by every [TableNotFoundError], so
+// callers that only need a presence check can use errors.Is instead of
+// errors.As.
+var ErrTableNotFound = errors.New("inspect: table not found")
+
+// TableNotFoundError reports that a requested table has no metadata in the
+// inspected scope. It distinguishes a lookup miss (misspelled or wrong-schema
+// table name) from a malformed table descriptor.
+type TableNotFoundError struct {
+	// Table is the requested table name.
+	Table string
+	// Scope describes where the lookup searched, such as "the current schema".
+	Scope string
+}
+
+func (e *TableNotFoundError) Error() string {
+	return fmt.Sprintf("inspect: table %q not found in %s", e.Table, e.Scope)
+}
+
+// Unwrap exposes ErrTableNotFound so errors.Is(err, ErrTableNotFound) works
+// alongside errors.As against *TableNotFoundError.
+func (e *TableNotFoundError) Unwrap() error {
+	return ErrTableNotFound
+}
 
 // Queryer is implemented by *sql.DB and *sql.Tx.
 type Queryer interface {
@@ -59,6 +85,12 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 	columns, err := i.readColumns(ctx, queries.columns, queries.argument(tableName))
 	if err != nil {
 		return schema.Table{}, err
+	}
+	if len(columns) == 0 {
+		if i.dialect.Name() == "postgresql" {
+			return schema.Table{}, i.postgreSQLEmptyColumnsError(ctx, tableName)
+		}
+		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
 	}
 	primaryKey, err := i.readPrimaryKey(ctx, queries.primaryKey, queries.argument(tableName))
 	if err != nil {
@@ -143,6 +175,96 @@ func (i Inspector) postgreSQLServerVersion(ctx context.Context) (int, error) {
 	return version, nil
 }
 
+// postgreSQLEmptyColumnsError explains an empty information_schema.columns
+// result for PostgreSQL. Three different situations produce that result and
+// each needs its own error:
+//
+//   - the table is absent from information_schema.tables, which is a lookup
+//     miss and keeps the TableNotFoundError signal;
+//   - the table exists and really has no user columns, which PostgreSQL
+//     permits through CREATE TABLE t ();
+//   - the table exists with user columns that this role cannot see, because
+//     information_schema.columns is filtered by has_column_privilege while
+//     information_schema.tables also accepts table-level privileges that have
+//     no column granularity, such as DELETE, TRUNCATE and TRIGGER.
+//
+// The third case must not be reported as a zero-column table, so the real
+// column count comes from pg_catalog, which carries no per-row privilege
+// filter.
+func (i Inspector) postgreSQLEmptyColumnsError(ctx context.Context, tableName string) error {
+	exists, err := i.postgreSQLTableExists(ctx, tableName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return &TableNotFoundError{Table: tableName, Scope: "the current schema"}
+	}
+	catalogColumns, err := i.postgreSQLCatalogColumnCount(ctx, tableName)
+	if err != nil {
+		return err
+	}
+	if catalogColumns > 0 {
+		return fmt.Errorf("inspect: table %q column metadata could not be read: pg_catalog reports %d columns but information_schema.columns exposed none, so the inspecting role holds no column privileges on the table", tableName, catalogColumns)
+	}
+	return fmt.Errorf("inspect: table %q cannot be represented: rasql does not support zero-column tables", tableName)
+}
+
+// postgreSQLTableExists reports whether tableName exists in the current
+// schema. It is used only after readColumns returns no rows, as the first
+// step of postgreSQLEmptyColumnsError.
+func (i Inspector) postgreSQLTableExists(ctx context.Context, tableName string) (bool, error) {
+	rows, err := i.queryer.QueryContext(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)", tableName)
+	if err != nil {
+		return false, fmt.Errorf("inspect: check table %q existence: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("inspect: iterate table %q existence: %w", tableName, err)
+		}
+		return false, fmt.Errorf("inspect: check table %q existence: no result", tableName)
+	}
+	var exists bool
+	if err := rows.Scan(&exists); err != nil {
+		return false, fmt.Errorf("inspect: scan table %q existence: %w", tableName, err)
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("inspect: iterate table %q existence: %w", tableName, err)
+	}
+	return exists, nil
+}
+
+// postgreSQLCatalogColumnCount counts the live user columns tableName has
+// according to pg_catalog. attnum > 0 skips the system columns and
+// NOT attisdropped skips columns left behind by DROP COLUMN, so the result is
+// the count a zero-column table would report as zero. pg_class, pg_attribute
+// and pg_namespace stay readable by PUBLIC with no per-row privilege filter,
+// which is what the constraint, index and foreign-key queries in this file
+// already rely on.
+func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName string) (int64, error) {
+	rows, err := i.queryer.QueryContext(ctx, "SELECT count(*) FROM pg_catalog.pg_attribute AS attribute JOIN pg_catalog.pg_class AS table_data ON table_data.oid = attribute.attrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND attribute.attnum > 0 AND NOT attribute.attisdropped", tableName)
+	if err != nil {
+		return 0, fmt.Errorf("inspect: count table %q catalog columns: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("inspect: iterate table %q catalog columns: %w", tableName, err)
+		}
+		return 0, fmt.Errorf("inspect: count table %q catalog columns: no result", tableName)
+	}
+	var count int64
+	if err := rows.Scan(&count); err != nil {
+		return 0, fmt.Errorf("inspect: scan table %q catalog column count: %w", tableName, err)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("inspect: iterate table %q catalog columns: %w", tableName, err)
+	}
+	return count, nil
+}
+
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
 	query := "PRAGMA table_info(\"" + tableName + "\")"
 	rows, err := i.queryer.QueryContext(ctx, query)
@@ -179,6 +301,9 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	}
 	if err := rows.Err(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: iterate SQLite columns: %w", err)
+	}
+	if len(columns) == 0 {
+		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
 	sort.Slice(primaryColumns, func(left, right int) bool {
 		return primaryColumns[left].position < primaryColumns[right].position
