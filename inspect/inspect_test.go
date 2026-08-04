@@ -32,9 +32,10 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
 			AddRow("id", "bigint", "NO", nil).
 			AddRow("email", "character varying", "YES", driver.Value(nil)))
-	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints").
+	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
 	expectPostgreSQLEmptyMetadata(mock, "users")
 
 	table, err := inspector.Table(t.Context(), "users")
@@ -91,9 +92,10 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 			AddRow("account_id", "bigint", "NO", nil).
 			AddRow("tenant_id", "bigint", "NO", nil).
 			AddRow("email", "character varying", "NO", nil))
-	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints").
+	expectPostgreSQLCatalogColumnCount(mock, "users", 4)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, index_metadata\\.indnkeyatts <> index_metadata\\.indnatts, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}).
@@ -170,9 +172,10 @@ func TestPostgreSQLInspectorRejectsReplicaIdentityIndex(t *testing.T) {
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
 			AddRow("id", "bigint", "NO", nil))
-	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints").
+	expectPostgreSQLCatalogColumnCount(mock, "users", 1)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, index_metadata\\.indnkeyatts <> index_metadata\\.indnatts, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
@@ -462,9 +465,10 @@ func expectPostgreSQLColumnsAndPrimaryKey(mock sqlmock.Sqlmock, tableName string
 		WithArgs(tableName).
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
 			AddRow("id", "bigint", "NO", nil))
-	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints").
+	expectPostgreSQLCatalogColumnCount(mock, tableName, 1)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
 }
 
 func expectPostgreSQLServerVersion(mock sqlmock.Sqlmock, version string) {
@@ -696,9 +700,7 @@ func TestPostgreSQLInspectorReportsTableNotFoundWhenAbsent(t *testing.T) {
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
 		WithArgs("widgets").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}))
-	mock.ExpectQuery("SELECT EXISTS \\(SELECT 1 FROM information_schema\\.tables WHERE table_schema = current_schema\\(\\) AND table_name = \\$1\\)").
-		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	expectPostgreSQLCatalogColumnCountAbsent(mock, "widgets")
 
 	_, err = inspector.Table(t.Context(), "widgets")
 	require.Error(t, err)
@@ -711,6 +713,11 @@ func TestPostgreSQLInspectorReportsTableNotFoundWhenAbsent(t *testing.T) {
 	require.NotContains(t, err.Error(), "normalize table")
 }
 
+// TestPostgreSQLInspectorReportsZeroColumnTableWhenPresent covers a table
+// that genuinely has no user columns, which CREATE TABLE t () permits. This
+// must stay distinguishable from both TableNotFoundError (the table exists)
+// and IncompleteMetadataError (there is nothing hidden by privileges: the
+// catalog agrees the column count is zero).
 func TestPostgreSQLInspectorReportsZeroColumnTableWhenPresent(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -726,9 +733,6 @@ func TestPostgreSQLInspectorReportsZeroColumnTableWhenPresent(t *testing.T) {
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
 		WithArgs("widgets").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}))
-	mock.ExpectQuery("SELECT EXISTS \\(SELECT 1 FROM information_schema\\.tables WHERE table_schema = current_schema\\(\\) AND table_name = \\$1\\)").
-		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 0)
 
 	_, err = inspector.Table(t.Context(), "widgets")
@@ -736,6 +740,9 @@ func TestPostgreSQLInspectorReportsZeroColumnTableWhenPresent(t *testing.T) {
 	var notFound *inspect.TableNotFoundError
 	require.False(t, errors.As(err, &notFound))
 	require.False(t, errors.Is(err, inspect.ErrTableNotFound))
+	var incomplete *inspect.IncompleteMetadataError
+	require.False(t, errors.As(err, &incomplete))
+	require.False(t, errors.Is(err, inspect.ErrIncompleteMetadata))
 	require.Contains(t, err.Error(), `"widgets"`)
 	require.Contains(t, err.Error(), "zero-column")
 }
@@ -761,26 +768,150 @@ func TestPostgreSQLInspectorReportsInvisibleColumnsWhenPresent(t *testing.T) {
 	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
 		WithArgs("widgets").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}))
-	mock.ExpectQuery("SELECT EXISTS \\(SELECT 1 FROM information_schema\\.tables WHERE table_schema = current_schema\\(\\) AND table_name = \\$1\\)").
-		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 3)
 
 	_, err = inspector.Table(t.Context(), "widgets")
 	require.Error(t, err)
-	var notFound *inspect.TableNotFoundError
-	require.False(t, errors.As(err, &notFound))
-	require.False(t, errors.Is(err, inspect.ErrTableNotFound))
+	require.ErrorIs(t, err, inspect.ErrIncompleteMetadata)
+	var incomplete *inspect.IncompleteMetadataError
+	require.ErrorAs(t, err, &incomplete)
+	require.Equal(t, "widgets", incomplete.Table)
+	require.Equal(t, 0, incomplete.Visible)
+	require.Equal(t, 3, incomplete.Actual)
 	require.Contains(t, err.Error(), `"widgets"`)
 	require.Contains(t, err.Error(), "column metadata could not be read")
 	require.Contains(t, err.Error(), "3 columns")
 	require.NotContains(t, err.Error(), "zero-column")
 }
 
+// TestPostgreSQLInspectorReportsTruncatedColumnsWhenPartiallyVisible covers
+// defect 1: a role granted SELECT on only some columns of an existing table.
+// information_schema.columns filters per column, so readColumns returns a
+// short, nonempty list with no error of its own. Before this fix, the
+// truncation check only ran when readColumns returned zero rows, so a
+// nonzero-but-short result like this one produced a valid-looking descriptor
+// with no error.
+func TestPostgreSQLInspectorReportsTruncatedColumnsWhenPartiallyVisible(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
+			AddRow("id", "bigint", "NO", nil).
+			AddRow("name", "character varying", "NO", nil))
+	expectPostgreSQLCatalogColumnCount(mock, "widgets", 3)
+
+	table, err := inspector.Table(t.Context(), "widgets")
+	require.Error(t, err)
+	require.Equal(t, schema.Table{}, table)
+	require.ErrorIs(t, err, inspect.ErrIncompleteMetadata)
+	var incomplete *inspect.IncompleteMetadataError
+	require.ErrorAs(t, err, &incomplete)
+	require.Equal(t, "widgets", incomplete.Table)
+	require.Equal(t, 2, incomplete.Visible)
+	require.Equal(t, 3, incomplete.Actual)
+}
+
+// TestPostgreSQLInspectorReturnsCompleteDescriptorWhenCountsAgree covers full
+// visibility: readColumns and the pg_catalog count agree, so the inspector
+// must proceed and return the complete descriptor rather than treat the
+// agreement itself as suspicious.
+func TestPostgreSQLInspectorReturnsCompleteDescriptorWhenCountsAgree(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
+			AddRow("id", "bigint", "NO", nil).
+			AddRow("name", "character varying", "NO", nil))
+	expectPostgreSQLCatalogColumnCount(mock, "widgets", 2)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
+	expectPostgreSQLEmptyMetadata(mock, "widgets")
+
+	table, err := inspector.Table(t.Context(), "widgets")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.TypeInteger},
+		{Name: "name", Type: schema.TypeText},
+	}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
+// TestPostgreSQLInspectorReadsPrimaryKeyFromCatalogUnderReadOnlyGrant covers
+// defect 2: a plain read-only role. information_schema.table_constraints
+// deliberately omits SELECT from the privileges that expose a constraint, so
+// a "GRANT SELECT" role sees every column but an empty primary key through
+// information_schema. Before this fix that empty primary key passed
+// validation (it is not a required field) and was returned with no error.
+// pg_catalog.pg_constraint carries no such filter, so the primary key must
+// now come back populated.
+func TestPostgreSQLInspectorReadsPrimaryKeyFromCatalogUnderReadOnlyGrant(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
+			AddRow("id", "bigint", "NO", nil))
+	expectPostgreSQLCatalogColumnCount(mock, "widgets", 1)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("widgets").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
+	expectPostgreSQLEmptyMetadata(mock, "widgets")
+
+	table, err := inspector.Table(t.Context(), "widgets")
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
+// TestPostgreSQLInspectorPreservesPrimaryKeyColumnOrder covers the ordering
+// half of defect 2's fix: a primary key's column order is part of its
+// identity, so switching the query source to pg_catalog must not scramble
+// it. unnest(conkey) WITH ORDINALITY, ordered by that ordinal, is meant to
+// preserve the same order key_column_usage.ordinal_position gave.
+func TestPostgreSQLInspectorPreservesPrimaryKeyColumnOrder(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+		WithArgs("memberships").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
+			AddRow("tenant_id", "bigint", "NO", nil).
+			AddRow("account_id", "bigint", "NO", nil).
+			AddRow("user_id", "bigint", "NO", nil))
+	expectPostgreSQLCatalogColumnCount(mock, "memberships", 3)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("memberships").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).
+			AddRow("account_id").
+			AddRow("tenant_id").
+			AddRow("user_id"))
+	expectPostgreSQLEmptyMetadata(mock, "memberships")
+
+	table, err := inspector.Table(t.Context(), "memberships")
+	require.NoError(t, err)
+	require.Equal(t, []string{"account_id", "tenant_id", "user_id"}, table.PrimaryKey)
+}
+
 func expectPostgreSQLCatalogColumnCount(mock sqlmock.Sqlmock, tableName string, count int64) {
-	mock.ExpectQuery("SELECT count\\(\\*\\) FROM pg_catalog\\.pg_attribute AS attribute JOIN pg_catalog\\.pg_class AS table_data.*JOIN pg_catalog\\.pg_namespace AS table_namespace.*attribute\\.attnum > 0 AND NOT attribute\\.attisdropped").
+	mock.ExpectQuery("SELECT count\\(attribute\\.attnum\\) FROM pg_catalog\\.pg_class AS table_data.*JOIN pg_catalog\\.pg_namespace AS table_namespace.*LEFT JOIN pg_catalog\\.pg_attribute AS attribute.*table_data\\.relkind IN \\('r','p','v','f'\\) GROUP BY table_data\\.oid").
 		WithArgs(tableName).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count))
+}
+
+func expectPostgreSQLCatalogColumnCountAbsent(mock sqlmock.Sqlmock, tableName string) {
+	mock.ExpectQuery("SELECT count\\(attribute\\.attnum\\) FROM pg_catalog\\.pg_class AS table_data.*JOIN pg_catalog\\.pg_namespace AS table_namespace.*LEFT JOIN pg_catalog\\.pg_attribute AS attribute.*table_data\\.relkind IN \\('r','p','v','f'\\) GROUP BY table_data\\.oid").
+		WithArgs(tableName).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}))
 }
 
 func TestSQLiteInspectorReportsTableNotFound(t *testing.T) {
