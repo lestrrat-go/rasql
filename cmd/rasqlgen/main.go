@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -92,12 +93,16 @@ func runSchema(args []string) error {
 	input := flags.String("input", "", "path to a JSON array of schema tables (max 64 MiB)")
 	dsn := flags.String("dsn", "", "PostgreSQL connection string")
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
+	timeout := flags.Duration("timeout", 30*time.Second, "deadline for -dsn metadata inspection")
 	var tableNames tableNames
 	flags.Var(&tableNames, "table", "database table to generate; repeat for multiple tables (duplicate values are rejected)")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "path for generated Go source")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
+	}
+	if *timeout <= 0 {
+		return fmt.Errorf("schema -timeout must be positive, got %s", *timeout)
 	}
 	if *packageName == "" || *output == "" {
 		return errors.New("schema requires -package and -output")
@@ -135,13 +140,24 @@ func runSchema(args []string) error {
 			return fmt.Errorf("open PostgreSQL database: %w", err)
 		}
 		defer database.Close()
-		inspector, err := inspect.New(database, d)
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		defer cancel()
+		tx, err := database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
+			return fmt.Errorf("begin PostgreSQL inspection transaction: %w", err)
+		}
+		inspector, err := inspect.New(tx, d)
+		if err != nil {
+			_ = tx.Rollback()
 			return err
 		}
-		tables, err = inspectTables(context.Background(), inspector, tableNames)
+		tables, err = inspectTables(ctx, inspector, tableNames)
 		if err != nil {
+			_ = tx.Rollback()
 			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit PostgreSQL inspection transaction: %w", err)
 		}
 	default:
 		return errors.New("schema requires either -input or -dsn")
