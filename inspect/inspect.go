@@ -1,11 +1,10 @@
 // Package inspect reads live database metadata into schema descriptors.
 //
-// A table descriptor is either complete or an error: this package never
-// returns a schema.Table silently missing columns or a primary key. For
-// PostgreSQL, that guarantee holds even for a role with restricted grants,
-// because information_schema is filtered per column and per table by the
-// inspecting role's privileges while pg_catalog is not; this package cross-
-// checks the two and reports [IncompleteMetadataError] or
+// For PostgreSQL and SQLite, a table descriptor is either complete or an
+// error: this package never returns a schema.Table silently missing columns
+// or a primary key. PostgreSQL's information_schema is filtered per column
+// and per table by the inspecting role's privileges while pg_catalog is not;
+// this package cross-checks the two and reports [IncompleteMetadataError] or
 // [TableNotFoundError] instead of guessing. MySQL has the same
 // information_schema privilege filtering but no unfiltered catalog
 // equivalent to cross-check against, so a MySQL inspection under a
