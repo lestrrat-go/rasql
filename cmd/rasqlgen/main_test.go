@@ -429,7 +429,12 @@ func TestRunSchemaInspectionRespectsTimeout(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, mock.ExpectationsWereMet())
+		// database/sql rolls the transaction back from its own goroutine once
+		// the deadline fires, so the driver may see Rollback after run
+		// returns. Poll instead of asserting synchronously.
+		require.Eventually(t, func() bool {
+			return mock.ExpectationsWereMet() == nil
+		}, time.Second, 5*time.Millisecond)
 	})
 	previousOpenDatabase := openDatabase
 	openDatabase = func(driverName string, dataSourceName string) (*sql.DB, error) {
@@ -438,14 +443,29 @@ func TestRunSchemaInspectionRespectsTimeout(t *testing.T) {
 	t.Cleanup(func() {
 		openDatabase = previousOpenDatabase
 	})
+	// inspectionDelay must stay well above the -timeout below and is reused
+	// verbatim as the elapsed-time assertion bound, so the test proves the
+	// query was cut short rather than merely completing quickly.
+	const inspectionDelay = 500 * time.Millisecond
 	mock.ExpectBegin()
-	mock.ExpectQuery("SHOW server_version_num").WillDelayFor(500 * time.Millisecond)
+	mock.ExpectQuery("SHOW server_version_num").
+		WillDelayFor(inspectionDelay).
+		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow("180000"))
 	mock.ExpectRollback()
 	mock.ExpectClose()
 
 	output := filepath.Join(directory, "schema.go")
+	start := time.Now()
 	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-timeout", "20ms", "-package", "generated", "-output", output})
-	require.ErrorContains(t, err, "read PostgreSQL server version")
+	elapsed := time.Since(start)
+	// Keep the full prefix, not just the cancellation tail, so this cannot be
+	// satisfied by a cancellation raised at some other query.
+	require.ErrorContains(t, err, "read PostgreSQL server version: canceling query due to user request")
+	// Bound against the delay constant itself, not a smaller round number:
+	// observed elapsed is ~21ms against a 500ms delay, a ~24x margin. A
+	// tighter bound (e.g. 50ms) would add no discrimination and could flake
+	// on a loaded machine.
+	require.Less(t, elapsed, inspectionDelay, "inspection must be cut short by -timeout, took %s", elapsed)
 	_, err = os.Stat(output)
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
