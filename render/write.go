@@ -1,7 +1,9 @@
 package render
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
@@ -103,13 +105,42 @@ func (r *renderer) writeInsertBase(statement query.Insert) error {
 	return nil
 }
 
+// Each upsertMessage constant below is the only definition of its error text.
+// The conflict-target check in writeUpsert joins its own message with the other
+// problems that apply to the same statement, so none of these texts may be
+// copied anywhere else.
+const (
+	upsertConflictTargetMessage = "explicit conflict target is not supported: this dialect lacks dialect.CapabilityConflictTarget"
+	upsertDefaultValuesMessage  = "default-values upsert is not supported"
+	upsertNoAssignmentsMessage  = "upsert without assignments is not supported"
+)
+
 func (r *renderer) writeUpsert(statement query.Upsert) error {
 	style := r.dialect.UpsertStyle()
 	if !r.dialect.Supports(dialect.CapabilityUpsert) || style == dialect.UpsertUnsupported {
 		return fmt.Errorf("upsert is not supported")
 	}
-	if statement.Insert().UsesDefaultValues() && !r.dialect.Supports(dialect.CapabilityDefaultValuesUpsert) {
-		return fmt.Errorf("default-values upsert is not supported")
+	defaultValuesRejected := statement.Insert().UsesDefaultValues() && !r.dialect.Supports(dialect.CapabilityDefaultValuesUpsert)
+	if len(statement.ConflictColumns()) > 0 && !r.dialect.Supports(dialect.CapabilityConflictTarget) {
+		// This check runs before the default-values check and the style switch on
+		// purpose: an explicit conflict target is unusable on this dialect for any
+		// insert and any assignment list, while the other two problems are
+		// conditional. A default-values upsert is only rejected by a dialect
+		// lacking dialect.CapabilityDefaultValuesUpsert, and zero assignments is
+		// only rejected by the ON DUPLICATE KEY style. Report every problem that
+		// applies so a caller is not misled into thinking the target is the only
+		// thing to fix and then hitting a second failure after removing it.
+		problems := []string{upsertConflictTargetMessage}
+		if defaultValuesRejected {
+			problems = append(problems, upsertDefaultValuesMessage)
+		}
+		if style == dialect.UpsertDuplicateKey && len(statement.Assignments()) == 0 {
+			problems = append(problems, upsertNoAssignmentsMessage)
+		}
+		return errors.New(strings.Join(problems, "; "))
+	}
+	if defaultValuesRejected {
+		return errors.New(upsertDefaultValuesMessage)
 	}
 	if err := r.writeInsertBase(statement.Insert()); err != nil {
 		return err
@@ -147,7 +178,7 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 	case dialect.UpsertDuplicateKey:
 		assignments := statement.Assignments()
 		if len(assignments) == 0 {
-			return fmt.Errorf("upsert without assignments is not supported")
+			return errors.New(upsertNoAssignmentsMessage)
 		}
 		r.builder.WriteString(" ON DUPLICATE KEY UPDATE ")
 		if err := r.writeUpsertAssignments(assignments, style); err != nil {
