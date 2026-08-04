@@ -20,7 +20,9 @@ func (Upsert) writeStatement() {}
 
 // NewUpsert creates a validated upsert statement.
 // Conflict columns identify an optional explicit conflict target. Assignments set
-// target columns when a conflict occurs.
+// target columns when a conflict occurs. Rendering a non-empty conflict target
+// requires dialect.CapabilityConflictTarget; dialects that lack it (for example
+// MySQL) reject the statement rather than silently drop the target.
 func NewUpsert(insert Insert, conflict []Column, assignments []Assignment) (Upsert, error) {
 	statement := Upsert{
 		insert:      insert.clone(),

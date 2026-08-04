@@ -389,7 +389,7 @@ if err != nil {
 result, err := client.Exec(ctx, statement)
 ```
 
-Each `With…` method returns a new validated statement rather than changing the one it was called on, matching the immutable style of the select builders. `WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not.
+Each `With…` method returns a new validated statement rather than changing the one it was called on, matching the immutable style of the select builders. `WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not. `NewUpsert` accepts an explicit conflict target the same way; check `dialect.CapabilityConflictTarget` before relying on it, since MySQL also lacks it and rejects a statement that sets one.
 
 `Client.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](05-templates.md) is executed.
 
