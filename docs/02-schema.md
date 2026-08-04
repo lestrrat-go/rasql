@@ -151,6 +151,8 @@ source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestr
 
 `inspect.New` takes the same kind of handle as `rasql.New` plus the dialect that describes the database being read. `Table` looks up one table by name. The result is an ordinary descriptor, so it can be validated, compared against a checked-in definition, or handed to the generator. `Table` returns an error for a `NUMERIC` or `DECIMAL` column, because rasql has no logical type that can represent an exact decimal.
 
+`Table` never returns a descriptor silently missing columns or a primary key. PostgreSQL's `information_schema` views are filtered by the inspecting role's privileges, while `pg_catalog` is not; `inspect` cross-checks the two, so a role that cannot see every column, or that can read but not alter a table, gets `inspect.TableNotFoundError` or `inspect.IncompleteMetadataError` instead of a truncated result. MySQL has the same `information_schema` filtering but no unfiltered catalog to cross-check against, so a restricted MySQL grant can make inspection silently under-report a table's columns or primary key, with no way for this package to detect it.
+
 ## Next
 
 [Querying](03-querying.md) reads rows through these descriptors, or [Writing rows](04-writing.md) puts rows into them.

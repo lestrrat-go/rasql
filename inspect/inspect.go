@@ -1,4 +1,17 @@
 // Package inspect reads live database metadata into schema descriptors.
+//
+// A table descriptor is either complete or an error: this package never
+// returns a schema.Table silently missing columns or a primary key. For
+// PostgreSQL, that guarantee holds even for a role with restricted grants,
+// because information_schema is filtered per column and per table by the
+// inspecting role's privileges while pg_catalog is not; this package cross-
+// checks the two and reports [IncompleteMetadataError] or
+// [TableNotFoundError] instead of guessing. MySQL has the same
+// information_schema privilege filtering but no unfiltered catalog
+// equivalent to cross-check against, so a MySQL inspection under a
+// restricted grant can silently under-report a table's columns or primary
+// key with no way for this package to detect it. SQLite has no such
+// filtering to begin with.
 package inspect
 
 import (
@@ -40,6 +53,39 @@ func (e *TableNotFoundError) Unwrap() error {
 	return ErrTableNotFound
 }
 
+// ErrIncompleteMetadata is the sentinel wrapped by every
+// [IncompleteMetadataError], so callers that only need to detect a privilege
+// problem can use errors.Is instead of errors.As.
+var ErrIncompleteMetadata = errors.New("inspect: incomplete table metadata")
+
+// IncompleteMetadataError reports that the inspecting role sees fewer
+// columns of Table than actually exist. PostgreSQL's information_schema.columns
+// filters each row by has_column_privilege, so a role granted SELECT on only
+// some columns, or none, gets a short or empty result with no error of its
+// own; pg_catalog carries no such filter and reports the true count. Visible
+// and Actual let a caller distinguish this from a schema rasql genuinely
+// cannot represent: a privilege gap is fixed with GRANT, a representability
+// gap needs a schema change, and only one of those is this error.
+type IncompleteMetadataError struct {
+	// Table is the requested table name.
+	Table string
+	// Visible is the column count information_schema exposed to the
+	// inspecting role.
+	Visible int
+	// Actual is the true column count reported by pg_catalog.
+	Actual int
+}
+
+func (e *IncompleteMetadataError) Error() string {
+	return fmt.Sprintf("inspect: table %q column metadata could not be read: pg_catalog reports %d columns but information_schema.columns exposed %d, so the inspecting role holds insufficient column privileges on the table", e.Table, e.Actual, e.Visible)
+}
+
+// Unwrap exposes ErrIncompleteMetadata so errors.Is(err, ErrIncompleteMetadata)
+// works alongside errors.As against *IncompleteMetadataError.
+func (e *IncompleteMetadataError) Unwrap() error {
+	return ErrIncompleteMetadata
+}
+
 // Queryer is implemented by *sql.DB and *sql.Tx.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -63,7 +109,11 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 	return Inspector{queryer: queryer, dialect: d}, nil
 }
 
-// Table reads the supported schema metadata for tableName.
+// Table reads the supported schema metadata for tableName. For PostgreSQL it
+// returns [TableNotFoundError] when tableName does not exist and
+// [IncompleteMetadataError] when the inspecting role's privileges hide some
+// or all of the table's columns; see the package doc for the MySQL
+// limitation, which this method cannot detect.
 func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, error) {
 	if err := schema.ValidateIdentifier(tableName); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: invalid table name: %w", err)
@@ -86,10 +136,11 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 	if err != nil {
 		return schema.Table{}, err
 	}
-	if len(columns) == 0 {
-		if i.dialect.Name() == "postgresql" {
-			return schema.Table{}, i.postgreSQLEmptyColumnsError(ctx, tableName)
+	if i.dialect.Name() == "postgresql" {
+		if err := i.postgreSQLCheckColumnVisibility(ctx, tableName, len(columns)); err != nil {
+			return schema.Table{}, err
 		}
+	} else if len(columns) == 0 {
 		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
 	}
 	primaryKey, err := i.readPrimaryKey(ctx, queries.primaryKey, queries.argument(tableName))
@@ -175,94 +226,78 @@ func (i Inspector) postgreSQLServerVersion(ctx context.Context) (int, error) {
 	return version, nil
 }
 
-// postgreSQLEmptyColumnsError explains an empty information_schema.columns
-// result for PostgreSQL. Three different situations produce that result and
-// each needs its own error:
+// postgreSQLCheckColumnVisibility compares visible, the column count
+// readColumns actually saw, against the same relation's column count from
+// pg_catalog. information_schema.columns filters each row by
+// has_column_privilege, so a role granted SELECT on only some columns of an
+// existing table — or none at all — gets a short or empty result with no
+// error of its own; that silent gap is what this check closes. It runs for
+// every PostgreSQL lookup, not only when visible is zero, because a
+// nonzero-but-short result (e.g. two of three columns) is exactly as
+// undetectable from information_schema alone as an empty one.
 //
-//   - the table is absent from information_schema.tables, which is a lookup
-//     miss and keeps the TableNotFoundError signal;
-//   - the table exists and really has no user columns, which PostgreSQL
-//     permits through CREATE TABLE t ();
-//   - the table exists with user columns that this role cannot see, because
-//     information_schema.columns is filtered by has_column_privilege while
-//     information_schema.tables also accepts table-level privileges that have
-//     no column granularity, such as DELETE, TRUNCATE and TRIGGER.
+// The pg_catalog query resolves three questions at once: whether tableName
+// exists, whether it genuinely has zero columns (which CREATE TABLE t ()
+// permits), or how many columns actually exist to compare against visible.
 //
-// The third case must not be reported as a zero-column table, so the real
-// column count comes from pg_catalog, which carries no per-row privilege
-// filter.
-func (i Inspector) postgreSQLEmptyColumnsError(ctx context.Context, tableName string) error {
-	exists, err := i.postgreSQLTableExists(ctx, tableName)
+// Concurrent DDL between the readColumns query and this one can make the two
+// counts disagree even with no privilege problem involved; cmd/rasqlgen/main.go
+// already runs inspection inside a transaction, which keeps that window
+// small, so it is noted here rather than eliminated.
+func (i Inspector) postgreSQLCheckColumnVisibility(ctx context.Context, tableName string, visible int) error {
+	exists, catalogColumns, err := i.postgreSQLCatalogColumnCount(ctx, tableName)
 	if err != nil {
 		return err
 	}
 	if !exists {
 		return &TableNotFoundError{Table: tableName, Scope: "the current schema"}
 	}
-	catalogColumns, err := i.postgreSQLCatalogColumnCount(ctx, tableName)
-	if err != nil {
-		return err
+	if catalogColumns == 0 {
+		return fmt.Errorf("inspect: table %q cannot be represented: rasql does not support zero-column tables", tableName)
 	}
-	if catalogColumns > 0 {
-		return fmt.Errorf("inspect: table %q column metadata could not be read: pg_catalog reports %d columns but information_schema.columns exposed none, so the inspecting role holds no column privileges on the table", tableName, catalogColumns)
+	if int64(visible) != catalogColumns {
+		return &IncompleteMetadataError{Table: tableName, Visible: visible, Actual: int(catalogColumns)}
 	}
-	return fmt.Errorf("inspect: table %q cannot be represented: rasql does not support zero-column tables", tableName)
+	return nil
 }
 
-// postgreSQLTableExists reports whether tableName exists in the current
-// schema. It is used only after readColumns returns no rows, as the first
-// step of postgreSQLEmptyColumnsError.
-func (i Inspector) postgreSQLTableExists(ctx context.Context, tableName string) (bool, error) {
-	rows, err := i.queryer.QueryContext(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)", tableName)
+// postgreSQLCatalogColumnCountQuery answers absence, a genuine zero-column
+// table, and the true column count in one round trip. GROUP BY table_data.oid
+// is load-bearing: the LEFT JOIN to pg_attribute means a table with zero live
+// columns still contributes one group, so zero result rows can only mean the
+// relation itself is absent; without the GROUP BY the aggregate always
+// returns exactly one row regardless of whether the relation exists.
+// relkind IN ('r','p','v','f') restricts to the same relation kinds
+// information_schema.columns itself considers (ordinary and partitioned
+// tables, views, foreign tables), so a name that resolves to a sequence or an
+// index does not count attributes that are not comparable to visible.
+// pg_class, pg_attribute and pg_namespace carry no per-row privilege filter
+// and stay readable by PUBLIC, unlike information_schema.columns and
+// information_schema.tables.
+const postgreSQLCatalogColumnCountQuery = "SELECT count(attribute.attnum) FROM pg_catalog.pg_class AS table_data JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace LEFT JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = table_data.oid AND attribute.attnum > 0 AND NOT attribute.attisdropped WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND table_data.relkind IN ('r','p','v','f') GROUP BY table_data.oid"
+
+// postgreSQLCatalogColumnCount runs postgreSQLCatalogColumnCountQuery and
+// reports whether tableName exists and, if so, its true column count.
+func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName string) (exists bool, count int64, err error) {
+	rows, err := i.queryer.QueryContext(ctx, postgreSQLCatalogColumnCountQuery, tableName)
 	if err != nil {
-		return false, fmt.Errorf("inspect: check table %q existence: %w", tableName, err)
+		return false, 0, fmt.Errorf("inspect: count table %q catalog columns: %w", tableName, err)
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return false, fmt.Errorf("inspect: iterate table %q existence: %w", tableName, err)
+			return false, 0, fmt.Errorf("inspect: iterate table %q catalog columns: %w", tableName, err)
 		}
-		return false, fmt.Errorf("inspect: check table %q existence: no result", tableName)
+		return false, 0, nil
 	}
-	var exists bool
-	if err := rows.Scan(&exists); err != nil {
-		return false, fmt.Errorf("inspect: scan table %q existence: %w", tableName, err)
-	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("inspect: iterate table %q existence: %w", tableName, err)
-	}
-	return exists, nil
-}
-
-// postgreSQLCatalogColumnCount counts the live user columns tableName has
-// according to pg_catalog. attnum > 0 skips the system columns and
-// NOT attisdropped skips columns left behind by DROP COLUMN, so the result is
-// the count a zero-column table would report as zero. pg_class, pg_attribute
-// and pg_namespace stay readable by PUBLIC with no per-row privilege filter,
-// which is what the constraint, index and foreign-key queries in this file
-// already rely on.
-func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName string) (int64, error) {
-	rows, err := i.queryer.QueryContext(ctx, "SELECT count(*) FROM pg_catalog.pg_attribute AS attribute JOIN pg_catalog.pg_class AS table_data ON table_data.oid = attribute.attrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND attribute.attnum > 0 AND NOT attribute.attisdropped", tableName)
-	if err != nil {
-		return 0, fmt.Errorf("inspect: count table %q catalog columns: %w", tableName, err)
-	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return 0, fmt.Errorf("inspect: iterate table %q catalog columns: %w", tableName, err)
-		}
-		return 0, fmt.Errorf("inspect: count table %q catalog columns: no result", tableName)
-	}
-	var count int64
 	if err := rows.Scan(&count); err != nil {
-		return 0, fmt.Errorf("inspect: scan table %q catalog column count: %w", tableName, err)
+		return false, 0, fmt.Errorf("inspect: scan table %q catalog column count: %w", tableName, err)
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("inspect: iterate table %q catalog columns: %w", tableName, err)
+		return false, 0, fmt.Errorf("inspect: iterate table %q catalog columns: %w", tableName, err)
 	}
-	return count, nil
+	return true, count, nil
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
@@ -625,6 +660,14 @@ func (informationQueries) argument(tableName string) any {
 	return tableName
 }
 
+// informationSchemaQueries returns the metadata queries for dialects that
+// have no unfiltered catalog to fall back on. MySQL's information_schema.columns
+// and information_schema.key_column_usage carry the same per-column privilege
+// filter PostgreSQL's do, but MySQL exposes no pg_catalog equivalent that is
+// both unfiltered and reveals the true column count. A role with a partial
+// column grant can therefore make MySQL inspection silently under-report a
+// table's columns or primary key, with no query this package can run to
+// detect it. This is a known limitation, not something planned here.
 func informationSchemaQueries(name string) (informationQueries, error) {
 	switch name {
 	case "mysql":
@@ -643,6 +686,23 @@ const (
 	postgreSQL18Version = 180000
 )
 
+// postgreSQLInformationQueries builds the PostgreSQL metadata queries for one
+// server version. The primary-key query reads pg_catalog.pg_constraint
+// instead of information_schema.table_constraints /
+// information_schema.key_column_usage: per the SQL standard,
+// information_schema.table_constraints exposes a constraint only to a role
+// with INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES or TRIGGER on the table,
+// deliberately omitting SELECT, and key_column_usage carries the same
+// per-column has_column_privilege filter as information_schema.columns. A
+// plain read-only "GRANT SELECT" role therefore sees every column through
+// information_schema.columns but an empty primary key through that path,
+// with no error. pg_catalog.pg_constraint carries no such filter and is
+// readable by PUBLIC, like the unique-constraint, check, index and
+// foreign-key queries below. unnest(conkey) WITH ORDINALITY preserves the
+// same column order information_schema.key_column_usage.ordinal_position
+// gave: both come from the position of each column within the constraint's
+// key array, which matters because a primary key's column order is part of
+// its identity.
 func postgreSQLInformationQueries(version int) informationQueries {
 	nullsNotDistinct := postgreSQLCatalogBoolean(version, postgreSQL15Version, "index_metadata.indnullsnotdistinct")
 	deleteSetColumns := postgreSQLCatalogBoolean(version, postgreSQL16Version, "constraint_data.confdelsetcols IS NOT NULL")
@@ -654,7 +714,7 @@ func postgreSQLInformationQueries(version int) informationQueries {
 
 	return informationQueries{
 		columns:                         "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
-		primaryKey:                      "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = current_schema() AND table_constraints.table_name = $1 AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
+		primaryKey:                      "SELECT attribute.attname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'p' ORDER BY key_column.ordinal_position",
 		uniqueConstraints:               "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", index_metadata.indnkeyatts <> index_metadata.indnatts, " + temporal + ", index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR index_metadata.indisreplident OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
 		checks:                          "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",
 		unsupportedExclusionConstraints: "SELECT constraint_data.conname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'x' ORDER BY constraint_data.conname",
