@@ -9,6 +9,8 @@ go get github.com/lestrrat-go/rasql/cmd/rasqlgen@latest
 go run github.com/lestrrat-go/rasql/cmd/rasqlgen <command> [flags]
 ```
 
+Both `schema` and `query` take flags only, and every flag must precede any other argument: flag parsing stops at the first non-flag argument, so any other argument, or a flag placed after one, is rejected as an unexpected argument.
+
 ## `rasqlgen schema`
 
 ```sh
