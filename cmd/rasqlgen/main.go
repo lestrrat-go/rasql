@@ -96,11 +96,8 @@ func runSchema(args []string) error {
 	flags.Var(&tableNames, "table", "database table to generate; repeat for multiple tables (duplicate values are rejected)")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "path for generated Go source")
-	if err := flags.Parse(args); err != nil {
+	if err := parseCommandFlags(flags, args); err != nil {
 		return err
-	}
-	if rest := flags.Args(); len(rest) > 0 {
-		return unexpectedArgumentsError(rest)
 	}
 	if *packageName == "" || *output == "" {
 		return errors.New("schema requires -package and -output")
@@ -219,11 +216,8 @@ func runQuery(args []string) error {
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "path for generated Go source")
-	if err := flags.Parse(args); err != nil {
+	if err := parseCommandFlags(flags, args); err != nil {
 		return err
-	}
-	if rest := flags.Args(); len(rest) > 0 {
-		return unexpectedArgumentsError(rest)
 	}
 	if *input == "" || *functionName == "" || *dialectName == "" || *packageName == "" || *output == "" {
 		return errors.New("query requires -input, -function, -dialect, -package, and -output")
@@ -252,6 +246,24 @@ func runQuery(args []string) error {
 		return fmt.Errorf("write query output: %w", err)
 	}
 	return nil
+}
+
+// parseCommandFlags parses a subcommand's arguments and rejects whatever the
+// flag set did not consume. A help request needs the same rejection as a
+// successful parse: flag parsing stops at -h with the arguments that follow it
+// still in Args(), and main exits 0 on flag.ErrHelp, so returning the help
+// error unchecked would drop those arguments without a diagnostic. Any other
+// parse failure is returned as it is, because the flag package reports it more
+// precisely than a leftover-argument message can.
+func parseCommandFlags(flags *flag.FlagSet, args []string) error {
+	err := flags.Parse(args)
+	if err != nil && !errors.Is(err, flag.ErrHelp) {
+		return err
+	}
+	if rest := flags.Args(); len(rest) > 0 {
+		return unexpectedArgumentsError(rest)
+	}
+	return err
 }
 
 // unexpectedArgumentsError reports the leftover arguments a command did not consume.

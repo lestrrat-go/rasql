@@ -260,6 +260,53 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+func TestRunRejectsArgumentsAfterHelp(t *testing.T) {
+	previousCommandOutput := commandOutput
+	output := new(bytes.Buffer)
+	commandOutput = output
+	t.Cleanup(func() {
+		commandOutput = previousCommandOutput
+	})
+
+	testCases := []struct {
+		name     string
+		args     []string
+		expected string
+	}{
+		{
+			name:     "schema",
+			args:     []string{"schema", "-h", "ignored"},
+			expected: `unexpected arguments: ["ignored"]`,
+		},
+		{
+			name:     "schema with several arguments",
+			args:     []string{"schema", "-h", "ignored", "more"},
+			expected: `unexpected arguments: ["ignored" "more"]`,
+		},
+		{
+			name:     "query",
+			args:     []string{"query", "-h", "ignored"},
+			expected: `unexpected arguments: ["ignored"]`,
+		},
+		{
+			name:     "query with several arguments",
+			args:     []string{"query", "-h", "ignored", "more"},
+			expected: `unexpected arguments: ["ignored" "more"]`,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			output.Reset()
+			err := run(testCase.args)
+			require.EqualError(t, err, testCase.expected)
+			// main exits 0 on flag.ErrHelp, so a help error here would
+			// swallow the leftover argument.
+			require.NotErrorIs(t, err, flag.ErrHelp)
+		})
+	}
+}
+
 func TestRunRejectsUnexpectedArguments(t *testing.T) {
 	previousCommandOutput := commandOutput
 	output := new(bytes.Buffer)
