@@ -8,13 +8,17 @@ import (
 // TestClassifyPortCollision pins classifyPortCollision against real
 // `docker compose up` failure text: several worded-differently port-in-use
 // messages (Docker Engine's classic and newer wording, podman's
-// rootlessport shim, and podman's own higher-level phrasing -- see the
-// comments on portCollisionPatterns for where each was confirmed) that must
-// all be classified as a collision with the right port extracted, plus
-// several unrelated bring-up failures that must NOT be, so a message this
-// classifier has never seen keeps failing loudly rather than silently
-// skipping. This needs no Docker: it drives the classifier directly on
-// fixed strings.
+// rootlessport shim, podman's own higher-level phrasing, podman's
+// cannot-listen wrapper, Docker Desktop for Windows' WSA bind error, and
+// Docker's userland-proxy EADDRINUSE wording -- see the comments on
+// portCollisionPatterns for where each was confirmed) that must all be
+// classified as a collision with the right port extracted, plus several
+// unrelated bring-up failures that must NOT be -- including two messages
+// that share vocabulary with real collisions (moby's and podman's
+// container-name conflicts, and moby's static-IP conflict) but are not
+// port collisions -- so a message this classifier has never seen keeps
+// failing loudly rather than silently skipping. This needs no Docker: it
+// drives the classifier directly on fixed strings.
 func TestClassifyPortCollision(t *testing.T) {
 	collisions := []struct {
 		name     string
@@ -57,6 +61,29 @@ func TestClassifyPortCollision(t *testing.T) {
 			wantPort: "5432",
 		},
 		{
+			name:     "podman's cannot-listen wrapper around the Go net bind error",
+			output:   "cannot listen on the TCP port: listen tcp4 :5432: bind: address already in use",
+			wantPort: "5432",
+		},
+		{
+			// The WSA tail text doesn't match any portNumberPatterns
+			// entry (those are anchored to "bind: address already in
+			// use" or the userland-proxy's EADDRINUSE wording, neither
+			// of which this message ends in), so the port is
+			// unextractable here -- the same "collision but no port"
+			// outcome as the last case in this table.
+			name: "docker desktop for windows wrapping its own WSA bind error",
+			output: "Error response from daemon: Ports are not available: exposing port TCP " +
+				"0.0.0.0:5432 -> 0.0.0.0:0: listen tcp 0.0.0.0:5432: bind: Only one usage of each " +
+				"socket address (protocol/network address/port) is normally permitted.",
+			wantPort: "",
+		},
+		{
+			name:     "docker's userland-proxy wording",
+			output:   "Error starting userland proxy: Bind for 0.0.0.0:80: unexpected error (Failure EADDRINUSE)",
+			wantPort: "80",
+		},
+		{
 			name:     "collision recognized even when the port cannot be extracted",
 			output:   "Error response from daemon: Ports are not available: something unexpected happened",
 			wantPort: "",
@@ -97,6 +124,22 @@ func TestClassifyPortCollision(t *testing.T) {
 		{
 			name:   "unrelated network failure reaching the registry",
 			output: `Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp: lookup registry-1.docker.io: no such host`,
+		},
+		{
+			name: "docker container-name conflict, not a port collision",
+			output: `Error response from daemon: Conflict. The container name "/rasql-postgres-1" is already ` +
+				`in use by container "abc123def456789". You have to remove (or rename) that container ` +
+				`to be able to reuse that name.`,
+		},
+		{
+			name: "podman's equivalent container-name conflict, not a port collision",
+			output: `Error: error creating container storage: the container name "rasql-postgres-1" is already ` +
+				`in use by container "abc123def456789789abc123def456789abc123def456789abc123def456789". ` +
+				`You have to remove that container to be able to reuse that name.`,
+		},
+		{
+			name:   "moby's static-IP conflict, not a port collision",
+			output: "Error response from daemon: Address already in use",
 		},
 	}
 	for _, tc := range notCollisions {
