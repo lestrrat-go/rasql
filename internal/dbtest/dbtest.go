@@ -102,6 +102,31 @@ func resolveDSN(t *testing.T, envVar, composeDSN string) string {
 	if dsn := os.Getenv(envVar); dsn != "" {
 		return dsn
 	}
+	// A present-but-empty value is deliberately treated the same as unset
+	// and falls through to Docker/skip below, rather than failing fast.
+	// This is not an oversight; two things rule out failing here:
+	//
+	//   - Clearing an inherited DSN to opt out of live tests is a real
+	//     workflow, and this repository's own base CI relied on it: the
+	//     old matrix set RASQL_TEST_MYSQL_DSN from an undefined matrix
+	//     value on the PostgreSQL leg, producing an empty value that had
+	//     to mean "not set". Failing on present-but-empty would break
+	//     that pattern for anyone who reintroduces it.
+	//   - Failing late, at connection time, instead of here is not a safe
+	//     alternative either: sql.Open("pgx", "") succeeds, and an empty
+	//     pgx DSN silently falls back to libpq's PG* environment
+	//     variables (PGHOST, PGPORT, PGUSER, PGDATABASE, ...). On a
+	//     machine with those set, that can connect to an unintended
+	//     database and pass for the wrong reason instead of erroring.
+	//
+	// If a hard failure is ever wanted, it must be an explicit, deliberate
+	// choice made with the above in mind -- not a drive-by fix. In the
+	// meantime this only logs, so the person who expected their DSN to be
+	// used can see why it was not, instead of reading a Docker or skip
+	// message that never names their variable.
+	if v, ok := os.LookupEnv(envVar); ok && v == "" {
+		t.Logf("%s is set but empty; ignoring it and falling through to Docker/skip resolution", envVar)
+	}
 	ensureComposeUp(t)
 	return composeDSN
 }
