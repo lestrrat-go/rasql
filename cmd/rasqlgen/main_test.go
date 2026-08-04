@@ -260,6 +260,148 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+func TestRunRejectsArgumentsAfterHelp(t *testing.T) {
+	previousCommandOutput := commandOutput
+	output := new(bytes.Buffer)
+	commandOutput = output
+	t.Cleanup(func() {
+		commandOutput = previousCommandOutput
+	})
+
+	testCases := []struct {
+		name     string
+		args     []string
+		expected string
+	}{
+		{
+			name:     "schema",
+			args:     []string{"schema", "-h", "ignored"},
+			expected: `unexpected arguments: ["ignored"]`,
+		},
+		{
+			name:     "schema with several arguments",
+			args:     []string{"schema", "-h", "ignored", "more"},
+			expected: `unexpected arguments: ["ignored" "more"]`,
+		},
+		{
+			name:     "query",
+			args:     []string{"query", "-h", "ignored"},
+			expected: `unexpected arguments: ["ignored"]`,
+		},
+		{
+			name:     "query with several arguments",
+			args:     []string{"query", "-h", "ignored", "more"},
+			expected: `unexpected arguments: ["ignored" "more"]`,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			output.Reset()
+			err := run(testCase.args)
+			require.EqualError(t, err, testCase.expected)
+			// main exits 0 on flag.ErrHelp, so a help error here would
+			// swallow the leftover argument.
+			require.NotErrorIs(t, err, flag.ErrHelp)
+		})
+	}
+}
+
+func TestRunRejectsUnexpectedArguments(t *testing.T) {
+	previousCommandOutput := commandOutput
+	output := new(bytes.Buffer)
+	commandOutput = output
+	t.Cleanup(func() {
+		commandOutput = previousCommandOutput
+	})
+
+	const schemaContent = `[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`
+	const queryContent = `SELECT id FROM users WHERE id = {{bind "id"}}`
+
+	testCases := []struct {
+		name         string
+		inputName    string
+		inputContent string
+		buildArgs    func(input, output string) []string
+		expected     string
+	}{
+		{
+			name:         "schema",
+			inputName:    "schema.json",
+			inputContent: schemaContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"schema", "-input", input, "-package", "generated", "-output", output, "ignored", "-table", "users"}
+			},
+			expected: `unexpected arguments: ["ignored" "-table" "users"]`,
+		},
+		{
+			name:         "schema with an empty argument",
+			inputName:    "schema.json",
+			inputContent: schemaContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"schema", "-input", input, "-package", "generated", "-output", output, ""}
+			},
+			expected: `unexpected arguments: [""]`,
+		},
+		{
+			name:         "schema with an argument holding a space",
+			inputName:    "schema.json",
+			inputContent: schemaContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"schema", "-input", input, "-package", "generated", "-output", output, "one two"}
+			},
+			expected: `unexpected arguments: ["one two"]`,
+		},
+		{
+			name:         "query",
+			inputName:    "user.sql",
+			inputContent: queryContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", output, "ignored"}
+			},
+			expected: `unexpected arguments: ["ignored"]`,
+		},
+		{
+			name:         "query with an empty argument",
+			inputName:    "user.sql",
+			inputContent: queryContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", output, ""}
+			},
+			expected: `unexpected arguments: [""]`,
+		},
+		{
+			name:         "query with an argument holding a space",
+			inputName:    "user.sql",
+			inputContent: queryContent,
+			buildArgs: func(input, output string) []string {
+				return []string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", output, "one two"}
+			},
+			expected: `unexpected arguments: ["one two"]`,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			output.Reset()
+			directory, err := os.MkdirTemp(".", ".tmp-unexpected-args-*")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, os.RemoveAll(directory))
+			})
+			input := filepath.Join(directory, testCase.inputName)
+			generated := filepath.Join(directory, "generated.go")
+			require.NoError(t, os.WriteFile(input, []byte(testCase.inputContent), 0o600))
+
+			err = run(testCase.buildArgs(input, generated))
+			require.EqualError(t, err, testCase.expected)
+			require.NotErrorIs(t, err, flag.ErrHelp)
+			_, statErr := os.Stat(generated)
+			require.ErrorIs(t, statErr, os.ErrNotExist)
+		})
+	}
+}
+
 func TestRunRejectsInvalidFlag(t *testing.T) {
 	previousCommandOutput := commandOutput
 	output := new(bytes.Buffer)
