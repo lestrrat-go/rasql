@@ -103,7 +103,8 @@ func firstLine(output []byte) string {
 // test run should report as a rasql defect. A bring-up that fails after
 // probeCompose has already confirmed Docker works fails loudly with
 // t.Fatalf instead, because that means the compose file or an image
-// reference is broken.
+// reference is broken -- except when the failure is a host port already
+// being in use, which is neither of those; see classifyBringUpFailure.
 func ensureComposeUp(t *testing.T) {
 	t.Helper()
 
@@ -136,9 +137,15 @@ func ensureComposeUp(t *testing.T) {
 	upCtx, cancel := context.WithTimeout(context.Background(), bringUpTimeout)
 	defer cancel()
 	cmd := runner.command(upCtx, "-f", composePath, "up", "-d", "--wait")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("dbtest: %s up failed even though Docker is available: %v\n%s", runner.displayName(), err, out)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return
 	}
+	if skip, msg := classifyBringUpFailure(out); skip {
+		t.Skipf("skipping live database test: %s", msg)
+		return
+	}
+	t.Fatalf("dbtest: %s up failed even though Docker is available: %v\n%s", runner.displayName(), err, out)
 }
 
 // repoRoot finds the module root from the current test binary's working

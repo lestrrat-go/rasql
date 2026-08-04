@@ -28,6 +28,18 @@
 // instead of skipping; a skip there would hide real breakage from exactly
 // the person able to see it.
 //
+// One bring-up failure is deliberately carved out of that loud-failure
+// rule: a host port compose wants (5432 or 3306) already being in use by
+// something else -- commonly a PostgreSQL or MySQL server the developer
+// already has running locally, or, as happened in this repository's own
+// CI, another job's service containers still holding the port. That is
+// neither a broken compose file nor a broken image reference, so it skips
+// instead, naming the conflicting port and the RASQL_TEST_*_DSN variable
+// that points at the database already running there. See
+// classifyBringUpFailure and classifyPortCollision in compose.go and
+// port_collision.go for how a bring-up failure's output is told apart from
+// any other kind.
+//
 // This package never tears containers down, and has no opt-in to make it
 // do so. go test ./... compiles and runs every package as a separate
 // binary, and runs those binaries in parallel, so several packages can

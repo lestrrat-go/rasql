@@ -35,3 +35,5 @@ docker compose down -v
 ### Skip vs. fail
 
 Docker being unusable on your machine is treated as an environment fact, not a rasql defect, so it produces a skip. A `docker compose up` that fails *after* Docker has already been confirmed reachable is treated differently: it fails the test loudly instead of skipping, because that means the compose file or an image reference is broken rather than that Docker is merely absent.
+
+One failure is carved out of that rule: if port 5432 or 3306 is already bound by something else -- most commonly a PostgreSQL or MySQL server you already have running locally -- that is neither a broken compose file nor a broken image, so it skips instead. The skip message names the conflicting port and the `RASQL_TEST_POSTGRES_DSN` / `RASQL_TEST_MYSQL_DSN` variable to set so the test uses the database you already have running.
