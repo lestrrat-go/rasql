@@ -21,6 +21,9 @@ type DeleteBuilder struct {
 // DeleteFrom starts a fluent DELETE builder for table.
 // Exec deletes every row when no predicate is set.
 func DeleteFrom[T any](client Client, table Table[T]) DeleteBuilder {
+	if isNilTable(table) {
+		return client.DeleteFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))
+	}
 	return client.DeleteFrom(table.QueryTable())
 }
 
