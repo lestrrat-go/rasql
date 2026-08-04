@@ -13,7 +13,7 @@ import (
 // SelectFrom starts a typed fluent SELECT builder for table.
 // It selects every table column by default so All and One can decode T.
 func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
-	if isNil(table) {
+	if isNilTable(table) {
 		return TypedSelectBuilder[T]{builder: client.SelectFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))}
 	}
 	reference := table.QueryTable()
@@ -30,7 +30,7 @@ func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
 // method when it has one, and projected column names map to R's rasql tags or
 // snake-cased exported field names otherwise.
 func DecodeFrom[R any, T any](client Client, table Table[T]) TypedSelectBuilder[R] {
-	if isNil(table) {
+	if isNilTable(table) {
 		return TypedSelectBuilder[R]{builder: client.SelectFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))}
 	}
 	return TypedSelectBuilder[R]{builder: client.SelectFrom(table.QueryTable())}
@@ -47,7 +47,7 @@ func DecodeQueryFrom[R any](client Client, table query.Table) TypedSelectBuilder
 // It adapts a typed table for the dialect-neutral query API, which cannot
 // import this package.
 func InnerJoin[T any](table Table[T], on query.Expression) query.Join {
-	if isNil(table) {
+	if isNilTable(table) {
 		return query.InnerJoin(query.Table{}, on)
 	}
 	return query.InnerJoin(table.QueryTable(), on)
@@ -57,7 +57,7 @@ func InnerJoin[T any](table Table[T], on query.Expression) query.Join {
 // It adapts a typed table for the dialect-neutral query API, which cannot
 // import this package.
 func LeftJoin[T any](table Table[T], on query.Expression) query.Join {
-	if isNil(table) {
+	if isNilTable(table) {
 		return query.LeftJoin(query.Table{}, on)
 	}
 	return query.LeftJoin(table.QueryTable(), on)

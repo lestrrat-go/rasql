@@ -41,6 +41,18 @@ func (t staffTable) As(alias string) (staffTable, error) {
 	return newStaffTable(aliased), nil
 }
 
+// auditedStaffTable mirrors a wrapper around a wrapper: it reaches
+// rasql.Table[staffRow] through the embedded staffTable rather than directly.
+type auditedStaffTable struct {
+	staffTable
+}
+
+// pointerStaffTable mirrors a wrapper that embeds its inner wrapper by pointer,
+// so its zero value promotes every table method to a nil pointer.
+type pointerStaffTable struct {
+	*staffTable
+}
+
 func staffDefinition() schema.Table {
 	return schema.Table{
 		Name: "staff",
@@ -164,124 +176,162 @@ func TestTypedSelectBuilderRejectsForeignColumn(t *testing.T) {
 	require.ErrorContains(t, err, "contractors")
 }
 
-func TestNilTableReportsErrors(t *testing.T) {
-	cases := []struct {
-		name string
-		run  func(t *testing.T) error
-	}{
+// nilTableEntryPoint is one exported entry point that takes a
+// rasql.Table[staffRow]. Wrapper is the type of the value the call receives, so
+// each case hands the entry point the table value a caller holds instead of one
+// the test converted to rasql.Table[staffRow] first.
+type nilTableEntryPoint[Wrapper rasql.Table[staffRow]] struct {
+	name string
+	// errorContains is the text the reported error must carry. InnerJoin and
+	// LeftJoin return a query.Join, which has no error channel, so they join an
+	// empty table and the error arrives from rendering that table at Build.
+	errorContains string
+	run           func(t *testing.T, table Wrapper) error
+}
+
+// nilTableEntryPoints returns every entry point that reaches a table through
+// rasql.Table[staffRow]. MustColumn is missing because it panics by contract;
+// requireNilTableRejected covers it separately.
+func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[Wrapper] {
+	return []nilTableEntryPoint[Wrapper]{
 		{
-			name: "SelectFrom",
-			run: func(t *testing.T) error {
-				var table rasql.Table[staffRow]
-				_, err := rasql.SelectFrom(clientForBuild(t), table).Build()
+			name:          "SelectFrom",
+			errorContains: "must not be nil",
+			run: func(t *testing.T, table Wrapper) error {
+				_, err := rasql.SelectFrom[staffRow](clientForBuild(t), table).Build()
 				return err
 			},
 		},
 		{
-			name: "DecodeFrom",
-			run: func(t *testing.T) error {
-				var table rasql.Table[staffRow]
-				_, err := rasql.DecodeFrom[staffRow](clientForBuild(t), table).Build()
+			name:          "DecodeFrom",
+			errorContains: "must not be nil",
+			run: func(t *testing.T, table Wrapper) error {
+				_, err := rasql.DecodeFrom[staffRow, staffRow](clientForBuild(t), table).Build()
 				return err
 			},
 		},
 		{
-			name: "DeleteFrom",
-			run: func(t *testing.T) error {
-				var table rasql.Table[staffRow]
-				_, err := rasql.DeleteFrom(clientForBuild(t), table).Build()
+			name:          "DeleteFrom",
+			errorContains: "must not be nil",
+			run: func(t *testing.T, table Wrapper) error {
+				_, err := rasql.DeleteFrom[staffRow](clientForBuild(t), table).Build()
 				return err
 			},
 		},
 		{
-			name: "Insert",
-			run: func(t *testing.T) error {
-				var table rasql.Table[staffRow]
-				_, err := rasql.Insert(t.Context(), clientForBuild(t), table, staffRow{})
+			name:          "Insert",
+			errorContains: "must not be nil",
+			run: func(t *testing.T, table Wrapper) error {
+				_, err := rasql.Insert[staffRow](t.Context(), clientForBuild(t), table, staffRow{})
 				return err
 			},
 		},
 		{
-			name: "InsertWithOptions",
-			run: func(t *testing.T) error {
-				var table rasql.Table[staffRow]
-				_, err := rasql.InsertWithOptions(t.Context(), clientForBuild(t), table, staffRow{})
+			name:          "InsertWithOptions",
+			errorContains: "must not be nil",
+			run: func(t *testing.T, table Wrapper) error {
+				_, err := rasql.InsertWithOptions[staffRow](t.Context(), clientForBuild(t), table, staffRow{})
 				return err
 			},
 		},
 		{
-			name: "Update",
-			run: func(t *testing.T) error {
-				var table rasql.Table[staffRow]
-				_, err := rasql.Update(t.Context(), clientForBuild(t), table, staffRow{})
+			name:          "Update",
+			errorContains: "must not be nil",
+			run: func(t *testing.T, table Wrapper) error {
+				_, err := rasql.Update[staffRow](t.Context(), clientForBuild(t), table, staffRow{})
 				return err
 			},
 		},
 		{
-			name: "Create",
-			run: func(t *testing.T) error {
-				var table rasql.Table[staffRow]
-				return rasql.Create(t.Context(), clientForBuild(t), table)
+			name:          "Create",
+			errorContains: "must not be nil",
+			run: func(t *testing.T, table Wrapper) error {
+				return rasql.Create[staffRow](t.Context(), clientForBuild(t), table)
 			},
 		},
 		{
-			name: "As",
-			run: func(t *testing.T) error {
-				var table rasql.Table[staffRow]
-				_, err := rasql.As(table, "alias")
+			name:          "As",
+			errorContains: "must not be nil",
+			run: func(t *testing.T, table Wrapper) error {
+				_, err := rasql.As[staffRow](table, "alias")
 				return err
 			},
 		},
 		{
-			name: "nil table from a failed NewTable",
-			run: func(t *testing.T) error {
-				table, err := rasql.NewTable[staffRow](schema.Table{})
-				require.Error(t, err)
-				require.Nil(t, table)
-				_, err = rasql.SelectFrom(clientForBuild(t), table).Build()
+			name:          "InnerJoin",
+			errorContains: "must not be empty",
+			run: func(t *testing.T, table Wrapper) error {
+				employees := staff(t)
+				_, err := rasql.SelectFrom(clientForBuild(t), employees).
+					Join(rasql.InnerJoin[staffRow](table, query.Equal(employees.ID, query.Bind(1)))).
+					Build()
 				return err
 			},
 		},
 		{
-			name: "generated wrapper zero value",
-			run: func(t *testing.T) error {
-				var wrapper staffTable
-				_, err := wrapper.As("alias")
-				return err
-			},
-		},
-		{
-			name: "typed nil pointer",
-			run: func(t *testing.T) error {
-				_, err := rasql.As[staffRow]((*staffTable)(nil), "alias")
+			name:          "LeftJoin",
+			errorContains: "must not be empty",
+			run: func(t *testing.T, table Wrapper) error {
+				employees := staff(t)
+				_, err := rasql.SelectFrom(clientForBuild(t), employees).
+					Join(rasql.LeftJoin[staffRow](table, query.Equal(employees.ID, query.Bind(1)))).
+					Build()
 				return err
 			},
 		},
 	}
+}
 
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			var err error
-			require.NotPanics(t, func() {
-				err = testCase.run(t)
+// requireNilTableRejected drives table through every typed entry point and
+// requires each one to report the nil table instead of panicking.
+func requireNilTableRejected[Wrapper rasql.Table[staffRow]](t *testing.T, name string, table Wrapper) {
+	t.Helper()
+
+	t.Run(name, func(t *testing.T) {
+		for _, entryPoint := range nilTableEntryPoints[Wrapper]() {
+			t.Run(entryPoint.name, func(t *testing.T) {
+				var err error
+				require.NotPanics(t, func() {
+					err = entryPoint.run(t, table)
+				})
+				require.ErrorContains(t, err, entryPoint.errorContains)
 			})
-			require.ErrorContains(t, err, "must not be nil")
-		})
-	}
+		}
 
-	t.Run("MustColumn panics with a descriptive message", func(t *testing.T) {
-		var table rasql.Table[staffRow]
-		require.PanicsWithValue(t, "rasql: table column: table must not be nil", func() {
-			rasql.MustColumn(table, "id")
+		t.Run("MustColumn", func(t *testing.T) {
+			require.PanicsWithValue(t, "rasql: table column: table must not be nil", func() {
+				rasql.MustColumn[staffRow](table, "id")
+			})
 		})
 	})
+}
 
-	t.Run("InnerJoin with a nil table reports an error at Build", func(t *testing.T) {
-		employees := staff(t)
-		expr := query.Equal(employees.ID, query.Bind(1))
-		_, err := rasql.SelectFrom(clientForBuild(t), employees).
-			Join(rasql.InnerJoin[staffRow](nil, expr)).
-			Build()
-		require.Error(t, err)
+func TestNilTableReportsErrors(t *testing.T) {
+	requireNilTableRejected[rasql.Table[staffRow]](t, "nil interface", nil)
+
+	failed, err := rasql.NewTable[staffRow](schema.Table{})
+	require.Error(t, err)
+	require.Nil(t, failed)
+	requireNilTableRejected(t, "nil table from a failed NewTable", failed)
+
+	requireNilTableRejected[*staffTable](t, "typed nil wrapper pointer", nil)
+	requireNilTableRejected(t, "zero generated wrapper by value", staffTable{})
+	requireNilTableRejected(t, "pointer to a zero generated wrapper", &staffTable{})
+	requireNilTableRejected(t, "zero wrapper around a wrapper", auditedStaffTable{})
+	requireNilTableRejected(t, "zero wrapper around a wrapper pointer", pointerStaffTable{})
+	requireNilTableRejected(t, "wrapper holding a nil wrapper pointer", staffTable{Table: (*staffTable)(nil)})
+
+	t.Run("a generated As reports the error behind the zero wrapper it returns", func(t *testing.T) {
+		var wrapper staffTable
+		aliased, err := wrapper.As("alias")
+		require.ErrorContains(t, err, "must not be nil")
+		require.Equal(t, staffTable{}, aliased)
+	})
+
+	t.Run("a wrapper around a usable wrapper is accepted", func(t *testing.T) {
+		audited := auditedStaffTable{staffTable: staff(t)}
+		statement, err := rasql.SelectFrom[staffRow](clientForBuild(t), audited).Build()
+		require.NoError(t, err)
+		require.Contains(t, statement.SQL(), `FROM "staff"`)
 	})
 }

@@ -175,7 +175,7 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 }
 
 func typedRowFields[T any](table Table[T], value T) (query.Table, map[string]any, error) {
-	if isNil(table) {
+	if isNilTable(table) {
 		return query.Table{}, nil, fmt.Errorf("table must not be nil")
 	}
 	reference := table.QueryTable()
