@@ -39,7 +39,7 @@ func TestMySQLDSNMalformedFailsLoudly(t *testing.T) {
 // postgresql_test.go for why that gap -- a parser call only ever exercised
 // when a live DSN happens to be set -- matters.
 func TestCIMySQLDSNParses(t *testing.T) {
-	const dsn = "rasql:rasql@tcp(127.0.0.1:3306)/rasql?parseTime=true"
+	const dsn = "root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true"
 	if _, err := mysql.ParseDSN(dsn); err != nil {
 		t.Fatalf("mysql.ParseDSN(%q) = %v, want nil: this is CI's own mysql DSN and must still parse", dsn, err)
 	}

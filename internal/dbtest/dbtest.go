@@ -109,8 +109,13 @@ const (
 	// the postgres_dsn CI sets for its PostgreSQL matrix leg.
 	postgresComposeDSN = "postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable"
 	// mysqlComposeDSN matches the "mysql" service in compose.yaml and the
-	// mysql_dsn CI sets for its MySQL matrix leg.
-	mysqlComposeDSN = "rasql:rasql@tcp(127.0.0.1:3306)/rasql?parseTime=true"
+	// RASQL_TEST_MYSQL_DSN CI sets for the integration job. It authenticates
+	// as root, not the rasql/rasql account MYSQL_USER/MYSQL_PASSWORD create:
+	// the official mysql image grants that account privileges scoped to
+	// MYSQL_DATABASE only, so it cannot CREATE DATABASE for this package's
+	// fresh per-run schema. root, whose password both service definitions
+	// already set via MYSQL_ROOT_PASSWORD, can.
+	mysqlComposeDSN = "root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true"
 
 	// cleanupTimeout bounds a t.Cleanup-registered database drop. It cannot
 	// use t.Context(): testing.T.Context is already canceled by the time
