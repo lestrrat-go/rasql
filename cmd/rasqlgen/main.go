@@ -294,6 +294,9 @@ func unexpectedArgumentsError(rest []string) error {
 // writeGeneratedFile writes source to path without ever truncating an
 // existing file in place. When path is a symbolic link it writes through
 // the link to the file the link points at, leaving the link itself intact.
+// A path that names a directory, or a symbolic link that resolves to one,
+// is rejected with an error instead of being written into, regardless of
+// whether path ends in a trailing slash.
 // It writes to a temporary file in the same directory as that resolved
 // destination, then renames the temporary file over the destination only
 // after the write fully succeeds, so a failure at any point along the way
@@ -370,6 +373,15 @@ const maxOutputSymlinkDepth = 40
 // survives the rename; writing to the link's own path would instead delete
 // the link and leave its target holding stale content.
 //
+// A path that names a directory, or a symbolic link that resolves to one,
+// is rejected instead of being treated as a destination. os.Lstat follows
+// a trailing slash through to the directory even when the final component
+// is a link, so this one check catches a directory named with or without a
+// trailing slash and a directory reached through a link either way; without
+// it, withResolvedParent would rewrite a path such as "outdir/" into a new
+// child file "outdir/outdir" inside that directory and report success on
+// what was almost certainly a typo.
+//
 // A link that points at a path which does not exist resolves to that
 // missing path, matching what writing through the link would have done:
 // the missing file is created, with the 0600 that generatedFileMode gives
@@ -390,6 +402,9 @@ func resolveOutputPath(path string) (string, error) {
 				return withResolvedParent(current), nil
 			}
 			return "", err
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("resolve output %s: is a directory", path)
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {
 			return withResolvedParent(current), nil
@@ -426,6 +441,10 @@ func resolveOutputPath(path string) (string, error) {
 // of path would have used. A parent that cannot be resolved is left as it
 // was spelled, which leaves the resulting open to report the ENOENT an
 // ordinary open would have reported.
+//
+// path is never itself a directory here: resolveOutputPath rejects that
+// case before calling this, so filepath.Base(path) always names the file
+// the caller asked for rather than the directory holding it.
 func withResolvedParent(path string) string {
 	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
 	if err != nil {

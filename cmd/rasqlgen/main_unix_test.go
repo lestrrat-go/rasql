@@ -131,6 +131,54 @@ func schemaFixtureInput(t *testing.T, directory string) string {
 	return input
 }
 
+// TestRunRejectsSymlinkToDirectoryOutput extends the directory-rejection
+// fix in TestRunRejectsDirectoryOutput (main_test.go) to a symlink whose
+// target is a directory. resolveOutputPath only sees that target after
+// following the link, so this exercises a later iteration of its loop than
+// the immediate os.Lstat check an ordinary directory path hits, and it must
+// reject the link the same way, with or without a trailing slash, leaving
+// nothing behind at the link's target.
+func TestRunRejectsSymlinkToDirectoryOutput(t *testing.T) {
+	for _, fixture := range outputCommandFixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name          string
+				trailingSlash bool
+			}{
+				{name: "trailing slash", trailingSlash: true},
+				{name: "no trailing slash", trailingSlash: false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					directory, err := os.MkdirTemp(".", ".tmp-output-directory-*")
+					require.NoError(t, err)
+					t.Cleanup(func() {
+						require.NoError(t, os.RemoveAll(directory))
+					})
+					target := filepath.Join(directory, "realdir")
+					require.NoError(t, os.Mkdir(target, 0o700))
+					link := filepath.Join(directory, "link")
+					require.NoError(t, os.Symlink("realdir", link))
+					output := link
+					if tc.trailingSlash {
+						output += string(filepath.Separator)
+					}
+					args := append(fixture.write(t, directory), "-output", output)
+
+					err = run(args)
+
+					require.ErrorContains(t, err, "is a directory")
+					linkInfo, err := os.Lstat(link)
+					require.NoError(t, err)
+					require.NotZero(t, linkInfo.Mode()&fs.ModeSymlink, "output must still be a symbolic link")
+					entries, err := os.ReadDir(target)
+					require.NoError(t, err)
+					require.Empty(t, entries, "no file must appear at the link's target")
+				})
+			}
+		})
+	}
+}
+
 // TestRunSchemaWritesThroughOutputSymlink pins what happens when -output
 // names a symbolic link. Renaming a temporary file over the link's own path
 // would replace the link with a regular file and leave the file it pointed
