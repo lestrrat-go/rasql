@@ -2,67 +2,40 @@ package rasql_test
 
 import (
 	"database/sql"
-	"os"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
-
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestDatabaseIntegration(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		driverName string
-		dsn        string
-		dialect    dialect.Dialect
+		name    string
+		open    func(*testing.T) *sql.DB
+		dialect dialect.Dialect
 	}{
 		{
-			name:       "postgresql",
-			driverName: "pgx",
-			dsn:        os.Getenv("RASQL_TEST_POSTGRES_DSN"),
-			dialect:    dialect.PostgreSQL(),
+			name:    "postgresql",
+			open:    dbtest.PostgreSQLDB,
+			dialect: dialect.PostgreSQL(),
 		},
 		{
-			name:       "mysql",
-			driverName: "mysql",
-			dsn:        os.Getenv("RASQL_TEST_MYSQL_DSN"),
-			dialect:    dialect.MySQL(),
+			name:    "mysql",
+			open:    dbtest.MySQLDB,
+			dialect: dialect.MySQL(),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if test.dsn == "" {
-				t.Skipf("set %s to run this integration test", dsnEnvironmentName(test.name))
-			}
-			testDatabaseIntegration(t, test.driverName, test.dsn, test.dialect)
+			testDatabaseIntegration(t, test.open(t), test.dialect)
 		})
 	}
 }
 
-func dsnEnvironmentName(databaseName string) string {
-	switch databaseName {
-	case "postgresql":
-		return "RASQL_TEST_POSTGRES_DSN"
-	case "mysql":
-		return "RASQL_TEST_MYSQL_DSN"
-	default:
-		return "database DSN environment variable"
-	}
-}
-
-func testDatabaseIntegration(t *testing.T, driverName string, dsn string, d dialect.Dialect) {
-	database, err := sql.Open(driverName, dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, database.Close())
-	})
-	require.NoError(t, database.PingContext(t.Context()))
-
+func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) {
 	client, err := rasql.New(database, d)
 	require.NoError(t, err)
 	type record struct {

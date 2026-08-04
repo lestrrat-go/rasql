@@ -1,0 +1,37 @@
+# Contributing to rasql
+
+This page covers the local development workflow. For how to use `rasql` as a library, start with the [README](README.md) and [docs/](docs/).
+
+## Running the test suite
+
+```sh
+go test ./...
+go vet ./...
+```
+
+Most of the suite needs no database. It also needs no Docker: any test that does need a live database skips cleanly when neither a DSN nor Docker is available (see below), so `go test ./...` always passes on a machine with nothing set up.
+
+## Live database tests
+
+A handful of tests run against a real PostgreSQL or MySQL server rather than a mock, such as `TestDatabaseIntegration` at the repository root and the privilege tests in `inspect/`. Any package can add one: `internal/dbtest` gives a test in any package a live `*sql.DB` or DSN for PostgreSQL and MySQL, resolved in this order:
+
+1. **`RASQL_TEST_POSTGRES_DSN` / `RASQL_TEST_MYSQL_DSN` environment variables.** If set, that DSN is used directly and Docker is never touched. This is how CI's `integration` job runs the suite.
+2. **Docker Compose**, otherwise. The harness runs `docker compose up -d --wait` against the checked-in [`compose.yaml`](compose.yaml), which defines the same two services CI uses (`postgres:17-alpine` on port 5432, `mysql:8.4` on port 3306, same credentials), and derives the DSN from those fixed ports. You can also bring these up yourself ahead of time:
+
+   ```sh
+   docker compose up -d --wait
+   ```
+
+3. **Skip**, otherwise. If Docker is not usable on your machine (no `docker` binary, no `docker compose` and no `docker-compose` fallback, or the daemon unreachable), the test skips with a message naming which of those was detected, plus how to set the DSN or start compose yourself.
+
+### No automatic teardown
+
+The harness never stops the containers it starts, and there is no environment variable to opt into it doing so. `go test ./...` builds and runs every package as a separate test binary and runs them in parallel, so several packages can reach the Docker Compose step at the same moment in different processes; an automatic `docker compose down` in one package's cleanup would tear down a database another package's tests are still using. Stop the containers yourself once you are done:
+
+```sh
+docker compose down -v
+```
+
+### Skip vs. fail
+
+Docker being unusable on your machine is treated as an environment fact, not a rasql defect, so it produces a skip. A `docker compose up` that fails *after* Docker has already been confirmed reachable is treated differently: it fails the test loudly instead of skipping, because that means the compose file or an image reference is broken rather than that Docker is merely absent.

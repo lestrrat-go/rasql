@@ -20,37 +20,33 @@ jobs:
       - run: go vet ./...
 
   integration:
-    name: ${{ matrix.name }} integration
+    name: Database integration
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: PostgreSQL
-            image: postgres:17-alpine
-            port_mapping: 5432:5432
-            health_command: pg_isready -U rasql -d rasql
-            postgres_dsn: postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable
-          - name: MySQL
-            image: mysql:8.4
-            port_mapping: 3306:3306
-            health_command: mysqladmin ping -h 127.0.0.1 -urasql -prasql
-            mysql_dsn: rasql:rasql@tcp(127.0.0.1:3306)/rasql?parseTime=true
     services:
-      database:
-        image: ${{ matrix.image }}
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: rasql
+          POSTGRES_PASSWORD: rasql
+          POSTGRES_USER: rasql
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rasql -d rasql"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      mysql:
+        image: mysql:8.4
         env:
           MYSQL_DATABASE: rasql
           MYSQL_PASSWORD: rasql
           MYSQL_ROOT_PASSWORD: root
           MYSQL_USER: rasql
-          POSTGRES_DB: rasql
-          POSTGRES_PASSWORD: rasql
-          POSTGRES_USER: rasql
         ports:
-          - ${{ matrix.port_mapping }}
+          - 3306:3306
         options: >-
-          --health-cmd "${{ matrix.health_command }}"
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -urasql -prasql"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
@@ -59,8 +55,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.x'
-      - name: Run database integration test
+      - name: Run the suite against live databases
         env:
-          RASQL_TEST_MYSQL_DSN: ${{ matrix.mysql_dsn }}
-          RASQL_TEST_POSTGRES_DSN: ${{ matrix.postgres_dsn }}
-        run: go test ./... -run '^TestDatabaseIntegration$' -count=1
+          RASQL_TEST_MYSQL_DSN: rasql:rasql@tcp(127.0.0.1:3306)/rasql?parseTime=true
+          RASQL_TEST_POSTGRES_DSN: postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable
+        run: go test ./... -count=1
