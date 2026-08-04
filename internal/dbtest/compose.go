@@ -65,7 +65,12 @@ func probeCompose() (composeRunner, error) {
 
 	composeCtx, composeCancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer composeCancel()
-	if err := exec.CommandContext(composeCtx, dockerPath, "compose", "version").Run(); err == nil {
+	// CombinedOutput, not Run: a failure here is common (many machines
+	// have Docker but not the compose plugin, or a plugin shim that
+	// doesn't run), and composeOut is the only way to quote what actually
+	// went wrong instead of discarding it -- see composeUnavailableError.
+	composeOut, composeErr := exec.CommandContext(composeCtx, dockerPath, "compose", "version").CombinedOutput()
+	if composeErr == nil {
 		return composeRunner{bin: dockerPath, args: []string{"compose"}}, nil
 	}
 
@@ -78,7 +83,27 @@ func probeCompose() (composeRunner, error) {
 		return composeRunner{bin: legacyPath}, nil
 	}
 
-	return composeRunner{}, fmt.Errorf("neither `docker compose` nor a standalone `docker-compose` binary is available")
+	return composeRunner{}, composeUnavailableError(composeOut)
+}
+
+// composeUnavailableError reports why no usable compose runner was found,
+// once `docker compose version` has failed and no standalone
+// docker-compose binary was found either. composeOut is that `docker
+// compose version` failure's own combined output, captured by the caller
+// with CombinedOutput rather than Run precisely so there is something here
+// to quote.
+//
+// An earlier version of this package discarded that output and reported
+// "neither `docker compose` nor a standalone `docker-compose` binary is
+// available" whenever this point was reached -- which is misleading on any
+// machine with a modern Docker CLI, where a `compose` subcommand truly
+// missing from `docker` itself is rare. Reaching here far more often means
+// the plugin IS installed but does not run (a broken shim, an incompatible
+// Docker CLI plugin layout, ...), which is a different, more actionable
+// fact than absence, and composeOut's first line is that failure speaking
+// for itself.
+func composeUnavailableError(composeOut []byte) error {
+	return fmt.Errorf("the `docker compose` plugin is installed but does not run (ran `docker compose version`): %s", firstLine(composeOut))
 }
 
 // displayName reports the command this runner invokes, for use in

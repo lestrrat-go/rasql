@@ -48,14 +48,22 @@
 // determined.
 //
 // A set RASQL_TEST_*_DSN value is validated, not merely trusted: an empty
-// pgx DSN, or one missing its host, port, or database, silently falls back
-// to libpq's PG* environment variables (PGHOST, PGPORT, PGDATABASE, ...)
-// or pgx's own built-in defaults instead of erroring, and a machine with
-// those set can then connect to an unintended database and pass for the
-// wrong reason. So a set-but-unusable DSN FAILS the calling test rather
+// pgx DSN, or one missing its host, port, or database in its own text,
+// silently falls back to libpq's PG* environment variables (PGHOST,
+// PGPORT, PGDATABASE, ...), a PostgreSQL service file, or pgx's own
+// built-in defaults instead of erroring, and a machine with those set can
+// then connect to an unintended database and pass for the wrong reason.
+// The default on a developer machine is a Unix socket reached as the OS
+// user, not 127.0.0.1, so this is not a hypothetical: the live suite runs
+// CREATE TABLE, CREATE ROLE, and DROP ROLE, and a wrongly resolved target
+// is destructive. So a set-but-unusable DSN FAILS the calling test rather
 // than falling back to Docker or skipping -- see resolvePostgreSQLConfig
 // and resolveMySQLConfig for exactly what "unusable" means for each driver
-// and why failing is the right response once a value has been set.
+// and why failing is the right response once a value has been set. Both
+// validators judge the DSN's own text directly rather than comparing
+// parses made with and without the ambient environment visible; see
+// unusablePostgreSQLTarget's comment in postgresql.go for why that
+// approach -- this package's own earlier one -- does not work.
 //
 // This package never tears containers down, and has no opt-in to make it
 // do so. go test ./... compiles and runs every package as a separate
