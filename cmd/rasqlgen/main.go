@@ -292,25 +292,36 @@ func unexpectedArgumentsError(rest []string) error {
 }
 
 // writeGeneratedFile writes source to path without ever truncating an
-// existing file in place. It writes to a temporary file in the same
-// directory as path, then renames the temporary file over path only after
-// the write fully succeeds, so a failure at any point along the way leaves
-// path untouched instead of empty or partially written. When path already
-// exists, its permission bits are copied to the temporary file before the
-// rename, so regenerating never changes the mode of an existing output
-// file; a file that did not exist is created at 0600.
+// existing file in place. When path is a symbolic link it writes through
+// the link to the file the link points at, leaving the link itself intact.
+// It writes to a temporary file in the same directory as that resolved
+// destination, then renames the temporary file over the destination only
+// after the write fully succeeds, so a failure at any point along the way
+// leaves the destination untouched instead of empty or partially written.
+// When the destination already exists, its permission bits are copied to
+// the temporary file before the rename, so regenerating never changes the
+// mode of an existing output file; a file that did not exist is created at
+// 0600.
 //
 // The rename is only atomic on Unix platforms. os.Rename documents that
 // even within a single directory it is not an atomic operation on
-// non-Unix platforms, so a run interrupted there can leave path missing
-// or still holding its old contents.
+// non-Unix platforms, so a run interrupted there can leave the destination
+// missing or still holding its old contents.
 func writeGeneratedFile(path string, source []byte) error {
-	mode, err := generatedFileMode(path)
+	// Both the temporary file's directory and the rename destination come
+	// from the resolved path. Resolving only the destination would put the
+	// temporary file beside the link instead of beside its target, and
+	// renaming across filesystems fails with EXDEV.
+	destination, err := resolveOutputPath(path)
 	if err != nil {
 		return err
 	}
-	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+".tmp*")
+	mode, err := generatedFileMode(destination)
+	if err != nil {
+		return err
+	}
+	directory := filepath.Dir(destination)
+	temporary, err := os.CreateTemp(directory, "."+filepath.Base(destination)+".tmp*")
 	if err != nil {
 		return err
 	}
@@ -332,16 +343,62 @@ func writeGeneratedFile(path string, source []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	// chmod before the rename, so path is never visible with the
-	// temporary file's mode instead of the mode it had before.
+	// chmod before the rename, so the destination is never visible with
+	// the temporary file's mode instead of the mode it had before.
 	if err := os.Chmod(temporary.Name(), mode); err != nil {
 		return err
 	}
-	if err := os.Rename(temporary.Name(), path); err != nil {
+	if err := os.Rename(temporary.Name(), destination); err != nil {
 		return err
 	}
 	removeTemporary = false
 	return nil
+}
+
+// maxOutputSymlinkDepth caps how many symbolic links resolveOutputPath
+// follows, so a link that points at itself or at another link in a cycle
+// reports an error instead of looping forever. Linux allows 40 links in a
+// single resolution, so this matches what an ordinary open would accept.
+const maxOutputSymlinkDepth = 40
+
+// resolveOutputPath reports the file writeGeneratedFile must replace for
+// the requested output path. A path that is not a symbolic link is its own
+// destination. A symbolic link resolves to whatever it points at, so the
+// generated source lands in the file the link names and the link itself
+// survives the rename; writing to the link's own path would instead delete
+// the link and leave its target holding stale content.
+//
+// A link that points at a path which does not exist resolves to that
+// missing path, matching what writing through the link would have done:
+// the missing file is created, with the 0600 that generatedFileMode gives
+// any new file, and the link keeps pointing at it. filepath.EvalSymlinks
+// cannot be used here, because it fails on such a dangling link.
+func resolveOutputPath(path string) (string, error) {
+	current := path
+	for range maxOutputSymlinkDepth {
+		info, err := os.Lstat(current)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return current, nil
+			}
+			return "", err
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			return current, nil
+		}
+		target, err := os.Readlink(current)
+		if err != nil {
+			return "", err
+		}
+		if filepath.IsAbs(target) {
+			current = target
+			continue
+		}
+		// A relative link is relative to the directory holding the link,
+		// not to the working directory.
+		current = filepath.Join(filepath.Dir(current), target)
+	}
+	return "", fmt.Errorf("resolve output %s: too many levels of symbolic links", path)
 }
 
 // generatedFileMode reports the permission bits writeGeneratedFile must
