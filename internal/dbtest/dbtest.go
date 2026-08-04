@@ -97,34 +97,55 @@ func MySQLDB(t *testing.T) *sql.DB {
 	return openDB(t, "mysql", MySQLDSN(t))
 }
 
+// dsnDecision is the pure decision at the heart of resolveDSN: given an
+// environment variable's raw state -- its value and whether it was set at
+// all -- does resolution use that value directly (useEnv), or fall through
+// to the Docker/skip path? When it falls through because the variable was
+// present but empty (as opposed to simply unset), shouldLog reports that,
+// so the caller can emit the present-but-empty diagnostic.
+//
+// This function does no environment lookups, runs no Docker commands, and
+// logs nothing itself -- it is pure input to output -- so it can be unit
+// tested directly without touching Docker or process environment state.
+// See dsnDecision's test for why that separation exists.
+//
+// A present-but-empty value is deliberately treated the same as unset and
+// falls through to Docker/skip, rather than failing fast. This is not an
+// oversight; two things rule out failing here:
+//
+//   - Clearing an inherited DSN to opt out of live tests is a real
+//     workflow, and this repository's own base CI relied on it: the old
+//     matrix set RASQL_TEST_MYSQL_DSN from an undefined matrix value on
+//     the PostgreSQL leg, producing an empty value that had to mean "not
+//     set". Failing on present-but-empty would break that pattern for
+//     anyone who reintroduces it.
+//   - Failing late, at connection time, instead of here is not a safe
+//     alternative either: sql.Open("pgx", "") succeeds, and an empty pgx
+//     DSN silently falls back to libpq's PG* environment variables
+//     (PGHOST, PGPORT, PGUSER, PGDATABASE, ...). On a machine with those
+//     set, that can connect to an unintended database and pass for the
+//     wrong reason instead of erroring.
+//
+// If a hard failure is ever wanted, it must be an explicit, deliberate
+// choice made with the above in mind -- not a drive-by fix.
+func dsnDecision(value string, set bool) (useEnv, shouldLog bool) {
+	if set && value != "" {
+		return true, false
+	}
+	return false, set
+}
+
 func resolveDSN(t *testing.T, envVar, composeDSN string) string {
 	t.Helper()
-	if dsn := os.Getenv(envVar); dsn != "" {
-		return dsn
+	value, set := os.LookupEnv(envVar)
+	useEnv, shouldLog := dsnDecision(value, set)
+	if useEnv {
+		return value
 	}
-	// A present-but-empty value is deliberately treated the same as unset
-	// and falls through to Docker/skip below, rather than failing fast.
-	// This is not an oversight; two things rule out failing here:
-	//
-	//   - Clearing an inherited DSN to opt out of live tests is a real
-	//     workflow, and this repository's own base CI relied on it: the
-	//     old matrix set RASQL_TEST_MYSQL_DSN from an undefined matrix
-	//     value on the PostgreSQL leg, producing an empty value that had
-	//     to mean "not set". Failing on present-but-empty would break
-	//     that pattern for anyone who reintroduces it.
-	//   - Failing late, at connection time, instead of here is not a safe
-	//     alternative either: sql.Open("pgx", "") succeeds, and an empty
-	//     pgx DSN silently falls back to libpq's PG* environment
-	//     variables (PGHOST, PGPORT, PGUSER, PGDATABASE, ...). On a
-	//     machine with those set, that can connect to an unintended
-	//     database and pass for the wrong reason instead of erroring.
-	//
-	// If a hard failure is ever wanted, it must be an explicit, deliberate
-	// choice made with the above in mind -- not a drive-by fix. In the
-	// meantime this only logs, so the person who expected their DSN to be
-	// used can see why it was not, instead of reading a Docker or skip
-	// message that never names their variable.
-	if v, ok := os.LookupEnv(envVar); ok && v == "" {
+	// The person who expected their DSN to be used can see why it was
+	// not, instead of reading a Docker or skip message that never names
+	// their variable.
+	if shouldLog {
 		t.Logf("%s is set but empty; ignoring it and falling through to Docker/skip resolution", envVar)
 	}
 	ensureComposeUp(t)

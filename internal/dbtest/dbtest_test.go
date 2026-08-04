@@ -1,41 +1,54 @@
-package dbtest_test
+package dbtest
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/lestrrat-go/rasql/internal/dbtest"
-)
-
-// TestPresentButEmptyDSNFallsThrough pins the behavior that a present-but-
-// empty RASQL_TEST_*_DSN is treated the same as an unset one: resolution
-// falls through to the Docker/skip path rather than using the empty value
-// directly. This guards against a future edit turning present-but-empty
-// into a hard failure or, worse, into "use it and let sql.Open see an
-// empty DSN" -- see the comment above the os.LookupEnv check in
-// resolveDSN (dbtest.go) for why both of those are unsafe.
+// TestDSNDecision pins the pure decision inside resolveDSN: given an
+// environment variable's raw state, does resolution use its value
+// directly, or fall through to the Docker/skip path? It covers the three
+// states resolveDSN cares about -- unset, set to a real value, and present
+// but empty -- and pins that a present-but-empty value is never used
+// directly, that both unset and present-but-empty fall through, and that
+// only present-but-empty asks for the diagnostic log.
 //
-// It cannot exercise the environment where Docker successfully brings up a
-// database, since that depends on the machine running the suite. What it
-// does check, on any machine: PostgreSQLDSN/MySQLDSN never return the empty
-// string for a present-but-empty variable. If a regression made the empty
-// value flow straight through instead of falling back to Docker, this
-// would either observe that empty return directly, or -- since resolution
-// no longer reaches ensureComposeUp -- fail to see the skip that a
-// Docker-less machine like this one otherwise always produces.
-func TestPresentButEmptyDSNFallsThrough(t *testing.T) {
-	t.Run("postgresql", func(t *testing.T) {
-		t.Setenv("RASQL_TEST_POSTGRES_DSN", "")
-		dsn := dbtest.PostgreSQLDSN(t)
-		if dsn == "" {
-			t.Fatal("PostgreSQLDSN returned an empty DSN for a present-but-empty RASQL_TEST_POSTGRES_DSN; a present-but-empty value must fall through to the compose DSN, never flow through as-is")
+// This is deliberately a test of dsnDecision alone, not of
+// PostgreSQLDSN/MySQLDSN/resolveDSN end-to-end: those reach
+// ensureComposeUp, which runs `docker compose up` when Docker is
+// reachable. On a CI runner that already has PostgreSQL and MySQL service
+// containers bound to ports 5432/3306, that bring-up fails even though
+// resolution itself made the right decision -- a test of the decision
+// should not perform the action the decision leads to. dsnDecision takes
+// no environment variable name and touches no Docker, so this test needs
+// neither, and passes identically with Docker installed, absent, or
+// already using the ports compose would want.
+func TestDSNDecision(t *testing.T) {
+	t.Run("unset falls through without logging", func(t *testing.T) {
+		useEnv, shouldLog := dsnDecision("", false)
+		if useEnv {
+			t.Fatal("dsnDecision(\"\", false) reported useEnv; an unset variable must fall through to Docker/skip")
+		}
+		if shouldLog {
+			t.Fatal("dsnDecision(\"\", false) reported shouldLog; an unset variable is not the present-but-empty case and must not log")
 		}
 	})
 
-	t.Run("mysql", func(t *testing.T) {
-		t.Setenv("RASQL_TEST_MYSQL_DSN", "")
-		dsn := dbtest.MySQLDSN(t)
-		if dsn == "" {
-			t.Fatal("MySQLDSN returned an empty DSN for a present-but-empty RASQL_TEST_MYSQL_DSN; a present-but-empty value must fall through to the compose DSN, never flow through as-is")
+	t.Run("present but empty falls through and logs", func(t *testing.T) {
+		useEnv, shouldLog := dsnDecision("", true)
+		if useEnv {
+			t.Fatal("dsnDecision(\"\", true) reported useEnv; a present-but-empty value must fall through to Docker/skip, never be used as a DSN")
+		}
+		if !shouldLog {
+			t.Fatal("dsnDecision(\"\", true) did not report shouldLog; the present-but-empty diagnostic would be silently dropped")
+		}
+	})
+
+	t.Run("set to a real value is used directly", func(t *testing.T) {
+		const dsn = "postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable"
+		useEnv, shouldLog := dsnDecision(dsn, true)
+		if !useEnv {
+			t.Fatal("dsnDecision reported !useEnv for a non-empty value; a set DSN must be used directly without touching Docker")
+		}
+		if shouldLog {
+			t.Fatal("dsnDecision reported shouldLog for a non-empty value; only the present-but-empty case logs")
 		}
 	})
 }
