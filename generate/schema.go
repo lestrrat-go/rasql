@@ -114,7 +114,7 @@ func validateVariableNames(tables []schema.Table) error {
 
 		fields := make(map[string]struct{}, len(table.Columns))
 		for _, column := range table.Columns {
-			field := fieldName(column.Name)
+			field := goName(column.Name)
 			if field == "" || !token.IsIdentifier(field) {
 				return fmt.Errorf("generate: column %q on table %q cannot become a Go field", column.Name, table.Name)
 			}
@@ -130,21 +130,12 @@ func validateVariableNames(tables []schema.Table) error {
 	return nil
 }
 
+// variableName returns the exported Go identifier for a table name. It
+// delegates to goName so tables use the same initialism rules as columns:
+// a table named api_keys and a column named api_key both spell "API" the
+// same way, instead of the table getting a plain "Api".
 func variableName(name string) string {
-	parts := strings.FieldsFunc(name, func(r rune) bool {
-		return r == '_'
-	})
-	var result strings.Builder
-	for _, part := range parts {
-		for index, r := range part {
-			if index == 0 {
-				result.WriteRune(unicode.ToUpper(r))
-				continue
-			}
-			result.WriteRune(r)
-		}
-	}
-	return result.String()
+	return goName(name)
 }
 
 func rowTypeName(tableName string) string {
@@ -164,19 +155,37 @@ func constructorName(tableName string) string {
 }
 
 // descriptorName returns the unexported variable name backing an accessor.
-// variableName always upper-cases its first rune, so distinct accessors keep
-// distinct descriptors.
+// Distinctness across accessors is enforced by validateVariableNames, which
+// includes descriptor names in its collision set, not by any property of
+// this lowering.
 func descriptorName(tableName string) string {
 	accessor := variableName(tableName)
 	if accessor == "" {
 		return ""
 	}
 	runes := []rune(accessor)
-	runes[0] = unicode.ToLower(runes[0])
+	// Find the leading run of uppercase runes: for "APIKeys" that is "APIK",
+	// because casing alone cannot tell an initialism from the capital that
+	// starts the next word. When the run stops partway through the name, its
+	// last rune is that next word's leading capital (the "K" of "Keys") and
+	// stays as-is; only the initialism before it gets lowered, so "APIKeys"
+	// becomes "apiKeys" rather than "apikeys". A run spanning the whole name
+	// (e.g. "ID") or only the first rune (e.g. "Users") has no such word
+	// boundary to protect, so it lowers completely.
+	end := 0
+	for end < len(runes) && unicode.IsUpper(runes[end]) {
+		end++
+	}
+	if end > 1 && end < len(runes) {
+		end--
+	}
+	for index := 0; index < end; index++ {
+		runes[index] = unicode.ToLower(runes[index])
+	}
 	return string(runes) + "Table"
 }
 
-func fieldName(name string) string {
+func goName(name string) string {
 	parts := strings.FieldsFunc(name, func(r rune) bool {
 		return r == '_'
 	})
@@ -233,7 +242,7 @@ func writeTableType(source *bytes.Buffer, table schema.Table) {
 	source.WriteString("]\n")
 	for _, column := range table.Columns {
 		source.WriteString("\t")
-		source.WriteString(fieldName(column.Name))
+		source.WriteString(goName(column.Name))
 		source.WriteString(" query.Column\n")
 	}
 	source.WriteString("}\n")
@@ -253,7 +262,7 @@ func writeTableConstructor(source *bytes.Buffer, table schema.Table) {
 	source.WriteString("{\n\t\tTable: table,\n")
 	for _, column := range table.Columns {
 		source.WriteString("\t\t")
-		source.WriteString(fieldName(column.Name))
+		source.WriteString(goName(column.Name))
 		source.WriteString(": rasql.MustColumn(table, ")
 		source.WriteString(quote(column.Name))
 		source.WriteString("),\n")
@@ -316,7 +325,7 @@ func writeRowType(source *bytes.Buffer, table schema.Table) {
 	source.WriteString(" struct {\n")
 	for _, column := range table.Columns {
 		source.WriteString("\t")
-		source.WriteString(fieldName(column.Name))
+		source.WriteString(goName(column.Name))
 		source.WriteByte(' ')
 		if column.Nullable {
 			source.WriteByte('*')
@@ -355,7 +364,7 @@ func writeRowAssign(source *bytes.Buffer, column schema.Column) {
 	source.WriteString("row.Assign(src, ")
 	source.WriteString(quote(column.Name))
 	source.WriteString(", &r.")
-	source.WriteString(fieldName(column.Name))
+	source.WriteString(goName(column.Name))
 	source.WriteString(")")
 }
 
@@ -372,7 +381,7 @@ func writeRowColumnValue(source *bytes.Buffer, table schema.Table) {
 		source.WriteString("\tcase ")
 		source.WriteString(quote(column.Name))
 		source.WriteString(":\n\t\treturn r.")
-		source.WriteString(fieldName(column.Name))
+		source.WriteString(goName(column.Name))
 		source.WriteString(", true\n")
 	}
 	source.WriteString("\t}\n\treturn nil, false\n}\n")

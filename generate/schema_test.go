@@ -258,6 +258,44 @@ func TestSchemaRejectsCollidingGeneratedNames(t *testing.T) {
 	require.ErrorContains(t, err, "UsersTable")
 }
 
+func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
+	apiKeys := schema.Table{
+		Name: "api_keys",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "api_key", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := generate.Schema("generated", apiKeys)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func APIKeys() APIKeysTable {")
+	require.Contains(t, string(source), "type APIKeysRow struct {")
+	require.Contains(t, string(source), "var apiKeysTable = newAPIKeysTable(rasql.MustTable[APIKeysRow](")
+
+	// The api_key column must spell "API" the same way the api_keys table
+	// does, so the package does not expose the same word two ways.
+	require.Contains(t, string(source), "\tAPIKey string\n")
+}
+
+func TestSchemaRejectsCollidingInitialismNames(t *testing.T) {
+	_, err := generate.Schema("generated",
+		schema.Table{
+			Name:       "api_keys",
+			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			PrimaryKey: []string{"id"},
+		},
+		schema.Table{
+			Name:       "APIKeys",
+			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			PrimaryKey: []string{"id"},
+		},
+	)
+	require.ErrorContains(t, err, "duplicates generated name")
+	require.ErrorContains(t, err, "APIKeys")
+}
+
 func stringIndex(t *testing.T, source []byte, value string) int {
 	t.Helper()
 	index := len(source)
