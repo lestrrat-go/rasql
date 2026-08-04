@@ -298,10 +298,10 @@ func unexpectedArgumentsError(rest []string) error {
 // destination, then renames the temporary file over the destination only
 // after the write fully succeeds, so a failure at any point along the way
 // leaves the destination untouched instead of empty or partially written.
-// When the destination already exists, its permission bits are copied to
-// the temporary file before the rename, so regenerating never changes the
-// mode of an existing output file; a file that did not exist is created at
-// 0600.
+// When the destination already exists, the mode bits generatedFileMode
+// reports for it are copied to the temporary file before the rename, so
+// regenerating never changes the mode of an existing output file; a file
+// that did not exist is created at 0600.
 //
 // The rename is only atomic on Unix platforms. os.Rename documents that
 // even within a single directory it is not an atomic operation on
@@ -358,7 +358,9 @@ func writeGeneratedFile(path string, source []byte) error {
 // maxOutputSymlinkDepth caps how many symbolic links resolveOutputPath
 // follows, so a link that points at itself or at another link in a cycle
 // reports an error instead of looping forever. Linux allows 40 links in a
-// single resolution, so this matches what an ordinary open would accept.
+// single resolution, so this matches what an ordinary open would accept:
+// the destination the fortieth link names is still used, and only a
+// forty-first link that must be resolved is too many.
 const maxOutputSymlinkDepth = 40
 
 // resolveOutputPath reports the file writeGeneratedFile must replace for
@@ -372,19 +374,28 @@ const maxOutputSymlinkDepth = 40
 // missing path, matching what writing through the link would have done:
 // the missing file is created, with the 0600 that generatedFileMode gives
 // any new file, and the link keeps pointing at it. filepath.EvalSymlinks
-// cannot be used here, because it fails on such a dangling link.
+// cannot resolve the whole path here, because it fails on such a dangling
+// link; it is used only on directories, which always exist by the time
+// they are resolved.
 func resolveOutputPath(path string) (string, error) {
 	current := path
-	for range maxOutputSymlinkDepth {
+	// followed counts the links already resolved. Testing it before the
+	// next Readlink rather than after the last one keeps the destination
+	// the fortieth link names in play, so a chain the kernel would accept
+	// is accepted here too.
+	for followed := 0; ; followed++ {
 		info, err := os.Lstat(current)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				return current, nil
+				return withResolvedParent(current), nil
 			}
 			return "", err
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {
-			return current, nil
+			return withResolvedParent(current), nil
+		}
+		if followed == maxOutputSymlinkDepth {
+			return "", fmt.Errorf("resolve output %s: too many levels of symbolic links", path)
 		}
 		target, err := os.Readlink(current)
 		if err != nil {
@@ -395,16 +406,45 @@ func resolveOutputPath(path string) (string, error) {
 			continue
 		}
 		// A relative link is relative to the directory holding the link,
-		// not to the working directory.
-		current = filepath.Join(filepath.Dir(current), target)
+		// and that is the directory the filesystem reaches rather than the
+		// one filepath.Dir spells. Joining against the lexical parent
+		// collapses a leading ".." in the target against a parent that is
+		// itself a link, which lands the resolved path beside the link
+		// instead of beside the directory the link points at. The Lstat
+		// above succeeded, so that parent exists and resolves.
+		parent, err := filepath.EvalSymlinks(filepath.Dir(current))
+		if err != nil {
+			return "", err
+		}
+		current = filepath.Join(parent, target)
 	}
-	return "", fmt.Errorf("resolve output %s: too many levels of symbolic links", path)
 }
 
-// generatedFileMode reports the permission bits writeGeneratedFile must
-// give path. An existing file keeps the bits it already has, because the
+// withResolvedParent reports path with the directory holding it replaced
+// by the directory the filesystem reaches, so writeGeneratedFile creates
+// its temporary file in, and renames over, the directory an ordinary open
+// of path would have used. A parent that cannot be resolved is left as it
+// was spelled, which leaves the resulting open to report the ENOENT an
+// ordinary open would have reported.
+func withResolvedParent(path string) string {
+	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return path
+	}
+	return filepath.Join(parent, filepath.Base(path))
+}
+
+// generatedFileMode reports the mode bits writeGeneratedFile must give
+// path. An existing file keeps the bits it already has, because the
 // generated output's mode is the caller's to choose. Only a path that does
 // not exist yet gets os.CreateTemp's 0600.
+//
+// The sticky bit travels with the permission bits, because writing the
+// file in place kept it and replacing the file must not quietly drop it.
+// Setuid and setgid deliberately do not travel: Linux clears both when an
+// unprivileged process writes a file, so writing in place lost them too,
+// and carrying them across here would make regenerating a file stricter
+// than writing it directly.
 func generatedFileMode(path string) (fs.FileMode, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -413,7 +453,7 @@ func generatedFileMode(path string) (fs.FileMode, error) {
 		}
 		return 0, err
 	}
-	return info.Mode().Perm(), nil
+	return info.Mode() & (fs.ModePerm | fs.ModeSticky), nil
 }
 
 func newFlagSet(name string) *flag.FlagSet {

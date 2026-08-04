@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/signal"
@@ -69,13 +70,19 @@ func TestRunSchemaPreservesExistingOutputWhenWriteFails(t *testing.T) {
 	require.Equal(t, sentinel, got)
 }
 
-// TestRunSchemaKeepsOutputPermissionBits pins the mode of the generated
-// file. Writing through a temporary file makes the output's mode come from
-// the temporary file rather than from the destination, so regenerating over
-// a file the user created at 0644 would silently narrow it to 0600 unless
+// TestRunSchemaKeepsOutputModeBits pins the mode of the generated file.
+// Writing through a temporary file makes the output's mode come from the
+// temporary file rather than from the destination, so regenerating over a
+// file the user created at 0644 would silently narrow it to 0600 unless
 // writeGeneratedFile copies the destination's bits across first. A path
 // that does not exist yet still gets 0600.
-func TestRunSchemaKeepsOutputPermissionBits(t *testing.T) {
+//
+// The sticky bit is part of what an existing file keeps, because an
+// in-place write kept it. Setuid and setgid are not: Linux clears both when
+// an unprivileged process writes a file, so an in-place write dropped them
+// as well, and the cases below pin that this command does not hand them
+// back.
+func TestRunSchemaKeepsOutputModeBits(t *testing.T) {
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 	for _, tc := range []struct {
 		name     string
@@ -85,6 +92,9 @@ func TestRunSchemaKeepsOutputPermissionBits(t *testing.T) {
 		{name: "new output is created at 0600", want: 0o600},
 		{name: "existing 0644 output keeps 0644", existing: 0o644, want: 0o644},
 		{name: "existing 0640 output keeps 0640", existing: 0o640, want: 0o640},
+		{name: "existing sticky output keeps the sticky bit", existing: 0o755 | fs.ModeSticky, want: 0o755 | fs.ModeSticky},
+		{name: "existing setuid output does not keep setuid", existing: 0o755 | fs.ModeSetuid, want: 0o755},
+		{name: "existing setgid output does not keep setgid", existing: 0o755 | fs.ModeSetgid, want: 0o755},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
@@ -106,7 +116,7 @@ func TestRunSchemaKeepsOutputPermissionBits(t *testing.T) {
 
 			info, err := os.Stat(output)
 			require.NoError(t, err)
-			require.Equal(t, tc.want, info.Mode().Perm())
+			require.Equal(t, tc.want, info.Mode()&(fs.ModePerm|fs.ModeSticky|fs.ModeSetuid|fs.ModeSetgid))
 		})
 	}
 }
@@ -229,6 +239,97 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 		info, err := os.Stat(target)
 		require.NoError(t, err)
 		require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
+	})
+
+	// A link is reached through the directories that lead to it, and those
+	// can be links themselves. Joining a relative target against the
+	// lexically spelled parent collapses "alias/.." even when alias points
+	// into another directory, which sends the generated source to a file
+	// nothing points at and leaves the real target missing.
+	t.Run("link reached through a symlinked parent directory resolves against the directory the link lives in", func(t *testing.T) {
+		root, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, os.RemoveAll(root))
+		})
+		input := schemaFixtureInput(t, root)
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "actual", "nested"), 0o700))
+		require.NoError(t, os.Mkdir(filepath.Join(root, "link"), 0o700))
+		require.NoError(t, os.Symlink(filepath.Join("..", "actual", "nested"), filepath.Join(root, "link", "alias")))
+		require.NoError(t, os.Symlink(filepath.Join("..", "target.go"), filepath.Join(root, "actual", "nested", "output.go")))
+		output := filepath.Join(root, "link", "alias", "output.go")
+		// This is where the filesystem, and therefore an ordinary open of
+		// output, puts the link's target.
+		target := filepath.Join(root, "actual", "target.go")
+
+		require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
+
+		source, err := os.ReadFile(target)
+		require.NoError(t, err)
+		require.Contains(t, string(source), "func Users() UsersTable {")
+		require.NoFileExists(t, filepath.Join(root, "link", "target.go"), "the lexical parent must not receive the generated source")
+		link, err := os.Lstat(filepath.Join(root, "actual", "nested", "output.go"))
+		require.NoError(t, err)
+		require.NotZero(t, link.Mode()&fs.ModeSymlink, "output must still be a symbolic link")
+	})
+
+	// resolveOutputPath has to draw its line where an ordinary open draws
+	// one, and maxOutputSymlinkDepth records which kernel limit it matches.
+	// A chain that long resolves through an ordinary open, destination
+	// included, so it must resolve here too, and only the link past it is
+	// too many. Both cases are expressed in terms of the constant, so they
+	// follow it if it ever changes.
+	t.Run("a chain of links resolves up to the depth cap", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			links   int
+			wantErr bool
+		}{
+			{name: "a chain as long as the cap reaches its target", links: maxOutputSymlinkDepth},
+			{name: "one link past the cap is too many levels", links: maxOutputSymlinkDepth + 1, wantErr: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					require.NoError(t, os.RemoveAll(directory))
+				})
+				input := schemaFixtureInput(t, directory)
+				target := filepath.Join(directory, "target.go")
+				// Every link but the last points at the next one, and the
+				// last points at a path that does not exist yet, so the
+				// chain ends the way a checked-in link to a not yet
+				// generated file does.
+				for i := range tc.links {
+					name := filepath.Join(directory, fmt.Sprintf("l%d.go", i))
+					next := fmt.Sprintf("l%d.go", i+1)
+					if i == tc.links-1 {
+						next = "target.go"
+					}
+					require.NoError(t, os.Symlink(next, name))
+				}
+				output := filepath.Join(directory, "l0.go")
+
+				err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
+
+				if tc.wantErr {
+					require.Error(t, err)
+					require.Contains(t, err.Error(), "too many levels of symbolic links")
+					require.NoFileExists(t, target)
+					return
+				}
+				require.NoError(t, err)
+				source, err := os.ReadFile(target)
+				require.NoError(t, err)
+				require.Contains(t, string(source), "func Users() UsersTable {")
+				info, err := os.Stat(target)
+				require.NoError(t, err)
+				require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
+				link, err := os.Lstat(output)
+				require.NoError(t, err)
+				require.NotZero(t, link.Mode()&fs.ModeSymlink, "output must still be a symbolic link")
+			})
+		}
 	})
 
 	t.Run("link that points at itself fails without touching anything", func(t *testing.T) {
