@@ -1,3 +1,5 @@
+//go:build unix
+
 package inspect_test
 
 import (
@@ -14,7 +16,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -164,19 +165,20 @@ func dropRestrictedRole(t *testing.T, ctx context.Context, admin *sql.DB, roleNa
 // openAsRole connects to the same server dbtest.PostgreSQLDB used, but
 // authenticated as roleName instead of the admin credentials.
 //
-// The DSN dbtest hands back can be a keyword/value string
-// ("host=... port=... dbname=..."), not just a URL, so this cannot go
-// through net/url: url.Parse followed by re-serializing with a userinfo set
-// turns spaces in a keyword/value DSN into "%20" inside a bare
-// "//user:pass@..." authority, which pgx.ParseConfig happily accepts and
-// resolves to an unrelated connection (a Unix socket, no database, the OS
-// user) instead of erroring out. Parsing with pgx.ParseConfig first and
-// only overriding the User/Password fields on the resulting config
-// preserves every other DSN field regardless of which form was configured.
+// dbtest.PostgreSQLConfig hands back pgx's own already-parsed *ConnConfig
+// rather than a DSN string, specifically so this can copy it and override
+// only User/Password, never rebuild and reparse a connection string. An
+// earlier version of this test did exactly that: it parsed the raw DSN
+// with net/url and re-serialized it with a userinfo set, which turned
+// spaces in a keyword/value DSN ("host=... port=... dbname=...") into
+// "%20" inside a bare "//user:pass@..." authority -- a string pgx.ParseConfig
+// happily accepted and resolved to an unrelated connection (a Unix socket,
+// no database, the OS user) instead of erroring out. Copying the parsed
+// config sidesteps that whole class of bug: there is no string left to
+// round-trip.
 func openAsRole(t *testing.T, roleName string) *sql.DB {
 	t.Helper()
-	config, err := pgx.ParseConfig(dbtest.PostgreSQLDSN(t))
-	require.NoError(t, err)
+	config := dbtest.PostgreSQLConfig(t).Copy()
 	config.User = roleName
 	config.Password = roleName
 	database := stdlib.OpenDB(*config)

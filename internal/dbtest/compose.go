@@ -1,3 +1,5 @@
+//go:build unix
+
 package dbtest
 
 import (
@@ -104,7 +106,8 @@ func firstLine(output []byte) string {
 // probeCompose has already confirmed Docker works fails loudly with
 // t.Fatalf instead, because that means the compose file or an image
 // reference is broken -- except when the failure is a host port already
-// being in use, which is neither of those; see classifyBringUpFailure.
+// being in use, which is neither of those; see classifyPortCollision and
+// findConflictingPort in port_collision.go.
 func ensureComposeUp(t *testing.T) {
 	t.Helper()
 
@@ -141,8 +144,18 @@ func ensureComposeUp(t *testing.T) {
 	if err == nil {
 		return
 	}
-	if skip, msg := classifyBringUpFailure(out); skip {
-		t.Skipf("skipping live database test: %s", msg)
+	// classifyPortCollision runs first and decides skip vs. fail entirely
+	// from Docker's own wording; only once it has already said this
+	// failure IS a port collision does findConflictingPort run. That
+	// order matters: findConflictingPort binds real sockets, and if it
+	// ran before classification it could turn some other, unrelated
+	// bring-up failure into a skip just because a port happened to be
+	// free or busy for reasons that have nothing to do with why `docker
+	// compose up` actually failed. Classification alone gates skip vs.
+	// fail; the probe only ever changes which port a skip names.
+	if classifyPortCollision(string(out)) {
+		port, envVar := findConflictingPort()
+		t.Skipf("skipping live database test: %s", bringUpFailureMessage(port, envVar))
 		return
 	}
 	t.Fatalf("dbtest: %s up failed even though Docker is available: %v\n%s", runner.displayName(), err, out)

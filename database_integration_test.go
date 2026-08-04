@@ -1,3 +1,5 @@
+//go:build unix
+
 package rasql_test
 
 import (

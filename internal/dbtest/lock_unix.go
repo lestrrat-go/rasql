@@ -7,12 +7,26 @@ import (
 	"syscall"
 )
 
-// fileLock is an OS-level advisory lock held by one process at a time. On
-// Unix it serializes compose bring-up with syscall.Flock, so of the several
+// fileLock is an OS-level advisory lock held by one process at a time. It
+// serializes compose bring-up with syscall.Flock, so of the several
 // `go test ./...` binaries that reach ensureComposeUp at once, only one
 // actually runs `docker compose up` while the rest block and then proceed
-// against the containers it started. See lock_other.go for platforms with
-// no flock.
+// against the containers it started.
+//
+// This package builds only on unix (see the //go:build unix constraint on
+// every file in this package), specifically because this lock has no
+// no-op-safe portable fallback: a platform with no syscall.Flock would need
+// either a real alternative locking primitive or an unguarded bring-up,
+// and an unguarded bring-up is not safe here. This package used to ship a
+// no-op fileLock for non-unix platforms, but a no-op lock lets two
+// `go test ./...` binaries race the same `docker compose up`, and the two
+// documented outcomes of that race -- a container-name conflict and a
+// "network already exists" error -- are both messages this package's own
+// classifyPortCollision correctly does NOT treat as a port collision (they
+// are not one), so the race would fail the test loudly and blame a broken
+// compose file that was never broken. Dropping non-unix support outright
+// removes that failure mode instead of papering over it with a lock that
+// does not lock.
 type fileLock struct {
 	file *os.File
 }

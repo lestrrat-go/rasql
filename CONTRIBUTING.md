@@ -13,16 +13,20 @@ Most of the suite needs no database. It also needs no Docker: any test that does
 
 ## Live database tests
 
-A handful of tests run against a real PostgreSQL or MySQL server rather than a mock, such as `TestDatabaseIntegration` at the repository root and the privilege tests in `inspect/`. Any package can add one: `internal/dbtest` gives a test in any package a live `*sql.DB` or DSN for PostgreSQL and MySQL, resolved in this order:
+A handful of tests run against a real PostgreSQL or MySQL server rather than a mock, such as `TestDatabaseIntegration` at the repository root and the privilege tests in `inspect/`. Any package can add one: `internal/dbtest` gives a test in any package a live `*sql.DB` or an already-parsed connection config (`*pgx.ConnConfig` / `*mysql.Config`) for PostgreSQL and MySQL, resolved in this order:
 
-1. **`RASQL_TEST_POSTGRES_DSN` / `RASQL_TEST_MYSQL_DSN` environment variables.** If set, that DSN is used directly and Docker is never touched. This is how CI's `integration` job runs the suite.
-2. **Docker Compose**, otherwise. The harness runs `docker compose up -d --wait` against the checked-in [`compose.yaml`](compose.yaml), which defines the same two services CI uses (`postgres:17-alpine` on port 5432, `mysql:8.4` on port 3306, same credentials), and derives the DSN from those fixed ports. You can also bring these up yourself ahead of time:
+1. **`RASQL_TEST_POSTGRES_DSN` / `RASQL_TEST_MYSQL_DSN` environment variables.** If set to a non-blank value, that value is parsed with the driver's own parser (`pgx.ParseConfig` / `mysql.ParseDSN`) and Docker is never touched. This is how CI's `integration` job runs the suite. A DSN that parses but does not itself pin down its host, port, and database -- so that the actual target would instead come from libpq's `PG*` environment variables or a driver default -- is rejected, and a DSN that fails to parse or fails that check fails the test rather than silently falling back to Docker; see the `dbtest` package doc for why. `internal/dbtest` never hands back a raw DSN string, only the parsed config, so nothing in this repository rebuilds or reparses a connection string.
+2. **Docker Compose**, otherwise. The harness runs `docker compose up -d --wait` against the checked-in [`compose.yaml`](compose.yaml), which defines the same two services CI uses (`postgres:17-alpine` on port 5432, `mysql:8.4` on port 3306, same credentials), and derives the config from those fixed ports. You can also bring these up yourself ahead of time:
 
    ```sh
    docker compose up -d --wait
    ```
 
 3. **Skip**, otherwise. If Docker is not usable on your machine (no `docker` binary, no `docker compose` and no `docker-compose` fallback, or the daemon unreachable), the test skips with a message naming which of those was detected, plus how to set the DSN or start compose yourself.
+
+### Unix only
+
+`internal/dbtest`, and every test file that imports it, builds only on unix (`//go:build unix`). Its bring-up lock (`internal/dbtest/lock_unix.go`) has no portable equivalent on other platforms, and an earlier no-op fallback let two `go test ./...` binaries race the same `docker compose up`, which this package's own failure classifier could not tell apart from a broken compose file. `GOOS=windows go build ./...` and `go vet ./...` still succeed: the package and its consumers are simply excluded from that build, the same as any other platform-restricted package.
 
 ### No automatic teardown
 

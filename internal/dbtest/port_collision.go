@@ -1,7 +1,10 @@
+//go:build unix
+
 package dbtest
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 )
 
@@ -27,6 +30,17 @@ import (
 // (see the comments on the third and fourth patterns below) and were
 // tightened after a review confirmed both false positives against real
 // daemon/podman error text.
+//
+// This list is used for classification only -- deciding skip vs. fail --
+// and never for extracting a port number. An earlier version of this file
+// also kept a second, parallel pattern list to pull the port number out of
+// this same text, but that list already missed real wording (Docker
+// Desktop for Windows' WSA bind error names the port but not in a shape
+// any of those patterns matched), which made a skip that should have named
+// the port instead falsely claim the port could not be determined.
+// findConflictingPort below replaces text extraction with directly
+// probing the ports compose.yaml publishes, so that class of miss cannot
+// recur; see its comment.
 var portCollisionPatterns = []*regexp.Regexp{
 	// Docker Engine's long-standing wording, produced when the daemon
 	// can't bind the published port while wiring up the container's
@@ -104,104 +118,96 @@ var portCollisionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)unexpected error \(failure eaddrinuse\)`),
 }
 
-// portNumberPatterns extracts the host port number from a port-collision
-// message, tried in the order listed; the first match wins. Each regexp is
-// anchored to the specific wording it was written against (see the
-// comments on portCollisionPatterns for what produces each one), not to
-// "any number that looks like a port", so a message that happens to
-// contain an unrelated number does not get mis-extracted.
-var portNumberPatterns = []*regexp.Regexp{
-	// "Bind for 0.0.0.0:5432 failed: port is already allocated"
-	regexp.MustCompile(`(?i)Bind for \S*:(\d+) failed`),
-
-	// "Bind for 0.0.0.0:80: unexpected error (Failure EADDRINUSE)" -- the
-	// userland-proxy's own bind-failure wording (see the comment on
-	// portCollisionPatterns) uses a bare colon after the port instead of
-	// " failed", so it needs its own anchor rather than reusing the one
-	// above.
-	regexp.MustCompile(`(?i)Bind for \S*:(\d+): unexpected error \(Failure EADDRINUSE\)`),
-
-	// "... listen tcp 0.0.0.0:5432: bind: address already in use" and
-	// its IPv6 form "... listen tcp6 [::]:5432: bind: address already in
-	// use" both end in "<port>: bind: address already in use"
-	// regardless of address family, so anchor there rather than on the
-	// address that precedes it.
-	regexp.MustCompile(`(?i):(\d+): ?bind: ?address already in use`),
-
-	// "port 8080 is already in use"
-	regexp.MustCompile(`(?i)\bport (\d+) is already in use\b`),
-}
-
 // classifyPortCollision reports whether combinedOutput -- the combined
 // stdout/stderr of a failed `docker compose up` -- names a host port
-// already in use, and the port number when extractPort could determine
-// one from the matched text. port is "" when a collision was detected but
-// no pattern in portNumberPatterns could pull a number out of this
-// particular message; the caller must not guess at a port in that case.
-func classifyPortCollision(combinedOutput string) (collision bool, port string) {
+// already in use, as opposed to a broken compose file or image reference.
+//
+// This function runs no commands, opens no sockets, and touches no
+// *testing.T; it is pure input to output, so it can be unit tested
+// directly without Docker or the network. See this function's test and
+// dsnDecision in dbtest.go for why that separation exists.
+func classifyPortCollision(combinedOutput string) bool {
 	for _, pattern := range portCollisionPatterns {
 		if pattern.MatchString(combinedOutput) {
-			return true, extractPort(combinedOutput)
+			return true
 		}
 	}
-	return false, ""
+	return false
 }
 
-func extractPort(output string) string {
-	for _, re := range portNumberPatterns {
-		if m := re.FindStringSubmatch(output); m != nil {
-			return m[1]
-		}
-	}
-	return ""
+// composePublishedPort pairs a host port compose.yaml publishes with the
+// RASQL_TEST_*_DSN variable that points a test at whatever already holds
+// that port.
+type composePublishedPort struct {
+	port   string
+	envVar string
 }
 
-// envVarForPort names the RASQL_TEST_*_DSN environment variable for the
-// compose service that owns port, matching the fixed ports documented in
-// compose.yaml and the package doc (5432 for PostgreSQL, 3306 for MySQL).
-// It returns "" when port matches neither -- including when the port could
-// not be determined at all -- so the caller can fall back to naming both
-// variables instead of one that might be wrong.
-func envVarForPort(port string) string {
-	switch port {
-	case "5432":
-		return postgresEnvVar
-	case "3306":
-		return mysqlEnvVar
-	default:
-		return ""
-	}
+// composePublishedPorts lists the ports compose.yaml publishes, matching
+// the fixed ports documented in the package doc (5432 for PostgreSQL, 3306
+// for MySQL).
+var composePublishedPorts = []composePublishedPort{
+	{port: "5432", envVar: postgresEnvVar},
+	{port: "3306", envVar: mysqlEnvVar},
 }
 
-// classifyBringUpFailure is the decision at the heart of ensureComposeUp's
-// failure handling: given the combined output of a failed `docker compose
-// up`, should the calling test skip -- naming the conflicting port -- or
-// fail loudly? See the package doc for why those are different outcomes.
+// findConflictingPort determines which port in candidates is already bound
+// by attempting to bind each one directly -- with the same address family
+// and wildcard address Docker itself binds ("0.0.0.0:<port>", per the
+// vendor wording collected in portCollisionPatterns) -- rather than
+// extracting a number from Docker's failure text. A bind that fails is
+// treated as that port already being held by something else; the first
+// such port found is returned. Docker's own bring-up attempt has already
+// failed and exited by the time this runs, so it is not still holding the
+// port itself.
 //
-// This function runs no commands and touches no *testing.T; it is pure
-// input to output, so it -- and the classification it is built on -- can
-// be unit tested directly without Docker. See this function's test and
-// classifyPortCollision's test for why that separation exists, matching
-// the same pattern dsnDecision uses elsewhere in this package.
-func classifyBringUpFailure(combinedOutput []byte) (skip bool, message string) {
-	collision, port := classifyPortCollision(string(combinedOutput))
-	if !collision {
-		return false, ""
+// This must only be called after classifyPortCollision has already
+// reported a collision for the same bring-up failure -- see
+// ensureComposeUp in compose.go for why that order matters. Calling this
+// on its own, without that prior classification, would say "port 5432 is
+// taken" any time something else on the machine happens to be listening
+// there, regardless of whether that has anything to do with the compose
+// failure under investigation.
+//
+// port is "" when none of candidates could be bound to determine a
+// conflict -- e.g. the collision was real but resolved between Docker's
+// attempt and this probe, or Docker's own wording matched a collision
+// pattern for a port this compose file does not publish. The caller must
+// not guess at a port in that case; see bringUpFailureMessage.
+func findConflictingPort() (string, string) {
+	return findConflictingPortAmong(composePublishedPorts)
+}
+
+// findConflictingPortAmong is findConflictingPort's logic over an explicit
+// candidate list, split out so a test can supply ports it controls (an
+// ephemeral port it is deliberately holding open, or one it knows is free)
+// instead of the real 5432/3306 compose.yaml publishes, which may or may
+// not be free on the machine running the test.
+func findConflictingPortAmong(candidates []composePublishedPort) (string, string) {
+	for _, candidate := range candidates {
+		listener, err := net.Listen("tcp", "0.0.0.0:"+candidate.port)
+		if err != nil {
+			return candidate.port, candidate.envVar
+		}
+		listener.Close()
 	}
+	return "", ""
+}
+
+// bringUpFailureMessage builds the skip diagnostic for a bring-up failure
+// classifyPortCollision has already identified as a port collision, once
+// findConflictingPort has run. port/envVar being "" means the probe could
+// not determine which port was the problem, which is reported truthfully
+// rather than guessed at.
+func bringUpFailureMessage(port, envVar string) string {
 	if port == "" {
-		return true, fmt.Sprintf(
-			"a host port docker compose wanted appears to already be in use, but the port could not be determined from its output; set %s or %s to use the database you already have running instead",
+		return fmt.Sprintf(
+			"a host port docker compose wanted appears to already be in use, but the port could not be determined; set %s or %s to use the database you already have running instead",
 			postgresEnvVar, mysqlEnvVar,
 		)
 	}
-	if envVar := envVarForPort(port); envVar != "" {
-		return true, fmt.Sprintf(
-			"host port %s is already in use; set %s to use the database you already have running instead of bringing up compose",
-			port, envVar,
-		)
-	}
-	return true, fmt.Sprintf(
-		"host port %s is already in use; set %s or %s to use the database you already have running instead of bringing up compose",
-		port, postgresEnvVar, mysqlEnvVar,
+	return fmt.Sprintf(
+		"host port %s is already in use; set %s to use the database you already have running instead of bringing up compose",
+		port, envVar,
 	)
 }
