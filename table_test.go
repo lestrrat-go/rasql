@@ -53,6 +53,53 @@ type pointerStaffTable struct {
 	*staffTable
 }
 
+// recursiveStaffTable mirrors a wrapper reachable from itself. Both anonymous
+// fields satisfy rasql.Table[staffRow], and Go promotes the table methods from
+// the shallower one, so its zero value still reaches them through a nil embedded
+// rasql.Table[staffRow]. Nothing reads the recursive field: its presence is the
+// shape under test.
+type recursiveStaffTable struct {
+	*recursiveStaffTable
+	rasql.Table[staffRow]
+}
+
+// twoCandidateStaffTable mirrors the same two-candidate shape with no recursion
+// in it: an ordinary wrapper sits beside the embedded interface Go promotes from.
+type twoCandidateStaffTable struct {
+	rasql.Table[staffRow]
+	staffTable
+}
+
+// selfMethodStaffTable mirrors a table that supplies its own QueryTable and
+// Column and keeps the embedded rasql.Table[staffRow] nil, using it only for the
+// unexported method that satisfies the interface. It is usable even though that
+// embedded field is nil.
+type selfMethodStaffTable struct {
+	rasql.Table[staffRow]
+	source query.Table
+}
+
+func (t selfMethodStaffTable) QueryTable() query.Table {
+	return t.source
+}
+
+func (t selfMethodStaffTable) Column(name string) (query.Column, error) {
+	return t.source.Column(name)
+}
+
+// staffTableBug is what buggyStaffTable.QueryTable panics with.
+const staffTableBug = "staff table: bug of its own"
+
+// buggyStaffTable mirrors a table whose own QueryTable panics for a reason that
+// has nothing to do with a nil table.
+type buggyStaffTable struct {
+	rasql.Table[staffRow]
+}
+
+func (t buggyStaffTable) QueryTable() query.Table {
+	panic(staffTableBug)
+}
+
 func staffDefinition() schema.Table {
 	return schema.Table{
 		Name: "staff",
@@ -71,6 +118,20 @@ func staff(t *testing.T) staffTable {
 	table, err := rasql.NewTable[staffRow](staffDefinition())
 	require.NoError(t, err)
 	return newStaffTable(table)
+}
+
+// contractors is a second table, so a statement can take a staff table under
+// test without duplicating the reference of the table it selects from.
+func contractors(t *testing.T) rasql.Table[staffRow] {
+	t.Helper()
+
+	table, err := rasql.NewTable[staffRow](schema.Table{
+		Name:       "contractors",
+		Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	return table
 }
 
 func TestTable(t *testing.T) {
@@ -163,13 +224,7 @@ func TestAs(t *testing.T) {
 }
 
 func TestTypedSelectBuilderRejectsForeignColumn(t *testing.T) {
-	other, err := rasql.NewTable[staffRow](schema.Table{
-		Name:       "contractors",
-		Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
-		PrimaryKey: []string{"id"},
-	})
-	require.NoError(t, err)
-	contractorID, err := other.Column("id")
+	contractorID, err := contractors(t).Column("id")
 	require.NoError(t, err)
 
 	_, err = rasql.SelectFrom(clientForBuild(t), staff(t)).WhereEqual(contractorID, 1).Build()
@@ -306,6 +361,53 @@ func requireNilTableRejected[Wrapper rasql.Table[staffRow]](t *testing.T, name s
 	})
 }
 
+// requireTableUsable drives table through the entry points that build a
+// statement without executing it and requires each one to reach the table behind
+// it, so a value the guard must accept is proven usable rather than merely not
+// rejected.
+func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string, table Wrapper) {
+	t.Helper()
+
+	t.Run(name, func(t *testing.T) {
+		selected, err := rasql.SelectFrom[staffRow](clientForBuild(t), table).Build()
+		require.NoError(t, err)
+		require.Contains(t, selected.SQL(), `FROM "staff"`)
+
+		// DecodeFrom projects nothing by default, so this one names a column.
+		email, err := table.Column("email")
+		require.NoError(t, err)
+		decoded, err := rasql.DecodeFrom[staffRow, staffRow](clientForBuild(t), table).Project(query.Project(email)).Build()
+		require.NoError(t, err)
+		require.Contains(t, decoded.SQL(), `FROM "staff"`)
+
+		deleted, err := rasql.DeleteFrom[staffRow](clientForBuild(t), table).Build()
+		require.NoError(t, err)
+		require.Contains(t, deleted.SQL(), `DELETE FROM "staff"`)
+
+		aliased, err := rasql.As[staffRow](table, "alias")
+		require.NoError(t, err)
+		require.Equal(t, "alias", aliased.QueryTable().Qualifier())
+
+		require.Equal(t, "email", rasql.MustColumn[staffRow](table, "email").Name())
+
+		others := contractors(t)
+		othersID, err := others.Column("id")
+		require.NoError(t, err)
+
+		joined, err := rasql.SelectFrom(clientForBuild(t), others).
+			Join(rasql.InnerJoin[staffRow](table, query.Equal(othersID, query.Bind(1)))).
+			Build()
+		require.NoError(t, err)
+		require.Contains(t, joined.SQL(), `INNER JOIN "staff"`)
+
+		left, err := rasql.SelectFrom(clientForBuild(t), others).
+			Join(rasql.LeftJoin[staffRow](table, query.Equal(othersID, query.Bind(1)))).
+			Build()
+		require.NoError(t, err)
+		require.Contains(t, left.SQL(), `LEFT JOIN "staff"`)
+	})
+}
+
 func TestNilTableReportsErrors(t *testing.T) {
 	requireNilTableRejected[rasql.Table[staffRow]](t, "nil interface", nil)
 
@@ -320,6 +422,8 @@ func TestNilTableReportsErrors(t *testing.T) {
 	requireNilTableRejected(t, "zero wrapper around a wrapper", auditedStaffTable{})
 	requireNilTableRejected(t, "zero wrapper around a wrapper pointer", pointerStaffTable{})
 	requireNilTableRejected(t, "wrapper holding a nil wrapper pointer", staffTable{Table: (*staffTable)(nil)})
+	requireNilTableRejected(t, "zero wrapper reachable from itself", recursiveStaffTable{recursiveStaffTable: nil})
+	requireNilTableRejected(t, "zero wrapper beside a second wrapper", twoCandidateStaffTable{})
 
 	t.Run("a generated As reports the error behind the zero wrapper it returns", func(t *testing.T) {
 		var wrapper staffTable
@@ -327,11 +431,32 @@ func TestNilTableReportsErrors(t *testing.T) {
 		require.ErrorContains(t, err, "must not be nil")
 		require.Equal(t, staffTable{}, aliased)
 	})
+}
 
-	t.Run("a wrapper around a usable wrapper is accepted", func(t *testing.T) {
-		audited := auditedStaffTable{staffTable: staff(t)}
-		statement, err := rasql.SelectFrom[staffRow](clientForBuild(t), audited).Build()
-		require.NoError(t, err)
-		require.Contains(t, statement.SQL(), `FROM "staff"`)
+func TestUsableTableIsAccepted(t *testing.T) {
+	table, err := rasql.NewTable[staffRow](staffDefinition())
+	require.NoError(t, err)
+
+	requireTableUsable(t, "typed table", table)
+	requireTableUsable(t, "wrapper around a typed table", staff(t))
+	requireTableUsable(t, "wrapper around a usable wrapper", auditedStaffTable{staffTable: staff(t)})
+	requireTableUsable(t, "pointer to a usable wrapper", &staffTable{Table: table})
+	requireTableUsable(t, "table with its own QueryTable and a nil embedded table", selfMethodStaffTable{source: table.QueryTable()})
+}
+
+func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
+	// The guard reads a nil pointer dereference from QueryTable as the missing
+	// table, so every other panic from an implementation must reach the caller
+	// unchanged instead of being reported as a nil table.
+	buggy := buggyStaffTable{Table: nil}
+
+	require.PanicsWithValue(t, staffTableBug, func() {
+		rasql.MustColumn[staffRow](buggy, "id")
+	})
+	require.PanicsWithValue(t, staffTableBug, func() {
+		_, _ = rasql.As[staffRow](buggy, "alias")
+	})
+	require.PanicsWithValue(t, staffTableBug, func() {
+		_, _ = rasql.SelectFrom[staffRow](clientForBuild(t), buggy).Build()
 	})
 }

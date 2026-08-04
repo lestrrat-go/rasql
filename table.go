@@ -2,7 +2,8 @@ package rasql
 
 import (
 	"fmt"
-	"reflect"
+	"runtime"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -11,11 +12,11 @@ import (
 // Table associates a SQL table with the Go type of one of its rows.
 // Only this package implements it; generated table types embed it.
 //
-// Some values satisfy Table[T] with no typed table behind them: a nil interface,
-// a nil pointer, and a wrapper whose embedded Table[T] is nil. Every function
-// taking a Table[T] rejects such a value, as an error from the call, as an error
-// from the Build of the statement the call feeds, or as a panic where the name
-// says it panics.
+// Some values satisfy Table[T] with no typed table behind them, such as a nil
+// interface or a zero wrapper whose embedded Table[T] is nil. Every function
+// taking a Table[T] rejects a value whose QueryTable cannot reach a table, as an
+// error from the call, as an error from the Build of the statement the call
+// feeds, or as a panic where the name says it panics.
 type Table[T any] interface {
 	// QueryTable returns the dialect-neutral table backing the descriptor.
 	QueryTable() query.Table
@@ -92,7 +93,8 @@ func (t typedTable[T]) tableRow() T {
 }
 
 // isNilTable reports whether table has no typed table behind it, so every entry
-// point taking a Table[T] can reject it instead of panicking.
+// point taking a Table[T] can reject it instead of panicking. It is the one
+// place this rule lives; every such entry point calls it.
 //
 // It catches more than the nil interface and the typed nil pointer isNil covers.
 // A table wrapper embeds Table[T] and reaches every Table method through that
@@ -101,66 +103,57 @@ func (t typedTable[T]) tableRow() T {
 // not nil, and it needs no hand-written type to exist: rasqlgen emits an
 // exported wrapper struct that embeds Table[T] under the exported field name
 // Table, and a generated As returns a zero wrapper along with its error.
+//
+// The nil field is not what makes such a value unusable, and the fields cannot
+// decide the question either way. A type can supply its own QueryTable and
+// Column and keep a nil embedded Table[T] only for the unexported tableRow
+// method: that value works, yet it has the same fields as a zero wrapper. A
+// struct can also embed two fields that satisfy Table[T], where Go promotes the
+// methods from the shallower one while an inspection of the fields sees only two
+// candidates. So the rule asks the promoted method instead: call QueryTable, and
+// treat a nil pointer dereference from that call as the missing table.
 func isNilTable[T any](table Table[T]) bool {
 	if isNil(table) {
 		return true
 	}
-	return nilEmbeddedTable(reflect.ValueOf(table), reflect.TypeFor[Table[T]]())
+	return queryTableDereferencesNil(table)
 }
 
-// nilEmbeddedTable reports whether the embedded Table[T] behind value's promoted
-// methods is nil. It follows one wrapper into the next, so a wrapper that wraps a
-// wrapper is caught as well.
+// queryTableDereferencesNil calls table.QueryTable and reports whether that call
+// dereferenced a nil pointer, which is what reaching a Table method through a nil
+// embedded field or a nil embedded pointer does.
 //
-// A struct satisfying Table[T] from outside this package promotes its methods
-// from exactly one anonymous field whenever that promotion is unambiguous, so
-// the walk follows that field alone. No such field means the struct carries its
-// own table, and several mean the field Go promotes from is not this walk's to
-// guess; either way nothing nil was found. That also ends the walk, because a
-// wrapper reachable from itself would need a second such field to satisfy
-// Table[T] at all.
-func nilEmbeddedTable(value reflect.Value, tableType reflect.Type) bool {
-	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
-		if value.IsNil() {
-			return true
-		}
-		value = value.Elem()
-	}
-	if value.Kind() != reflect.Struct {
-		return false
-	}
-	embedded, ok := embeddedTable(value, tableType)
+// Any other panic is re-panicked unchanged, so a bug inside a caller's own
+// QueryTable surfaces as itself instead of being relabelled a nil table.
+func queryTableDereferencesNil[T any](table Table[T]) bool {
+	dereferencedNil := false
+	func() {
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+			if !nilPointerDereference(recovered) {
+				panic(recovered)
+			}
+			dereferencedNil = true
+		}()
+		table.QueryTable()
+	}()
+	return dereferencedNil
+}
+
+// nilDereferenceMessage is how the Go runtime describes a nil pointer
+// dereference. The runtime exports no value to compare such a panic against, so
+// the recovered runtime.Error is matched on this text.
+const nilDereferenceMessage = "invalid memory address or nil pointer dereference"
+
+// nilPointerDereference reports whether recovered is the runtime's nil pointer
+// dereference rather than a panic the code under it raised itself.
+func nilPointerDereference(recovered any) bool {
+	failure, ok := recovered.(runtime.Error)
 	if !ok {
 		return false
 	}
-	return nilEmbeddedTable(embedded, tableType)
-}
-
-// embeddedTable returns the one anonymous field of value that Table[T] methods
-// can be promoted from, and reports whether there is exactly one.
-func embeddedTable(value reflect.Value, tableType reflect.Type) (reflect.Value, bool) {
-	valueType := value.Type()
-	var embedded reflect.Value
-	found := false
-	for index := range valueType.NumField() {
-		field := valueType.Field(index)
-		if !field.Anonymous || !implementsTable(field.Type, tableType) {
-			continue
-		}
-		if found {
-			return reflect.Value{}, false
-		}
-		embedded = value.Field(index)
-		found = true
-	}
-	return embedded, found
-}
-
-// implementsTable reports whether fieldType or a pointer to it satisfies
-// tableType, so an embedded value and an embedded pointer both count.
-func implementsTable(fieldType reflect.Type, tableType reflect.Type) bool {
-	if fieldType.Implements(tableType) {
-		return true
-	}
-	return reflect.PointerTo(fieldType).Implements(tableType)
+	return strings.Contains(failure.Error(), nilDereferenceMessage)
 }
