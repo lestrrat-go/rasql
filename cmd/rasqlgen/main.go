@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -294,8 +295,20 @@ func unexpectedArgumentsError(rest []string) error {
 // existing file in place. It writes to a temporary file in the same
 // directory as path, then renames the temporary file over path only after
 // the write fully succeeds, so a failure at any point along the way leaves
-// path untouched instead of empty or partially written.
+// path untouched instead of empty or partially written. When path already
+// exists, its permission bits are copied to the temporary file before the
+// rename, so regenerating never changes the mode of an existing output
+// file; a file that did not exist is created at 0600.
+//
+// The rename is only atomic on Unix platforms. os.Rename documents that
+// even within a single directory it is not an atomic operation on
+// non-Unix platforms, so a run interrupted there can leave path missing
+// or still holding its old contents.
 func writeGeneratedFile(path string, source []byte) error {
+	mode, err := generatedFileMode(path)
+	if err != nil {
+		return err
+	}
 	directory := filepath.Dir(path)
 	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+".tmp*")
 	if err != nil {
@@ -319,11 +332,31 @@ func writeGeneratedFile(path string, source []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
+	// chmod before the rename, so path is never visible with the
+	// temporary file's mode instead of the mode it had before.
+	if err := os.Chmod(temporary.Name(), mode); err != nil {
+		return err
+	}
 	if err := os.Rename(temporary.Name(), path); err != nil {
 		return err
 	}
 	removeTemporary = false
 	return nil
+}
+
+// generatedFileMode reports the permission bits writeGeneratedFile must
+// give path. An existing file keeps the bits it already has, because the
+// generated output's mode is the caller's to choose. Only a path that does
+// not exist yet gets os.CreateTemp's 0600.
+func generatedFileMode(path string) (fs.FileMode, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0o600, nil
+		}
+		return 0, err
+	}
+	return info.Mode().Perm(), nil
 }
 
 func newFlagSet(name string) *flag.FlagSet {

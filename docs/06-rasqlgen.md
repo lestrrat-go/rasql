@@ -256,6 +256,6 @@ Put the command in a `go:generate` line beside the package it writes into:
 //go:generate go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema -input schema.json -package store -output rasql_gen.go
 ```
 
-The output file is replaced atomically: `rasqlgen` writes to a temporary file beside it and renames the temporary file into place, so a failed or interrupted run leaves the existing generated file untouched instead of empty or truncated.
+`rasqlgen` never writes the output file in place. It writes a temporary file beside the output and renames the temporary file over it once the write has fully succeeded, so a run that fails leaves the existing generated file untouched instead of empty or truncated, and an existing file keeps its own permission bits. On Unix platforms that replacement is atomic, so an interrupted run is covered too. Elsewhere it is not: Go's `os.Rename` is documented as non-atomic on non-Unix platforms even within a single directory, so an interrupted run there can leave the output file missing or still holding its old contents.
 
 Then `go generate ./...` refreshes everything. Because output is deterministic, a CI job can regenerate and fail when `git diff` is not empty, which catches a generated file that drifted from its source.
