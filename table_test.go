@@ -116,6 +116,37 @@ func (t nilDereferenceStaffTable) QueryTable() query.Table {
 	return *t.source
 }
 
+// fabricatedNilDereference is a caller-declared type that satisfies
+// runtime.Error and echoes the runtime's own nil-dereference text from its
+// Error method, but is not the runtime's own concrete error type. It exists to
+// prove the guard tells a genuine nil dereference apart from a caller
+// panicking with a value fabricated to look like one, which is only possible
+// because the classifier also checks which package the concrete type behind
+// the panic comes from, not just its interface and text.
+type fabricatedNilDereference struct{}
+
+func (fabricatedNilDereference) Error() string {
+	return "runtime error: invalid memory address or nil pointer dereference"
+}
+
+func (fabricatedNilDereference) RuntimeError() {}
+
+// fabricatedRuntimeErrorStaffTable mirrors a caller type whose own QueryTable
+// panics with fabricatedNilDereference: a value that satisfies runtime.Error
+// and carries the runtime's own nil-dereference text, yet did not come from an
+// actual nil dereference. Its embedded rasql.Table[staffRow] is nil, so
+// tableRow nil-dereferences first and the guard proceeds to probe QueryTable,
+// which is where this fabricated panic is raised. A classifier that matched
+// only the interface and the text would swallow it as "table must not be nil"
+// instead of letting the caller's own panic propagate.
+type fabricatedRuntimeErrorStaffTable struct {
+	rasql.Table[staffRow]
+}
+
+func (t fabricatedRuntimeErrorStaffTable) QueryTable() query.Table {
+	panic(fabricatedNilDereference{})
+}
+
 // requirePanicsWithNilDereference runs fn and requires it to panic with the Go
 // runtime's own nil pointer dereference error, proving the panic reached the
 // caller unchanged instead of being caught and relabelled as a missing table.
@@ -540,6 +571,37 @@ func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
 	t.Run("DecodeFrom", func(t *testing.T) {
 		requirePanicsWithNilDereference(t, func() {
 			_, _ = rasql.DecodeFrom[staffRow, staffRow](clientForBuild(t), buggy).Build()
+		})
+	})
+}
+
+// TestTableGuardDoesNotRelabelAFabricatedNilDereference discriminates the
+// defect a neutral audit confirmed in the text-only classifier: fabricatedNilDereference
+// implements runtime.Error and its Error method returns exactly the runtime's
+// nil-dereference text, but it is declared outside rasql and never comes from an
+// actual nil dereference. Its embedded rasql.Table[staffRow] is nil, so tableRow
+// nil-dereferences and the guard proceeds to probe QueryTable, which is where
+// this fabricated value is panicked. A classifier matching only the
+// runtime.Error interface and the message text would swallow this as "table
+// must not be nil"; the concrete type's package is what tells the two apart.
+func TestTableGuardDoesNotRelabelAFabricatedNilDereference(t *testing.T) {
+	buggy := fabricatedRuntimeErrorStaffTable{}
+
+	t.Run("MustColumn", func(t *testing.T) {
+		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+			rasql.MustColumn[staffRow](buggy, "id")
+		})
+	})
+
+	t.Run("As", func(t *testing.T) {
+		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+			_, _ = rasql.As[staffRow](buggy, "alias")
+		})
+	})
+
+	t.Run("SelectFrom", func(t *testing.T) {
+		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+			_, _ = rasql.SelectFrom[staffRow](clientForBuild(t), buggy).Build()
 		})
 	})
 }

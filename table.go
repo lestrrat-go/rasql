@@ -2,6 +2,7 @@ package rasql
 
 import (
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 
@@ -172,15 +173,52 @@ func dereferencesNil(call func()) bool {
 
 // nilDereferenceMessage is how the Go runtime describes a nil pointer
 // dereference. The runtime exports no value to compare such a panic against, so
-// the recovered runtime.Error is matched on this text.
+// the recovered runtime.Error is matched on this text, alongside the concrete
+// type check nilPointerDereference also does.
 const nilDereferenceMessage = "invalid memory address or nil pointer dereference"
 
 // nilPointerDereference reports whether recovered is the runtime's nil pointer
 // dereference rather than a panic the code under it raised itself.
+//
+// Matching the runtime.Error interface and the message text is not enough on
+// its own: runtime.Error is a public interface, so a caller can declare its
+// own type that implements it, return exactly nilDereferenceMessage from its
+// Error method, and panic with that value from its own QueryTable. Without a
+// further check, that fabricated value would be indistinguishable from a real
+// nil dereference and would be swallowed as "table must not be nil" instead
+// of propagating as the caller's own panic.
+//
+// The concrete type behind recovered is checked against package "runtime" to
+// close that gap. Every nil pointer dereference on this Go toolchain panics
+// with the runtime's own concrete error type (currently *runtime.errorString,
+// reached by unwrapping any pointer indirection), and that type's PkgPath is
+// "runtime". No type a caller declares outside the standard library can carry
+// that package path, so the check cannot be satisfied by a fabricated
+// look-alike. An interface-only check has no such property, which is why it
+// is not enough by itself.
+//
+// This ties the classifier to how the current runtime happens to construct
+// the panic value, which is a known, accepted risk: if a future Go release
+// ever panicked with a nil-dereference value from a different package, this
+// check would fail closed. It would treat that panic as unrelated to a
+// missing table and re-panic it unchanged, which is the behavior this guard
+// had before it existed, rather than risk misclassifying a caller's own panic
+// as a missing table. TestTableGuardKeepsUnrelatedPanics and the guard's other
+// panic-shape tests would then fail loudly instead of the guard silently
+// drifting.
 func nilPointerDereference(recovered any) bool {
 	failure, ok := recovered.(runtime.Error)
 	if !ok {
 		return false
 	}
+
+	failureType := reflect.TypeOf(recovered)
+	for failureType != nil && failureType.Kind() == reflect.Ptr {
+		failureType = failureType.Elem()
+	}
+	if failureType == nil || failureType.PkgPath() != "runtime" {
+		return false
+	}
+
 	return strings.Contains(failure.Error(), nilDereferenceMessage)
 }
