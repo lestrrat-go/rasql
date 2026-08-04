@@ -168,11 +168,34 @@ func TestMySQLUpsertRejectsConflictTarget(t *testing.T) {
 	users, id, email := writeTable(t)
 	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	withAssignments, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+	withoutAssignments, err := query.NewUpsert(insert, []query.Column{id}, nil)
 	require.NoError(t, err)
 
-	_, err = render.Upsert(dialect.MySQL(), statement)
-	require.ErrorContains(t, err, "explicit conflict target is not supported")
+	tests := map[string]struct {
+		statement query.Upsert
+		message   string
+	}{
+		"with assignments": {
+			statement: withAssignments,
+			message:   "render mysql: explicit conflict target is not supported: this dialect lacks dialect.CapabilityConflictTarget",
+		},
+		// MySQL rejects both the conflict target and the empty assignment list, so
+		// the error names both problems. The conflict target keeps precedence
+		// because it is unusable on MySQL for any assignment list, while zero
+		// assignments render as ON CONFLICT DO NOTHING on PostgreSQL and SQLite.
+		"without assignments": {
+			statement: withoutAssignments,
+			message:   "render mysql: explicit conflict target is not supported: this dialect lacks dialect.CapabilityConflictTarget; upsert without assignments is not supported",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := render.Upsert(dialect.MySQL(), test.statement)
+			require.EqualError(t, err, test.message)
+		})
+	}
 }
 
 func TestSQLiteUpsertExecutes(t *testing.T) {
