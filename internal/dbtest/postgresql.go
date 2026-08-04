@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -68,7 +69,7 @@ func resolvePostgreSQLConfig(t *testing.T) *pgx.ConnConfig {
 		// set it, not the absence of one. See the package doc.
 		t.Fatalf("%s is set to a value pgx could not parse: %v", postgresEnvVar, err)
 	}
-	if reason := unusablePostgreSQLTarget(config); reason != "" {
+	if reason := unusablePostgreSQLTarget(trimmed, config); reason != "" {
 		// Same reasoning as the parse-error branch above: a DSN that
 		// parses but does not itself pin down where it connects is still
 		// a wrong answer, not an absent one, once RASQL_TEST_POSTGRES_DSN
@@ -82,8 +83,73 @@ func resolvePostgreSQLConfig(t *testing.T) *pgx.ConnConfig {
 	return config
 }
 
-// unusablePostgreSQLTarget reports why config -- parsed from a
-// caller-supplied, non-blank DSN -- must not be treated as usable, or ""
+// libpqEnvVars lists every environment variable pgconn's parseEnvSettings
+// reads (pgconn/config.go's nameMap). It must stay in sync with that list;
+// pgx exposes no way to ask it for the list itself, and no way to make
+// ParseConfig ignore it either -- see parseWithoutLibpqEnv.
+var libpqEnvVars = []string{
+	"PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD", "PGPASSFILE",
+	"PGAPPNAME", "PGCONNECT_TIMEOUT", "PGSSLMODE", "PGSSLKEY", "PGSSLCERT",
+	"PGSSLSNI", "PGSSLROOTCERT", "PGSSLPASSWORD", "PGSSLNEGOTIATION",
+	"PGTARGETSESSIONATTRS", "PGSERVICE", "PGSERVICEFILE", "PGTZ", "PGOPTIONS",
+	"PGMINPROTOCOLVERSION", "PGMAXPROTOCOLVERSION", "PGCHANNELBINDING",
+	"PGREQUIREAUTH",
+}
+
+// pgEnvMu serializes parseWithoutLibpqEnv calls against each other, since
+// each one briefly mutates process-wide environment variables. See
+// parseWithoutLibpqEnv for why that mutation is safe despite being
+// process-wide.
+var pgEnvMu sync.Mutex
+
+// parseWithoutLibpqEnv parses dsn the same way pgx.ParseConfig does, except
+// with every variable in libpqEnvVars hidden from the parser, so the result
+// reflects only what dsn's own text supplies (plus pgx's built-in
+// defaults) and never anything the ambient environment would have
+// contributed.
+//
+// pgconn's parseEnvSettings reads PG* variables with a direct os.Getenv
+// call (see pgconn/config.go), and ParseConfigWithOptions's
+// ParseConfigOptions has no hook to substitute a different environment
+// lookup, so there is no way to ask pgx to ignore the environment other
+// than actually hiding it: this function unsets every name in
+// libpqEnvVars for the duration of the call and restores the previous
+// values (present or absent) before returning, even on panic.
+//
+// That is a process-wide mutation, which a concurrent t.Parallel test could
+// in principle observe. It is safe here for two reasons: pgEnvMu
+// serializes every call this package makes into this function, so no two
+// invocations from this package ever overlap, and no test in this
+// repository's dbtest package (nor its one caller,
+// database_integration_test.go) calls t.Parallel -- grep confirms it -- so
+// nothing else running in the same test binary reads PGHOST/PGPORT/etc.
+// during the narrow window this function holds them unset.
+func parseWithoutLibpqEnv(dsn string) (*pgx.ConnConfig, error) {
+	pgEnvMu.Lock()
+	defer pgEnvMu.Unlock()
+
+	saved := make(map[string]string, len(libpqEnvVars))
+	wasSet := make(map[string]bool, len(libpqEnvVars))
+	for _, name := range libpqEnvVars {
+		if value, ok := os.LookupEnv(name); ok {
+			saved[name] = value
+			wasSet[name] = true
+			os.Unsetenv(name)
+		}
+	}
+	defer func() {
+		for _, name := range libpqEnvVars {
+			if wasSet[name] {
+				os.Setenv(name, saved[name])
+			}
+		}
+	}()
+
+	return pgx.ParseConfig(dsn)
+}
+
+// unusablePostgreSQLTarget reports why config -- parsed from
+// caller-supplied, non-blank dsn -- must not be treated as usable, or ""
 // when it is usable.
 //
 // pgconn.ParseConfig always merges the PG* libpq environment variables
@@ -91,41 +157,51 @@ func resolvePostgreSQLConfig(t *testing.T) *pgx.ConnConfig {
 // socket directory or "localhost" for the host, port 5432) underneath
 // whatever the DSN's own text supplies -- see pgconn/config.go's
 // mergeSettings(defaultSettings(), parseEnvSettings(), connStringSettings).
-// This is what let a whitespace-only DSN read a PG*-pointed target and pass
-// for a real one, the defect this rescope traces to its root: pgconn has no
-// exported way to ask "did the connection string itself supply this field",
-// so this function instead compares config's Host, Port, and Database
-// against what pgx.ParseConfig("") alone would produce in the exact same
-// process environment. A field equal to that baseline could not have come
-// from the DSN text -- there is nothing else it could have come from except
-// the environment or a hardcoded default -- so it is rejected.
+// An earlier version of this function tried to detect that by comparing
+// config's Host, Port, and Database against what pgx.ParseConfig("") alone
+// would produce -- but that baseline is unsound: a DSN that explicitly
+// names the default port (5432, overwhelmingly the common case) parses
+// identically to one that omitted it, so the comparison could not tell
+// "explicitly 5432" from "silently defaulted to 5432" and rejected almost
+// every real-world DSN, including CI's own.
 //
-// This can flag a small number of legitimate DSNs that happen to spell out
-// the same value the baseline would already produce (host "localhost" set
-// explicitly on a machine with no Unix socket directory present, for
-// instance) as unusable. That false positive is accepted deliberately, the
-// same bias classifyPortCollision documents in port_collision.go: when in
-// doubt, stay narrow and conservative rather than accept a DSN whose real
-// target this function cannot prove came from the DSN itself.
-func unusablePostgreSQLTarget(config *pgx.ConnConfig) string {
-	baseline, err := pgx.ParseConfig("")
+// This function instead parses dsn a second time with libpqEnvVars hidden
+// from the parser (see parseWithoutLibpqEnv) and compares that result
+// against config, which was parsed in the ambient environment. If the two
+// disagree, some field's value depended on what PG* variables happened to
+// be set, so dsn does not by itself determine the target and is rejected.
+// If they agree, dsn fully determines the target regardless of whether
+// that target happens to equal a built-in default -- an explicit port 5432
+// is accepted precisely because it parses to 5432 whether or not PG* is
+// visible, which is what makes it deterministic rather than
+// environment-derived. The hazard being closed is silent environment
+// substitution, not the use of a documented default.
+//
+// An empty database is checked separately, up front: with no PGDATABASE
+// set anywhere, both the ambient and the isolated parse agree on "", so the
+// two-parse comparison alone would not catch it, yet an empty database is
+// never a usable target.
+func unusablePostgreSQLTarget(dsn string, config *pgx.ConnConfig) string {
+	if config.Database == "" {
+		return "it does not specify a database"
+	}
+
+	isolated, err := parseWithoutLibpqEnv(dsn)
 	if err != nil {
-		// ParseConfig("") failing is a pgx/environment problem this
+		// dsn already parsed once to produce config, so a second parse of
+		// the same text failing points at a pgx/environment problem this
 		// package cannot repair by itself; say so rather than silently
-		// treating config as usable because the baseline could not be
-		// computed.
-		return fmt.Sprintf("a baseline for comparison could not be established: %v", err)
+		// treating config as usable because the comparison could not be
+		// made.
+		return fmt.Sprintf("a comparison parse with PG* environment variables hidden failed: %v", err)
 	}
 	switch {
-	case config.Host == baseline.Host:
-		return fmt.Sprintf("its host %q is indistinguishable from what PG* environment variables or pgx's built-in default would produce without it", config.Host)
-	case config.Port == baseline.Port:
-		return fmt.Sprintf("its port %d is indistinguishable from what PG* environment variables or pgx's built-in default would produce without it", config.Port)
-	case config.Database == baseline.Database:
-		if config.Database == "" {
-			return "it does not specify a database"
-		}
-		return fmt.Sprintf("its database %q is indistinguishable from what PG* environment variables would produce without it", config.Database)
+	case config.Host != isolated.Host:
+		return fmt.Sprintf("its host %q is indistinguishable from what PG* environment variables would supply in its place (hiding them parses it as %q instead)", config.Host, isolated.Host)
+	case config.Port != isolated.Port:
+		return fmt.Sprintf("its port %d is indistinguishable from what PG* environment variables would supply in its place (hiding them parses it as %d instead)", config.Port, isolated.Port)
+	case config.Database != isolated.Database:
+		return fmt.Sprintf("its database %q is indistinguishable from what PG* environment variables would supply in its place (hiding them parses it as %q instead)", config.Database, isolated.Database)
 	default:
 		return ""
 	}

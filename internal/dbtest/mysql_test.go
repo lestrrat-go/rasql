@@ -47,3 +47,21 @@ func TestUnusableMySQLTarget(t *testing.T) {
 		}
 	})
 }
+
+// TestCIMySQLDSNIsUsable exercises unusableMySQLTarget against the exact
+// literal DSN string CI sets RASQL_TEST_MYSQL_DSN to (see
+// .github/workflows/ci.yml), asserting it is usable. It needs no database
+// connection, only the validator; see TestCIPostgresDSNIsUsable in
+// postgresql_test.go for why that gap -- a validator only ever exercised
+// when a live DSN happens to be set -- is exactly what let a regression in
+// this package reach CI unnoticed.
+func TestCIMySQLDSNIsUsable(t *testing.T) {
+	const dsn = "rasql:rasql@tcp(127.0.0.1:3306)/rasql?parseTime=true"
+	config, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("mysql.ParseDSN(%q): %v", dsn, err)
+	}
+	if reason := unusableMySQLTarget(config); reason != "" {
+		t.Fatalf("unusableMySQLTarget(%q) = %q, want \"\": this is CI's own mysql DSN and must be usable", dsn, reason)
+	}
+}
