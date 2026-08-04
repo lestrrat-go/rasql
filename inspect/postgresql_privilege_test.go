@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -15,7 +14,8 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // These two tests prove the premise behind inspect.go's pg_catalog
@@ -97,6 +97,18 @@ func TestPostgreSQLInspectorReadsPrimaryKeyThroughTableLevelSelect(t *testing.T)
 	// from its privilege list, so this plain read-only role sees zero
 	// primary-key rows through information_schema even though it can read
 	// every column.
+	//
+	// The zero-rows assertion alone cannot tell "the privilege filter hid
+	// the primary key" apart from "this connection reached the wrong or an
+	// empty database" -- both produce zero rows. The column-visibility
+	// check below is a positive control: it must see both columns of this
+	// specific table, which only happens if the connection landed on the
+	// intended database and the table exists there. Zero PRIMARY KEY rows
+	// alongside two visible columns is the actual signature of the
+	// privilege gap under test.
+	visibleColumns := countRows(t, ctx, restricted, fmt.Sprintf(`SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '%s'`, tableName))
+	require.Equal(t, 2, visibleColumns, "the role should see both columns of the table it was granted table-level SELECT on, confirming the connection reached the intended database and table")
+
 	pkRows := countRows(t, ctx, restricted, fmt.Sprintf(`SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema = current_schema() AND table_name = '%s' AND constraint_type = 'PRIMARY KEY'`, tableName))
 	require.Equal(t, 0, pkRows, "information_schema.table_constraints should expose no PRIMARY KEY row to a plain SELECT-only role")
 
@@ -151,13 +163,23 @@ func dropRestrictedRole(t *testing.T, ctx context.Context, admin *sql.DB, roleNa
 
 // openAsRole connects to the same server dbtest.PostgreSQLDB used, but
 // authenticated as roleName instead of the admin credentials.
+//
+// The DSN dbtest hands back can be a keyword/value string
+// ("host=... port=... dbname=..."), not just a URL, so this cannot go
+// through net/url: url.Parse followed by re-serializing with a userinfo set
+// turns spaces in a keyword/value DSN into "%20" inside a bare
+// "//user:pass@..." authority, which pgx.ParseConfig happily accepts and
+// resolves to an unrelated connection (a Unix socket, no database, the OS
+// user) instead of erroring out. Parsing with pgx.ParseConfig first and
+// only overriding the User/Password fields on the resulting config
+// preserves every other DSN field regardless of which form was configured.
 func openAsRole(t *testing.T, roleName string) *sql.DB {
 	t.Helper()
-	dsn, err := url.Parse(dbtest.PostgreSQLDSN(t))
+	config, err := pgx.ParseConfig(dbtest.PostgreSQLDSN(t))
 	require.NoError(t, err)
-	dsn.User = url.UserPassword(roleName, roleName)
-	database, err := sql.Open("pgx", dsn.String())
-	require.NoError(t, err)
+	config.User = roleName
+	config.Password = roleName
+	database := stdlib.OpenDB(*config)
 	require.NoError(t, database.PingContext(t.Context()))
 	return database
 }

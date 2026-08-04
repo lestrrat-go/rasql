@@ -68,10 +68,23 @@ func probeCompose() (composeRunner, error) {
 	}
 
 	if legacyPath, err := exec.LookPath("docker-compose"); err == nil {
+		legacyCtx, legacyCancel := context.WithTimeout(context.Background(), probeTimeout)
+		defer legacyCancel()
+		if out, err := exec.CommandContext(legacyCtx, legacyPath, "version").CombinedOutput(); err != nil {
+			return composeRunner{}, fmt.Errorf("the `docker-compose` binary is present but does not run (ran `docker-compose version`): %s", firstLine(out))
+		}
 		return composeRunner{bin: legacyPath}, nil
 	}
 
 	return composeRunner{}, fmt.Errorf("neither `docker compose` nor a standalone `docker-compose` binary is available")
+}
+
+// displayName reports the command this runner invokes, for use in
+// diagnostic messages -- "docker compose" for the plugin, "docker-compose"
+// for the standalone binary -- so a message naming the runner never names a
+// command that was never run.
+func (r composeRunner) displayName() string {
+	return strings.Join(append([]string{filepath.Base(r.bin)}, r.args...), " ")
 }
 
 func firstLine(output []byte) string {
@@ -124,7 +137,7 @@ func ensureComposeUp(t *testing.T) {
 	defer cancel()
 	cmd := runner.command(upCtx, "-f", composePath, "up", "-d", "--wait")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("dbtest: docker compose up failed even though Docker is available: %v\n%s", err, out)
+		t.Fatalf("dbtest: %s up failed even though Docker is available: %v\n%s", runner.displayName(), err, out)
 	}
 }
 
