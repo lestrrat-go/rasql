@@ -146,6 +146,172 @@ func TestRunSchemaRejectsDuplicateTableFlag(t *testing.T) {
 	}
 }
 
+// TestRunSchemaSuccessLeavesNoTemporaryFile confirms that a successful run
+// cleans up after itself: only the input and the final output file remain
+// in the output directory, with no leftover temporary file from the
+// write-then-rename sequence.
+func TestRunSchemaSuccessLeavesNoTemporaryFile(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	input := filepath.Join(directory, "schema.json")
+	output := filepath.Join(directory, "schema.go")
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	require.NoError(t, os.WriteFile(input, data, 0o600))
+
+	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
+
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	require.ElementsMatch(t, []string{"schema.json", "schema.go"}, names)
+}
+
+// TestRunSchemaOutputDirectoryMissingReturnsError confirms that an -output
+// path inside a nonexistent directory surfaces as an error, since
+// writeGeneratedFile's os.CreateTemp call can fail before its cleanup
+// defer is registered.
+func TestRunSchemaOutputDirectoryMissingReturnsError(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	input := filepath.Join(directory, "schema.json")
+	output := filepath.Join(directory, "missing", "schema.go")
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	require.NoError(t, os.WriteFile(input, data, 0o600))
+
+	err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
+	require.Error(t, err)
+}
+
+// outputCommandFixture names one of rasqlgen's two subcommands together
+// with the -input fixture it needs, so a test that must run the same
+// -output check against both commands can do so from one table instead of
+// duplicating the test body per command. write creates whatever -input
+// fixture the command needs inside directory and returns the argument list
+// up to, but not including, -output.
+type outputCommandFixture struct {
+	name  string
+	write func(t *testing.T, directory string) []string
+}
+
+var outputCommandFixtures = []outputCommandFixture{
+	{
+		name: "schema",
+		write: func(t *testing.T, directory string) []string {
+			t.Helper()
+			input := filepath.Join(directory, "schema.json")
+			data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+			require.NoError(t, os.WriteFile(input, data, 0o600))
+			return []string{"schema", "-input", input, "-package", "generated"}
+		},
+	},
+	{
+		name: "query",
+		write: func(t *testing.T, directory string) []string {
+			t.Helper()
+			input := filepath.Join(directory, "user.sql")
+			require.NoError(t, os.WriteFile(input, []byte(`SELECT id FROM users WHERE id = {{bind "id"}}`), 0o600))
+			return []string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated"}
+		},
+	},
+}
+
+// TestRunRejectsDirectoryOutput pins the fix for a regression that symlink
+// resolution introduced into resolveOutputPath: an -output path naming an
+// existing directory must be rejected instead of being written into.
+// withResolvedParent used to rebuild the destination as
+// filepath.Join(filepath.Dir(path), filepath.Base(path)); for a path
+// ending in a separator, filepath.Dir strips the trailing slash and
+// reports the directory itself, so that join turned "outdir/" into a new
+// child file "outdir/outdir" inside it and the run reported success. A
+// path without a trailing slash already failed, but only because
+// os.Rename reported "file exists" on top of a directory, not because
+// resolveOutputPath diagnosed it directly. Both forms must now fail with
+// the same clear diagnosis, and neither must leave a file behind.
+func TestRunRejectsDirectoryOutput(t *testing.T) {
+	for _, fixture := range outputCommandFixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name          string
+				trailingSlash bool
+			}{
+				{name: "trailing slash", trailingSlash: true},
+				{name: "no trailing slash", trailingSlash: false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					directory, err := os.MkdirTemp(".", ".tmp-output-directory-*")
+					require.NoError(t, err)
+					t.Cleanup(func() {
+						require.NoError(t, os.RemoveAll(directory))
+					})
+					outputDirectory := filepath.Join(directory, "outdir")
+					require.NoError(t, os.Mkdir(outputDirectory, 0o700))
+					output := outputDirectory
+					if tc.trailingSlash {
+						output += string(filepath.Separator)
+					}
+					args := append(fixture.write(t, directory), "-output", output)
+
+					err = run(args)
+
+					require.ErrorContains(t, err, "is a directory")
+					entries, err := os.ReadDir(outputDirectory)
+					require.NoError(t, err)
+					require.Empty(t, entries, "no file must be created inside the rejected directory")
+				})
+			}
+		})
+	}
+}
+
+// TestRunAcceptsSafeOutputPaths is coverage, not discrimination: both cases
+// here already passed before the directory-rejection fix in
+// resolveOutputPath, so neither fails against the pre-fix code. They guard
+// the "-output under a missing directory reports an error" and "an
+// ordinary new -output path succeeds" behavior against a future regression
+// introduced by the new directory check itself, across both subcommands.
+func TestRunAcceptsSafeOutputPaths(t *testing.T) {
+	for _, fixture := range outputCommandFixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Run("missing output directory reports an error", func(t *testing.T) {
+				directory, err := os.MkdirTemp(".", ".tmp-output-directory-*")
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					require.NoError(t, os.RemoveAll(directory))
+				})
+				output := filepath.Join(directory, "missing", "out.go")
+				args := append(fixture.write(t, directory), "-output", output)
+
+				err = run(args)
+
+				require.Error(t, err)
+			})
+
+			t.Run("ordinary new output path succeeds", func(t *testing.T) {
+				directory, err := os.MkdirTemp(".", ".tmp-output-directory-*")
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					require.NoError(t, os.RemoveAll(directory))
+				})
+				output := filepath.Join(directory, "out.go")
+				args := append(fixture.write(t, directory), "-output", output)
+
+				require.NoError(t, run(args))
+				_, err = os.Stat(output)
+				require.NoError(t, err)
+			})
+		})
+	}
+}
+
 func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
 	require.NoError(t, err)
