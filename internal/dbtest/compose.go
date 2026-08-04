@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,18 @@ import (
 // on 127.0.0.1:5432 and mysql:8.4 on 127.0.0.1:3306, with the same
 // credentials and healthchecks.
 const composeFileName = "compose.yaml"
+
+// composeService names a single compose.yaml service ensureComposeUp brings
+// up in isolation -- never the whole file -- together with the host port it
+// publishes and the RASQL_TEST_*_DSN variable that names a database already
+// using that port. compose.yaml declares no depends_on between its
+// services and each healthcheck runs inside its own container, so bringing
+// up one by name never waits on or starts the other.
+type composeService struct {
+	name   string
+	port   string
+	envVar string
+}
 
 // probeTimeout bounds each Docker availability probe, so an unreachable
 // daemon is reported quickly instead of hanging a test run.
@@ -86,6 +99,17 @@ func probeCompose() (composeRunner, error) {
 	return composeRunner{}, composeUnavailableError(composeOut)
 }
 
+// composeSubcommandMissingPattern matches the Docker CLI's own wording when
+// it does not recognize "compose" as a subcommand at all -- neither a
+// built-in command nor an installed CLI plugin -- as opposed to a compose
+// plugin that IS recognized but fails when actually invoked (a broken shim,
+// an incompatible plugin layout, a permission error, ...). The Docker CLI's
+// wording for the former is stable across versions:
+//
+//	docker: 'compose' is not a docker command.
+//	See 'docker --help'
+var composeSubcommandMissingPattern = regexp.MustCompile(`(?i)'compose' is not a docker command`)
+
 // composeUnavailableError reports why no usable compose runner was found,
 // once `docker compose version` has failed and no standalone
 // docker-compose binary was found either. composeOut is that `docker
@@ -93,16 +117,21 @@ func probeCompose() (composeRunner, error) {
 // with CombinedOutput rather than Run precisely so there is something here
 // to quote.
 //
-// An earlier version of this package discarded that output and reported
-// "neither `docker compose` nor a standalone `docker-compose` binary is
-// available" whenever this point was reached -- which is misleading on any
-// machine with a modern Docker CLI, where a `compose` subcommand truly
-// missing from `docker` itself is rare. Reaching here far more often means
-// the plugin IS installed but does not run (a broken shim, an incompatible
-// Docker CLI plugin layout, ...), which is a different, more actionable
-// fact than absence, and composeOut's first line is that failure speaking
-// for itself.
+// composeSubcommandMissingPattern separates two different facts composeOut
+// can report. When it matches, the Docker CLI itself says "compose" is not
+// a command it knows at all, so neither runner this package can use exists,
+// and the message says so plainly. Otherwise, `docker compose` IS a
+// recognized subcommand -- the plugin is installed -- and this reached here
+// because invoking it failed for some other reason (a broken shim, an
+// incompatible plugin layout, a permission error, ...); an earlier version
+// of this package reported the "neither is available" message
+// unconditionally, which was actively wrong for exactly this second, more
+// common case, so that wording is now reserved for the case
+// composeSubcommandMissingPattern actually confirms.
 func composeUnavailableError(composeOut []byte) error {
+	if composeSubcommandMissingPattern.Match(composeOut) {
+		return fmt.Errorf("neither `docker compose` nor a standalone `docker-compose` binary is available (ran `docker compose version`): %s", firstLine(composeOut))
+	}
 	return fmt.Errorf("the `docker compose` plugin is installed but does not run (ran `docker compose version`): %s", firstLine(composeOut))
 }
 
@@ -122,8 +151,22 @@ func firstLine(output []byte) string {
 	return strings.SplitN(trimmed, "\n", 2)[0]
 }
 
-// ensureComposeUp brings up the checked-in compose file if needed, or skips
-// the calling test naming why Docker could not be used.
+// ensureComposeUp brings up service, and only service, from the checked-in
+// compose file if needed, or skips the calling test naming why Docker could
+// not be used.
+//
+// It never brings up the whole compose file: an earlier version passed no
+// service name to `docker compose up`, which started both the postgres and
+// mysql services regardless of which one the caller actually needed, so a
+// port collision on the OTHER service -- one the caller never asked for --
+// skipped the caller's own test, naming the wrong RASQL_TEST_*_DSN
+// variable and the wrong port. Naming service here, and probing only its
+// own published port on a collision, keeps a PostgreSQL caller's skip
+// decision independent of whatever is or isn't running on MySQL's port, and
+// vice versa. This works safely against compose.yaml as written because it
+// declares no depends_on between its two services and each healthcheck
+// runs inside its own container, so `--wait` on one never waits on the
+// other.
 //
 // Skip vs. fail here is deliberate; see the package doc for the reasoning.
 // probeCompose failing skips: it is an environment fact, not something the
@@ -132,13 +175,13 @@ func firstLine(output []byte) string {
 // t.Fatalf instead, because that means the compose file or an image
 // reference is broken -- except when the failure is a host port already
 // being in use, which is neither of those; see classifyPortCollision and
-// findConflictingPort in port_collision.go.
-func ensureComposeUp(t *testing.T) {
+// findConflictingPortAmong in port_collision.go.
+func ensureComposeUp(t *testing.T, service composeService) {
 	t.Helper()
 
 	runner, err := probeCompose()
 	if err != nil {
-		t.Skipf("skipping live database test: %s; set RASQL_TEST_POSTGRES_DSN/RASQL_TEST_MYSQL_DSN to point at a running database, or start one locally with `docker compose up -d --wait` (uses %s)", err, composeFileName)
+		t.Skipf("skipping live database test: %s; set %s to point at a running database, or start one locally with `docker compose up -d --wait %s` (uses %s)", err, service.envVar, service.name, composeFileName)
 		return
 	}
 
@@ -164,23 +207,24 @@ func ensureComposeUp(t *testing.T) {
 
 	upCtx, cancel := context.WithTimeout(context.Background(), bringUpTimeout)
 	defer cancel()
-	cmd := runner.command(upCtx, "-f", composePath, "up", "-d", "--wait")
+	cmd := runner.command(upCtx, "-f", composePath, "up", "-d", "--wait", service.name)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return
 	}
 	// classifyPortCollision runs first and decides skip vs. fail entirely
 	// from Docker's own wording; only once it has already said this
-	// failure IS a port collision does findConflictingPort run. That
-	// order matters: findConflictingPort binds real sockets, and if it
-	// ran before classification it could turn some other, unrelated
-	// bring-up failure into a skip just because a port happened to be
+	// failure IS a port collision does findConflictingPortAmong run. That
+	// order matters: findConflictingPortAmong binds a real socket, and if
+	// it ran before classification it could turn some other, unrelated
+	// bring-up failure into a skip just because the port happened to be
 	// free or busy for reasons that have nothing to do with why `docker
 	// compose up` actually failed. Classification alone gates skip vs.
-	// fail; the probe only ever changes which port a skip names.
+	// fail; the probe only ever confirms whether service's own port is the
+	// one actually held.
 	if classifyPortCollision(string(out)) {
-		port, envVar := findConflictingPort()
-		t.Skipf("skipping live database test: %s", bringUpFailureMessage(port, envVar))
+		port, _ := findConflictingPortAmong([]composePublishedPort{{port: service.port, envVar: service.envVar}})
+		t.Skipf("skipping live database test: %s", bringUpFailureMessage(service, port))
 		return
 	}
 	t.Fatalf("dbtest: %s up failed even though Docker is available: %v\n%s", runner.displayName(), err, out)

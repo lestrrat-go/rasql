@@ -67,10 +67,10 @@ func TestClassifyPortCollision(t *testing.T) {
 			// already in use" or the userland-proxy's EADDRINUSE
 			// wording), which used to make a real collision falsely
 			// report "the port could not be determined". Classification
-			// alone is what this test proves; findConflictingPort (see
-			// TestFindConflictingPortAmong) is what actually determines
-			// the port now, and it does not depend on this wording at
-			// all.
+			// alone is what this test proves; findConflictingPortAmong
+			// (see TestFindConflictingPortAmong) is what actually
+			// determines the port now, and it does not depend on this
+			// wording at all.
 			name: "docker desktop for windows wrapping its own WSA bind error",
 			output: "Error response from daemon: Ports are not available: exposing port TCP " +
 				"0.0.0.0:5432 -> 0.0.0.0:0: listen tcp 0.0.0.0:5432: bind: Only one usage of each " +
@@ -201,21 +201,69 @@ func TestFindConflictingPortAmong(t *testing.T) {
 	})
 }
 
+// TestFindConflictingPortAmongIgnoresTheOtherServicesPort proves the
+// scoping ensureComposeUp relies on: probing only the single service it
+// actually brought up, even while the OTHER database's port is genuinely
+// held by something else, must not report a conflict. An earlier version
+// of this package always probed both compose.yaml ports together, so a
+// MySQL caller's port collision (3306 free, 5432 held by something
+// unrelated) would have been reported as a PostgreSQL-port conflict and
+// skipped the MySQL caller's test while naming the wrong DSN variable.
+func TestFindConflictingPortAmongIgnoresTheOtherServicesPort(t *testing.T) {
+	// heldPort stands in for the OTHER database's port -- held by
+	// something unrelated, e.g. the PostgreSQL port when the caller only
+	// asked for MySQL -- and must never be probed at all.
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind an ephemeral port to hold open: %v", err)
+	}
+	defer held.Close()
+
+	// requestedPort stands in for the service the caller actually asked
+	// for, genuinely free.
+	requested, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind an ephemeral port to find its number: %v", err)
+	}
+	requestedPort := requested.Addr().(*net.TCPAddr).Port
+	if err := requested.Close(); err != nil {
+		t.Fatalf("release the requested port before probing: %v", err)
+	}
+
+	// Only the requested service's own port is ever passed to
+	// findConflictingPortAmong -- see ensureComposeUp in compose.go -- so
+	// heldPort, standing in for the other database's port, never appears
+	// in the candidate list at all.
+	candidates := []composePublishedPort{{port: strconv.Itoa(requestedPort), envVar: mysqlEnvVar}}
+	port, envVar := findConflictingPortAmong(candidates)
+	if port != "" || envVar != "" {
+		t.Fatalf("findConflictingPortAmong(%v) = (%q, %q), want (\"\", \"\"): the requested port is genuinely free", candidates, port, envVar)
+	}
+}
+
 // TestBringUpFailureMessage pins the two skip-message shapes: a determined
-// port names both the port and its env var, and an undetermined port says
-// so truthfully instead of guessing.
+// port names both the port and the requested service's own env var, and an
+// undetermined port says so truthfully instead of guessing -- always
+// naming only the service actually being brought up, never the other
+// database's env var.
 func TestBringUpFailureMessage(t *testing.T) {
-	t.Run("determined port names the port and env var", func(t *testing.T) {
-		message := bringUpFailureMessage("5432", postgresEnvVar)
+	t.Run("determined port names the port and the requested service's env var", func(t *testing.T) {
+		message := bringUpFailureMessage(postgresComposeService, "5432")
 		if !containsAll(message, "5432", postgresEnvVar) {
 			t.Fatalf("bringUpFailureMessage message %q does not name both the port and %s", message, postgresEnvVar)
 		}
+		if strings.Contains(message, mysqlEnvVar) {
+			t.Fatalf("bringUpFailureMessage message %q names %s, the other database's env var, for a PostgreSQL-only bring-up", message, mysqlEnvVar)
+		}
 	})
 
-	t.Run("undetermined port says so instead of guessing", func(t *testing.T) {
-		message := bringUpFailureMessage("", "")
-		if !containsAll(message, "could not be determined") {
-			t.Fatalf("bringUpFailureMessage message %q does not say the port could not be determined", message)
+	t.Run("undetermined port says so instead of guessing, still naming only the requested service", func(t *testing.T) {
+		message := bringUpFailureMessage(mysqlComposeService, "")
+		if !containsAll(message, "could not be determined", mysqlEnvVar) {
+			t.Fatalf("bringUpFailureMessage message %q does not say the port could not be determined for %s", message, mysqlEnvVar)
+		}
+		if strings.Contains(message, postgresEnvVar) {
+			t.Fatalf("bringUpFailureMessage message %q names %s, the other database's env var, for a MySQL-only bring-up", message, postgresEnvVar)
 		}
 	})
 }

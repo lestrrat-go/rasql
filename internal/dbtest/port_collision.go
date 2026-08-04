@@ -143,18 +143,10 @@ type composePublishedPort struct {
 	envVar string
 }
 
-// composePublishedPorts lists the ports compose.yaml publishes, matching
-// the fixed ports documented in the package doc (5432 for PostgreSQL, 3306
-// for MySQL).
-var composePublishedPorts = []composePublishedPort{
-	{port: "5432", envVar: postgresEnvVar},
-	{port: "3306", envVar: mysqlEnvVar},
-}
-
-// findConflictingPort determines which port in candidates is already bound
-// by attempting to bind each one directly -- with the same address family
-// and wildcard address Docker itself binds ("0.0.0.0:<port>", per the
-// vendor wording collected in portCollisionPatterns) -- rather than
+// findConflictingPortAmong determines which port in candidates is already
+// bound by attempting to bind each one directly -- with the same address
+// family and wildcard address Docker itself binds ("0.0.0.0:<port>", per
+// the vendor wording collected in portCollisionPatterns) -- rather than
 // extracting a number from Docker's failure text. A bind that fails is
 // treated as that port already being held by something else; the first
 // such port found is returned. Docker's own bring-up attempt has already
@@ -169,20 +161,20 @@ var composePublishedPorts = []composePublishedPort{
 // there, regardless of whether that has anything to do with the compose
 // failure under investigation.
 //
+// candidates holds a single entry in production use: ensureComposeUp brings
+// up one compose.yaml service at a time (see composeService) and probes
+// only that service's own published port, never the other database's, so a
+// collision on a port the caller never asked for cannot skip the caller's
+// own test. The signature still takes a slice so a test can supply ports it
+// controls (an ephemeral port it is deliberately holding open, or one it
+// knows is free) instead of the real 5432/3306 compose.yaml publishes,
+// which may or may not be free on the machine running the test.
+//
 // port is "" when none of candidates could be bound to determine a
 // conflict -- e.g. the collision was real but resolved between Docker's
 // attempt and this probe, or Docker's own wording matched a collision
 // pattern for a port this compose file does not publish. The caller must
 // not guess at a port in that case; see bringUpFailureMessage.
-func findConflictingPort() (string, string) {
-	return findConflictingPortAmong(composePublishedPorts)
-}
-
-// findConflictingPortAmong is findConflictingPort's logic over an explicit
-// candidate list, split out so a test can supply ports it controls (an
-// ephemeral port it is deliberately holding open, or one it knows is free)
-// instead of the real 5432/3306 compose.yaml publishes, which may or may
-// not be free on the machine running the test.
 func findConflictingPortAmong(candidates []composePublishedPort) (string, string) {
 	for _, candidate := range candidates {
 		listener, err := net.Listen("tcp", "0.0.0.0:"+candidate.port)
@@ -196,18 +188,21 @@ func findConflictingPortAmong(candidates []composePublishedPort) (string, string
 
 // bringUpFailureMessage builds the skip diagnostic for a bring-up failure
 // classifyPortCollision has already identified as a port collision, once
-// findConflictingPort has run. port/envVar being "" means the probe could
-// not determine which port was the problem, which is reported truthfully
-// rather than guessed at.
-func bringUpFailureMessage(port, envVar string) string {
+// findConflictingPortAmong has run for the single service ensureComposeUp
+// was bringing up. It always names that service's own RASQL_TEST_*_DSN
+// variable -- never the other database's -- since ensureComposeUp only ever
+// brings up one service at a time. port being "" means the probe could not
+// determine that service's port was actually the problem, which is
+// reported truthfully rather than guessed at.
+func bringUpFailureMessage(service composeService, port string) string {
 	if port == "" {
 		return fmt.Sprintf(
-			"a host port docker compose wanted appears to already be in use, but the port could not be determined; set %s or %s to use the database you already have running instead",
-			postgresEnvVar, mysqlEnvVar,
+			"a host port docker compose wanted for the %s service appears to already be in use, but the port could not be determined; set %s to use the database you already have running instead",
+			service.name, service.envVar,
 		)
 	}
 	return fmt.Sprintf(
 		"host port %s is already in use; set %s to use the database you already have running instead of bringing up compose",
-		port, envVar,
+		port, service.envVar,
 	)
 }

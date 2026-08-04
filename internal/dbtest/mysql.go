@@ -3,7 +3,9 @@
 package dbtest
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -11,20 +13,48 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-// MySQLConfig returns a parsed, validated MySQL connection configuration
-// for a live database, resolved as described in the package doc. It skips
-// the calling test rather than returning an error when no DSN or usable
-// Docker fallback is available.
+// mysqlAccessDenied and mysqlSpecificAccessDenied are the go-sql-driver/mysql
+// error numbers MySQL returns when the connected user lacks CREATE
+// privilege: 1044 (ER_DBACCESS_DENIED_ERROR, "Access denied for user ... to
+// database ...", raised for a specific schema) and 1227
+// (ER_SPECIFIC_ACCESS_DENIED_ERROR, "Access denied; you need ... privilege
+// ... for this operation", raised when no schema-specific privilege applies
+// at all). Checked against mysql.MySQLError.Number -- a stable, documented
+// value the driver already parses out of the server's response -- rather
+// than matched against the error's free-text message.
+const (
+	mysqlAccessDenied         = 1044
+	mysqlSpecificAccessDenied = 1227
+)
+
+// mysqlComposeService is the compose.yaml service MySQLConfig brings up
+// when no DSN is set; see ensureComposeUp in compose.go.
+var mysqlComposeService = composeService{name: "mysql", port: "3306", envVar: mysqlEnvVar}
+
+var mysqlConfigCache perTestCache[*mysql.Config]
+
+// MySQLConfig returns a parsed MySQL connection configuration for a fresh,
+// per-run database (a schema, in MySQL terms) created on a live server,
+// resolved as described in the package doc. It skips the calling test
+// rather than returning an error when no DSN or usable Docker fallback is
+// available.
 //
 // Like PostgreSQLConfig, it returns the driver's own *mysql.Config rather
 // than a DSN string, so a caller needing different credentials modifies the
 // parsed struct instead of rebuilding and reparsing a string. See
-// MySQLConfig's PostgreSQL sibling for the round-trip bug that guards
-// against; nothing in this repository currently rebuilds a MySQL DSN, but
-// returning the parsed form keeps that true rather than merely accidental.
+// PostgreSQLConfig for the round-trip bug that guards against; nothing in
+// this repository currently rebuilds a MySQL DSN, but returning the parsed
+// form keeps that true rather than merely accidental.
+//
+// Calling this more than once for the same *testing.T (directly, or via
+// MySQLDB) returns configuration for the SAME fresh database every time,
+// rather than creating a second one; see perTestCache.
 func MySQLConfig(t *testing.T) *mysql.Config {
 	t.Helper()
-	return resolveMySQLConfig(t)
+	return mysqlConfigCache.resolve(t, func() *mysql.Config {
+		server := resolveMySQLServerConfig(t)
+		return createFreshMySQLDatabase(t, server)
+	})
 }
 
 // MySQLDB opens a live MySQL connection via MySQLConfig, registers
@@ -32,14 +62,27 @@ func MySQLConfig(t *testing.T) *mysql.Config {
 func MySQLDB(t *testing.T) *sql.DB {
 	t.Helper()
 	config := MySQLConfig(t)
+	return openAndPing(t, mysqlOpenDB(t, config))
+}
+
+// mysqlOpenDB builds a *sql.DB from config through the driver's own
+// connector, never through sql.Open(driverName, dsnString), so nothing
+// rebuilds or reparses a DSN string.
+func mysqlOpenDB(t *testing.T, config *mysql.Config) *sql.DB {
+	t.Helper()
 	connector, err := mysql.NewConnector(config)
 	if err != nil {
 		t.Fatalf("dbtest: build mysql connector: %v", err)
 	}
-	return openAndPing(t, sql.OpenDB(connector))
+	return sql.OpenDB(connector)
 }
 
-func resolveMySQLConfig(t *testing.T) *mysql.Config {
+// resolveMySQLServerConfig resolves a MySQL connection configuration the
+// way the package doc describes -- a set RASQL_TEST_MYSQL_DSN parsed with
+// the mysql driver's own parser, or the Docker compose fallback -- without
+// yet creating this run's own fresh database. createFreshMySQLDatabase does
+// that next; see MySQLConfig.
+func resolveMySQLServerConfig(t *testing.T) *mysql.Config {
 	t.Helper()
 	value, set := os.LookupEnv(mysqlEnvVar)
 	trimmed, useValue, shouldLog := dsnDecision(value, set)
@@ -47,9 +90,9 @@ func resolveMySQLConfig(t *testing.T) *mysql.Config {
 		if shouldLog {
 			blankDiagnostic(t, mysqlEnvVar)
 		}
-		ensureComposeUp(t)
+		ensureComposeUp(t, mysqlComposeService)
 		// mysqlComposeDSN is this package's own constant, not user input;
-		// see the identical comment in resolvePostgreSQLConfig.
+		// see the identical comment in resolvePostgreSQLServerConfig.
 		config, err := mysql.ParseDSN(mysqlComposeDSN)
 		if err != nil {
 			t.Fatalf("dbtest: parse mysqlComposeDSN: %v", err)
@@ -59,121 +102,103 @@ func resolveMySQLConfig(t *testing.T) *mysql.Config {
 
 	config, err := mysql.ParseDSN(trimmed)
 	if err != nil {
-		// Same reasoning as resolvePostgreSQLConfig's identical branch: a
-		// set-but-unparseable DSN fails rather than falls through.
+		// Same reasoning as resolvePostgreSQLServerConfig's identical
+		// branch: a set-but-unparseable DSN fails rather than falls
+		// through.
 		t.Fatalf("%s is set to a value the mysql driver could not parse: %v", mysqlEnvVar, err)
-	}
-	if reason := unusableMySQLTarget(trimmed, config); reason != "" {
-		t.Fatalf("%s is set but %s; a set DSN must specify its own network address and database in its own text rather than rely on the mysql driver's built-in default", mysqlEnvVar, reason)
 	}
 	return config
 }
 
-// unusableMySQLTarget reports why dsn -- caller-supplied, non-blank DSN
-// text that has already parsed successfully into config -- must not be
-// treated as usable, or "" when it is usable.
+// createFreshMySQLDatabase creates a database (a schema, in MySQL terms)
+// named uniquely for this run on the server server describes, registers a
+// t.Cleanup to drop it, and returns a copy of server pointed at the new
+// database -- the configuration every live MySQL connection for this test
+// should use.
 //
-// The go-sql-driver/mysql package has no PostgreSQL-style PG* environment
-// variable layer at all: mysql.ParseDSN and mysql.Config.normalize() read
-// no environment variables anywhere (confirmed by inspecting dsn.go and
-// config.go in the driver module; the only os.Getenv calls in the module
-// are in its own tests), so a MySQL DSN can never silently pick up an
-// unrelated target the way an under-specified PostgreSQL DSN can pick up
-// PGHOST/PGPORT/PGDATABASE. That is the core hazard this rescope closes,
-// and MySQL simply does not have it.
-//
-// What MySQL does have is a narrower, different hazard: an under-specified
-// DSN (e.g. a bare "/") still parses successfully, with config.Addr
-// defaulting to the driver's hardcoded "127.0.0.1:3306" and DBName
-// defaulting to "". An earlier version of this function reasoned that
-// there was no way for an omitted host/port to resolve anywhere other than
-// that same default address, and so declined to check Addr's provenance at
-// all -- but that reasoning was wrong: "rasql:rasql@unix()/rasql" parses
-// with an empty address inside the unix() protocol, and
-// Config.normalize() resolves that empty address to "/tmp/mysql.sock", not
-// to 127.0.0.1:3306, proving an omitted address can reach a target a
-// correct DSN never names. mysql.Config also cannot answer "did the DSN's
-// own text specify this" after the fact: ParseDSN calls normalize() before
-// returning, so an explicit "tcp(127.0.0.1:3306)" and an entirely omitted
-// address both leave identical *mysql.Config values behind.
-//
-// So, exactly as unusablePostgreSQLTarget does for PostgreSQL, this
-// function reads dsn's own text directly via mysqlAddrText -- the DSN
-// string the resolver still holds, before ParseDSN's normalization -- and
-// requires it to name its own network address, plus a port when that
-// address is (or defaults to) tcp. Database is unaffected by this hazard:
-// mysql.Config never defaults DBName to anything but "", so requiring
-// config.DBName to be non-empty, read directly off the already-parsed
-// struct, remains both meaningful and safe.
-func unusableMySQLTarget(dsn string, config *mysql.Config) string {
-	if config.DBName == "" {
-		return "it does not specify a database"
+// Unlike PostgreSQL, MySQL has no restriction on running CREATE DATABASE
+// while connected (DDL simply causes an implicit commit if a transaction
+// happens to be open; see MySQL's own manual, "Statements That Cause an
+// Implicit Commit"), and a connection needs no pre-existing database
+// selected at all to run one. So this connects through server exactly as
+// given -- its DBName may be empty -- issues CREATE DATABASE, then
+// reconnects with DBName set to the new database to confirm it before
+// handing back its configuration.
+func createFreshMySQLDatabase(t *testing.T, server *mysql.Config) *mysql.Config {
+	t.Helper()
+	name := UniqueName(t, "rasql_test")
+
+	admin := mysqlOpenDB(t, server)
+	defer admin.Close()
+	if err := admin.PingContext(t.Context()); err != nil {
+		t.Fatalf("dbtest: connect via %s to create a fresh MySQL database: %v", mysqlEnvVar, err)
 	}
-	netText, addrText := mysqlAddrText(dsn)
-	if addrText == "" {
-		return "it does not specify its own network address (host or socket path) rather than relying on the driver's built-in default"
+	if _, err := admin.ExecContext(t.Context(), mysqlCreateDatabaseStatement(name)); err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && (mysqlErr.Number == mysqlAccessDenied || mysqlErr.Number == mysqlSpecificAccessDenied) {
+			t.Fatalf("dbtest: %s's credentials cannot CREATE DATABASE; supply a DSN whose credentials can create and drop databases so the live suite can run inside its own database: %v", mysqlEnvVar, err)
+		}
+		// Any other failure -- including the name already existing, which
+		// a per-run unique name colliding would mean something is
+		// genuinely wrong worth seeing -- fails loudly rather than
+		// retrying under another name.
+		t.Fatalf("dbtest: create fresh MySQL database %q: %v", name, err)
 	}
-	if (netText == "" || netText == "tcp") && !mysqlAddrHasPort(addrText) {
-		return "it does not specify a port"
+
+	fresh := server.Clone()
+	fresh.DBName = name
+
+	verify := mysqlOpenDB(t, fresh)
+	defer verify.Close()
+	if err := verify.PingContext(t.Context()); err != nil {
+		t.Fatalf("dbtest: reconnect to fresh MySQL database %q: %v", name, err)
 	}
-	return ""
+
+	t.Cleanup(func() { dropMySQLDatabase(t, server, name) })
+	return fresh
 }
 
-// mysqlAddrText mirrors go-sql-driver/mysql's own DSN scanner (dsn.go's
-// ParseDSN) far enough to recover the network protocol and address exactly
-// as they appear in dsn's own text -- i.e. cfg.Net and cfg.Addr as ParseDSN
-// computes them, before Config.normalize() runs and overwrites an empty
-// Net with "tcp" and an empty Addr with "127.0.0.1:3306". Those
-// pre-normalize values are the only place the DSN's own explicitness about
-// its address survives; see unusableMySQLTarget's comment for why the
-// already-parsed, already-normalized *mysql.Config cannot answer this.
+// dropMySQLDatabase drops the fresh database name that
+// createFreshMySQLDatabase created, connecting through server -- the same
+// configuration used to create it, needing no database selected.
 //
-// dsn is only ever passed here after mysql.ParseDSN has already accepted
-// it (see resolveMySQLConfig), so it is known to contain the
-// dbname-separating slash ParseDSN itself requires; this walks the same
-// right-to-left scan ParseDSN uses -- last '/' before the database name,
-// then last '@' before that -- specifically because a naive left-to-right
-// split would misparse a password containing '@' or '/' as if it were
-// part of the network address or an extra path segment.
-func mysqlAddrText(dsn string) (netText, addrText string) {
-	slash := strings.LastIndexByte(dsn, '/')
-	if slash <= 0 {
-		return "", ""
-	}
-	left := dsn[:slash]
+// This runs as a t.Cleanup, registered before every connection this
+// package hands out against name (MySQLDB's own connection, and any copy
+// callers make from MySQLConfig's result); Go runs t.Cleanup callbacks in
+// last-registered-first-run order, so those connections' own
+// Cleanup-registered (or defer-registered, which always runs before
+// Cleanup) closes happen before this one runs.
+func dropMySQLDatabase(t *testing.T, server *mysql.Config, name string) {
+	t.Helper()
+	// t.Context() is already canceled by the time a t.Cleanup function
+	// runs, so this uses its own bounded context rather than t.Context().
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
 
-	// [user[:password]@][net[(addr)]] -- find the last '@' in left, since
-	// the password may itself contain one; at == -1 (no '@' present) is
-	// handled the same way ParseDSN handles it, by treating the whole of
-	// left as the net[(addr)] segment.
-	at := strings.LastIndexByte(left, '@')
-	netAddr := left[at+1:]
-
-	open := strings.IndexByte(netAddr, '(')
-	if open < 0 {
-		return netAddr, ""
+	admin := mysqlOpenDB(t, server)
+	defer admin.Close()
+	if _, err := admin.ExecContext(ctx, mysqlDropDatabaseStatement(name)); err != nil {
+		t.Errorf("dbtest: drop fresh MySQL database %q: %v", name, err)
 	}
-	if len(netAddr) == 0 || netAddr[len(netAddr)-1] != ')' {
-		// ParseDSN requires the character immediately before the
-		// dbname-separating slash to be ')' whenever '(' is present, or
-		// it rejects the DSN outright; since dsn has already been
-		// accepted by ParseDSN, this branch should be unreachable, but
-		// it fails safe (an empty address is treated as unspecified)
-		// rather than panicking on a slice bound if that invariant is
-		// ever violated.
-		return netAddr[:open], ""
-	}
-	return netAddr[:open], netAddr[open+1 : len(netAddr)-1]
 }
 
-// mysqlAddrHasPort reports whether addrText -- a tcp network address as it
-// appears literally inside a DSN's protocol(...) segment -- names its own
-// port, treating a bracketed IPv6 literal ("[::1]:3306") the way
-// net.SplitHostPort does rather than naively looking for the first colon,
-// which would misread an IPv6 literal's own colons as a port separator.
-func mysqlAddrHasPort(addrText string) bool {
-	if strings.HasPrefix(addrText, "[") {
-		return strings.Contains(addrText, "]:")
-	}
-	return strings.Contains(addrText, ":")
+// mysqlCreateDatabaseStatement and mysqlDropDatabaseStatement build the
+// exact SQL text createFreshMySQLDatabase and dropMySQLDatabase issue for
+// name, split out as pure functions so a test can pin that both target
+// exactly the same, correctly quoted identifier without needing a live
+// server to connect to.
+func mysqlCreateDatabaseStatement(name string) string {
+	return "CREATE DATABASE " + mysqlQuoteIdentifier(name)
+}
+
+func mysqlDropDatabaseStatement(name string) string {
+	return "DROP DATABASE " + mysqlQuoteIdentifier(name)
+}
+
+// mysqlQuoteIdentifier backtick-quotes name for use as a MySQL identifier,
+// doubling any backtick name itself contains the way MySQL's own identifier
+// quoting requires. UniqueName never produces a backtick, but this stays
+// correct even if that were not so, rather than relying on it.
+func mysqlQuoteIdentifier(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }

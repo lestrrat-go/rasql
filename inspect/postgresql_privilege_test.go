@@ -6,9 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
@@ -40,8 +38,8 @@ func TestPostgreSQLInspectorRejectsPartialColumnPrivilege(t *testing.T) {
 	ctx := t.Context()
 	admin := dbtest.PostgreSQLDB(t)
 
-	tableName := uniquePostgreSQLName(t, "rasql_priv_partial")
-	roleName := uniquePostgreSQLName(t, "rasql_priv_partial_role")
+	tableName := dbtest.UniqueName(t, "rasql_priv_partial")
+	roleName := dbtest.UniqueName(t, "rasql_priv_partial_role")
 
 	mustExec(t, ctx, admin, fmt.Sprintf(`CREATE TABLE %s (id integer PRIMARY KEY, email text NOT NULL, ssn text NOT NULL)`, tableName))
 	defer mustExec(t, ctx, admin, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tableName))
@@ -80,8 +78,8 @@ func TestPostgreSQLInspectorReadsPrimaryKeyThroughTableLevelSelect(t *testing.T)
 	ctx := t.Context()
 	admin := dbtest.PostgreSQLDB(t)
 
-	tableName := uniquePostgreSQLName(t, "rasql_priv_pk")
-	roleName := uniquePostgreSQLName(t, "rasql_priv_pk_role")
+	tableName := dbtest.UniqueName(t, "rasql_priv_pk")
+	roleName := dbtest.UniqueName(t, "rasql_priv_pk_role")
 
 	mustExec(t, ctx, admin, fmt.Sprintf(`CREATE TABLE %s (id integer PRIMARY KEY, email text NOT NULL)`, tableName))
 	defer mustExec(t, ctx, admin, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tableName))
@@ -122,14 +120,6 @@ func TestPostgreSQLInspectorReadsPrimaryKeyThroughTableLevelSelect(t *testing.T)
 		{Name: "id", Type: schema.TypeInteger},
 		{Name: "email", Type: schema.TypeText},
 	}, table.Columns)
-}
-
-// uniquePostgreSQLName generates a name unlikely to collide with another
-// concurrent test run, since roles are cluster-wide rather than per-database
-// and would otherwise collide across runs if ever leaked.
-func uniquePostgreSQLName(t *testing.T, prefix string) string {
-	t.Helper()
-	return fmt.Sprintf("%s_%d_%d", prefix, os.Getpid(), time.Now().UnixNano())
 }
 
 func mustExec(t *testing.T, ctx context.Context, db *sql.DB, statement string) {

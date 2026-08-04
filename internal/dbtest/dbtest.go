@@ -11,19 +11,36 @@
 //     PARSED with the driver's own parser (pgx.ParseConfig for PostgreSQL,
 //     mysql.ParseDSN for MySQL) and Docker is never touched. This is CI's
 //     path (see .github/workflows/ci.yml), and it keeps that behavior
-//     exactly as it is today. The parsed configuration -- never the raw
-//     string -- is what callers receive; see PostgreSQLConfig and
-//     MySQLConfig for why.
+//     exactly as it is today.
 //  2. Otherwise, if Docker is usable, the compose file checked in at the
 //     repository root (compose.yaml) is brought up with
-//     `docker compose up -d --wait` (or the standalone `docker-compose` if
-//     the compose plugin is absent), and the DSN is derived from that
-//     file's fixed ports -- 5432 for PostgreSQL, 3306 for MySQL -- the same
-//     ports and credentials CI's DSNs already assume.
+//     `docker compose up -d --wait <service>` (or the standalone
+//     `docker-compose` if the compose plugin is absent) -- only the single
+//     service the caller needs, never both -- and the DSN is derived from
+//     that file's fixed ports -- 5432 for PostgreSQL, 3306 for MySQL -- the
+//     same ports and credentials CI's DSNs already assume.
 //  3. Otherwise the calling test is skipped, naming which of the following
 //     was detected: the docker binary missing from PATH, the daemon being
 //     unreachable (including a permission error talking to its socket), or
 //     neither `docker compose` nor `docker-compose` being available.
+//
+// Whichever of those a database resolves to -- a caller-supplied DSN or the
+// Docker fallback -- this package then creates a database (a schema, for
+// MySQL) named uniquely for this run, and hands back a configuration
+// pointed at THAT database rather than whatever the resolved DSN or compose
+// fallback itself named. Safety no longer depends on proving where a
+// supplied DSN's text points: earlier revisions of this package tried to
+// verify that from the DSN's own text alone, which required reimplementing
+// pieces of each driver's own parser this package cannot call, and an audit
+// judged that approach intractable. Instead, this package makes WHERE a set
+// DSN lands not matter, by ensuring the live suite can only touch objects
+// it created itself: its own fresh database, dropped in cleanup, plus the
+// per-run-unique tables and roles/users individual tests create directly
+// with UniqueName (see inspect/postgresql_privilege_test.go for an
+// example). A calling test must keep that property itself -- never operate
+// on an object it did not create by a name it does not control -- since a
+// per-database boundary cannot contain a cluster-wide PostgreSQL role or a
+// global MySQL user the way it contains a table.
 //
 // Unavailability and failure are different outcomes and this package treats
 // them differently. Docker being unusable is a fact about the machine, not
@@ -32,7 +49,9 @@
 // means the compose file or an image reference is broken -- something the
 // person running the suite can fix -- so that path fails the test loudly
 // instead of skipping; a skip there would hide real breakage from exactly
-// the person able to see it.
+// the person able to see it. Failing to create this package's own fresh
+// database once connected -- including a set of credentials that cannot
+// CREATE DATABASE at all -- fails loudly the same way, for the same reason.
 //
 // One bring-up failure is deliberately carved out of that loud-failure
 // rule: a host port compose wants (5432 or 3306) already being in use by
@@ -44,26 +63,8 @@
 // reading Docker's message text -- and the RASQL_TEST_*_DSN variable that
 // points at the database already running there. See classifyPortCollision
 // in port_collision.go for how a bring-up failure's output is told apart
-// from any other kind, and findConflictingPort for how the port itself is
-// determined.
-//
-// A set RASQL_TEST_*_DSN value is validated, not merely trusted: an empty
-// pgx DSN, or one missing its host, port, or database in its own text,
-// silently falls back to libpq's PG* environment variables (PGHOST,
-// PGPORT, PGDATABASE, ...), a PostgreSQL service file, or pgx's own
-// built-in defaults instead of erroring, and a machine with those set can
-// then connect to an unintended database and pass for the wrong reason.
-// The default on a developer machine is a Unix socket reached as the OS
-// user, not 127.0.0.1, so this is not a hypothetical: the live suite runs
-// CREATE TABLE, CREATE ROLE, and DROP ROLE, and a wrongly resolved target
-// is destructive. So a set-but-unusable DSN FAILS the calling test rather
-// than falling back to Docker or skipping -- see resolvePostgreSQLConfig
-// and resolveMySQLConfig for exactly what "unusable" means for each driver
-// and why failing is the right response once a value has been set. Both
-// validators judge the DSN's own text directly rather than comparing
-// parses made with and without the ambient environment visible; see
-// unusablePostgreSQLTarget's comment in postgresql.go for why that
-// approach -- this package's own earlier one -- does not work.
+// from any other kind, and findConflictingPortAmong for how the port
+// itself is determined.
 //
 // This package never tears containers down, and has no opt-in to make it
 // do so. go test ./... compiles and runs every package as a separate
@@ -88,8 +89,12 @@ package dbtest
 
 import (
 	"database/sql"
+	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -106,11 +111,19 @@ const (
 	// mysqlComposeDSN matches the "mysql" service in compose.yaml and the
 	// mysql_dsn CI sets for its MySQL matrix leg.
 	mysqlComposeDSN = "rasql:rasql@tcp(127.0.0.1:3306)/rasql?parseTime=true"
+
+	// cleanupTimeout bounds a t.Cleanup-registered database drop. It cannot
+	// use t.Context(): testing.T.Context is already canceled by the time
+	// Cleanup-registered functions run, so a drop that used it would fail
+	// immediately with a canceled-context error instead of ever reaching
+	// the server.
+	cleanupTimeout = 30 * time.Second
 )
 
-// dsnDecision is the pure decision at the heart of both resolvePostgreSQLConfig
-// and resolveMySQLConfig: given an environment variable's raw state -- its
-// value and whether it was set at all -- does resolution parse and use that
+// dsnDecision is the pure decision at the heart of both
+// resolvePostgreSQLServerConfig and resolveMySQLServerConfig: given an
+// environment variable's raw state -- its value and whether it was set at
+// all -- does resolution parse and use that
 // value, or fall through to the Docker/skip path? It returns (trimmed,
 // useValue, shouldLog): trimmed is value with leading and trailing
 // whitespace removed, and useValue reports whether the caller should parse
@@ -141,12 +154,12 @@ const (
 //     no host, port, or database in it to report as wrong. It reads the
 //     same as "not set", so it is treated the same way.
 //
-// A present and non-blank value that turns out to be unusable -- one that
-// fails to parse, or one whose host/port/database would come from
-// somewhere other than the value itself -- is a different case, handled by
-// resolvePostgreSQLConfig/resolveMySQLConfig, not by this function: that
-// value carries a specific, wrong answer, unlike a blank one, which is why
-// it fails rather than falls through. See the package doc.
+// A present and non-blank value that turns out to be unparseable is a
+// different case, handled by
+// resolvePostgreSQLServerConfig/resolveMySQLServerConfig, not by this
+// function: that value carries a specific, wrong answer, unlike a blank
+// one, which is why it fails rather than falls through. See the package
+// doc.
 func dsnDecision(value string, set bool) (string, bool, bool) {
 	trimmed := strings.TrimSpace(value)
 	if set && trimmed != "" {
@@ -181,4 +194,59 @@ func openAndPing(t *testing.T, db *sql.DB) *sql.DB {
 func blankDiagnostic(t *testing.T, envVar string) {
 	t.Helper()
 	t.Logf("%s is set to a blank value; ignoring it and falling through to Docker/skip resolution", envVar)
+}
+
+// UniqueName generates a name unlikely to collide with another concurrent
+// or prior test run, for any object a live test creates directly: this
+// package's own per-run database (see createFreshPostgreSQLDatabase and its
+// MySQL equivalent in mysql.go), or a table or role/user a calling test
+// creates itself (see inspect/postgresql_privilege_test.go). PostgreSQL
+// roles and MySQL users are cluster-wide/global rather than scoped to a
+// single database, so a leaked one from a previous run could otherwise
+// collide with a fresh one this run creates; a per-database boundary alone
+// cannot contain that, which is why every live test using this package
+// must still name what it creates through this function rather than a
+// fixed literal.
+func UniqueName(t *testing.T, prefix string) string {
+	t.Helper()
+	return fmt.Sprintf("%s_%d_%d", prefix, os.Getpid(), time.Now().UnixNano())
+}
+
+// perTestCache memoizes a value per *testing.T, so a live test that
+// resolves the same live database more than once within itself (see
+// openAsRole in inspect/postgresql_privilege_test.go, which calls
+// PostgreSQLConfig again after PostgreSQLDB already created the run's fresh
+// database) reuses that same fresh database instead of creating a second,
+// unrelated one only the first caller's connections can see. The entry is
+// removed via t.Cleanup so the map cannot grow across the life of a test
+// binary.
+type perTestCache[T any] struct {
+	mu sync.Mutex
+	m  map[*testing.T]T
+}
+
+// resolve returns the cached value for t if resolve has already been called
+// for t, or calls create, caches its result, and returns that. create runs
+// while the cache's lock is held, so two resolve calls for the same t from
+// concurrent goroutines cannot both create a value; nothing in this
+// package's own callers does that today, but the lock keeps that true
+// rather than merely accidental.
+func (c *perTestCache[T]) resolve(t *testing.T, create func() T) T {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if v, ok := c.m[t]; ok {
+		return v
+	}
+	v := create()
+	if c.m == nil {
+		c.m = make(map[*testing.T]T)
+	}
+	c.m[t] = v
+	t.Cleanup(func() {
+		c.mu.Lock()
+		delete(c.m, t)
+		c.mu.Unlock()
+	})
+	return v
 }
