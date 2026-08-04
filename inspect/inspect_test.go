@@ -49,6 +49,28 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 	require.Nil(t, table.ForeignKeys)
 }
 
+func TestPostgreSQLInspectorRejectsNumericColumn(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
+			AddRow("amount", "numeric", "NO", nil))
+
+	_, err = inspector.Table(t.Context(), "payments")
+	require.ErrorContains(t, err, "cannot be represented")
+	require.ErrorContains(t, err, `"amount"`)
+}
+
 func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -544,6 +566,28 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64$`, string(source))
 	require.Contains(t, string(source), `row.Assign(src, "active", &r.Active)`)
 	require.Contains(t, string(source), `row.Assign(src, "login_attempts", &r.LoginAttempts)`)
+}
+
+func TestMySQLInspectorRejectsDecimalColumn(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	mock.ExpectQuery(columnsQuery).
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default"}).
+			AddRow("amount", "decimal(10,2)", "NO", nil))
+
+	_, err = inspector.Table(t.Context(), "payments")
+	require.ErrorContains(t, err, "cannot be represented")
+	require.ErrorContains(t, err, `"amount"`)
 }
 
 func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {

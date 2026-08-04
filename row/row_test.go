@@ -213,6 +213,30 @@ func TestAssignDecodesBoolFromAnyNonzeroInteger(t *testing.T) {
 	require.ErrorContains(t, err, `row: decode column "not_an_integer"`)
 }
 
+// TestAssignRejectsExactDecimalSourcesForFloat64 records why rasql maps NUMERIC
+// and DECIMAL columns to a rejected inspection rather than schema.TypeFloat: the
+// drivers hand back the exact decimal as a string or []byte, and a float64
+// destination accepts neither, so the generated field could never decode it.
+func TestAssignRejectsExactDecimalSourcesForFloat64(t *testing.T) {
+	t.Run("string source", func(t *testing.T) {
+		result, err := row.New([]string{"pg_numeric"}, []any{"12.50"})
+		require.NoError(t, err)
+
+		var destination float64
+		err = row.Assign(result, "pg_numeric", &destination)
+		require.ErrorContains(t, err, `row: decode column "pg_numeric": expected float64, got string`)
+	})
+
+	t.Run("byte slice source", func(t *testing.T) {
+		result, err := row.New([]string{"mysql_decimal"}, []any{[]byte("12.50")})
+		require.NoError(t, err)
+
+		var destination float64
+		err = row.Assign(result, "mysql_decimal", &destination)
+		require.ErrorContains(t, err, `row: decode column "mysql_decimal": expected float64, got []uint8`)
+	})
+}
+
 // selfDecodedUser maps its own columns and carries a tag that names a different
 // column, so a decode through the tag is distinguishable from one through the method.
 type selfDecodedUser struct {
