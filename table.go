@@ -110,22 +110,49 @@ func (t typedTable[T]) tableRow() T {
 // method: that value works, yet it has the same fields as a zero wrapper. A
 // struct can also embed two fields that satisfy Table[T], where Go promotes the
 // methods from the shallower one while an inspection of the fields sees only two
-// candidates. So the rule asks the promoted method instead: call QueryTable, and
-// treat a nil pointer dereference from that call as the missing table.
+// candidates. So the rule asks a promoted method instead of inspecting fields.
+//
+// It probes the unexported tableRow method first rather than QueryTable, because
+// tableRow cannot be intercepted: it is unexported to this package, so a type
+// defined outside this package can never declare its own tableRow, and always
+// reaches the one promoted from its embedded Table[T]. A nil pointer dereference
+// from that call proves the embedded table is missing, with no caller code
+// having run. Probing QueryTable first would not have that property: a caller
+// type can declare its own QueryTable, and a nil dereference inside that
+// caller's own method looks identical to one reached through a nil embedded
+// field, wrongly relabelling the caller's own bug as a missing table.
+//
+// When tableRow does reach a real table, the value works and the probe stops
+// there without calling QueryTable at all, so a panic from a caller's own
+// QueryTable propagates out of the entry point unchanged instead of being
+// caught by this guard.
+//
+// When tableRow nil-dereferences, the embedded table may still be genuinely
+// missing, or the value may be the self-method shape: a type that supplies its
+// own working QueryTable and Column and keeps the embedded Table[T] nil only to
+// satisfy tableRow. QueryTable is probed next to tell those apart. This still
+// cannot tell a genuinely missing table apart from a self-method table whose own
+// QueryTable happens to nil-dereference for an unrelated reason: both look like
+// a nil-dereferencing QueryTable behind a nil-dereferencing tableRow, and Go
+// gives no way to attribute a recovered nil dereference to the frame that raised
+// it. That one shape is outside what this guard can promise.
 func isNilTable[T any](table Table[T]) bool {
 	if isNil(table) {
 		return true
 	}
-	return queryTableDereferencesNil(table)
+	if !dereferencesNil(func() { table.tableRow() }) {
+		return false
+	}
+	return dereferencesNil(func() { table.QueryTable() })
 }
 
-// queryTableDereferencesNil calls table.QueryTable and reports whether that call
-// dereferenced a nil pointer, which is what reaching a Table method through a nil
-// embedded field or a nil embedded pointer does.
+// dereferencesNil calls call and reports whether that call dereferenced a nil
+// pointer, which is what reaching a Table method through a nil embedded field or
+// a nil embedded pointer does.
 //
 // Any other panic is re-panicked unchanged, so a bug inside a caller's own
-// QueryTable surfaces as itself instead of being relabelled a nil table.
-func queryTableDereferencesNil[T any](table Table[T]) bool {
+// method surfaces as itself instead of being relabelled a nil table.
+func dereferencesNil(call func()) bool {
 	dereferencedNil := false
 	func() {
 		defer func() {
@@ -138,7 +165,7 @@ func queryTableDereferencesNil[T any](table Table[T]) bool {
 			}
 			dereferencedNil = true
 		}()
-		table.QueryTable()
+		call()
 	}()
 	return dereferencedNil
 }

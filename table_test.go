@@ -1,6 +1,7 @@
 package rasql_test
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
@@ -98,6 +99,39 @@ type buggyStaffTable struct {
 
 func (t buggyStaffTable) QueryTable() query.Table {
 	panic(staffTableBug)
+}
+
+// nilDereferenceStaffTable mirrors a wrapper with a VALID embedded
+// rasql.Table[staffRow] whose own QueryTable panics with a nil pointer
+// dereference for a reason that has nothing to do with the embedded table. The
+// guard probes the unexported tableRow method first, and tableRow succeeds
+// here because the embedded table is real, so the guard must never call this
+// QueryTable itself: the panic must reach the caller unrelabelled.
+type nilDereferenceStaffTable struct {
+	rasql.Table[staffRow]
+	source *query.Table
+}
+
+func (t nilDereferenceStaffTable) QueryTable() query.Table {
+	return *t.source
+}
+
+// requirePanicsWithNilDereference runs fn and requires it to panic with the Go
+// runtime's own nil pointer dereference error, proving the panic reached the
+// caller unchanged instead of being caught and relabelled as a missing table.
+func requirePanicsWithNilDereference(t *testing.T, fn func()) {
+	t.Helper()
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		fn()
+	}()
+
+	require.NotNil(t, recovered, "expected a panic")
+	failure, ok := recovered.(runtime.Error)
+	require.Truef(t, ok, "expected a runtime.Error, got %T: %v", recovered, recovered)
+	require.Contains(t, failure.Error(), "invalid memory address or nil pointer dereference")
 }
 
 func staffDefinition() schema.Table {
@@ -445,9 +479,11 @@ func TestUsableTableIsAccepted(t *testing.T) {
 }
 
 func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
-	// The guard reads a nil pointer dereference from QueryTable as the missing
-	// table, so every other panic from an implementation must reach the caller
-	// unchanged instead of being reported as a nil table.
+	// The guard reads a nil pointer dereference from tableRow, and then from
+	// QueryTable, as signs of a missing table, so every other panic from an
+	// implementation must reach the caller unchanged instead of being reported
+	// as a nil table. This case's own QueryTable panics with a plain string, so
+	// it stays distinguishable from a nil dereference regardless of probe order.
 	buggy := buggyStaffTable{Table: nil}
 
 	require.PanicsWithValue(t, staffTableBug, func() {
@@ -458,5 +494,52 @@ func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
 	})
 	require.PanicsWithValue(t, staffTableBug, func() {
 		_, _ = rasql.SelectFrom[staffRow](clientForBuild(t), buggy).Build()
+	})
+
+	// The nil-dereference subclass needs its own coverage: a string panic and a
+	// nil-dereference panic are recovered and classified differently, so a fix
+	// that keeps the string case passing could still relabel this one. Here the
+	// embedded table is VALID, so tableRow succeeds and the guard never probes
+	// this QueryTable at all; the panic below comes straight from it.
+	table, err := rasql.NewTable[staffRow](staffDefinition())
+	require.NoError(t, err)
+	buggyNilDeref := nilDereferenceStaffTable{Table: table}
+
+	requirePanicsWithNilDereference(t, func() {
+		_, _ = rasql.As[staffRow](buggyNilDeref, "alias")
+	})
+	requirePanicsWithNilDereference(t, func() {
+		_, _ = rasql.SelectFrom[staffRow](clientForBuild(t), buggyNilDeref).Build()
+	})
+}
+
+// TestTableGuardDoesNotRelabelACallersOwnNilDereference discriminates the
+// defect a neutral audit confirmed in the QueryTable-only probe: a caller type
+// that embeds a VALID rasql.Table[T] but also declares its own QueryTable that
+// dereferences an unrelated nil pointer used to be misreported as "table must
+// not be nil" instead of letting its own panic propagate. Probing tableRow
+// first fixes this, because tableRow is unexported and a type outside this
+// package can never intercept it, so it always reaches the embedded table.
+func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
+	table, err := rasql.NewTable[staffRow](staffDefinition())
+	require.NoError(t, err)
+	buggy := nilDereferenceStaffTable{Table: table}
+
+	t.Run("SelectFrom", func(t *testing.T) {
+		requirePanicsWithNilDereference(t, func() {
+			_, _ = rasql.SelectFrom[staffRow](clientForBuild(t), buggy).Build()
+		})
+	})
+
+	t.Run("As", func(t *testing.T) {
+		requirePanicsWithNilDereference(t, func() {
+			_, _ = rasql.As[staffRow](buggy, "alias")
+		})
+	})
+
+	t.Run("DecodeFrom", func(t *testing.T) {
+		requirePanicsWithNilDereference(t, func() {
+			_, _ = rasql.DecodeFrom[staffRow, staffRow](clientForBuild(t), buggy).Build()
+		})
 	})
 }
