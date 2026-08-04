@@ -198,6 +198,86 @@ func TestMySQLUpsertRejectsConflictTarget(t *testing.T) {
 	}
 }
 
+// upsertOnlyDialect is a stub dialect.Dialect that supports upserts but neither
+// dialect.CapabilityConflictTarget nor dialect.CapabilityDefaultValuesUpsert. No
+// built-in dialect lacks both, yet dialect.Dialect is a public interface, so a
+// caller can supply one and must hear about both problems at once.
+type upsertOnlyDialect struct {
+	style dialect.UpsertStyle
+}
+
+func (upsertOnlyDialect) Name() string { return "stub" }
+
+func (upsertOnlyDialect) QuoteIdentifier(name string) (string, error) { return `"` + name + `"`, nil }
+
+func (upsertOnlyDialect) Placeholder(int) (string, error) { return "?", nil }
+
+func (upsertOnlyDialect) TypeName(schema.LogicalType) (string, error) { return "", nil }
+
+func (d upsertOnlyDialect) UpsertStyle() dialect.UpsertStyle { return d.style }
+
+func (upsertOnlyDialect) Supports(capability dialect.Capability) bool {
+	return capability&dialect.CapabilityUpsert == capability
+}
+
+func TestUpsertReportsEveryUnsupportedFeature(t *testing.T) {
+	users, id, email := writeTable(t)
+	defaultInsert, err := query.NewDefaultInsert(users)
+	require.NoError(t, err)
+	withAssignments, err := query.NewUpsert(defaultInsert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+	withoutAssignments, err := query.NewUpsert(defaultInsert, []query.Column{id}, nil)
+	require.NoError(t, err)
+	withoutTarget, err := query.NewUpsert(defaultInsert, nil, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		style     dialect.UpsertStyle
+		statement query.Upsert
+		message   string
+	}{
+		// A default-values upsert that also carries a conflict target hits two
+		// unsupported features at once, so the error names both. The conflict
+		// target keeps precedence because it is unusable on this dialect for any
+		// insert, while a default-values upsert renders on PostgreSQL and MySQL.
+		"on conflict with assignments": {
+			style:     dialect.UpsertOnConflict,
+			statement: withAssignments,
+			message:   "render stub: explicit conflict target is not supported: this dialect lacks dialect.CapabilityConflictTarget; default-values upsert is not supported",
+		},
+		"on conflict without assignments": {
+			style:     dialect.UpsertOnConflict,
+			statement: withoutAssignments,
+			message:   "render stub: explicit conflict target is not supported: this dialect lacks dialect.CapabilityConflictTarget; default-values upsert is not supported",
+		},
+		"duplicate key with assignments": {
+			style:     dialect.UpsertDuplicateKey,
+			statement: withAssignments,
+			message:   "render stub: explicit conflict target is not supported: this dialect lacks dialect.CapabilityConflictTarget; default-values upsert is not supported",
+		},
+		// The ON DUPLICATE KEY style rejects an empty assignment list too, so all
+		// three problems appear in the same message.
+		"duplicate key without assignments": {
+			style:     dialect.UpsertDuplicateKey,
+			statement: withoutAssignments,
+			message:   "render stub: explicit conflict target is not supported: this dialect lacks dialect.CapabilityConflictTarget; default-values upsert is not supported; upsert without assignments is not supported",
+		},
+		// Without a conflict target the default-values problem still reports on its
+		// own, so removing the target does not silence it.
+		"no conflict target": {
+			style:     dialect.UpsertOnConflict,
+			statement: withoutTarget,
+			message:   "render stub: default-values upsert is not supported",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := render.Upsert(upsertOnlyDialect{style: test.style}, test.statement)
+			require.EqualError(t, err, test.message)
+		})
+	}
+}
+
 func TestSQLiteUpsertExecutes(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
