@@ -135,6 +135,79 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestWriteStatementsRejectAggregates covers the placement rule for write
+// statements: no clause of a write statement may call an aggregate, because
+// only a SELECT projection may.
+func TestWriteStatementsRejectAggregates(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
+	require.NoError(t, err)
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		build   func() error
+		message string
+	}{
+		"insert value": {
+			build: func() error {
+				_, err := query.NewInsert(users, []query.Column{id}, []query.Expression{query.Count(id)})
+				return err
+			},
+			message: `calls aggregate function "COUNT" in an INSERT value`,
+		},
+		"insert returning": {
+			build: func() error {
+				_, err := insert.WithReturning(query.Project(query.CountAll()))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in a RETURNING projection`,
+		},
+		"update assignment": {
+			build: func() error {
+				_, err := query.NewUpdate(users, query.Set(id, query.Max(id)))
+				return err
+			},
+			message: `calls aggregate function "MAX" in a SET assignment`,
+		},
+		"update where": {
+			build: func() error {
+				_, err := update.WithWhere(query.GreaterThan(query.Count(id), query.Bind(1)))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in a WHERE clause`,
+		},
+		"delete where": {
+			build: func() error {
+				_, err := deleteStatement.WithWhere(query.GreaterThan(query.Count(id), query.Bind(1)))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in a WHERE clause`,
+		},
+		"upsert assignment": {
+			build: func() error {
+				_, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Max(email))})
+				return err
+			},
+			message: `calls aggregate function "MAX" in a conflict-update assignment`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.build()
+			requireQueryValidationError(t, err)
+			require.ErrorContains(t, err, test.message)
+		})
+	}
+}
+
 func TestUpsertValidatesConflictAssignments(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)

@@ -272,7 +272,12 @@ const (
 	FunctionAvg   FunctionName = "AVG"
 )
 
-// Function calls a SQL function on its arguments.
+// Function calls a SQL function on its arguments. Every supported function
+// aggregates, so statement validation accepts a call only where SQL does: in a
+// SELECT projection, never inside another aggregate, and never in a projection
+// set that also reads a column outside an aggregate, which would need the
+// unsupported GROUP BY. Any other placement fails with a ValidationError before
+// the statement is rendered.
 type Function struct {
 	name      FunctionName
 	arguments []Expression

@@ -104,7 +104,7 @@ func (s Upsert) Validate() error {
 			return validationError(path+".column", "duplicates column %q", assignment.column.Name())
 		}
 		assigned[assignment.column.Name()] = struct{}{}
-		if err := validateExpression(assignment.value, sources, path+".value"); err != nil {
+		if err := validateClauseExpression(assignment.value, sources, "a conflict-update assignment", path+".value"); err != nil {
 			return err
 		}
 	}
@@ -242,7 +242,7 @@ func (s Insert) Validate() error {
 			return validationError(path, "duplicates column %q", column.Name())
 		}
 		seen[column.Name()] = struct{}{}
-		if err := validateExpression(s.values[i], sources, fmt.Sprintf("values[%d]", i)); err != nil {
+		if err := validateClauseExpression(s.values[i], sources, "an INSERT value", fmt.Sprintf("values[%d]", i)); err != nil {
 			return err
 		}
 	}
@@ -335,12 +335,12 @@ func (s Update) Validate() error {
 			return validationError(path+".column", "duplicates column %q", assignment.column.Name())
 		}
 		seen[assignment.column.Name()] = struct{}{}
-		if err := validateExpression(assignment.value, sources, path+".value"); err != nil {
+		if err := validateClauseExpression(assignment.value, sources, "a SET assignment", path+".value"); err != nil {
 			return err
 		}
 	}
 	if s.where != nil {
-		if err := validateExpression(s.where, sources, "where"); err != nil {
+		if err := validateClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
 	}
@@ -417,7 +417,7 @@ func (s Delete) Validate() error {
 		return err
 	}
 	if s.where != nil {
-		if err := validateExpression(s.where, sources, "where"); err != nil {
+		if err := validateClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
 	}
@@ -447,6 +447,8 @@ func validateTargetColumn(column Column, table Table, path string) error {
 	return nil
 }
 
+// validateProjections validates the RETURNING projections of a write statement.
+// RETURNING reports the rows the statement changed, so it may not aggregate.
 func validateProjections(projections []Projection, sources map[string]struct{}, path string) error {
 	for i, projection := range projections {
 		itemPath := fmt.Sprintf("%s[%d]", path, i)
@@ -455,7 +457,7 @@ func validateProjections(projections []Projection, sources map[string]struct{}, 
 				return validationError(itemPath+".alias", "%s", err)
 			}
 		}
-		if err := validateExpression(projection.expression, sources, itemPath+".expression"); err != nil {
+		if err := validateClauseExpression(projection.expression, sources, "a RETURNING projection", itemPath+".expression"); err != nil {
 			return err
 		}
 	}

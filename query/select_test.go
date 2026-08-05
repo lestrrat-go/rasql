@@ -164,6 +164,121 @@ func TestSelectAcceptsMembershipPredicate(t *testing.T) {
 	require.Equal(t, query.Expression(notIn), statement.Where())
 }
 
+// TestSelectRejectsMisplacedAggregates covers the placement rules that make an
+// aggregate legal SQL. Every rejected shape below rendered SQL that a supported
+// database refuses or answers meaninglessly; TestSQLiteRefusesMisplacedAggregates
+// in the root package runs the SQLite half against a real database.
+func TestSelectRejectsMisplacedAggregates(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	base, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		build   func() error
+		message string
+	}{
+		"where": {
+			build: func() error {
+				_, err := base.WithWhere(query.GreaterThan(query.Count(userID), query.Bind(1)))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in a WHERE clause`,
+		},
+		"join on": {
+			build: func() error {
+				_, err := base.WithJoin(query.InnerJoin(orders, query.Equal(query.Count(userID), orderUserID)))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in a JOIN ON condition`,
+		},
+		"order by": {
+			build: func() error {
+				_, err := base.WithOrder(query.Asc(query.Count(userID)))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in an ORDER BY clause`,
+		},
+		"nested aggregate": {
+			build: func() error {
+				_, err := query.NewSelect(users, query.Project(query.Sum(query.Sum(userID))))
+				return err
+			},
+			message: `calls aggregate function "SUM" inside another aggregate function`,
+		},
+		"aggregate nested below an operator": {
+			build: func() error {
+				_, err := query.NewSelect(users, query.Project(query.Max(query.GreaterThan(query.Count(userID), query.Bind(1)))))
+				return err
+			},
+			message: `calls aggregate function "COUNT" inside another aggregate function`,
+		},
+		"column projected beside an aggregate": {
+			build: func() error {
+				_, err := query.NewSelect(users, query.Project(userID), query.Project(query.CountAll()))
+				return err
+			},
+			message: "reads a column outside an aggregate function while projections[1] aggregates",
+		},
+		"column beside an aggregate in one projection": {
+			build: func() error {
+				_, err := query.NewSelect(users, query.Project(query.GreaterThan(query.Count(userID), userID)))
+				return err
+			},
+			message: "reads a column outside an aggregate function while projections[0] aggregates",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.build()
+			requireQueryValidationError(t, err)
+			require.ErrorContains(t, err, test.message)
+		})
+	}
+}
+
+// TestSelectAcceptsWellPlacedAggregates pins the statements the placement rules
+// must keep accepting, so the rules reject a shape rather than the feature.
+func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	// An aggregate-only projection set filters, joins and orders by columns; only
+	// the projections aggregate, so the statement needs no GROUP BY.
+	statement, err := query.NewSelect(users,
+		query.Project(query.CountAll()).As("total"),
+		query.Project(query.Max(userID)).As("top"),
+	)
+	require.NoError(t, err)
+	statement, err = statement.WithJoin(query.InnerJoin(orders, query.Equal(userID, orderUserID)))
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.IsNotNull(email))
+	require.NoError(t, err)
+	statement, err = statement.WithOrder(query.Asc(email))
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+
+	// A projection set that never aggregates keeps reading columns freely.
+	columns, err := query.NewSelect(users, query.Project(userID), query.Project(email))
+	require.NoError(t, err)
+	require.NoError(t, columns.Validate())
+}
+
 func TestTableRejectsUnknownColumn(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)

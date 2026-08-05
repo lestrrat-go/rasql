@@ -110,7 +110,7 @@ The value list of `query.In` and `query.NotIn` takes expressions, the same freed
 
 ### Aggregates
 
-`Function` calls a SQL function on its arguments, projected like any other expression. `COUNT`, `SUM`, `MIN`, `MAX`, and `AVG` are the closed set of names `Call` accepts; any other name fails validation before it reaches SQL.
+`Function` calls a SQL function on its arguments. `COUNT`, `SUM`, `MIN`, `MAX`, and `AVG` are the closed set of names `Call` accepts; any other name fails validation before it reaches SQL.
 
 | Constructor | Renders |
 | --- | --- |
@@ -121,6 +121,12 @@ The value list of `query.In` and `query.NotIn` takes expressions, the same freed
 | `query.Max(expression)` | `MAX(expression)` |
 | `query.Avg(expression)` | `AVG(expression)` |
 | `query.Call(name, arguments…)` | Any of the functions above, named by a `query.Function…` constant. |
+
+Every function above aggregates, so validation accepts one only where SQL does, and reports a `query.ValidationError` everywhere else:
+
+- Only a `SELECT` projection may call an aggregate. A `WHERE` clause, a `JOIN ON` condition, an `ORDER BY` clause, and every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — reject one.
+- An aggregate must not contain another, at any depth: `query.Sum(query.Sum(column))` is refused, since no supported dialect runs it.
+- A projection set that calls an aggregate must not also read a column outside one, because reconciling the two needs `GROUP BY`, which this package does not support yet. Project `query.CountAll()` on its own, or beside another aggregate, rather than beside `users.ID`.
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
 

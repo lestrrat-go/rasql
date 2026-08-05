@@ -229,29 +229,21 @@ func (s Select) Validate() error {
 			return validationError(path+".source", "duplicates table reference %q", join.source.Qualifier())
 		}
 		sources[join.source.key()] = struct{}{}
-		if err := validateExpression(join.on, sources, path+".on"); err != nil {
+		if err := validateClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {
 			return err
 		}
 	}
 
-	for i, projection := range s.projections {
-		path := fmt.Sprintf("projections[%d]", i)
-		if projection.alias != "" {
-			if err := validateAlias(projection.alias); err != nil {
-				return validationError(path+".alias", "%s", err)
-			}
-		}
-		if err := validateExpression(projection.expression, sources, path+".expression"); err != nil {
-			return err
-		}
+	if err := s.validateProjectionSet(sources); err != nil {
+		return err
 	}
 	if s.where != nil {
-		if err := validateExpression(s.where, sources, "where"); err != nil {
+		if err := validateClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
 	}
 	for i, order := range s.orderBy {
-		if err := validateExpression(order.expression, sources, fmt.Sprintf("order_by[%d]", i)); err != nil {
+		if err := validateClauseExpression(order.expression, sources, "an ORDER BY clause", fmt.Sprintf("order_by[%d]", i)); err != nil {
 			return err
 		}
 	}
@@ -260,6 +252,43 @@ func (s Select) Validate() error {
 	}
 	if s.hasOffset && s.offset < 0 {
 		return validationError("offset", "must not be negative")
+	}
+	return nil
+}
+
+// validateProjectionSet validates every projection and the rules that span the
+// set. A statement that both aggregates and reads a column outside an aggregate
+// needs GROUP BY to mean anything, and GROUP BY is unsupported, so no such
+// statement has a rendering any supported dialect answers usefully: PostgreSQL
+// rejects the ungrouped column and SQLite pairs the aggregate with an arbitrary
+// row. Validation refuses the combination instead.
+func (s Select) validateProjectionSet(sources map[string]struct{}) error {
+	var (
+		total         expressionUsage
+		aggregatePath string
+		columnPath    string
+	)
+	for i, projection := range s.projections {
+		path := fmt.Sprintf("projections[%d]", i)
+		if projection.alias != "" {
+			if err := validateAlias(projection.alias); err != nil {
+				return validationError(path+".alias", "%s", err)
+			}
+		}
+		usage, err := validateExpression(projection.expression, projectionContext(sources), path+".expression")
+		if err != nil {
+			return err
+		}
+		if usage.aggregate && aggregatePath == "" {
+			aggregatePath = path
+		}
+		if usage.bareColumn && columnPath == "" {
+			columnPath = path
+		}
+		total = total.merge(usage)
+	}
+	if total.aggregate && total.bareColumn {
+		return validationError(columnPath+".expression", "reads a column outside an aggregate function while %s aggregates, which requires the unsupported GROUP BY", aggregatePath)
 	}
 	return nil
 }
