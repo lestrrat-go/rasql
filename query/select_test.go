@@ -329,6 +329,109 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 	require.NoError(t, columns.Validate())
 }
 
+// TestSelectJudgesAggregatesInsideMembership pins how the clause-aware walk
+// treats a membership test. The test itself is an ordinary predicate, so the
+// tested expression and every member of its value list are judged by the rule
+// that governs the clause the test sits in, exactly as the same operand would be
+// outside an IN.
+func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	base, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
+	require.NoError(t, err)
+
+	rejected := map[string]struct {
+		build   func() error
+		message string
+	}{
+		"aggregate in a value list of a WHERE membership": {
+			build: func() error {
+				_, err := base.WithWhere(query.In(userID, query.Bind(1), query.Count(email)))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in a WHERE clause`,
+		},
+		"aggregate tested by a WHERE membership": {
+			build: func() error {
+				_, err := base.WithWhere(query.NotIn(query.CountAll(), query.Bind(1)))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in a WHERE clause`,
+		},
+		"aggregate in a value list inside another aggregate": {
+			build: func() error {
+				_, err := query.NewSelect(users, query.Project(query.Max(query.In(userID, query.Count(email)))))
+				return err
+			},
+			message: `calls aggregate function "COUNT" inside another aggregate function`,
+		},
+		"column in a value list beside an aggregate projection": {
+			build: func() error {
+				_, err := query.NewSelect(users,
+					query.Project(query.In(email, query.Bind("ada@example.com"))),
+					query.Project(query.CountAll()),
+				)
+				return err
+			},
+			message: "reads a column outside an aggregate function while projections[1] aggregates",
+		},
+		"column in a value list ordering an aggregate projection set": {
+			build: func() error {
+				_, err := aggregated.WithOrder(query.Asc(query.In(query.CountAll(), userID)))
+				return err
+			},
+			message: "reads a column outside an aggregate function while the projections aggregate",
+		},
+		"empty value list in an ordering expression": {
+			build: func() error {
+				_, err := aggregated.WithOrder(query.Asc(query.In(query.CountAll())))
+				return err
+			},
+			message: "requires at least one value",
+		},
+	}
+	for name, test := range rejected {
+		t.Run(name, func(t *testing.T) {
+			err := test.build()
+			requireQueryValidationError(t, err)
+			require.ErrorContains(t, err, test.message)
+		})
+	}
+
+	accepted := map[string]func() error{
+		// WHERE runs before aggregation, so a membership test over columns and
+		// bound values stays legal in a statement that never aggregates.
+		"columns and values in a WHERE membership": func() error {
+			_, err := base.WithWhere(query.In(userID, query.Bind(1), query.Bind(2)))
+			return err
+		},
+		// A column read inside an aggregate is aggregated, including one the
+		// aggregate reaches through a membership test.
+		"membership inside an aggregate projection": func() error {
+			_, err := query.NewSelect(users, query.Project(query.Count(query.In(userID, query.Bind(1), query.Bind(2)))))
+			return err
+		},
+		// ORDER BY of an aggregate-only statement may call an aggregate, so a
+		// membership test whose operands are all aggregates or values belongs there.
+		"membership over aggregates in an ORDER BY": func() error {
+			_, err := aggregated.WithOrder(query.Asc(query.In(query.CountAll(), query.Bind(1), query.Max(userID))))
+			return err
+		},
+	}
+	for name, build := range accepted {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, build())
+		})
+	}
+}
+
 func TestTableRejectsUnknownColumn(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)

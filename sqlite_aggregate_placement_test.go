@@ -15,8 +15,9 @@ import (
 
 // TestSQLiteRefusesMisplacedAggregates proves the aggregate placement rules
 // against a real database. The first half runs SQL of each misplaced shape
-// against SQLite: three statements are refused outright, and the fourth is
-// answered from an arbitrary row. The second half builds the same shapes
+// against SQLite: four statements are refused outright, including a membership
+// test whose value list calls an aggregate, and the mixed projection is answered
+// from an arbitrary row instead. The second half builds the same shapes
 // through the public render builder and requires validation to refuse them, so
 // none of that SQL is rendered at all.
 func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
@@ -25,6 +26,7 @@ func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
 	t.Run("sqlite refuses the SQL", func(t *testing.T) {
 		tests := map[string]string{
 			"where":            `SELECT "users"."id" FROM "users" WHERE (COUNT("users"."id") > 1)`,
+			"where membership": `SELECT "users"."id" FROM "users" WHERE ("users"."id" IN (COUNT("users"."id")))`,
 			"order by":         `SELECT "users"."id" FROM "users" ORDER BY COUNT("users"."id")`,
 			"nested aggregate": `SELECT SUM(SUM("users"."id")) FROM "users"`,
 		}
@@ -56,6 +58,7 @@ func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
 
 		tests := map[string]render.SelectBuilder{
 			"where":                               base.Select("id").Where(query.GreaterThan(query.Count(id), query.Bind(1))),
+			"where membership":                    base.Select("id").Where(query.In(id, query.Count(id))),
 			"order by beside a column projection": base.Select("id").Order(query.Asc(query.Count(id))),
 			"nested aggregate":                    base.Project(query.Project(query.Sum(query.Sum(id)))),
 			"mixed projections":                   base.Select("id").Project(query.Project(query.CountAll())),

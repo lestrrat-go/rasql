@@ -256,6 +256,20 @@ func TestSelectBuilderCombinesPredicates(t *testing.T) {
 		require.Equal(t, selected.Args(), counted.Args())
 	})
 
+	t.Run("BuildCount carries a membership predicate", func(t *testing.T) {
+		// A membership predicate binds one placeholder per value, so counting it
+		// has to carry every one of them into the counted statement.
+		counted, err := render.SelectFrom(dialect.PostgreSQL(), users).
+			Select("id").
+			WhereIn("id", 1, 2, 3).
+			BuildCount()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT COUNT(*) AS "count" FROM "users" WHERE ("users"."id" IN ($1, $2, $3))`,
+			counted.SQL())
+		require.Equal(t, []any{1, 2, 3}, counted.Args())
+	})
+
 	t.Run("a lone Or is not wrapped", func(t *testing.T) {
 		statement, err := render.SelectFrom(dialect.PostgreSQL(), users).
 			Select("id").
