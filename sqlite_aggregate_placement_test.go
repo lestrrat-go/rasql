@@ -75,9 +75,10 @@ func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
 // projection set, in both directions, against a real database. An
 // aggregate-only projection ordered by an aggregate is legal SQL, so the builder
 // has to render it and SQLite has to answer it. The same projection ordered by a
-// bare column reads a column of no particular row, which PostgreSQL and MySQL
-// both refuse and SQLite silently answers, so validation refuses it before it
-// renders.
+// bare column reads a column of no particular row, which PostgreSQL refuses
+// while SQLite silently answers, so validation refuses it before it renders.
+// TestAggregateOrderingAgainstLiveDatabases records what each live server does
+// with that second shape, MySQL included, which answers it as SQLite does.
 func TestSQLiteOrdersAnAggregateStatement(t *testing.T) {
 	database, definition := aggregatePlacementFixture(t)
 
@@ -111,7 +112,8 @@ func TestSQLiteOrdersAnAggregateStatement(t *testing.T) {
 	t.Run("sqlite answers a bare-column ordering from an arbitrary row", func(t *testing.T) {
 		// SQLite runs this one instead of refusing it, which is why validation
 		// has to: it orders the single aggregate row by the id of whichever row
-		// SQLite happened to keep. PostgreSQL and MySQL reject the same SQL.
+		// SQLite happened to keep. PostgreSQL rejects the same SQL, which is
+		// what makes refusing it the portable answer; MySQL 8.4 runs it.
 		var count int64
 		result := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM "users" ORDER BY "users"."id"`)
 		require.NoError(t, result.Scan(&count))

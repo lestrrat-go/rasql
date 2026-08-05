@@ -15,23 +15,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// aggregateOrderingCase describes one live server the ORDER BY rule is proved
+// against.
+type aggregateOrderingCase struct {
+	name    string
+	open    func(*testing.T) *sql.DB
+	dialect dialect.Dialect
+	// bareColumnSQL spells, in this dialect's quoting, the statement the
+	// builder used to render and no longer does.
+	bareColumnSQL func(table string) string
+	// serverRefusesBareColumn records whether this server rejects
+	// bareColumnSQL. It is the one point the two servers disagree on, so the
+	// test's doc comment carries the reason.
+	serverRefusesBareColumn bool
+}
+
 // TestAggregateOrderingAgainstLiveDatabases proves the ORDER BY rule against the
-// two dialects SQLite cannot speak for. PostgreSQL and MySQL treat an aggregate
-// statement without GROUP BY as one group, so ordering by an aggregate runs
-// while ordering by a bare column is refused -- the asymmetry validation now
-// enforces. TestSQLiteOrdersAnAggregateStatement covers the same two shapes
-// against SQLite, which runs both and therefore cannot prove the rejection.
-// Each case skips when its server is unavailable; CI's integration job runs
-// both.
+// two dialects SQLite cannot speak for. PostgreSQL and MySQL both treat an
+// aggregate statement without GROUP BY as one group, so both run an ordering by
+// an aggregate. They part ways on an ordering by a bare column: PostgreSQL
+// rejects the ungrouped column, while MySQL 8.4 runs the statement even with
+// ONLY_FULL_GROUP_BY in its default sql_mode, so each case records the answer
+// its own server gives. Validation refuses that statement for every dialect
+// regardless, since only PostgreSQL's answer is portable.
+// TestSQLiteOrdersAnAggregateStatement covers the same two shapes against
+// SQLite, which runs both. Each case skips when its server is unavailable; CI's
+// integration job runs both.
 func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		open    func(*testing.T) *sql.DB
-		dialect dialect.Dialect
-		// bareColumnSQL spells, in this dialect's quoting, the statement the
-		// builder used to render and no longer does.
-		bareColumnSQL func(table string) string
-	}{
+	for _, test := range []aggregateOrderingCase{
 		{
 			name:    "postgresql",
 			open:    dbtest.PostgreSQLDB,
@@ -39,6 +50,7 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 			bareColumnSQL: func(table string) string {
 				return `SELECT COUNT(*) FROM "` + table + `" ORDER BY "` + table + `"."id"`
 			},
+			serverRefusesBareColumn: true,
 		},
 		{
 			name:    "mysql",
@@ -50,13 +62,13 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			testAggregateOrdering(t, test.open(t), test.dialect, test.bareColumnSQL)
+			testAggregateOrdering(t, test.open(t), test)
 		})
 	}
 }
 
-func testAggregateOrdering(t *testing.T, database *sql.DB, d dialect.Dialect, bareColumnSQL func(string) string) {
-	client, err := rasql.New(database, d)
+func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderingCase) {
+	client, err := rasql.New(database, test.dialect)
 	require.NoError(t, err)
 	type record struct {
 		ID    int64  `rasql:"id"`
@@ -95,7 +107,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, d dialect.Dialect, ba
 	require.NoError(t, err)
 	id, err := table.Column("id")
 	require.NoError(t, err)
-	counted := render.SelectFrom(d, table).Project(query.Project(query.CountAll()).As("count"))
+	counted := render.SelectFrom(test.dialect, table).Project(query.Project(query.CountAll()).As("count"))
 
 	t.Run("the database runs an aggregate ordering", func(t *testing.T) {
 		for name, builder := range map[string]render.SelectBuilder{
@@ -113,11 +125,28 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, d dialect.Dialect, ba
 		}
 	})
 
-	t.Run("the database refuses a bare-column ordering", func(t *testing.T) {
-		// The database rejecting this SQL is why validation refuses to render
-		// it: the ungrouped column belongs to no row of the single group.
-		require.Error(t, runStatement(t, database, bareColumnSQL(tableName)))
+	t.Run("the server answers a bare-column ordering its own way", func(t *testing.T) {
+		// The two servers genuinely disagree here, so no single assertion
+		// covers both. PostgreSQL rejects the ungrouped column, because it
+		// belongs to no row of the single group. MySQL 8.4 runs the same
+		// statement under its default sql_mode: ONLY_FULL_GROUP_BY checks an
+		// ORDER BY list only when the query names a GROUP BY, and this one is
+		// grouped implicitly by its aggregate, which leaves the select list as
+		// the only list checked -- MySQL does reject the mixed projection
+		// SELECT COUNT(*), t.id FROM t.
+		err := runStatement(t, database, test.bareColumnSQL(tableName))
+		if !test.serverRefusesBareColumn {
+			require.NoError(t, err)
+			return
+		}
+		require.Error(t, err)
+	})
 
+	t.Run("validation refuses to render a bare-column ordering", func(t *testing.T) {
+		// Validation refuses it for both dialects, MySQL included: PostgreSQL
+		// rejecting the statement is what makes refusal the portable answer,
+		// and a builder that rendered it for MySQL alone would render SQL that
+		// does not survive a move to PostgreSQL.
 		_, err := counted.Order(query.Asc(id)).Build()
 		var validationErr *query.ValidationError
 		require.ErrorAs(t, err, &validationErr)
