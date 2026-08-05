@@ -209,6 +209,65 @@ func UniqueName(t *testing.T, prefix string) string {
 	return fmt.Sprintf("%s_%d_%d", prefix, os.Getpid(), time.Now().UnixNano())
 }
 
+// createFreshDatabase implements the containment ordering
+// createFreshPostgreSQLDatabase and createFreshMySQLDatabase both build on,
+// factored out into driver-agnostic function-parameter form so the ordering
+// itself -- not the SQL either driver speaks -- can be exercised by a test
+// with fake probeExists/create/drop functions and no live server. See
+// TestCreateFreshDatabase in dbtest_test.go.
+//
+// The three steps, matching the containment remedy in the package doc:
+//
+//  1. probeExists runs first, before anything else. If it reports the name
+//     already exists, this returns immediately with a nil cleanup and an
+//     error: nothing is ever registered for the caller to run, so a
+//     pre-existing name can never be dropped by this call, not even by
+//     accident.
+//  2. A local dropOwned flag, and a cleanup closure that reads it, are
+//     built before create runs -- so if the caller registers the returned
+//     cleanup with t.Cleanup before inspecting the returned error (as both
+//     callers do) and then fails loudly, the cleanup is already in place.
+//     dropOwned needs no synchronization: the flag is written here and read
+//     by cleanup, and both happen only on the calling test's own goroutine
+//     -- cleanup runs from t.Cleanup on that same goroutine, whether
+//     reached normally or via t.Fatalf's runtime.Goexit unwind.
+//  3. If create fails, errorProvesNothingCreated decides whether that
+//     failure proves create made nothing: if so, dropOwned is cleared so
+//     the returned cleanup becomes a no-op, and the returned error still
+//     tells the caller to fail loudly. If create's error does not prove
+//     that -- including an error carrying no code at all, such as a
+//     context cancellation, a connection reset, a timeout, or an EOF --
+//     dropOwned stays true, so cleanup still attempts the drop: the
+//     database may have been created despite the client-visible error, and
+//     leaking it is the safe failure mode, not dropping something this
+//     call did not create.
+//
+// On success, cleanup drops the database this call created and err is nil.
+func createFreshDatabase(name string, probeExists func() (bool, error), create func() error, errorProvesNothingCreated func(error) bool, drop func()) (func(), error) {
+	exists, err := probeExists()
+	if err != nil {
+		return nil, fmt.Errorf("check whether a database named %q already exists: %w", name, err)
+	}
+	if exists {
+		return nil, fmt.Errorf("a database named %q already exists; refusing to touch it (per-run names must be unique -- see UniqueName)", name)
+	}
+
+	dropOwned := true
+	cleanup := func() {
+		if dropOwned {
+			drop()
+		}
+	}
+
+	if err := create(); err != nil {
+		if errorProvesNothingCreated(err) {
+			dropOwned = false
+		}
+		return cleanup, fmt.Errorf("create fresh database %q: %w", name, err)
+	}
+	return cleanup, nil
+}
+
 // perTestCache memoizes a value per *testing.T, so a live test that
 // resolves the same live database more than once within itself (see
 // openAsRole in inspect/postgresql_privilege_test.go, which calls

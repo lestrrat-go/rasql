@@ -27,6 +27,76 @@ const (
 	mysqlSpecificAccessDenied = 1227
 )
 
+// mysqlDbCreateExists is go-sql-driver/mysql's error number for
+// ER_DB_CREATE_EXISTS, raised by CREATE DATABASE when a database by that
+// name already exists.
+const mysqlDbCreateExists = 1007
+
+// mysqlCreateDatabaseErrorProvesNothingCreated reports whether err is a
+// MySQL error that CREATE DATABASE can only return when this particular
+// statement created nothing: the name already existed (mysqlDbCreateExists),
+// or the connected user lacks CREATE privilege (mysqlAccessDenied or
+// mysqlSpecificAccessDenied). createFreshMySQLDatabase clears its dropOwned
+// flag only when this reports true, so the registered cleanup's DROP
+// DATABASE never runs for a database this call did not create; see
+// pgCreateDatabaseErrorProvesNothingCreated in postgresql.go for the full
+// containment reasoning this mirrors.
+//
+// Unlike PostgreSQL, this needs no accepted-race case for the pre-existence
+// probe (see pgUniqueViolation in postgresql.go for why PostgreSQL does):
+// MySQL serializes CREATE DATABASE for a given schema name on its own
+// metadata lock, so two concurrent creates of the same name never both
+// proceed past the existence check -- the loser of that race gets
+// mysqlDbCreateExists (1007) directly, the same code a simple pre-existing
+// name produces, never a distinct "someone else won the race" code the way
+// PostgreSQL's 23505 is distinct from 42P04.
+//
+// This is sound for the same underlying reason the PostgreSQL version is: a
+// duplicate error here can never be this call's own earlier, successful
+// CREATE DATABASE being reported back as a failure, because
+// go-sql-driver/mysql does not retry a statement whose bytes already
+// reached the wire either. go-sql-driver converts to database/sql's retry
+// signal, driver.ErrBadConn, only its own internal errBadConnNoWrite --
+// produced only when writing the statement to the connection failed after
+// writing zero bytes -- and returns any failure discovered while reading
+// the server's response (which is where a real ER_DB_CREATE_EXISTS is
+// reported) unchanged, never converted to a retry signal. So whatever
+// produced mysqlDbCreateExists here was not this call's own statement being
+// silently retried and colliding with itself. This reasoning is
+// version-dependent, tied to go-sql-driver/mysql's own errBadConnNoWrite
+// contract; a later editor changing which codes are checked here must
+// preserve the reasoning, not merely the list of codes.
+func mysqlCreateDatabaseErrorProvesNothingCreated(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	switch mysqlErr.Number {
+	case mysqlDbCreateExists, mysqlAccessDenied, mysqlSpecificAccessDenied:
+		return true
+	default:
+		return false
+	}
+}
+
+// mysqlSchemaExists reports whether a schema (database) named name already
+// exists on the server admin is connected to. createFreshMySQLDatabase calls
+// this before registering any cleanup for name (step 1 of the containment
+// remedy), so a name that already exists is refused with nothing ever
+// scheduled to be dropped for it.
+func mysqlSchemaExists(ctx context.Context, admin *sql.DB, name string) (bool, error) {
+	var discard int
+	err := admin.QueryRowContext(ctx, "SELECT 1 FROM information_schema.schemata WHERE schema_name = ?", name).Scan(&discard)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // mysqlComposeService is the compose.yaml service MySQLConfig brings up
 // when no DSN is set; see ensureComposeUp in compose.go.
 var mysqlComposeService = composeService{name: "mysql", envVar: mysqlEnvVar}
@@ -121,9 +191,17 @@ func resolveMySQLServerConfig(t *testing.T) *mysql.Config {
 // happens to be open; see MySQL's own manual, "Statements That Cause an
 // Implicit Commit"), and a connection needs no pre-existing database
 // selected at all to run one. So this connects through server exactly as
-// given -- its DBName may be empty -- issues CREATE DATABASE, then
-// reconnects with DBName set to the new database to confirm it before
-// handing back its configuration.
+// given -- its DBName may be empty -- probes for name's pre-existence,
+// issues CREATE DATABASE, then reconnects with DBName set to the new
+// database to confirm it before handing back its configuration.
+//
+// The probe, the drop registration, and the drop-guard flag are
+// createFreshDatabase's job (see its doc for the full containment
+// ordering); this function supplies the MySQL-specific probe, create, and
+// drop operations createFreshDatabase drives. The returned cleanup is
+// registered with t.Cleanup before the returned error is inspected, so a
+// Fatalf below still reaches it -- createFreshDatabase builds that cleanup,
+// with dropOwned already decided, before it returns.
 func createFreshMySQLDatabase(t *testing.T, server *mysql.Config) *mysql.Config {
 	t.Helper()
 	name := UniqueName(t, "rasql_test")
@@ -134,25 +212,29 @@ func createFreshMySQLDatabase(t *testing.T, server *mysql.Config) *mysql.Config 
 		t.Fatalf("dbtest: connect via %s to create a fresh MySQL database: %v", mysqlEnvVar, err)
 	}
 
-	// The drop is registered before CREATE DATABASE runs; see the identical
-	// comment in createFreshPostgreSQLDatabase for why -- the server can
-	// apply CREATE DATABASE while the client sees an error, so registering
-	// only on success would still leak it. mysqlDropDatabaseStatement uses
-	// DROP DATABASE IF EXISTS for the same reason: without IF EXISTS, a
-	// legitimate CREATE failure (the missing-privilege path below) would
-	// turn cleanup into a second, spurious error.
-	t.Cleanup(func() { dropMySQLDatabase(t, server, name) })
-
-	if _, err := admin.ExecContext(t.Context(), mysqlCreateDatabaseStatement(name)); err != nil {
+	cleanup, err := createFreshDatabase(
+		name,
+		func() (bool, error) { return mysqlSchemaExists(t.Context(), admin, name) },
+		func() error {
+			_, err := admin.ExecContext(t.Context(), mysqlCreateDatabaseStatement(name))
+			return err
+		},
+		mysqlCreateDatabaseErrorProvesNothingCreated,
+		func() { dropMySQLDatabase(t, server, name) },
+	)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	if err != nil {
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && (mysqlErr.Number == mysqlAccessDenied || mysqlErr.Number == mysqlSpecificAccessDenied) {
 			t.Fatalf("dbtest: %s's credentials cannot CREATE DATABASE; supply a DSN whose credentials can create and drop databases so the live suite can run inside its own database: %v", mysqlEnvVar, err)
 		}
-		// Any other failure -- including the name already existing, which
-		// a per-run unique name colliding would mean something is
-		// genuinely wrong worth seeing -- fails loudly rather than
-		// retrying under another name.
-		t.Fatalf("dbtest: create fresh MySQL database %q: %v", name, err)
+		// Any other failure -- including a pre-existing name, which a
+		// per-run unique name colliding would mean something is genuinely
+		// wrong worth seeing -- fails loudly rather than retrying under
+		// another name.
+		t.Fatalf("dbtest: %v", err)
 	}
 
 	fresh := server.Clone()

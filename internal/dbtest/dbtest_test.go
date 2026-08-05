@@ -3,6 +3,8 @@
 package dbtest
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -157,6 +159,137 @@ func TestMySQLDatabaseStatementsTargetExactName(t *testing.T) {
 	if drop != "DROP DATABASE IF EXISTS "+wantIdent {
 		t.Fatalf("mysqlDropDatabaseStatement(%q) = %q, want %q", name, drop, "DROP DATABASE IF EXISTS "+wantIdent)
 	}
+}
+
+// TestCreateFreshDatabase pins the containment ordering createFreshDatabase
+// implements (see its own doc for the three steps) using fake
+// probeExists/create/drop functions instead of a live database, so the
+// decision is provable without a server -- this package cannot open a
+// connection in this environment, and even where it can, a database-backed
+// test could only prove the happy path, not the specific error-code
+// branches this exists to get right.
+//
+// Every subtest asserts on the *fake* drop function actually being invoked
+// or not, never merely on the returned error: the property under test is
+// containment -- whether a drop is attempted -- not whether the call
+// failed, and a test that only checked the error would pass even if the
+// guard were deleted entirely.
+func TestCreateFreshDatabase(t *testing.T) {
+	t.Run("pre-existing name fails loudly with no drop ever registered", func(t *testing.T) {
+		probeCalls, createCalls, dropCalls := 0, 0, 0
+		cleanup, err := createFreshDatabase(
+			"exists",
+			func() (bool, error) { probeCalls++; return true, nil },
+			func() error { createCalls++; return nil },
+			func(error) bool {
+				t.Fatal("errorProvesNothingCreated must not be called: create must never run for a pre-existing name")
+				return false
+			},
+			func() { dropCalls++ },
+		)
+		if err == nil {
+			t.Fatal("createFreshDatabase returned a nil error for a pre-existing name, want an error")
+		}
+		if cleanup != nil {
+			t.Fatal("createFreshDatabase returned a non-nil cleanup for a pre-existing name; nothing may ever be registered for a name this call refused to touch")
+		}
+		if probeCalls != 1 {
+			t.Fatalf("probeExists called %d times, want exactly 1", probeCalls)
+		}
+		if createCalls != 0 {
+			t.Fatalf("create called %d times, want 0: CREATE DATABASE must never run for a name the probe found pre-existing", createCalls)
+		}
+		if dropCalls != 0 {
+			t.Fatalf("drop called %d times, want 0: cleanup is nil, so nothing could have invoked it", dropCalls)
+		}
+	})
+
+	t.Run("duplicate-name create error clears the flag so the drop does not run", func(t *testing.T) {
+		dropCalls := 0
+		cleanup, err := createFreshDatabase(
+			"dup",
+			func() (bool, error) { return false, nil },
+			func() error { return errors.New("duplicate database") },
+			func(error) bool { return true }, // stands in for pgCreateDatabaseErrorProvesNothingCreated/mysqlCreateDatabaseErrorProvesNothingCreated reporting a duplicate-name code
+			func() { dropCalls++ },
+		)
+		if err == nil {
+			t.Fatal("createFreshDatabase returned a nil error for a failed create, want an error")
+		}
+		if cleanup == nil {
+			t.Fatal("createFreshDatabase returned a nil cleanup for a failed create; a cleanup must still be registered so ambiguous errors are not silently leaked")
+		}
+		cleanup()
+		if dropCalls != 0 {
+			t.Fatalf("drop called %d times after cleanup(), want 0: a proven duplicate-name error must never trigger a drop", dropCalls)
+		}
+	})
+
+	t.Run("insufficient-privilege create error clears the flag so the drop does not run", func(t *testing.T) {
+		dropCalls := 0
+		cleanup, err := createFreshDatabase(
+			"priv",
+			func() (bool, error) { return false, nil },
+			func() error { return errors.New("insufficient privilege") },
+			func(error) bool { return true }, // stands in for the classifier reporting an insufficient-privilege code
+			func() { dropCalls++ },
+		)
+		if err == nil {
+			t.Fatal("createFreshDatabase returned a nil error for a failed create, want an error")
+		}
+		cleanup()
+		if dropCalls != 0 {
+			t.Fatalf("drop called %d times after cleanup(), want 0: a proven insufficient-privilege error must never trigger a drop", dropCalls)
+		}
+	})
+
+	t.Run("create error with no proof leaves the flag set so the drop still runs", func(t *testing.T) {
+		dropCalls := 0
+		cleanup, err := createFreshDatabase(
+			"cancel",
+			func() (bool, error) { return false, nil },
+			func() error { return context.Canceled }, // an error carrying no driver-specific code at all
+			func(error) bool { return false },        // stands in for neither classifier recognizing this error
+			func() { dropCalls++ },
+		)
+		if err == nil {
+			t.Fatal("createFreshDatabase returned a nil error for a failed create, want an error")
+		}
+		if cleanup == nil {
+			t.Fatal("createFreshDatabase returned a nil cleanup for a failed create, want a cleanup so the leak stays closed")
+		}
+		cleanup()
+		if dropCalls != 1 {
+			t.Fatalf("drop called %d times after cleanup(), want exactly 1: an unproven error (e.g. a context cancellation) must still attempt the drop, since the database may have been created despite the client-visible error", dropCalls)
+		}
+	})
+
+	t.Run("happy path creates once and the returned cleanup drops exactly once", func(t *testing.T) {
+		probeCalls, createCalls, dropCalls := 0, 0, 0
+		cleanup, err := createFreshDatabase(
+			"ok",
+			func() (bool, error) { probeCalls++; return false, nil },
+			func() error { createCalls++; return nil },
+			func(error) bool {
+				t.Fatal("errorProvesNothingCreated must not be called: create succeeded")
+				return false
+			},
+			func() { dropCalls++ },
+		)
+		if err != nil {
+			t.Fatalf("createFreshDatabase returned an error for a successful create: %v", err)
+		}
+		if probeCalls != 1 || createCalls != 1 {
+			t.Fatalf("probeExists called %d times and create called %d times, want exactly 1 each", probeCalls, createCalls)
+		}
+		if cleanup == nil {
+			t.Fatal("createFreshDatabase returned a nil cleanup for a successful create, want a cleanup that drops the database it created")
+		}
+		cleanup()
+		if dropCalls != 1 {
+			t.Fatalf("drop called %d times after cleanup(), want exactly 1", dropCalls)
+		}
+	})
 }
 
 // TestPerTestCacheResolve pins the memoization PostgreSQLConfig and
