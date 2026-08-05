@@ -1,0 +1,43 @@
+# Local live-database services for rasql, mirroring the `integration` job in
+# .github/workflows/ci.yml: same images, same credentials, same
+# healthchecks. Ports are fixed so the DSNs CI already uses
+# (RASQL_TEST_POSTGRES_DSN / RASQL_TEST_MYSQL_DSN) work unchanged locally.
+#
+# Bring both up with:
+#
+#   docker compose up -d --wait
+#
+# internal/dbtest does this automatically for a live test when the relevant
+# DSN environment variable is not set. Containers are never torn down
+# automatically; stop them yourself with:
+#
+#   docker compose down -v
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: rasql
+      POSTGRES_PASSWORD: rasql
+      POSTGRES_USER: rasql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "rasql", "-d", "rasql"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: rasql
+      MYSQL_PASSWORD: rasql
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: rasql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-urasql", "-prasql"]
+      interval: 5s
+      timeout: 5s
+      retries: 12

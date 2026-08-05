@@ -232,3 +232,7 @@ Most applications only import the root `rasql` package plus `dialect` and `schem
 | `template`, `generate`, `cmd/rasqlgen` | Compile templates and descriptors into deterministic Go source. |
 
 See [DESIGN.md](DESIGN.md) for the architecture and the reasoning behind these boundaries.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the local development workflow, including running the live-database tests.
