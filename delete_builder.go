@@ -62,10 +62,29 @@ func (b DeleteBuilder) WhereEqual(column query.Column, value any) DeleteBuilder 
 	return b.Where(query.Equal(column, query.Bind(value)))
 }
 
+// WhereIn adds an IN predicate for column and binds each value.
+// Repeated calls combine with AND in the order they were made, including calls to
+// Where and WhereEqual, and each call counts as the predicate that Build and Exec
+// require. Build and Exec reject an empty value list, and reject a column whose
+// table is not the delete target.
+func (b DeleteBuilder) WhereIn(column query.Column, values ...any) DeleteBuilder {
+	if b.err != nil {
+		return b
+	}
+	if len(values) == 0 {
+		return b.withError(fmt.Errorf("rasql: IN requires at least one value"))
+	}
+	binds := make([]query.Expression, len(values))
+	for i, value := range values {
+		binds[i] = query.Bind(value)
+	}
+	return b.Where(query.In(column, binds...))
+}
+
 // AllowAll states that the statement is meant to delete every row of the target table,
 // which Build and Exec otherwise reject. It sets no predicate and changes no rendered SQL.
-// Build and Exec reject a builder that combines it with Where or WhereEqual, because the
-// two state different intents.
+// Build and Exec reject a builder that combines it with Where, WhereEqual or WhereIn,
+// because the two state different intents.
 func (b DeleteBuilder) AllowAll() DeleteBuilder {
 	if b.err != nil {
 		return b

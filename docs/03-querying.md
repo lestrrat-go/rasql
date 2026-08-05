@@ -43,6 +43,8 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `Where(expression)` | Adds a predicate from a `query` expression. | ✓ | ✓ |
 | `WhereEqual(column, value)` | Adds `column = value` for a `query.Column`. | ✓ | |
 | `WhereEqual(name, value)` | Adds `column = value` for a primary-table column. | | ✓ |
+| `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.Column`, one placeholder per value. | ✓ | |
+| `WhereIn(name, values…)` | Adds `column IN (values…)` for a primary-table column, one placeholder per value. | | ✓ |
 | `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. | ✓ | ✓ |
 | `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.Column`. | ✓ | |
 | `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. | | ✓ |
@@ -52,10 +54,13 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `All(ctx)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
 | `One(ctx)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
 
-`Where` and `WhereEqual` accumulate: repeated calls combine with `AND` in the
-order they were made, which is what a conditionally built filter needs. Use a
-single `query.Or` call for a top-level `OR`; it is not wrapped in an `AND`
-unless another `Where` or `WhereEqual` follows it.
+`Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
+`AND` in the order they were made, which is what a conditionally built filter
+needs. Use a single `query.Or` call for a top-level `OR`; it is not wrapped in
+an `AND` unless another `Where`, `WhereEqual`, or `WhereIn` follows it.
+`WhereIn` needs at least one value on either builder: an empty list makes
+`Build` and the executing methods return an error rather than render `IN ()`,
+which is not valid SQL in any supported dialect.
 
 ### Delete builder methods
 
@@ -63,10 +68,11 @@ unless another `Where` or `WhereEqual` follows it.
 | --- | --- |
 | `Where(expression)` | Adds a predicate from a `query` expression. |
 | `WhereEqual(column, value)` | Adds `column = value` for a `query.Column` of the target table. |
+| `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.Column` of the target table, one placeholder per value. |
 | `Build()` | Renders `render.Statement` without executing. |
 | `Exec(ctx)` | Executes and returns `sql.Result`. |
 
-`Where` and `WhereEqual` accumulate on the delete builder the same way: repeated calls combine with `AND` in the order they were made.
+`Where`, `WhereEqual`, and `WhereIn` accumulate on the delete builder the same way: repeated calls combine with `AND` in the order they were made. Each of them supplies the predicate that `Build` and `Exec` require, so a delete still needs one of them or an explicit `AllowAll`. `WhereIn` needs at least one value: an empty list makes `Build` and `Exec` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect.
 
 ### Where conditions
 
@@ -84,9 +90,13 @@ Every constructor below takes and returns `query.Expression`, so conditions nest
 | `query.Compare(left, operator, right)` | Any of the operators above, named by a `query.Operator…` constant. |
 | `query.IsNull(expression)` | `expression IS NULL` |
 | `query.IsNotNull(expression)` | `expression IS NOT NULL` |
+| `query.In(expression, values…)` | `expression IN (values…)` |
+| `query.NotIn(expression, values…)` | `expression NOT IN (values…)` |
 | `query.And(expressions…)` | `(a AND b …)` |
 | `query.Or(expressions…)` | `(a OR b …)` |
 | `query.Negate(expression)` | `NOT (expression)` |
+
+`query.In` and `query.NotIn` bind each value as its own placeholder, so an `N`-value list costs `N` arguments against the dialect's parameter limit. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect.
 
 ### Operands
 
@@ -221,6 +231,85 @@ if errors.Is(err, rasql.ErrNoRows) {
 ## Filter, order, and page
 
 `WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.Column` and cover the common cases without importing the `query` package. Generated tables expose one field per column, so `users.ID` is the whole reference. `Limit` and `Offset` page the result. The untyped builder from `client.SelectFrom` also has `Select`, which narrows the projection to named columns.
+
+`WhereIn` covers a membership test the same way, binding each value as its own placeholder:
+
+<!-- INCLUDE(examples/rasql_where_in_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_where_in() {
+	// This example selects rows whose id is one of a fixed set of values.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+	// Create the table described by the generated users descriptor.
+	if err := rasql.Create(ctx, client, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+	for _, user := range []UserRow{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+		{ID: 3, Email: "cyd@example.com"},
+	} {
+		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+			fmt.Printf("failed to insert user: %s\n", err)
+			return
+		}
+	}
+
+	// WhereIn binds one placeholder per value and skips the users whose id is
+	// not in the list.
+	rows, err := rasql.SelectFrom(client, users).
+		WhereIn(users.ID, 1, 3).
+		OrderAsc(users.ID).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+	for found, err := range rows {
+		if err != nil {
+			fmt.Printf("failed to query users: %s\n", err)
+			return
+		}
+		fmt.Println(found.Email)
+	}
+
+	// Output:
+	// ada@example.com
+	// cyd@example.com
+}
+```
+source: [examples/rasql_where_in_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_where_in_example_test.go)
+<!-- END INCLUDE -->
 
 For anything richer, `Where` and `Order` accept expressions from the `query` package:
 

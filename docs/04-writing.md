@@ -277,7 +277,7 @@ The row identifies itself, so there is no separate predicate to keep in step wit
 
 ## Delete rows
 
-`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` takes a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly.
+`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` and `WhereIn` take a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly.
 
 <!-- INCLUDE(examples/rasql_delete_example_test.go) -->
 ```go

@@ -230,6 +230,30 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		}
 		r.builder.WriteString("NULL)")
 		return nil
+	case query.Membership:
+		values := expression.Values()
+		if len(values) == 0 {
+			return fmt.Errorf("IN requires at least one value")
+		}
+		r.builder.WriteByte('(')
+		if err := r.writeExpression(expression.Expression()); err != nil {
+			return err
+		}
+		if expression.Not() {
+			r.builder.WriteString(" NOT IN (")
+		} else {
+			r.builder.WriteString(" IN (")
+		}
+		for i, value := range values {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			if err := r.writeExpression(value); err != nil {
+				return err
+			}
+		}
+		r.builder.WriteString("))")
+		return nil
 	default:
 		return fmt.Errorf("unsupported expression %T", expression)
 	}

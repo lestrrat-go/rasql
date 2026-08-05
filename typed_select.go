@@ -95,6 +95,23 @@ func (b TypedSelectBuilder[T]) WhereEqual(column query.Column, value any) TypedS
 	return b
 }
 
+// WhereIn adds an IN predicate for column and binds each value.
+// Repeated calls combine with AND in the order they were made, including calls to
+// Where and WhereEqual. Build, Query, All, and One reject an empty value list,
+// and reject a column whose table is not part of the statement.
+func (b TypedSelectBuilder[T]) WhereIn(column query.Column, values ...any) TypedSelectBuilder[T] {
+	if len(values) == 0 {
+		b.builder = b.builder.withError(fmt.Errorf("rasql: IN requires at least one value"))
+		return b
+	}
+	binds := make([]query.Expression, len(values))
+	for i, value := range values {
+		binds[i] = query.Bind(value)
+	}
+	b.builder = b.builder.Where(query.In(column, binds...))
+	return b
+}
+
 // Order adds ordering created through the basic query API.
 func (b TypedSelectBuilder[T]) Order(orders ...query.Order) TypedSelectBuilder[T] {
 	b.builder = b.builder.Order(orders...)
