@@ -162,7 +162,7 @@ The example moves through four steps.
 1. `rasql.Create` renders the table description as DDL and executes it, followed by any indexes. A real application usually creates tables through migrations instead, so this step is mostly a convenience for tests and examples.
 2. `rasql.Insert` reads the tagged fields of `UserRow` and writes them as bound values. See [Writing rows](04-writing.md).
 3. `rasql.SelectFrom(client, users)` starts a builder that already knows the result type. `WhereEqual` binds `42` as an argument rather than putting it into the SQL text.
-4. `One` executes the statement and returns a single decoded `UserRow`, reporting an error when the result does not hold exactly one row.
+4. `One` executes the statement and returns a single decoded `UserRow`, reporting `rasql.ErrNoRows` when the result holds no row and `rasql.ErrMultipleRows` when it holds more than one.
 
 The `database.SetMaxOpenConns(1)` call is a SQLite detail, not a `rasql` requirement. An in-memory SQLite database belongs to a single connection, so a pooled second connection would not see the created table.
 
