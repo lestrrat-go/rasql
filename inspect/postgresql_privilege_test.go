@@ -5,8 +5,10 @@ package inspect_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
@@ -14,6 +16,7 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -45,7 +48,6 @@ func TestPostgreSQLInspectorRejectsPartialColumnPrivilege(t *testing.T) {
 	defer mustExec(t, ctx, admin, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tableName))
 
 	createRestrictedRole(t, ctx, admin, roleName)
-	defer dropRestrictedRole(t, ctx, admin, roleName)
 
 	mustExec(t, ctx, admin, fmt.Sprintf(`GRANT SELECT (id) ON %s TO %s`, tableName, roleName))
 
@@ -85,7 +87,6 @@ func TestPostgreSQLInspectorReadsPrimaryKeyThroughTableLevelSelect(t *testing.T)
 	defer mustExec(t, ctx, admin, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tableName))
 
 	createRestrictedRole(t, ctx, admin, roleName)
-	defer dropRestrictedRole(t, ctx, admin, roleName)
 
 	mustExec(t, ctx, admin, fmt.Sprintf(`GRANT SELECT ON %s TO %s`, tableName, roleName))
 
@@ -135,21 +136,208 @@ func countRows(t *testing.T, ctx context.Context, db *sql.DB, statement string) 
 	return count
 }
 
+// pgDuplicateObject is PostgreSQL's SQLSTATE for "duplicate_object" (see
+// errcodes.txt in PostgreSQL's own source). CREATE ROLE has no role-specific
+// duplicate code and no IF NOT EXISTS clause; PostgreSQL's own
+// src/backend/commands/user.c raises this generic code directly from an
+// explicit get_role_oid pre-check when the name already exists.
+//
+// createRestrictedRole's own pgRoleExists probe already refuses a
+// pre-existing name before any cleanup is registered (mirroring
+// dbtest.pgDatabaseExists / dbtest's createFreshDatabase step 1 in
+// internal/dbtest/dbtest.go), so this code firing after that probe passed
+// can only mean another process created the exact same UniqueName-derived
+// name in the narrow window between the probe and this CREATE ROLE.
+const pgDuplicateObject = "42710"
+
+// pgUniqueViolation is PostgreSQL's SQLSTATE for "unique_violation".
+// PostgreSQL's CreateRole checks for a duplicate name before taking any
+// lock on pg_authid (its RowExclusiveLock on pg_authid is acquired only
+// afterward, to perform the insert), so two concurrent CREATE ROLE calls
+// for the same name can both pass the pre-check and race at the insert's
+// unique index instead -- the loser sees this code rather than
+// pgDuplicateObject. See dbtest.pgUniqueViolation in
+// internal/dbtest/postgresql.go for the identical accepted race this
+// mirrors for CREATE DATABASE.
+const pgUniqueViolation = "23505"
+
+// pgInsufficientPrivilege is PostgreSQL's SQLSTATE for
+// "insufficient_privilege", the code CREATE ROLE returns when the connected
+// role lacks CREATEROLE. dbtest.pgCreateDatabaseErrorProvesNothingCreated in
+// internal/dbtest/postgresql.go treats the same code the same way for
+// CREATE DATABASE, for the same reason: the statement was rejected before
+// anything was created.
+const pgInsufficientPrivilege = "42501"
+
+// createRoleErrorProvesNothingCreated reports whether err is a PostgreSQL
+// error CREATE ROLE can only return when this particular statement created
+// nothing: the name already existed (pgDuplicateObject, or pgUniqueViolation
+// for the accepted pre-check/insert race -- see their comments above), or
+// admin lacks CREATEROLE (pgInsufficientPrivilege). createRestrictedRole
+// clears its dropOwned flag only when this reports true, so the registered
+// cleanup's DROP OWNED BY/DROP ROLE never runs for a role this call did not
+// create -- see dbtest.pgCreateDatabaseErrorProvesNothingCreated in
+// internal/dbtest/postgresql.go for the full soundness argument (no driver
+// this package uses retries a statement whose bytes already reached the
+// wire), which applies here unchanged.
+func createRoleErrorProvesNothingCreated(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.Code {
+	case pgDuplicateObject, pgUniqueViolation, pgInsufficientPrivilege:
+		return true
+	default:
+		return false
+	}
+}
+
+// pgRoleExists reports whether a role named name already exists on the
+// server admin is connected to. createRestrictedRole calls this before
+// registering any cleanup for name, so a name that already exists is
+// refused with nothing ever scheduled to be dropped for it -- the same
+// step 1 dbtest.pgDatabaseExists performs for the per-run database in
+// internal/dbtest/postgresql.go.
+func pgRoleExists(ctx context.Context, admin *sql.DB, name string) (bool, error) {
+	var discard int
+	err := admin.QueryRowContext(ctx, "SELECT 1 FROM pg_roles WHERE rolname = $1", name).Scan(&discard)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// restrictedRoleCleanupTimeout bounds a t.Cleanup-registered role drop. It
+// cannot use t.Context(): testing.T.Context is already canceled by the time
+// Cleanup-registered functions run, so a drop that used it would fail
+// immediately with a canceled-context error instead of ever reaching the
+// server. See dbtest.cleanupTimeout in internal/dbtest/dbtest.go for the
+// identical reasoning.
+const restrictedRoleCleanupTimeout = 30 * time.Second
+
+// createRestrictedRoleFlow implements the containment ordering
+// createRestrictedRole builds on, factored out into driver-agnostic
+// function-parameter form -- the same shape dbtest.createFreshDatabase in
+// internal/dbtest/dbtest.go uses for the per-run database -- so the ordering
+// itself, not the SQL a live server would speak, can be exercised by a test
+// with fake probeExists/create/drop functions and no live server. See
+// TestCreateRestrictedRoleFlow.
+//
+// The three steps, matching dbtest.createFreshDatabase's containment
+// ordering (a role is cluster-wide, so dropping the per-run database this
+// test's admin connection lives in cannot remove it):
+//
+//  1. probeExists runs first. If it reports the name already exists, this
+//     returns immediately with a nil cleanup and an error: nothing is ever
+//     registered for the caller to run, so a pre-existing name can never be
+//     dropped by this call, not even by accident.
+//  2. A local dropOwned flag, and a cleanup closure that reads it, are built
+//     before create runs -- so a caller that registers the returned cleanup
+//     before inspecting the returned error (as createRestrictedRole does)
+//     still has it in place even for a lost response: CREATE ROLE commits
+//     on the server but the client never sees the reply.
+//  3. If create fails, errorProvesNothingCreated decides whether that
+//     failure proves create made nothing: if so, dropOwned is cleared so
+//     the returned cleanup becomes a no-op. Otherwise dropOwned stays true,
+//     so cleanup still attempts the drop: the role may have been created
+//     despite the client-visible error, and leaking it is the safe failure
+//     mode, not dropping a role this call did not create.
+//
+// On success, cleanup drops the role this call created and err is nil.
+func createRestrictedRoleFlow(name string, probeExists func() (bool, error), create func() error, errorProvesNothingCreated func(error) bool, drop func()) (func(), error) {
+	exists, err := probeExists()
+	if err != nil {
+		return nil, fmt.Errorf("check whether a role named %q already exists: %w", name, err)
+	}
+	if exists {
+		return nil, fmt.Errorf("a role named %q already exists; refusing to touch it (per-run names must be unique -- see dbtest.UniqueName)", name)
+	}
+
+	dropOwned := true
+	cleanup := func() {
+		if dropOwned {
+			drop()
+		}
+	}
+
+	if err := create(); err != nil {
+		if errorProvesNothingCreated(err) {
+			dropOwned = false
+		}
+		return cleanup, fmt.Errorf("create restricted role %q: %w", name, err)
+	}
+	return cleanup, nil
+}
+
 // createRestrictedRole creates a LOGIN role whose password is its own name,
 // so tests can connect as it directly instead of only impersonating it
-// within the admin session.
+// within the admin session. See createRestrictedRoleFlow for the
+// containment ordering this drives.
 func createRestrictedRole(t *testing.T, ctx context.Context, admin *sql.DB, roleName string) {
 	t.Helper()
-	mustExec(t, ctx, admin, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s'`, roleName, roleName))
+
+	cleanup, err := createRestrictedRoleFlow(
+		roleName,
+		func() (bool, error) { return pgRoleExists(ctx, admin, roleName) },
+		func() error {
+			_, err := admin.ExecContext(ctx, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s'`, roleName, roleName))
+			return err
+		},
+		createRoleErrorProvesNothingCreated,
+		func() { dropRestrictedRole(t, admin, roleName) },
+	)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	require.NoError(t, err)
 }
 
 // dropRestrictedRole cleans up a role created by createRestrictedRole. A
 // role cannot be dropped while it still owns privileges, so DROP OWNED BY
 // strips whatever this test granted it before DROP ROLE runs.
-func dropRestrictedRole(t *testing.T, ctx context.Context, admin *sql.DB, roleName string) {
+//
+// Every step below is attempted regardless of an earlier step's failure,
+// and every failure is reported through t.Errorf rather than a FailNow-style
+// assertion: a FailNow-style failure on DROP OWNED BY would skip DROP ROLE
+// entirely and leak the cluster-wide role, and today's caller (t.Cleanup)
+// runs on the test goroutine after the test body has already returned, so a
+// FailNow-style call here would report only the first failure and hide the
+// second.
+func dropRestrictedRole(t *testing.T, admin *sql.DB, roleName string) {
 	t.Helper()
-	mustExec(t, ctx, admin, fmt.Sprintf(`DROP OWNED BY %s`, roleName))
-	mustExec(t, ctx, admin, fmt.Sprintf(`DROP ROLE IF EXISTS %s`, roleName))
+	ctx, cancel := context.WithTimeout(context.Background(), restrictedRoleCleanupTimeout)
+	defer cancel()
+
+	dropRestrictedRoleSteps(
+		func(msg string) { t.Errorf("dbtest: %s", msg) },
+		func() error { _, err := admin.ExecContext(ctx, fmt.Sprintf(`DROP OWNED BY %s`, roleName)); return err },
+		func() error {
+			_, err := admin.ExecContext(ctx, fmt.Sprintf(`DROP ROLE IF EXISTS %s`, roleName))
+			return err
+		},
+	)
+}
+
+// dropRestrictedRoleSteps runs dropRestrictedRole's two cleanup statements,
+// DROP OWNED BY then DROP ROLE, in function-parameter form so a test can
+// exercise the ordering with fake step functions and no live server -- see
+// TestDropRestrictedRoleSteps. dropRole always runs, even when dropOwned
+// fails, and every failure is reported through report rather than a
+// FailNow-style call: a FailNow-style failure on the first step would skip
+// the second and leak the cluster-wide role, and would also hide the
+// second failure's own message from whoever reads the test output.
+func dropRestrictedRoleSteps(report func(msg string), dropOwned func() error, dropRole func() error) {
+	if err := dropOwned(); err != nil {
+		report(fmt.Sprintf("drop owned by role: %v", err))
+	}
+	if err := dropRole(); err != nil {
+		report(fmt.Sprintf("drop role: %v", err))
+	}
 }
 
 // openAsRole connects to the same server dbtest.PostgreSQLDB used, but

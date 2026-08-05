@@ -45,15 +45,24 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 		Active bool   `rasql:"active"`
 		Email  string `rasql:"email"`
 	}
-	records, err := rasql.NewTable[record](integrationTable())
+	// A fixed table name here would be inherited into every fresh PostgreSQL
+	// database this test runs against: CREATE DATABASE copies template1 by
+	// default, and an object added to template1 is copied into every
+	// database created afterward, including the per-run database
+	// dbtest.PostgreSQLDB just created. A per-run unique name keeps this
+	// test from ever dropping a table it did not itself create -- the same
+	// containment rule internal/dbtest's package doc states for the
+	// database and role names a live test creates directly.
+	tableName := dbtest.UniqueName(t, "rasql_integration_records")
+	records, err := rasql.NewTable[record](integrationTable(tableName))
 	require.NoError(t, err)
 	recordID, err := records.Column("id")
 	require.NoError(t, err)
 
-	_, err = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS rasql_integration_records")
+	_, err = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 	require.NoError(t, err)
 	defer func() {
-		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS rasql_integration_records")
+		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
 	require.NoError(t, rasql.Create(t.Context(), client, records))
@@ -79,14 +88,14 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 
 	inspector, err := inspect.New(database, d)
 	require.NoError(t, err)
-	inspected, err := inspector.Table(t.Context(), "rasql_integration_records")
+	inspected, err := inspector.Table(t.Context(), tableName)
 	require.NoError(t, err)
-	require.Equal(t, integrationTable(), inspected)
+	require.Equal(t, integrationTable(tableName), inspected)
 }
 
-func integrationTable() schema.Table {
+func integrationTable(name string) schema.Table {
 	return schema.Table{
-		Name: "rasql_integration_records",
+		Name: name,
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
 			{Name: "active", Type: schema.TypeBoolean},
@@ -94,4 +103,36 @@ func integrationTable() schema.Table {
 		},
 		PrimaryKey: []string{"id"},
 	}
+}
+
+// TestIntegrationTableUsesItsNameArgument pins that integrationTable is
+// parameterized by name rather than carrying a fixed literal: this needs no
+// live server, since it is the same schema.Table construction
+// testDatabaseIntegration feeds into rasql.NewTable, the DROP/CREATE
+// statements, and inspector.Table -- all from the single tableName variable
+// dbtest.UniqueName produces (see testDatabaseIntegration above). Reverting
+// integrationTable to hardcode "rasql_integration_records" -- the bug this
+// test exists to catch -- reintroduces the containment violation the
+// package doc warns about: a table of that fixed name in PostgreSQL's
+// template1 would be inherited into every fresh per-run database and then
+// dropped by this test, though not this call, since two arbitrary names
+// would then collide.
+func TestIntegrationTableUsesItsNameArgument(t *testing.T) {
+	first := integrationTable("rasql_integration_records_1")
+	second := integrationTable("rasql_integration_records_2")
+
+	if first.Name != "rasql_integration_records_1" {
+		t.Fatalf("integrationTable(%q).Name = %q, want %q", "rasql_integration_records_1", first.Name, "rasql_integration_records_1")
+	}
+	if second.Name != "rasql_integration_records_2" {
+		t.Fatalf("integrationTable(%q).Name = %q, want %q", "rasql_integration_records_2", second.Name, "rasql_integration_records_2")
+	}
+	if first.Name == second.Name {
+		t.Fatalf("two different name arguments both produced schema.Table.Name %q; integrationTable must not carry a fixed table name", first.Name)
+	}
+
+	// Everything but the name must stay identical, so parameterizing the
+	// name cannot silently mask an unrelated schema difference.
+	first.Name, second.Name = "", ""
+	require.Equal(t, first, second)
 }
