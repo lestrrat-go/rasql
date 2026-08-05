@@ -29,7 +29,7 @@ const (
 
 // mysqlComposeService is the compose.yaml service MySQLConfig brings up
 // when no DSN is set; see ensureComposeUp in compose.go.
-var mysqlComposeService = composeService{name: "mysql", port: "3306", envVar: mysqlEnvVar}
+var mysqlComposeService = composeService{name: "mysql", envVar: mysqlEnvVar}
 
 var mysqlConfigCache perTestCache[*mysql.Config]
 
@@ -133,6 +133,16 @@ func createFreshMySQLDatabase(t *testing.T, server *mysql.Config) *mysql.Config 
 	if err := admin.PingContext(t.Context()); err != nil {
 		t.Fatalf("dbtest: connect via %s to create a fresh MySQL database: %v", mysqlEnvVar, err)
 	}
+
+	// The drop is registered before CREATE DATABASE runs; see the identical
+	// comment in createFreshPostgreSQLDatabase for why -- the server can
+	// apply CREATE DATABASE while the client sees an error, so registering
+	// only on success would still leak it. mysqlDropDatabaseStatement uses
+	// DROP DATABASE IF EXISTS for the same reason: without IF EXISTS, a
+	// legitimate CREATE failure (the missing-privilege path below) would
+	// turn cleanup into a second, spurious error.
+	t.Cleanup(func() { dropMySQLDatabase(t, server, name) })
+
 	if _, err := admin.ExecContext(t.Context(), mysqlCreateDatabaseStatement(name)); err != nil {
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && (mysqlErr.Number == mysqlAccessDenied || mysqlErr.Number == mysqlSpecificAccessDenied) {
@@ -154,7 +164,6 @@ func createFreshMySQLDatabase(t *testing.T, server *mysql.Config) *mysql.Config 
 		t.Fatalf("dbtest: reconnect to fresh MySQL database %q: %v", name, err)
 	}
 
-	t.Cleanup(func() { dropMySQLDatabase(t, server, name) })
 	return fresh
 }
 
@@ -192,7 +201,7 @@ func mysqlCreateDatabaseStatement(name string) string {
 }
 
 func mysqlDropDatabaseStatement(name string) string {
-	return "DROP DATABASE " + mysqlQuoteIdentifier(name)
+	return "DROP DATABASE IF EXISTS " + mysqlQuoteIdentifier(name)
 }
 
 // mysqlQuoteIdentifier backtick-quotes name for use as a MySQL identifier,

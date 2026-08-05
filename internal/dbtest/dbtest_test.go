@@ -129,9 +129,13 @@ func TestPostgreSQLDatabaseStatementsTargetExactName(t *testing.T) {
 	if create != "CREATE DATABASE "+wantIdent {
 		t.Fatalf("pgCreateDatabaseStatement(%q) = %q, want %q", name, create, "CREATE DATABASE "+wantIdent)
 	}
+	// The drop is registered before CREATE DATABASE runs (see
+	// createFreshPostgreSQLDatabase), so it must use IF EXISTS: a
+	// legitimate CREATE failure must not turn cleanup into a second,
+	// spurious error against a database that was never created.
 	drop := pgDropDatabaseStatement(name)
-	if drop != "DROP DATABASE "+wantIdent {
-		t.Fatalf("pgDropDatabaseStatement(%q) = %q, want %q", name, drop, "DROP DATABASE "+wantIdent)
+	if drop != "DROP DATABASE IF EXISTS "+wantIdent {
+		t.Fatalf("pgDropDatabaseStatement(%q) = %q, want %q", name, drop, "DROP DATABASE IF EXISTS "+wantIdent)
 	}
 }
 
@@ -146,9 +150,12 @@ func TestMySQLDatabaseStatementsTargetExactName(t *testing.T) {
 	if create != "CREATE DATABASE "+wantIdent {
 		t.Fatalf("mysqlCreateDatabaseStatement(%q) = %q, want %q", name, create, "CREATE DATABASE "+wantIdent)
 	}
+	// See the identical comment in
+	// TestPostgreSQLDatabaseStatementsTargetExactName: the drop is
+	// registered before CREATE DATABASE runs, so it must use IF EXISTS.
 	drop := mysqlDropDatabaseStatement(name)
-	if drop != "DROP DATABASE "+wantIdent {
-		t.Fatalf("mysqlDropDatabaseStatement(%q) = %q, want %q", name, drop, "DROP DATABASE "+wantIdent)
+	if drop != "DROP DATABASE IF EXISTS "+wantIdent {
+		t.Fatalf("mysqlDropDatabaseStatement(%q) = %q, want %q", name, drop, "DROP DATABASE IF EXISTS "+wantIdent)
 	}
 }
 

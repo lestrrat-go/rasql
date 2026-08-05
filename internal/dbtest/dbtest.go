@@ -14,15 +14,14 @@
 //     exactly as it is today.
 //  2. Otherwise, if Docker is usable, the compose file checked in at the
 //     repository root (compose.yaml) is brought up with
-//     `docker compose up -d --wait <service>` (or the standalone
-//     `docker-compose` if the compose plugin is absent) -- only the single
-//     service the caller needs, never both -- and the DSN is derived from
-//     that file's fixed ports -- 5432 for PostgreSQL, 3306 for MySQL -- the
-//     same ports and credentials CI's DSNs already assume.
+//     `docker compose up -d --wait <service>` -- only the single service
+//     the caller needs, never both -- and the DSN is derived from that
+//     file's fixed ports -- 5432 for PostgreSQL, 3306 for MySQL -- the same
+//     ports and credentials CI's DSNs already assume.
 //  3. Otherwise the calling test is skipped, naming which of the following
 //     was detected: the docker binary missing from PATH, the daemon being
 //     unreachable (including a permission error talking to its socket), or
-//     neither `docker compose` nor `docker-compose` being available.
+//     the `compose` subcommand not being available.
 //
 // Whichever of those a database resolves to -- a caller-supplied DSN or the
 // Docker fallback -- this package then creates a database (a schema, for
@@ -46,25 +45,18 @@
 // them differently. Docker being unusable is a fact about the machine, not
 // about rasql, so it skips the test rather than failing it. A compose
 // bring-up that fails after Docker has already been confirmed reachable
-// means the compose file or an image reference is broken -- something the
-// person running the suite can fix -- so that path fails the test loudly
-// instead of skipping; a skip there would hide real breakage from exactly
-// the person able to see it. Failing to create this package's own fresh
-// database once connected -- including a set of credentials that cannot
-// CREATE DATABASE at all -- fails loudly the same way, for the same reason.
-//
-// One bring-up failure is deliberately carved out of that loud-failure
-// rule: a host port compose wants (5432 or 3306) already being in use by
-// something else -- commonly a PostgreSQL or MySQL server the developer
-// already has running locally, or, as happened in this repository's own
-// CI, another job's service containers still holding the port. That is
-// neither a broken compose file nor a broken image reference, so it skips
-// instead, naming the conflicting port -- determined by probing, not by
-// reading Docker's message text -- and the RASQL_TEST_*_DSN variable that
-// points at the database already running there. See classifyPortCollision
-// in port_collision.go for how a bring-up failure's output is told apart
-// from any other kind, and findConflictingPortAmong for how the port
-// itself is determined.
+// fails the test loudly instead, carrying Docker's own message, uniformly
+// -- whether the cause is a broken compose file, a broken image reference,
+// or a host port compose wants (5432 or 3306) already being in use by
+// something else, commonly a PostgreSQL or MySQL server the developer
+// already has running locally. There is no classification of which of
+// those it was: the person running the suite can read Docker's own message
+// and, if it is a port already in use, set RASQL_TEST_POSTGRES_DSN or
+// RASQL_TEST_MYSQL_DSN to point at the database they already have running
+// instead of bringing up compose. Failing to create this package's own
+// fresh database once connected -- including a set of credentials that
+// cannot CREATE DATABASE at all -- fails loudly the same way, for the same
+// reason.
 //
 // This package never tears containers down, and has no opt-in to make it
 // do so. go test ./... compiles and runs every package as a separate

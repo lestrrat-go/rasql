@@ -24,7 +24,7 @@ const pgInsufficientPrivilege = "42501"
 
 // postgresComposeService is the compose.yaml service PostgreSQLConfig
 // brings up when no DSN is set; see ensureComposeUp in compose.go.
-var postgresComposeService = composeService{name: "postgres", port: "5432", envVar: postgresEnvVar}
+var postgresComposeService = composeService{name: "postgres", envVar: postgresEnvVar}
 
 var postgresConfigCache perTestCache[*pgx.ConnConfig]
 
@@ -116,6 +116,18 @@ func createFreshPostgreSQLDatabase(t *testing.T, server *pgx.ConnConfig) *pgx.Co
 	if err := admin.PingContext(t.Context()); err != nil {
 		t.Fatalf("dbtest: connect via %s to create a fresh PostgreSQL database: %v", postgresEnvVar, err)
 	}
+
+	// The drop is registered before CREATE DATABASE runs, not after it
+	// succeeds. The server can apply CREATE DATABASE while the client sees
+	// an error -- a context cancellation or a connection reset arriving
+	// after the statement already committed -- so registering only on
+	// success would still leak that database. pgDropDatabaseStatement uses
+	// DROP DATABASE IF EXISTS for exactly this ordering: without IF
+	// EXISTS, a legitimate CREATE failure (the missing-CREATEDB path
+	// below, for instance) would turn cleanup into a second, spurious
+	// error against a database that was never created.
+	t.Cleanup(func() { dropPostgreSQLDatabase(t, server, name) })
+
 	if _, err := admin.ExecContext(t.Context(), pgCreateDatabaseStatement(name)); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgInsufficientPrivilege {
@@ -137,7 +149,6 @@ func createFreshPostgreSQLDatabase(t *testing.T, server *pgx.ConnConfig) *pgx.Co
 		t.Fatalf("dbtest: reconnect to fresh PostgreSQL database %q: %v", name, err)
 	}
 
-	t.Cleanup(func() { dropPostgreSQLDatabase(t, server, name) })
 	return fresh
 }
 
@@ -178,5 +189,5 @@ func pgCreateDatabaseStatement(name string) string {
 }
 
 func pgDropDatabaseStatement(name string) string {
-	return "DROP DATABASE " + pgx.Identifier{name}.Sanitize()
+	return "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize()
 }
