@@ -69,10 +69,69 @@ func TestDeleteFrom(t *testing.T) {
 		require.Equal(t, []any{"ada@example.com"}, statement.Args())
 	})
 
-	t.Run("no predicate deletes every row", func(t *testing.T) {
-		statement, err := rasql.DeleteFrom(clientForBuild(t), deleteUsersTable(t)).Build()
+	t.Run("no predicate is rejected at Build", func(t *testing.T) {
+		_, err := rasql.DeleteFrom(clientForBuild(t), deleteUsersTable(t)).Build()
+		require.ErrorContains(t, err, "requires a WHERE predicate or an explicit AllowAll")
+	})
+
+	t.Run("no predicate is rejected at Exec", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+
+		_, err = rasql.DeleteFrom(client, deleteUsersTable(t)).Exec(t.Context())
+		require.ErrorContains(t, err, "requires a WHERE predicate or an explicit AllowAll")
+	})
+
+	t.Run("AllowAll builds a full-table delete", func(t *testing.T) {
+		statement, err := rasql.DeleteFrom(clientForBuild(t), deleteUsersTable(t)).AllowAll().Build()
 		require.NoError(t, err)
 		require.Equal(t, "DELETE FROM \"users\"", statement.SQL())
+		require.Empty(t, statement.Args())
+	})
+
+	t.Run("AllowAll executes", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		mock.ExpectExec("DELETE FROM \"users\"").
+			WillReturnResult(sqlmock.NewResult(0, 3))
+
+		result, err := rasql.DeleteFrom(client, deleteUsersTable(t)).AllowAll().Exec(t.Context())
+		require.NoError(t, err)
+		rows, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 3, rows)
+	})
+
+	t.Run("AllowAll with a predicate is rejected", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+
+		t.Run("AllowAll then WhereEqual", func(t *testing.T) {
+			_, err := rasql.DeleteFrom(clientForBuild(t), users).AllowAll().WhereEqual(id, 42).Build()
+			require.ErrorContains(t, err, "must not be combined")
+		})
+
+		t.Run("WhereEqual then AllowAll", func(t *testing.T) {
+			_, err := rasql.DeleteFrom(clientForBuild(t), users).WhereEqual(id, 42).AllowAll().Build()
+			require.ErrorContains(t, err, "must not be combined")
+		})
 	})
 
 	t.Run("column from another table reports an error", func(t *testing.T) {
@@ -104,6 +163,12 @@ func TestDeleteFrom(t *testing.T) {
 		typed, err := rasql.DeleteFrom(client, users).WhereEqual(id, 42).Build()
 		require.NoError(t, err)
 		require.Equal(t, typed.SQL(), fromClient.SQL())
+
+		fromClientAllowAll, err := client.DeleteFrom(users.QueryTable()).AllowAll().Build()
+		require.NoError(t, err)
+		typedAllowAll, err := rasql.DeleteFrom(client, users).AllowAll().Build()
+		require.NoError(t, err)
+		require.Equal(t, typedAllowAll.SQL(), fromClientAllowAll.SQL())
 	})
 }
 

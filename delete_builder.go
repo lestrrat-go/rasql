@@ -10,16 +10,20 @@ import (
 )
 
 // DeleteBuilder builds and executes a DELETE statement through an immutable fluent API.
+// Build and Exec reject a builder that carries no predicate, so a dropped Where cannot
+// become a full-table delete. AllowAll states the full-table delete when that is the intent.
 type DeleteBuilder struct {
 	client   Client
 	from     query.Table
 	where    query.Expression
 	hasWhere bool
+	allowAll bool
 	err      error
 }
 
 // DeleteFrom starts a fluent DELETE builder for table.
-// Exec deletes every row when no predicate is set.
+// Build and Exec report an error when the builder carries no predicate.
+// Call AllowAll to delete every row of the target table.
 func DeleteFrom[T any](client Client, table Table[T]) DeleteBuilder {
 	if isNilTable(table) {
 		return client.DeleteFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))
@@ -28,7 +32,8 @@ func DeleteFrom[T any](client Client, table Table[T]) DeleteBuilder {
 }
 
 // DeleteFrom starts a fluent DELETE builder using table as its target.
-// Exec deletes every row when no predicate is set.
+// Build and Exec report an error when the builder carries no predicate.
+// Call AllowAll to delete every row of the target table.
 func (c Client) DeleteFrom(table query.Table) DeleteBuilder {
 	return DeleteBuilder{client: c, from: table}
 }
@@ -57,6 +62,18 @@ func (b DeleteBuilder) WhereEqual(column query.Column, value any) DeleteBuilder 
 	return b.Where(query.Equal(column, query.Bind(value)))
 }
 
+// AllowAll states that the statement is meant to delete every row of the target table,
+// which Build and Exec otherwise reject. It sets no predicate and changes no rendered SQL.
+// Build and Exec reject a builder that combines it with Where or WhereEqual, because the
+// two state different intents.
+func (b DeleteBuilder) AllowAll() DeleteBuilder {
+	if b.err != nil {
+		return b
+	}
+	b.allowAll = true
+	return b
+}
+
 // Build validates and renders the statement without executing it.
 func (b DeleteBuilder) Build() (render.Statement, error) {
 	statement, err := b.statement()
@@ -78,6 +95,12 @@ func (b DeleteBuilder) Exec(ctx context.Context) (sql.Result, error) {
 func (b DeleteBuilder) statement() (query.Delete, error) {
 	if b.err != nil {
 		return query.Delete{}, b.err
+	}
+	if b.hasWhere && b.allowAll {
+		return query.Delete{}, fmt.Errorf("rasql: AllowAll must not be combined with a WHERE predicate")
+	}
+	if !b.hasWhere && !b.allowAll {
+		return query.Delete{}, fmt.Errorf("rasql: DELETE requires a WHERE predicate or an explicit AllowAll")
 	}
 	statement, err := query.NewDelete(b.from)
 	if err != nil {
