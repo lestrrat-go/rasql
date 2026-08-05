@@ -49,7 +49,7 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `Build()` | Renders `render.Statement` without executing. | ✓ | ✓ |
 | `Query(ctx)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. | ✓ | ✓ |
 | `All(ctx)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
-| `One(ctx)` | Executes and returns one `T`; any other row count is an error. | ✓ | |
+| `One(ctx)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
 
 `Where` and `WhereEqual` each replace the predicate set before them; combine conditions with `query.And` or `query.Or` rather than by calling them twice.
 
@@ -200,6 +200,15 @@ source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat
 <!-- END INCLUDE -->
 
 `Query`, `All`, and `One` run the statement, as listed under [Select builder methods](#select-builder-methods). All three report validation and rendering problems as the returned error before any row is read. `Query` yields rows first and at most one error after them, so a loop checks the error on each step and stops when it is non-nil.
+
+`One` also reports the result's row count: it returns `rasql.ErrNoRows` when the statement matched no rows and `rasql.ErrMultipleRows` when it matched more than one. `rasql.ErrNoRows` wraps `sql.ErrNoRows`, so `errors.Is(err, sql.ErrNoRows)` holds too, and code already written against `database/sql` keeps working:
+
+```go
+user, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, id).One(ctx)
+if errors.Is(err, rasql.ErrNoRows) {
+	// no such user
+}
+```
 
 `Build()` skips execution and returns the rendered `render.Statement`, which carries the SQL text and its ordered arguments. It is the direct way to log or test a statement.
 

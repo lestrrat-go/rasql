@@ -53,6 +53,10 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 	actual, err := rasql.SelectFrom(client, events).WhereEqual(eventID, expected.ID).One(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
+
+	_, err = rasql.SelectFrom(client, events).WhereEqual(eventID, expected.ID+1).One(t.Context())
+	require.ErrorIs(t, err, rasql.ErrNoRows)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
 // generatedEventRow has the shape rasqlgen emits: no tags, and one method per

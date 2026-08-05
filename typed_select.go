@@ -172,6 +172,8 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
 }
 
 // One returns exactly one row from Query.
+// It returns [ErrNoRows] when the statement matched no rows and
+// [ErrMultipleRows] when it matched more than one.
 func (b TypedSelectBuilder[T]) One(ctx context.Context) (T, error) {
 	var zero T
 	rows, err := b.Query(ctx)
@@ -187,11 +189,11 @@ func (b TypedSelectBuilder[T]) One(ctx context.Context) (T, error) {
 		result = value
 		count++
 		if count > 1 {
-			return zero, fmt.Errorf("rasql: expected one row, got %d", count)
+			return zero, ErrMultipleRows
 		}
 	}
 	if count != 1 {
-		return zero, fmt.Errorf("rasql: expected one row, got %d", count)
+		return zero, ErrNoRows
 	}
 	return result, nil
 }
