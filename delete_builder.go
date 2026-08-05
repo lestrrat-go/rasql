@@ -13,12 +13,11 @@ import (
 // Build and Exec reject a builder that carries no predicate, so a dropped Where cannot
 // become a full-table delete. AllowAll states the full-table delete when that is the intent.
 type DeleteBuilder struct {
-	client   Client
-	from     query.Table
-	where    query.Expression
-	hasWhere bool
-	allowAll bool
-	err      error
+	client     Client
+	from       query.Table
+	predicates []query.Expression
+	allowAll   bool
+	err        error
 }
 
 // DeleteFrom starts a fluent DELETE builder for table.
@@ -38,8 +37,9 @@ func (c Client) DeleteFrom(table query.Table) DeleteBuilder {
 	return DeleteBuilder{client: c, from: table}
 }
 
-// Where sets the predicate using an expression created through the basic query API.
-// It replaces any predicate set before it.
+// Where adds a predicate created through the basic query API.
+// Repeated calls combine with AND in the order they were made. Use one call
+// with query.Or for a top-level OR.
 func (b DeleteBuilder) Where(expression query.Expression) DeleteBuilder {
 	if b.err != nil {
 		return b
@@ -47,14 +47,14 @@ func (b DeleteBuilder) Where(expression query.Expression) DeleteBuilder {
 	if expression == nil {
 		return b.withError(fmt.Errorf("rasql: WHERE expression must not be nil"))
 	}
-	b.where = expression
-	b.hasWhere = true
+	b = b.clone()
+	b.predicates = append(b.predicates, expression)
 	return b
 }
 
-// WhereEqual sets an equality predicate for column and binds value.
-// It replaces any predicate set before it. Build and Exec reject a column whose
-// table is not the delete target.
+// WhereEqual adds an equality predicate for column and binds value.
+// Repeated calls combine with AND in the order they were made, including calls to Where.
+// Build and Exec reject a column whose table is not the delete target.
 func (b DeleteBuilder) WhereEqual(column query.Column, value any) DeleteBuilder {
 	if b.err != nil {
 		return b
@@ -96,20 +96,23 @@ func (b DeleteBuilder) statement() (query.Delete, error) {
 	if b.err != nil {
 		return query.Delete{}, b.err
 	}
-	if b.hasWhere && b.allowAll {
+	// The guard reads the accumulated predicates, not a separate flag, so that
+	// adding or dropping a Where cannot leave the check looking at stale state.
+	predicate, hasPredicate := combinePredicates(b.predicates)
+	if hasPredicate && b.allowAll {
 		return query.Delete{}, fmt.Errorf("rasql: AllowAll must not be combined with a WHERE predicate")
 	}
-	if !b.hasWhere && !b.allowAll {
+	if !hasPredicate && !b.allowAll {
 		return query.Delete{}, fmt.Errorf("rasql: DELETE requires a WHERE predicate or an explicit AllowAll")
 	}
 	statement, err := query.NewDelete(b.from)
 	if err != nil {
 		return query.Delete{}, fmt.Errorf("rasql: build DELETE: %w", err)
 	}
-	if !b.hasWhere {
+	if !hasPredicate {
 		return statement, nil
 	}
-	statement, err = statement.WithWhere(b.where)
+	statement, err = statement.WithWhere(predicate)
 	if err != nil {
 		return query.Delete{}, fmt.Errorf("rasql: build DELETE: %w", err)
 	}
@@ -121,4 +124,23 @@ func (b DeleteBuilder) withError(err error) DeleteBuilder {
 		b.err = err
 	}
 	return b
+}
+
+func (b DeleteBuilder) clone() DeleteBuilder {
+	copy := b
+	copy.predicates = append([]query.Expression(nil), b.predicates...)
+	return copy
+}
+
+// combinePredicates reduces accumulated predicates to one expression.
+// It reports false when there is no predicate to install.
+func combinePredicates(predicates []query.Expression) (query.Expression, bool) {
+	switch len(predicates) {
+	case 0:
+		return nil, false
+	case 1:
+		return predicates[0], true
+	default:
+		return query.And(predicates...), true
+	}
 }

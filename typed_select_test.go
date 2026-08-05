@@ -8,6 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -122,4 +123,97 @@ func TestTypedSelectOneQueryFailureIsNotNoRows(t *testing.T) {
 func TestOneSentinelsAreDistinct(t *testing.T) {
 	require.NotErrorIs(t, rasql.ErrMultipleRows, sql.ErrNoRows)
 	require.NotErrorIs(t, rasql.ErrMultipleRows, rasql.ErrNoRows)
+}
+
+func TestTypedSelectCombinesPredicates(t *testing.T) {
+	t.Run("WhereEqual then Where combine with AND", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+
+		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+			WhereEqual(id, 42).
+			Where(query.Like(email, query.Bind("%@example.com"))).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" LIKE $2))`,
+			statement.SQL())
+		require.Equal(t, []any{42, "%@example.com"}, statement.Args())
+	})
+
+	t.Run("a lone Or predicate survives unwrapped", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+
+		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+			Where(query.Or(
+				query.Equal(email, query.Bind("ada@example.com")),
+				query.Equal(email, query.Bind("bob@example.com")),
+			)).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."email" = $1) OR ("users"."email" = $2))`,
+			statement.SQL())
+	})
+
+	t.Run("WhereEqual after a lone Or wraps it in AND", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+
+		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+			Where(query.Or(
+				query.Equal(email, query.Bind("ada@example.com")),
+				query.Equal(email, query.Bind("bob@example.com")),
+			)).
+			WhereEqual(id, 42).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT "users"."id", "users"."email" FROM "users" WHERE ((("users"."email" = $1) OR ("users"."email" = $2)) AND ("users"."id" = $3))`,
+			statement.SQL())
+		require.Equal(t, []any{"ada@example.com", "bob@example.com", 42}, statement.Args())
+	})
+
+	t.Run("predicates from a joined table combine", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		type order struct {
+			ID     int64 `rasql:"id"`
+			UserID int64 `rasql:"user_id"`
+		}
+		orders, err := rasql.NewTable[order](schema.Table{
+			Name: "orders",
+			Columns: []schema.Column{
+				{Name: "id", Type: schema.TypeInteger},
+				{Name: "user_id", Type: schema.TypeInteger},
+			},
+			PrimaryKey: []string{"id"},
+		})
+		require.NoError(t, err)
+		userID, err := users.Column("id")
+		require.NoError(t, err)
+		ordersUserID, err := orders.Column("user_id")
+		require.NoError(t, err)
+
+		// WhereEqual takes a primary-table column, Where takes a column of the
+		// joined table; accumulating them must not bypass the "column must be
+		// in the statement" validation for either.
+		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+			Join(rasql.InnerJoin(orders, query.Equal(userID, ordersUserID))).
+			WhereEqual(userID, 42).
+			Where(query.GreaterThan(ordersUserID, query.Bind(0))).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT "users"."id", "users"."email" FROM "users" INNER JOIN "orders" ON ("users"."id" = "orders"."user_id") WHERE (("users"."id" = $1) AND ("orders"."user_id" > $2))`,
+			statement.SQL())
+		require.Equal(t, []any{42, 0}, statement.Args())
+	})
 }
