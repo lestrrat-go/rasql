@@ -232,7 +232,7 @@ if errors.Is(err, rasql.ErrNoRows) {
 
 `WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.Column` and cover the common cases without importing the `query` package. Generated tables expose one field per column, so `users.ID` is the whole reference. `Limit` and `Offset` page the result. The untyped builder from `client.SelectFrom` also has `Select`, which narrows the projection to named columns.
 
-`WhereIn` covers a membership test the same way, binding each value as its own placeholder:
+`WhereIn` covers a membership test the same way. It needs at least one value: an empty list makes `Build`, `Query`, `All`, and `One` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect. A non-empty list binds each value as its own placeholder:
 
 <!-- INCLUDE(examples/rasql_where_in_example_test.go) -->
 ```go
@@ -286,7 +286,8 @@ func Example_rasql_where_in() {
 	}
 
 	// WhereIn binds one placeholder per value and skips the users whose id is
-	// not in the list.
+	// not in the list. The list must hold at least one value: an empty one makes
+	// Query return an error instead of rendering IN (), which is not valid SQL.
 	rows, err := rasql.SelectFrom(client, users).
 		WhereIn(users.ID, 1, 3).
 		OrderAsc(users.ID).

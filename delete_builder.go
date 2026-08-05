@@ -84,7 +84,7 @@ func (b DeleteBuilder) WhereIn(column query.Column, values ...any) DeleteBuilder
 // AllowAll states that the statement is meant to delete every row of the target table,
 // which Build and Exec otherwise reject. It sets no predicate and changes no rendered SQL.
 // Build and Exec reject a builder that combines it with Where, WhereEqual or WhereIn,
-// because the two state different intents.
+// because a predicate and a full-table delete state different intents.
 func (b DeleteBuilder) AllowAll() DeleteBuilder {
 	if b.err != nil {
 		return b
