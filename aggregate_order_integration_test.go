@@ -59,6 +59,13 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 			bareColumnSQL: func(table string) string {
 				return "SELECT COUNT(*) FROM `" + table + "` ORDER BY `" + table + "`.`id`"
 			},
+			// This case leaves serverRefusesBareColumn false on measured
+			// behavior: MySQL 8.4.11, from the mysql:8.4 image CI uses, with
+			// ONLY_FULL_GROUP_BY in its sql_mode, ran the statement above and
+			// returned a count. That same server rejected the mixed projection
+			// SELECT COUNT(*), t.id FROM t with error 1140, and rejected this
+			// ordering once the query named an explicit GROUP BY, with error
+			// 1055.
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
