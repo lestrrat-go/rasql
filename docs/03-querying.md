@@ -53,6 +53,7 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `Query(ctx)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. | ✓ | ✓ |
 | `All(ctx)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
 | `One(ctx)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
+| `Count(ctx)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit` or `Offset` set. | ✓ | ✓ |
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
 `AND` in the order they were made, which is what a conditionally built filter
@@ -106,6 +107,22 @@ The value list of `query.In` and `query.NotIn` takes expressions, the same freed
 | `table.Column(name)` | A column looked up by name and validated against the descriptor. |
 | `query.Bind(value)` | A bound argument, rendered as the dialect's placeholder. |
 | `query.Excluded(column)` | The proposed value of a column in an upsert. |
+
+### Aggregates
+
+`Function` calls a SQL function on its arguments, projected like any other expression. `COUNT`, `SUM`, `MIN`, `MAX`, and `AVG` are the closed set of names `Call` accepts; any other name fails validation before it reaches SQL.
+
+| Constructor | Renders |
+| --- | --- |
+| `query.CountAll()` | `COUNT(*)` |
+| `query.Count(expression)` | `COUNT(expression)` |
+| `query.Sum(expression)` | `SUM(expression)` |
+| `query.Min(expression)` | `MIN(expression)` |
+| `query.Max(expression)` | `MAX(expression)` |
+| `query.Avg(expression)` | `AVG(expression)` |
+| `query.Call(name, arguments…)` | Any of the functions above, named by a `query.Function…` constant. |
+
+An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
 
 ### Projections, joins, and ordering
 
@@ -325,6 +342,89 @@ rows, err := rasql.SelectFrom(client, users).
 ```
 
 A generated field cannot name a column the table does not have, because the field would not exist. A table built at run time has no such fields, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column; a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
+
+## Count rows
+
+`Count` runs `COUNT(*)` over the builder's joins and every predicate it accumulated, in place of its projections, so it counts exactly the rows the same builder would return. That is the common need for a paginated list: get the total once, unpaged, then page a separate copy of the builder for the rows.
+
+<!-- INCLUDE(examples/rasql_count_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_count() {
+	// This example counts rows matched by a builder without paging through them.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+	// Create the table described by the generated users descriptor.
+	if err := rasql.Create(ctx, client, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+	// Use rasql.Insert for each fixture row so setup follows the public API.
+	for _, user := range []UserRow{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+		{ID: 3, Email: "cyd@example.com"},
+	} {
+		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+			fmt.Printf("failed to insert user: %s\n", err)
+			return
+		}
+	}
+
+	// Count runs COUNT(*) over the builder's WHERE and joins, without decoding
+	// any row into a UserRow. It rejects a builder with Limit or Offset set,
+	// since a count of a paged statement is not the count the caller asked for.
+	total, err := rasql.SelectFrom(client, users).Count(ctx)
+	if err != nil {
+		fmt.Printf("failed to count users: %s\n", err)
+		return
+	}
+	fmt.Println("total:", total)
+
+	filtered, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 2).Count(ctx)
+	if err != nil {
+		fmt.Printf("failed to count filtered users: %s\n", err)
+		return
+	}
+	fmt.Println("filtered:", filtered)
+
+	// Output:
+	// total: 3
+	// filtered: 1
+}
+```
+source: [examples/rasql_count_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_count_example_test.go)
+<!-- END INCLUDE -->
+
+`Count` rejects a builder that sets `Limit` or `Offset`, because a count of a paged statement is not the count the caller built the statement to ask for; count an unpaged builder, then page a copy of it for the rows. `SUM` and `AVG` have no equivalent helper, because their result types are not portable across dialects — project them with `query.Sum` or `query.Avg` and decode through `rasql.DecodeFrom[R]` instead, as [Aggregates](#aggregates) covers.
 
 ## Alias a table for a self-join
 

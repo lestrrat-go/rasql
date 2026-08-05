@@ -81,6 +81,73 @@ func TestSelectBuilderIsImmutable(t *testing.T) {
 	require.Contains(t, filteredStatement.SQL(), " WHERE ")
 }
 
+func TestSelectBuilderBuildsCountStatement(t *testing.T) {
+	users := fluentUsers(t)
+	orders, err := query.NewTable(schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "SELECT COUNT(*) AS \"count\" FROM \"users\" INNER JOIN \"orders\" ON (\"users\".\"id\" = \"orders\".\"user_id\") WHERE (\"users\".\"id\" = $1)",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "SELECT COUNT(*) AS `count` FROM `users` INNER JOIN `orders` ON (`users`.`id` = `orders`.`user_id`) WHERE (`users`.`id` = ?)",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "SELECT COUNT(*) AS \"count\" FROM \"users\" INNER JOIN \"orders\" ON (\"users\".\"id\" = \"orders\".\"user_id\") WHERE (\"users\".\"id\" = ?)",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.SelectFrom(test.dialect, users).
+				Select("id", "email").
+				Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
+				WhereEqual("id", 42).
+				OrderDesc("email").
+				BuildCount()
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{42}, rendered.Args())
+			require.NotContains(t, rendered.SQL(), " ORDER BY ")
+		})
+	}
+}
+
+func TestSelectBuilderRejectsCountWithPaging(t *testing.T) {
+	users := fluentUsers(t)
+
+	_, err := render.SelectFrom(dialect.PostgreSQL(), users).Select("id").Limit(10).BuildCount()
+	require.Error(t, err)
+
+	_, err = render.SelectFrom(dialect.PostgreSQL(), users).Select("id").Offset(5).BuildCount()
+	require.Error(t, err)
+}
+
+func TestSelectBuilderBuildCountReportsBuildErrors(t *testing.T) {
+	users := fluentUsers(t)
+
+	_, err := render.SelectFrom(dialect.PostgreSQL(), users).Select("missing").BuildCount()
+	require.Error(t, err)
+}
+
 func TestSelectBuilderReportsBuildErrors(t *testing.T) {
 	users := fluentUsers(t)
 
@@ -165,6 +232,28 @@ func TestSelectBuilderCombinesPredicates(t *testing.T) {
 			`SELECT "users"."id" FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" LIKE $2) AND ("users"."email" IS NOT NULL))`,
 			statement.SQL())
 		require.NotContains(t, statement.SQL(), `") AND ("users"."email" LIKE $2)) AND`)
+	})
+
+	t.Run("BuildCount carries every accumulated predicate", func(t *testing.T) {
+		// BuildCount replaces the projections but must count exactly the rows
+		// Build would return, so it has to combine the accumulated predicates
+		// the same way Build does rather than keep only one of them.
+		builder := render.SelectFrom(dialect.PostgreSQL(), users).
+			Select("id").
+			WhereEqual("id", 42).
+			Where(query.Like(email, query.Bind("%@example.com"))).
+			Where(query.IsNotNull(email))
+
+		counted, err := builder.BuildCount()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT COUNT(*) AS "count" FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" LIKE $2) AND ("users"."email" IS NOT NULL))`,
+			counted.SQL())
+		require.Equal(t, []any{42, "%@example.com"}, counted.Args())
+
+		selected, err := builder.Build()
+		require.NoError(t, err)
+		require.Equal(t, selected.Args(), counted.Args())
 	})
 
 	t.Run("a lone Or is not wrapped", func(t *testing.T) {

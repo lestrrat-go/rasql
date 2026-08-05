@@ -164,21 +164,9 @@ func (b SelectBuilder) Build() (Statement, error) {
 	if b.err != nil {
 		return Statement{}, b.err
 	}
-	statement, err := query.NewSelect(b.from, b.projections...)
+	statement, err := b.buildFromJoinsWhere(b.projections...)
 	if err != nil {
 		return Statement{}, err
-	}
-	for _, join := range b.joins {
-		statement, err = statement.WithJoin(join)
-		if err != nil {
-			return Statement{}, err
-		}
-	}
-	if predicate, ok := combinePredicates(b.predicates); ok {
-		statement, err = statement.WithWhere(predicate)
-		if err != nil {
-			return Statement{}, err
-		}
 	}
 	if len(b.orders) > 0 {
 		statement, err = statement.WithOrder(b.orders...)
@@ -199,6 +187,52 @@ func (b SelectBuilder) Build() (Statement, error) {
 		}
 	}
 	return Select(b.dialect, statement)
+}
+
+// BuildCount validates b and returns a parameterized statement that counts the
+// rows b matches. It projects COUNT(*) under the result name "count" in place of
+// b's projections, and drops ordering, which cannot change a count. It reports
+// an error when b sets a limit or an offset, because a count of a paged
+// statement is not the count the caller built the statement to ask for.
+func (b SelectBuilder) BuildCount() (Statement, error) {
+	if b.err != nil {
+		return Statement{}, b.err
+	}
+	if b.hasLimit {
+		return Statement{}, fmt.Errorf("cannot count a statement with a limit")
+	}
+	if b.hasOffset {
+		return Statement{}, fmt.Errorf("cannot count a statement with an offset")
+	}
+	statement, err := b.buildFromJoinsWhere(query.Project(query.CountAll()).As("count"))
+	if err != nil {
+		return Statement{}, err
+	}
+	return Select(b.dialect, statement)
+}
+
+// buildFromJoinsWhere assembles a query.Select from b's from, joins, and
+// accumulated predicates, using projections in place of b's own. Build and
+// BuildCount share it so both carry every predicate, combined with AND in the
+// order the calls were made, into the statement they build.
+func (b SelectBuilder) buildFromJoinsWhere(projections ...query.Projection) (query.Select, error) {
+	statement, err := query.NewSelect(b.from, projections...)
+	if err != nil {
+		return query.Select{}, err
+	}
+	for _, join := range b.joins {
+		statement, err = statement.WithJoin(join)
+		if err != nil {
+			return query.Select{}, err
+		}
+	}
+	if predicate, ok := combinePredicates(b.predicates); ok {
+		statement, err = statement.WithWhere(predicate)
+		if err != nil {
+			return query.Select{}, err
+		}
+	}
+	return statement, nil
 }
 
 func (b SelectBuilder) orderColumn(name string, descending bool) SelectBuilder {

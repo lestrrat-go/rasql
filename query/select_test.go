@@ -54,6 +54,40 @@ func TestSelectBuildsImmutableStatement(t *testing.T) {
 	require.NoError(t, statement.Validate())
 }
 
+func TestFunctionConstructorsCarryTheirCall(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		function  query.Function
+		name      query.FunctionName
+		arguments []query.Expression
+		star      bool
+	}{
+		"Count":    {function: query.Count(userID), name: query.FunctionCount, arguments: []query.Expression{userID}},
+		"CountAll": {function: query.CountAll(), name: query.FunctionCount, star: true},
+		"Sum":      {function: query.Sum(userID), name: query.FunctionSum, arguments: []query.Expression{userID}},
+		"Min":      {function: query.Min(userID), name: query.FunctionMin, arguments: []query.Expression{userID}},
+		"Max":      {function: query.Max(userID), name: query.FunctionMax, arguments: []query.Expression{userID}},
+		"Avg":      {function: query.Avg(userID), name: query.FunctionAvg, arguments: []query.Expression{userID}},
+		"Call":     {function: query.Call(query.FunctionSum, userID), name: query.FunctionSum, arguments: []query.Expression{userID}},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, test.name, test.function.Name())
+			require.Equal(t, test.arguments, test.function.Arguments())
+			require.Equal(t, test.star, test.function.Star())
+		})
+	}
+
+	function := query.Sum(userID)
+	arguments := function.Arguments()
+	arguments[0] = nil
+	require.Equal(t, userID, function.Arguments()[0], "mutating the returned slice must not change the expression")
+}
+
 func TestSelectRejectsInvalidStatements(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
@@ -85,6 +119,30 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	requireQueryValidationError(t, err)
 	_, err = statement.WithWhere(query.In(otherID, query.Bind(1)))
 	requireQueryValidationError(t, err)
+
+	_, err = query.NewSelect(users, query.Project(query.Call("LOWER", userID)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `unsupported function "LOWER"`)
+
+	_, err = query.NewSelect(users, query.Project(query.Call(query.FunctionSum)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "takes exactly one argument, got 0")
+
+	_, err = query.NewSelect(users, query.Project(query.Call(query.FunctionCount, userID, userID)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "takes exactly one argument, got 2")
+
+	_, err = query.NewSelect(users, query.Project(query.Count(otherID)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "references table")
+	require.ErrorContains(t, err, "outside the statement")
+
+	statement, err = query.NewSelect(users,
+		query.Project(query.CountAll()),
+		query.Project(query.Max(userID)),
+	)
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
 }
 
 func TestSelectAcceptsMembershipPredicate(t *testing.T) {

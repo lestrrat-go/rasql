@@ -99,6 +99,28 @@ func validateExpression(expression Expression, sources map[string]struct{}, path
 			}
 		}
 		return nil
+	case Function:
+		if !validFunctionName(expression.name) {
+			return validationError(path+".function", "unsupported function %q", expression.name)
+		}
+		if expression.star {
+			if expression.name != FunctionCount {
+				return validationError(path, "function %q does not support *", expression.name)
+			}
+			if len(expression.arguments) > 0 {
+				return validationError(path, "COUNT(*) takes no arguments")
+			}
+			return nil
+		}
+		if len(expression.arguments) != 1 {
+			return validationError(path, "function %q takes exactly one argument, got %d", expression.name, len(expression.arguments))
+		}
+		for i, argument := range expression.arguments {
+			if err := validateExpression(argument, sources, fmt.Sprintf("%s.arguments[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+		return nil
 	default:
 		return validationError(path, "uses unsupported expression %T", expression)
 	}
@@ -107,6 +129,15 @@ func validateExpression(expression Expression, sources map[string]struct{}, path
 func validBinaryOperator(operator BinaryOperator) bool {
 	switch operator {
 	case OperatorEqual, OperatorNotEqual, OperatorGreaterThan, OperatorGreaterThanOrEqual, OperatorLessThan, OperatorLessThanOrEqual, OperatorLike:
+		return true
+	default:
+		return false
+	}
+}
+
+func validFunctionName(name FunctionName) bool {
+	switch name {
+	case FunctionCount, FunctionSum, FunctionMin, FunctionMax, FunctionAvg:
 		return true
 	default:
 		return false

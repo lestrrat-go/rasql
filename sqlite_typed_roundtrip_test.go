@@ -105,6 +105,62 @@ func TestSQLiteTypedSelectWhereInFiltersRows(t *testing.T) {
 	require.Equal(t, []user{inserted[0], inserted[2]}, actual)
 }
 
+func TestSQLiteTypedSelectCountsRows(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	client, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	type event struct {
+		ID     int64 `rasql:"id"`
+		Active bool  `rasql:"active"`
+	}
+	events, err := rasql.NewTable[event](schema.Table{
+		Name: "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "active", Type: schema.TypeBoolean},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	eventActive, err := events.Column("active")
+	require.NoError(t, err)
+	eventID, err := events.Column("id")
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, events))
+
+	for _, row := range []event{
+		{ID: 1, Active: true},
+		{ID: 2, Active: true},
+		{ID: 3, Active: false},
+	} {
+		_, err = rasql.Insert(t.Context(), client, events, row)
+		require.NoError(t, err)
+	}
+
+	total, err := rasql.SelectFrom(client, events).Count(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, int64(3), total)
+
+	active, err := rasql.SelectFrom(client, events).WhereEqual(eventActive, true).Count(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, int64(2), active)
+
+	// Two predicates must both reach the counted statement, so the count has
+	// to drop the inactive row and the second active row alike.
+	activeFirst, err := rasql.SelectFrom(client, events).
+		WhereEqual(eventActive, true).
+		WhereEqual(eventID, int64(1)).
+		Count(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, int64(1), activeFirst)
+}
+
 // generatedEventRow has the shape rasqlgen emits: no tags, and one method per
 // direction stating the column-to-field mapping.
 type generatedEventRow struct {

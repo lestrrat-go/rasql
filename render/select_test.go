@@ -41,6 +41,63 @@ func TestSelectRendersForBuiltInDialects(t *testing.T) {
 	}
 }
 
+func TestSelectRendersAggregateFunctions(t *testing.T) {
+	statement := aggregateSelectStatement(t)
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "SELECT COUNT(*) AS \"total\", MAX(\"orders\".\"amount\") AS \"top\" FROM \"orders\" WHERE (\"orders\".\"amount\" <> $1)",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "SELECT COUNT(*) AS `total`, MAX(`orders`.`amount`) AS `top` FROM `orders` WHERE (`orders`.`amount` <> ?)",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "SELECT COUNT(*) AS \"total\", MAX(\"orders\".\"amount\") AS \"top\" FROM \"orders\" WHERE (\"orders\".\"amount\" <> ?)",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Select(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{"done"}, rendered.Args())
+			require.Contains(t, rendered.SQL(), "COUNT(*)")
+			require.NotContains(t, rendered.SQL(), `"COUNT"`)
+			require.NotContains(t, rendered.SQL(), "`COUNT`")
+		})
+	}
+}
+
+func aggregateSelectStatement(t *testing.T) query.Select {
+	t.Helper()
+	orders, err := query.NewTable(schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "amount", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	amount, err := orders.Column("amount")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(orders,
+		query.Project(query.CountAll()).As("total"),
+		query.Project(query.Max(amount)).As("top"),
+	)
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.NotEqual(amount, query.Bind("done")))
+	require.NoError(t, err)
+	return statement
+}
+
 func TestSelectRejectsNilDialect(t *testing.T) {
 	_, err := render.Select(nil, selectStatement(t))
 	require.Error(t, err)

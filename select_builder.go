@@ -110,6 +110,48 @@ func (b SelectBuilder) Query(ctx context.Context) (iter.Seq2[row.Row, error], er
 	return b.client.QueryRendered(ctx, statement)
 }
 
+// Count executes COUNT(*) over the rows the statement matches.
+// It ignores ordering and reports an error when the builder sets a limit or an
+// offset: count an unpaged builder, then page a copy of it for the rows.
+// A COUNT(*) statement returns exactly one row, so Count reports the same
+// [ErrNoRows] and [ErrMultipleRows] as every other single-row read when the
+// database returns anything else.
+func (b SelectBuilder) Count(ctx context.Context) (int64, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
+	statement, err := b.builder.BuildCount()
+	if err != nil {
+		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	rows, err := b.client.QueryRendered(ctx, statement)
+	if err != nil {
+		return 0, err
+	}
+	return exactlyOne(countValues(rows))
+}
+
+// countValues adapts a sequence of result rows into the int64 held by each
+// row's "count" result column, the name BuildCount projects COUNT(*) under.
+func countValues(rows iter.Seq2[row.Row, error]) iter.Seq2[int64, error] {
+	return func(yield func(int64, error) bool) {
+		for result, err := range rows {
+			if err != nil {
+				yield(0, err)
+				return
+			}
+			count, err := row.Get[int64](result, "count")
+			if err != nil {
+				yield(0, err)
+				return
+			}
+			if !yield(count, nil) {
+				return
+			}
+		}
+	}
+}
+
 func (b SelectBuilder) withError(err error) SelectBuilder {
 	if b.err == nil {
 		b.err = err
