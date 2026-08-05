@@ -445,7 +445,7 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 		require.NoError(t, err)
 		require.Contains(t, decoded.SQL(), `FROM "staff"`)
 
-		deleted, err := rasql.DeleteFrom[staffRow](clientForBuild(t), table).Build()
+		deleted, err := rasql.DeleteFrom[staffRow](clientForBuild(t), table).AllowAll().Build()
 		require.NoError(t, err)
 		require.Contains(t, deleted.SQL(), `DELETE FROM "staff"`)
 

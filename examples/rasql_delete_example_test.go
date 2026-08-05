@@ -70,9 +70,14 @@ func Example_rasql_delete() {
 	}
 	fmt.Printf("%d user deleted by predicate\n", deleted)
 
-	// Build renders the statement without executing it, which shows that a
-	// builder with no predicate deletes every row.
-	statement, err := rasql.DeleteFrom(client, users).Build()
+	// A builder with no predicate is rejected, so a dropped Where cannot become
+	// a full-table delete by accident.
+	if _, err := rasql.DeleteFrom(client, users).Build(); err != nil {
+		fmt.Println(err)
+	}
+
+	// AllowAll states the full-table delete. Build renders it without executing it.
+	statement, err := rasql.DeleteFrom(client, users).AllowAll().Build()
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -82,5 +87,6 @@ func Example_rasql_delete() {
 	// Output:
 	// 1 user deleted by id
 	// 1 user deleted by predicate
+	// rasql: DELETE requires a WHERE predicate or an explicit AllowAll
 	// DELETE FROM "users"
 }
