@@ -225,9 +225,13 @@ type Membership struct {
 func (Membership) expression() {}
 
 // In tests whether expression equals one of values.
-// It renders as expression IN (…) with one placeholder per bound value, so a
-// long list costs one argument per element. Statement validation rejects an
-// empty value list, because IN () is not valid SQL in any supported dialect.
+// It renders as expression IN (…). The value list takes expressions, so a column
+// or a computed operand is accepted as deliberately as a bound value; there is no
+// subquery expression in this package, so a SELECT on the right-hand side is not
+// available. Each Bind value renders as its own placeholder and costs one
+// argument, while a column renders as a quoted identifier and costs none.
+// Statement validation rejects an empty value list, because IN () is not valid
+// SQL in any supported dialect.
 func In(expression Expression, values ...Expression) Membership {
 	return Membership{expr: expression, values: append([]Expression(nil), values...)}
 }

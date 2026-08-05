@@ -96,7 +96,7 @@ Every constructor below takes and returns `query.Expression`, so conditions nest
 | `query.Or(expressions…)` | `(a OR b …)` |
 | `query.Negate(expression)` | `NOT (expression)` |
 
-`query.In` and `query.NotIn` bind each value as its own placeholder, so an `N`-value list costs `N` arguments against the dialect's parameter limit. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect.
+The value list of `query.In` and `query.NotIn` takes expressions, the same freedom the comparison constructors give both of their operands. Each `query.Bind` value becomes its own placeholder, so a list of `N` bound values costs `N` arguments against the dialect's parameter limit. A non-value operand is accepted deliberately and costs no argument: a column such as `orders.UserID` renders as a quoted identifier, which is how a column-to-column test like `query.In(users.ID, orders.UserID)` is written. There is no subquery expression in the `query` package, so a `SELECT` on the right-hand side is not available. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect.
 
 ### Operands
 

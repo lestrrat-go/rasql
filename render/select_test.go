@@ -77,6 +77,78 @@ func TestSelectRendersMembershipForBuiltInDialects(t *testing.T) {
 	}
 }
 
+func TestSelectRendersMembershipWithColumnMember(t *testing.T) {
+	statement := columnMembershipStatement(t)
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "SELECT \"users\".\"id\" FROM \"users\" INNER JOIN \"orders\" ON (\"users\".\"id\" = \"orders\".\"user_id\") WHERE ((\"users\".\"id\" IN (\"orders\".\"user_id\")) AND (\"users\".\"id\" NOT IN ($1, \"orders\".\"id\")))",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "SELECT `users`.`id` FROM `users` INNER JOIN `orders` ON (`users`.`id` = `orders`.`user_id`) WHERE ((`users`.`id` IN (`orders`.`user_id`)) AND (`users`.`id` NOT IN (?, `orders`.`id`)))",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "SELECT \"users\".\"id\" FROM \"users\" INNER JOIN \"orders\" ON (\"users\".\"id\" = \"orders\".\"user_id\") WHERE ((\"users\".\"id\" IN (\"orders\".\"user_id\")) AND (\"users\".\"id\" NOT IN (?, \"orders\".\"id\")))",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Select(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			// A column member renders as a quoted identifier and contributes no
+			// argument, so only the one bound value shows up in Args.
+			require.Equal(t, []any{7}, rendered.Args())
+		})
+	}
+}
+
+// columnMembershipStatement builds a statement whose membership predicates take
+// a column as a member, which is valid SQL and is accepted by design.
+func columnMembershipStatement(t *testing.T) query.Select {
+	t.Helper()
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	orders, err := query.NewTable(schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	orderID, err := orders.Column("id")
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	statement, err = statement.WithJoin(query.InnerJoin(orders, query.Equal(userID, orderUserID)))
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.And(
+		query.In(userID, orderUserID),
+		query.NotIn(userID, query.Bind(7), orderID),
+	))
+	require.NoError(t, err)
+	return statement
+}
+
 func membershipStatement(t *testing.T) query.Select {
 	t.Helper()
 	users, err := query.NewTable(schema.Table{
