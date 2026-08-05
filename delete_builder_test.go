@@ -153,6 +153,90 @@ func TestDeleteFrom(t *testing.T) {
 		require.ErrorContains(t, err, "must not be nil")
 	})
 
+	t.Run("repeated Where combines with AND", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+		statement, err := rasql.DeleteFrom(clientForBuild(t), users).
+			Where(query.Equal(id, query.Bind(42))).
+			Where(query.Equal(email, query.Bind("ada@example.com"))).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`DELETE FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" = $2))`,
+			statement.SQL())
+		require.Equal(t, []any{42, "ada@example.com"}, statement.Args())
+	})
+
+	t.Run("WhereEqual after Where combines with AND", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+		statement, err := rasql.DeleteFrom(clientForBuild(t), users).
+			Where(query.Equal(email, query.Bind("ada@example.com"))).
+			WhereEqual(id, 42).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`DELETE FROM "users" WHERE (("users"."email" = $1) AND ("users"."id" = $2))`,
+			statement.SQL())
+		require.Equal(t, []any{"ada@example.com", 42}, statement.Args())
+	})
+
+	t.Run("derived builders do not share predicates", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+
+		// Three predicates leave the accumulated slice with spare backing-array
+		// capacity (Go grows a nil slice 0 -> 1 -> 2 -> 4), which is what exposes
+		// the aliasing hazard DeleteBuilder.clone must guard against.
+		base := rasql.DeleteFrom(clientForBuild(t), users).
+			WhereEqual(id, 1).
+			WhereEqual(id, 2).
+			WhereEqual(id, 3)
+
+		first := base.Where(query.Equal(email, query.Bind("ada@example.com")))
+		second := base.Where(query.Equal(email, query.Bind("bob@example.com")))
+
+		firstStatement, err := first.Build()
+		require.NoError(t, err)
+		secondStatement, err := second.Build()
+		require.NoError(t, err)
+
+		require.Contains(t, firstStatement.Args(), "ada@example.com")
+		require.NotContains(t, firstStatement.Args(), "bob@example.com")
+
+		require.Contains(t, secondStatement.Args(), "bob@example.com")
+		require.NotContains(t, secondStatement.Args(), "ada@example.com")
+	})
+
+	t.Run("a column from another table still errors after a valid predicate", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		other, err := rasql.NewTable[deleteUser](schema.Table{
+			Name:       "archived_users",
+			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			PrimaryKey: []string{"id"},
+		})
+		require.NoError(t, err)
+		archivedID, err := other.Column("id")
+		require.NoError(t, err)
+
+		_, err = rasql.DeleteFrom(clientForBuild(t), users).
+			WhereEqual(id, 1).
+			WhereEqual(archivedID, 1).
+			Build()
+		require.ErrorContains(t, err, "archived_users")
+	})
+
 	t.Run("Client.DeleteFrom builds the same statement", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		id, err := users.Column("id")

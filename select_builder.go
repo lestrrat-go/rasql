@@ -40,13 +40,16 @@ func (b SelectBuilder) Join(joins ...query.Join) SelectBuilder {
 	return b
 }
 
-// Where sets the predicate using an expression created through the basic query API.
+// Where adds a predicate created through the basic query API.
+// Repeated calls combine with AND in the order they were made. Use one call
+// with query.Or for a top-level OR.
 func (b SelectBuilder) Where(expression query.Expression) SelectBuilder {
 	b.builder = b.builder.Where(expression)
 	return b
 }
 
-// WhereEqual sets an equality predicate for a primary-table column and binds value.
+// WhereEqual adds an equality predicate for a primary-table column and binds value.
+// Repeated calls combine with AND in the order they were made, including calls to Where.
 func (b SelectBuilder) WhereEqual(columnName string, value any) SelectBuilder {
 	b.builder = b.builder.WhereEqual(columnName, value)
 	return b
