@@ -239,7 +239,9 @@ func In(expression Expression, values ...Expression) Membership {
 // NotIn tests whether expression differs from every one of values.
 // It renders as expression NOT IN (…) and follows the same rules as In,
 // including the rejection of an empty value list by statement validation. A NULL
-// among values makes the whole test unknown, which is SQL's rule for NOT IN.
+// among values never makes the test true: it is false when a non-NULL value
+// equals expression, and unknown otherwise. A WHERE clause keeps neither, so a
+// NOT IN over a list that may contain NULL matches no rows at all.
 func NotIn(expression Expression, values ...Expression) Membership {
 	return Membership{expr: expression, values: append([]Expression(nil), values...), not: true}
 }
