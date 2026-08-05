@@ -93,6 +93,30 @@ func (b SelectBuilder) WhereEqual(columnName string, value any) SelectBuilder {
 	return b
 }
 
+// WhereIn adds an IN predicate for a primary-table column and binds each value.
+// Repeated calls combine with AND in the order they were made, including calls to
+// Where and WhereEqual. Build reports an error when values is empty, because
+// IN () is not valid SQL.
+func (b SelectBuilder) WhereIn(columnName string, values ...any) SelectBuilder {
+	b = b.clone()
+	if b.err != nil {
+		return b
+	}
+	if len(values) == 0 {
+		return b.withError(fmt.Errorf("IN requires at least one value"))
+	}
+	column, err := b.from.Column(columnName)
+	if err != nil {
+		return b.withError(err)
+	}
+	binds := make([]query.Expression, len(values))
+	for i, value := range values {
+		binds[i] = query.Bind(value)
+	}
+	b.predicates = append(b.predicates, query.In(column, binds...))
+	return b
+}
+
 // Order adds ordering created through the basic query API.
 func (b SelectBuilder) Order(orders ...query.Order) SelectBuilder {
 	b = b.clone()

@@ -43,6 +43,30 @@ func TestSelectBuilderBuildsRenderedStatement(t *testing.T) {
 	require.Equal(t, expected.Args(), rendered.Args())
 }
 
+func TestSelectBuilderWhereInRendersOnePlaceholderPerValue(t *testing.T) {
+	users := fluentUsers(t)
+
+	rendered, err := render.SelectFrom(dialect.PostgreSQL(), users).
+		Select("id", "email").
+		WhereIn("id", 1, 2, 3).
+		Build()
+	require.NoError(t, err)
+
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	statement, err := query.NewSelect(users, query.Project(id), query.Project(email))
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.In(id, query.Bind(1), query.Bind(2), query.Bind(3)))
+	require.NoError(t, err)
+	expected, err := render.Select(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+
+	require.Equal(t, expected.SQL(), rendered.SQL())
+	require.Equal(t, expected.Args(), rendered.Args())
+}
+
 func TestSelectBuilderIsImmutable(t *testing.T) {
 	users := fluentUsers(t)
 
@@ -67,6 +91,10 @@ func TestSelectBuilderReportsBuildErrors(t *testing.T) {
 	_, err = render.SelectFrom(dialect.PostgreSQL(), users).Select("id").Where(nil).Build()
 	require.Error(t, err)
 	_, err = render.SelectFrom(nil, users).Select("id").Build()
+	require.Error(t, err)
+	_, err = render.SelectFrom(dialect.PostgreSQL(), users).WhereIn("id").Build()
+	require.Error(t, err)
+	_, err = render.SelectFrom(dialect.PostgreSQL(), users).WhereIn("missing", 1).Build()
 	require.Error(t, err)
 }
 
@@ -110,6 +138,19 @@ func TestSelectBuilderCombinesPredicates(t *testing.T) {
 		require.Equal(t,
 			`SELECT "users"."id" FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" LIKE $2))`,
 			whereEqualFirst.SQL())
+	})
+
+	t.Run("WhereIn joins the accumulated predicates", func(t *testing.T) {
+		statement, err := render.SelectFrom(dialect.PostgreSQL(), users).
+			Select("id").
+			Where(query.Like(email, query.Bind("%@example.com"))).
+			WhereIn("id", 1, 2).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT "users"."id" FROM "users" WHERE (("users"."email" LIKE $1) AND ("users"."id" IN ($2, $3)))`,
+			statement.SQL())
+		require.Equal(t, []any{"%@example.com", 1, 2}, statement.Args())
 	})
 
 	t.Run("three predicates render one flat AND", func(t *testing.T) {

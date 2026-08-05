@@ -82,6 +82,35 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSelectBuilderWhereInMatchesRenderSelectFrom(t *testing.T) {
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	fromRender, err := render.SelectFrom(dialect.PostgreSQL(), users).
+		Select("id", "email").
+		WhereIn("id", 1, 2).
+		Build()
+	require.NoError(t, err)
+
+	client, err := rasql.New(&debugQueryer{}, dialect.PostgreSQL())
+	require.NoError(t, err)
+	fromClient, err := client.SelectFrom(users).
+		Select("id", "email").
+		WhereIn("id", 1, 2).
+		Build()
+	require.NoError(t, err)
+
+	require.Equal(t, fromRender.SQL(), fromClient.SQL())
+	require.Equal(t, fromRender.Args(), fromClient.Args())
+}
+
 func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)

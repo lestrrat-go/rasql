@@ -78,6 +78,32 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	require.NoError(t, err)
 	_, err = statement.WithWhere(query.Equal(otherID, query.Bind(1)))
 	requireQueryValidationError(t, err)
+
+	_, err = statement.WithWhere(query.In(userID))
+	requireQueryValidationError(t, err)
+	_, err = statement.WithWhere(query.In(userID, query.Bind(1), nil))
+	requireQueryValidationError(t, err)
+	_, err = statement.WithWhere(query.In(otherID, query.Bind(1)))
+	requireQueryValidationError(t, err)
+}
+
+func TestSelectAcceptsMembershipPredicate(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	statement, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+
+	in := query.In(userID, query.Bind(1), query.Bind(2), query.Bind(3))
+	statement, err = statement.WithWhere(in)
+	require.NoError(t, err)
+	require.Equal(t, query.Expression(in), statement.Where())
+
+	notIn := query.NotIn(userID, query.Bind(1))
+	statement, err = statement.WithWhere(notIn)
+	require.NoError(t, err)
+	require.Equal(t, query.Expression(notIn), statement.Where())
 }
 
 func TestTableRejectsUnknownColumn(t *testing.T) {
