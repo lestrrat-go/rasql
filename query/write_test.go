@@ -97,6 +97,19 @@ func TestWriteStatementsValidate(t *testing.T) {
 	deleteStatement, err = deleteStatement.WithWhere(query.Equal(id, query.Bind(1)))
 	require.NoError(t, err)
 	require.NoError(t, deleteStatement.Validate())
+
+	// Validation is shared by writes, not select-only: a DELETE accepts NotIn
+	// with values and rejects In with none.
+	membershipDelete, err := query.NewDelete(users)
+	require.NoError(t, err)
+	membershipDelete, err = membershipDelete.WithWhere(query.NotIn(id, query.Bind(1)))
+	require.NoError(t, err)
+	require.NoError(t, membershipDelete.Validate())
+
+	emptyDelete, err := query.NewDelete(users)
+	require.NoError(t, err)
+	_, err = emptyDelete.WithWhere(query.In(id))
+	require.Error(t, err)
 }
 
 func TestWriteStatementsRejectInvalidInput(t *testing.T) {

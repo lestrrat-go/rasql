@@ -71,6 +71,40 @@ func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 	}
 }
 
+func TestDeleteRendersNotInForBuiltInDialects(t *testing.T) {
+	users, id, _ := writeTable(t)
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	deleteStatement, err = deleteStatement.WithWhere(query.NotIn(id, query.Bind(1), query.Bind(2)))
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "DELETE FROM \"users\" WHERE (\"users\".\"id\" NOT IN ($1, $2))",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "DELETE FROM `users` WHERE (`users`.`id` NOT IN (?, ?))",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "DELETE FROM \"users\" WHERE (\"users\".\"id\" NOT IN (?, ?))",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Delete(test.dialect, deleteStatement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{1, 2}, rendered.Args())
+		})
+	}
+}
+
 func TestReturningRequiresDialectCapability(t *testing.T) {
 	users, id, email := writeTable(t)
 	statement, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})

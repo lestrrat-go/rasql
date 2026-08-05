@@ -86,6 +86,19 @@ func validateExpression(expression Expression, sources map[string]struct{}, path
 		return validateExpression(expression.expr, sources, path+".expression")
 	case NullTest:
 		return validateExpression(expression.expr, sources, path+".expression")
+	case Membership:
+		if len(expression.values) == 0 {
+			return validationError(path, "requires at least one value")
+		}
+		if err := validateExpression(expression.expr, sources, path+".expression"); err != nil {
+			return err
+		}
+		for i, value := range expression.values {
+			if err := validateExpression(value, sources, fmt.Sprintf("%s.values[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+		return nil
 	default:
 		return validationError(path, "uses unsupported expression %T", expression)
 	}

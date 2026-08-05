@@ -60,6 +60,51 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+func TestSQLiteTypedSelectWhereInFiltersRows(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	client, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[user](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, users))
+
+	inserted := []user{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+		{ID: 3, Email: "cyd@example.com"},
+	}
+	for _, row := range inserted {
+		_, err = rasql.Insert(t.Context(), client, users, row)
+		require.NoError(t, err)
+	}
+
+	actual, err := rasql.SelectFrom(client, users).
+		WhereIn(userID, inserted[0].ID, inserted[2].ID).
+		OrderAsc(userID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []user{inserted[0], inserted[2]}, actual)
+}
+
 // generatedEventRow has the shape rasqlgen emits: no tags, and one method per
 // direction stating the column-to-field mapping.
 type generatedEventRow struct {

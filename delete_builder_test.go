@@ -57,6 +57,53 @@ func TestDeleteFrom(t *testing.T) {
 		require.EqualValues(t, 1, rows)
 	})
 
+	t.Run("WhereIn deletes matching rows", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		mock.ExpectExec("DELETE FROM \"users\" WHERE (\"users\".\"id\" IN ($1, $2))").
+			WithArgs(1, 2).
+			WillReturnResult(sqlmock.NewResult(0, 2))
+
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		result, err := rasql.DeleteFrom(client, users).WhereIn(id, 1, 2).Exec(t.Context())
+		require.NoError(t, err)
+		rows, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 2, rows)
+	})
+
+	t.Run("WhereIn with no values reports an error", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		_, err = rasql.DeleteFrom(clientForBuild(t), users).WhereIn(id).Build()
+		require.EqualError(t, err, "rasql: IN requires at least one value")
+	})
+
+	t.Run("WhereIn with a column from another table reports an error", func(t *testing.T) {
+		other, err := rasql.NewTable[deleteUser](schema.Table{
+			Name:       "archived_users",
+			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			PrimaryKey: []string{"id"},
+		})
+		require.NoError(t, err)
+		archivedID, err := other.Column("id")
+		require.NoError(t, err)
+
+		_, err = rasql.DeleteFrom(clientForBuild(t), deleteUsersTable(t)).WhereIn(archivedID, 1).Build()
+		require.ErrorContains(t, err, "archived_users")
+	})
+
 	t.Run("Where takes a query expression", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		email, err := users.Column("email")
@@ -88,6 +135,17 @@ func TestDeleteFrom(t *testing.T) {
 
 		_, err = rasql.DeleteFrom(client, deleteUsersTable(t)).Exec(t.Context())
 		require.ErrorContains(t, err, "requires a WHERE predicate or an explicit AllowAll")
+	})
+
+	t.Run("WhereIn alone satisfies the predicate requirement", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+
+		statement, err := rasql.DeleteFrom(clientForBuild(t), users).WhereIn(id, 1, 2).Build()
+		require.NoError(t, err)
+		require.Equal(t, "DELETE FROM \"users\" WHERE (\"users\".\"id\" IN ($1, $2))", statement.SQL())
+		require.Equal(t, []any{1, 2}, statement.Args())
 	})
 
 	t.Run("AllowAll builds a full-table delete", func(t *testing.T) {
@@ -130,6 +188,11 @@ func TestDeleteFrom(t *testing.T) {
 
 		t.Run("WhereEqual then AllowAll", func(t *testing.T) {
 			_, err := rasql.DeleteFrom(clientForBuild(t), users).WhereEqual(id, 42).AllowAll().Build()
+			require.ErrorContains(t, err, "must not be combined")
+		})
+
+		t.Run("WhereIn then AllowAll", func(t *testing.T) {
+			_, err := rasql.DeleteFrom(clientForBuild(t), users).WhereIn(id, 42).AllowAll().Build()
 			require.ErrorContains(t, err, "must not be combined")
 		})
 	})
@@ -185,6 +248,23 @@ func TestDeleteFrom(t *testing.T) {
 			`DELETE FROM "users" WHERE (("users"."email" = $1) AND ("users"."id" = $2))`,
 			statement.SQL())
 		require.Equal(t, []any{"ada@example.com", 42}, statement.Args())
+	})
+
+	t.Run("WhereIn after WhereEqual combines with AND", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+		statement, err := rasql.DeleteFrom(clientForBuild(t), users).
+			WhereEqual(email, "ada@example.com").
+			WhereIn(id, 1, 2).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`DELETE FROM "users" WHERE (("users"."email" = $1) AND ("users"."id" IN ($2, $3)))`,
+			statement.SQL())
+		require.Equal(t, []any{"ada@example.com", 1, 2}, statement.Args())
 	})
 
 	t.Run("derived builders do not share predicates", func(t *testing.T) {

@@ -55,6 +55,14 @@ func (b SelectBuilder) WhereEqual(columnName string, value any) SelectBuilder {
 	return b
 }
 
+// WhereIn adds an IN predicate for a primary-table column and binds each value.
+// Repeated calls combine with AND in the order they were made, including calls to
+// Where and WhereEqual. Build and Query report an error when values is empty.
+func (b SelectBuilder) WhereIn(columnName string, values ...any) SelectBuilder {
+	b.builder = b.builder.WhereIn(columnName, values...)
+	return b
+}
+
 // Order adds ordering created through the basic query API.
 func (b SelectBuilder) Order(orders ...query.Order) SelectBuilder {
 	b.builder = b.builder.Order(orders...)

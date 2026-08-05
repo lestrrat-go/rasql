@@ -214,3 +214,49 @@ func (n NullTest) Expression() Expression {
 func (n NullTest) Not() bool {
 	return n.not
 }
+
+// Membership tests whether an expression matches one of a list of values.
+type Membership struct {
+	expr   Expression
+	values []Expression
+	not    bool
+}
+
+func (Membership) expression() {}
+
+// In tests whether expression equals one of values.
+// It renders as expression IN (…). The value list takes expressions, so a column
+// or a computed operand is accepted as deliberately as a bound value; there is no
+// subquery expression in this package, so a SELECT on the right-hand side is not
+// available. Each Bind value renders as its own placeholder and costs one
+// argument, while a column renders as a quoted identifier and costs none.
+// Statement validation rejects an empty value list, because IN () is not valid
+// SQL in any supported dialect.
+func In(expression Expression, values ...Expression) Membership {
+	return Membership{expr: expression, values: append([]Expression(nil), values...)}
+}
+
+// NotIn tests whether expression differs from every one of values.
+// It renders as expression NOT IN (…) and follows the same rules as In,
+// including the rejection of an empty value list by statement validation. A NULL
+// among values never makes the test true: it is false when a non-NULL value
+// equals expression, and unknown otherwise. A WHERE clause keeps neither, so a
+// NOT IN over a list that may contain NULL matches no rows at all.
+func NotIn(expression Expression, values ...Expression) Membership {
+	return Membership{expr: expression, values: append([]Expression(nil), values...), not: true}
+}
+
+// Expression returns the expression being tested.
+func (m Membership) Expression() Expression {
+	return m.expr
+}
+
+// Values returns a copy of the tested values.
+func (m Membership) Values() []Expression {
+	return append([]Expression(nil), m.values...)
+}
+
+// Not reports whether the test is NOT IN.
+func (m Membership) Not() bool {
+	return m.not
+}
