@@ -260,3 +260,82 @@ func (m Membership) Values() []Expression {
 func (m Membership) Not() bool {
 	return m.not
 }
+
+// FunctionName identifies a SQL function a statement may call.
+type FunctionName string
+
+const (
+	FunctionCount FunctionName = "COUNT"
+	FunctionSum   FunctionName = "SUM"
+	FunctionMin   FunctionName = "MIN"
+	FunctionMax   FunctionName = "MAX"
+	FunctionAvg   FunctionName = "AVG"
+)
+
+// Function calls a SQL function on its arguments. Every supported function
+// aggregates, so statement validation accepts a call only where SQL does: in a
+// SELECT projection, or in an ORDER BY clause of a statement whose projections
+// all aggregate, never inside another aggregate, and never in a projection set
+// that also reads a column outside an aggregate, which would need the
+// unsupported GROUP BY. That same GROUP BY rule governs the ORDER BY of an
+// aggregating statement, whose ordering expressions may read a column only
+// inside an aggregate. Any other placement fails with a ValidationError before
+// the statement is rendered.
+type Function struct {
+	name      FunctionName
+	arguments []Expression
+	star      bool
+}
+
+func (Function) expression() {}
+
+// Call applies name to arguments. Validation rejects a name that is not one of
+// the FunctionName constants, so a function name never reaches SQL unchecked.
+func Call(name FunctionName, arguments ...Expression) Function {
+	return Function{name: name, arguments: append([]Expression(nil), arguments...)}
+}
+
+// Count counts the non-NULL values of expression. Use CountAll to count rows.
+func Count(expression Expression) Function {
+	return Call(FunctionCount, expression)
+}
+
+// CountAll counts result rows as COUNT(*).
+func CountAll() Function {
+	return Function{name: FunctionCount, star: true}
+}
+
+// Sum adds the values of expression.
+func Sum(expression Expression) Function {
+	return Call(FunctionSum, expression)
+}
+
+// Min returns the smallest value of expression.
+func Min(expression Expression) Function {
+	return Call(FunctionMin, expression)
+}
+
+// Max returns the largest value of expression.
+func Max(expression Expression) Function {
+	return Call(FunctionMax, expression)
+}
+
+// Avg averages the values of expression.
+func Avg(expression Expression) Function {
+	return Call(FunctionAvg, expression)
+}
+
+// Name returns the called function.
+func (f Function) Name() FunctionName {
+	return f.name
+}
+
+// Arguments returns a copy of the call arguments.
+func (f Function) Arguments() []Expression {
+	return append([]Expression(nil), f.arguments...)
+}
+
+// Star reports whether the call takes * instead of arguments.
+func (f Function) Star() bool {
+	return f.star
+}

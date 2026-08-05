@@ -196,6 +196,106 @@ func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
 	require.Equal(t, []summary{{UserID: 42, Email: "ada@example.com"}}, decoded)
 }
 
+func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
+		WithArgs(42).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
+
+	count, err := client.SelectFrom(users).WhereEqual("id", 42).Count(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, int64(3), count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	table := schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[user](table)
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	// Count must not select the table's columns, unlike every other typed
+	// query; only COUNT(*) AS "count" reaches the database.
+	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
+		WithArgs(42).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
+
+	count, err := rasql.SelectFrom(client, users).WhereEqual(id, 42).Count(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, int64(3), count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSelectBuilderCountRejectsWrongRowCount(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	// Count reports the shared single-row sentinels, the same ones One
+	// reports, rather than a message of its own.
+	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\"").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}))
+	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\"").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)).AddRow(int64(2)))
+
+	_, err = client.SelectFrom(users).Count(t.Context())
+	require.ErrorIs(t, err, rasql.ErrNoRows)
+
+	_, err = client.SelectFrom(users).Count(t.Context())
+	require.ErrorIs(t, err, rasql.ErrMultipleRows)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestClientQueryAllowsDebugQueryer(t *testing.T) {
 	queryer := &debugQueryer{}
 	client, err := rasql.New(queryer, dialect.PostgreSQL())

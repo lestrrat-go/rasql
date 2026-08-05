@@ -229,29 +229,22 @@ func (s Select) Validate() error {
 			return validationError(path+".source", "duplicates table reference %q", join.source.Qualifier())
 		}
 		sources[join.source.key()] = struct{}{}
-		if err := validateExpression(join.on, sources, path+".on"); err != nil {
+		if err := validateClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {
 			return err
 		}
 	}
 
-	for i, projection := range s.projections {
-		path := fmt.Sprintf("projections[%d]", i)
-		if projection.alias != "" {
-			if err := validateAlias(projection.alias); err != nil {
-				return validationError(path+".alias", "%s", err)
-			}
-		}
-		if err := validateExpression(projection.expression, sources, path+".expression"); err != nil {
-			return err
-		}
+	projections, err := s.validateProjectionSet(sources)
+	if err != nil {
+		return err
 	}
 	if s.where != nil {
-		if err := validateExpression(s.where, sources, "where"); err != nil {
+		if err := validateClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
 	}
 	for i, order := range s.orderBy {
-		if err := validateExpression(order.expression, sources, fmt.Sprintf("order_by[%d]", i)); err != nil {
+		if err := validateOrder(order, sources, projections, fmt.Sprintf("order_by[%d]", i)); err != nil {
 			return err
 		}
 	}
@@ -262,6 +255,69 @@ func (s Select) Validate() error {
 		return validationError("offset", "must not be negative")
 	}
 	return nil
+}
+
+// validateOrder validates one ORDER BY expression against what the projection
+// set does, which projections reports. ORDER BY runs after aggregation, so the
+// legal shape follows the projections and has exactly two cases, because
+// validateProjectionSet already refused the mixed set. Projections that never
+// aggregate leave one result row per source row, so ORDER BY reads columns
+// freely and must not aggregate. Projections that all aggregate leave a single
+// group, so ORDER BY may call an aggregate, while a column it reads outside
+// every aggregate belongs to no row of that group and would need the
+// unsupported GROUP BY, exactly as in the projection set itself.
+func validateOrder(order Order, sources map[string]struct{}, projections expressionUsage, path string) error {
+	if !projections.aggregate {
+		return validateClauseExpression(order.expression, sources, "an ORDER BY clause", path)
+	}
+	usage, err := validateExpression(order.expression, aggregateClauseContext(sources, "an ORDER BY clause"), path)
+	if err != nil {
+		return err
+	}
+	if usage.bareColumn {
+		return validationError(path, "reads a column outside an aggregate function while the projections aggregate, which requires the unsupported GROUP BY")
+	}
+	return nil
+}
+
+// validateProjectionSet validates every projection and the rules that span the
+// set, and reports what the set as a whole reads so a later clause can apply the
+// rules that depend on it. A statement that both aggregates and reads a column
+// outside an aggregate needs GROUP BY to mean anything, and GROUP BY is
+// unsupported, so no such statement has a rendering any supported dialect
+// answers usefully: PostgreSQL rejects the ungrouped column and SQLite pairs the
+// aggregate with an arbitrary row. Validation refuses the combination instead,
+// which leaves every accepted set either free of aggregates or entirely
+// aggregate.
+func (s Select) validateProjectionSet(sources map[string]struct{}) (expressionUsage, error) {
+	var (
+		total         expressionUsage
+		aggregatePath string
+		columnPath    string
+	)
+	for i, projection := range s.projections {
+		path := fmt.Sprintf("projections[%d]", i)
+		if projection.alias != "" {
+			if err := validateAlias(projection.alias); err != nil {
+				return expressionUsage{}, validationError(path+".alias", "%s", err)
+			}
+		}
+		usage, err := validateExpression(projection.expression, projectionContext(sources), path+".expression")
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		if usage.aggregate && aggregatePath == "" {
+			aggregatePath = path
+		}
+		if usage.bareColumn && columnPath == "" {
+			columnPath = path
+		}
+		total = total.merge(usage)
+	}
+	if total.aggregate && total.bareColumn {
+		return expressionUsage{}, validationError(columnPath+".expression", "reads a column outside an aggregate function while %s aggregates, which requires the unsupported GROUP BY", aggregatePath)
+	}
+	return total, nil
 }
 
 func (s Select) clone() Select {

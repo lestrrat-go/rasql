@@ -165,6 +165,16 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
 	return collectAll(rows)
 }
 
+// Count executes COUNT(*) over the rows the statement matches.
+// It ignores the projections that decode T, ignores ordering, and reports an
+// error when the builder sets a limit or an offset: count an unpaged builder,
+// then page a copy of it for the rows.
+// Like [TypedSelectBuilder.One], it reports [ErrNoRows] or [ErrMultipleRows]
+// when the database returns anything other than the one row COUNT(*) produces.
+func (b TypedSelectBuilder[T]) Count(ctx context.Context) (int64, error) {
+	return b.builder.Count(ctx)
+}
+
 // One returns exactly one row from Query.
 // It returns [ErrNoRows] when the statement matched no rows and
 // [ErrMultipleRows] when it matched more than one.

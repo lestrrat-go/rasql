@@ -87,6 +87,10 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	require.NoError(t, err)
 	require.Equal(t, []record{first, second}, all)
 
+	total, err := rasql.SelectFrom(client, records).Count(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, int64(2), total)
+
 	// RETURNING is PostgreSQL-only among the two live dialects this test runs
 	// against, so QueryWrite is exercised over the real pgx driver on
 	// PostgreSQL and pinned as a build-time rejection on MySQL.
