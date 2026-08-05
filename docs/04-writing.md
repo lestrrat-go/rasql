@@ -1,6 +1,6 @@
 # Writing rows
 
-The root package writes a typed row without building a statement by hand. For anything the typed helpers do not cover, the `query` package builds the statement and `Client.Exec` runs it.
+The root package writes a typed row without building a statement by hand. For anything the typed helpers do not cover, the `query` package builds the statement and `Client.Exec` runs it, except a statement carrying a `RETURNING` clause, which reads its rows back through `Client.QueryWrite` or the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]`.
 
 Every write operation, predicate, and statement constructor is listed in the [operation reference](03-querying.md#operation-reference).
 

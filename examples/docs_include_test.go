@@ -53,6 +53,38 @@ func TestDocExamplesMatchSource(t *testing.T) {
 	require.NotZero(t, blocks, "no example blocks found in the documentation")
 }
 
+// execMethod matches the Client.Exec method by name. The word boundary keeps
+// ExecRendered and a builder's own Exec out, since neither rejects RETURNING.
+var execMethod = regexp.MustCompile(`\b[Cc]lient\.Exec\b`)
+
+// fencedBlock matches a fenced code block, which holds example source rather
+// than the prose that routes a reader to an API.
+var fencedBlock = regexp.MustCompile("(?s)```.*?```")
+
+// TestDocsQualifyExecWithReturningRule holds the documentation to the rule
+// Client.Exec enforces: it rejects a write statement carrying a RETURNING
+// clause, so prose that sends a caller to Exec must name that exception rather
+// than route the caller into a failing call.
+func TestDocsQualifyExecWithReturningRule(t *testing.T) {
+	passages := 0
+	for _, page := range documentationPages(t) {
+		contents, err := os.ReadFile(page)
+		require.NoError(t, err)
+
+		prose := fencedBlock.ReplaceAllString(string(contents), "")
+		for _, paragraph := range strings.Split(prose, "\n\n") {
+			if !execMethod.MatchString(paragraph) {
+				continue
+			}
+			passages++
+			require.Contains(t, paragraph, "RETURNING",
+				"%s names Client.Exec without stating that it rejects a RETURNING write; say which call reads those rows instead:\n%s",
+				page, strings.TrimSpace(paragraph))
+		}
+	}
+	require.NotZero(t, passages, "no Client.Exec passage found in the documentation")
+}
+
 // documentationPages lists every markdown file that may include an example.
 func documentationPages(t *testing.T) []string {
 	t.Helper()
