@@ -89,6 +89,30 @@ func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
 	return config.defaultColumns, nil
 }
 
+// QueryWriteAll runs statement through Client.QueryWrite and decodes every
+// returned row as T. The RETURNING projections must cover the columns T maps.
+func QueryWriteAll[T any](ctx context.Context, client Client, statement query.WriteStatement) ([]T, error) {
+	rows, err := client.QueryWrite(ctx, statement)
+	if err != nil {
+		return nil, err
+	}
+	return collectAll(decodeRows[T](rows))
+}
+
+// QueryWriteOne runs statement through Client.QueryWrite and decodes exactly one
+// returned row as T.
+// It returns [ErrNoRows] when RETURNING produced no rows and [ErrMultipleRows]
+// when it produced more than one, the same sentinels
+// [TypedSelectBuilder.One] reports.
+func QueryWriteOne[T any](ctx context.Context, client Client, statement query.WriteStatement) (T, error) {
+	var zero T
+	rows, err := client.QueryWrite(ctx, statement)
+	if err != nil {
+		return zero, err
+	}
+	return exactlyOne(decodeRows[T](rows))
+}
+
 // Update encodes value's rasql-tagged fields and updates its table row.
 // It matches primary-key fields and updates every non-primary-key column.
 // Value must have one exported tagged field for every table column,
