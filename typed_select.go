@@ -7,7 +7,6 @@ import (
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/row"
 )
 
 // SelectFrom starts a typed fluent SELECT builder for table.
@@ -137,25 +136,7 @@ func (b TypedSelectBuilder[T]) Query(ctx context.Context) (iter.Seq2[T, error], 
 	if err != nil {
 		return nil, err
 	}
-	return func(yield func(T, error) bool) {
-		var zero T
-		index := 0
-		for result, err := range rows {
-			if err != nil {
-				yield(zero, err)
-				return
-			}
-			decoded, err := row.Decode[T](result)
-			if err != nil {
-				yield(zero, fmt.Errorf("rasql: decode row %d: %w", index, err))
-				return
-			}
-			index++
-			if !yield(decoded, nil) {
-				return
-			}
-		}
-	}, nil
+	return decodeRows[T](rows), nil
 }
 
 // All collects every row from Query.
@@ -164,14 +145,7 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	decoded := make([]T, 0)
-	for value, err := range rows {
-		if err != nil {
-			return nil, err
-		}
-		decoded = append(decoded, value)
-	}
-	return decoded, nil
+	return collectAll(rows)
 }
 
 // One returns exactly one row from Query.
@@ -183,20 +157,5 @@ func (b TypedSelectBuilder[T]) One(ctx context.Context) (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	var result T
-	count := 0
-	for value, err := range rows {
-		if err != nil {
-			return zero, err
-		}
-		result = value
-		count++
-		if count > 1 {
-			return zero, ErrMultipleRows
-		}
-	}
-	if count != 1 {
-		return zero, ErrNoRows
-	}
-	return result, nil
+	return exactlyOne(rows)
 }

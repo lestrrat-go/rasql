@@ -3,8 +3,11 @@ package query
 import "fmt"
 
 // WriteStatement is a validated statement that changes database rows.
+// Returning reports the projections of its RETURNING clause, and is empty when
+// the statement has none. Only this package implements it.
 type WriteStatement interface {
 	Validate() error
+	Returning() []Projection
 	writeStatement()
 }
 

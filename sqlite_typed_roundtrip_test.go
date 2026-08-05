@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
@@ -144,4 +145,79 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 	actual, err = rasql.SelectFrom(client, events).WhereEqual(eventID, expected.ID).One(t.Context())
 	require.NoError(t, err)
 	require.Nil(t, actual.Note)
+}
+
+// TestSQLiteReturningRoundTrip exercises Client.QueryWrite against a real
+// database: an INSERT reads back a database-assigned id and a defaulted
+// column through QueryWriteOne, then an UPDATE and a DELETE each read back
+// their affected rows through QueryWriteAll.
+func TestSQLiteReturningRoundTrip(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	client, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	type returningUser struct {
+		ID     int64  `rasql:"id"`
+		Email  string `rasql:"email"`
+		Status string `rasql:"status"`
+	}
+	table := schema.Table{
+		Name: "returning_users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+			{Name: "status", Type: schema.TypeText, Default: "'pending'"},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	users, err := rasql.NewTable[returningUser](table)
+	require.NoError(t, err)
+	queryUsers := users.QueryTable()
+	id, err := queryUsers.Column("id")
+	require.NoError(t, err)
+	email, err := queryUsers.Column("email")
+	require.NoError(t, err)
+	status, err := queryUsers.Column("status")
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, users))
+
+	insert, err := query.NewInsert(queryUsers, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	insert, err = insert.WithReturning(query.Project(id), query.Project(email), query.Project(status))
+	require.NoError(t, err)
+	inserted, err := rasql.QueryWriteOne[returningUser](t.Context(), client, insert)
+	require.NoError(t, err)
+	require.Equal(t, returningUser{ID: 1, Email: "ada@example.com", Status: "pending"}, inserted)
+
+	update, err := query.NewUpdate(queryUsers, query.Set(status, query.Bind("active")))
+	require.NoError(t, err)
+	update, err = update.WithWhere(query.Equal(id, query.Bind(inserted.ID)))
+	require.NoError(t, err)
+	update, err = update.WithReturning(query.Project(id), query.Project(email), query.Project(status))
+	require.NoError(t, err)
+	updated, err := rasql.QueryWriteAll[returningUser](t.Context(), client, update)
+	require.NoError(t, err)
+	require.Equal(t, []returningUser{{ID: 1, Email: "ada@example.com", Status: "active"}}, updated)
+
+	deleteStatement, err := query.NewDelete(queryUsers)
+	require.NoError(t, err)
+	deleteStatement, err = deleteStatement.WithWhere(query.Equal(id, query.Bind(inserted.ID)))
+	require.NoError(t, err)
+	deleteStatement, err = deleteStatement.WithReturning(query.Project(id))
+	require.NoError(t, err)
+	type deletedRow struct {
+		ID int64 `rasql:"id"`
+	}
+	deleted, err := rasql.QueryWriteAll[deletedRow](t.Context(), client, deleteStatement)
+	require.NoError(t, err)
+	require.Equal(t, []deletedRow{{ID: 1}}, deleted)
+
+	remaining, err := rasql.SelectFrom(client, users).All(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, remaining)
 }

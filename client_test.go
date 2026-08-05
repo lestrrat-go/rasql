@@ -347,6 +347,178 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestClientQueryWriteReturnsRows(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement := insertReturningStatement(t)
+	mock.ExpectQuery("INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\"").
+		WithArgs("ada@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
+
+	sequence, err := client.QueryWrite(t.Context(), statement)
+	rows := collectRows(t, sequence, err)
+	require.Len(t, rows, 1)
+
+	id, err := row.Int64("id")
+	require.NoError(t, err)
+	email, err := row.String("email")
+	require.NoError(t, err)
+	gotID, err := id.Get(rows[0])
+	require.NoError(t, err)
+	gotEmail, err := email.Get(rows[0])
+	require.NoError(t, err)
+	require.Equal(t, int64(42), gotID)
+	require.Equal(t, "ada@example.com", gotEmail)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestClientQueryWriteRejectsStatementWithoutReturning(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement, err := query.NewInsert(usersWriteTable(t), []query.Column{usersEmailColumn(t)}, []query.Expression{query.Bind("ada@example.com")})
+	require.NoError(t, err)
+
+	_, err = client.QueryWrite(t.Context(), statement)
+	require.ErrorContains(t, err, "rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
+}
+
+func TestClientQueryWriteRejectsUnsupportedDialect(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	statement := insertReturningStatement(t)
+
+	_, err = client.QueryWrite(t.Context(), statement)
+	require.ErrorContains(t, err, "RETURNING is not supported")
+}
+
+func TestClientQueryWriteRejectsInvalidClient(t *testing.T) {
+	_, err := rasql.Client{}.QueryWrite(t.Context(), insertReturningStatement(t))
+	require.ErrorContains(t, err, "rasql: invalid client")
+}
+
+func TestClientExecRejectsReturningStatement(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement := insertReturningStatement(t)
+
+	_, err = client.Exec(t.Context(), statement)
+	require.ErrorContains(t, err, "rasql: write statement has a RETURNING clause: use QueryWrite to read its rows")
+}
+
+func TestClientExecStillAcceptsStatementWithoutReturning(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement, err := query.NewInsert(usersWriteTable(t), []query.Column{usersEmailColumn(t)}, []query.Expression{query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES ($1)").
+		WithArgs("ada@example.com").
+		WillReturnResult(sqlmock.NewResult(42, 1))
+
+	_, err = client.Exec(t.Context(), statement)
+	require.NoError(t, err)
+}
+
+func TestClientDialectReturnsConfiguredDialect(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// dialect.Dialect's built-in implementation carries a func field, which
+	// require.Equal (and even ==) cannot compare, so the assertions below check
+	// the dialect passed to New by its observable behavior instead of a full
+	// value comparison.
+	postgres := dialect.PostgreSQL()
+	client, err := rasql.New(database, postgres)
+	require.NoError(t, err)
+	require.Equal(t, "postgresql", client.Dialect().Name())
+	require.Equal(t, postgres.Name(), client.Dialect().Name())
+	require.Equal(t, postgres.UpsertStyle(), client.Dialect().UpsertStyle())
+	require.True(t, client.Dialect().Supports(dialect.CapabilityReturning))
+	require.Nil(t, rasql.Client{}.Dialect())
+}
+
+// usersWriteTable returns the write target the returning-related tests share.
+func usersWriteTable(t *testing.T) query.Table {
+	t.Helper()
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	return users
+}
+
+func usersEmailColumn(t *testing.T) query.Column {
+	t.Helper()
+	email, err := usersWriteTable(t).Column("email")
+	require.NoError(t, err)
+	return email
+}
+
+// insertReturningStatement builds an INSERT that returns id and email, the
+// statement the QueryWrite and Exec rejection tests share.
+func insertReturningStatement(t *testing.T) query.Insert {
+	t.Helper()
+	users := usersWriteTable(t)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	statement, err := query.NewInsert(users, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	require.NoError(t, err)
+	return statement
+}
+
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
 	users, err := query.NewTable(schema.Table{

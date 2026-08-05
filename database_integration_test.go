@@ -10,6 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +86,31 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	all, err := rasql.SelectFrom(client, records).OrderAsc(recordID).All(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, []record{first, second}, all)
+
+	// RETURNING is PostgreSQL-only among the two live dialects this test runs
+	// against, so QueryWrite is exercised over the real pgx driver on
+	// PostgreSQL and pinned as a build-time rejection on MySQL.
+	recordActive, err := records.Column("active")
+	require.NoError(t, err)
+	recordEmail, err := records.Column("email")
+	require.NoError(t, err)
+	third := record{ID: 3, Active: true, Email: "grace@example.com"}
+	insert, err := query.NewInsert(
+		records.QueryTable(),
+		[]query.Column{recordID, recordActive, recordEmail},
+		[]query.Expression{query.Bind(third.ID), query.Bind(third.Active), query.Bind(third.Email)},
+	)
+	require.NoError(t, err)
+	insert, err = insert.WithReturning(query.Project(recordID), query.Project(recordActive), query.Project(recordEmail))
+	require.NoError(t, err)
+	if d.Supports(dialect.CapabilityReturning) {
+		inserted, err := rasql.QueryWriteOne[record](t.Context(), client, insert)
+		require.NoError(t, err)
+		require.Equal(t, third, inserted)
+	} else {
+		_, err := client.QueryWrite(t.Context(), insert)
+		require.ErrorContains(t, err, "RETURNING is not supported")
+	}
 
 	inspector, err := inspect.New(database, d)
 	require.NoError(t, err)

@@ -5,8 +5,12 @@
 // Create execute typed database operations.
 // Query operations return a rangeable iter.Seq2 sequence plus any construction
 // error. The sequence yields rows followed by at most one execution or scanning
-// error. [TypedSelectBuilder.One] reports a row count other than one through
-// [ErrNoRows] or [ErrMultipleRows].
+// error. [TypedSelectBuilder.One] and [QueryWriteOne] report a row count other
+// than one through [ErrNoRows] or [ErrMultipleRows].
+//
+// A write statement built through the query package that carries a RETURNING
+// clause is read with Client.QueryWrite, or the typed QueryWriteAll and
+// QueryWriteOne, instead of Client.Exec, which rejects it.
 //
 // The schema, query, render, row, and dialect packages expose lower-level APIs
 // for schema generation, dynamic queries, rendering, and result handling.
