@@ -156,6 +156,22 @@ func TestSelectBuilderCombinesPredicates(t *testing.T) {
 		require.Equal(t, []any{"ada@example.com", "bob@example.com", 10}, statement.Args())
 	})
 
+	t.Run("Or then WhereEqual nests correctly", func(t *testing.T) {
+		statement, err := render.SelectFrom(dialect.PostgreSQL(), users).
+			Select("id").
+			Where(query.Or(
+				query.Equal(email, query.Bind("ada@example.com")),
+				query.Equal(email, query.Bind("bob@example.com")),
+			)).
+			WhereEqual("id", 42).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT "users"."id" FROM "users" WHERE ((("users"."email" = $1) OR ("users"."email" = $2)) AND ("users"."id" = $3))`,
+			statement.SQL())
+		require.Equal(t, []any{"ada@example.com", "bob@example.com", 42}, statement.Args())
+	})
+
 	t.Run("no predicate renders no WHERE", func(t *testing.T) {
 		statement, err := render.SelectFrom(dialect.PostgreSQL(), users).Select("id").Build()
 		require.NoError(t, err)

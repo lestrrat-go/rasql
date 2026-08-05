@@ -54,7 +54,7 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 `Where` and `WhereEqual` accumulate: repeated calls combine with `AND` in the
 order they were made, which is what a conditionally built filter needs. Use a
 single `query.Or` call for a top-level `OR`; it is not wrapped in an `AND`
-unless another `Where` follows it.
+unless another `Where` or `WhereEqual` follows it.
 
 ### Delete builder methods
 

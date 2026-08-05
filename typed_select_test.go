@@ -161,6 +161,27 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 			statement.SQL())
 	})
 
+	t.Run("WhereEqual after a lone Or wraps it in AND", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+
+		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+			Where(query.Or(
+				query.Equal(email, query.Bind("ada@example.com")),
+				query.Equal(email, query.Bind("bob@example.com")),
+			)).
+			WhereEqual(id, 42).
+			Build()
+		require.NoError(t, err)
+		require.Equal(t,
+			`SELECT "users"."id", "users"."email" FROM "users" WHERE ((("users"."email" = $1) OR ("users"."email" = $2)) AND ("users"."id" = $3))`,
+			statement.SQL())
+		require.Equal(t, []any{"ada@example.com", "bob@example.com", 42}, statement.Args())
+	})
+
 	t.Run("predicates from a joined table combine", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		type order struct {
