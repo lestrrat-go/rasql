@@ -49,15 +49,15 @@ func TestSelectRendersAggregateFunctions(t *testing.T) {
 	}{
 		"postgresql": {
 			dialect: dialect.PostgreSQL(),
-			sql:     "SELECT COUNT(*) AS \"total\", MAX(\"orders\".\"amount\") AS \"top\" FROM \"orders\" WHERE (\"orders\".\"amount\" <> $1)",
+			sql:     "SELECT COUNT(*) AS \"total\", MAX(\"orders\".\"amount\") AS \"top\" FROM \"orders\" WHERE (\"orders\".\"amount\" <> $1) ORDER BY COUNT(*) DESC",
 		},
 		"mysql": {
 			dialect: dialect.MySQL(),
-			sql:     "SELECT COUNT(*) AS `total`, MAX(`orders`.`amount`) AS `top` FROM `orders` WHERE (`orders`.`amount` <> ?)",
+			sql:     "SELECT COUNT(*) AS `total`, MAX(`orders`.`amount`) AS `top` FROM `orders` WHERE (`orders`.`amount` <> ?) ORDER BY COUNT(*) DESC",
 		},
 		"sqlite": {
 			dialect: dialect.SQLite(),
-			sql:     "SELECT COUNT(*) AS \"total\", MAX(\"orders\".\"amount\") AS \"top\" FROM \"orders\" WHERE (\"orders\".\"amount\" <> ?)",
+			sql:     "SELECT COUNT(*) AS \"total\", MAX(\"orders\".\"amount\") AS \"top\" FROM \"orders\" WHERE (\"orders\".\"amount\" <> ?) ORDER BY COUNT(*) DESC",
 		},
 	}
 
@@ -94,6 +94,10 @@ func aggregateSelectStatement(t *testing.T) query.Select {
 	)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.NotEqual(amount, query.Bind("done")))
+	require.NoError(t, err)
+	// An aggregate-only projection may order by an aggregate, so the rendering
+	// has to carry the call into ORDER BY for every dialect.
+	statement, err = statement.WithOrder(query.Desc(query.CountAll()))
 	require.NoError(t, err)
 	return statement
 }

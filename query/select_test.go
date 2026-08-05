@@ -199,12 +199,45 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 			},
 			message: `calls aggregate function "COUNT" in a JOIN ON condition`,
 		},
-		"order by": {
+		"order by a projection set that does not aggregate": {
 			build: func() error {
 				_, err := base.WithOrder(query.Asc(query.Count(userID)))
 				return err
 			},
 			message: `calls aggregate function "COUNT" in an ORDER BY clause`,
+		},
+		"column ordering an aggregate projection set": {
+			build: func() error {
+				aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
+				if err != nil {
+					return err
+				}
+				_, err = aggregated.WithOrder(query.Asc(userID))
+				return err
+			},
+			message: "reads a column outside an aggregate function while the projections aggregate",
+		},
+		"column beside an aggregate in one ordering expression": {
+			build: func() error {
+				aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
+				if err != nil {
+					return err
+				}
+				_, err = aggregated.WithOrder(query.Asc(query.GreaterThan(query.Count(userID), userID)))
+				return err
+			},
+			message: "reads a column outside an aggregate function while the projections aggregate",
+		},
+		"nested aggregate in an ordering expression": {
+			build: func() error {
+				aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
+				if err != nil {
+					return err
+				}
+				_, err = aggregated.WithOrder(query.Asc(query.Max(query.Max(userID))))
+				return err
+			},
+			message: `calls aggregate function "MAX" inside another aggregate function`,
 		},
 		"nested aggregate": {
 			build: func() error {
@@ -258,8 +291,8 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
-	// An aggregate-only projection set filters, joins and orders by columns; only
-	// the projections aggregate, so the statement needs no GROUP BY.
+	// An aggregate-only projection set filters and joins by columns, because
+	// WHERE and JOIN ON run before aggregation on the source rows.
 	statement, err := query.NewSelect(users,
 		query.Project(query.CountAll()).As("total"),
 		query.Project(query.Max(userID)).As("top"),
@@ -269,12 +302,29 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.IsNotNull(email))
 	require.NoError(t, err)
-	statement, err = statement.WithOrder(query.Asc(email))
-	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
 
-	// A projection set that never aggregates keeps reading columns freely.
+	// ORDER BY runs after aggregation, so an aggregate-only statement orders by
+	// anything that reads no column outside an aggregate.
+	for name, order := range map[string]query.Order{
+		"aggregate":                   query.Asc(query.CountAll()),
+		"aggregate over a column":     query.Desc(query.Max(userID)),
+		"expression over aggregates":  query.Asc(query.GreaterThan(query.Count(userID), query.Bind(1))),
+		"null test over an aggregate": query.Asc(query.IsNull(query.Max(userID))),
+		"bound value":                 query.Asc(query.Bind(1)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ordered, err := statement.WithOrder(order)
+			require.NoError(t, err)
+			require.NoError(t, ordered.Validate())
+		})
+	}
+
+	// A projection set that never aggregates keeps reading columns freely, in
+	// the projections and in the ordering alike.
 	columns, err := query.NewSelect(users, query.Project(userID), query.Project(email))
+	require.NoError(t, err)
+	columns, err = columns.WithOrder(query.Asc(email))
 	require.NoError(t, err)
 	require.NoError(t, columns.Validate())
 }

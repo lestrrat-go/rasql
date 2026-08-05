@@ -33,8 +33,9 @@ func validateAlias(alias string) error {
 
 // expressionContext tells the expression walk where in a statement the
 // expression sits. An aggregate function is only legal in a SELECT projection
-// and never inside another aggregate, so a walk that carries no clause and no
-// nesting state cannot tell a legal call from one every dialect rejects.
+// and in the ORDER BY of a statement whose projections all aggregate, and never
+// inside another aggregate, so a walk that carries no clause and no nesting
+// state cannot tell a legal call from one every dialect rejects.
 type expressionContext struct {
 	sources map[string]struct{}
 	// clause names the SQL clause the expression belongs to, for error messages.
@@ -50,10 +51,16 @@ func clauseContext(sources map[string]struct{}, clause string) expressionContext
 	return expressionContext{sources: sources, clause: clause}
 }
 
-// projectionContext returns a context for a SELECT projection, the only place
-// an aggregate call is legal.
+// aggregateClauseContext returns a context for a clause that may call an
+// aggregate. It permits the call itself; a caller that also has to refuse a
+// column read outside every aggregate reads bareColumn from the returned usage.
+func aggregateClauseContext(sources map[string]struct{}, clause string) expressionContext {
+	return expressionContext{sources: sources, clause: clause, allowsAggregate: true}
+}
+
+// projectionContext returns a context for a SELECT projection.
 func projectionContext(sources map[string]struct{}) expressionContext {
-	return expressionContext{sources: sources, clause: "a SELECT projection", allowsAggregate: true}
+	return aggregateClauseContext(sources, "a SELECT projection")
 }
 
 // inAggregate returns a copy of c that walks the arguments of an aggregate call.
@@ -190,7 +197,7 @@ func validateFunction(function Function, ctx expressionContext, path string) (ex
 		return expressionUsage{}, validationError(path, "calls aggregate function %q inside another aggregate function", function.name)
 	}
 	if !ctx.allowsAggregate {
-		return expressionUsage{}, validationError(path, "calls aggregate function %q in %s, but an aggregate is only valid in a SELECT projection", function.name, ctx.clause)
+		return expressionUsage{}, validationError(path, "calls aggregate function %q in %s, but an aggregate is only valid in a SELECT projection, or in an ORDER BY clause of a statement whose projections all aggregate", function.name, ctx.clause)
 	}
 	if function.star {
 		if function.name != FunctionCount {
