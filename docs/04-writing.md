@@ -277,7 +277,7 @@ The row identifies itself, so there is no separate predicate to keep in step wit
 
 ## Delete rows
 
-`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` takes a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement.
+`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` takes a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly.
 
 <!-- INCLUDE(examples/rasql_delete_example_test.go) -->
 ```go
@@ -353,9 +353,14 @@ func Example_rasql_delete() {
 	}
 	fmt.Printf("%d user deleted by predicate\n", deleted)
 
-	// Build renders the statement without executing it, which shows that a
-	// builder with no predicate deletes every row.
-	statement, err := rasql.DeleteFrom(client, users).Build()
+	// A builder with no predicate is rejected, so a dropped Where cannot become
+	// a full-table delete by accident.
+	if _, err := rasql.DeleteFrom(client, users).Build(); err != nil {
+		fmt.Println(err)
+	}
+
+	// AllowAll states the full-table delete. Build renders it without executing it.
+	statement, err := rasql.DeleteFrom(client, users).AllowAll().Build()
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -365,13 +370,14 @@ func Example_rasql_delete() {
 	// Output:
 	// 1 user deleted by id
 	// 1 user deleted by predicate
+	// rasql: DELETE requires a WHERE predicate or an explicit AllowAll
 	// DELETE FROM "users"
 }
 ```
 source: [examples/rasql_delete_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_delete_example_test.go)
 <!-- END INCLUDE -->
 
-A delete matches whatever the predicate matches, so it is not tied to a primary key the way `Update` is. A builder with no predicate deletes every row of the table; `Build` renders the statement without executing it when you want to see the SQL first.
+A delete matches whatever the predicate matches, so it is not tied to a primary key the way `Update` is. `Build` renders the statement without executing it when you want to see the SQL first; combine it with `AllowAll` to render a full-table delete.
 
 ## Statements the typed helpers do not cover
 

@@ -361,6 +361,8 @@ type Delete struct {
 func (Delete) writeStatement() {}
 
 // NewDelete creates a validated DELETE statement.
+// A statement with no predicate deletes every row. This constructor accepts that shape;
+// the fluent builder in the rasql package requires an explicit opt-in for it.
 func NewDelete(from Table) (Delete, error) {
 	statement := Delete{from: from}
 	if err := statement.Validate(); err != nil {
