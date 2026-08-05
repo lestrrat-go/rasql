@@ -11,6 +11,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -162,6 +164,236 @@ func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
 
 	_, err = rasql.InsertWithOptions(t.Context(), client, users, user{}, rasql.DefaultColumns("id", "email"))
 	require.NoError(t, err)
+}
+
+func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	statement, err := query.NewUpdate(users, query.Set(id, query.Bind(int64(1))))
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(query.Project(id))
+	require.NoError(t, err)
+	mock.ExpectQuery("UPDATE \"users\" SET \"id\" = $1 RETURNING \"id\"").
+		WithArgs(int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)).AddRow(int64(2)))
+
+	type user struct {
+		ID int64 `rasql:"id"`
+	}
+	rows, err := rasql.QueryWriteAll[user](t.Context(), client, statement)
+	require.NoError(t, err)
+	require.Equal(t, []user{{ID: 1}, {ID: 2}}, rows)
+}
+
+func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	statement, err := query.NewInsert(users, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	require.NoError(t, err)
+	mock.ExpectQuery("INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\"").
+		WithArgs("ada@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(1), "ada@example.com"))
+
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	result, err := rasql.QueryWriteOne[user](t.Context(), client, statement)
+	require.NoError(t, err)
+	require.Equal(t, user{ID: 1, Email: "ada@example.com"}, result)
+}
+
+func TestQueryWriteOneRejectsZeroOrMultipleRows(t *testing.T) {
+	type user struct {
+		ID int64 `rasql:"id"`
+	}
+
+	t.Run("zero rows", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		statement := deleteReturningStatement(t)
+		mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
+			WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+		// QueryWriteOne shares exactlyOne with TypedSelectBuilder.One, so an empty
+		// RETURNING result reports the same sentinels.
+		_, err = rasql.QueryWriteOne[user](t.Context(), client, statement)
+		require.EqualError(t, err, "rasql: expected one row, got none")
+		require.ErrorIs(t, err, rasql.ErrNoRows)
+		require.ErrorIs(t, err, sql.ErrNoRows)
+		require.NotErrorIs(t, err, rasql.ErrMultipleRows)
+	})
+
+	t.Run("multiple rows", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		statement := deleteReturningStatement(t)
+		mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)).AddRow(int64(2)))
+
+		_, err = rasql.QueryWriteOne[user](t.Context(), client, statement)
+		require.EqualError(t, err, "rasql: expected one row, got more than one")
+		require.ErrorIs(t, err, rasql.ErrMultipleRows)
+		require.NotErrorIs(t, err, rasql.ErrNoRows)
+		require.NotErrorIs(t, err, sql.ErrNoRows)
+	})
+}
+
+func TestQueryWriteOneReportsDecodeError(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement := deleteReturningStatement(t)
+	mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+
+	// email is not among the returning projections, so decoding a row type that
+	// requires it fails the same way TypedSelectBuilder.Query does.
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	_, err = rasql.QueryWriteOne[user](t.Context(), client, statement)
+	require.ErrorContains(t, err, "rasql: decode row 0: row: column \"email\" is not present")
+}
+
+// generatedReturningUser has the method-based mapping rasqlgen writes for a row
+// type, so QueryWriteOne can be pinned to honor it the same way Insert and
+// Update do.
+type generatedReturningUser struct {
+	ID    int64
+	Email string
+}
+
+func (u *generatedReturningUser) DecodeRow(source row.Row) error {
+	if err := row.Assign(source, "id", &u.ID); err != nil {
+		return err
+	}
+	return row.Assign(source, "email", &u.Email)
+}
+
+func TestQueryWriteOneHonorsGeneratedRowType(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	statement, err := query.NewInsert(users, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	require.NoError(t, err)
+	mock.ExpectQuery("INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\"").
+		WithArgs("ada@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(1), "ada@example.com"))
+
+	result, err := rasql.QueryWriteOne[generatedReturningUser](t.Context(), client, statement)
+	require.NoError(t, err)
+	require.Equal(t, generatedReturningUser{ID: 1, Email: "ada@example.com"}, result)
+}
+
+// deleteReturningStatement builds a DELETE that returns id, which the
+// QueryWriteOne error-path tests share.
+func deleteReturningStatement(t *testing.T) query.Delete {
+	t.Helper()
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	statement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(query.Project(id))
+	require.NoError(t, err)
+	return statement
 }
 
 func TestUpdateExecutesTypedRow(t *testing.T) {

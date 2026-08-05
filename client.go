@@ -48,6 +48,12 @@ func New(queryer Queryer, d dialect.Dialect) (Client, error) {
 	return client, nil
 }
 
+// Dialect returns the dialect this client renders SQL for.
+// It returns nil for a zero Client.
+func (c Client) Dialect() dialect.Dialect {
+	return c.dialect
+}
+
 // Query renders statement and returns a rangeable sequence of rows.
 // It reports validation and rendering errors before iteration starts.
 func (c Client) Query(ctx context.Context, statement query.Select) (iter.Seq2[row.Row, error], error) {
@@ -112,13 +118,40 @@ func (c Client) QueryRendered(ctx context.Context, statement render.Statement) (
 	}, nil
 }
 
+// QueryWrite renders a write statement and returns a rangeable sequence of the
+// rows its RETURNING clause produces. The statement must carry at least one
+// returning projection, and the dialect must support RETURNING, which MySQL
+// does not.
+// It reports validation and rendering errors before iteration starts and yields
+// execution or scanning errors instead of rows while it is ranged over.
+// The statement runs through QueryContext, so a debug Queryer that returns nil
+// rows never executes it.
+func (c Client) QueryWrite(ctx context.Context, statement query.WriteStatement) (iter.Seq2[row.Row, error], error) {
+	if isNil(c.queryer) || isNil(c.dialect) {
+		return nil, fmt.Errorf("rasql: invalid client")
+	}
+	if isNil(statement) || len(statement.Returning()) == 0 {
+		return nil, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
+	}
+	rendered, err := render.Write(c.dialect, statement)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: render write statement: %w", err)
+	}
+	return c.QueryRendered(ctx, rendered)
+}
+
 // Exec renders and executes a write statement.
+// It rejects a statement carrying a RETURNING clause, because ExecContext
+// discards result rows; QueryWrite reads them instead.
 func (c Client) Exec(ctx context.Context, statement query.WriteStatement) (sql.Result, error) {
 	if isNil(c.queryer) || isNil(c.dialect) {
 		return nil, fmt.Errorf("rasql: invalid client")
 	}
 	if isNil(c.execer) {
 		return nil, fmt.Errorf("rasql: queryer does not support ExecContext")
+	}
+	if !isNil(statement) && len(statement.Returning()) > 0 {
+		return nil, fmt.Errorf("rasql: write statement has a RETURNING clause: use QueryWrite to read its rows")
 	}
 	rendered, err := render.Write(c.dialect, statement)
 	if err != nil {

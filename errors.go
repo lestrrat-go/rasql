@@ -5,9 +5,10 @@ import (
 	"errors"
 )
 
-// ErrNoRows is returned by [TypedSelectBuilder.One] when the statement matched
-// no rows. It lets a caller tell an absent row from a failed query, which is
-// otherwise indistinguishable because both arrive as a non-nil error.
+// ErrNoRows is returned by [TypedSelectBuilder.One] and [QueryWriteOne] when
+// the statement matched no rows. It lets a caller tell an absent row from a
+// failed query, which is otherwise indistinguishable because both arrive as a
+// non-nil error.
 //
 // It wraps [database/sql.ErrNoRows], so code that already branches on the
 // standard library's sentinel keeps working without change:
@@ -17,17 +18,17 @@ import (
 //		// no such user
 //	}
 //
-// Only One reports it. All returns an empty slice for an empty result, and
-// Query yields no values at all, because neither treats an empty result as a
-// failure.
+// Only the methods that expect one row report it. All and [QueryWriteAll]
+// return an empty slice for an empty result, and Query yields no values at all,
+// because none of them treats an empty result as a failure.
 var ErrNoRows error = noRowsError{}
 
-// ErrMultipleRows is returned by [TypedSelectBuilder.One] when the statement
-// matched more than one row. It usually means the predicate is not unique, so
-// it deserves a different response from ErrNoRows.
+// ErrMultipleRows is returned by [TypedSelectBuilder.One] and [QueryWriteOne]
+// when the statement matched more than one row. It usually means the predicate
+// is not unique, so it deserves a different response from ErrNoRows.
 //
-// One stops reading at the second row and does not drain the result, so it
-// reports that more than one row matched without reporting how many.
+// Both stop reading at the second row and do not drain the result, so they
+// report that more than one row matched without reporting how many.
 var ErrMultipleRows = errors.New("rasql: expected one row, got more than one")
 
 // noRowsError gives ErrNoRows a message of its own while still unwrapping to

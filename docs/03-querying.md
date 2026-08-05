@@ -23,7 +23,8 @@ The tables in this section enumerate every operation the public API offers. The 
 | `UPDATE` of one typed row by primary key | `rasql.Update(ctx, client, table, value)` | `sql.Result` |
 | `DELETE` by predicate | `rasql.DeleteFrom(client, table)` | `DeleteBuilder` |
 | `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |
-| Upsert, `RETURNING`, partial update | `query.New…` then `client.Exec(ctx, statement)` | `sql.Result` |
+| Upsert, partial update | `query.New…` then `client.Exec(ctx, statement)` | `sql.Result` |
+| Write with `RETURNING` | `query.New….WithReturning(...)` then `client.QueryWrite(ctx, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Row` or `[]T` / `T` |
 | Compiled [static template](05-templates.md) | `client.ExecRendered(ctx, statement)` | `sql.Result` |
 
 Writes are covered in [Writing rows](04-writing.md); the rest of this page covers reads.
@@ -109,7 +110,7 @@ Every constructor below takes and returns `query.Expression`, so conditions nest
 
 ### Statement constructors
 
-The builders cover the common statements. These constructors build the same statements directly, and `client.Exec` runs any of them.
+The builders cover the common statements. These constructors build the same statements directly. `client.Query` runs a `Select`, and `client.Exec` runs a write that carries no `RETURNING` clause. A write refined with `WithReturning` reads its rows back through `client.QueryWrite`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `client.Exec` rejects it.
 
 | Constructor | Statement |
 | --- | --- |
@@ -119,7 +120,7 @@ The builders cover the common statements. These constructors build the same stat
 | `query.NewDelete(from)` | `DELETE` |
 | `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |
 
-Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write. Each returns a new validated statement rather than changing the one it was called on.
+Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](04-writing.md#reading-a-returning-clause) covers. Each returns a new validated statement rather than changing the one it was called on.
 
 ## Select typed rows
 
