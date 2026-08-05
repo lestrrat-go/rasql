@@ -13,8 +13,7 @@ type SelectBuilder struct {
 	from        query.Table
 	projections []query.Projection
 	joins       []query.Join
-	where       query.Expression
-	hasWhere    bool
+	predicates  []query.Expression
 	orders      []query.Order
 	limit       int
 	hasLimit    bool
@@ -64,7 +63,9 @@ func (b SelectBuilder) Join(joins ...query.Join) SelectBuilder {
 	return b
 }
 
-// Where sets the predicate using an expression created through the basic query API.
+// Where adds a predicate created through the basic query API.
+// Repeated calls combine with AND in the order they were made. Use one call
+// with query.Or for a top-level OR.
 func (b SelectBuilder) Where(expression query.Expression) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
@@ -73,12 +74,12 @@ func (b SelectBuilder) Where(expression query.Expression) SelectBuilder {
 	if expression == nil {
 		return b.withError(fmt.Errorf("WHERE expression must not be nil"))
 	}
-	b.where = expression
-	b.hasWhere = true
+	b.predicates = append(b.predicates, expression)
 	return b
 }
 
-// WhereEqual sets an equality predicate for a primary-table column and binds value.
+// WhereEqual adds an equality predicate for a primary-table column and binds value.
+// Repeated calls combine with AND in the order they were made, including calls to Where.
 func (b SelectBuilder) WhereEqual(columnName string, value any) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
@@ -88,8 +89,7 @@ func (b SelectBuilder) WhereEqual(columnName string, value any) SelectBuilder {
 	if err != nil {
 		return b.withError(err)
 	}
-	b.where = query.Equal(column, query.Bind(value))
-	b.hasWhere = true
+	b.predicates = append(b.predicates, query.Equal(column, query.Bind(value)))
 	return b
 }
 
@@ -150,8 +150,8 @@ func (b SelectBuilder) Build() (Statement, error) {
 			return Statement{}, err
 		}
 	}
-	if b.hasWhere {
-		statement, err = statement.WithWhere(b.where)
+	if predicate, ok := combinePredicates(b.predicates); ok {
+		statement, err = statement.WithWhere(predicate)
 		if err != nil {
 			return Statement{}, err
 		}
@@ -205,6 +205,20 @@ func (b SelectBuilder) clone() SelectBuilder {
 	copy := b
 	copy.projections = append([]query.Projection(nil), b.projections...)
 	copy.joins = append([]query.Join(nil), b.joins...)
+	copy.predicates = append([]query.Expression(nil), b.predicates...)
 	copy.orders = append([]query.Order(nil), b.orders...)
 	return copy
+}
+
+// combinePredicates reduces accumulated predicates to one expression.
+// It reports false when there is no predicate to install.
+func combinePredicates(predicates []query.Expression) (query.Expression, bool) {
+	switch len(predicates) {
+	case 0:
+		return nil, false
+	case 1:
+		return predicates[0], true
+	default:
+		return query.And(predicates...), true
+	}
 }

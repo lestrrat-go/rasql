@@ -80,13 +80,16 @@ func (b TypedSelectBuilder[T]) Join(joins ...query.Join) TypedSelectBuilder[T] {
 	return b
 }
 
-// Where sets the predicate using an expression created through the basic query API.
+// Where adds a predicate created through the basic query API.
+// Repeated calls combine with AND in the order they were made. Use one call
+// with query.Or for a top-level OR.
 func (b TypedSelectBuilder[T]) Where(expression query.Expression) TypedSelectBuilder[T] {
 	b.builder = b.builder.Where(expression)
 	return b
 }
 
-// WhereEqual sets an equality predicate for column and binds value.
+// WhereEqual adds an equality predicate for column and binds value.
+// Repeated calls combine with AND in the order they were made, including calls to Where.
 // Build and Query reject a column whose table is not part of the statement.
 func (b TypedSelectBuilder[T]) WhereEqual(column query.Column, value any) TypedSelectBuilder[T] {
 	b.builder = b.builder.Where(query.Equal(column, query.Bind(value)))

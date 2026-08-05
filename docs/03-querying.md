@@ -39,9 +39,9 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `Select(names…)` | Adds primary-table columns by name. | | ✓ |
 | `Project(projections…)` | Adds projections built with `query.Project`. | ✓ | ✓ |
 | `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. | ✓ | ✓ |
-| `Where(expression)` | Sets the predicate from a `query` expression. | ✓ | ✓ |
-| `WhereEqual(column, value)` | Sets `column = value` for a `query.Column`. | ✓ | |
-| `WhereEqual(name, value)` | Sets `column = value` for a primary-table column. | | ✓ |
+| `Where(expression)` | Adds a predicate from a `query` expression. | ✓ | ✓ |
+| `WhereEqual(column, value)` | Adds `column = value` for a `query.Column`. | ✓ | |
+| `WhereEqual(name, value)` | Adds `column = value` for a primary-table column. | | ✓ |
 | `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. | ✓ | ✓ |
 | `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.Column`. | ✓ | |
 | `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. | | ✓ |
@@ -51,16 +51,21 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `All(ctx)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
 | `One(ctx)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
 
-`Where` and `WhereEqual` each replace the predicate set before them; combine conditions with `query.And` or `query.Or` rather than by calling them twice.
+`Where` and `WhereEqual` accumulate: repeated calls combine with `AND` in the
+order they were made, which is what a conditionally built filter needs. Use a
+single `query.Or` call for a top-level `OR`; it is not wrapped in an `AND`
+unless another `Where` follows it.
 
 ### Delete builder methods
 
 | Method | Effect |
 | --- | --- |
-| `Where(expression)` | Sets the predicate from a `query` expression. |
-| `WhereEqual(column, value)` | Sets `column = value` for a `query.Column` of the target table. |
+| `Where(expression)` | Adds a predicate from a `query` expression. |
+| `WhereEqual(column, value)` | Adds `column = value` for a `query.Column` of the target table. |
 | `Build()` | Renders `render.Statement` without executing. |
 | `Exec(ctx)` | Executes and returns `sql.Result`. |
+
+`Where` and `WhereEqual` accumulate on the delete builder the same way: repeated calls combine with `AND` in the order they were made.
 
 ### Where conditions
 
