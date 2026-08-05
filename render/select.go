@@ -185,6 +185,23 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		return nil
 	case query.Value:
 		return r.writeArgument(expression.Argument())
+	case query.Function:
+		r.builder.WriteString(string(expression.Name()))
+		r.builder.WriteByte('(')
+		if expression.Star() {
+			r.builder.WriteByte('*')
+		} else {
+			for i, argument := range expression.Arguments() {
+				if i > 0 {
+					r.builder.WriteString(", ")
+				}
+				if err := r.writeExpression(argument); err != nil {
+					return err
+				}
+			}
+		}
+		r.builder.WriteByte(')')
+		return nil
 	case query.Binary:
 		r.builder.WriteByte('(')
 		if err := r.writeExpression(expression.Left()); err != nil {
