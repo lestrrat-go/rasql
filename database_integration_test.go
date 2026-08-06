@@ -294,8 +294,9 @@ func testQualifiedDDLMySQL(t *testing.T) {
 	}()
 
 	type eventRow struct {
-		ID     int64  `rasql:"id"`
-		Action string `rasql:"action"`
+		ID      int64  `rasql:"id"`
+		ActorID int64  `rasql:"actor_id"`
+		Action  string `rasql:"action"`
 	}
 	eventsName := dbtest.UniqueName(t, "rasql_qualified_events")
 	events, err := rasql.NewTable[eventRow](schema.Table{
@@ -303,25 +304,46 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		Name:   eventsName,
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
+			{Name: "actor_id", Type: schema.TypeInteger},
 			{Name: "action", Type: schema.TypeText},
 		},
 		PrimaryKey: []string{"id"},
+		// The index names actor_id, not the action column beside it,
+		// because MySQL maps schema.TypeText to TEXT and refuses an index
+		// on a BLOB/TEXT column unless the index states a key length --
+		// which schema.Index has no field for. actor_id is a fixed-width
+		// BIGINT, so it indexes on every dialect and the qualified
+		// CREATE INDEX this test exists to exercise is the only thing
+		// under test here.
 		Indexes: []schema.Index{{
-			Name:    eventsName + "_action_idx",
-			Columns: []string{"action"},
+			Name:    eventsName + "_actor_idx",
+			Columns: []string{"actor_id"},
 		}},
 	})
 	require.NoError(t, err)
 	require.NoError(t, rasql.Create(t.Context(), client, events))
 
-	_, err = rasql.Insert(t.Context(), client, events, eventRow{ID: 1, Action: "created"})
+	// Both objects must live in schemaName rather than in the connection's
+	// own default database, which is what the qualified DDL is for. The
+	// index is named explicitly because its CREATE INDEX qualifies the
+	// table it targets rather than the index name, so nothing else here
+	// would notice it landing next to the wrong table.
+	var indexSchema, indexTable string
+	require.NoError(t, database.QueryRowContext(t.Context(),
+		"SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND INDEX_NAME = ?",
+		schemaName, eventsName+"_actor_idx",
+	).Scan(&indexSchema, &indexTable))
+	require.Equal(t, schemaName, indexSchema)
+	require.Equal(t, eventsName, indexTable)
+
+	_, err = rasql.Insert(t.Context(), client, events, eventRow{ID: 1, ActorID: 7, Action: "created"})
 	require.NoError(t, err)
 
 	eventID, err := events.Column("id")
 	require.NoError(t, err)
 	event, err := rasql.SelectFrom(client, events).WhereEqual(eventID, int64(1)).One(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, eventRow{ID: 1, Action: "created"}, event)
+	require.Equal(t, eventRow{ID: 1, ActorID: 7, Action: "created"}, event)
 }
 
 // TestIntegrationTableUsesItsNameArgument pins that integrationTable is
