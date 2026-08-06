@@ -335,10 +335,10 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("SHOW server_version_num").
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow("180000"))
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil))
 	mock.ExpectQuery("SELECT count\\(attribute\\.attnum\\) FROM pg_catalog\\.pg_class AS table_data.*JOIN pg_catalog\\.pg_namespace AS table_namespace.*LEFT JOIN pg_catalog\\.pg_attribute AS attribute.*table_data\\.relkind IN \\('r','p','v','f'\\) GROUP BY table_data\\.oid").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))

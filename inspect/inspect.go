@@ -366,19 +366,32 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		var databaseType string
 		var nullable string
 		var defaultValue any
-		if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue); err != nil {
+		var numericPrecision sql.NullInt64
+		var numericScale sql.NullInt64
+		if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale); err != nil {
 			return nil, fmt.Errorf("inspect: scan column: %w", err)
 		}
 		logicalType, err := normalizeType(i.dialect.Name(), databaseType)
 		if err != nil {
 			return nil, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
-		columns = append(columns, schema.Column{
+		column := schema.Column{
 			Name:     name,
 			Type:     logicalType,
 			Nullable: strings.EqualFold(nullable, "YES"),
 			Default:  text(defaultValue),
-		})
+		}
+		if logicalType == schema.TypeDecimal {
+			if !numericPrecision.Valid {
+				return nil, fmt.Errorf("inspect: column %q: unconstrained NUMERIC has no precision to record: declare it as NUMERIC(precision, scale)", name)
+			}
+			if !numericScale.Valid {
+				return nil, fmt.Errorf("inspect: column %q: decimal column reports no scale to record: declare it as NUMERIC(precision, scale)", name)
+			}
+			column.Precision = int(numericPrecision.Int64)
+			column.Scale = schema.NewDecimalScale(int(numericScale.Int64))
+		}
+		columns = append(columns, column)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate columns: %w", err)
@@ -671,7 +684,7 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 	switch name {
 	case "mysql":
 		return informationQueries{
-			columns:    "SELECT column_name, column_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
+			columns:    "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
 			primaryKey: "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
 		}, nil
 	default:
@@ -712,7 +725,7 @@ func postgreSQLInformationQueries(version int) informationQueries {
 	temporal := postgreSQLCatalogBoolean(version, postgreSQL18Version, "constraint_data.conperiod")
 
 	return informationQueries{
-		columns:                         "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
+		columns:                         "SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
 		primaryKey:                      "SELECT attribute.attname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'p' ORDER BY key_column.ordinal_position",
 		uniqueConstraints:               "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", index_metadata.indnkeyatts <> index_metadata.indnatts, " + temporal + ", index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR index_metadata.indisreplident OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
 		checks:                          "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",
@@ -742,7 +755,7 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 		case "REAL", "DOUBLE PRECISION":
 			return schema.TypeFloat, nil
 		case "NUMERIC", "DECIMAL":
-			return "", fmt.Errorf("exact decimal type %q cannot be represented: rasql has no exact decimal logical type", databaseType)
+			return schema.TypeDecimal, nil
 		case "TEXT", "CHARACTER VARYING", "CHARACTER", "VARCHAR", "CHAR":
 			return schema.TypeText, nil
 		case "BYTEA":
@@ -755,13 +768,18 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 			return schema.TypeUUID, nil
 		}
 	case "mysql":
+		decimal, err := mysqlDecimalDeclaration(typeName, databaseType)
+		if err != nil {
+			return "", err
+		}
+		if decimal {
+			return schema.TypeDecimal, nil
+		}
 		switch {
 		case typeName == "BOOLEAN" || typeName == "BOOL" || typeName == "TINYINT(1)":
 			return schema.TypeBoolean, nil
 		case strings.Contains(typeName, "INT"):
 			return schema.TypeInteger, nil
-		case strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC"):
-			return "", fmt.Errorf("exact decimal type %q cannot be represented: rasql has no exact decimal logical type", databaseType)
 		case strings.Contains(typeName, "FLOAT") || strings.Contains(typeName, "DOUBLE"):
 			return schema.TypeFloat, nil
 		case strings.Contains(typeName, "BLOB") || strings.Contains(typeName, "BINARY"):
@@ -775,6 +793,8 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 		}
 	case "sqlite":
 		switch {
+		case strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC"):
+			return "", fmt.Errorf("exact decimal type %q is not exact in SQLite: a NUMERIC-affinity column stores REAL, so declare the column TEXT", databaseType)
 		case strings.Contains(typeName, "BOOL"):
 			return schema.TypeBoolean, nil
 		case strings.Contains(typeName, "INT"):
@@ -794,6 +814,68 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 		}
 	}
 	return "", fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
+}
+
+// mysqlDecimalDeclaration reports whether typeName, an upper-cased MySQL
+// COLUMN_TYPE, declares an exact decimal column this package can represent.
+// COLUMN_TYPE is a whole type declaration rather than a bare type name, so it
+// is matched as a whole: a substring test would accept catalog text such as
+// FOODECIMALBAR, and the catalog is read from a server the application may not
+// control. Only DECIMAL or NUMERIC, optionally followed by (precision) or
+// (precision, scale), is a decimal.
+//
+// A DECIMAL or NUMERIC declaration carrying UNSIGNED, ZEROFILL or any other
+// trailing modifier returns an error instead of a logical type. schema.Column
+// cannot record such a modifier, and UNSIGNED in particular narrows the values
+// the column permits, so a descriptor that dropped it would re-render as a
+// column with a different meaning. Anything that is not a decimal declaration
+// at all reports false with no error, leaving the caller's remaining type
+// matches to run.
+func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, error) {
+	base := typeName
+	rest := ""
+	if index := strings.IndexAny(typeName, " ("); index >= 0 {
+		base = typeName[:index]
+		rest = typeName[index:]
+	}
+	if base != "DECIMAL" && base != "NUMERIC" {
+		return false, nil
+	}
+
+	rest = strings.TrimSpace(rest)
+	if strings.HasPrefix(rest, "(") {
+		end := strings.Index(rest, ")")
+		if end < 0 || !validDecimalArguments(rest[1:end]) {
+			return false, fmt.Errorf("unsupported mysql type %q: a decimal column must be declared %s(precision, scale)", databaseType, base)
+		}
+		rest = strings.TrimSpace(rest[end+1:])
+	}
+	if rest != "" {
+		return false, fmt.Errorf("mysql type %q cannot be represented: a decimal column must carry no %s modifier, because rasql cannot record one and re-rendering the column without it would change the values it permits", databaseType, rest)
+	}
+	return true, nil
+}
+
+// validDecimalArguments reports whether arguments is the inside of a MySQL
+// decimal type's parentheses: a digit run for the precision, optionally
+// followed by a comma and a digit run for the scale.
+func validDecimalArguments(arguments string) bool {
+	parts := strings.Split(arguments, ",")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func text(value any) string {

@@ -136,7 +136,7 @@ func (r *renderer) columnDefinition(column schema.Column) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	typeName, err := r.dialect.TypeName(column.Type)
+	typeName, err := r.dialect.TypeName(column)
 	if err != nil {
 		return "", fmt.Errorf("column %q: %w", column.Name, err)
 	}

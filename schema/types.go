@@ -15,12 +15,18 @@ const (
 	TypeTime    LogicalType = "time"
 	TypeJSON    LogicalType = "json"
 	TypeUUID    LogicalType = "uuid"
+
+	// TypeDecimal is an exact decimal number. Unlike TypeFloat it never rounds,
+	// so it is the type for money, quantities, and any other value where a
+	// binary floating-point approximation is wrong. A column of this type must
+	// state a Precision and a Scale.
+	TypeDecimal LogicalType = "decimal"
 )
 
 // Valid reports whether the logical type is supported by the core schema model.
 func (t LogicalType) Valid() bool {
 	switch t {
-	case TypeBoolean, TypeInteger, TypeFloat, TypeText, TypeBytes, TypeTime, TypeJSON, TypeUUID:
+	case TypeBoolean, TypeInteger, TypeFloat, TypeText, TypeBytes, TypeTime, TypeJSON, TypeUUID, TypeDecimal:
 		return true
 	default:
 		return false

@@ -27,11 +27,11 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil).
-			AddRow("email", "character varying", "YES", driver.Value(nil)))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil).
+			AddRow("email", "character varying", "YES", driver.Value(nil), nil, nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -51,7 +51,7 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 	require.Nil(t, table.ForeignKeys)
 }
 
-func TestPostgreSQLInspectorRejectsNumericColumn(t *testing.T) {
+func TestPostgreSQLInspectorNormalizesNumericColumn(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -63,13 +63,68 @@ func TestPostgreSQLInspectorRejectsNumericColumn(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("payments").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("amount", "numeric", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("amount", "numeric", "NO", nil, int64(19), int64(4)))
+	expectPostgreSQLCatalogColumnCount(mock, "payments", 1)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}))
+	expectPostgreSQLEmptyMetadata(mock, "payments")
+
+	table, err := inspector.Table(t.Context(), "payments")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+	}, table.Columns)
+}
+
+func TestPostgreSQLInspectorRejectsUnconstrainedNumericColumn(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("amount", "numeric", "NO", nil, nil, nil))
 
 	_, err = inspector.Table(t.Context(), "payments")
-	require.ErrorContains(t, err, "cannot be represented")
+	require.ErrorContains(t, err, "unconstrained NUMERIC has no precision to record")
+	require.ErrorContains(t, err, `"amount"`)
+}
+
+// TestPostgreSQLInspectorRejectsDecimalColumnWithoutScale covers a catalog row
+// that reports a precision but a NULL scale. Reading the NULL as 0 would turn
+// a NUMERIC(10,2) column into a descriptor that re-renders as NUMERIC(10,0)
+// and drops the column's fractional digits, so inspection refuses it instead.
+func TestPostgreSQLInspectorRejectsDecimalColumnWithoutScale(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("amount", "numeric", "NO", nil, int64(10), nil))
+
+	_, err = inspector.Table(t.Context(), "payments")
+	require.ErrorContains(t, err, "reports no scale to record")
 	require.ErrorContains(t, err, `"amount"`)
 }
 
@@ -85,13 +140,13 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil).
-			AddRow("account_id", "bigint", "NO", nil).
-			AddRow("tenant_id", "bigint", "NO", nil).
-			AddRow("email", "character varying", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil).
+			AddRow("tenant_id", "bigint", "NO", nil, nil, nil).
+			AddRow("email", "character varying", "NO", nil, nil, nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 4)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -168,10 +223,10 @@ func TestPostgreSQLInspectorRejectsReplicaIdentityIndex(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 1)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -461,10 +516,10 @@ func newPostgreSQLInspector(t *testing.T) (inspect.Inspector, sqlmock.Sqlmock) {
 }
 
 func expectPostgreSQLColumnsAndPrimaryKey(mock sqlmock.Sqlmock, tableName string) {
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil))
 	expectPostgreSQLCatalogColumnCount(mock, tableName, 1)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs(tableName).
@@ -544,14 +599,14 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.MySQL())
 	require.NoError(t, err)
-	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
 	primaryKeyQuery := "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position"
 	mock.ExpectQuery(columnsQuery).
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil).
-			AddRow("active", "tinyint(1)", "NO", nil).
-			AddRow("login_attempts", "tinyint", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil).
+			AddRow("active", "tinyint(1)", "NO", nil, nil, nil).
+			AddRow("login_attempts", "tinyint", "NO", nil, nil, nil))
 	mock.ExpectQuery(primaryKeyQuery).
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
@@ -573,7 +628,7 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	require.Contains(t, string(source), `row.Assign(src, "login_attempts", &r.LoginAttempts)`)
 }
 
-func TestMySQLInspectorRejectsDecimalColumn(t *testing.T) {
+func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -584,14 +639,164 @@ func TestMySQLInspectorRejectsDecimalColumn(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.MySQL())
 	require.NoError(t, err)
-	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	primaryKeyQuery := "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position"
 	mock.ExpectQuery(columnsQuery).
 		WithArgs("payments").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default"}).
-			AddRow("amount", "decimal(10,2)", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("amount", "decimal(10,2)", "NO", nil, int64(10), int64(2)))
+	mock.ExpectQuery(primaryKeyQuery).
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+
+	table, err := inspector.Table(t.Context(), "payments")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "amount", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(2)},
+	}, table.Columns)
+}
+
+// TestMySQLInspectorMatchesDecimalColumnTypeExactly covers the two ways a
+// MySQL COLUMN_TYPE can look like a decimal without being one this package can
+// represent. The catalog is read from a server the application may not
+// control, so a decimal is recognized from the whole declaration: catalog text
+// that merely contains DECIMAL or NUMERIC is an unsupported type, and a real
+// decimal declaration carrying a modifier is refused rather than silently
+// re-rendered without it.
+func TestMySQLInspectorMatchesDecimalColumnTypeExactly(t *testing.T) {
+	tests := map[string]struct {
+		columnType string
+		wantErr    string
+	}{
+		"decimal as a substring": {
+			columnType: "FOODECIMALBAR",
+			wantErr:    `unsupported mysql type "FOODECIMALBAR"`,
+		},
+		"numeric as a substring": {
+			columnType: "NOT_A_TYPE_NUMERICAL",
+			wantErr:    `unsupported mysql type "NOT_A_TYPE_NUMERICAL"`,
+		},
+		"unsigned decimal": {
+			columnType: "decimal(10,2) unsigned",
+			wantErr:    "must carry no UNSIGNED modifier",
+		},
+		"zerofill decimal": {
+			columnType: "decimal(10,2) unsigned zerofill",
+			wantErr:    "must carry no UNSIGNED ZEROFILL modifier",
+		},
+		"decimal alias": {
+			columnType: "fixed(10,2)",
+			wantErr:    `unsupported mysql type "fixed(10,2)"`,
+		},
+		"malformed precision": {
+			columnType: "decimal(ten,two)",
+			wantErr:    "a decimal column must be declared DECIMAL(precision, scale)",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("payments").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("amount", test.columnType, "NO", nil, int64(10), int64(2)))
+
+			_, err = inspector.Table(t.Context(), "payments")
+			require.ErrorContains(t, err, test.wantErr)
+			require.ErrorContains(t, err, `"amount"`)
+		})
+	}
+}
+
+// TestMySQLInspectorAcceptsDocumentedDecimalSpellings is the positive
+// counterpart: every spelling MySQL documents for a decimal type still
+// normalizes to schema.TypeDecimal.
+func TestMySQLInspectorAcceptsDocumentedDecimalSpellings(t *testing.T) {
+	for _, columnType := range []string{"decimal", "decimal(10)", "decimal(10,2)", "numeric(10,2)", "DECIMAL(10, 2)"} {
+		t.Run(columnType, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("payments").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("amount", columnType, "NO", nil, int64(10), int64(2)))
+			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+				WithArgs("payments").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+
+			table, err := inspector.Table(t.Context(), "payments")
+			require.NoError(t, err)
+			require.Equal(t, []schema.Column{
+				{Name: "amount", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(2)},
+			}, table.Columns)
+		})
+	}
+}
+
+// TestMySQLInspectorRejectsDecimalColumnWithoutScale is the MySQL counterpart
+// of the PostgreSQL NULL-scale refusal.
+func TestMySQLInspectorRejectsDecimalColumnWithoutScale(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("amount", "decimal(10,2)", "NO", nil, int64(10), nil))
 
 	_, err = inspector.Table(t.Context(), "payments")
-	require.ErrorContains(t, err, "cannot be represented")
+	require.ErrorContains(t, err, "reports no scale to record")
+	require.ErrorContains(t, err, `"amount"`)
+}
+
+// TestSQLiteInspectorRejectsDecimalColumn pins the explicit-refusal property:
+// a SQLite column declared DECIMAL/NUMERIC holds REAL values (see the
+// dialect package's decimal type mapping), so inspection must keep refusing
+// it rather than assert an exactness the stored data does not have, and must
+// say why instead of falling through to the generic unsupported-type error.
+func TestSQLiteInspectorRejectsDecimalColumn(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery("PRAGMA table_info(\"payments\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
+			AddRow(0, "amount", "DECIMAL(19,4)", 1, nil, 0))
+
+	_, err = inspector.Table(t.Context(), "payments")
+	require.ErrorContains(t, err, "is not exact in SQLite")
+	require.ErrorContains(t, err, "NUMERIC-affinity")
 	require.ErrorContains(t, err, `"amount"`)
 }
 
@@ -656,7 +861,7 @@ func (*nilPointerDialect) QuoteIdentifier(string) (string, error) { return "", n
 
 func (*nilPointerDialect) Placeholder(int) (string, error) { return "", nil }
 
-func (*nilPointerDialect) TypeName(schema.LogicalType) (string, error) { return "", nil }
+func (*nilPointerDialect) TypeName(schema.Column) (string, error) { return "", nil }
 
 func (*nilPointerDialect) UpsertStyle() dialect.UpsertStyle { return dialect.UpsertUnsupported }
 
@@ -697,9 +902,9 @@ func TestPostgreSQLInspectorReportsTableNotFoundWhenAbsent(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}))
 	expectPostgreSQLCatalogColumnCountAbsent(mock, "widgets")
 
 	_, err = inspector.Table(t.Context(), "widgets")
@@ -730,9 +935,9 @@ func TestPostgreSQLInspectorReportsZeroColumnTableWhenPresent(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 0)
 
 	_, err = inspector.Table(t.Context(), "widgets")
@@ -765,9 +970,9 @@ func TestPostgreSQLInspectorReportsInvisibleColumnsWhenPresent(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 3)
 
 	_, err = inspector.Table(t.Context(), "widgets")
@@ -803,11 +1008,11 @@ func TestPostgreSQLInspectorReportsTruncatedColumnsWhenPartiallyVisible(t *testi
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil).
-			AddRow("name", "character varying", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil).
+			AddRow("name", "character varying", "NO", nil, nil, nil))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 3)
 
 	table, err := inspector.Table(t.Context(), "widgets")
@@ -828,11 +1033,11 @@ func TestPostgreSQLInspectorReportsTruncatedColumnsWhenPartiallyVisible(t *testi
 func TestPostgreSQLInspectorReturnsCompleteDescriptorWhenCountsAgree(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil).
-			AddRow("name", "character varying", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil).
+			AddRow("name", "character varying", "NO", nil, nil, nil))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 2)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint").
 		WithArgs("widgets").
@@ -859,10 +1064,10 @@ func TestPostgreSQLInspectorReturnsCompleteDescriptorWhenCountsAgree(t *testing.
 func TestPostgreSQLInspectorReadsPrimaryKeyFromCatalogUnderReadOnlyGrant(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("id", "bigint", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 1)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("widgets").
@@ -882,12 +1087,12 @@ func TestPostgreSQLInspectorReadsPrimaryKeyFromCatalogUnderReadOnlyGrant(t *test
 func TestPostgreSQLInspectorPreservesPrimaryKeyColumnOrder(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
 		WithArgs("memberships").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default"}).
-			AddRow("tenant_id", "bigint", "NO", nil).
-			AddRow("account_id", "bigint", "NO", nil).
-			AddRow("user_id", "bigint", "NO", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("tenant_id", "bigint", "NO", nil, nil, nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil).
+			AddRow("user_id", "bigint", "NO", nil, nil, nil))
 	expectPostgreSQLCatalogColumnCount(mock, "memberships", 3)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("memberships").
