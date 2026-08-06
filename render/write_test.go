@@ -25,29 +25,40 @@ func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 	deleteStatement, err = deleteStatement.WithWhere(query.Equal(id, query.Bind(1)))
 	require.NoError(t, err)
 
+	multiInsert, err := query.NewInsertRows(users, []query.Column{id, email}, [][]query.Expression{
+		{query.Bind(1), query.Bind("ada@example.com")},
+		{query.Bind(2), query.Bind("grace@example.com")},
+		{query.Bind(3), query.Bind("edsger@example.com")},
+	})
+	require.NoError(t, err)
+
 	tests := map[string]struct {
-		dialect dialect.Dialect
-		insert  string
-		update  string
-		delete  string
+		dialect     dialect.Dialect
+		insert      string
+		update      string
+		delete      string
+		multiInsert string
 	}{
 		"postgresql": {
-			dialect: dialect.PostgreSQL(),
-			insert:  "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)",
-			update:  "UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)",
-			delete:  "DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1)",
+			dialect:     dialect.PostgreSQL(),
+			insert:      "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)",
+			update:      "UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)",
+			delete:      "DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1)",
+			multiInsert: "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2), ($3, $4), ($5, $6)",
 		},
 		"mysql": {
-			dialect: dialect.MySQL(),
-			insert:  "INSERT INTO `users` (`id`, `email`) VALUES (?, ?)",
-			update:  "UPDATE `users` SET `email` = ? WHERE (`users`.`id` = ?)",
-			delete:  "DELETE FROM `users` WHERE (`users`.`id` = ?)",
+			dialect:     dialect.MySQL(),
+			insert:      "INSERT INTO `users` (`id`, `email`) VALUES (?, ?)",
+			update:      "UPDATE `users` SET `email` = ? WHERE (`users`.`id` = ?)",
+			delete:      "DELETE FROM `users` WHERE (`users`.`id` = ?)",
+			multiInsert: "INSERT INTO `users` (`id`, `email`) VALUES (?, ?), (?, ?), (?, ?)",
 		},
 		"sqlite": {
-			dialect: dialect.SQLite(),
-			insert:  "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?)",
-			update:  "UPDATE \"users\" SET \"email\" = ? WHERE (\"users\".\"id\" = ?)",
-			delete:  "DELETE FROM \"users\" WHERE (\"users\".\"id\" = ?)",
+			dialect:     dialect.SQLite(),
+			insert:      "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?)",
+			update:      "UPDATE \"users\" SET \"email\" = ? WHERE (\"users\".\"id\" = ?)",
+			delete:      "DELETE FROM \"users\" WHERE (\"users\".\"id\" = ?)",
+			multiInsert: "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?), (?, ?), (?, ?)",
 		},
 	}
 
@@ -67,6 +78,11 @@ func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.delete, rendered.SQL())
 			require.Equal(t, []any{1}, rendered.Args())
+
+			rendered, err = render.Insert(test.dialect, multiInsert)
+			require.NoError(t, err)
+			require.Equal(t, test.multiInsert, rendered.SQL())
+			require.Equal(t, []any{1, "ada@example.com", 2, "grace@example.com", 3, "edsger@example.com"}, rendered.Args())
 		})
 	}
 }
@@ -119,6 +135,28 @@ func TestReturningRequiresDialectCapability(t *testing.T) {
 	rendered, err = render.Insert(dialect.SQLite(), statement)
 	require.NoError(t, err)
 	require.Equal(t, "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?) RETURNING \"id\"", rendered.SQL())
+
+	_, err = render.Insert(dialect.MySQL(), statement)
+	require.Error(t, err)
+}
+
+func TestMultiRowInsertRendersReturning(t *testing.T) {
+	users, id, email := writeTable(t)
+	statement, err := query.NewInsertRows(users, []query.Column{id, email}, [][]query.Expression{
+		{query.Bind(1), query.Bind("ada@example.com")},
+		{query.Bind(2), query.Bind("grace@example.com")},
+	})
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	require.NoError(t, err)
+
+	rendered, err := render.Insert(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(t, "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2), ($3, $4) RETURNING \"id\", \"email\"", rendered.SQL())
+
+	rendered, err = render.Insert(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	require.Equal(t, "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?), (?, ?) RETURNING \"id\", \"email\"", rendered.SQL())
 
 	_, err = render.Insert(dialect.MySQL(), statement)
 	require.Error(t, err)
@@ -196,6 +234,49 @@ func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
 		})
 	}
 
+}
+
+func TestMultiRowUpsertRendersDialectConflictSyntax(t *testing.T) {
+	users, id, email := writeTable(t)
+	insert, err := query.NewInsertRows(users, []query.Column{id, email}, [][]query.Expression{
+		{query.Bind(1), query.Bind("ada@example.com")},
+		{query.Bind(2), query.Bind("grace@example.com")},
+	})
+	require.NoError(t, err)
+	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+	mysqlStatement, err := query.NewUpsert(insert, nil, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect   dialect.Dialect
+		statement query.Upsert
+		sql       string
+	}{
+		"postgresql": {
+			dialect:   dialect.PostgreSQL(),
+			statement: statement,
+			sql:       "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2), ($3, $4) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = EXCLUDED.\"email\"",
+		},
+		"mysql": {
+			dialect:   dialect.MySQL(),
+			statement: mysqlStatement,
+			sql:       "INSERT INTO `users` (`id`, `email`) VALUES (?, ?), (?, ?) ON DUPLICATE KEY UPDATE `email` = VALUES(`email`)",
+		},
+		"sqlite": {
+			dialect:   dialect.SQLite(),
+			statement: statement,
+			sql:       "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?), (?, ?) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = EXCLUDED.\"email\"",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Upsert(test.dialect, test.statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{1, "ada@example.com", 2, "grace@example.com"}, rendered.Args())
+		})
+	}
 }
 
 func TestMySQLUpsertRejectsConflictTarget(t *testing.T) {
@@ -345,6 +426,50 @@ func TestSQLiteUpsertExecutes(t *testing.T) {
 	var actual string
 	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT \"email\" FROM \"users\" WHERE \"id\" = 1").Scan(&actual))
 	require.Equal(t, "grace@example.com", actual)
+}
+
+func TestSQLiteMultiRowInsertExecutes(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	users, id, email := writeTable(t)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY, \"email\" TEXT NOT NULL)")
+	require.NoError(t, err)
+
+	statement, err := query.NewInsertRows(users, []query.Column{id, email}, [][]query.Expression{
+		{query.Bind(1), query.Bind("ada@example.com")},
+		{query.Bind(2), query.Bind("grace@example.com")},
+		{query.Bind(3), query.Bind("edsger@example.com")},
+	})
+	require.NoError(t, err)
+	rendered, err := render.Insert(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	result, err := database.ExecContext(t.Context(), rendered.SQL(), rendered.Args()...)
+	require.NoError(t, err)
+	affected, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 3, affected)
+
+	rows, err := database.QueryContext(t.Context(), "SELECT \"id\", \"email\" FROM \"users\" ORDER BY \"id\"")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var ids []int
+	var emails []string
+	for rows.Next() {
+		var gotID int
+		var gotEmail string
+		require.NoError(t, rows.Scan(&gotID, &gotEmail))
+		ids = append(ids, gotID)
+		emails = append(emails, gotEmail)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []int{1, 2, 3}, ids)
+	require.Equal(t, []string{"ada@example.com", "grace@example.com", "edsger@example.com"}, emails)
 }
 
 func TestSQLiteDefaultValuesUpsertIsRejected(t *testing.T) {
