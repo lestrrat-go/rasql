@@ -23,6 +23,10 @@ func Example_schema_qualified_table() {
 	// SQLite attached-database name. rasql never creates the namespace
 	// itself, so the CREATE TABLE below stands in for a reviewed native
 	// migration, which is the only way rasql creates a schema in production.
+	// The DDL is written out here rather than run through rasql.Create for
+	// the same reason: qualification reaches DML and column references only,
+	// so rasql.Create would render CREATE TABLE "events" and drop the audit
+	// qualifier. Qualified DDL is not supported yet.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

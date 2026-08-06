@@ -118,12 +118,23 @@ type ForeignKey struct {
 // Table describes a database table and its constraints.
 type Table struct {
 	// Schema names the namespace holding the table: a PostgreSQL schema, a
-	// MySQL database, or a SQLite attached-database name. Renderers quote it
-	// as an identifier separate from Name and never interpret it further, so
+	// MySQL database, or a SQLite attached-database name. A renderer quotes it
+	// as an identifier separate from Name and never interprets it further, so
 	// rasql takes no position on what a namespace means to a server and never
 	// creates one. An empty Schema leaves the table unqualified, which
 	// resolves through the connection's own default and is what every
 	// descriptor written before this field existed does.
+	//
+	// Qualification currently reaches DML and column references only. A
+	// SELECT, INSERT, UPDATE or DELETE built from this descriptor renders
+	// "audit"."events" as its target, and a column reached through the
+	// unaliased table renders "audit"."events"."id". Nothing else reads the
+	// field: render.CreateTable, render.CreateIndexes and rasql.Create render
+	// CREATE TABLE "events" on every dialect, so DDL lands in whatever
+	// namespace the connection resolves to; inspect never reports a Schema,
+	// and rasqlgen never emits one. Qualified DDL, inspection and generation
+	// are not supported yet, so a qualified table is created and re-read
+	// through a reviewed native migration.
 	Schema            string
 	Name              string
 	Columns           []Column

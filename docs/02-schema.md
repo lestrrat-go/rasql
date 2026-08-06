@@ -61,7 +61,9 @@ Call `Validate` before using a descriptor. It reports a `*schema.ValidationError
 
 ## Qualify a table with a schema
 
-`Schema` is optional and names the namespace holding the table: a PostgreSQL schema, a MySQL database, or a SQLite attached-database name. rasql takes no position on what a namespace means to a server: it validates `Schema` as a simple identifier exactly like `Name`, quotes it as a separate identifier wherever it renders a table or a column reference, and never creates, drops, or connects to one itself. An application that needs `audit.events` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created. An empty `Schema` leaves the table unqualified, which resolves through the connection's own default and is what every descriptor written before this field existed still does.
+`Schema` is optional and names the namespace holding the table: a PostgreSQL schema, a MySQL database, or a SQLite attached-database name. rasql takes no position on what a namespace means to a server: it validates `Schema` as a simple identifier exactly like `Name`, quotes it as a separate identifier in the SQL that reads the field, and never creates, drops, or connects to a namespace itself. An application that needs `audit.events` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created. An empty `Schema` leaves the table unqualified, which resolves through the connection's own default and is what every descriptor written before this field existed still does.
+
+Qualification currently reaches DML and column references only, and this is the whole of what the field does today. A `SELECT`, `INSERT`, `UPDATE`, or `DELETE` built from a qualified descriptor renders `"audit"."events"` as its target, and a column reached through the unaliased table renders `"audit"."events"."id"`. Nothing else reads `Schema`: `render.CreateTable`, `render.CreateIndexes`, and `rasql.Create` render `CREATE TABLE "events"` for an `audit.events` descriptor on all three dialects, so DDL created through rasql lands in whatever namespace the connection resolves to rather than in the named one. `inspect` never fills `Schema` in, and [`rasqlgen`](06-rasqlgen.md) never emits one. Qualified DDL, inspection, and generation are not supported yet; until they are, create and re-read a qualified table with a native migration and keep the descriptor for the queries that read it.
 
 `schema.Table` and `query.Table` each answer two questions about qualification. `Qualified` reports whether a schema is named at all, and `QualifiedName` returns `schema.name` for display, falling back to `name` for an unqualified table. Neither is a SQL identifier: a renderer quotes `Schema` and `Name` as two identifiers, and `dialect.QuoteIdentifier` rejects the dotted string `QualifiedName` returns. On `query.Table` the two describe the table rather than the reference: `Qualified` stays true once the table is aliased, while `QualifiedName` returns the alias, because that is what an error message about an aliased table has to name. `query.Table.QualifierSchema` reports what actually qualifies a rendered column, which is nothing at all once an alias replaces the table's whole name.
 
@@ -92,6 +94,10 @@ func Example_schema_qualified_table() {
 	// SQLite attached-database name. rasql never creates the namespace
 	// itself, so the CREATE TABLE below stands in for a reviewed native
 	// migration, which is the only way rasql creates a schema in production.
+	// The DDL is written out here rather than run through rasql.Create for
+	// the same reason: qualification reaches DML and column references only,
+	// so rasql.Create would render CREATE TABLE "events" and drop the audit
+	// qualifier. Qualified DDL is not supported yet.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
