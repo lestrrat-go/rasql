@@ -319,6 +319,58 @@ func TestDecodeFromDecodesGroupedRows(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestDecodeFromDecodesDistinctRows proves Distinct on TypedSelectBuilder
+// renders into the statement DecodeFrom builds and reaches a typed caller,
+// the distinct counterpart to TestDecodeFromDecodesGroupedRows.
+func TestDecodeFromDecodesDistinctRows(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	type task struct {
+		ID     int64  `rasql:"id"`
+		Status string `rasql:"status"`
+	}
+	tasks, err := rasql.NewTable[task](schema.Table{
+		Name: "tasks",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "status", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	status, err := tasks.Column("status")
+	require.NoError(t, err)
+
+	type statusOnly struct {
+		Status string `rasql:"status"`
+	}
+
+	mock.ExpectQuery("SELECT DISTINCT \"tasks\".\"status\" FROM \"tasks\"").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).
+			AddRow("open").
+			AddRow("done"))
+
+	rows, err := rasql.DecodeFrom[statusOnly](client, tasks).
+		Project(query.Project(status)).
+		Distinct().
+		Query(t.Context())
+	require.NoError(t, err)
+	decoded := make([]statusOnly, 0)
+	for value, err := range rows {
+		require.NoError(t, err)
+		decoded = append(decoded, value)
+	}
+	require.Equal(t, []statusOnly{{Status: "open"}, {Status: "done"}}, decoded)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)

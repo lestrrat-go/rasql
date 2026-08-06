@@ -55,6 +55,24 @@ func TestSelectBuilder(t *testing.T) {
 		require.Equal(t, []any{42}, statement.Args())
 	})
 
+	t.Run("Distinct de-duplicates result rows", func(t *testing.T) {
+		users := deleteUsersTable(t)
+		client := clientForBuild(t)
+		statement, err := client.SelectFrom(users.QueryTable()).
+			Select("email").
+			Distinct().
+			Build()
+		require.NoError(t, err)
+		require.Equal(t, `SELECT DISTINCT "users"."email" FROM "users"`, statement.SQL())
+
+		_, err = client.SelectFrom(users.QueryTable()).
+			Select("email").
+			Distinct().
+			Count(t.Context())
+		require.Error(t, err)
+		require.ErrorContains(t, err, "cannot count a distinct statement")
+	})
+
 	// The grouping is validated together with the joins, so a joined table's
 	// column may be grouped by. Attaching the joins after the first validation
 	// refused it.

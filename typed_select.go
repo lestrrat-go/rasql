@@ -145,6 +145,15 @@ func (b TypedSelectBuilder[T]) OrderDesc(column query.Column) TypedSelectBuilder
 	return b
 }
 
+// Distinct de-duplicates the result rows. SelectFrom projects every column of
+// the table, including its primary key, which already makes each row unique,
+// so Distinct is meaningful mainly beside a narrowed projection: DecodeFrom
+// with Project, or the untyped builder's Select with specific column names.
+func (b TypedSelectBuilder[T]) Distinct() TypedSelectBuilder[T] {
+	b.builder = b.builder.Distinct()
+	return b
+}
+
 // Limit sets the maximum number of result rows.
 func (b TypedSelectBuilder[T]) Limit(limit int) TypedSelectBuilder[T] {
 	b.builder = b.builder.Limit(limit)

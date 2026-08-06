@@ -156,6 +156,34 @@ func TestTypedSelectGroupBy(t *testing.T) {
 	require.ErrorContains(t, err, "cannot count a grouped statement")
 }
 
+// TestTypedSelectDistinct proves TypedSelectBuilder.Distinct reaches Build,
+// and that Count refuses a distinct builder rather than rendering
+// SELECT DISTINCT COUNT(*), which always answers 1 instead of the number of
+// distinct rows.
+func TestTypedSelectDistinct(t *testing.T) {
+	users := deleteUsersTable(t)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	type emailOnly struct {
+		Email string `rasql:"email"`
+	}
+
+	statement, err := rasql.DecodeFrom[emailOnly](clientForBuild(t), users).
+		Project(query.Project(email)).
+		Distinct().
+		Build()
+	require.NoError(t, err)
+	require.Equal(t, `SELECT DISTINCT "users"."email" FROM "users"`, statement.SQL())
+
+	_, err = rasql.DecodeFrom[emailOnly](clientForBuild(t), users).
+		Project(query.Project(email)).
+		Distinct().
+		Count(t.Context())
+	require.Error(t, err)
+	require.ErrorContains(t, err, "cannot count a distinct statement")
+}
+
 // TestTypedSelectGroupByJoinedColumn proves the typed builder shares the fixed
 // assembly order: the grouping is validated together with the joins, so a joined
 // table's column may be grouped by. Attaching the joins after the first
