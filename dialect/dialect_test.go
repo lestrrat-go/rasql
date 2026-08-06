@@ -205,4 +205,16 @@ func TestBuiltinCapabilities(t *testing.T) {
 	require.False(t, dialect.MySQL().Supports(dialect.CapabilityReturning))
 	require.Equal(t, dialect.UpsertOnConflict, dialect.PostgreSQL().UpsertStyle())
 	require.Equal(t, dialect.UpsertDuplicateKey, dialect.MySQL().UpsertStyle())
+
+	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityQualifiedReference))
+	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityQualifiedIndexTarget))
+	require.False(t, dialect.PostgreSQL().Supports(dialect.CapabilityQualifiedIndexName))
+
+	require.True(t, dialect.MySQL().Supports(dialect.CapabilityQualifiedReference))
+	require.True(t, dialect.MySQL().Supports(dialect.CapabilityQualifiedIndexTarget))
+	require.False(t, dialect.MySQL().Supports(dialect.CapabilityQualifiedIndexName))
+
+	require.False(t, dialect.SQLite().Supports(dialect.CapabilityQualifiedReference))
+	require.False(t, dialect.SQLite().Supports(dialect.CapabilityQualifiedIndexTarget))
+	require.True(t, dialect.SQLite().Supports(dialect.CapabilityQualifiedIndexName))
 }

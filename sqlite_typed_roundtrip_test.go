@@ -391,10 +391,12 @@ func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
 // TestSQLiteQualifiedTableRoundTrip runs select, join, group, subquery,
 // multi-row insert, update and delete against a schema-qualified table over
 // a real SQLite database with a second database attached, pinning the
-// rendered text against a real parser rather than a golden string. Change 1
-// renders no DDL, so the qualified table is created through raw SQL against
-// the attached database, the same way a native migration would create a
-// PostgreSQL schema or a MySQL database in production.
+// rendered text against a real parser rather than a golden string. The
+// qualified table is created through rasql.Create itself, which now renders
+// CREATE TABLE into the named database rather than dropping the qualifier;
+// only the attached database's existence stands in for a reviewed native
+// migration, the same way a native migration creates a PostgreSQL schema or
+// a MySQL database in production.
 func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -404,8 +406,6 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	database.SetMaxOpenConns(1)
 
 	_, err = database.ExecContext(t.Context(), `ATTACH DATABASE ':memory:' AS audit`)
-	require.NoError(t, err)
-	_, err = database.ExecContext(t.Context(), `CREATE TABLE audit.events (id INTEGER NOT NULL, user_id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))`)
 	require.NoError(t, err)
 
 	client, err := rasql.New(database, dialect.SQLite())
@@ -427,6 +427,7 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, events))
 	queryEvents := events.QueryTable()
 	id, err := queryEvents.Column("id")
 	require.NoError(t, err)

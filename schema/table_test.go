@@ -426,6 +426,31 @@ func TestTableValidatesSchemaQualifier(t *testing.T) {
 	require.ErrorContains(t, err, "table.schema")
 }
 
+// TestTableValidatesForeignKeyReferencedSchema covers ForeignKey.ReferencedSchema:
+// empty stays valid, exactly like Table.Schema, and an invalid identifier is
+// reported at foreign_keys[0].referenced_schema.
+func TestTableValidatesForeignKeyReferencedSchema(t *testing.T) {
+	base := func(referencedSchema string) schema.Table {
+		table := validTable()
+		table.ForeignKeys[0].ReferencedSchema = referencedSchema
+		return table
+	}
+
+	require.NoError(t, base("").Validate())
+	require.NoError(t, base("tenant").Validate())
+
+	err := base("tenant.customers").Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "foreign_keys[0].referenced_schema")
+
+	err = base("1bad").Validate()
+	require.Error(t, err)
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "foreign_keys[0].referenced_schema")
+}
+
 // TestTableQualifiedName pins QualifiedName and Qualified for both an
 // unqualified and a qualified table.
 func TestTableQualifiedName(t *testing.T) {

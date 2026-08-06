@@ -63,7 +63,9 @@ Call `Validate` before using a descriptor. It reports a `*schema.ValidationError
 
 `Schema` is optional and names the namespace holding the table: a PostgreSQL schema, a MySQL database, or a SQLite attached-database name. rasql takes no position on what a namespace means to a server: it validates `Schema` as a simple identifier exactly like `Name`, quotes it as a separate identifier in the SQL that reads the field, and never creates, drops, or connects to a namespace itself. An application that needs `audit.events` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created. An empty `Schema` leaves the table unqualified, which resolves through the connection's own default and is what every descriptor written before this field existed still does.
 
-Qualification currently reaches DML and column references only, and this is the whole of what the field does today. A `SELECT`, `INSERT`, `UPDATE`, or `DELETE` built from a qualified descriptor renders `"audit"."events"` as its target, and a column reached through the unaliased table renders `"audit"."events"."id"`. Nothing else reads `Schema`: `render.CreateTable`, `render.CreateIndexes`, and `rasql.Create` render `CREATE TABLE "events"` for an `audit.events` descriptor on all three dialects, so DDL created through rasql lands in whatever namespace the connection resolves to rather than in the named one. `inspect` never fills `Schema` in, and [`rasqlgen`](06-rasqlgen.md) never emits one. Qualified DDL, inspection, and generation are not supported yet; until they are, create and re-read a qualified table with a native migration and keep the descriptor for the queries that read it.
+Qualification reaches DML, column references, and DDL. A `SELECT`, `INSERT`, `UPDATE`, or `DELETE` built from a qualified descriptor renders `"audit"."events"` as its target, a column reached through the unaliased table renders `"audit"."events"."id"`, and `render.CreateTable`, `render.CreateIndexes`, and `rasql.Create` render `CREATE TABLE "audit"."events"` and its indexes into the named namespace on every dialect that can express it. rasql never creates, drops, or connects to the namespace itself: an application that needs `audit` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created, and `rasql.Create` then fails with the server's own error if that namespace does not exist. `inspect` never fills `Schema` in, and [`rasqlgen`](06-rasqlgen.md) never emits one; qualified inspection and generation are not supported yet, so a qualified table is re-read through a hand-written descriptor.
+
+A foreign key that references a table in another schema names it with `ForeignKey.ReferencedSchema`, validated the same way as `Table.Schema` and left empty for the server to resolve, exactly like an empty `Table.Schema`. PostgreSQL and MySQL render a stated `ReferencedSchema` as a second qualified identifier in the `REFERENCES` clause. SQLite cannot: it rejects a schema-qualified `REFERENCES` outright, even when the reference names the referencing table's own schema, so rasql drops a same-schema qualifier there rather than refuse a reference that means the same thing either way, and refuses to render a genuinely cross-schema reference instead of silently pointing it at the wrong table. An unqualified table's foreign keys are unaffected either way: qualifying `Table.Schema` alone, without also stating `ForeignKey.ReferencedSchema`, would let PostgreSQL resolve an unqualified `REFERENCES` through the connection's `search_path` rather than the table's own schema, which is why the two fields ship together.
 
 `schema.Table` and `query.Table` each answer two questions about qualification. `Qualified` reports whether a schema is named at all, and `QualifiedName` returns `schema.name` for display, falling back to `name` for an unqualified table. Neither is a SQL identifier: a renderer quotes `Schema` and `Name` as two identifiers, and `dialect.QuoteIdentifier` rejects the dotted string `QualifiedName` returns. On `query.Table` the two describe the table rather than the reference: `Qualified` stays true once the table is aliased, while `QualifiedName` returns the alias, because that is what an error message about an aliased table has to name. `query.Table.QualifierSchema` reports what actually qualifies a rendered column, which is nothing at all once an alias replaces the table's whole name.
 
@@ -89,15 +91,13 @@ type eventRow struct {
 }
 
 func Example_schema_qualified_table() {
-	// This example queries a table through a schema-qualified descriptor.
-	// Schema names a PostgreSQL schema, a MySQL database, or, as here, a
-	// SQLite attached-database name. rasql never creates the namespace
-	// itself, so the CREATE TABLE below stands in for a reviewed native
-	// migration, which is the only way rasql creates a schema in production.
-	// The DDL is written out here rather than run through rasql.Create for
-	// the same reason: qualification reaches DML and column references only,
-	// so rasql.Create would render CREATE TABLE "events" and drop the audit
-	// qualifier. Qualified DDL is not supported yet.
+	// This example creates and queries a table through a schema-qualified
+	// descriptor. Schema names a PostgreSQL schema, a MySQL database, or, as
+	// here, a SQLite attached-database name. rasql never creates the
+	// namespace itself, so the ATTACH DATABASE below stands in for a
+	// reviewed native migration, which is the only way rasql creates a
+	// namespace in production; rasql.Create then renders CREATE TABLE
+	// "audit"."events" into the namespace that migration already created.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -110,10 +110,6 @@ func Example_schema_qualified_table() {
 
 	if _, err := database.ExecContext(ctx, `ATTACH DATABASE ':memory:' AS audit`); err != nil {
 		fmt.Printf("failed to attach audit database: %s\n", err)
-		return
-	}
-	if _, err := database.ExecContext(ctx, "CREATE TABLE audit.events (id INTEGER PRIMARY KEY, action TEXT NOT NULL)"); err != nil {
-		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}
 
@@ -133,6 +129,11 @@ func Example_schema_qualified_table() {
 		},
 		PrimaryKey: []string{"id"},
 	})
+
+	if err := rasql.Create(ctx, client, events); err != nil {
+		fmt.Printf("failed to create events table: %s\n", err)
+		return
+	}
 
 	if _, err := rasql.Insert(ctx, client, events, eventRow{ID: 1, Action: "created"}); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
