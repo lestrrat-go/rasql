@@ -578,6 +578,37 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 	require.NoError(t, aggregateHaving.Validate())
 }
 
+// TestSelectAcceptsSubqueriesInGroupedClauses pins that GROUP BY and HAVING are
+// SELECT clauses like the others, so a subquery is legal in both. GROUP BY is
+// validated through validateSelectClauseExpression and HAVING through
+// aggregateClauseContext, and both of those permit a subquery, which keeps the
+// clause list in the misplaced-subquery message honest.
+func TestSelectAcceptsSubqueriesInGroupedClauses(t *testing.T) {
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	amount, err := orders.Column("amount")
+	require.NoError(t, err)
+	// A separate alias keeps the average its own scope rather than a
+	// correlation, which this package does not support.
+	allOrders, err := orders.As("all_orders")
+	require.NoError(t, err)
+	allAmount, err := allOrders.Column("amount")
+	require.NoError(t, err)
+	averageAmount, err := query.NewSelect(allOrders, query.Project(query.Avg(allAmount)))
+	require.NoError(t, err)
+
+	// GROUP BY groups on whether each amount beats the average.
+	aboveAverage := query.GreaterThan(amount, query.Scalar(averageAmount))
+	grouped, err := query.NewGroupedSelect(orders, []query.Expression{aboveAverage}, query.Project(query.CountAll()))
+	require.NoError(t, err)
+	require.NoError(t, grouped.Validate())
+
+	// HAVING compares an aggregate against a scalar subquery.
+	withHaving, err := grouped.WithHaving(query.GreaterThan(query.Avg(amount), query.Scalar(averageAmount)))
+	require.NoError(t, err)
+	require.NoError(t, withHaving.Validate())
+}
+
 // TestSelectJudgesAggregatesInsideMembership pins how the clause-aware walk
 // treats a membership test. The test itself is an ordinary predicate, so the
 // tested expression and every member of its value list are judged by the rule

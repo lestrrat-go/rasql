@@ -298,7 +298,7 @@ func (s Select) Validate() error {
 	grouped := len(s.groupBy) > 0
 	for i, expression := range s.groupBy {
 		path := fmt.Sprintf("group_by[%d]", i)
-		if err := validateClauseExpression(expression, sources, "a GROUP BY clause", path); err != nil {
+		if err := validateSelectClauseExpression(expression, sources, "a GROUP BY clause", path); err != nil {
 			return err
 		}
 		if _, ok := expression.(Value); ok {
