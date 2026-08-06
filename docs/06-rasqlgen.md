@@ -212,12 +212,16 @@ Names come from the table and column names. Underscore-separated parts are capit
 | --- | --- |
 | `boolean` | `bool` |
 | `integer` | `int64` |
+| `integer` with `Unsigned` | `uint64` |
 | `float` | `float64` |
 | `text`, `uuid` | `string` |
 | `bytes`, `json` | `[]byte` |
 | `time` | `time.Time` |
+| `decimal` | `string` |
 
 A `boolean` column decodes from any integer value, not just 0 and 1: zero decodes as `false`, and any nonzero value decodes as `true`.
+
+An `integer` column that sets `Unsigned` generates a `uint64` field rather than an `int64` one, because it reaches 18446744073709551615 and `int64` stops at 9223372036854775807. The generated descriptor restates `Unsigned: true`, so regenerating from the emitted source produces the same column instead of a signed one, and a `schema.Table` read through `-input` keeps it too, since it is a plain JSON boolean. See [Unsigned integer columns](02-schema.md#unsigned-integer-columns) for which engines can render such a column.
 
 The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `QueryTable`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `DecodeRow` or `ColumnValue`, because those belong to the row type's own mapping methods.
 
