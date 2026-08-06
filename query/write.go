@@ -161,8 +161,8 @@ func NewInsert(into Table, columns []Column, values []Expression) (Insert, error
 
 // NewInsertRows creates a validated INSERT statement for one or more rows.
 // The rows are rectangular: every row supplies exactly one expression per
-// column, in the order of columns, and each expression renders as its own
-// placeholder. Validation reports an error for an empty rows slice, because
+// column, in the order of columns, and each expression renders in that column's
+// position. Validation reports an error for an empty rows slice, because
 // VALUES with no row is not valid SQL in any supported dialect.
 //
 // The rows render as a single statement, but that on its own does not make the
@@ -170,8 +170,12 @@ func NewInsert(into Table, columns []Column, values []Expression) (Insert, error
 // rolls back the rows it already wrote, remain the caller's and the database's
 // responsibility: a non-transactional MySQL table keeps the earlier rows.
 // Wrap the call in a transaction when every row has to land or none of them.
-// Bound parameters are capped by the database: see the package documentation on
-// parameter limits.
+// Bound parameters are capped by the database. This insert costs R*C parameters
+// over R rows of C columns only when every row value is a single [Bind]; a row
+// value may be any Expression, and one that is not a single [Bind] costs
+// however many [Bind] values are nested inside it. See the Parameter limits
+// section of the package documentation for the caps and for how to stay under
+// them.
 func NewInsertRows(into Table, columns []Column, rows [][]Expression) (Insert, error) {
 	statement := Insert{
 		into:    into,
