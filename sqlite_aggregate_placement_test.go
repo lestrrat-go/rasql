@@ -62,6 +62,11 @@ func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
 			"order by beside a column projection": base.Select("id").Order(query.Asc(query.Count(id))),
 			"nested aggregate":                    base.Project(query.Project(query.Sum(query.Sum(id)))),
 			"mixed projections":                   base.Select("id").Project(query.Project(query.CountAll())),
+			// A scalar function carries ctx unchanged into its arguments, so an
+			// aggregate wrapped inside one is refused in WHERE exactly as a bare
+			// aggregate is: the scalar call is not an exemption from the
+			// placement rule.
+			"scalar function wrapping an aggregate in where": base.Select("id").Where(query.GreaterThan(query.Coalesce(query.Count(id), query.Bind(0)), query.Bind(1))),
 		}
 		for name, builder := range tests {
 			t.Run(name, func(t *testing.T) {
@@ -206,6 +211,46 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.ElementsMatch(t, []int64{2, 3}, ids, "HAVING id > 1 keeps groups 2 and 3 and drops group 1")
 	})
+}
+
+// TestSQLiteRunsScalarFunctionsBesideAggregates proves a scalar function call
+// runs beside an aggregate against a real database: LOWER(email) groups the
+// rows and COALESCE(SUM(id), 0) aggregates within each group, which is the
+// shape a scalar function wrapping an aggregate is refused in WHERE for
+// (TestSQLiteRefusesMisplacedAggregates) and accepted in a projection for.
+func TestSQLiteRunsScalarFunctionsBesideAggregates(t *testing.T) {
+	database, definition := aggregatePlacementFixture(t)
+	table, err := query.NewTable(definition)
+	require.NoError(t, err)
+	id, err := table.Column("id")
+	require.NoError(t, err)
+	email, err := table.Column("email")
+	require.NoError(t, err)
+
+	statement, err := query.NewGroupedSelect(table, []query.Expression{query.Lower(email)},
+		query.Project(query.Lower(email)).As("email"),
+		query.Project(query.Coalesce(query.Sum(id), query.Bind(0))).As("total"),
+	)
+	require.NoError(t, err)
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	require.NoError(t, err)
+
+	rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
+	require.NoError(t, err)
+	defer rows.Close()
+	seen := map[string]int64{}
+	for rows.Next() {
+		var gotEmail string
+		var total int64
+		require.NoError(t, rows.Scan(&gotEmail, &total))
+		seen[gotEmail] = total
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, map[string]int64{
+		"ada@example.com": 1,
+		"bob@example.com": 2,
+		"cyd@example.com": 3,
+	}, seen)
 }
 
 // aggregatePlacementFixture opens an in-memory SQLite database holding three

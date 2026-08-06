@@ -196,7 +196,14 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 	return r.writeReturning(statement.Returning())
 }
 
+// writeUpsertAssignments renders each assignment's value through the ordinary
+// writeExpression, having first told the renderer which upsert style is in
+// effect: writeExcludedColumn reads that state to render an ExcludedColumn
+// wherever in the value it sits, and rejects one reached outside this scope.
 func (r *renderer) writeUpsertAssignments(assignments []query.Assignment, style dialect.UpsertStyle) error {
+	r.inExcluded = true
+	r.excludedStyle = style
+	defer func() { r.inExcluded = false }()
 	for i, assignment := range assignments {
 		if i > 0 {
 			r.builder.WriteString(", ")
@@ -207,35 +214,11 @@ func (r *renderer) writeUpsertAssignments(assignments []query.Assignment, style 
 		}
 		r.builder.WriteString(column)
 		r.builder.WriteString(" = ")
-		if err := r.writeUpsertExpression(assignment.Value(), style); err != nil {
+		if err := r.writeExpression(assignment.Value()); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (r *renderer) writeUpsertExpression(expression query.Expression, style dialect.UpsertStyle) error {
-	excluded, ok := expression.(query.ExcludedColumn)
-	if !ok {
-		return r.writeExpression(expression)
-	}
-	name, err := r.quoteIdentifier(excluded.Column().Name())
-	if err != nil {
-		return err
-	}
-	switch style {
-	case dialect.UpsertOnConflict:
-		r.builder.WriteString("EXCLUDED.")
-		r.builder.WriteString(name)
-		return nil
-	case dialect.UpsertDuplicateKey:
-		r.builder.WriteString("VALUES(")
-		r.builder.WriteString(name)
-		r.builder.WriteByte(')')
-		return nil
-	default:
-		return fmt.Errorf("excluded columns are not supported")
-	}
 }
 
 func (r *renderer) writeUpdate(statement query.Update) error {

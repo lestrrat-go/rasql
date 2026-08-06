@@ -4,6 +4,7 @@ package rasql_test
 
 import (
 	"database/sql"
+	"math/big"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
@@ -15,30 +16,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// coalescedAmounts is what the COALESCE projection in testDatabaseIntegration
+// reads back for the two inserted "amount" values. The two live dialects do
+// not agree, so each states its own pair rather than reusing the plain-column
+// expectations the rest of the test uses; the comment on that projection says
+// why MySQL differs. Both pairs are exact strings on purpose -- the point of
+// the projection is to pin what a caller decoding a coalesced decimal on each
+// dialect actually receives, so neither may be loosened to accept any string.
+type coalescedAmounts struct {
+	first  string
+	second string
+}
+
 func TestDatabaseIntegration(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		open    func(*testing.T) *sql.DB
-		dialect dialect.Dialect
+		name      string
+		open      func(*testing.T) *sql.DB
+		dialect   dialect.Dialect
+		coalesced coalescedAmounts
 	}{
 		{
-			name:    "postgresql",
-			open:    dbtest.PostgreSQLDB,
-			dialect: dialect.PostgreSQL(),
+			name:      "postgresql",
+			open:      dbtest.PostgreSQLDB,
+			dialect:   dialect.PostgreSQL(),
+			coalesced: coalescedAmounts{first: "19.9900", second: "5.0000"},
 		},
 		{
-			name:    "mysql",
-			open:    dbtest.MySQLDB,
-			dialect: dialect.MySQL(),
+			name:      "mysql",
+			open:      dbtest.MySQLDB,
+			dialect:   dialect.MySQL(),
+			coalesced: coalescedAmounts{first: "19.990000000000000000000000000000", second: "5.000000000000000000000000000000"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			testDatabaseIntegration(t, test.open(t), test.dialect)
+			testDatabaseIntegration(t, test.open(t), test.dialect, test.coalesced)
 		})
 	}
 }
 
-func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) {
+func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, coalesced coalescedAmounts) {
 	client, err := rasql.New(database, d)
 	require.NoError(t, err)
 	type record struct {
@@ -89,7 +105,10 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	// decimal type exists to preserve, so rasql surfaces the server's digits
 	// unchanged rather than trimming them. The expectations below therefore
 	// state the padded form deliberately -- do not "correct" them back to the
-	// shorter literals that were inserted.
+	// shorter literals that were inserted. That declared scale governs the
+	// column read directly; a projected expression over it need not keep it,
+	// which is why the COALESCE projection further down carries its own
+	// per-dialect expectation instead of reusing these two.
 	firstStored := first
 	firstStored.Amount = "19.9900"
 	secondStored := second
@@ -121,6 +140,75 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 		All(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, []record{firstStored}, viaSubquery)
+
+	// A scalar-function predicate and projection prove COALESCE and LOWER
+	// render and execute against a real server on both live dialects: the
+	// design behind this change argued no new dialect.Capability is needed
+	// because all three engines spell these functions identically, and this
+	// is what proves that argument against MySQL and PostgreSQL rather than
+	// only against the SQLite-backed tests elsewhere in this repository.
+	scalarEmail, err := records.Column("email")
+	require.NoError(t, err)
+	scalarAmount, err := records.Column("amount")
+	require.NoError(t, err)
+	viaLower, err := rasql.SelectFrom(client, records).
+		Where(query.Equal(query.Lower(scalarEmail), query.Bind(firstStored.Email))).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []record{firstStored}, viaLower)
+
+	type amountRow struct {
+		ID     int64  `rasql:"id"`
+		Amount string `rasql:"amount"`
+	}
+	// The coalesced amount is not the plain-column amount on both dialects.
+	// MySQL fixes the type of COALESCE while it prepares the statement, and
+	// the placeholder query.Bind produces carries no scale of its own at that
+	// point, so the whole call widens to DECIMAL(65,30) and the DECIMAL(19,4)
+	// column decodes with 30 digits right of the point rather than 4.
+	// PostgreSQL returns the value at its own scale. That difference is a real,
+	// user-visible property of the scalar functions this change adds, and it is
+	// documented on query.Coalesce and in docs/03-querying.md; pinning it here
+	// per dialect is what keeps the documentation honest. Coalescing against
+	// another decimal expression rather than a bound value would dodge the
+	// widening, but this projection exists to exercise a bound fallback, so it
+	// states both exact strings instead.
+	viaCoalesce, err := rasql.DecodeFrom[amountRow](client, records).
+		Project(query.Project(recordID), query.Project(query.Coalesce(scalarAmount, query.Bind("0.0000"))).As("amount")).
+		OrderAsc(recordID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []amountRow{
+		{ID: first.ID, Amount: coalesced.first},
+		{ID: second.ID, Amount: coalesced.second},
+	}, viaCoalesce)
+	// Whatever scale the server chose, the pinned string must still denote the
+	// number the column holds. This is what makes the widened MySQL literal
+	// above a statement about formatting rather than a licence to expect any
+	// value, and it catches a mistyped digit in either pair.
+	requireSameDecimal(t, firstStored.Amount, coalesced.first)
+	requireSameDecimal(t, secondStored.Amount, coalesced.second)
+
+	// NULLIF is the counterexample the documentation on query.Coalesce and in
+	// docs/03-querying.md now names: the widening above is not a property of
+	// mixing any function with a placeholder, it is a property of a function
+	// whose result type is resolved across all of its arguments. MySQL types
+	// NULLIF from its first argument alone, so a decimal column passed first
+	// keeps its declared DECIMAL(19,4) and decodes at scale 4 even though the
+	// second argument is a scaleless placeholder. PostgreSQL types NULLIF the
+	// same way, so both live dialects read back the plain-column strings the
+	// expectations above already state, and this projection needs no
+	// per-dialect pair of its own. Neither amount equals the bound "0.0000",
+	// so NULLIF returns the column value on every row.
+	viaNullIf, err := rasql.DecodeFrom[amountRow](client, records).
+		Project(query.Project(recordID), query.Project(query.Func("NULLIF", scalarAmount, query.Bind("0.0000"))).As("amount")).
+		OrderAsc(recordID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []amountRow{
+		{ID: first.ID, Amount: firstStored.Amount},
+		{ID: second.ID, Amount: secondStored.Amount},
+	}, viaNullIf)
 
 	total, err := rasql.SelectFrom(client, records).Count(t.Context())
 	require.NoError(t, err)
@@ -161,6 +249,19 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	inspected, err := inspector.Table(t.Context(), tableName)
 	require.NoError(t, err)
 	require.Equal(t, integrationTable(tableName), inspected)
+}
+
+// requireSameDecimal fails unless two decimal strings denote the same number.
+// It parses with math/big rather than float64 so that comparing a 30-digit
+// scale against a 4-digit one stays exact, which is the whole point of the
+// decimal type under test.
+func requireSameDecimal(t *testing.T, expected, actual string) {
+	t.Helper()
+	expectedValue, ok := new(big.Rat).SetString(expected)
+	require.True(t, ok, "%q is not a decimal", expected)
+	actualValue, ok := new(big.Rat).SetString(actual)
+	require.True(t, ok, "%q is not a decimal", actual)
+	require.Zero(t, expectedValue.Cmp(actualValue), "%q and %q are different numbers", expected, actual)
 }
 
 func integrationTable(name string) schema.Table {

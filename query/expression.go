@@ -327,24 +327,36 @@ const (
 	FunctionMin   FunctionName = "MIN"
 	FunctionMax   FunctionName = "MAX"
 	FunctionAvg   FunctionName = "AVG"
+
+	FunctionCoalesce FunctionName = "COALESCE"
+	FunctionLower    FunctionName = "LOWER"
+	FunctionUpper    FunctionName = "UPPER"
+	FunctionAbs      FunctionName = "ABS"
 )
 
-// Function calls a SQL function on its arguments. Every supported function
-// aggregates, so statement validation accepts a call only where SQL does: in a
-// SELECT projection, in a HAVING clause, or in an ORDER BY clause of a
-// statement that groups, never inside another aggregate. An ungrouped
-// projection set that both aggregates and reads a column outside an aggregate
-// needs an explicit GROUP BY to mean anything, so it is refused, and the same
-// rule governs the ORDER BY and HAVING of an ungrouped aggregating statement,
-// whose expressions may then read a column only inside an aggregate. A grouped
-// statement drops both restrictions: its projections, its ORDER BY, and its
-// HAVING clause may read a column freely alongside an aggregate. Any other
-// placement fails with a ValidationError before the statement is rendered.
+// Function calls a SQL function on its arguments. COUNT, SUM, MIN, MAX, and
+// AVG aggregate, so statement validation accepts a call to one of them only
+// where SQL does: in a SELECT projection, in a HAVING clause, or in an ORDER
+// BY clause of a statement that groups, never inside another aggregate. An
+// ungrouped projection set that both aggregates and reads a column outside an
+// aggregate needs an explicit GROUP BY to mean anything, so it is refused, and
+// the same rule governs the ORDER BY and HAVING of an ungrouped aggregating
+// statement, whose expressions may then read a column only inside an
+// aggregate. A grouped statement drops both restrictions: its projections, its
+// ORDER BY, and its HAVING clause may read a column freely alongside an
+// aggregate. COALESCE, LOWER, UPPER, and ABS are scalar: a call to one of them
+// is legal wherever any expression is, including a WHERE clause, a SET
+// assignment, an INSERT value, and RETURNING, and its arguments are judged by
+// the same placement rules as if they appeared in the call's place directly,
+// so an aggregate nested inside one follows the aggregate rule above. Any
+// placement Aggregates forbids fails with a ValidationError before the
+// statement is rendered.
 type Function struct {
 	name      FunctionName
 	arguments []Expression
 	star      bool
 	distinct  bool
+	unchecked bool
 }
 
 func (Function) expression() {}
@@ -353,6 +365,32 @@ func (Function) expression() {}
 // the FunctionName constants, so a function name never reaches SQL unchecked.
 func Call(name FunctionName, arguments ...Expression) Function {
 	return Function{name: name, arguments: append([]Expression(nil), arguments...)}
+}
+
+// Func calls the SQL function named name on arguments. It is the escape hatch
+// for a function outside the curated FunctionName set: name is any string
+// rather than a FunctionName constant, and reaching a function this package
+// does not curate never requires a change to rasql.
+//
+// rasql checks nothing about name beyond it being a legal SQL identifier —
+// the same rule schema.ValidateIdentifier applies to a column or table name —
+// so that a caller-supplied string never reaches SQL text unchecked.
+// Validation does not know whether name exists on the target database, what
+// it does, what arguments it takes, or whether it renders identically across
+// PostgreSQL, MySQL, and SQLite. Portability is entirely the caller's
+// responsibility; prefer Call with a FunctionName constant, or one of
+// Coalesce, Lower, Upper, and Abs, whenever the function is one of them.
+// Every argument still goes through the ordinary expression nodes, so a value
+// passed with Bind still travels as a placeholder rather than as SQL text —
+// only the function's own name reaches SQL unescaped, and only after
+// validation has confirmed it is a legal identifier. A call built with Func
+// is always treated as scalar: it is legal wherever any expression is, and it
+// is never subject to the aggregate placement rules, even when name happens
+// to match an aggregate this package curates, such as "SUM". WithDistinct is
+// the one thing it does not share with a curated scalar call, and WithDistinct
+// states what it does there.
+func Func(name string, arguments ...Expression) Function {
+	return Function{name: FunctionName(name), arguments: append([]Expression(nil), arguments...), unchecked: true}
 }
 
 // Count counts the non-NULL values of expression. Use CountAll to count rows.
@@ -385,6 +423,55 @@ func Avg(expression Expression) Function {
 	return Call(FunctionAvg, expression)
 }
 
+// Coalesce returns the first of expressions that is not NULL. It takes at
+// least two expressions, because a one-argument COALESCE is not accepted by
+// every supported dialect.
+//
+// On MySQL, coalescing a decimal column against a value bound with Bind
+// changes the scale the result decodes at. MySQL fixes the result type while
+// it prepares the statement, and a placeholder carries no scale of its own at
+// that point, so the whole call becomes the widest decimal the server has,
+// DECIMAL(65,30), instead of the column's declared type: a DECIMAL(19,4)
+// column decodes with 30 digits right of the point rather than 4. The number
+// is the same and only its trailing zeroes differ, but a caller comparing the
+// decoded string against a literal has to expect the widened form. Coalescing
+// against another decimal expression of the same scale, such as a second
+// column, keeps that scale, and so does a driver that interpolates its
+// arguments into the SQL text client-side rather than sending them as
+// placeholders. PostgreSQL and SQLite are unaffected: both return the value at
+// its own scale. The same widening reaches a call built with Func that mixes a
+// decimal column with a bound value only when the named function's own MySQL
+// type rules resolve a common decimal result type across all of its arguments,
+// as IFNULL, GREATEST, and LEAST do. A function that types its result from a
+// single argument keeps that argument's scale instead: MySQL types NULLIF from
+// its first argument, so NULLIF on a decimal column passed first keeps the
+// column's declared scale, while the same call with the placeholder first
+// widens. The rule is about which argument the result takes its type from, not
+// about the function name. A function that returns a string or an integer,
+// such as CONCAT, has no decimal result scale to widen and is unaffected.
+func Coalesce(expressions ...Expression) Function {
+	return Call(FunctionCoalesce, expressions...)
+}
+
+// Lower returns expression with its letters folded to lower case. SQLite folds
+// ASCII letters only, while PostgreSQL and MySQL fold according to the
+// server's collation, so a case-insensitive match on non-ASCII text is not
+// portable across dialects. MySQL leaves a binary-typed argument unchanged.
+func Lower(expression Expression) Function {
+	return Call(FunctionLower, expression)
+}
+
+// Upper returns expression with its letters folded to upper case. The same
+// dialect differences documented on Lower apply here.
+func Upper(expression Expression) Function {
+	return Call(FunctionUpper, expression)
+}
+
+// Abs returns the magnitude of expression.
+func Abs(expression Expression) Function {
+	return Call(FunctionAbs, expression)
+}
+
 // Name returns the called function.
 func (f Function) Name() FunctionName {
 	return f.name
@@ -402,11 +489,18 @@ func (f Function) Star() bool {
 
 // WithDistinct returns a copy of f that evaluates its argument only once per
 // distinct value before the function combines them, rendering as e.g.
-// COUNT(DISTINCT x). It is a modifier on the call's argument, not a
-// separate function name, so it applies to any of the functions above; it
-// takes no argument for the same reason query.Select.WithDistinct does.
-// Statement validation rejects it combined with CountAll's star, since
-// COUNT(DISTINCT *) is not legal SQL; call Count with a column instead.
+// COUNT(DISTINCT x). It is a modifier on the call's argument, not a separate
+// function name; it takes no argument for the same reason
+// query.Select.WithDistinct does. DISTINCT inside a call is only legal SQL
+// where the function aggregates, so statement validation rejects it on a
+// curated call Aggregates reports false for, and rejects it combined with
+// CountAll's star, since COUNT(DISTINCT *) is not legal SQL; call Count with
+// a column instead. A call built with Func carries it through
+// unchecked, because rasql does not know whether the named function
+// aggregates: DISTINCT is how an aggregate this package does not curate, such
+// as GROUP_CONCAT, reaches SQL, and whether that call is legal on the target
+// database is the caller's responsibility, as everything else about a Func
+// name already is.
 func (f Function) WithDistinct() Function {
 	f.distinct = true
 	return f
@@ -416,4 +510,20 @@ func (f Function) WithDistinct() Function {
 // value before combining them.
 func (f Function) Distinct() bool {
 	return f.distinct
+}
+
+// Aggregates reports whether the called function aggregates. It governs where
+// the call is legal: an aggregate is legal only in a SELECT projection, in a
+// HAVING clause, and in the ORDER BY of a statement that groups, while a
+// scalar call is legal wherever any expression is. A call built with Func is
+// always scalar, so it reports false whatever its name, even when that name
+// matches an aggregate this package curates, such as "SUM"; that matches the
+// placement rule validation applies to it. An unsupported function name also
+// reports false; statement validation is what refuses it.
+func (f Function) Aggregates() bool {
+	if f.unchecked {
+		return false
+	}
+	spec, ok := functionSpecs[f.name]
+	return ok && spec.aggregate
 }

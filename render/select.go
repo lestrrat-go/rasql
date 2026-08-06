@@ -68,6 +68,16 @@ type renderer struct {
 	dialect dialect.Dialect
 	builder strings.Builder
 	args    []any
+	// excludedStyle is the dialect's upsert conflict-handling syntax for the
+	// duration of an upsert conflict-update assignment, and inExcluded
+	// reports whether the expression walk currently sits inside one.
+	// writeUpsertAssignments sets both around each assignment's value, so an
+	// ExcludedColumn renders correctly however deep inside that value it sits
+	// — not only at the value's own top level. EXCLUDED means nothing outside
+	// a conflict-update assignment, so writeExcludedColumn refuses one
+	// reached anywhere else.
+	excludedStyle dialect.UpsertStyle
+	inExcluded    bool
 }
 
 func (r *renderer) writeSelect(statement query.Select) error {
@@ -324,8 +334,42 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		}
 		r.builder.WriteByte(')')
 		return nil
+	case query.ExcludedColumn:
+		return r.writeExcludedColumn(expression)
 	default:
 		return fmt.Errorf("unsupported expression %T", expression)
+	}
+}
+
+// writeExcludedColumn renders an ExcludedColumn reached anywhere in an
+// expression tree, not only at the top level of an upsert conflict-update
+// assignment's value: validation admits ExcludedColumn nested inside another
+// expression, such as Equal(Excluded(col), Bind(v)) or
+// Coalesce(Excluded(col), Bind(0)), the same way it admits Column there, so
+// the renderer has to recognise it at any depth to match. EXCLUDED means
+// nothing outside a conflict-update assignment, so a call reached while
+// inExcluded is false — anywhere else validation happened to accept one —
+// fails loudly instead of silently.
+func (r *renderer) writeExcludedColumn(excluded query.ExcludedColumn) error {
+	if !r.inExcluded {
+		return fmt.Errorf("references the excluded column %q outside an upsert conflict-update assignment", excluded.Column().Name())
+	}
+	name, err := r.quoteIdentifier(excluded.Column().Name())
+	if err != nil {
+		return err
+	}
+	switch r.excludedStyle {
+	case dialect.UpsertOnConflict:
+		r.builder.WriteString("EXCLUDED.")
+		r.builder.WriteString(name)
+		return nil
+	case dialect.UpsertDuplicateKey:
+		r.builder.WriteString("VALUES(")
+		r.builder.WriteString(name)
+		r.builder.WriteByte(')')
+		return nil
+	default:
+		return fmt.Errorf("excluded columns are not supported")
 	}
 }
 
