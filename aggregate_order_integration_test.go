@@ -25,14 +25,18 @@ type aggregateOrderingCase struct {
 	// builder used to render and no longer does.
 	bareColumnSQL func(table string) string
 	// serverRefusesBareColumn records whether this server rejects
-	// bareColumnSQL. It is the one point the two servers disagree on, so the
-	// test's doc comment carries the reason.
+	// bareColumnSQL. It is one of the two points the two servers disagree on,
+	// so the test's doc comment carries the reason.
 	serverRefusesBareColumn bool
 	// nonAggregateHavingSQL spells, in this dialect's quoting, a HAVING clause
-	// on a query whose projections do not aggregate. Both servers refuse it,
-	// which is what proves the model's HAVING-without-GROUP-BY rule matches
-	// SQL rather than being stricter than it needs to be.
+	// on a query that names no GROUP BY and whose projections do not
+	// aggregate. This is the second point the two servers disagree on.
 	nonAggregateHavingSQL func(table string) string
+	// serverRefusesNonAggregateHaving records whether this server rejects
+	// nonAggregateHavingSQL. Neither server refuses a HAVING merely for
+	// lacking a GROUP BY, so the answers differ and the subtest's doc comment
+	// carries the reason.
+	serverRefusesNonAggregateHaving bool
 }
 
 // TestAggregateOrderingAgainstLiveDatabases proves the ORDER BY rule against the
@@ -46,6 +50,9 @@ type aggregateOrderingCase struct {
 // TestSQLiteOrdersAnAggregateStatement covers the same two shapes against
 // SQLite, which runs both. Each case skips when its server is unavailable; CI's
 // integration job runs both.
+// The test also covers the grouped shapes GROUP BY and HAVING exist for, and a
+// HAVING that names no GROUP BY, on which the two servers part ways a second
+// time; the subtests carry those reasons.
 func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 	for _, test := range []aggregateOrderingCase{
 		{
@@ -59,6 +66,7 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 			nonAggregateHavingSQL: func(table string) string {
 				return `SELECT "` + table + `"."id" FROM "` + table + `" HAVING ("` + table + `"."id" > 1)`
 			},
+			serverRefusesNonAggregateHaving: true,
 		},
 		{
 			name:    "mysql",
@@ -77,6 +85,9 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 			// SELECT COUNT(*), t.id FROM t with error 1140, and rejected this
 			// ordering once the query named an explicit GROUP BY, with error
 			// 1055.
+			// It leaves serverRefusesNonAggregateHaving false on measured
+			// behavior too: that same server ran nonAggregateHavingSQL and
+			// returned rows.
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -143,12 +154,10 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		}
 	})
 
-	t.Run("the database runs a grouped mixed projection and refuses HAVING on a non-aggregate query", func(t *testing.T) {
-		// SQLite cannot speak for either half of this: TestSQLiteRunsGroupedStatements
-		// covers the grouped-mixed-projection half, and TestSQLiteRefusesMisplacedAggregates
-		// records that SQLite refuses the misplaced shapes it does refuse, but
-		// HAVING without GROUP BY on a non-aggregate query is refused by
-		// PostgreSQL and MySQL specifically, which is the rule WithHaving matches.
+	t.Run("the database runs a grouped mixed projection", func(t *testing.T) {
+		// TestSQLiteRunsGroupedStatements proves the same shape against
+		// SQLite; this proves it against the two servers SQLite cannot speak
+		// for.
 		email, err := table.Column("email")
 		require.NoError(t, err)
 		grouped := render.SelectFrom(test.dialect, table).
@@ -169,9 +178,37 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		}
 		require.NoError(t, rows.Err())
 		require.Len(t, seen, 2, "two fixtures, each with a distinct email, form two groups")
+	})
 
-		err = runStatement(t, database, test.nonAggregateHavingSQL(tableName))
-		require.Error(t, err, "both servers refuse a HAVING clause on a query whose projections do not aggregate")
+	t.Run("the server answers a HAVING without GROUP BY its own way", func(t *testing.T) {
+		// The two servers genuinely disagree here, so no single assertion
+		// covers both, and neither one refuses the statement for the reason a
+		// reader might expect: a HAVING that names no GROUP BY is not refused
+		// as such by either server. PostgreSQL counts a HAVING clause as
+		// making the query grouped, so the bare id in the select list belongs
+		// to no row of the single group and the server rejects the statement.
+		// MySQL 8.4 does not count it that way: with neither a GROUP BY nor an
+		// aggregate the query is not grouped at all, so ONLY_FULL_GROUP_BY
+		// checks nothing, and the server runs the HAVING as a row filter and
+		// returns rows.
+		//
+		// SQLite gives a third answer: 3.53.3, the version the driver
+		// this module builds against reports, refuses the same statement with
+		// "HAVING clause on a non-aggregate query".
+		//
+		// So there is no portable "the servers refuse this" claim to assert,
+		// and this subtest asserts only the answer each server actually gives.
+		// rasql is deliberately stricter than both: query refuses a HAVING
+		// without a GROUP BY at validation time, which is why a rasql caller
+		// never reaches either server with this statement and why the SQL here
+		// is spelled out by hand. TestSelectRejectsInvalidHaving covers that
+		// rule.
+		err := runStatement(t, database, test.nonAggregateHavingSQL(tableName))
+		if !test.serverRefusesNonAggregateHaving {
+			require.NoError(t, err)
+			return
+		}
+		require.Error(t, err)
 	})
 
 	t.Run("the server answers a bare-column ordering its own way", func(t *testing.T) {
