@@ -141,6 +141,73 @@ func TestSQLiteOrdersAnAggregateStatement(t *testing.T) {
 	})
 }
 
+// TestSQLiteRunsGroupedStatements proves the two shapes GROUP BY and HAVING
+// exist for, against a real database: a grouped mixed projection returns one
+// row per group with the right per-group counts, and a grouped HAVING filters
+// those groups. It turns the "sqlite answers the mixed projection from an
+// arbitrary row" subtest of TestSQLiteRefusesMisplacedAggregates into a pair:
+// one shape still refused ungrouped, the same shape run grouped.
+func TestSQLiteRunsGroupedStatements(t *testing.T) {
+	database, definition := aggregatePlacementFixture(t)
+	table, err := query.NewTable(definition)
+	require.NoError(t, err)
+	id, err := table.Column("id")
+	require.NoError(t, err)
+	email, err := table.Column("email")
+	require.NoError(t, err)
+
+	t.Run("a grouped mixed projection returns one row per group", func(t *testing.T) {
+		statement, err := query.NewGroupedSelect(table, []query.Expression{email},
+			query.Project(email),
+			query.Project(query.CountAll()).As("total"),
+		)
+		require.NoError(t, err)
+		rendered, err := render.Select(dialect.SQLite(), statement)
+		require.NoError(t, err)
+
+		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
+		require.NoError(t, err)
+		defer rows.Close()
+		seen := map[string]int64{}
+		for rows.Next() {
+			var gotEmail string
+			var total int64
+			require.NoError(t, rows.Scan(&gotEmail, &total))
+			seen[gotEmail] = total
+		}
+		require.NoError(t, rows.Err())
+		require.Len(t, seen, 3, "three fixture users, each with a distinct email, form three groups")
+		for _, total := range seen {
+			require.Equal(t, int64(1), total)
+		}
+	})
+
+	t.Run("a grouped HAVING filters groups", func(t *testing.T) {
+		statement, err := query.NewGroupedSelect(table, []query.Expression{id},
+			query.Project(id),
+			query.Project(query.CountAll()).As("total"),
+		)
+		require.NoError(t, err)
+		statement, err = statement.WithHaving(query.GreaterThan(id, query.Bind(1)))
+		require.NoError(t, err)
+		rendered, err := render.Select(dialect.SQLite(), statement)
+		require.NoError(t, err)
+
+		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
+		require.NoError(t, err)
+		defer rows.Close()
+		var ids []int64
+		for rows.Next() {
+			var gotID, total int64
+			require.NoError(t, rows.Scan(&gotID, &total))
+			ids = append(ids, gotID)
+			require.Equal(t, int64(1), total)
+		}
+		require.NoError(t, rows.Err())
+		require.ElementsMatch(t, []int64{2, 3}, ids, "HAVING id > 1 keeps groups 2 and 3 and drops group 1")
+	})
+}
+
 // aggregatePlacementFixture opens an in-memory SQLite database holding three
 // users, and returns it with the table descriptor the placement tests build
 // statements from.

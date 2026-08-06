@@ -32,8 +32,8 @@ func validateAlias(alias string) error {
 }
 
 // expressionContext tells the expression walk where in a statement the
-// expression sits. An aggregate function is only legal in a SELECT projection
-// and in the ORDER BY of a statement whose projections all aggregate, and never
+// expression sits. An aggregate function is only legal in a SELECT projection,
+// in a HAVING clause, and in the ORDER BY of a statement that groups, and never
 // inside another aggregate, so a walk that carries no clause and no nesting
 // state cannot tell a legal call from one every dialect rejects.
 type expressionContext struct {
@@ -85,8 +85,10 @@ type expressionUsage struct {
 	// aggregate reports that the expression calls at least one aggregate.
 	aggregate bool
 	// bareColumn reports that the expression reads a column outside every
-	// aggregate call, which no supported dialect can combine with an aggregate
-	// while GROUP BY is unsupported.
+	// aggregate call, which an ungrouped statement must not combine with an
+	// aggregate because no supported dialect answers that combination usefully.
+	// A statement with a GROUP BY may combine the two, so its callers ignore
+	// this.
 	bareColumn bool
 }
 
@@ -216,7 +218,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		return validateFunction(expression, ctx, path)
 	case Subquery:
 		if !ctx.allowsSubquery {
-			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, and ORDER BY clause of a SELECT statement", ctx.clause)
+			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement", ctx.clause)
 		}
 		if err := expression.statement.Validate(); err != nil {
 			return expressionUsage{}, validationError(path+".statement", "%s", err)
@@ -241,7 +243,7 @@ func validateFunction(function Function, ctx expressionContext, path string) (ex
 		return expressionUsage{}, validationError(path, "calls aggregate function %q inside another aggregate function", function.name)
 	}
 	if !ctx.allowsAggregate {
-		return expressionUsage{}, validationError(path, "calls aggregate function %q in %s, but an aggregate is only valid in a SELECT projection, or in an ORDER BY clause of a statement whose projections all aggregate", function.name, ctx.clause)
+		return expressionUsage{}, validationError(path, "calls aggregate function %q in %s, but an aggregate is only valid in a SELECT projection, in a HAVING clause, or in the ORDER BY clause of a statement that groups", function.name, ctx.clause)
 	}
 	if function.star {
 		if function.name != FunctionCount {

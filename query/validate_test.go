@@ -16,3 +16,13 @@ func TestFunctionValidationRejectsStarOnNonCountFunctions(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "does not support *")
 }
+
+// TestFunctionValidationMessageNamesHavingAndGroupedOrderBy pins the rewritten
+// misplaced-aggregate message so a future edit cannot drop the HAVING mention
+// or narrow the ORDER BY wording back to "whose projections all aggregate" now
+// that a statement can group explicitly.
+func TestFunctionValidationMessageNamesHavingAndGroupedOrderBy(t *testing.T) {
+	_, err := validateExpression(Call(FunctionCount, Value{}), clauseContext(map[string]struct{}{}, "a WHERE clause"), "where")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "is only valid in a SELECT projection, in a HAVING clause, or in the ORDER BY clause of a statement that groups")
+}
