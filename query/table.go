@@ -1,4 +1,18 @@
 // Package query defines dialect-neutral SQL statements and expressions.
+//
+// # Parameter limits
+//
+// Every [Bind] value renders as its own placeholder and costs one bound
+// parameter, so a statement's parameter count follows the bound values it
+// carries: a list of N bound values given to [In] or [NotIn] costs N, and
+// [NewInsertRows] over R rows of C columns costs R*C. The database caps that
+// count, at 65535 for PostgreSQL and MySQL and at 32766 for SQLite through
+// modernc.org/sqlite. This package neither counts parameters nor enforces the
+// cap, so a statement over it builds and renders without complaint and fails
+// when the database executes it. Keep a statement under the cap by splitting
+// the work into several statements, such as inserting a large row set in
+// chunks, or by replacing a large value list with [InSelect] or [NotInSelect],
+// which cost no parameter per candidate value.
 package query
 
 import (

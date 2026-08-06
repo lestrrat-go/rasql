@@ -170,8 +170,9 @@ func NewInsert(into Table, columns []Column, values []Expression) (Insert, error
 // rolls back the rows it already wrote, remain the caller's and the database's
 // responsibility: a non-transactional MySQL table keeps the earlier rows.
 // Wrap the call in a transaction when every row has to land or none of them.
-// Bound parameters are capped by the database: see the package documentation on
-// parameter limits.
+// Bound parameters are capped by the database, and this insert costs one per
+// value in every row: see the Parameter limits section of the package
+// documentation for the caps and for how to stay under them.
 func NewInsertRows(into Table, columns []Column, rows [][]Expression) (Insert, error) {
 	statement := Insert{
 		into:    into,
