@@ -148,11 +148,25 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 		},
 		PrimaryKey: []string{"id"},
 	}
+	invoices := schema.Table{
+		Name: "invoices",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
+			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: 4, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	}
 
-	source, err := generate.Schema("generated", users, orders)
+	source, err := generate.Schema("generated", users, orders, invoices)
 	require.NoError(t, err)
 	require.Contains(t, string(source), "type OrdersRow struct")
 	require.Contains(t, string(source), "type UsersRow struct")
+	require.Contains(t, string(source), "type InvoicesRow struct")
+	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
+	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
+	require.Contains(t, string(source), `{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},`)
+	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.TypeDecimal, Nullable: true, Precision: 5, Scale: 4},`)
 	require.Contains(t, string(source), "Email")
 	require.Contains(t, string(source), "CreatedAt")
 	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
@@ -179,7 +193,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.NotContains(t, string(source), "var Users =")
 	require.Less(t, stringIndex(t, source, "var ordersTable"), stringIndex(t, source, "var usersTable"))
 
-	repeated, err := generate.Schema("generated", orders, users)
+	repeated, err := generate.Schema("generated", invoices, orders, users)
 	require.NoError(t, err)
 	require.Equal(t, string(source), string(repeated), "generated source must not depend on input order")
 
@@ -216,6 +230,28 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Errorf(t, err, "misspelled column field compiled:\n%s", output)
 	require.Contains(t, string(output), "users.Emial undefined")
 	require.Contains(t, string(output), "as query.Column value")
+}
+
+// TestSchemaGeneratesDecimalColumns pins the generator's decimal mapping in
+// isolation: a TypeDecimal column becomes a Go string field, and the
+// descriptor literal restates Precision and Scale in declaration order.
+func TestSchemaGeneratesDecimalColumns(t *testing.T) {
+	invoices := schema.Table{
+		Name: "invoices",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
+			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: 4, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := generate.Schema("generated", invoices)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
+	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
+	require.Contains(t, string(source), `{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},`)
+	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.TypeDecimal, Nullable: true, Precision: 5, Scale: 4},`)
 }
 
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {

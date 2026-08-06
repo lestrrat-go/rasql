@@ -344,6 +344,47 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 	require.Nil(t, actual.Note)
 }
 
+// TestSQLiteDecimalRoundTripsExactly is the test that would have caught the
+// NUMERIC(19,4)-to-REAL truncation change 2 documents: SQLite has no exact
+// decimal storage class, so a TypeDecimal column is declared TEXT and the
+// inserted digits must come back byte-identical rather than rounded through
+// float64.
+func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	client, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	type invoice struct {
+		ID     int64  `rasql:"id"`
+		Amount string `rasql:"amount"`
+	}
+	invoices, err := rasql.NewTable[invoice](schema.Table{
+		Name: "invoices",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	invoiceID, err := invoices.Column("id")
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, invoices))
+
+	expected := invoice{ID: 1, Amount: "1234.5678901234567890"}
+	_, err = rasql.Insert(t.Context(), client, invoices, expected)
+	require.NoError(t, err)
+
+	actual, err := rasql.SelectFrom(client, invoices).WhereEqual(invoiceID, expected.ID).One(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+}
+
 // TestSQLiteReturningRoundTrip exercises Client.QueryWrite against a real
 // database: an INSERT reads back a database-assigned id and a defaulted
 // column through QueryWriteOne, then an UPDATE and a DELETE each read back

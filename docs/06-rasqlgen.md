@@ -33,7 +33,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | `-package` | Package name for the generated file. Required. |
 | `-output` | Path of the generated file. Required. |
 
-Supply either `-dsn` or `-input`, never both. Direct inspection currently supports PostgreSQL only; the command bundles the pgx driver, so nothing needs importing to use `-dsn`. It preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys. It reports an error when an index or constraint has metadata that the schema descriptor cannot reproduce, and when a column is an exact decimal type (`NUMERIC`/`DECIMAL`), since rasql has no logical type that can represent it.
+Supply either `-dsn` or `-input`, never both. Direct inspection currently supports PostgreSQL only; the command bundles the pgx driver, so nothing needs importing to use `-dsn`. It preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys, including exact decimal columns (`NUMERIC`/`DECIMAL`), which generate a Go `string` field. It reports an error when an index or constraint has metadata that the schema descriptor cannot reproduce, and when a column is a bare, unconstrained `NUMERIC`, since PostgreSQL reports no precision for it to record.
 
 `-dsn` reads every requested table in one read-only, repeatable-read transaction and commits it after the last read, so a migration that commits partway through cannot split the generated descriptor across two schema versions. `-timeout` bounds that whole transaction, from opening it through the last metadata query; a server that accepts the connection but never answers cancels the command instead of hanging it indefinitely.
 

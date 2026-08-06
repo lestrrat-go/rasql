@@ -45,6 +45,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 		ID     int64  `rasql:"id"`
 		Active bool   `rasql:"active"`
 		Email  string `rasql:"email"`
+		Amount string `rasql:"amount"`
 	}
 	// A fixed table name here would be inherited into every fresh PostgreSQL
 	// database this test runs against: CREATE DATABASE copies template1 by
@@ -68,8 +69,8 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	}()
 	require.NoError(t, rasql.Create(t.Context(), client, records))
 
-	first := record{ID: 1, Active: true, Email: "ada@example.com"}
-	second := record{ID: 2, Active: false, Email: "grace@example.com"}
+	first := record{ID: 1, Active: true, Email: "ada@example.com", Amount: "19.99"}
+	second := record{ID: 2, Active: false, Email: "grace@example.com", Amount: "5.00"}
 	_, err = rasql.Insert(t.Context(), client, records, first)
 	require.NoError(t, err)
 	_, err = rasql.Insert(t.Context(), client, records, second)
@@ -113,14 +114,16 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	// PostgreSQL and pinned as a build-time rejection on MySQL.
 	recordEmail, err := records.Column("email")
 	require.NoError(t, err)
-	third := record{ID: 3, Active: true, Email: "grace@example.com"}
+	recordAmount, err := records.Column("amount")
+	require.NoError(t, err)
+	third := record{ID: 3, Active: true, Email: "grace@example.com", Amount: "42.50"}
 	insert, err := query.NewInsert(
 		records.QueryTable(),
-		[]query.Column{recordID, recordActive, recordEmail},
-		[]query.Expression{query.Bind(third.ID), query.Bind(third.Active), query.Bind(third.Email)},
+		[]query.Column{recordID, recordActive, recordEmail, recordAmount},
+		[]query.Expression{query.Bind(third.ID), query.Bind(third.Active), query.Bind(third.Email), query.Bind(third.Amount)},
 	)
 	require.NoError(t, err)
-	insert, err = insert.WithReturning(query.Project(recordID), query.Project(recordActive), query.Project(recordEmail))
+	insert, err = insert.WithReturning(query.Project(recordID), query.Project(recordActive), query.Project(recordEmail), query.Project(recordAmount))
 	require.NoError(t, err)
 	if d.Supports(dialect.CapabilityReturning) {
 		inserted, err := rasql.QueryWriteOne[record](t.Context(), client, insert)
@@ -145,6 +148,7 @@ func integrationTable(name string) schema.Table {
 			{Name: "id", Type: schema.TypeInteger},
 			{Name: "active", Type: schema.TypeBoolean},
 			{Name: "email", Type: schema.TypeText},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
 		},
 		PrimaryKey: []string{"id"},
 	}

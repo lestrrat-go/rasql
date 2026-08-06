@@ -224,7 +224,7 @@ func (constantPlaceholderDialect) Placeholder(int) (string, error) {
 	return "?", nil
 }
 
-func (markerDialect) TypeName(schema.LogicalType) (string, error) {
+func (markerDialect) TypeName(schema.Column) (string, error) {
 	return "", nil
 }
 

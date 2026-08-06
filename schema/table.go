@@ -8,6 +8,17 @@ type Column struct {
 	Type     LogicalType
 	Nullable bool
 	Default  string
+
+	// Precision is the total number of significant digits a TypeDecimal column
+	// stores, counting those on both sides of the decimal point. It must be at
+	// least 1, and must be zero for every other logical type. Each dialect
+	// enforces its own upper bound when it renders DDL.
+	Precision int
+
+	// Scale is the number of those digits that fall to the right of the
+	// decimal point. It must not be negative and must not exceed Precision,
+	// and must be zero for every logical type other than TypeDecimal.
+	Scale int
 }
 
 // UniqueConstraint requires the listed columns to be unique together.
@@ -103,6 +114,19 @@ func (t Table) Validate() error {
 		}
 		if !column.Type.Valid() {
 			return validationError(path+".type", "unsupported logical type %q", column.Type)
+		}
+		if column.Type == TypeDecimal {
+			if column.Precision < 1 {
+				return validationError(path+".precision", "decimal column must state a precision of at least 1")
+			}
+			if column.Scale < 0 {
+				return validationError(path+".scale", "decimal scale must not be negative")
+			}
+			if column.Scale > column.Precision {
+				return validationError(path+".scale", "decimal scale %d exceeds precision %d", column.Scale, column.Precision)
+			}
+		} else if column.Precision != 0 || column.Scale != 0 {
+			return validationError(path+".precision", "precision and scale apply only to a decimal column, not %q", column.Type)
 		}
 		if _, exists := columns[column.Name]; exists {
 			return validationError(path+".name", "duplicates column %q", column.Name)
