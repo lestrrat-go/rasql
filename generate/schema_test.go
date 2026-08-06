@@ -258,6 +258,32 @@ func TestSchemaGeneratesDecimalColumns(t *testing.T) {
 	require.Contains(t, string(source), `{Name: "quantity", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(0)},`)
 }
 
+// TestSchemaGeneratesUnsignedIntegerColumns pins the generator's signedness
+// mapping. An unsigned integer column reaches 18446744073709551615, which
+// int64 cannot hold, so its row field is a uint64; a signed one keeps int64.
+// The descriptor literal restates Unsigned, so regenerating from the generated
+// source produces the same column rather than a signed one.
+func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
+	events := schema.Table{
+		Name: "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger, Unsigned: true},
+			{Name: "sequence", Type: schema.TypeInteger},
+			{Name: "parent_id", Type: schema.TypeInteger, Nullable: true, Unsigned: true},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := generate.Schema("generated", events)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
+	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
+	require.Regexp(t, `(?m)^\s*ParentID\s+\*uint64$`, string(source))
+	require.Contains(t, string(source), `{Name: "id", Type: schema.TypeInteger, Unsigned: true},`)
+	require.Contains(t, string(source), `{Name: "sequence", Type: schema.TypeInteger},`)
+	require.Contains(t, string(source), `{Name: "parent_id", Type: schema.TypeInteger, Nullable: true, Unsigned: true},`)
+}
+
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {
 	_, err := generate.Schema("not-valid")
 	require.Error(t, err)

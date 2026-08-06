@@ -274,6 +274,75 @@ func TestTableValidateAcceptsDecimalColumn(t *testing.T) {
 	require.NoError(t, table.Validate())
 }
 
+// TestTableValidateUnsignedColumn covers both sides of the rule Unsigned
+// carries: an integer column may state it, and every other logical type is
+// rejected, since no other logical type has a signedness for a dialect to
+// render.
+func TestTableValidateUnsignedColumn(t *testing.T) {
+	table := schema.Table{
+		Name: "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger, Unsigned: true},
+			{Name: "sequence", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	require.NoError(t, table.Validate())
+
+	for _, logicalType := range []schema.LogicalType{schema.TypeText, schema.TypeFloat, schema.TypeBoolean} {
+		t.Run(string(logicalType), func(t *testing.T) {
+			rejected := schema.Table{
+				Name:    "events",
+				Columns: []schema.Column{{Name: "id", Type: logicalType, Unsigned: true}},
+			}
+			err := rejected.Validate()
+			require.ErrorContains(t, err, "columns[0].unsigned")
+			require.ErrorContains(t, err, "unsigned applies only to an integer column")
+		})
+	}
+
+	// A decimal column carries its own precision and scale, and states no
+	// signedness even so.
+	decimal := schema.Table{
+		Name:    "payments",
+		Columns: []schema.Column{{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4), Unsigned: true}},
+	}
+	require.ErrorContains(t, decimal.Validate(), "unsigned applies only to an integer column")
+}
+
+// TestColumnUnsignedJSON pins the snapshot form rasqlgen's -input reads. A
+// descriptor makes that round trip as JSON, so signedness recorded in an
+// exported bool survives it; state kept unexported would be dropped there and
+// the column would silently read back signed.
+func TestColumnUnsignedJSON(t *testing.T) {
+	table := schema.Table{
+		Name: "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger, Unsigned: true},
+			{Name: "sequence", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	require.NoError(t, table.Validate())
+
+	encoded, err := json.Marshal(table)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"Unsigned":true`)
+
+	var decoded schema.Table
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.Equal(t, table, decoded)
+	require.NoError(t, decoded.Validate())
+	require.True(t, decoded.Columns[0].Unsigned)
+	require.False(t, decoded.Columns[1].Unsigned)
+
+	// A snapshot written before columns carried signedness names no Unsigned
+	// at all, and decodes as the signed column it described.
+	decoded = schema.Table{}
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"events","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}`), &decoded))
+	require.False(t, decoded.Columns[0].Unsigned)
+}
+
 func TestTableValidateDuplicateConstraintNameReportsPath(t *testing.T) {
 	table := schema.Table{
 		Name: "orders",

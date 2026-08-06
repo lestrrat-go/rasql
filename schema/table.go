@@ -70,6 +70,19 @@ type Column struct {
 	// must not be negative and must not exceed Precision. Every other logical
 	// type must leave it unstated.
 	Scale DecimalScale
+
+	// Unsigned states that a TypeInteger column stores no negative values, so
+	// it reaches 18446744073709551615 instead of 9223372036854775807. It must
+	// be false for every other logical type. Unlike Scale it is a plain bool,
+	// because signedness has exactly two states and its default is the signed
+	// one every existing descriptor already means; the zero value is therefore
+	// the truth about an existing column rather than a missing statement.
+	//
+	// Only MySQL has unsigned integer types. PostgreSQL has none, and SQLite
+	// stores a signed 64-bit value whatever a column is declared, so both
+	// dialects report an error for an unsigned column instead of rendering it
+	// signed and narrowing the values it permits.
+	Unsigned bool
 }
 
 // UniqueConstraint requires the listed columns to be unique together.
@@ -182,6 +195,9 @@ func (t Table) Validate() error {
 			}
 		} else if _, stated := column.Scale.Value(); column.Precision != 0 || stated {
 			return validationError(path+".precision", "precision and scale apply only to a decimal column, not %q", column.Type)
+		}
+		if column.Unsigned && column.Type != TypeInteger {
+			return validationError(path+".unsigned", "unsigned applies only to an integer column, not %q", column.Type)
 		}
 		if _, exists := columns[column.Name]; exists {
 			return validationError(path+".name", "duplicates column %q", column.Name)

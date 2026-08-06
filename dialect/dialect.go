@@ -39,9 +39,11 @@ type Dialect interface {
 
 	// TypeName returns the DDL type for column. It takes the whole column
 	// because a type name can depend on more than the logical type: a decimal
-	// column's name carries its precision and scale. It reports an error for a
-	// logical type this dialect does not map, and for a decimal whose
-	// precision or scale is outside what this dialect can express.
+	// column's name carries its precision and scale, and an integer column's
+	// name carries its signedness. It reports an error for a logical type this
+	// dialect does not map, for a decimal whose precision or scale is outside
+	// what this dialect can express, and for an unsigned column on a dialect
+	// with no unsigned integer type.
 	TypeName(schema.Column) (string, error)
 
 	UpsertStyle() UpsertStyle
@@ -83,6 +85,9 @@ func MySQL() Dialect {
 		decimalName:  "DECIMAL",
 		maxPrecision: 65,
 		maxScale:     30,
+		// MySQL is the only supported engine with unsigned integer types, so it
+		// is the only builtin that states one here.
+		unsignedInteger: "BIGINT UNSIGNED",
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
 			schema.TypeInteger: "BIGINT",
@@ -128,6 +133,9 @@ type builtin struct {
 	decimalName  string
 	maxPrecision int
 	maxScale     int
+	// unsignedInteger is the DDL type for an unsigned schema.TypeInteger
+	// column, and is empty on a dialect that has no unsigned integer type.
+	unsignedInteger string
 }
 
 func (d builtin) Name() string {
@@ -149,6 +157,9 @@ func (d builtin) Placeholder(position int) (string, error) {
 }
 
 func (d builtin) TypeName(column schema.Column) (string, error) {
+	if column.Unsigned {
+		return d.unsignedTypeName(column)
+	}
 	if column.Type == schema.TypeDecimal {
 		return d.decimalTypeName(column)
 	}
@@ -157,6 +168,23 @@ func (d builtin) TypeName(column schema.Column) (string, error) {
 		return "", fmt.Errorf("dialect %s: unsupported logical type %q", d.name, column.Type)
 	}
 	return typeName, nil
+}
+
+// unsignedTypeName renders the DDL type for a column that states no negative
+// values. Only MySQL has such a type, so PostgreSQL and SQLite refuse the
+// column here rather than render it signed: a signed BIGINT stops at
+// 9223372036854775807 where an unsigned one reaches 18446744073709551615, and
+// a column silently rendered signed would reject values the descriptor permits.
+// Refusing is loud and recoverable, and the caller's fix is to declare the
+// column signed and say so in the descriptor.
+func (d builtin) unsignedTypeName(column schema.Column) (string, error) {
+	if column.Type != schema.TypeInteger {
+		return "", fmt.Errorf("dialect %s: column %q cannot be represented: unsigned applies only to an integer column, not %q", d.name, column.Name, column.Type)
+	}
+	if d.unsignedInteger == "" {
+		return "", fmt.Errorf("dialect %s: unsigned integer column %q cannot be represented: this dialect has no unsigned integer type, and rendering the column signed would narrow the values it permits", d.name, column.Name)
+	}
+	return d.unsignedInteger, nil
 }
 
 // decimalTypeName renders the DDL type for a TypeDecimal column. Every dialect
