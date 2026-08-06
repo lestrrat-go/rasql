@@ -50,6 +50,9 @@ type Tx struct {
 // opts may be nil, which leaves the isolation level and read-only mode to the
 // driver. Begin does not roll back on ctx cancellation by itself; that is
 // database/sql's own behavior for the transaction it returns.
+// A Beginner that reports success while returning a nil transaction is
+// rejected with an error rather than wrapped, so a hand-written one cannot
+// produce a Tx that panics on its first use.
 func Begin(ctx context.Context, db Beginner, d dialect.Dialect, opts *sql.TxOptions) (Tx, error) {
 	if isNil(db) {
 		return Tx{}, fmt.Errorf("rasql: beginner must not be nil")
@@ -60,6 +63,12 @@ func Begin(ctx context.Context, db Beginner, d dialect.Dialect, opts *sql.TxOpti
 	transaction, err := db.BeginTx(ctx, opts)
 	if err != nil {
 		return Tx{}, fmt.Errorf("rasql: begin transaction: %w", err)
+	}
+	if transaction == nil {
+		// *sql.DB never does this: its BeginTx returns a transaction or an
+		// error. A hand-written Beginner can, and the nil would otherwise reach
+		// Rollback below as a nil receiver.
+		return Tx{}, fmt.Errorf("rasql: beginner returned a nil transaction without an error")
 	}
 	client, err := New(transaction, d)
 	if err != nil {
@@ -123,10 +132,12 @@ var (
 	_ Executor = Tx{}
 )
 
-// Query renders statement for x's dialect, runs it, and returns a rangeable
-// sequence of its rows. It reports validation and rendering errors before
-// iteration starts; the returned sequence closes the underlying rows when it
-// ends.
+// Query renders statement for x's dialect and returns a rangeable sequence of
+// its rows. It reports validation and rendering errors before iteration starts
+// and yields an execution error instead of a row once iteration begins.
+// The statement runs when the sequence is first ranged over, not when Query
+// returns, so a sequence that is never ranged opens no cursor to leak; a
+// sequence that is ranged closes the underlying rows when it ends.
 func Query(ctx context.Context, x Executor, statement query.Select) (iter.Seq2[row.Row, error], error) {
 	if isNil(x) {
 		return nil, fmt.Errorf("rasql: executor must not be nil")
@@ -135,11 +146,7 @@ func Query(ctx context.Context, x Executor, statement query.Select) (iter.Seq2[r
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	rows, err := x.QueryRendered(ctx, rendered)
-	if err != nil {
-		return nil, err
-	}
-	return row.Scan(rows), nil
+	return scanRendered(ctx, x, rendered), nil
 }
 
 // QueryWrite renders a write statement and returns a rangeable sequence of the
@@ -147,7 +154,9 @@ func Query(ctx context.Context, x Executor, statement query.Select) (iter.Seq2[r
 // returning projection, and the dialect must support RETURNING, which MySQL
 // does not.
 // The statement runs through QueryContext, so a debug Handle that returns nil
-// rows never executes it.
+// rows never executes it. Like Query, it runs the statement when the sequence
+// is first ranged over rather than when QueryWrite returns, so a write whose
+// sequence is abandoned never reaches the database.
 func QueryWrite(ctx context.Context, x Executor, statement query.WriteStatement) (iter.Seq2[row.Row, error], error) {
 	if isNil(x) {
 		return nil, fmt.Errorf("rasql: executor must not be nil")
@@ -159,11 +168,23 @@ func QueryWrite(ctx context.Context, x Executor, statement query.WriteStatement)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render write statement: %w", err)
 	}
-	rows, err := x.QueryRendered(ctx, rendered)
-	if err != nil {
-		return nil, err
+	return scanRendered(ctx, x, rendered), nil
+}
+
+// scanRendered defers running statement until the returned sequence is ranged
+// over, so obtaining a sequence and abandoning it opens no cursor. Every
+// terminal that hands result rows to row.Scan goes through it, which keeps the
+// rule in one place: the *sql.Rows is created and consumed inside the same
+// closure.
+func scanRendered(ctx context.Context, x Executor, statement render.Statement) iter.Seq2[row.Row, error] {
+	return func(yield func(row.Row, error) bool) {
+		rows, err := x.QueryRendered(ctx, statement)
+		if err != nil {
+			yield(row.Row{}, err)
+			return
+		}
+		row.Scan(rows)(yield)
 	}
-	return row.Scan(rows), nil
 }
 
 // Exec renders and executes a write statement.

@@ -604,8 +604,18 @@ func TestClientQueryReturnsExecutionError(t *testing.T) {
 		WithArgs(42).
 		WillReturnError(expected)
 
-	_, err = rasql.Query(t.Context(), client, statement)
-	require.ErrorIs(t, err, expected)
+	// The statement runs when the sequence is ranged, not when Query returns,
+	// so an execution error arrives as the sequence's one yielded error rather
+	// than as Query's own. That is what keeps an abandoned sequence from
+	// opening a cursor.
+	rows, err := rasql.Query(t.Context(), client, statement)
+	require.NoError(t, err)
+	yielded := 0
+	for _, err := range rows {
+		require.ErrorIs(t, err, expected)
+		yielded++
+	}
+	require.Equal(t, 1, yielded)
 }
 
 func TestCreateExecutesTableAndIndexes(t *testing.T) {

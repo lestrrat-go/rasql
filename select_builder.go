@@ -134,9 +134,12 @@ func (b SelectBuilder) Build(d dialect.Dialect) (render.Statement, error) {
 	return b.builder.WithDialect(d).Build()
 }
 
-// Query renders the statement for x's dialect, runs it, and returns a rangeable
-// sequence of rows. It reports validation and rendering errors before iteration
-// starts; the returned sequence closes the underlying rows when it ends.
+// Query renders the statement for x's dialect and returns a rangeable sequence
+// of rows. It reports validation and rendering errors before iteration starts
+// and yields an execution error instead of a row once iteration begins.
+// The statement runs when the sequence is first ranged over, not when Query
+// returns, so a sequence that is never ranged opens no cursor to leak; a
+// sequence that is ranged closes the underlying rows when it ends.
 func (b SelectBuilder) Query(ctx context.Context, x Executor) (iter.Seq2[row.Row, error], error) {
 	if isNil(x) {
 		return nil, fmt.Errorf("rasql: executor must not be nil")
@@ -145,11 +148,7 @@ func (b SelectBuilder) Query(ctx context.Context, x Executor) (iter.Seq2[row.Row
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	rows, err := x.QueryRendered(ctx, statement)
-	if err != nil {
-		return nil, err
-	}
-	return row.Scan(rows), nil
+	return scanRendered(ctx, x, statement), nil
 }
 
 // Count executes COUNT(*) over the rows the statement matches.
@@ -169,11 +168,10 @@ func (b SelectBuilder) Count(ctx context.Context, x Executor) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	rows, err := x.QueryRendered(ctx, statement)
-	if err != nil {
-		return 0, err
-	}
-	return exactlyOne(countValues(row.Scan(rows)))
+	// Count consumes the sequence itself, so the statement runs before Count
+	// returns either way. It goes through scanRendered so that no call site
+	// outside that one closure holds a *sql.Rows.
+	return exactlyOne(countValues(scanRendered(ctx, x, statement)))
 }
 
 // countValues adapts a sequence of result rows into the int64 held by each

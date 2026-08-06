@@ -54,11 +54,11 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.Column`. | ✓ | |
 | `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. | | ✓ |
 | `Limit(n)`, `Offset(n)` | Pages the result. | ✓ | ✓ |
-| `Build()` | Renders `render.Statement` without executing. | ✓ | ✓ |
-| `Query(ctx)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. | ✓ | ✓ |
-| `All(ctx)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
-| `One(ctx)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
-| `Count(ctx)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. | ✓ | ✓ |
+| `Build(d)` | Renders `render.Statement` for a `dialect.Dialect` without executing. | ✓ | ✓ |
+| `Query(ctx, executor)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. | ✓ | ✓ |
+| `All(ctx, executor)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
+| `One(ctx, executor)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
+| `Count(ctx, executor)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. | ✓ | ✓ |
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
 `AND` in the order they were made, which is what a conditionally built filter
@@ -75,8 +75,8 @@ which is not valid SQL in any supported dialect.
 | `Where(expression)` | Adds a predicate from a `query` expression. |
 | `WhereEqual(column, value)` | Adds `column = value` for a `query.Column` of the target table. |
 | `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.Column` of the target table, one placeholder per value. |
-| `Build()` | Renders `render.Statement` without executing. |
-| `Exec(ctx)` | Executes and returns `sql.Result`. |
+| `Build(d)` | Renders `render.Statement` for a `dialect.Dialect` without executing. |
+| `Exec(ctx, executor)` | Executes and returns `sql.Result`. |
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate on the delete builder the same way: repeated calls combine with `AND` in the order they were made. Each of them supplies the predicate that `Build` and `Exec` require, so a delete still needs one of them or an explicit `AllowAll`. `WhereIn` needs at least one value: an empty list makes `Build` and `Exec` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect.
 
@@ -350,7 +350,7 @@ rows, err := rasql.DecodeFrom[taskSummary](tasks).
 
 ### Statement constructors
 
-The builders cover the common statements. These constructors build the same statements directly. `client.Query` runs a `Select`, and `client.Exec` runs a write that carries no `RETURNING` clause. A write refined with `WithReturning` reads its rows back through `client.QueryWrite`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `client.Exec` rejects it.
+The builders cover the common statements. These constructors build the same statements directly. `rasql.Query(ctx, executor, statement)` runs a `Select`, and `rasql.Exec(ctx, executor, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over an `Executor`, so the same statement runs against a `Client` or a `Tx`. A write refined with `WithReturning` reads its rows back through `rasql.QueryWrite`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
 
 | Constructor | Statement |
 | --- | --- |
@@ -458,7 +458,7 @@ if errors.Is(err, rasql.ErrNoRows) {
 }
 ```
 
-`Build()` skips execution and returns the rendered `render.Statement`, which carries the SQL text and its ordered arguments. It is the direct way to log or test a statement.
+`Build(d)` skips execution and returns the rendered `render.Statement`, which carries the SQL text and its ordered arguments. It takes a `dialect.Dialect` rather than an `Executor`, because rendering needs the dialect and nothing else. It is the direct way to log or test a statement.
 
 ## Filter, order, and page
 
@@ -1271,7 +1271,7 @@ func Example_rasql_debug_query() {
 source: [examples/rasql_debug_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_debug_query_example_test.go)
 <!-- END INCLUDE -->
 
-A debug `Queryer` may return `nil` rows after logging; `Client` treats that as an empty result rather than an error. When only the SQL is wanted and no execution at all, `Build()` returns it without a client.
+A debug `Queryer` may return `nil` rows after logging; `row.Scan` treats that as an empty result rather than an error. When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `Executor`.
 
 ## Next
 
