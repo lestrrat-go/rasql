@@ -117,6 +117,25 @@ type ForeignKey struct {
 
 // Table describes a database table and its constraints.
 type Table struct {
+	// Schema names the namespace holding the table: a PostgreSQL schema, a
+	// MySQL database, or a SQLite attached-database name. A renderer quotes it
+	// as an identifier separate from Name and never interprets it further, so
+	// rasql takes no position on what a namespace means to a server and never
+	// creates one. An empty Schema leaves the table unqualified, which
+	// resolves through the connection's own default and is what every
+	// descriptor written before this field existed does.
+	//
+	// Qualification currently reaches DML and column references only. A
+	// SELECT, INSERT, UPDATE or DELETE built from this descriptor renders
+	// "audit"."events" as its target, and a column reached through the
+	// unaliased table renders "audit"."events"."id". Nothing else reads the
+	// field: render.CreateTable, render.CreateIndexes and rasql.Create render
+	// CREATE TABLE "events" on every dialect, so DDL lands in whatever
+	// namespace the connection resolves to; inspect never reports a Schema,
+	// and rasqlgen never emits one. Qualified DDL, inspection and generation
+	// are not supported yet, so a qualified table is created and re-read
+	// through a reviewed native migration.
+	Schema            string
 	Name              string
 	Columns           []Column
 	PrimaryKey        []string
@@ -124,6 +143,23 @@ type Table struct {
 	Checks            []CheckConstraint
 	Indexes           []Index
 	ForeignKeys       []ForeignKey
+}
+
+// Qualified reports whether t names a schema.
+func (t Table) Qualified() bool {
+	return t.Schema != ""
+}
+
+// QualifiedName returns the table's name for display: "schema.name" when t
+// names a schema and "name" otherwise. It is for error messages, log output
+// and map keys only. It is never a SQL identifier: a renderer quotes Schema
+// and Name as two identifiers, and dialect.QuoteIdentifier rejects the
+// dotted string this returns.
+func (t Table) QualifiedName() string {
+	if t.Schema == "" {
+		return t.Name
+	}
+	return t.Schema + "." + t.Name
 }
 
 // Clone returns a copy of t that does not share slices with t.
@@ -163,6 +199,11 @@ func (t Table) Column(name string) (Column, bool) {
 
 // Validate reports whether t has a valid, internally consistent descriptor.
 func (t Table) Validate() error {
+	if t.Schema != "" {
+		if err := ValidateIdentifier(t.Schema); err != nil {
+			return validationError("table.schema", "%s", err)
+		}
+	}
 	if err := ValidateIdentifier(t.Name); err != nil {
 		return validationError("table", "%s", err)
 	}

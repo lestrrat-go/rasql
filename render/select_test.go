@@ -41,6 +41,191 @@ func TestSelectRendersForBuiltInDialects(t *testing.T) {
 	}
 }
 
+// TestSelectRendersQualifiedJoin pins the exact rendered SQL for a select
+// that joins a schema-qualified table to another schema-qualified table,
+// across all three built-in dialects: quoting each of Schema and Name as a
+// separate identifier needs no dialect-specific branch.
+func TestSelectRendersQualifiedJoin(t *testing.T) {
+	statement := qualifiedJoinSelectStatement(t)
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     `SELECT "audit"."events"."id", "audit"."events"."action" FROM "audit"."events" INNER JOIN "tenant"."users" ON ("audit"."events"."user_id" = "tenant"."users"."id") WHERE ("tenant"."users"."email" = $1)`,
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "SELECT `audit`.`events`.`id`, `audit`.`events`.`action` FROM `audit`.`events` INNER JOIN `tenant`.`users` ON (`audit`.`events`.`user_id` = `tenant`.`users`.`id`) WHERE (`tenant`.`users`.`email` = ?)",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     `SELECT "audit"."events"."id", "audit"."events"."action" FROM "audit"."events" INNER JOIN "tenant"."users" ON ("audit"."events"."user_id" = "tenant"."users"."id") WHERE ("tenant"."users"."email" = ?)`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Select(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{"a@example.com"}, rendered.Args())
+		})
+	}
+}
+
+func qualifiedJoinSelectStatement(t *testing.T) query.Select {
+	t.Helper()
+	events, err := query.NewTable(schema.Table{
+		Schema: "audit",
+		Name:   "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "action", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	users, err := query.NewTable(schema.Table{
+		Schema: "tenant",
+		Name:   "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	eventsID, err := events.Column("id")
+	require.NoError(t, err)
+	eventsUserID, err := events.Column("user_id")
+	require.NoError(t, err)
+	eventsAction, err := events.Column("action")
+	require.NoError(t, err)
+	usersID, err := users.Column("id")
+	require.NoError(t, err)
+	usersEmail, err := users.Column("email")
+	require.NoError(t, err)
+
+	statement, err := query.NewJoinedSelect(events,
+		[]query.Join{query.InnerJoin(users, query.Equal(eventsUserID, usersID))},
+		nil,
+		query.Project(eventsID), query.Project(eventsAction),
+	)
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.Equal(usersEmail, query.Bind("a@example.com")))
+	require.NoError(t, err)
+	return statement
+}
+
+// TestSelectRendersAliasWithoutSchema pins that an alias replaces a
+// qualified table's whole name in every position: FROM names the qualified
+// table, but a column reference is qualified by the alias alone.
+func TestSelectRendersAliasWithoutSchema(t *testing.T) {
+	events, err := query.NewTable(schema.Table{
+		Schema: "audit",
+		Name:   "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	aliased, err := events.As("e")
+	require.NoError(t, err)
+	id, err := aliased.Column("id")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(aliased, query.Project(id))
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(t, `SELECT "e"."id" FROM "audit"."events" AS "e"`, rendered.SQL())
+}
+
+// TestSelectRendersQualifiedTableInGroupedStatement covers #62's GROUP
+// BY/HAVING render path over a qualified table: both clauses render through
+// writeExpression, which the qualification change alters in exactly one
+// case, so a three-part key must appear in both.
+func TestSelectRendersQualifiedTableInGroupedStatement(t *testing.T) {
+	events, err := query.NewTable(schema.Table{
+		Schema: "audit",
+		Name:   "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	userID, err := events.Column("user_id")
+	require.NoError(t, err)
+
+	statement, err := query.NewGroupedSelect(events, []query.Expression{userID},
+		query.Project(userID),
+		query.Project(query.CountAll()),
+	)
+	require.NoError(t, err)
+	statement, err = statement.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		`SELECT "audit"."events"."user_id", COUNT(*) FROM "audit"."events" GROUP BY "audit"."events"."user_id" HAVING (COUNT(*) > $1)`,
+		rendered.SQL(),
+	)
+	require.Equal(t, []any{1}, rendered.Args())
+}
+
+// TestSelectRendersQualifiedTableInSubquery covers #63's subquery render
+// path: a subquery recurses into writeSelect, so its FROM and its columns go
+// through the same substitutions as a top-level statement.
+func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
+	events, err := query.NewTable(schema.Table{
+		Schema: "audit",
+		Name:   "events",
+		Columns: []schema.Column{
+			{Name: "user_id", Type: schema.TypeInteger},
+		},
+	})
+	require.NoError(t, err)
+	eventsUserID, err := events.Column("user_id")
+	require.NoError(t, err)
+	inner, err := query.NewSelect(events, query.Project(eventsUserID))
+	require.NoError(t, err)
+
+	users, err := query.NewTable(schema.Table{
+		Schema: "tenant",
+		Name:   "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	usersID, err := users.Column("id")
+	require.NoError(t, err)
+
+	outer, err := query.NewSelect(users, query.Project(usersID))
+	require.NoError(t, err)
+	outer, err = outer.WithWhere(query.InSelect(usersID, inner))
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.PostgreSQL(), outer)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		`SELECT "tenant"."users"."id" FROM "tenant"."users" WHERE ("tenant"."users"."id" IN (SELECT "audit"."events"."user_id" FROM "audit"."events"))`,
+		rendered.SQL(),
+	)
+}
+
 func TestSelectRendersAggregateFunctions(t *testing.T) {
 	statement := aggregateSelectStatement(t)
 	tests := map[string]struct {

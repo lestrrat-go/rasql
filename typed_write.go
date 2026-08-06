@@ -133,7 +133,7 @@ func typedInsert[T any](table Table[T], value T, defaultColumns map[string]struc
 	definition := reference.Definition()
 	for name := range defaultColumns {
 		if _, exists := definition.Column(name); !exists {
-			return query.Insert{}, fmt.Errorf("table %q has no column %q selected for a database default", definition.Name, name)
+			return query.Insert{}, fmt.Errorf("table %q has no column %q selected for a database default", definition.QualifiedName(), name)
 		}
 	}
 
@@ -163,7 +163,7 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 	}
 	definition := reference.Definition()
 	if len(definition.PrimaryKey) == 0 {
-		return query.Update{}, fmt.Errorf("table %q has no primary key", definition.Name)
+		return query.Update{}, fmt.Errorf("table %q has no primary key", definition.QualifiedName())
 	}
 
 	primaryKeys := make(map[string]struct{}, len(definition.PrimaryKey))
@@ -185,7 +185,7 @@ func typedUpdate[T any](table Table[T], value T) (query.Update, error) {
 		assignments = append(assignments, query.Set(column, query.Bind(field)))
 	}
 	if len(assignments) == 0 {
-		return query.Update{}, fmt.Errorf("table %q has no non-primary-key columns", definition.Name)
+		return query.Update{}, fmt.Errorf("table %q has no non-primary-key columns", definition.QualifiedName())
 	}
 
 	statement, err := query.NewUpdate(reference, assignments...)

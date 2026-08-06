@@ -451,6 +451,53 @@ func TestUpdateRejectsTableWithoutPrimaryKey(t *testing.T) {
 	require.ErrorContains(t, err, "has no primary key")
 }
 
+// TestTypedWriteNamesQualifiedTableInErrors pins the three typed-write
+// messages that name a table. Each one used to print the bare name, so a
+// qualified table reported "users" and told the caller nothing about which
+// schema the table it complained about sits in.
+func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	type key struct {
+		ID int64 `rasql:"id"`
+	}
+	columns := []schema.Column{
+		{Name: "id", Type: schema.TypeInteger},
+		{Name: "email", Type: schema.TypeText},
+	}
+
+	keyed, err := rasql.NewTable[user](schema.Table{
+		Schema:     "tenant",
+		Name:       "users",
+		Columns:    columns,
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	_, err = rasql.InsertWithOptions(t.Context(), rasql.Client{}, keyed, user{}, rasql.DefaultColumns("missing"))
+	require.ErrorContains(t, err, `table "tenant.users" has no column "missing" selected for a database default`)
+
+	unkeyed, err := rasql.NewTable[user](schema.Table{
+		Schema:  "tenant",
+		Name:    "users",
+		Columns: columns,
+	})
+	require.NoError(t, err)
+	_, err = rasql.Update(t.Context(), rasql.Client{}, unkeyed, user{ID: 42})
+	require.ErrorContains(t, err, `table "tenant.users" has no primary key`)
+
+	allKey, err := rasql.NewTable[key](schema.Table{
+		Schema:     "tenant",
+		Name:       "users",
+		Columns:    columns[:1],
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	_, err = rasql.Update(t.Context(), rasql.Client{}, allKey, key{ID: 42})
+	require.ErrorContains(t, err, `table "tenant.users" has no non-primary-key columns`)
+}
+
 func TestUpdateMatchesCompositePrimaryKey(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)

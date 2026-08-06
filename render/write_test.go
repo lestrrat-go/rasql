@@ -87,6 +87,121 @@ func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 	}
 }
 
+// TestQualifiedWriteStatementsRenderForBuiltInDialects pins the exact
+// rendered SQL for INSERT, multi-row INSERT, UPDATE and DELETE against a
+// schema-qualified table across all three built-in dialects. Only the table
+// name in the statement's own clause is qualified: WHERE and SET still name
+// unqualified columns because they belong to the statement's own table.
+func TestQualifiedWriteStatementsRenderForBuiltInDialects(t *testing.T) {
+	events, id, userID, action := qualifiedWriteTable(t)
+	insert, err := query.NewInsert(events, []query.Column{userID, action}, []query.Expression{query.Bind(7), query.Bind("created")})
+	require.NoError(t, err)
+	update, err := query.NewUpdate(events, query.Set(action, query.Bind("closed")))
+	require.NoError(t, err)
+	update, err = update.WithWhere(query.Equal(id, query.Bind(2)))
+	require.NoError(t, err)
+	deleteStatement, err := query.NewDelete(events)
+	require.NoError(t, err)
+	deleteStatement, err = deleteStatement.WithWhere(query.Equal(id, query.Bind(2)))
+	require.NoError(t, err)
+	multiInsert, err := query.NewInsertRows(events, []query.Column{userID, action}, [][]query.Expression{
+		{query.Bind(7), query.Bind("created")},
+		{query.Bind(8), query.Bind("updated")},
+	})
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect     dialect.Dialect
+		insert      string
+		update      string
+		delete      string
+		multiInsert string
+	}{
+		"postgresql": {
+			dialect:     dialect.PostgreSQL(),
+			insert:      `INSERT INTO "audit"."events" ("user_id", "action") VALUES ($1, $2)`,
+			update:      `UPDATE "audit"."events" SET "action" = $1 WHERE ("audit"."events"."id" = $2)`,
+			delete:      `DELETE FROM "audit"."events" WHERE ("audit"."events"."id" = $1)`,
+			multiInsert: `INSERT INTO "audit"."events" ("user_id", "action") VALUES ($1, $2), ($3, $4)`,
+		},
+		"mysql": {
+			dialect:     dialect.MySQL(),
+			insert:      "INSERT INTO `audit`.`events` (`user_id`, `action`) VALUES (?, ?)",
+			update:      "UPDATE `audit`.`events` SET `action` = ? WHERE (`audit`.`events`.`id` = ?)",
+			delete:      "DELETE FROM `audit`.`events` WHERE (`audit`.`events`.`id` = ?)",
+			multiInsert: "INSERT INTO `audit`.`events` (`user_id`, `action`) VALUES (?, ?), (?, ?)",
+		},
+		"sqlite": {
+			dialect:     dialect.SQLite(),
+			insert:      `INSERT INTO "audit"."events" ("user_id", "action") VALUES (?, ?)`,
+			update:      `UPDATE "audit"."events" SET "action" = ? WHERE ("audit"."events"."id" = ?)`,
+			delete:      `DELETE FROM "audit"."events" WHERE ("audit"."events"."id" = ?)`,
+			multiInsert: `INSERT INTO "audit"."events" ("user_id", "action") VALUES (?, ?), (?, ?)`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Insert(test.dialect, insert)
+			require.NoError(t, err)
+			require.Equal(t, test.insert, rendered.SQL())
+
+			rendered, err = render.Update(test.dialect, update)
+			require.NoError(t, err)
+			require.Equal(t, test.update, rendered.SQL())
+
+			rendered, err = render.Delete(test.dialect, deleteStatement)
+			require.NoError(t, err)
+			require.Equal(t, test.delete, rendered.SQL())
+
+			rendered, err = render.Insert(test.dialect, multiInsert)
+			require.NoError(t, err)
+			require.Equal(t, test.multiInsert, rendered.SQL())
+		})
+	}
+}
+
+// TestQualifiedUpsertRendersDialectConflictSyntax pins that a conflict
+// target, an EXCLUDED/VALUES() operand, a SET target and a RETURNING
+// projection all stay unqualified against a schema-qualified table, because
+// each names a column of the statement's own table rather than a table
+// reference.
+func TestQualifiedUpsertRendersDialectConflictSyntax(t *testing.T) {
+	events, id, _, action := qualifiedWriteTable(t)
+	insert, err := query.NewInsert(events, []query.Column{id, action}, []query.Expression{query.Bind(1), query.Bind("created")})
+	require.NoError(t, err)
+	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(action, query.Excluded(action))})
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(query.Project(id), query.Project(action))
+	require.NoError(t, err)
+	mysqlStatement, err := query.NewUpsert(insert, nil, []query.Assignment{query.Set(action, query.Excluded(action))})
+	require.NoError(t, err)
+
+	rendered, err := render.Upsert(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		`INSERT INTO "audit"."events" ("id", "action") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "action" = EXCLUDED."action" RETURNING "id", "action"`,
+		rendered.SQL(),
+	)
+
+	rendered, err = render.Upsert(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		`INSERT INTO "audit"."events" ("id", "action") VALUES (?, ?) ON CONFLICT ("id") DO UPDATE SET "action" = EXCLUDED."action" RETURNING "id", "action"`,
+		rendered.SQL(),
+	)
+
+	rendered, err = render.Upsert(dialect.MySQL(), mysqlStatement)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"INSERT INTO `audit`.`events` (`id`, `action`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `action` = VALUES(`action`)",
+		rendered.SQL(),
+	)
+}
+
 func TestDeleteRendersNotInForBuiltInDialects(t *testing.T) {
 	users, id, _ := writeTable(t)
 	deleteStatement, err := query.NewDelete(users)
@@ -481,6 +596,28 @@ func TestSQLiteDefaultValuesUpsertIsRejected(t *testing.T) {
 
 	_, err = render.Upsert(dialect.SQLite(), statement)
 	require.ErrorContains(t, err, "default-values upsert is not supported")
+}
+
+func qualifiedWriteTable(t *testing.T) (query.Table, query.Column, query.Column, query.Column) {
+	t.Helper()
+	events, err := query.NewTable(schema.Table{
+		Schema: "audit",
+		Name:   "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "action", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := events.Column("id")
+	require.NoError(t, err)
+	userID, err := events.Column("user_id")
+	require.NoError(t, err)
+	action, err := events.Column("action")
+	require.NoError(t, err)
+	return events, id, userID, action
 }
 
 func writeTable(t *testing.T) (query.Table, query.Column, query.Column) {
