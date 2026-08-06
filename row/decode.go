@@ -3,6 +3,7 @@ package row
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"time"
@@ -279,22 +280,44 @@ func assign(destination reflect.Value, value any) error {
 		}
 		destination.SetBool(decoded)
 		return nil
+	// An integer destination accepts an integer driver value of either
+	// signedness, because which one a driver delivers is the driver's choice
+	// rather than the column's: go-sql-driver/mysql hands back uint64 only for
+	// a BIGINT UNSIGNED column and int64 for a narrower unsigned one, so a
+	// generated uint64 field would otherwise fail on the narrower column. A
+	// value that does not fit the destination is an error, never a wrap.
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if isSignedInteger(source.Kind()) {
+		switch {
+		case isSignedInteger(source.Kind()):
 			value := source.Int()
 			if destination.OverflowInt(value) {
 				return fmt.Errorf("%d overflows %s", value, destination.Type())
 			}
 			destination.SetInt(value)
 			return nil
+		case isUnsignedInteger(source.Kind()):
+			value := source.Uint()
+			if value > math.MaxInt64 || destination.OverflowInt(int64(value)) {
+				return fmt.Errorf("%d overflows %s", value, destination.Type())
+			}
+			destination.SetInt(int64(value))
+			return nil
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if isUnsignedInteger(source.Kind()) {
+		switch {
+		case isUnsignedInteger(source.Kind()):
 			value := source.Uint()
 			if destination.OverflowUint(value) {
 				return fmt.Errorf("%d overflows %s", value, destination.Type())
 			}
 			destination.SetUint(value)
+			return nil
+		case isSignedInteger(source.Kind()):
+			value := source.Int()
+			if value < 0 || destination.OverflowUint(uint64(value)) {
+				return fmt.Errorf("%d overflows %s", value, destination.Type())
+			}
+			destination.SetUint(uint64(value))
 			return nil
 		}
 	case reflect.Float32, reflect.Float64:

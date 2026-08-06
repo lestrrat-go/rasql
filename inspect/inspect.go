@@ -323,7 +323,12 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 		if err := rows.Scan(&ordinal, &name, &databaseType, &notNull, &defaultValue, &primaryPosition); err != nil {
 			return schema.Table{}, fmt.Errorf("inspect: scan SQLite column: %w", err)
 		}
-		logicalType, err := normalizeType(i.dialect.Name(), databaseType)
+		// The signedness result is discarded: SQLite's declared type carries
+		// none this package can trust, because an INTEGER column stores a
+		// signed 64-bit value however it was declared, so even a column
+		// declared UNSIGNED BIG INT is signed storage. The descriptor records
+		// that truth rather than the declaration.
+		logicalType, _, err := normalizeType(i.dialect.Name(), databaseType)
 		if err != nil {
 			return schema.Table{}, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
@@ -371,7 +376,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale); err != nil {
 			return nil, fmt.Errorf("inspect: scan column: %w", err)
 		}
-		logicalType, err := normalizeType(i.dialect.Name(), databaseType)
+		logicalType, unsigned, err := normalizeType(i.dialect.Name(), databaseType)
 		if err != nil {
 			return nil, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
@@ -380,6 +385,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			Type:     logicalType,
 			Nullable: strings.EqualFold(nullable, "YES"),
 			Default:  text(defaultValue),
+			Unsigned: unsigned,
 		}
 		if logicalType == schema.TypeDecimal {
 			if !numericPrecision.Valid {
@@ -743,77 +749,99 @@ func postgreSQLCatalogBoolean(version int, introducedVersion int, column string)
 	return "FALSE"
 }
 
-func normalizeType(dialectName string, databaseType string) (schema.LogicalType, error) {
+// normalizeType maps one native column type to a logical type and reports
+// whether the column is unsigned. Only MySQL can report an unsigned column:
+// PostgreSQL has no unsigned integer type, and SQLite stores a signed 64-bit
+// value whatever a column is declared, so both always report false.
+func normalizeType(dialectName string, databaseType string) (schema.LogicalType, bool, error) {
 	typeName := strings.ToUpper(strings.TrimSpace(databaseType))
 	switch dialectName {
 	case "postgresql":
 		switch typeName {
 		case "BOOLEAN":
-			return schema.TypeBoolean, nil
+			return schema.TypeBoolean, false, nil
 		case "SMALLINT", "INTEGER", "BIGINT":
-			return schema.TypeInteger, nil
+			return schema.TypeInteger, false, nil
 		case "REAL", "DOUBLE PRECISION":
-			return schema.TypeFloat, nil
+			return schema.TypeFloat, false, nil
 		case "NUMERIC", "DECIMAL":
-			return schema.TypeDecimal, nil
+			return schema.TypeDecimal, false, nil
 		case "TEXT", "CHARACTER VARYING", "CHARACTER", "VARCHAR", "CHAR":
-			return schema.TypeText, nil
+			return schema.TypeText, false, nil
 		case "BYTEA":
-			return schema.TypeBytes, nil
+			return schema.TypeBytes, false, nil
 		case "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE", "DATE", "TIME WITH TIME ZONE", "TIME WITHOUT TIME ZONE":
-			return schema.TypeTime, nil
+			return schema.TypeTime, false, nil
 		case "JSON", "JSONB":
-			return schema.TypeJSON, nil
+			return schema.TypeJSON, false, nil
 		case "UUID":
-			return schema.TypeUUID, nil
+			return schema.TypeUUID, false, nil
 		}
 	case "mysql":
-		decimal, err := mysqlDecimalDeclaration(typeName, databaseType)
-		if err != nil {
-			return "", err
-		}
-		if decimal {
-			return schema.TypeDecimal, nil
-		}
-		switch {
-		case typeName == "BOOLEAN" || typeName == "BOOL" || typeName == "TINYINT(1)":
-			return schema.TypeBoolean, nil
-		case strings.Contains(typeName, "INT"):
-			return schema.TypeInteger, nil
-		case strings.Contains(typeName, "FLOAT") || strings.Contains(typeName, "DOUBLE"):
-			return schema.TypeFloat, nil
-		case strings.Contains(typeName, "BLOB") || strings.Contains(typeName, "BINARY"):
-			return schema.TypeBytes, nil
-		case typeName == "JSON":
-			return schema.TypeJSON, nil
-		case strings.Contains(typeName, "DATE") || strings.Contains(typeName, "TIME"):
-			return schema.TypeTime, nil
-		case strings.Contains(typeName, "CHAR") || strings.Contains(typeName, "TEXT") || strings.Contains(typeName, "ENUM") || strings.Contains(typeName, "SET"):
-			return schema.TypeText, nil
-		}
+		return normalizeMySQLType(typeName, databaseType)
 	case "sqlite":
 		switch {
 		case strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC"):
-			return "", fmt.Errorf("exact decimal type %q is not exact in SQLite: a NUMERIC-affinity column stores REAL, so declare the column TEXT", databaseType)
+			return "", false, fmt.Errorf("exact decimal type %q is not exact in SQLite: a NUMERIC-affinity column stores REAL, so declare the column TEXT", databaseType)
 		case strings.Contains(typeName, "BOOL"):
-			return schema.TypeBoolean, nil
+			return schema.TypeBoolean, false, nil
 		case strings.Contains(typeName, "INT"):
-			return schema.TypeInteger, nil
+			return schema.TypeInteger, false, nil
 		case strings.Contains(typeName, "CHAR") || strings.Contains(typeName, "CLOB") || strings.Contains(typeName, "TEXT"):
-			return schema.TypeText, nil
+			return schema.TypeText, false, nil
 		case strings.Contains(typeName, "BLOB") || typeName == "":
-			return schema.TypeBytes, nil
+			return schema.TypeBytes, false, nil
 		case strings.Contains(typeName, "REAL") || strings.Contains(typeName, "FLOA") || strings.Contains(typeName, "DOUB"):
-			return schema.TypeFloat, nil
+			return schema.TypeFloat, false, nil
 		case strings.Contains(typeName, "JSON"):
-			return schema.TypeJSON, nil
+			return schema.TypeJSON, false, nil
 		case strings.Contains(typeName, "DATE") || strings.Contains(typeName, "TIME"):
-			return schema.TypeTime, nil
+			return schema.TypeTime, false, nil
 		case strings.Contains(typeName, "UUID"):
-			return schema.TypeUUID, nil
+			return schema.TypeUUID, false, nil
 		}
 	}
-	return "", fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
+	return "", false, fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
+}
+
+// normalizeMySQLType maps one MySQL COLUMN_TYPE, already upper-cased as
+// typeName, to a logical type and its signedness. databaseType is the original
+// catalog text, quoted back in errors.
+func normalizeMySQLType(typeName string, databaseType string) (schema.LogicalType, bool, error) {
+	decimal, err := mysqlDecimalDeclaration(typeName, databaseType)
+	if err != nil {
+		return "", false, err
+	}
+	if decimal {
+		return schema.TypeDecimal, false, nil
+	}
+	// BOOLEAN, BOOL and TINYINT(1) are the same MySQL column, and the catalog
+	// spells it TINYINT(1). It is matched before the integer declaration so
+	// that spelling stays a boolean; TINYINT(1) UNSIGNED is a different column
+	// and remains an integer, as it was before signedness was recorded.
+	if typeName == "BOOLEAN" || typeName == "BOOL" || typeName == "TINYINT(1)" {
+		return schema.TypeBoolean, false, nil
+	}
+	integer, unsigned, err := mysqlIntegerDeclaration(typeName, databaseType)
+	if err != nil {
+		return "", false, err
+	}
+	if integer {
+		return schema.TypeInteger, unsigned, nil
+	}
+	switch {
+	case strings.Contains(typeName, "FLOAT") || strings.Contains(typeName, "DOUBLE"):
+		return schema.TypeFloat, false, nil
+	case strings.Contains(typeName, "BLOB") || strings.Contains(typeName, "BINARY"):
+		return schema.TypeBytes, false, nil
+	case typeName == "JSON":
+		return schema.TypeJSON, false, nil
+	case strings.Contains(typeName, "DATE") || strings.Contains(typeName, "TIME"):
+		return schema.TypeTime, false, nil
+	case strings.Contains(typeName, "CHAR") || strings.Contains(typeName, "TEXT") || strings.Contains(typeName, "ENUM") || strings.Contains(typeName, "SET"):
+		return schema.TypeText, false, nil
+	}
+	return "", false, fmt.Errorf("unsupported mysql type %q", databaseType)
 }
 
 // mysqlDecimalDeclaration reports whether typeName, an upper-cased MySQL
@@ -825,24 +853,19 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 // (precision, scale), is a decimal.
 //
 // A DECIMAL or NUMERIC declaration carrying UNSIGNED, ZEROFILL or any other
-// trailing modifier returns an error instead of a logical type. schema.Column
-// cannot record such a modifier, and UNSIGNED in particular narrows the values
-// the column permits, so a descriptor that dropped it would re-render as a
-// column with a different meaning. Anything that is not a decimal declaration
+// trailing modifier returns an error instead of a logical type.
+// schema.Column.Unsigned states the signedness of an integer column only, so a
+// decimal's UNSIGNED still has nowhere to be recorded, and it narrows the
+// values the column permits, so a descriptor that dropped it would re-render as
+// a column with a different meaning. Anything that is not a decimal declaration
 // at all reports false with no error, leaving the caller's remaining type
 // matches to run.
 func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, error) {
-	base := typeName
-	rest := ""
-	if index := strings.IndexAny(typeName, " ("); index >= 0 {
-		base = typeName[:index]
-		rest = typeName[index:]
-	}
+	base, rest := splitMySQLDeclaration(typeName)
 	if base != "DECIMAL" && base != "NUMERIC" {
 		return false, nil
 	}
 
-	rest = strings.TrimSpace(rest)
 	if strings.HasPrefix(rest, "(") {
 		end := strings.Index(rest, ")")
 		if end < 0 || !validDecimalArguments(rest[1:end]) {
@@ -856,6 +879,60 @@ func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, error)
 	return true, nil
 }
 
+// mysqlIntegerDeclaration reports whether typeName, an upper-cased MySQL
+// COLUMN_TYPE, declares an integer column this package can represent, and
+// whether that column is UNSIGNED. The two results are, in order, whether the
+// declaration is an integer at all and whether it is unsigned; a declaration
+// that is not an integer reports false, false and no error, leaving the
+// caller's remaining type matches to run.
+//
+// Like the decimal case, COLUMN_TYPE is matched as a whole declaration rather
+// than by substring. A substring test on "INT" accepts MySQL's own POINT and
+// MULTIPOINT, which are not integers at all, and it cannot see the UNSIGNED
+// that follows the type: that is exactly how a BIGINT UNSIGNED column used to
+// become a plain signed BIGINT, losing every value above 9223372036854775807.
+// Only TINYINT, SMALLINT, MEDIUMINT, INT, INTEGER or BIGINT, optionally
+// followed by a display width and then by UNSIGNED, is an integer here.
+//
+// ZEROFILL and any other trailing modifier returns an error instead, because
+// schema.Column cannot record it and a descriptor that dropped it would
+// re-render as a column with a different meaning.
+func mysqlIntegerDeclaration(typeName string, databaseType string) (bool, bool, error) {
+	base, rest := splitMySQLDeclaration(typeName)
+	switch base {
+	case "TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "BIGINT":
+	default:
+		return false, false, nil
+	}
+
+	if strings.HasPrefix(rest, "(") {
+		end := strings.Index(rest, ")")
+		if end < 0 || !validDigitRun(rest[1:end]) {
+			return false, false, fmt.Errorf("unsupported mysql type %q: an integer column must be declared %s or %s(width)", databaseType, base, base)
+		}
+		rest = strings.TrimSpace(rest[end+1:])
+	}
+	if rest == "UNSIGNED" {
+		return true, true, nil
+	}
+	if rest != "" {
+		return false, false, fmt.Errorf("mysql type %q cannot be represented: an integer column must carry no %s modifier, because rasql cannot record one and re-rendering the column without it would change the values it permits", databaseType, rest)
+	}
+	return true, false, nil
+}
+
+// splitMySQLDeclaration cuts an upper-cased MySQL COLUMN_TYPE into its bare
+// type name and whatever follows it: the arguments in parentheses, the
+// modifiers after them, or both. The remainder is returned with surrounding
+// space trimmed, so a caller compares it against a modifier directly.
+func splitMySQLDeclaration(typeName string) (string, string) {
+	index := strings.IndexAny(typeName, " (")
+	if index < 0 {
+		return typeName, ""
+	}
+	return typeName[:index], strings.TrimSpace(typeName[index:])
+}
+
 // validDecimalArguments reports whether arguments is the inside of a MySQL
 // decimal type's parentheses: a digit run for the precision, optionally
 // followed by a comma and a digit run for the scale.
@@ -865,14 +942,23 @@ func validDecimalArguments(arguments string) bool {
 		return false
 	}
 	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
+		if !validDigitRun(part) {
 			return false
 		}
-		for _, r := range part {
-			if r < '0' || r > '9' {
-				return false
-			}
+	}
+	return true
+}
+
+// validDigitRun reports whether value, once surrounding space is trimmed, is a
+// non-empty run of decimal digits.
+func validDigitRun(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
 		}
 	}
 	return true

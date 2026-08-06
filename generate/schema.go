@@ -330,7 +330,7 @@ func writeRowType(source *bytes.Buffer, table schema.Table) {
 		if column.Nullable {
 			source.WriteByte('*')
 		}
-		source.WriteString(rowFieldType(column.Type))
+		source.WriteString(rowFieldType(column))
 		source.WriteString("\n")
 	}
 	source.WriteString("}\n")
@@ -387,8 +387,15 @@ func writeRowColumnValue(source *bytes.Buffer, table schema.Table) {
 	source.WriteString("\t}\n\treturn nil, false\n}\n")
 }
 
-func rowFieldType(logicalType schema.LogicalType) string {
-	switch logicalType {
+// rowFieldType returns the Go type of the row field holding column. It takes
+// the whole column because signedness changes the answer: an unsigned integer
+// column reaches 18446744073709551615, which int64 cannot hold, so it generates
+// a uint64 field. Every other integer column keeps int64.
+func rowFieldType(column schema.Column) string {
+	if column.Unsigned && column.Type == schema.TypeInteger {
+		return "uint64"
+	}
+	switch column.Type {
 	case schema.TypeBoolean:
 		return "bool"
 	case schema.TypeInteger:
@@ -435,6 +442,9 @@ func writeColumns(source *bytes.Buffer, columns []schema.Column, indent string) 
 		source.WriteString(typeConstant(column.Type))
 		if column.Nullable {
 			source.WriteString(", Nullable: true")
+		}
+		if column.Unsigned {
+			source.WriteString(", Unsigned: true")
 		}
 		if column.Default != "" {
 			source.WriteString(", Default: ")

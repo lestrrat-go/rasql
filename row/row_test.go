@@ -213,6 +213,53 @@ func TestAssignDecodesBoolFromAnyNonzeroInteger(t *testing.T) {
 	require.ErrorContains(t, err, `row: decode column "not_an_integer"`)
 }
 
+// TestAssignDecodesIntegersAcrossSignedness covers the uint64 field the
+// generator emits for an unsigned integer column. Which signedness a driver
+// delivers is the driver's choice rather than the column's:
+// go-sql-driver/mysql hands back uint64 only for a BIGINT UNSIGNED column and
+// int64 for a narrower unsigned one, so a uint64 field has to accept both. A
+// value that does not fit the destination is an error, never a wrap.
+func TestAssignDecodesIntegersAcrossSignedness(t *testing.T) {
+	result, err := row.New(
+		[]string{"big_unsigned", "narrow_unsigned", "negative", "small_unsigned"},
+		[]any{uint64(18446744073709551615), int64(42), int64(-1), uint64(7)},
+	)
+	require.NoError(t, err)
+
+	t.Run("uint64 field takes an unsigned driver value", func(t *testing.T) {
+		var destination uint64
+		require.NoError(t, row.Assign(result, "big_unsigned", &destination))
+		require.Equal(t, uint64(18446744073709551615), destination)
+	})
+
+	t.Run("uint64 field takes a signed driver value", func(t *testing.T) {
+		var destination uint64
+		require.NoError(t, row.Assign(result, "narrow_unsigned", &destination))
+		require.Equal(t, uint64(42), destination)
+	})
+
+	t.Run("uint64 field rejects a negative value", func(t *testing.T) {
+		var destination uint64
+		err := row.Assign(result, "negative", &destination)
+		require.ErrorContains(t, err, "-1 overflows uint64")
+	})
+
+	t.Run("int64 field takes a small unsigned value", func(t *testing.T) {
+		var destination int64
+		require.NoError(t, row.Assign(result, "small_unsigned", &destination))
+		require.Equal(t, int64(7), destination)
+	})
+
+	// This is the range the whole change exists for: an int64 field cannot
+	// hold what a BIGINT UNSIGNED column stores above 9223372036854775807, and
+	// says so instead of wrapping to a negative number.
+	t.Run("int64 field rejects a value above its range", func(t *testing.T) {
+		var destination int64
+		err := row.Assign(result, "big_unsigned", &destination)
+		require.ErrorContains(t, err, "18446744073709551615 overflows int64")
+	})
+}
+
 // TestAssignRejectsExactDecimalSourcesForFloat64 records why rasql maps NUMERIC
 // and DECIMAL columns to a rejected inspection rather than schema.TypeFloat: the
 // drivers hand back the exact decimal as a string or []byte, and a float64

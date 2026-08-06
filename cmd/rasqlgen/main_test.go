@@ -36,6 +36,30 @@ func TestRunSchemaGeneratesSource(t *testing.T) {
 	require.Contains(t, string(source), "func Users() UsersTable {")
 }
 
+// TestRunSchemaKeepsUnsignedColumnsFromInput proves signedness survives the
+// one path that carries a descriptor as JSON. An unsigned integer column read
+// through -input has to reach the generator still unsigned: dropped there, it
+// would generate an int64 field and a signed descriptor, and the column would
+// silently lose every value above 9223372036854775807.
+func TestRunSchemaKeepsUnsignedColumnsFromInput(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	input := filepath.Join(directory, "schema.json")
+	output := filepath.Join(directory, "schema.go")
+	data := []byte(`[{"Name":"events","Columns":[{"Name":"id","Type":"integer","Unsigned":true},{"Name":"sequence","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	require.NoError(t, os.WriteFile(input, data, 0o600))
+
+	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
+	source, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
+	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
+	require.Contains(t, string(source), `{Name: "id", Type: schema.TypeInteger, Unsigned: true},`)
+}
+
 func TestRunSchemaFiltersInputTables(t *testing.T) {
 	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
 	require.NoError(t, err)

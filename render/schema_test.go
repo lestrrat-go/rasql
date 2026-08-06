@@ -88,6 +88,35 @@ func TestCreateTableRendersDecimalColumns(t *testing.T) {
 	}
 }
 
+// TestCreateTableRendersUnsignedIntegerColumns is the DDL half of the fix for
+// an unsigned integer column: MySQL keeps the UNSIGNED the descriptor states,
+// where it used to render a signed BIGINT that stops at 9223372036854775807,
+// and the two dialects with no unsigned integer type refuse the table instead
+// of narrowing it silently.
+func TestCreateTableRendersUnsignedIntegerColumns(t *testing.T) {
+	table := schema.Table{
+		Name: "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger, Unsigned: true},
+			{Name: "sequence", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	require.NoError(t, table.Validate())
+
+	rendered, err := render.CreateTable(dialect.MySQL(), table)
+	require.NoError(t, err)
+	require.Equal(t, "CREATE TABLE `events` (`id` BIGINT UNSIGNED NOT NULL, `sequence` BIGINT NOT NULL, PRIMARY KEY (`id`))", rendered.SQL())
+
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.SQLite()} {
+		t.Run(d.Name(), func(t *testing.T) {
+			_, err := render.CreateTable(d, table)
+			require.ErrorContains(t, err, `column "id"`)
+			require.ErrorContains(t, err, "has no unsigned integer type")
+		})
+	}
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.Table{
 		Name: "invoices",

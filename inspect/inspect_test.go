@@ -10,6 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -626,6 +627,154 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64$`, string(source))
 	require.Contains(t, string(source), `row.Assign(src, "active", &r.Active)`)
 	require.Contains(t, string(source), `row.Assign(src, "login_attempts", &r.LoginAttempts)`)
+}
+
+// TestMySQLInspectorRecordsUnsignedIntegerColumn follows one unsigned column
+// the whole way: the catalog reports bigint(20) unsigned, the descriptor
+// records it, the MySQL renderer puts the UNSIGNED back, and the generator
+// emits a uint64 field for it. Before signedness reached schema.Column this
+// same catalog row inspected into a plain integer column and re-rendered as
+// `id` BIGINT, which stops at 9223372036854775807 and rejects every value a
+// BIGINT UNSIGNED column above it holds.
+func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	primaryKeyQuery := "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position"
+	mock.ExpectQuery(columnsQuery).
+		WithArgs("events").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint(20) unsigned", "NO", nil, int64(20), int64(0)).
+			AddRow("sequence", "bigint", "NO", nil, int64(19), int64(0)))
+	mock.ExpectQuery(primaryKeyQuery).
+		WithArgs("events").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.TypeInteger, Unsigned: true},
+		{Name: "sequence", Type: schema.TypeInteger},
+	}, table.Columns)
+
+	rendered, err := render.CreateTable(dialect.MySQL(), table)
+	require.NoError(t, err)
+	require.Contains(t, rendered.SQL(), "`id` BIGINT UNSIGNED NOT NULL")
+	require.Contains(t, rendered.SQL(), "`sequence` BIGINT NOT NULL")
+
+	source, err := generate.Schema("generated", table)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
+	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
+}
+
+// TestMySQLInspectorMatchesIntegerColumnTypeExactly covers the declarations
+// that look like an integer without being one this package can represent. A
+// substring test on "INT" accepted MySQL's own POINT, and it could not see the
+// modifiers that follow the type at all.
+func TestMySQLInspectorMatchesIntegerColumnTypeExactly(t *testing.T) {
+	tests := map[string]struct {
+		columnType string
+		wantErr    string
+	}{
+		"integer as a substring": {
+			columnType: "POINT",
+			wantErr:    `unsupported mysql type "POINT"`,
+		},
+		"zerofill integer": {
+			columnType: "bigint(20) unsigned zerofill",
+			wantErr:    "must carry no UNSIGNED ZEROFILL modifier",
+		},
+		"signed zerofill integer": {
+			columnType: "int(11) zerofill",
+			wantErr:    "must carry no ZEROFILL modifier",
+		},
+		"malformed display width": {
+			columnType: "bigint(twenty)",
+			wantErr:    "an integer column must be declared BIGINT or BIGINT(width)",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("events").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("id", test.columnType, "NO", nil, int64(20), int64(0)))
+
+			_, err = inspector.Table(t.Context(), "events")
+			require.ErrorContains(t, err, test.wantErr)
+			require.ErrorContains(t, err, `"id"`)
+		})
+	}
+}
+
+// TestMySQLInspectorAcceptsDocumentedIntegerSpellings is the positive
+// counterpart: every integer spelling MySQL's catalog produces, with and
+// without a display width, normalizes to schema.TypeInteger carrying the
+// signedness the declaration states. TINYINT(1) stays a boolean, and its
+// unsigned form stays an integer, as both did before signedness was recorded.
+func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
+	tests := map[string]struct {
+		columnType string
+		want       schema.Column
+	}{
+		"bigint":                            {columnType: "bigint", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
+		"bigint with width":                 {columnType: "bigint(20)", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
+		"bigint unsigned":                   {columnType: "bigint unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
+		"bigint width unsigned":             {columnType: "bigint(20) unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
+		"int unsigned":                      {columnType: "int(10) unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
+		"integer alias":                     {columnType: "integer", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
+		"smallint unsigned":                 {columnType: "smallint unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
+		"mediumint":                         {columnType: "mediumint", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
+		"tinyint":                           {columnType: "tinyint", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
+		"tinyint(1) is a boolean":           {columnType: "tinyint(1)", want: schema.Column{Name: "id", Type: schema.TypeBoolean}},
+		"unsigned tinyint(1) is an integer": {columnType: "tinyint(1) unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("events").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("id", test.columnType, "NO", nil, int64(20), int64(0)))
+			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+				WithArgs("events").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+
+			table, err := inspector.Table(t.Context(), "events")
+			require.NoError(t, err)
+			require.Equal(t, []schema.Column{test.want}, table.Columns)
+		})
+	}
 }
 
 func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {

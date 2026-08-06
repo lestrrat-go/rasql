@@ -135,6 +135,56 @@ func TestBuiltinsRejectUnrepresentableDecimals(t *testing.T) {
 	}
 }
 
+// TestBuiltinsRenderUnsignedIntegerTypeNames pins the one dialect that can
+// express an unsigned integer column and the two that cannot. MySQL renders
+// BIGINT UNSIGNED, which reaches 18446744073709551615. PostgreSQL has no
+// unsigned integer type and SQLite stores a signed 64-bit value whatever a
+// column is declared, so both report an error naming the column instead of
+// rendering a signed BIGINT that would reject values the descriptor permits.
+func TestBuiltinsRenderUnsignedIntegerTypeNames(t *testing.T) {
+	column := schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}
+
+	typeName, err := dialect.MySQL().TypeName(column)
+	require.NoError(t, err)
+	require.Equal(t, "BIGINT UNSIGNED", typeName)
+
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.SQLite()} {
+		t.Run(d.Name(), func(t *testing.T) {
+			_, err := d.TypeName(column)
+			require.ErrorContains(t, err, `unsigned integer column "id" cannot be represented`)
+			require.ErrorContains(t, err, "has no unsigned integer type")
+		})
+	}
+
+	// The signed column keeps the type name it always had, on every dialect.
+	signed := schema.Column{Name: "id", Type: schema.TypeInteger}
+	for _, test := range []struct {
+		dialect  dialect.Dialect
+		typeName string
+	}{
+		{dialect: dialect.PostgreSQL(), typeName: "BIGINT"},
+		{dialect: dialect.MySQL(), typeName: "BIGINT"},
+		{dialect: dialect.SQLite(), typeName: "INTEGER"},
+	} {
+		typeName, err := test.dialect.TypeName(signed)
+		require.NoError(t, err)
+		require.Equal(t, test.typeName, typeName)
+	}
+}
+
+// TestBuiltinsRejectUnsignedNonIntegerColumn covers the descriptor
+// schema.Table.Validate already rejects, since a dialect renders columns it is
+// handed directly as well as through a validated table.
+func TestBuiltinsRejectUnsignedNonIntegerColumn(t *testing.T) {
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
+		t.Run(d.Name(), func(t *testing.T) {
+			_, err := d.TypeName(schema.Column{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4), Unsigned: true})
+			require.ErrorContains(t, err, `column "amount" cannot be represented`)
+			require.ErrorContains(t, err, "unsigned applies only to an integer column")
+		})
+	}
+}
+
 func TestBuiltinCapabilities(t *testing.T) {
 	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityReturning))
 	require.True(t, dialect.SQLite().Supports(dialect.CapabilityConflictTarget))
