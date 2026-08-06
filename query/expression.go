@@ -386,7 +386,9 @@ func Call(name FunctionName, arguments ...Expression) Function {
 // validation has confirmed it is a legal identifier. A call built with Func
 // is always treated as scalar: it is legal wherever any expression is, and it
 // is never subject to the aggregate placement rules, even when name happens
-// to match an aggregate this package curates, such as "SUM".
+// to match an aggregate this package curates, such as "SUM". WithDistinct is
+// the one thing it does not share with a curated scalar call, and WithDistinct
+// states what it does there.
 func Func(name string, arguments ...Expression) Function {
 	return Function{name: FunctionName(name), arguments: append([]Expression(nil), arguments...), unchecked: true}
 }
@@ -437,8 +439,11 @@ func Avg(expression Expression) Function {
 // column, keeps that scale, and so does a driver that interpolates its
 // arguments into the SQL text client-side rather than sending them as
 // placeholders. PostgreSQL and SQLite are unaffected: both return the value at
-// its own scale. The same widening reaches any call built with Func that mixes
-// a decimal column with a bound value, since it has the same cause.
+// its own scale. The same widening reaches a call built with Func that mixes a
+// decimal column with a bound value only when the named function's own MySQL
+// type rules resolve a common decimal result type across its arguments, as
+// IFNULL and NULLIF do. A function that returns a string or an integer, such
+// as CONCAT, has no decimal result scale to widen and is unaffected.
 func Coalesce(expressions ...Expression) Function {
 	return Call(FunctionCoalesce, expressions...)
 }
@@ -483,9 +488,9 @@ func (f Function) Star() bool {
 // function name; it takes no argument for the same reason
 // query.Select.WithDistinct does. DISTINCT inside a call is only legal SQL
 // where the function aggregates, so statement validation rejects it on a
-// curated scalar function — COALESCE, LOWER, UPPER, and ABS — and rejects it
-// combined with CountAll's star, since COUNT(DISTINCT *) is not legal SQL;
-// call Count with a column instead. A call built with Func carries it through
+// curated call Aggregates reports false for, and rejects it combined with
+// CountAll's star, since COUNT(DISTINCT *) is not legal SQL; call Count with
+// a column instead. A call built with Func carries it through
 // unchecked, because rasql does not know whether the named function
 // aggregates: DISTINCT is how an aggregate this package does not curate, such
 // as GROUP_CONCAT, reaches SQL, and whether that call is legal on the target
@@ -505,9 +510,15 @@ func (f Function) Distinct() bool {
 // Aggregates reports whether the called function aggregates. It governs where
 // the call is legal: an aggregate is legal only in a SELECT projection, in a
 // HAVING clause, and in the ORDER BY of a statement that groups, while a
-// scalar call is legal wherever any expression is. An unsupported function
-// name reports false; statement validation is what refuses it.
+// scalar call is legal wherever any expression is. A call built with Func is
+// always scalar, so it reports false whatever its name, even when that name
+// matches an aggregate this package curates, such as "SUM"; that matches the
+// placement rule validation applies to it. An unsupported function name also
+// reports false; statement validation is what refuses it.
 func (f Function) Aggregates() bool {
+	if f.unchecked {
+		return false
+	}
 	spec, ok := functionSpecs[f.name]
 	return ok && spec.aggregate
 }

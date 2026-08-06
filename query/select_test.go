@@ -182,6 +182,7 @@ func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
 	// the call is, so it leaves Aggregates alone on either side of the split.
 	require.True(t, query.Count(userID).WithDistinct().Aggregates())
 	require.False(t, query.Lower(email).WithDistinct().Aggregates())
+	require.False(t, query.Func("SUM", userID).WithDistinct().Aggregates())
 
 	refused := map[string]query.Function{
 		"Lower":    query.Lower(email).WithDistinct(),
@@ -240,6 +241,9 @@ func TestFunctionConstructorsCarryTheirCall(t *testing.T) {
 		"Upper":    {function: query.Upper(email), name: query.FunctionUpper, arguments: []query.Expression{email}},
 		"Abs":      {function: query.Abs(userID), name: query.FunctionAbs, arguments: []query.Expression{userID}},
 		"Func":     {function: query.Func("jsonb_path_query", userID), name: query.FunctionName("jsonb_path_query"), arguments: []query.Expression{userID}},
+		// A Func call is always scalar, so Aggregates reports false even when
+		// the caller-supplied name collides with a curated aggregate.
+		"FuncNamedAfterAggregate": {function: query.Func("SUM", userID), name: query.FunctionName("SUM"), arguments: []query.Expression{userID}},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -772,6 +776,8 @@ func TestFuncValidatesEscapeHatchName(t *testing.T) {
 	filtered, err := base.WithWhere(query.Equal(query.Func("SUM", userID), query.Bind(1)))
 	require.NoError(t, err)
 	require.NoError(t, filtered.Validate())
+	// Aggregates has to agree with the placement rule validation just applied.
+	require.False(t, query.Func("SUM", userID).Aggregates())
 
 	_, err = query.NewSelect(users, query.Project(query.Func("bad-name", userID)))
 	requireQueryValidationError(t, err)
