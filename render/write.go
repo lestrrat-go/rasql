@@ -64,7 +64,7 @@ func (r *renderer) writeInsert(statement query.Insert) error {
 }
 
 func (r *renderer) writeInsertBase(statement query.Insert) error {
-	table, err := r.quoteIdentifier(statement.Into().Name())
+	table, err := r.quoteQualified(statement.Into().Schema(), statement.Into().Name())
 	if err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func (r *renderer) writeUpsertExpression(expression query.Expression, style dial
 }
 
 func (r *renderer) writeUpdate(statement query.Update) error {
-	table, err := r.quoteIdentifier(statement.Table().Name())
+	table, err := r.quoteQualified(statement.Table().Schema(), statement.Table().Name())
 	if err != nil {
 		return err
 	}
@@ -270,7 +270,7 @@ func (r *renderer) writeUpdate(statement query.Update) error {
 }
 
 func (r *renderer) writeDelete(statement query.Delete) error {
-	table, err := r.quoteIdentifier(statement.From().Name())
+	table, err := r.quoteQualified(statement.From().Schema(), statement.From().Name())
 	if err != nil {
 		return err
 	}

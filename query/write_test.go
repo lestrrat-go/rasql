@@ -152,6 +152,26 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestWriteTargetRejectsColumnFromAnotherSchema pins the sharpening of
+// query/write.go's validateTargetColumn once the schema joined key(): a
+// column built from an unqualified "users" descriptor is refused against a
+// "tenant.users" target, where it was wrongly accepted before the schema was
+// part of the key comparison.
+func TestWriteTargetRejectsColumnFromAnotherSchema(t *testing.T) {
+	unqualified, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	email, err := unqualified.Column("email")
+	require.NoError(t, err)
+
+	tenantDescriptor := usersTable()
+	tenantDescriptor.Schema = "tenant"
+	tenantUsers, err := query.NewTable(tenantDescriptor)
+	require.NoError(t, err)
+
+	_, err = query.NewUpdate(tenantUsers, query.Set(email, query.Bind("grace@example.com")))
+	require.ErrorContains(t, err, `belongs to table "users" instead of target "tenant.users"`)
+}
+
 func TestInsertHoldsMultipleRows(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)

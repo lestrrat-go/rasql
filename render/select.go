@@ -154,7 +154,7 @@ func (r *renderer) writeSelect(statement query.Select) error {
 }
 
 func (r *renderer) writeTable(table query.Table) error {
-	name, err := r.quoteIdentifier(table.Name())
+	name, err := r.quoteQualified(table.Schema(), table.Name())
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func (r *renderer) writeProjection(projection query.Projection) error {
 func (r *renderer) writeExpression(expression query.Expression) error {
 	switch expression := expression.(type) {
 	case query.Column:
-		qualifier, err := r.quoteIdentifier(expression.Source().Qualifier())
+		qualifier, err := r.quoteQualified(expression.Source().QualifierSchema(), expression.Source().Qualifier())
 		if err != nil {
 			return err
 		}
@@ -339,6 +339,26 @@ func (r *renderer) quoteIdentifier(name string) (string, error) {
 		return "", fmt.Errorf("identifier %q: %w", name, err)
 	}
 	return quoted, nil
+}
+
+// quoteQualified quotes schemaName and name as two separate identifiers
+// joined by a dot. It never quotes a dotted string as one identifier and
+// never splits a string on a dot, so the dialect validates and quotes each
+// segment on its own. An empty schemaName yields exactly what
+// quoteIdentifier(name) yields.
+func (r *renderer) quoteQualified(schemaName string, name string) (string, error) {
+	quotedName, err := r.quoteIdentifier(name)
+	if err != nil {
+		return "", err
+	}
+	if schemaName == "" {
+		return quotedName, nil
+	}
+	quotedSchema, err := r.quoteIdentifier(schemaName)
+	if err != nil {
+		return "", err
+	}
+	return quotedSchema + "." + quotedName, nil
 }
 
 func isNilDialect(d dialect.Dialect) bool {

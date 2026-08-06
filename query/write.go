@@ -492,7 +492,7 @@ func validateTargetColumn(column Column, table Table, path string) error {
 		return validationError(path, "%s", err)
 	}
 	if column.source.key() != table.key() {
-		return validationError(path, "belongs to table %q instead of target %q", column.source.Qualifier(), table.Qualifier())
+		return validationError(path, "belongs to table %q instead of target %q", column.source.QualifiedName(), table.QualifiedName())
 	}
 	if _, exists := table.definition.Column(column.name); !exists {
 		return validationError(path, "references unknown column %q", column.name)
