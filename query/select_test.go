@@ -873,6 +873,184 @@ func TestSelectNamesQualifiedTableInDuplicateSourceError(t *testing.T) {
 	require.ErrorContains(t, err, `duplicates table reference "audit.users"`)
 }
 
+// TestTableReportsWhetherItIsQualified pins Qualified on query.Table against
+// the same method on the descriptor it wraps. Qualified describes the table,
+// so an alias leaves it alone even though the alias empties QualifierSchema.
+func TestTableReportsWhetherItIsQualified(t *testing.T) {
+	unqualified := query.MustNewTable(usersTable())
+	require.False(t, unqualified.Qualified())
+
+	descriptor := usersTable()
+	descriptor.Schema = "audit"
+	qualified := query.MustNewTable(descriptor)
+	require.True(t, qualified.Qualified())
+
+	aliased, err := qualified.As("u")
+	require.NoError(t, err)
+	require.True(t, aliased.Qualified())
+	require.Equal(t, "", aliased.QualifierSchema())
+}
+
+// TestTableNamesQualifiedTableInUnknownColumnError pins the fifth
+// table-naming message: Table.Column names the qualified table, and the alias
+// once the table is aliased, exactly as every other message does.
+func TestTableNamesQualifiedTableInUnknownColumnError(t *testing.T) {
+	descriptor := usersTable()
+	descriptor.Schema = "tenant"
+	qualified := query.MustNewTable(descriptor)
+
+	_, err := qualified.Column("missing")
+	require.ErrorContains(t, err, `table "tenant.users" has no column "missing"`)
+
+	aliased, err := qualified.As("u")
+	require.NoError(t, err)
+	_, err = aliased.Column("missing")
+	require.ErrorContains(t, err, `table "u" has no column "missing"`)
+}
+
+// TestSelectRejectsSourcesThatShareOneName covers the rule that two sources of
+// one statement must render under names a server can tell apart. It is a check
+// of its own, not a side effect of the table key: every pair below holds two
+// distinct keys, and each renders SQL SQLite rejects with "ambiguous column
+// name". TestSQLiteRefusesAmbiguousSources runs both sets against a real
+// database.
+func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
+	qualifiedUsers := func(schemaName string) schema.Table {
+		descriptor := usersTable()
+		descriptor.Schema = schemaName
+		return descriptor
+	}
+	aliasOf := func(t *testing.T, descriptor schema.Table, alias string) query.Table {
+		t.Helper()
+		table, err := query.MustNewTable(descriptor).As(alias)
+		require.NoError(t, err)
+		return table
+	}
+
+	rejected := map[string]struct {
+		from    func(*testing.T) query.Table
+		joined  func(*testing.T) query.Table
+		message string
+	}{
+		// The finding this PR introduced: two different qualified tables under
+		// one alias.
+		"two qualified tables share an alias": {
+			from:    func(t *testing.T) query.Table { return aliasOf(t, qualifiedUsers("tenant_a"), "u") },
+			joined:  func(t *testing.T) query.Table { return aliasOf(t, qualifiedUsers("tenant_b"), "u") },
+			message: `table "tenant_b.users" is referred to as "u", which already refers to table "tenant_a.users"`,
+		},
+		// The hole that predates this PR: the key never caught an alias clash
+		// between two tables that differed in any other way.
+		"two unrelated tables share an alias": {
+			from:    func(t *testing.T) query.Table { return aliasOf(t, usersTable(), "u") },
+			joined:  func(t *testing.T) query.Table { return aliasOf(t, ordersTable(), "u") },
+			message: `table "orders" is referred to as "u", which already refers to table "users"`,
+		},
+		// The regression this PR introduced: a bare "users" names the
+		// unqualified table and the qualified one equally, in either order.
+		"unqualified table joined to a qualified one of the same name": {
+			from:    func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
+			joined:  func(t *testing.T) query.Table { return query.MustNewTable(qualifiedUsers("tenant_a")) },
+			message: `table "tenant_a.users" is referred to as "users", which already refers to table "users"`,
+		},
+		"qualified table joined to an unqualified one of the same name": {
+			from:    func(t *testing.T) query.Table { return query.MustNewTable(qualifiedUsers("tenant_a")) },
+			joined:  func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
+			message: `table "users" is referred to as "users", which already refers to table "tenant_a.users"`,
+		},
+		// An alias that repeats an unaliased source's own name is the same
+		// clash reached from the other side.
+		"an alias repeats an unaliased source's name": {
+			from:    func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
+			joined:  func(t *testing.T) query.Table { return aliasOf(t, ordersTable(), "users") },
+			message: `table "orders" is referred to as "users", which already refers to table "users"`,
+		},
+	}
+	for name, testCase := range rejected {
+		t.Run(name, func(t *testing.T) {
+			from := testCase.from(t)
+			joined := testCase.joined(t)
+			// The table key is schema, name and alias together, so a pair that
+			// differs in any of the three holds two distinct keys and the key
+			// cannot be what refuses it.
+			tableKey := func(table query.Table) string {
+				return table.Definition().QualifiedName() + "\x00" + table.Alias()
+			}
+			require.NotEqual(t, tableKey(from), tableKey(joined),
+				"the pair must hold distinct table keys, so the check cannot be riding on the key")
+
+			fromID, err := from.Column("id")
+			require.NoError(t, err)
+			joinedID, err := joined.Column("id")
+			require.NoError(t, err)
+
+			join := query.InnerJoin(joined, query.Equal(fromID, joinedID))
+			_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, query.Project(fromID))
+			requireQueryValidationError(t, err)
+			require.ErrorContains(t, err, testCase.message)
+		})
+	}
+
+	accepted := map[string]struct {
+		from   func(*testing.T) query.Table
+		joined func(*testing.T) query.Table
+	}{
+		// Each source renders its columns under its own "schema"."table"
+		// prefix, so nothing is ambiguous.
+		"same name in two schemas, both unaliased": {
+			from:   func(t *testing.T) query.Table { return query.MustNewTable(qualifiedUsers("tenant_a")) },
+			joined: func(t *testing.T) query.Table { return query.MustNewTable(qualifiedUsers("tenant_b")) },
+		},
+		"same name in two schemas under distinct aliases": {
+			from:   func(t *testing.T) query.Table { return aliasOf(t, qualifiedUsers("tenant_a"), "a") },
+			joined: func(t *testing.T) query.Table { return aliasOf(t, qualifiedUsers("tenant_b"), "b") },
+		},
+		"one table joined to itself under a distinct alias": {
+			from:   func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
+			joined: func(t *testing.T) query.Table { return aliasOf(t, usersTable(), "manager") },
+		},
+		"two differently named tables": {
+			from:   func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
+			joined: func(t *testing.T) query.Table { return query.MustNewTable(ordersTable()) },
+		},
+	}
+	for name, testCase := range accepted {
+		t.Run(name, func(t *testing.T) {
+			from := testCase.from(t)
+			joined := testCase.joined(t)
+
+			fromID, err := from.Column("id")
+			require.NoError(t, err)
+			joinedID, err := joined.Column("id")
+			require.NoError(t, err)
+
+			join := query.InnerJoin(joined, query.Equal(fromID, joinedID))
+			_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, query.Project(fromID))
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestSelectRejectsSharedNameAddedByWithJoin pins that the check runs on every
+// path that adds a source, not only on the constructor.
+func TestSelectRejectsSharedNameAddedByWithJoin(t *testing.T) {
+	users := query.MustNewTable(usersTable())
+	descriptor := usersTable()
+	descriptor.Schema = "tenant_a"
+	tenantUsers := query.MustNewTable(descriptor)
+
+	usersID, err := users.Column("id")
+	require.NoError(t, err)
+	tenantID, err := tenantUsers.Column("id")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users, query.Project(usersID))
+	require.NoError(t, err)
+
+	_, err = statement.WithJoin(query.InnerJoin(tenantUsers, query.Equal(usersID, tenantID)))
+	require.ErrorContains(t, err, `table "tenant_a.users" is referred to as "users", which already refers to table "users"`)
+}
+
 func requireQueryValidationError(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)

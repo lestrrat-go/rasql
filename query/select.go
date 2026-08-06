@@ -288,6 +288,7 @@ func (s Select) Validate() error {
 	}
 
 	sources := map[string]struct{}{s.from.key(): {}}
+	references := []sourceReference{s.from.reference()}
 	for i, join := range s.joins {
 		path := fmt.Sprintf("joins[%d]", i)
 		if join.kind != JoinInner && join.kind != JoinLeft {
@@ -299,7 +300,11 @@ func (s Select) Validate() error {
 		if _, exists := sources[join.source.key()]; exists {
 			return validationError(path+".source", "duplicates table reference %q", join.source.QualifiedName())
 		}
+		if err := validateSourceReference(references, join.source, path+".source"); err != nil {
+			return err
+		}
 		sources[join.source.key()] = struct{}{}
+		references = append(references, join.source.reference())
 		if err := validateSelectClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {
 			return err
 		}

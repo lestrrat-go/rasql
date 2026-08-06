@@ -31,6 +31,29 @@ func validateAlias(alias string) error {
 	return nil
 }
 
+// validateSourceReference refuses a source a server could not tell apart from
+// one the statement already carries, and it is a separate check from the table
+// key on purpose. The key states which descriptor a column belongs to, and two
+// sources that differ by schema, by name or by alias hold different keys while
+// still rendering column references a server resolves to both of them.
+//
+// The check refuses the statement rather than inventing an alias to separate the
+// two sources. An alias rasql chose would change the SQL the caller asked for
+// and, through a projected column's result name, what a decoded row looks like,
+// and rasql cannot tell which of the two sources any already-written column
+// reference meant. Refusing names both tables and leaves the caller to pick an
+// alias with As, which is the one repair that keeps the statement theirs.
+func validateSourceReference(references []sourceReference, source Table, path string) error {
+	candidate := source.reference()
+	for _, existing := range references {
+		if !existing.conflicts(candidate) {
+			continue
+		}
+		return validationError(path, "table %q is referred to as %q, which already refers to table %q; give one of them a distinct alias", candidate.descriptor, candidate.qualifier, existing.descriptor)
+	}
+	return nil
+}
+
 // expressionContext tells the expression walk where in a statement the
 // expression sits. An aggregate function is only legal in a SELECT projection,
 // in a HAVING clause, and in the ORDER BY of a statement that groups, and never

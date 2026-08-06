@@ -92,6 +92,15 @@ func (t Table) Schema() string {
 	return t.definition.Schema
 }
 
+// Qualified reports whether the underlying descriptor names a schema. It
+// describes the table itself, so an alias does not change it: an aliased
+// qualified table is still qualified even though its columns render under the
+// alias alone. Read QualifierSchema instead to learn what, if anything,
+// qualifies a rendered column reference.
+func (t Table) Qualified() bool {
+	return t.definition.Qualified()
+}
+
 // QualifierSchema returns the schema that qualifies Qualifier, or an empty
 // string when the table is aliased or unqualified. An alias replaces a
 // table's whole qualified name, so an aliased table's columns are never
@@ -124,7 +133,7 @@ func (t Table) Column(name string) (Column, error) {
 		return Column{}, err
 	}
 	if _, ok := t.definition.Column(name); !ok {
-		return Column{}, fmt.Errorf("query column: table %q has no column %q", t.definition.Name, name)
+		return Column{}, fmt.Errorf("query column: table %q has no column %q", t.QualifiedName(), name)
 	}
 	return Column{source: t, name: name}, nil
 }
@@ -144,4 +153,52 @@ func (t Table) validate() error {
 
 func (t Table) key() string {
 	return t.definition.Schema + "\x00" + t.definition.Name + "\x00" + t.alias
+}
+
+// sourceReference describes how a statement addresses one of its tables, which
+// is a different thing from the identity key() carries. Two descriptors that
+// differ still collide when a server resolves a column reference to both of
+// them, and the key cannot see that because it is built from the parts that
+// make the two descriptors different in the first place.
+type sourceReference struct {
+	// qualifier is the leading identifier a column reference carries: the
+	// alias when the table is aliased, and the bare table name otherwise.
+	qualifier string
+	// schema qualifies qualifier in rendered SQL, and is empty when the table
+	// is aliased or unqualified.
+	schema string
+	// descriptor names the table for an error message, ignoring any alias, so
+	// that a message about two tables sharing one alias can still tell them
+	// apart.
+	descriptor string
+}
+
+func (t Table) reference() sourceReference {
+	return sourceReference{
+		qualifier:  t.Qualifier(),
+		schema:     t.QualifierSchema(),
+		descriptor: t.definition.QualifiedName(),
+	}
+}
+
+// conflicts reports whether a server could resolve one column reference to both
+// sources.
+//
+// Two sources that render their columns under different leading identifiers are
+// always distinguishable, so they never conflict. When the leading identifier is
+// the same, the only thing that can still tell them apart is a schema rendered
+// in front of it, and that works only when both sources carry one: rasql renders
+// every column of an unaliased qualified table as "schema"."table"."column", so
+// tenant_a.users and tenant_b.users each answer to their own prefix. If either
+// side renders a bare identifier, the reference is ambiguous, because a bare
+// users.id names the unqualified users table and the qualified tenant_a.users
+// table equally, and an alias is bare by construction.
+func (r sourceReference) conflicts(other sourceReference) bool {
+	if r.qualifier != other.qualifier {
+		return false
+	}
+	if r.schema != "" && other.schema != "" {
+		return r.schema == other.schema
+	}
+	return true
 }

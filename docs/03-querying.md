@@ -768,7 +768,19 @@ rows, err := rasql.SelectFrom(client, employees).
 
 `employees.ID` still renders as `"employees"."id"`, while `manager.ID` renders as `"manager"."id"`. `As` fails when the alias is not a valid identifier.
 
-A table whose descriptor names a `Schema` (see [Qualify a table with a schema](02-schema.md#qualify-a-table-with-a-schema)) renders `"schema"."table"` in `FROM` and every write statement's target, and a column reached through it renders `"schema"."table"."column"`. An alias replaces a qualified table's whole name: once `events.As("e")` is taken, `e.ID` renders as `"e"."id"`, not `"audit"."e"."id"`, and this holds for every alias regardless of whether the aliased table was qualified. Two aliases from different schemas still collide under the same alias, exactly as two same-named unaliased tables from different schemas do not: the alias is what a column is qualified by, so giving two different tables the same alias in one statement is still an error.
+A table whose descriptor names a `Schema` (see [Qualify a table with a schema](02-schema.md#qualify-a-table-with-a-schema)) renders `"schema"."table"` in `FROM` and every write statement's target, and a column reached through it renders `"schema"."table"."column"`. An alias replaces a qualified table's whole name: once `events.As("e")` is taken, `e.ID` renders as `"e"."id"`, not `"audit"."e"."id"`, and this holds for every alias regardless of whether the aliased table was qualified.
+
+### Every source of one statement needs its own name
+
+A statement may carry two sources only when a server can tell their column references apart, and `Validate` refuses the statement when it cannot. A refused statement reports `table "…" is referred to as "…", which already refers to table "…"`, naming the two tables it could not separate. A source is referred to by its alias when it has one, and by its table name otherwise. Two sources therefore clash whenever:
+
+- they share an alias, whatever the two tables are and whichever schemas they come from;
+- one carries an alias that repeats another source's unaliased table name;
+- they share a table name and at least one of them is unqualified, because a bare `"users"."id"` names an unqualified `users` and a qualified `tenant_a.users` equally.
+
+Two unaliased tables of the same name in *different* schemas do not clash. Each renders its columns under its own `"schema"."table"` prefix, so `tenant_a.users` joined to `tenant_b.users` renders a statement whose every column reference names exactly one source. `TestSQLiteRefusesAmbiguousSources` runs that join against SQLite alongside each shape validation refuses.
+
+rasql refuses a clash rather than inventing an alias to separate the two sources. An alias it chose would change the SQL you asked for and, through a projected column's result name, what a decoded row looks like, and it cannot tell which of the two sources a column reference you already wrote was meant to reach. Repair a refused statement by calling `As` on one of the two sources.
 
 [Where conditions](#where-conditions) lists every comparison, logical connective, and null test the expression set offers.
 
