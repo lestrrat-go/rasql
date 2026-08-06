@@ -424,6 +424,21 @@ func Avg(expression Expression) Function {
 // Coalesce returns the first of expressions that is not NULL. It takes at
 // least two expressions, because a one-argument COALESCE is not accepted by
 // every supported dialect.
+//
+// On MySQL, coalescing a decimal column against a value bound with Bind
+// changes the scale the result decodes at. MySQL fixes the result type while
+// it prepares the statement, and a placeholder carries no scale of its own at
+// that point, so the whole call becomes the widest decimal the server has,
+// DECIMAL(65,30), instead of the column's declared type: a DECIMAL(19,4)
+// column decodes with 30 digits right of the point rather than 4. The number
+// is the same and only its trailing zeroes differ, but a caller comparing the
+// decoded string against a literal has to expect the widened form. Coalescing
+// against another decimal expression of the same scale, such as a second
+// column, keeps that scale, and so does a driver that interpolates its
+// arguments into the SQL text client-side rather than sending them as
+// placeholders. PostgreSQL and SQLite are unaffected: both return the value at
+// its own scale. The same widening reaches any call built with Func that mixes
+// a decimal column with a bound value, since it has the same cause.
 func Coalesce(expressions ...Expression) Function {
 	return Call(FunctionCoalesce, expressions...)
 }

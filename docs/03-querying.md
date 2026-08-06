@@ -167,6 +167,8 @@ A scalar call carries the placement context of wherever it sits unchanged into i
 
 SQLite's `LOWER`/`UPPER` fold ASCII letters only, while PostgreSQL and MySQL fold according to the server's collation, so a case-insensitive match on non-ASCII text is not portable across the three dialects. MySQL's `LOWER`/`UPPER` leave a binary-typed argument unchanged. A projected scalar call has no portable result name any more than an aggregate does, so a projection that will be decoded needs `.As(alias)` the same way [Aggregates](#aggregates) states.
 
+MySQL also changes the scale a coalesced decimal decodes at. `query.Coalesce(amount, query.Bind("0.0000"))` over a `DECIMAL(19,4)` column decodes with 30 digits right of the decimal point rather than 4, because MySQL fixes the result type while it prepares the statement and a placeholder carries no scale of its own at that point, so the call becomes the widest decimal the server has, `DECIMAL(65,30)`. The number is unchanged and only its trailing zeroes differ, but a caller comparing the decoded string against a literal has to expect the widened form — see [Logical column types](02-schema.md#logical-column-types), which states the narrower rule a plain decimal column follows. Coalescing against another decimal expression of the same scale, such as a second column, keeps that scale, and so does a driver that interpolates its arguments into the SQL text client-side rather than sending them as placeholders. PostgreSQL and SQLite return the value at its own scale in every case. The same widening reaches any `query.Func` call that mixes a decimal column with a bound value, since it has the same cause.
+
 <!-- INCLUDE(examples/rasql_scalar_function_example_test.go) -->
 ```go
 package examples_test
