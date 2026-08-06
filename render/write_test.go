@@ -87,6 +87,43 @@ func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 	}
 }
 
+// TestUpdateRendersScalarFunctionAssignment proves a scalar function call in
+// a SET assignment renders with no dialect-specific branch, identically to a
+// SELECT projection, across all three built-in dialects.
+func TestUpdateRendersScalarFunctionAssignment(t *testing.T) {
+	users, id, email := writeTable(t)
+	update, err := query.NewUpdate(users, query.Set(email, query.Lower(email)))
+	require.NoError(t, err)
+	update, err = update.WithWhere(query.Equal(id, query.Bind(1)))
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "UPDATE \"users\" SET \"email\" = LOWER(\"users\".\"email\") WHERE (\"users\".\"id\" = $1)",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "UPDATE `users` SET `email` = LOWER(`users`.`email`) WHERE (`users`.`id` = ?)",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "UPDATE \"users\" SET \"email\" = LOWER(\"users\".\"email\") WHERE (\"users\".\"id\" = ?)",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Update(test.dialect, update)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{1}, rendered.Args())
+		})
+	}
+}
+
 // TestQualifiedWriteStatementsRenderForBuiltInDialects pins the exact
 // rendered SQL for INSERT, multi-row INSERT, UPDATE and DELETE against a
 // schema-qualified table across all three built-in dialects. Only the table
@@ -541,6 +578,116 @@ func TestSQLiteUpsertExecutes(t *testing.T) {
 	var actual string
 	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT \"email\" FROM \"users\" WHERE \"id\" = 1").Scan(&actual))
 	require.Equal(t, "grace@example.com", actual)
+}
+
+// TestUpsertRendersNestedExcludedColumn proves the renderer fix for the
+// pre-existing defect the design investigation found: validation accepts an
+// ExcludedColumn nested inside another expression, such as inside COALESCE,
+// but the renderer used to recognise one only at the top level of a
+// conflict-update assignment's value. writeExcludedColumn now renders one at
+// any depth inside the value, across all three built-in dialects.
+func TestUpsertRendersNestedExcludedColumn(t *testing.T) {
+	users, id, email := writeTable(t)
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{
+		query.Set(email, query.Coalesce(query.Excluded(email), query.Bind("unknown@example.com"))),
+	})
+	require.NoError(t, err)
+	mysqlStatement, err := query.NewUpsert(insert, nil, []query.Assignment{
+		query.Set(email, query.Coalesce(query.Excluded(email), query.Bind("unknown@example.com"))),
+	})
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect   dialect.Dialect
+		statement query.Upsert
+		sql       string
+	}{
+		"postgresql": {
+			dialect:   dialect.PostgreSQL(),
+			statement: statement,
+			sql:       "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = COALESCE(EXCLUDED.\"email\", $3)",
+		},
+		"mysql": {
+			dialect:   dialect.MySQL(),
+			statement: mysqlStatement,
+			sql:       "INSERT INTO `users` (`id`, `email`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `email` = COALESCE(VALUES(`email`), ?)",
+		},
+		"sqlite": {
+			dialect:   dialect.SQLite(),
+			statement: statement,
+			sql:       "INSERT INTO \"users\" (\"id\", \"email\") VALUES (?, ?) ON CONFLICT (\"id\") DO UPDATE SET \"email\" = COALESCE(EXCLUDED.\"email\", ?)",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Upsert(test.dialect, test.statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{1, "ada@example.com", "unknown@example.com"}, rendered.Args())
+		})
+	}
+}
+
+// TestSQLiteUpsertExecutesNestedExcludedColumn proves the rendered nested
+// EXCLUDED reference actually runs: the conflicting row's EXCLUDED.email is
+// not NULL, so COALESCE keeps it rather than falling back to the bound
+// default.
+func TestSQLiteUpsertExecutesNestedExcludedColumn(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	users, id, email := writeTable(t)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY, \"email\" TEXT NOT NULL)")
+	require.NoError(t, err)
+
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{
+		query.Set(email, query.Coalesce(query.Excluded(email), query.Bind("unknown@example.com"))),
+	})
+	require.NoError(t, err)
+	rendered, err := render.Upsert(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), rendered.SQL(), rendered.Args()...)
+	require.NoError(t, err)
+
+	insert, err = query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("grace@example.com")})
+	require.NoError(t, err)
+	statement, err = query.NewUpsert(insert, []query.Column{id}, []query.Assignment{
+		query.Set(email, query.Coalesce(query.Excluded(email), query.Bind("unknown@example.com"))),
+	})
+	require.NoError(t, err)
+	rendered, err = render.Upsert(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), rendered.SQL(), rendered.Args()...)
+	require.NoError(t, err)
+
+	var actual string
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT \"email\" FROM \"users\" WHERE \"id\" = 1").Scan(&actual))
+	require.Equal(t, "grace@example.com", actual)
+}
+
+// TestUpdateRejectsExcludedColumnOutsideUpsertAssignment proves the scope of
+// the renderer fix above: validation admits ExcludedColumn wherever its
+// source table is in scope, which includes an UPDATE's own WHERE clause, but
+// EXCLUDED means nothing there. writeExcludedColumn refuses it with a named
+// error instead of falling through to the generic "unsupported expression"
+// message the same shape reported before this change added a case for it.
+func TestUpdateRejectsExcludedColumnOutsideUpsertAssignment(t *testing.T) {
+	users, id, email := writeTable(t)
+	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
+	require.NoError(t, err)
+	update, err = update.WithWhere(query.Equal(id, query.Excluded(id)))
+	require.NoError(t, err)
+
+	_, err = render.Update(dialect.SQLite(), update)
+	require.ErrorContains(t, err, `references the excluded column "id" outside an upsert conflict-update assignment`)
 }
 
 func TestSQLiteMultiRowInsertExecutes(t *testing.T) {

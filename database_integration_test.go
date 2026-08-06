@@ -122,6 +122,36 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	require.NoError(t, err)
 	require.Equal(t, []record{firstStored}, viaSubquery)
 
+	// A scalar-function predicate and projection prove COALESCE and LOWER
+	// render and execute against a real server on both live dialects: the
+	// design behind this change argued no new dialect.Capability is needed
+	// because all three engines spell these functions identically, and this
+	// is what proves that argument against MySQL and PostgreSQL rather than
+	// only against the SQLite-backed tests elsewhere in this repository.
+	scalarEmail, err := records.Column("email")
+	require.NoError(t, err)
+	scalarAmount, err := records.Column("amount")
+	require.NoError(t, err)
+	viaLower, err := rasql.SelectFrom(client, records).
+		Where(query.Equal(query.Lower(scalarEmail), query.Bind(firstStored.Email))).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []record{firstStored}, viaLower)
+
+	type amountRow struct {
+		ID     int64  `rasql:"id"`
+		Amount string `rasql:"amount"`
+	}
+	viaCoalesce, err := rasql.DecodeFrom[amountRow](client, records).
+		Project(query.Project(recordID), query.Project(query.Coalesce(scalarAmount, query.Bind("0.0000"))).As("amount")).
+		OrderAsc(recordID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []amountRow{
+		{ID: first.ID, Amount: firstStored.Amount},
+		{ID: second.ID, Amount: secondStored.Amount},
+	}, viaCoalesce)
+
 	total, err := rasql.SelectFrom(client, records).Count(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)

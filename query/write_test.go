@@ -313,6 +313,70 @@ func TestWriteStatementsRejectAggregates(t *testing.T) {
 	}
 }
 
+// TestWriteStatementsAcceptScalarFunctions covers the reach of a scalar
+// function call into every write clause: an INSERT row value, a SET
+// assignment, an upsert conflict-update assignment, and RETURNING all reach
+// validateClauseExpression, which carries ctx unchanged, so a scalar call is
+// legal there while an aggregate is refused, exactly as in
+// TestWriteStatementsRejectAggregates.
+func TestWriteStatementsAcceptScalarFunctions(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Coalesce(query.Bind("ada@example.com"), query.Bind(""))})
+	require.NoError(t, err)
+	require.NoError(t, insert.Validate())
+
+	returning, err := insert.WithReturning(query.Project(query.Lower(email)).As("lower_email"))
+	require.NoError(t, err)
+	require.NoError(t, returning.Validate())
+
+	update, err := query.NewUpdate(users, query.Set(email, query.Lower(email)))
+	require.NoError(t, err)
+	require.NoError(t, update.Validate())
+
+	upsert, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Coalesce(query.Excluded(email), email))})
+	require.NoError(t, err)
+	require.NoError(t, upsert.Validate())
+}
+
+// TestUpsertAcceptsNestedExcludedColumn pins that validation accepts an
+// ExcludedColumn nested inside another expression, such as inside a scalar
+// function call, and not only at the top level of a conflict-update
+// assignment's value. render/write_test.go's
+// TestSQLiteUpsertRendersNestedExcludedColumn proves the renderer now
+// matches what validation already accepted here.
+func TestUpsertAcceptsNestedExcludedColumn(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+
+	upsert, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{
+		query.Set(email, query.Coalesce(query.Excluded(email), query.Bind("unknown@example.com"))),
+	})
+	require.NoError(t, err)
+	require.NoError(t, upsert.Validate())
+
+	// The exact shape the design doc reproduced: a comparison nests
+	// ExcludedColumn as its left operand rather than a scalar function, and
+	// validation accepts it the same way.
+	comparison, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{
+		query.Set(id, query.Equal(query.Excluded(id), query.Bind(5))),
+	})
+	require.NoError(t, err)
+	require.NoError(t, comparison.Validate())
+}
+
 // TestWriteStatementsRejectSubqueries covers the placement rule that keeps a
 // subquery out of every write clause: only a SELECT statement's own clauses set
 // allowsSubquery, so a write clause refuses one with the same message a write
