@@ -156,6 +156,36 @@ func TestTypedSelectGroupBy(t *testing.T) {
 	require.ErrorContains(t, err, "cannot count a grouped statement")
 }
 
+// TestTypedSelectGroupByJoinedColumn proves the typed builder shares the fixed
+// assembly order: the grouping is validated together with the joins, so a joined
+// table's column may be grouped by. Attaching the joins after the first
+// validation refused it.
+func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
+	users := deleteUsersTable(t)
+	orders := selectOrdersTable(t)
+	id, err := users.QueryTable().Column("id")
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	type userOrderCount struct {
+		UserID int64 `rasql:"user_id"`
+		Total  int64 `rasql:"total"`
+	}
+
+	statement, err := rasql.DecodeFrom[userOrderCount](clientForBuild(t), users).
+		Project(query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
+		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
+		GroupBy(orderUserID).
+		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		Build()
+	require.NoError(t, err)
+	require.Equal(t,
+		`SELECT "orders"."user_id", COUNT(*) AS "total" FROM "users" INNER JOIN "orders" ON ("users"."id" = "orders"."user_id") GROUP BY "orders"."user_id" HAVING (COUNT(*) > $1)`,
+		statement.SQL())
+	require.Equal(t, []any{1}, statement.Args())
+}
+
 func TestTypedSelectCombinesPredicates(t *testing.T) {
 	t.Run("WhereEqual then Where combine with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)

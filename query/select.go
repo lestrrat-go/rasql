@@ -112,14 +112,7 @@ type Select struct {
 
 // NewSelect creates a validated SELECT statement.
 func NewSelect(from Table, projections ...Projection) (Select, error) {
-	statement := Select{
-		from:        from,
-		projections: append([]Projection(nil), projections...),
-	}
-	if err := statement.Validate(); err != nil {
-		return Select{}, err
-	}
-	return statement, nil
+	return NewJoinedSelect(from, nil, nil, projections...)
 }
 
 // NewGroupedSelect creates a validated grouped SELECT statement.
@@ -130,8 +123,23 @@ func NewSelect(from Table, projections ...Projection) (Select, error) {
 // legal. A grouping expression must not call an aggregate function and must not
 // be a bare bound value.
 func NewGroupedSelect(from Table, groupBy []Expression, projections ...Projection) (Select, error) {
+	return NewJoinedSelect(from, nil, groupBy, projections...)
+}
+
+// NewJoinedSelect creates a validated SELECT statement that already carries its
+// joins, and its grouping when it groups. NewSelect and NewGroupedSelect are it
+// with no joins.
+//
+// Validation judges the statement as constructed, and every clause may read
+// only a table the statement selects from. A join added afterwards through
+// WithJoin therefore cannot rescue a projection or a grouping expression that
+// reads the joined table, because validation has already refused it. Supply the
+// joins here whenever any projection or grouping expression reads a joined
+// table's column. Pass a nil groupBy for a statement that does not group.
+func NewJoinedSelect(from Table, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
 	statement := Select{
 		from:        from,
+		joins:       append([]Join(nil), joins...),
 		groupBy:     append([]Expression(nil), groupBy...),
 		projections: append([]Projection(nil), projections...),
 	}
@@ -179,9 +187,11 @@ func (s Select) WithGroupBy(expressions ...Expression) (Select, error) {
 // replacing any predicate set before it.
 // HAVING filters groups after aggregation, so it may call an aggregate. It
 // requires a statement that groups: either an explicit GROUP BY, or a
-// projection set in which every projection aggregates, which is one group.
-// Without a GROUP BY it follows the same rule as ORDER BY over an aggregating
-// statement, and may read a column only inside an aggregate.
+// projection set that aggregates and reads no column outside an aggregate,
+// which is one group. Not every projection in that set has to aggregate: a
+// projection that reads no column, a bound value for instance, may sit beside
+// the aggregate. Without a GROUP BY the clause follows the same rule as ORDER BY
+// over an aggregating statement, and may read a column only inside an aggregate.
 func (s Select) WithHaving(expression Expression) (Select, error) {
 	copy := s.clone()
 	copy.having = expression

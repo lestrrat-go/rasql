@@ -457,6 +457,54 @@ func TestSelectGroupsAndFilters(t *testing.T) {
 	require.Equal(t, query.Expression(query.LessThan(query.CountAll(), query.Bind(10))), replaced.Having())
 }
 
+// TestJoinedSelectGroupsByJoinedColumn covers what NewJoinedSelect adds over
+// NewGroupedSelect: the joins are present at the first validation, so a grouping
+// expression and a projection may read a joined table. WithJoin cannot reach the
+// same statement, because validation refuses the grouping before the join is
+// attached.
+func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+	join := query.InnerJoin(orders, query.Equal(userID, orderUserID))
+
+	grouped, err := query.NewJoinedSelect(users, []query.Join{join}, []query.Expression{orderUserID},
+		query.Project(orderUserID),
+		query.Project(query.CountAll()).As("total"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []query.Expression{orderUserID}, grouped.GroupBy())
+	require.Equal(t, []query.Join{join}, grouped.Joins())
+
+	// A nil grouping leaves the statement ungrouped, which is where the
+	// projection of a joined column also needs the join up front.
+	ungrouped, err := query.NewJoinedSelect(users, []query.Join{join}, nil,
+		query.Project(userID),
+		query.Project(orderUserID),
+	)
+	require.NoError(t, err)
+	require.Empty(t, ungrouped.GroupBy())
+
+	// The joins the caller passes are copied, so a later write to their slice
+	// must not reach the statement.
+	joins := []query.Join{join}
+	copied, err := query.NewJoinedSelect(users, joins, nil, query.Project(userID))
+	require.NoError(t, err)
+	joins[0] = query.Join{}
+	require.Equal(t, []query.Join{join}, copied.Joins())
+
+	// Without the join the same grouping is refused, which is what attaching
+	// the joins afterwards amounted to.
+	_, err = query.NewJoinedSelect(users, nil, []query.Expression{orderUserID}, query.Project(query.CountAll()))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `references table "orders" outside the statement`)
+}
+
 // TestSelectRejectsInvalidGrouping covers the rules a GROUP BY expression has to
 // follow: no aggregate, no table outside the statement, and no bare bound value.
 func TestSelectRejectsInvalidGrouping(t *testing.T) {
@@ -500,9 +548,9 @@ func TestSelectRejectsInvalidGrouping(t *testing.T) {
 }
 
 // TestSelectRejectsInvalidHaving covers the rules that make a HAVING clause
-// legal: it needs a statement that groups, either explicitly or through an
-// aggregate-only projection set, and follows the same aggregate-placement rules
-// as every other clause.
+// legal: it needs a statement that groups, either explicitly or through a
+// projection set that aggregates and reads no column outside an aggregate, and
+// follows the same aggregate-placement rules as every other clause.
 func TestSelectRejectsInvalidHaving(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
@@ -569,13 +617,23 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, withOrder.Validate())
 
-	// HAVING over an aggregate needs no GROUP BY when every projection
-	// aggregates, because that projection set is already one group.
+	// HAVING over an aggregate needs no GROUP BY when the projection set
+	// aggregates and reads no column outside an aggregate, because that set is
+	// already one group.
 	aggregateOnly, err := query.NewSelect(users, query.Project(query.CountAll()))
 	require.NoError(t, err)
 	aggregateHaving, err := aggregateOnly.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
 	require.NoError(t, err)
 	require.NoError(t, aggregateHaving.Validate())
+
+	// Not every projection in that set has to aggregate. A projection that
+	// reads no column, a bound value here, sits beside the aggregate and the
+	// set still counts as one group, so the HAVING stays legal.
+	besideBoundValue, err := query.NewSelect(users, query.Project(query.CountAll()), query.Project(query.Bind(7)))
+	require.NoError(t, err)
+	boundValueHaving, err := besideBoundValue.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
+	require.NoError(t, err)
+	require.NoError(t, boundValueHaving.Validate())
 }
 
 // TestSelectAcceptsSubqueriesInGroupedClauses pins that GROUP BY and HAVING are

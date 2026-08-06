@@ -156,6 +156,70 @@ func TestSelectBuilderBuildsGroupedStatement(t *testing.T) {
 	require.Contains(t, viaExpression.SQL(), ` GROUP BY "users"."id"`)
 }
 
+// TestSelectBuilderGroupsByJoinedColumn pins the order in which Build assembles
+// the statement. The grouping and the projections are validated together with
+// the joins, so a joined table's column may be grouped by and projected. Adding
+// the joins after the first validation refused both, because the statement
+// validation judged did not yet select from the joined table.
+func TestSelectBuilderGroupsByJoinedColumn(t *testing.T) {
+	users := fluentUsers(t)
+	orders, err := query.NewTable(schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	rendered, err := render.SelectFrom(dialect.PostgreSQL(), users).
+		Project(query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
+		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
+		GroupBy(orderUserID).
+		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		Build()
+	require.NoError(t, err)
+	require.Equal(t,
+		`SELECT "orders"."user_id", COUNT(*) AS "total" FROM "users" INNER JOIN "orders" ON ("users"."id" = "orders"."user_id") GROUP BY "orders"."user_id" HAVING (COUNT(*) > $1)`,
+		rendered.SQL())
+	require.Equal(t, []any{1}, rendered.Args())
+
+	// GroupByColumns names a primary-table column, so grouping by it beside a
+	// joined projection has to survive the same assembly order.
+	mixed, err := render.SelectFrom(dialect.PostgreSQL(), users).
+		Project(query.Project(id), query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
+		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
+		GroupByColumns("id").
+		GroupBy(orderUserID).
+		Build()
+	require.NoError(t, err)
+	require.Contains(t, mixed.SQL(), ` GROUP BY "users"."id", "orders"."user_id"`)
+
+	// The same ordering governs an ungrouped statement that projects a joined
+	// table's column.
+	projected, err := render.SelectFrom(dialect.PostgreSQL(), users).
+		Project(query.Project(id), query.Project(orderUserID)).
+		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
+		Build()
+	require.NoError(t, err)
+	require.Equal(t,
+		`SELECT "users"."id", "orders"."user_id" FROM "users" INNER JOIN "orders" ON ("users"."id" = "orders"."user_id")`,
+		projected.SQL())
+
+	// A grouping expression that reads a table the statement never selects from
+	// is still refused.
+	_, err = render.SelectFrom(dialect.PostgreSQL(), users).
+		Project(query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
+		GroupBy(orderUserID).
+		Build()
+	require.ErrorContains(t, err, `references table "orders" outside the statement`)
+}
+
 func TestSelectBuilderGroupingIsImmutable(t *testing.T) {
 	users := fluentUsers(t)
 	id, err := users.Column("id")

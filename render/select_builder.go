@@ -274,20 +274,20 @@ func (b SelectBuilder) BuildCount() (Statement, error) {
 // buildFromJoinsWhere assembles a query.Select from b's from, joins, and
 // accumulated predicates, using projections in place of b's own. Build and
 // BuildCount share it so both carry every predicate, combined with AND in the
-// order the calls were made, into the statement they build. It builds through
-// query.NewGroupedSelect when b holds a grouping, because query.NewSelect would
-// refuse a projection set that mixes an aggregate with a bare column before the
-// grouping that makes it legal could be attached.
+// order the calls were made, into the statement they build.
+//
+// It builds through query.NewJoinedSelect, which validates the joins, the
+// grouping and the projections together. Each of those has to be present at the
+// first validation: a projection or a grouping expression that reads a joined
+// table is refused while the join is missing, and a projection set that mixes an
+// aggregate with a bare column is refused while the grouping that makes it legal
+// is missing. Only the clauses validation judges against an already complete
+// statement, WHERE here and HAVING, ORDER BY, LIMIT and OFFSET in Build, are
+// attached afterwards.
 func (b SelectBuilder) buildFromJoinsWhere(projections ...query.Projection) (query.Select, error) {
-	statement, err := b.newSelect(projections...)
+	statement, err := query.NewJoinedSelect(b.from, b.joins, b.groupBy, projections...)
 	if err != nil {
 		return query.Select{}, err
-	}
-	for _, join := range b.joins {
-		statement, err = statement.WithJoin(join)
-		if err != nil {
-			return query.Select{}, err
-		}
 	}
 	if predicate, ok := combinePredicates(b.predicates); ok {
 		statement, err = statement.WithWhere(predicate)
@@ -296,15 +296,6 @@ func (b SelectBuilder) buildFromJoinsWhere(projections ...query.Projection) (que
 		}
 	}
 	return statement, nil
-}
-
-// newSelect starts a query.Select with projections, through query.NewGroupedSelect
-// when b holds a grouping and through query.NewSelect otherwise.
-func (b SelectBuilder) newSelect(projections ...query.Projection) (query.Select, error) {
-	if len(b.groupBy) > 0 {
-		return query.NewGroupedSelect(b.from, b.groupBy, projections...)
-	}
-	return query.NewSelect(b.from, projections...)
 }
 
 func (b SelectBuilder) orderColumn(name string, descending bool) SelectBuilder {
