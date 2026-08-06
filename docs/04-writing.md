@@ -381,7 +381,9 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 
 ## Statements the typed helpers do not cover
 
-`Client.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for a partial update or conflict handling. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `Client.QueryWrite` for one of those instead.
+`Client.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for a partial update, conflict handling, or a multi-row insert. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `Client.QueryWrite` for one of those instead.
+
+`NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. The database applies all of the rows or none of them, because the statement is one statement even without a caller-managed transaction. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
 ```go
 statement, err := query.NewUpdate(users.QueryTable(), query.Set(users.Email, query.Bind("ada@example.com")))
@@ -396,6 +398,12 @@ result, err := client.Exec(ctx, statement)
 ```
 
 Each `With…` method returns a new validated statement rather than changing the one it was called on, matching the immutable style of the select builders. `NewUpsert` accepts an explicit conflict target the same way; check `dialect.CapabilityConflictTarget` before relying on it, since MySQL lacks it and rejects a statement that sets one.
+
+A multi-row insert built with `NewInsertRows` carries `RETURNING` and conflict handling the same way a one-row insert does, with two caveats worth knowing before relying on either.
+
+Row order in a `RETURNING` result is not guaranteed to match the order of the `VALUES` list: SQLite states outright that `RETURNING` output order is undefined, and PostgreSQL never promises it either. Project a column that identifies the row and match on it; do not correlate the result with the input rows by position.
+
+A `NewUpsert` built over a multi-row insert whose `VALUES` list contains two rows with the same conflict key is a runtime error the database reports, not something `Validate` checks: PostgreSQL and SQLite both reject an `ON CONFLICT DO UPDATE` that would affect the same row twice.
 
 ### Reading a `RETURNING` clause
 

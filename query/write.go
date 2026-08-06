@@ -141,28 +141,65 @@ func (a Assignment) Value() Expression {
 	return a.value
 }
 
-// Insert is an immutable single-row INSERT statement.
+// Insert is an immutable INSERT statement. It inserts one or more rows, or the
+// database defaults for every column.
 type Insert struct {
 	into          Table
 	columns       []Column
-	values        []Expression
+	rows          [][]Expression
 	defaultValues bool
 	returning     []Projection
 }
 
 func (Insert) writeStatement() {}
 
-// NewInsert creates a validated INSERT statement.
+// NewInsert creates a validated INSERT statement for one row. It is the one-row
+// form of NewInsertRows.
 func NewInsert(into Table, columns []Column, values []Expression) (Insert, error) {
+	return NewInsertRows(into, columns, [][]Expression{values})
+}
+
+// NewInsertRows creates a validated INSERT statement for one or more rows.
+// The rows are rectangular: every row supplies exactly one expression per
+// column, in the order of columns, and each expression renders as its own
+// placeholder. Validation reports an error for an empty rows slice, because
+// VALUES with no row is not valid SQL in any supported dialect.
+//
+// The rendered statement is one statement, so the database applies every row or
+// none of them even without a caller-managed transaction. Bound parameters are
+// capped by the database: see the package documentation on parameter limits.
+func NewInsertRows(into Table, columns []Column, rows [][]Expression) (Insert, error) {
 	statement := Insert{
 		into:    into,
 		columns: append([]Column(nil), columns...),
-		values:  append([]Expression(nil), values...),
+		rows:    cloneRows(rows),
 	}
 	if err := statement.Validate(); err != nil {
 		return Insert{}, err
 	}
 	return statement, nil
+}
+
+// WithRows returns a copy of s with rows appended to the rows it already
+// inserts. Each row must supply one expression per column of s, and a
+// default-values insert accepts no rows at all.
+func (s Insert) WithRows(rows ...[]Expression) (Insert, error) {
+	copy := s.clone()
+	copy.rows = append(copy.rows, cloneRows(rows)...)
+	if err := copy.Validate(); err != nil {
+		return Insert{}, err
+	}
+	return copy, nil
+}
+
+// cloneRows deep-copies rows so a caller's later append to the outer slice or
+// to one of its inner row slices cannot reach inside a validated statement.
+func cloneRows(rows [][]Expression) [][]Expression {
+	copy := make([][]Expression, len(rows))
+	for i, row := range rows {
+		copy[i] = append([]Expression(nil), row...)
+	}
+	return copy
 }
 
 // NewDefaultInsert creates a validated INSERT statement that uses the database
@@ -195,9 +232,10 @@ func (s Insert) Columns() []Column {
 	return append([]Column(nil), s.columns...)
 }
 
-// Values returns a copy of the inserted expressions.
-func (s Insert) Values() []Expression {
-	return append([]Expression(nil), s.values...)
+// Rows returns a copy of the inserted rows, one slice of expressions per row, in
+// insertion order. It is empty for a default-values insert.
+func (s Insert) Rows() [][]Expression {
+	return cloneRows(s.rows)
 }
 
 // UsesDefaultValues reports whether s uses the database defaults for every
@@ -221,16 +259,16 @@ func (s Insert) Validate() error {
 		if len(s.columns) > 0 {
 			return validationError("columns", "must be empty for a default-values insert")
 		}
-		if len(s.values) > 0 {
-			return validationError("values", "must be empty for a default-values insert")
+		if len(s.rows) > 0 {
+			return validationError("rows", "must be empty for a default-values insert")
 		}
 		return validateProjections(s.returning, sources, "returning")
 	}
 	if len(s.columns) == 0 {
 		return validationError("columns", "must not be empty")
 	}
-	if len(s.columns) != len(s.values) {
-		return validationError("values", "has %d values for %d columns", len(s.values), len(s.columns))
+	if len(s.rows) == 0 {
+		return validationError("rows", "must not be empty")
 	}
 	seen := make(map[string]struct{}, len(s.columns))
 	for i, column := range s.columns {
@@ -242,8 +280,15 @@ func (s Insert) Validate() error {
 			return validationError(path, "duplicates column %q", column.Name())
 		}
 		seen[column.Name()] = struct{}{}
-		if err := validateClauseExpression(s.values[i], sources, "an INSERT value", fmt.Sprintf("values[%d]", i)); err != nil {
-			return err
+	}
+	for i, row := range s.rows {
+		if len(row) != len(s.columns) {
+			return validationError(fmt.Sprintf("rows[%d]", i), "has %d values for %d columns", len(row), len(s.columns))
+		}
+		for j, value := range row {
+			if err := validateClauseExpression(value, sources, "an INSERT value", fmt.Sprintf("rows[%d].values[%d]", i, j)); err != nil {
+				return err
+			}
 		}
 	}
 	return validateProjections(s.returning, sources, "returning")
@@ -252,7 +297,7 @@ func (s Insert) Validate() error {
 func (s Insert) clone() Insert {
 	copy := s
 	copy.columns = append([]Column(nil), s.columns...)
-	copy.values = append([]Expression(nil), s.values...)
+	copy.rows = cloneRows(s.rows)
 	copy.returning = append([]Projection(nil), s.returning...)
 	return copy
 }

@@ -92,16 +92,22 @@ func (r *renderer) writeInsertBase(statement query.Insert) error {
 		}
 		r.builder.WriteString(name)
 	}
-	r.builder.WriteString(") VALUES (")
-	for i, value := range statement.Values() {
+	r.builder.WriteString(") VALUES ")
+	for i, values := range statement.Rows() {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
-		if err := r.writeExpression(value); err != nil {
-			return err
+		r.builder.WriteByte('(')
+		for j, value := range values {
+			if j > 0 {
+				r.builder.WriteString(", ")
+			}
+			if err := r.writeExpression(value); err != nil {
+				return err
+			}
 		}
+		r.builder.WriteByte(')')
 	}
-	r.builder.WriteByte(')')
 	return nil
 }
 

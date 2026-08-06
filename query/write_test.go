@@ -83,7 +83,7 @@ func TestWriteStatementsValidate(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, defaultInsert.UsesDefaultValues())
 	require.Empty(t, defaultInsert.Columns())
-	require.Empty(t, defaultInsert.Values())
+	require.Empty(t, defaultInsert.Rows())
 	require.NoError(t, defaultInsert.Validate())
 
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
@@ -120,11 +120,28 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	email, err := users.Column("email")
 	require.NoError(t, err)
 
+	// NewInsert with nil values becomes one row of length zero against a
+	// non-empty column list, and must keep failing.
 	_, err = query.NewInsert(users, []query.Column{id}, nil)
 	require.Error(t, err)
 	_, err = query.NewInsert(users, []query.Column{id, id}, []query.Expression{query.Bind(1), query.Bind(2)})
 	require.Error(t, err)
 	_, err = query.NewUpdate(users)
+	require.Error(t, err)
+
+	_, err = query.NewInsertRows(users, []query.Column{id, email}, nil)
+	require.Error(t, err)
+	_, err = query.NewInsertRows(users, []query.Column{id, email}, [][]query.Expression{})
+	require.Error(t, err)
+	_, err = query.NewInsertRows(users, []query.Column{id, email}, [][]query.Expression{
+		{query.Bind(1), query.Bind("ada@example.com")},
+		{query.Bind(2)},
+	})
+	require.Error(t, err)
+
+	defaultInsert, err := query.NewDefaultInsert(users)
+	require.NoError(t, err)
+	_, err = defaultInsert.WithRows([]query.Expression{query.Bind(1), query.Bind("ada@example.com")})
 	require.Error(t, err)
 
 	aliased, err := users.As("u")
@@ -133,6 +150,74 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	require.Error(t, err)
 	_, err = query.NewUpdate(users, query.Set(email, query.And(id)))
 	require.Error(t, err)
+}
+
+func TestInsertHoldsMultipleRows(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	rows := [][]query.Expression{
+		{query.Bind(1), query.Bind("ada@example.com")},
+		{query.Bind(2), query.Bind("grace@example.com")},
+		{query.Bind(3), query.Bind("edsger@example.com")},
+	}
+	insert, err := query.NewInsertRows(users, []query.Column{id, email}, rows)
+	require.NoError(t, err)
+	require.Equal(t, rows, insert.Rows())
+
+	// Rows returns an independent copy: appending to the returned outer slice
+	// and mutating one of its inner slices must not reach the statement.
+	returned := insert.Rows()
+	returned = append(returned, []query.Expression{query.Bind(4), query.Bind("grete@example.com")})
+	returned[0][0] = query.Bind(999)
+	require.Equal(t, rows, insert.Rows())
+}
+
+func TestInsertAppendsRowsImmutably(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	first := [][]query.Expression{{query.Bind(1), query.Bind("ada@example.com")}}
+	insert, err := query.NewInsertRows(users, []query.Column{id, email}, first)
+	require.NoError(t, err)
+
+	appended, err := insert.WithRows([]query.Expression{query.Bind(2), query.Bind("grace@example.com")})
+	require.NoError(t, err)
+
+	require.Len(t, insert.Rows(), 1)
+	require.Len(t, appended.Rows(), 2)
+}
+
+func TestInsertValidatesEveryRowExpression(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderID, err := orders.Column("id")
+	require.NoError(t, err)
+
+	_, err = query.NewInsertRows(users, []query.Column{id, email}, [][]query.Expression{
+		{query.Bind(1), query.Bind("ada@example.com")},
+		{query.Bind(2), query.Bind("grace@example.com")},
+		{orderID, query.Bind("edsger@example.com")},
+	})
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "references table")
+	require.ErrorContains(t, err, "outside the statement")
+	require.ErrorContains(t, err, "rows[2].values[0]")
 }
 
 // TestWriteStatementsRejectAggregates covers the placement rule for write
