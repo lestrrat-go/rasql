@@ -287,6 +287,184 @@ func aggregateSelectStatement(t *testing.T) query.Select {
 	return statement
 }
 
+// TestSelectRendersDistinctStatement proves SELECT DISTINCT renders right
+// after SELECT, ahead of the projections, and composes with a join, a WHERE
+// clause, ordering, and paging without changing the bound arguments.
+func TestSelectRendersDistinctStatement(t *testing.T) {
+	statement := distinctSelectStatement(t)
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     `SELECT DISTINCT "u"."id" AS "user_id" FROM "users" AS "u" INNER JOIN "orders" AS "o" ON ("u"."id" = "o"."user_id") WHERE ("o"."amount" > $1) ORDER BY "u"."id" LIMIT $2 OFFSET $3`,
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "SELECT DISTINCT `u`.`id` AS `user_id` FROM `users` AS `u` INNER JOIN `orders` AS `o` ON (`u`.`id` = `o`.`user_id`) WHERE (`o`.`amount` > ?) ORDER BY `u`.`id` LIMIT ? OFFSET ?",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     `SELECT DISTINCT "u"."id" AS "user_id" FROM "users" AS "u" INNER JOIN "orders" AS "o" ON ("u"."id" = "o"."user_id") WHERE ("o"."amount" > ?) ORDER BY "u"."id" LIMIT ? OFFSET ?`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Select(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{100, 20, 10}, rendered.Args())
+		})
+	}
+}
+
+func distinctSelectStatement(t *testing.T) query.Select {
+	t.Helper()
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	users, err = users.As("u")
+	require.NoError(t, err)
+	orders, err := query.NewTable(schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "amount", Type: schema.TypeFloat},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	orders, err = orders.As("o")
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+	amount, err := orders.Column("amount")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users, query.Project(userID).As("user_id"))
+	require.NoError(t, err)
+	statement, err = statement.WithJoin(query.InnerJoin(orders, query.Equal(userID, orderUserID)))
+	require.NoError(t, err)
+	statement, err = statement.WithDistinct()
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.GreaterThan(amount, query.Bind(100)))
+	require.NoError(t, err)
+	statement, err = statement.WithOrder(query.Asc(userID))
+	require.NoError(t, err)
+	statement, err = statement.WithLimit(20)
+	require.NoError(t, err)
+	statement, err = statement.WithOffset(10)
+	require.NoError(t, err)
+	return statement
+}
+
+// TestSelectRendersDistinctFunctionArgument proves Function.WithDistinct
+// renders as COUNT(DISTINCT x), the modifier COUNT(DISTINCT x) needs now that
+// BuildCount refuses a distinct SelectBuilder.
+func TestSelectRendersDistinctFunctionArgument(t *testing.T) {
+	orders, err := query.NewTable(schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(orders, query.Project(query.Count(orderUserID).WithDistinct()).As("distinct_users"))
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     `SELECT COUNT(DISTINCT "orders"."user_id") AS "distinct_users" FROM "orders"`,
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "SELECT COUNT(DISTINCT `orders`.`user_id`) AS `distinct_users` FROM `orders`",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     `SELECT COUNT(DISTINCT "orders"."user_id") AS "distinct_users" FROM "orders"`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Select(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Empty(t, rendered.Args())
+		})
+	}
+}
+
+// TestSelectRendersDistinctSubquery proves a distinct subquery renders through
+// the same writeSelect path as a top-level statement, in the shape of
+// TestSelectRendersSubqueriesForBuiltInDialects, and that placeholder
+// numbering carries through it unaffected, since DISTINCT binds no argument.
+func TestSelectRendersDistinctSubquery(t *testing.T) {
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "status", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	orders, err := query.NewTable(schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	status, err := users.Column("status")
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	subquery, err := query.NewSelect(orders, query.Project(orderUserID))
+	require.NoError(t, err)
+	subquery, err = subquery.WithDistinct()
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.And(
+		query.Equal(status, query.Bind("active")),
+		query.InSelect(userID, subquery),
+	))
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(t,
+		`SELECT "users"."id" FROM "users" WHERE (("users"."status" = $1) AND ("users"."id" IN (SELECT DISTINCT "orders"."user_id" FROM "orders")))`,
+		rendered.SQL())
+	require.Equal(t, []any{"active"}, rendered.Args())
+}
+
 // TestSelectRendersGroupedStatement proves GROUP BY and HAVING render in the
 // clause order SQL requires, between WHERE and ORDER BY, identically across all
 // three dialects except for identifier quoting and placeholder style.

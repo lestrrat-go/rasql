@@ -21,6 +21,7 @@ type SelectBuilder struct {
 	hasLimit         bool
 	offset           int
 	hasOffset        bool
+	distinct         bool
 	err              error
 }
 
@@ -182,6 +183,16 @@ func (b SelectBuilder) OrderDesc(columnName string) SelectBuilder {
 	return b.orderColumn(columnName, true)
 }
 
+// Distinct de-duplicates the result rows.
+func (b SelectBuilder) Distinct() SelectBuilder {
+	b = b.clone()
+	if b.err != nil {
+		return b
+	}
+	b.distinct = true
+	return b
+}
+
 // Limit sets the maximum number of result rows.
 func (b SelectBuilder) Limit(limit int) SelectBuilder {
 	b = b.clone()
@@ -212,6 +223,12 @@ func (b SelectBuilder) Build() (Statement, error) {
 	statement, err := b.buildFromJoinsWhere(b.projections...)
 	if err != nil {
 		return Statement{}, err
+	}
+	if b.distinct {
+		statement, err = statement.WithDistinct()
+		if err != nil {
+			return Statement{}, err
+		}
 	}
 	if predicate, ok := combinePredicates(b.havingPredicates); ok {
 		statement, err = statement.WithHaving(predicate)
@@ -246,8 +263,14 @@ func (b SelectBuilder) Build() (Statement, error) {
 // an error when b sets a limit or an offset, because a count of a paged
 // statement is not the count the caller built the statement to ask for; when b
 // groups, because a grouped count returns one row per group rather than the
-// single row Count expects; and when b sets a HAVING clause, because BuildCount
-// discards the projections that clause was written against.
+// single row Count expects; when b sets a HAVING clause, because BuildCount
+// discards the projections that clause was written against; and when b is
+// distinct, because BuildCount replaces the projections with COUNT(*), which
+// would turn SELECT DISTINCT a, b into SELECT DISTINCT COUNT(*) — always one
+// row, never the count of distinct rows. There is no distinct-row count to
+// offer in its place: query.Count(column).WithDistinct() renders
+// COUNT(DISTINCT column), which counts the distinct non-NULL values of one
+// column rather than the rows SELECT DISTINCT returns.
 func (b SelectBuilder) BuildCount() (Statement, error) {
 	if b.err != nil {
 		return Statement{}, b.err
@@ -263,6 +286,9 @@ func (b SelectBuilder) BuildCount() (Statement, error) {
 	}
 	if len(b.havingPredicates) > 0 {
 		return Statement{}, fmt.Errorf("cannot count a statement with a HAVING clause")
+	}
+	if b.distinct {
+		return Statement{}, fmt.Errorf("cannot count a distinct statement")
 	}
 	statement, err := b.buildFromJoinsWhere(query.Project(query.CountAll()).As("count"))
 	if err != nil {

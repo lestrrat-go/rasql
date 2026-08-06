@@ -108,6 +108,7 @@ type Select struct {
 	hasLimit    bool
 	offset      int
 	hasOffset   bool
+	distinct    bool
 }
 
 // NewSelect creates a validated SELECT statement.
@@ -177,6 +178,25 @@ func (s Select) WithWhere(expression Expression) (Select, error) {
 func (s Select) WithGroupBy(expressions ...Expression) (Select, error) {
 	copy := s.clone()
 	copy.groupBy = append(copy.groupBy, expressions...)
+	if err := copy.Validate(); err != nil {
+		return Select{}, err
+	}
+	return copy, nil
+}
+
+// WithDistinct returns a copy of s that de-duplicates its result rows. It
+// takes no argument because no With… method in this package unsets what it
+// set, so a no-argument setter matches WithLimit and WithOffset.
+//
+// It places no rule of its own on ORDER BY. SQLite answers an ORDER BY term
+// that is not among the projections of a distinct statement from an arbitrary
+// surviving row, while PostgreSQL refuses the same statement with SQLSTATE
+// 42P10 and MySQL with error 3065 ER_FIELD_IN_ORDER_NOT_SELECT. rasql renders
+// what the caller asks for and lets the database report that error rather
+// than refusing it here.
+func (s Select) WithDistinct() (Select, error) {
+	copy := s.clone()
+	copy.distinct = true
 	if err := copy.Validate(); err != nil {
 		return Select{}, err
 	}
@@ -256,6 +276,11 @@ func (s Select) Where() Expression {
 // GroupBy returns a copy of the grouping expressions.
 func (s Select) GroupBy() []Expression {
 	return append([]Expression(nil), s.groupBy...)
+}
+
+// Distinct reports whether the statement de-duplicates its result rows.
+func (s Select) Distinct() bool {
+	return s.distinct
 }
 
 // Having returns the grouped predicate, or nil when none is set.

@@ -344,6 +344,7 @@ type Function struct {
 	name      FunctionName
 	arguments []Expression
 	star      bool
+	distinct  bool
 }
 
 func (Function) expression() {}
@@ -397,4 +398,22 @@ func (f Function) Arguments() []Expression {
 // Star reports whether the call takes * instead of arguments.
 func (f Function) Star() bool {
 	return f.star
+}
+
+// WithDistinct returns a copy of f that evaluates its argument only once per
+// distinct value before the function combines them, rendering as e.g.
+// COUNT(DISTINCT x). It is a modifier on the call's argument, not a
+// separate function name, so it applies to any of the functions above; it
+// takes no argument for the same reason query.Select.WithDistinct does.
+// Statement validation rejects it combined with CountAll's star, since
+// COUNT(DISTINCT *) is not legal SQL; call Count with a column instead.
+func (f Function) WithDistinct() Function {
+	f.distinct = true
+	return f
+}
+
+// Distinct reports whether f evaluates its argument only once per distinct
+// value before combining them.
+func (f Function) Distinct() bool {
+	return f.distinct
 }
