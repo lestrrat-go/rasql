@@ -20,7 +20,7 @@ The tables in this section enumerate every operation the public API offers. The 
 | `SELECT` without decoding | `client.SelectFrom(table.QueryTable())` | `SelectBuilder`, yielding `row.Row` |
 | `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
 | `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, client, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
-| `INSERT` of several rows | `query.NewInsertRows(table, columns, rows)` then `client.Exec(ctx, statement)` | `sql.Result` |
+| `INSERT` of several rows | `query.NewInsertRows(table.QueryTable(), columns, rows)` then `client.Exec(ctx, statement)` | `sql.Result` |
 | `UPDATE` of one typed row by primary key | `rasql.Update(ctx, client, table, value)` | `sql.Result` |
 | `DELETE` by predicate | `rasql.DeleteFrom(client, table)` | `DeleteBuilder` |
 | `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |

@@ -165,9 +165,13 @@ func NewInsert(into Table, columns []Column, values []Expression) (Insert, error
 // placeholder. Validation reports an error for an empty rows slice, because
 // VALUES with no row is not valid SQL in any supported dialect.
 //
-// The rendered statement is one statement, so the database applies every row or
-// none of them even without a caller-managed transaction. Bound parameters are
-// capped by the database: see the package documentation on parameter limits.
+// The rows render as a single statement, but that on its own does not make the
+// insert atomic. Transaction scope, and whether a statement that fails partway
+// rolls back the rows it already wrote, remain the caller's and the database's
+// responsibility: a non-transactional MySQL table keeps the earlier rows.
+// Wrap the call in a transaction when every row has to land or none of them.
+// Bound parameters are capped by the database: see the package documentation on
+// parameter limits.
 func NewInsertRows(into Table, columns []Column, rows [][]Expression) (Insert, error) {
 	statement := Insert{
 		into:    into,
