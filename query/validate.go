@@ -85,8 +85,10 @@ type expressionUsage struct {
 	// aggregate reports that the expression calls at least one aggregate.
 	aggregate bool
 	// bareColumn reports that the expression reads a column outside every
-	// aggregate call, which no supported dialect can combine with an aggregate
-	// while GROUP BY is unsupported.
+	// aggregate call, which an ungrouped statement must not combine with an
+	// aggregate because no supported dialect answers that combination usefully.
+	// A statement with a GROUP BY may combine the two, so its callers ignore
+	// this.
 	bareColumn bool
 }
 
@@ -216,7 +218,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		return validateFunction(expression, ctx, path)
 	case Subquery:
 		if !ctx.allowsSubquery {
-			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, and ORDER BY clause of a SELECT statement", ctx.clause)
+			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement", ctx.clause)
 		}
 		if err := expression.statement.Validate(); err != nil {
 			return expressionUsage{}, validationError(path+".statement", "%s", err)

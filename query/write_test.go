@@ -358,7 +358,7 @@ func TestWriteStatementsRejectSubqueries(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			err := test.build()
 			requireQueryValidationError(t, err)
-			require.ErrorContains(t, err, "only valid in the projections, JOIN ON conditions, WHERE clause, and ORDER BY clause of a SELECT statement")
+			require.ErrorContains(t, err, "only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement")
 		})
 	}
 }

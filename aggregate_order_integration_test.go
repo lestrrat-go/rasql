@@ -198,11 +198,14 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		//
 		// So there is no portable "the servers refuse this" claim to assert,
 		// and this subtest asserts only the answer each server actually gives.
-		// rasql is deliberately stricter than both: query refuses a HAVING
-		// without a GROUP BY at validation time, which is why a rasql caller
-		// never reaches either server with this statement and why the SQL here
-		// is spelled out by hand. TestSelectRejectsInvalidHaving covers that
-		// rule.
+		// rasql is deliberately stricter than both for the statement run here:
+		// query refuses a HAVING on a statement that neither names a GROUP BY
+		// nor aggregates in every projection, which is exactly this statement,
+		// so a rasql caller never reaches either server with it and the SQL here
+		// is spelled out by hand. A HAVING over a projection set that does
+		// aggregate throughout is accepted without a GROUP BY, because that set
+		// is one group. TestSelectRejectsInvalidHaving covers the refusal and
+		// TestSelectAcceptsGroupedStatements covers the acceptance.
 		err := runStatement(t, database, test.nonAggregateHavingSQL(tableName))
 		if !test.serverRefusesNonAggregateHaving {
 			require.NoError(t, err)
