@@ -16,6 +16,8 @@ if err := rasql.Create(ctx, client, users); err != nil {
 
 Each statement runs on its own. To create several tables atomically, build the client from a `*sql.Tx` and commit once every `Create` has succeeded.
 
+A descriptor that names a [`Schema`](02-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.Create` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `Create` fails with the server's own error.
+
 Most applications manage schema changes with [`migrate`](07-migrations.md). `Create` remains useful for tests, examples, and one-shot setup.
 
 ## Insert a row

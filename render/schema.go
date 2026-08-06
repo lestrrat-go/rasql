@@ -43,7 +43,7 @@ func CreateIndexes(d dialect.Dialect, table schema.Table) ([]Statement, error) {
 }
 
 func (r *renderer) writeCreateTable(table schema.Table) error {
-	name, err := r.quoteIdentifier(table.Name)
+	name, err := r.quoteQualified(table.Schema, table.Name)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (r *renderer) writeCreateTable(table schema.Table) error {
 		definitions = append(definitions, definition)
 	}
 	for _, key := range table.ForeignKeys {
-		definition, err := r.foreignKeyDefinition(key)
+		definition, err := r.foreignKeyDefinition(table, key)
 		if err != nil {
 			return err
 		}
@@ -105,11 +105,7 @@ func (r *renderer) writeCreateTable(table schema.Table) error {
 }
 
 func (r *renderer) writeCreateIndex(table schema.Table, index schema.Index) error {
-	indexName, err := r.quoteIdentifier(index.Name)
-	if err != nil {
-		return err
-	}
-	tableName, err := r.quoteIdentifier(table.Name)
+	indexName, tableName, err := r.qualifiedIndexNames(table, index)
 	if err != nil {
 		return err
 	}
@@ -131,6 +127,54 @@ func (r *renderer) writeCreateIndex(table schema.Table, index schema.Index) erro
 	return nil
 }
 
+// qualifiedIndexNames returns the quoted index name and quoted table name for
+// a CREATE INDEX statement. An unqualified table.Schema always yields today's
+// unqualified pair, with no capability consulted. A qualified table.Schema
+// needs one of two capabilities, because which identifier carries the
+// qualifier is positional: dialect.CapabilityQualifiedIndexTarget qualifies
+// the indexed table and leaves the index name bare, and
+// dialect.CapabilityQualifiedIndexName qualifies the index name and leaves
+// the indexed table bare, which is SQLite's form, since it cannot qualify the
+// table in "ON table" at all. A dialect with neither capability is refused
+// rather than silently dropping the qualifier.
+func (r *renderer) qualifiedIndexNames(table schema.Table, index schema.Index) (string, string, error) {
+	if table.Schema == "" {
+		indexName, err := r.quoteIdentifier(index.Name)
+		if err != nil {
+			return "", "", err
+		}
+		tableName, err := r.quoteIdentifier(table.Name)
+		if err != nil {
+			return "", "", err
+		}
+		return indexName, tableName, nil
+	}
+	switch {
+	case r.dialect.Supports(dialect.CapabilityQualifiedIndexTarget):
+		indexName, err := r.quoteIdentifier(index.Name)
+		if err != nil {
+			return "", "", err
+		}
+		tableName, err := r.quoteQualified(table.Schema, table.Name)
+		if err != nil {
+			return "", "", err
+		}
+		return indexName, tableName, nil
+	case r.dialect.Supports(dialect.CapabilityQualifiedIndexName):
+		indexName, err := r.quoteQualified(table.Schema, index.Name)
+		if err != nil {
+			return "", "", err
+		}
+		tableName, err := r.quoteIdentifier(table.Name)
+		if err != nil {
+			return "", "", err
+		}
+		return indexName, tableName, nil
+	default:
+		return "", "", fmt.Errorf("dialect %s: cannot create an index on table %q in schema %q: this dialect lacks both dialect.CapabilityQualifiedIndexTarget and dialect.CapabilityQualifiedIndexName", r.dialect.Name(), table.Name, table.Schema)
+	}
+}
+
 func (r *renderer) columnDefinition(column schema.Column) (string, error) {
 	name, err := r.quoteIdentifier(column.Name)
 	if err != nil {
@@ -150,12 +194,35 @@ func (r *renderer) columnDefinition(column schema.Column) (string, error) {
 	return definition, nil
 }
 
-func (r *renderer) foreignKeyDefinition(key schema.ForeignKey) (string, error) {
+// qualifiedReferencedTable returns the quoted REFERENCES target for key,
+// owned by table. An empty key.ReferencedSchema renders exactly what an
+// unqualified reference always has, with no capability consulted.
+// dialect.CapabilityQualifiedReference renders the reference qualified, on
+// any dialect that has it. Without that capability, a same-schema reference
+// still renders unqualified, because dropping a same-schema qualifier changes
+// nothing about what the reference means; this is also the only form SQLite
+// can render, since it rejects a schema-qualified REFERENCES clause outright,
+// even for its own schema. A cross-schema reference on a dialect with neither
+// path is refused rather than silently rendered as same-schema or dropped.
+func (r *renderer) qualifiedReferencedTable(table schema.Table, key schema.ForeignKey) (string, error) {
+	if key.ReferencedSchema == "" {
+		return r.quoteIdentifier(key.ReferencedTable)
+	}
+	if r.dialect.Supports(dialect.CapabilityQualifiedReference) {
+		return r.quoteQualified(key.ReferencedSchema, key.ReferencedTable)
+	}
+	if key.ReferencedSchema == table.Schema {
+		return r.quoteIdentifier(key.ReferencedTable)
+	}
+	return "", fmt.Errorf("dialect %s: foreign key on table %q references table %q in schema %q: this dialect lacks dialect.CapabilityQualifiedReference and can only reference table %q's own schema %q", r.dialect.Name(), table.Name, key.ReferencedTable, key.ReferencedSchema, table.Name, table.Schema)
+}
+
+func (r *renderer) foreignKeyDefinition(table schema.Table, key schema.ForeignKey) (string, error) {
 	columns, err := r.quotedNames(key.Columns)
 	if err != nil {
 		return "", err
 	}
-	referencedTable, err := r.quoteIdentifier(key.ReferencedTable)
+	referencedTable, err := r.qualifiedReferencedTable(table, key)
 	if err != nil {
 		return "", err
 	}

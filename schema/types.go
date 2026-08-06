@@ -1,4 +1,13 @@
 // Package schema defines dialect-neutral database schema descriptors.
+//
+// Every exported descriptor struct in this package is built with a keyed
+// composite literal, and every literal of one in this repository is keyed.
+// These structs gain fields as the descriptor model grows, and a new field is
+// placed next to the fields it belongs with rather than appended at the end:
+// Table.Schema and ForeignKey.ReferencedSchema were each inserted ahead of
+// existing fields. An unkeyed composite literal matches fields by position and
+// must list every one of them, so it is not a supported way to build a
+// descriptor.
 package schema
 
 import "fmt"

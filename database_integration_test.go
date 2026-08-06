@@ -176,6 +176,176 @@ func integrationTable(name string) schema.Table {
 	}
 }
 
+// TestQualifiedDDLIntegration proves the schema-qualified DDL path against
+// both live servers: PostgreSQL and MySQL differ in what a "schema" is, so
+// each subtest creates its own second namespace the way an application would
+// -- a native CREATE SCHEMA on PostgreSQL, a second CREATE DATABASE on MySQL
+// -- rather than relying on anything rasql itself creates, since creating a
+// namespace stays out of scope for rasql.Create. SQLite has no server and no
+// DDL statement for a namespace at all (its namespace comes from ATTACH), so
+// its coverage lives in render/schema_test.go's TestSQLiteExecutesQualifiedDDL
+// and sqlite_typed_roundtrip_test.go's TestSQLiteQualifiedTableRoundTrip
+// instead of here.
+func TestQualifiedDDLIntegration(t *testing.T) {
+	t.Run("postgresql", testQualifiedDDLPostgreSQL)
+	t.Run("mysql", testQualifiedDDLMySQL)
+}
+
+// testQualifiedDDLPostgreSQL creates a table in a fresh PostgreSQL schema
+// through rasql.Create, with a foreign key that reaches back into the
+// connection's default "public" schema via ForeignKey.ReferencedSchema. The
+// test never touches search_path: the whole point is that fully qualified
+// DDL does not depend on it, and the cross-schema foreign key is what proves
+// REFERENCES "public"."..." itself renders and executes.
+func testQualifiedDDLPostgreSQL(t *testing.T) {
+	database := dbtest.PostgreSQLDB(t)
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+
+	type customerRow struct {
+		ID   int64  `rasql:"id"`
+		Name string `rasql:"name"`
+	}
+	customersName := dbtest.UniqueName(t, "rasql_qualified_customers")
+	customers, err := rasql.NewTable[customerRow](schema.Table{
+		Name: customersName,
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "name", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	// customersName lives in the connection's default schema, "public",
+	// which rasql.Create never states explicitly: an unqualified Schema
+	// resolves through the connection's own default, the same as before
+	// this change.
+	require.NoError(t, rasql.Create(t.Context(), client, customers))
+	defer func() {
+		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+customersName)
+		require.NoError(t, err)
+	}()
+
+	schemaName := dbtest.UniqueName(t, "rasql_qualified_schema")
+	_, err = database.ExecContext(t.Context(), "CREATE SCHEMA "+schemaName)
+	require.NoError(t, err)
+	defer func() {
+		_, err := database.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE")
+		require.NoError(t, err)
+	}()
+
+	type orderRow struct {
+		ID         int64 `rasql:"id"`
+		CustomerID int64 `rasql:"customer_id"`
+	}
+	ordersName := dbtest.UniqueName(t, "rasql_qualified_orders")
+	orders, err := rasql.NewTable[orderRow](schema.Table{
+		Schema: schemaName,
+		Name:   ordersName,
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "customer_id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Name:              ordersName + "_customer_fkey",
+			Columns:           []string{"customer_id"},
+			ReferencedSchema:  "public",
+			ReferencedTable:   customersName,
+			ReferencedColumns: []string{"id"},
+		}},
+		Indexes: []schema.Index{{
+			Name:    ordersName + "_customer_idx",
+			Columns: []string{"customer_id"},
+		}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, orders))
+
+	_, err = rasql.Insert(t.Context(), client, customers, customerRow{ID: 1, Name: "ada"})
+	require.NoError(t, err)
+	_, err = rasql.Insert(t.Context(), client, orders, orderRow{ID: 1, CustomerID: 1})
+	require.NoError(t, err)
+
+	ordersID, err := orders.Column("id")
+	require.NoError(t, err)
+	order, err := rasql.SelectFrom(client, orders).WhereEqual(ordersID, int64(1)).One(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, orderRow{ID: 1, CustomerID: 1}, order)
+}
+
+// testQualifiedDDLMySQL creates a table in a second MySQL database through
+// rasql.Create. A "schema" is a second database on MySQL, so this test
+// creates one directly: dbtest.MySQLDB already grants the CREATE/DROP
+// privilege CONTRIBUTING.md requires of a live MySQL test DSN, and a
+// per-run-unique name keeps this inside the containment rule that a live
+// test only touches objects it created.
+func testQualifiedDDLMySQL(t *testing.T) {
+	database := dbtest.MySQLDB(t)
+	client, err := rasql.New(database, dialect.MySQL())
+	require.NoError(t, err)
+
+	schemaName := dbtest.UniqueName(t, "rasql_qualified_schema")
+	_, err = database.ExecContext(t.Context(), "CREATE DATABASE "+schemaName)
+	require.NoError(t, err)
+	defer func() {
+		_, err := database.ExecContext(t.Context(), "DROP DATABASE IF EXISTS "+schemaName)
+		require.NoError(t, err)
+	}()
+
+	type eventRow struct {
+		ID      int64  `rasql:"id"`
+		ActorID int64  `rasql:"actor_id"`
+		Action  string `rasql:"action"`
+	}
+	eventsName := dbtest.UniqueName(t, "rasql_qualified_events")
+	events, err := rasql.NewTable[eventRow](schema.Table{
+		Schema: schemaName,
+		Name:   eventsName,
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "actor_id", Type: schema.TypeInteger},
+			{Name: "action", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+		// The index names actor_id, not the action column beside it,
+		// because MySQL maps schema.TypeText to TEXT and refuses an index
+		// on a BLOB/TEXT column unless the index states a key length --
+		// which schema.Index has no field for. actor_id is a fixed-width
+		// BIGINT, so it indexes on every dialect and the qualified
+		// CREATE INDEX this test exists to exercise is the only thing
+		// under test here.
+		Indexes: []schema.Index{{
+			Name:    eventsName + "_actor_idx",
+			Columns: []string{"actor_id"},
+		}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, events))
+
+	// Both objects must live in schemaName rather than in the connection's
+	// own default database, which is what the qualified DDL is for. The
+	// index is named explicitly because its CREATE INDEX qualifies the
+	// table it targets rather than the index name, so nothing else here
+	// would notice it landing next to the wrong table.
+	var indexSchema, indexTable string
+	require.NoError(t, database.QueryRowContext(t.Context(),
+		"SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND INDEX_NAME = ?",
+		schemaName, eventsName+"_actor_idx",
+	).Scan(&indexSchema, &indexTable))
+	require.Equal(t, schemaName, indexSchema)
+	require.Equal(t, eventsName, indexTable)
+
+	_, err = rasql.Insert(t.Context(), client, events, eventRow{ID: 1, ActorID: 7, Action: "created"})
+	require.NoError(t, err)
+
+	eventID, err := events.Column("id")
+	require.NoError(t, err)
+	event, err := rasql.SelectFrom(client, events).WhereEqual(eventID, int64(1)).One(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, eventRow{ID: 1, ActorID: 7, Action: "created"}, event)
+}
+
 // TestIntegrationTableUsesItsNameArgument pins that integrationTable is
 // parameterized by name rather than carrying a fixed literal: this needs no
 // live server, since it is the same schema.Table construction

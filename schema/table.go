@@ -107,8 +107,16 @@ type Index struct {
 
 // ForeignKey describes a foreign-key constraint.
 type ForeignKey struct {
-	Name              string
-	Columns           []string
+	Name    string
+	Columns []string
+
+	// ReferencedSchema names the schema holding ReferencedTable. An empty
+	// ReferencedSchema leaves the reference unqualified, which each server
+	// then resolves by its own rule: SQLite in the referencing table's own
+	// database, PostgreSQL through search_path. A dialect without
+	// dialect.CapabilityQualifiedReference rejects a ReferencedSchema that
+	// names any schema other than the referencing table's own.
+	ReferencedSchema  string
 	ReferencedTable   string
 	ReferencedColumns []string
 	OnDelete          ReferenceAction
@@ -125,16 +133,19 @@ type Table struct {
 	// resolves through the connection's own default and is what every
 	// descriptor written before this field existed does.
 	//
-	// Qualification currently reaches DML and column references only. A
-	// SELECT, INSERT, UPDATE or DELETE built from this descriptor renders
-	// "audit"."events" as its target, and a column reached through the
-	// unaliased table renders "audit"."events"."id". Nothing else reads the
-	// field: render.CreateTable, render.CreateIndexes and rasql.Create render
-	// CREATE TABLE "events" on every dialect, so DDL lands in whatever
-	// namespace the connection resolves to; inspect never reports a Schema,
-	// and rasqlgen never emits one. Qualified DDL, inspection and generation
-	// are not supported yet, so a qualified table is created and re-read
-	// through a reviewed native migration.
+	// Qualification reaches DML, column references and DDL. A SELECT,
+	// INSERT, UPDATE or DELETE built from this descriptor renders
+	// "audit"."events" as its target, a column reached through the unaliased
+	// table renders "audit"."events"."id", and render.CreateTable,
+	// render.CreateIndexes and rasql.Create render the table and its indexes
+	// into the named namespace on every dialect that can express it. rasql
+	// never creates, drops or connects to the namespace itself: an
+	// application that needs "audit" to exist creates it with a reviewed
+	// native migration, the same way every other piece of DDL this library
+	// does not synthesize gets created. inspect never reports a Schema, and
+	// rasqlgen never emits one, so a qualified table is re-read through a
+	// hand-written descriptor until qualified inspection and generation
+	// land.
 	Schema            string
 	Name              string
 	Columns           []Column
@@ -337,6 +348,11 @@ func validateForeignKeys(keys []ForeignKey, columns map[string]struct{}, constra
 		}
 		if err := validateColumnList(path+".columns", key.Columns, columns, true); err != nil {
 			return err
+		}
+		if key.ReferencedSchema != "" {
+			if err := ValidateIdentifier(key.ReferencedSchema); err != nil {
+				return validationError(path+".referenced_schema", "%s", err)
+			}
 		}
 		if err := ValidateIdentifier(key.ReferencedTable); err != nil {
 			return validationError(path+".referenced_table", "%s", err)

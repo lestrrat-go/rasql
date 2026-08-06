@@ -20,6 +20,15 @@ const (
 	// CapabilitySubqueryLimit reports whether a subquery on the right-hand side
 	// of IN may set a LIMIT or an OFFSET. MySQL rejects that combination.
 	CapabilitySubqueryLimit
+	// CapabilityQualifiedReference reports that a REFERENCES clause accepts a
+	// schema-qualified table name.
+	CapabilityQualifiedReference
+	// CapabilityQualifiedIndexTarget reports that CREATE INDEX qualifies the
+	// indexed table and leaves the index name bare.
+	CapabilityQualifiedIndexTarget
+	// CapabilityQualifiedIndexName reports that CREATE INDEX qualifies the
+	// index name and leaves the indexed table bare, which is SQLite's form.
+	CapabilityQualifiedIndexName
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -57,7 +66,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget,
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
@@ -81,7 +90,7 @@ func MySQL() Dialect {
 		quote:        '`',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertDuplicateKey,
-		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert,
+		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget,
 		decimalName:  "DECIMAL",
 		maxPrecision: 65,
 		maxScale:     30,
@@ -108,7 +117,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityQualifiedIndexName,
 		decimalName:  "TEXT",
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "INTEGER",
