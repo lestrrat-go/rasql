@@ -40,6 +40,7 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | --- | --- | --- | --- |
 | `Select(names…)` | Adds primary-table columns by name. | | ✓ |
 | `Project(projections…)` | Adds projections built with `query.Project`. | ✓ | ✓ |
+| `Distinct()` | De-duplicates result rows. | ✓ | ✓ |
 | `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. | ✓ | ✓ |
 | `Where(expression)` | Adds a predicate from a `query` expression. | ✓ | ✓ |
 | `WhereEqual(column, value)` | Adds `column = value` for a `query.Column`. | ✓ | |
@@ -57,7 +58,7 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `Query(ctx)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. | ✓ | ✓ |
 | `All(ctx)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
 | `One(ctx)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
-| `Count(ctx)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit` or `Offset` set. | ✓ | ✓ |
+| `Count(ctx)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. | ✓ | ✓ |
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
 `AND` in the order they were made, which is what a conditionally built filter
@@ -140,6 +141,8 @@ Every function above aggregates, so validation accepts one only where SQL does, 
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
 
+`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the constructors above; validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. This is the way to count distinct rows at all: the builder's own `Count` in [Count rows](#count-rows) rejects a distinct builder, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
+
 ### Subqueries
 
 `query.Subquery` is a `SELECT` statement used as an expression: `query.Scalar(statement)` uses it as a single value, and `query.InSelect`/`query.NotInSelect` use it as the right-hand side of a membership test. In every form, `statement` must project exactly one expression — validation reports the count when it does not — because `x > (SELECT a, b …)` is as invalid as `x IN (SELECT a, b …)`.
@@ -188,7 +191,7 @@ The builders cover the common statements. These constructors build the same stat
 | `query.NewDelete(from)` | `DELETE` |
 | `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |
 
-Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithGroupBy`, `WithHaving`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](04-writing.md#reading-a-returning-clause) covers. Each returns a new validated statement rather than changing the one it was called on.
+Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithGroupBy`, `WithHaving`, `WithOrder`, `WithLimit`, `WithOffset`, and `WithDistinct` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](04-writing.md#reading-a-returning-clause) covers. Each returns a new validated statement rather than changing the one it was called on.
 
 ## Select typed rows
 
@@ -750,6 +753,121 @@ source: [examples/rasql_group_by_example_test.go](https://github.com/lestrrat-go
 <!-- END INCLUDE -->
 
 The untyped builder groups by a primary-table column name with `GroupByColumns`, the counterpart to `Select`'s `names…` form, without importing the `query` package.
+
+## Select distinct rows
+
+`Distinct()` adds `DISTINCT` right after `SELECT`, so the statement returns one row per distinct combination of its projected values. It is meaningful mainly beside a narrowed projection: `rasql.SelectFrom[T]` already selects every column of the table, including its primary key, which makes every row unique before `DISTINCT` runs. Use `rasql.DecodeFrom[R]` with `Project`, or the untyped builder's `Select` with specific column names, to narrow the projection first.
+
+`Distinct` composes with everything else the builder offers — joins, `Where`, `GroupBy` and `Having`, `Order`, and `Limit`/`Offset` — with one rule left to the database rather than enforced in Go: an `ORDER BY` expression that is not among the distinct projections. SQLite accepts that shape and answers it from whichever row survived de-duplication, which is no question the caller asked; PostgreSQL refuses it with SQLSTATE `42P10`, and MySQL refuses it with error 3065 `ER_FIELD_IN_ORDER_NOT_SELECT`. rasql renders what the caller asks for and lets the database report that error, the way it already does for a WHERE clause that outgrows a dialect's parameter limit, rather than reimplementing the two servers' rule in Go.
+
+<!-- INCLUDE(examples/rasql_distinct_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_distinct() {
+	// This example lists the users who have placed at least one order,
+	// without repeating a user who placed more than one.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+
+	// A typed descriptor makes orders usable with rasql.Insert.
+	type orderRow struct {
+		ID     int `rasql:"id"`
+		UserID int `rasql:"user_id"`
+	}
+	// A local result type holds one row per distinct user id.
+	type orderingUser struct {
+		UserID int64 `rasql:"user_id"`
+	}
+	orders := rasql.MustTable[orderRow](schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	if err := rasql.Create(ctx, client, orders); err != nil {
+		fmt.Printf("failed to create orders table: %s\n", err)
+		return
+	}
+	for _, order := range []orderRow{
+		{ID: 1, UserID: 1},
+		{ID: 2, UserID: 2},
+		{ID: 3, UserID: 1},
+	} {
+		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
+			fmt.Printf("failed to insert order: %s\n", err)
+			return
+		}
+	}
+
+	// orders has no generated column field for user_id, so it is looked up by
+	// name. That lookup validates it against the descriptor as the query is
+	// assembled.
+	orderUserID, err := orders.Column("user_id")
+	if err != nil {
+		fmt.Printf("failed to find orders.user_id: %s\n", err)
+		return
+	}
+
+	// Distinct is meaningful here because Project narrows the result to
+	// user_id alone; SelectFrom would already select the orders primary key,
+	// which makes every row unique before DISTINCT runs.
+	rows, err := rasql.DecodeFrom[orderingUser](client, orders).
+		Project(query.Project(orderUserID).As("user_id")).
+		Distinct().
+		Order(query.Asc(orderUserID)).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query ordering users: %s\n", err)
+		return
+	}
+	for found, err := range rows {
+		if err != nil {
+			fmt.Printf("failed to query ordering users: %s\n", err)
+			return
+		}
+		fmt.Println(found.UserID)
+	}
+
+	// Output:
+	// 1
+	// 2
+}
+```
+source: [examples/rasql_distinct_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_distinct_example_test.go)
+<!-- END INCLUDE -->
+
+`Count` rejects a distinct builder, because it replaces the projections with `COUNT(*)`: `SELECT DISTINCT COUNT(*)` is always exactly one row, never the number of distinct rows. Count distinct rows with `query.Count(column).WithDistinct()` instead, which [Aggregates](#aggregates) covers, and decode the result through `rasql.DecodeFrom[R]`.
+
+`DISTINCT ON`, PostgreSQL's syntax for keeping one row per group by explicit ordering, is out of scope: it needs its own dialect capability, since PostgreSQL is the only supported database that has it.
 
 ## Alias a table for a self-join
 

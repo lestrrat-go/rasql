@@ -131,6 +131,44 @@ func TestSelectBuilderBuildsCountStatement(t *testing.T) {
 	}
 }
 
+func TestSelectBuilderBuildsDistinctStatement(t *testing.T) {
+	users := fluentUsers(t)
+
+	rendered, err := render.SelectFrom(dialect.PostgreSQL(), users).
+		Select("email").
+		Distinct().
+		OrderAsc("email").
+		Build()
+	require.NoError(t, err)
+	require.Equal(t, `SELECT DISTINCT "users"."email" FROM "users" ORDER BY "users"."email"`, rendered.SQL())
+	require.Empty(t, rendered.Args())
+}
+
+func TestSelectBuilderDistinctIsImmutable(t *testing.T) {
+	users := fluentUsers(t)
+
+	base := render.SelectFrom(dialect.PostgreSQL(), users).Select("email")
+	distinct := base.Distinct()
+
+	baseStatement, err := base.Build()
+	require.NoError(t, err)
+	require.NotContains(t, baseStatement.SQL(), "DISTINCT")
+	distinctStatement, err := distinct.Build()
+	require.NoError(t, err)
+	require.Contains(t, distinctStatement.SQL(), "SELECT DISTINCT ")
+}
+
+// TestSelectBuilderRejectsCountWithDistinct proves BuildCount refuses a
+// distinct builder rather than rendering SELECT DISTINCT COUNT(*), which
+// would always answer 1 instead of the number of distinct rows.
+func TestSelectBuilderRejectsCountWithDistinct(t *testing.T) {
+	users := fluentUsers(t)
+
+	_, err := render.SelectFrom(dialect.PostgreSQL(), users).Select("email").Distinct().BuildCount()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "cannot count a distinct statement")
+}
+
 func TestSelectBuilderBuildsGroupedStatement(t *testing.T) {
 	users := fluentUsers(t)
 	id, err := users.Column("id")

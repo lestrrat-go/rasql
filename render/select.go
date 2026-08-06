@@ -72,6 +72,9 @@ type renderer struct {
 
 func (r *renderer) writeSelect(statement query.Select) error {
 	r.builder.WriteString("SELECT ")
+	if statement.Distinct() {
+		r.builder.WriteString("DISTINCT ")
+	}
 	for i, projection := range statement.Projections() {
 		if i > 0 {
 			r.builder.WriteString(", ")
@@ -210,6 +213,9 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		if expression.Star() {
 			r.builder.WriteByte('*')
 		} else {
+			if expression.Distinct() {
+				r.builder.WriteString("DISTINCT ")
+			}
 			for i, argument := range expression.Arguments() {
 				if i > 0 {
 					r.builder.WriteString(", ")

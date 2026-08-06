@@ -103,6 +103,12 @@ func (b SelectBuilder) OrderDesc(columnName string) SelectBuilder {
 	return b
 }
 
+// Distinct de-duplicates the result rows.
+func (b SelectBuilder) Distinct() SelectBuilder {
+	b.builder = b.builder.Distinct()
+	return b
+}
+
 // Limit sets the maximum number of result rows.
 func (b SelectBuilder) Limit(limit int) SelectBuilder {
 	b.builder = b.builder.Limit(limit)

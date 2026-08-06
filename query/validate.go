@@ -275,6 +275,9 @@ func validateFunction(function Function, ctx expressionContext, path string) (ex
 		if len(function.arguments) > 0 {
 			return expressionUsage{}, validationError(path, "COUNT(*) takes no arguments")
 		}
+		if function.distinct {
+			return expressionUsage{}, validationError(path, "COUNT(DISTINCT *) is not valid SQL; call Count with a column instead of CountAll")
+		}
 		return expressionUsage{aggregate: true}, nil
 	}
 	if len(function.arguments) != 1 {

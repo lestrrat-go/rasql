@@ -54,6 +54,116 @@ func TestSelectBuildsImmutableStatement(t *testing.T) {
 	require.NoError(t, statement.Validate())
 }
 
+// TestSelectAcceptsDistinctStatements proves WithDistinct sets Distinct and
+// leaves the receiver untouched, the same immutability
+// TestSelectBuildsImmutableStatement pins for the other With… methods.
+func TestSelectAcceptsDistinctStatements(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	base, err := query.NewSelect(users, query.Project(email))
+	require.NoError(t, err)
+	require.False(t, base.Distinct())
+
+	distinct, err := base.WithDistinct()
+	require.NoError(t, err)
+	require.True(t, distinct.Distinct())
+	require.False(t, base.Distinct(), "WithDistinct must not mutate the receiver")
+}
+
+// TestSelectAcceptsDistinctWithGroupingAndPaging proves distinct composes with
+// every clause the design table in .tmp/design-p2-distinct.md lists as
+// unchecked: GROUP BY, HAVING, LIMIT, and OFFSET, in either call order with
+// WithDistinct. It also proves that an ORDER BY term outside the projections
+// of a distinct statement validates: rasql does not implement the refusal
+// PostgreSQL (42P10) and MySQL (3065) apply, and leaves it to the database.
+// TestSelectRendersDistinctStatement and distinct_order_integration_test.go
+// prove the rendering and the server-side behavior this decision relies on.
+func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(email))
+	require.NoError(t, err)
+	grouped, err = grouped.WithHaving(query.NotEqual(email, query.Bind("done")))
+	require.NoError(t, err)
+	grouped, err = grouped.WithDistinct()
+	require.NoError(t, err)
+	grouped, err = grouped.WithLimit(10)
+	require.NoError(t, err)
+	grouped, err = grouped.WithOffset(5)
+	require.NoError(t, err)
+	require.NoError(t, grouped.Validate())
+	require.True(t, grouped.Distinct())
+
+	// The reverse call order, WithDistinct before the other clauses, reaches
+	// the same accepted statement.
+	reversed, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(email))
+	require.NoError(t, err)
+	reversed, err = reversed.WithDistinct()
+	require.NoError(t, err)
+	reversed, err = reversed.WithHaving(query.NotEqual(email, query.Bind("done")))
+	require.NoError(t, err)
+	reversed, err = reversed.WithLimit(10)
+	require.NoError(t, err)
+	reversed, err = reversed.WithOffset(5)
+	require.NoError(t, err)
+	require.NoError(t, reversed.Validate())
+
+	// A distinct statement ordered by a column outside its projections
+	// validates in both call orders: rasql renders it and leaves the
+	// PostgreSQL/MySQL refusal to the server.
+	distinctFirst, err := query.NewSelect(users, query.Project(email))
+	require.NoError(t, err)
+	distinctFirst, err = distinctFirst.WithDistinct()
+	require.NoError(t, err)
+	distinctFirst, err = distinctFirst.WithOrder(query.Asc(userID))
+	require.NoError(t, err)
+	require.NoError(t, distinctFirst.Validate())
+
+	orderFirst, err := query.NewSelect(users, query.Project(email))
+	require.NoError(t, err)
+	orderFirst, err = orderFirst.WithOrder(query.Asc(userID))
+	require.NoError(t, err)
+	orderFirst, err = orderFirst.WithDistinct()
+	require.NoError(t, err)
+	require.NoError(t, orderFirst.Validate())
+}
+
+// TestFunctionAcceptsDistinctArgument proves WithDistinct marks a function
+// call as COUNT(DISTINCT x)-shaped without changing its name or arguments,
+// and that combining it with CountAll's star is refused, since
+// COUNT(DISTINCT *) is not legal SQL.
+func TestFunctionAcceptsDistinctArgument(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+
+	plain := query.Count(userID)
+	require.False(t, plain.Distinct())
+
+	distinct := plain.WithDistinct()
+	require.True(t, distinct.Distinct())
+	require.Equal(t, plain.Name(), distinct.Name())
+	require.Equal(t, plain.Arguments(), distinct.Arguments())
+	require.False(t, plain.Distinct(), "WithDistinct must not mutate the receiver")
+
+	statement, err := query.NewSelect(users, query.Project(distinct).As("distinct_count"))
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+
+	_, err = query.NewSelect(users, query.Project(query.CountAll().WithDistinct()))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "COUNT(DISTINCT *) is not valid")
+}
+
 func TestFunctionConstructorsCarryTheirCall(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
