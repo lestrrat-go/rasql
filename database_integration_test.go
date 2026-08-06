@@ -106,7 +106,9 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	// An InSelect predicate exercises IN (SELECT …) against a real server,
 	// which is what proves the MySQL rendering path this change adds actually
 	// runs: MySQL is the one dialect among the two here whose grammar this
-	// change had to fit without a capability gap.
+	// change had to fit without a capability gap. The row it reads back comes
+	// from the server, so it carries the padded amount for the same reason the
+	// two expectations above do -- expect firstStored, never first.
 	recordActive, err := records.Column("active")
 	require.NoError(t, err)
 	activeIDs, err := query.NewSelect(records.QueryTable(), query.Project(recordID))
@@ -118,7 +120,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 		OrderAsc(recordID).
 		All(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, []record{first}, viaSubquery)
+	require.Equal(t, []record{firstStored}, viaSubquery)
 
 	total, err := rasql.SelectFrom(client, records).Count(t.Context())
 	require.NoError(t, err)
