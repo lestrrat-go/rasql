@@ -2,17 +2,27 @@
 //
 // # Parameter limits
 //
-// Every [Bind] value renders as its own placeholder and costs one bound
-// parameter, so a statement's parameter count follows the bound values it
-// carries: a list of N bound values given to [In] or [NotIn] costs N, and
-// [NewInsertRows] over R rows of C columns costs R*C. The database caps that
-// count, at 65535 for PostgreSQL and MySQL and at 32766 for SQLite through
-// modernc.org/sqlite. This package neither counts parameters nor enforces the
-// cap, so a statement over it builds and renders without complaint and fails
-// when the database executes it. Keep a statement under the cap by splitting
-// the work into several statements, such as inserting a large row set in
-// chunks, or by replacing a large value list with [InSelect] or [NotInSelect],
-// which cost no parameter per candidate value.
+// A rendered statement's parameter count is the number of [Bind] values it
+// carries, plus one for a LIMIT and one for an OFFSET. Every [Bind] value
+// renders as its own placeholder and costs one parameter, while an expression
+// that binds nothing, such as a column reference, costs none. A LIMIT and an
+// OFFSET each bind a placeholder of their own, so [Select.WithLimit] and
+// [Select.WithOffset] add one parameter each even when the statement holds no
+// [Bind] at all.
+//
+// A list of N bound values given to [In] or [NotIn] therefore costs N.
+// [NewInsertRows] over R rows of C columns costs R*C only when every row value
+// is a single [Bind]. A row value may be any [Expression], and one that is not
+// a single [Bind] costs however many [Bind] values are nested inside it: a
+// column reference costs none, and Equal(Bind(x), Bind(y)) costs two.
+//
+// The database caps that count, at 65535 for PostgreSQL and MySQL and at 32766
+// for SQLite through modernc.org/sqlite. This package neither counts parameters
+// nor enforces the cap, so a statement over it builds and renders without
+// complaint and fails when the database executes it. Keep a statement under the
+// cap by splitting the work into several statements, such as inserting a large
+// row set in chunks, or by replacing a large value list with [InSelect] or
+// [NotInSelect], which cost no parameter per candidate value.
 package query
 
 import (
