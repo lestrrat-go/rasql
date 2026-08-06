@@ -297,7 +297,7 @@ func (s Select) Validate() error {
 			return validationError(path+".source", "%s", err)
 		}
 		if _, exists := sources[join.source.key()]; exists {
-			return validationError(path+".source", "duplicates table reference %q", join.source.Qualifier())
+			return validationError(path+".source", "duplicates table reference %q", join.source.QualifiedName())
 		}
 		sources[join.source.key()] = struct{}{}
 		if err := validateSelectClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {

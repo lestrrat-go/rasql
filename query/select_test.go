@@ -801,6 +801,78 @@ func TestMustNewTable(t *testing.T) {
 	})
 }
 
+// TestTableReportsItsSchema pins Schema, QualifierSchema and Qualifier for
+// an unqualified table, a qualified unaliased table and a qualified aliased
+// table: an alias replaces the whole qualified name, so QualifierSchema
+// returns "" once a table is aliased even though Schema still reports it.
+func TestTableReportsItsSchema(t *testing.T) {
+	unqualified := query.MustNewTable(usersTable())
+	require.Equal(t, "", unqualified.Schema())
+	require.Equal(t, "", unqualified.QualifierSchema())
+	require.Equal(t, "users", unqualified.Qualifier())
+
+	descriptor := usersTable()
+	descriptor.Schema = "audit"
+	qualified := query.MustNewTable(descriptor)
+	require.Equal(t, "audit", qualified.Schema())
+	require.Equal(t, "audit", qualified.QualifierSchema())
+	require.Equal(t, "users", qualified.Qualifier())
+	require.Equal(t, "audit.users", qualified.QualifiedName())
+
+	aliased, err := qualified.As("u")
+	require.NoError(t, err)
+	require.Equal(t, "audit", aliased.Schema())
+	require.Equal(t, "", aliased.QualifierSchema())
+	require.Equal(t, "u", aliased.Qualifier())
+	require.Equal(t, "u", aliased.QualifiedName())
+}
+
+// TestSelectJoinsSameNameTablesFromDifferentSchemas pins the fix to key():
+// two same-named tables in different schemas are distinct join sources, a
+// case Select.Validate rejected as a duplicate before the schema joined the
+// key.
+func TestSelectJoinsSameNameTablesFromDifferentSchemas(t *testing.T) {
+	tenantADescriptor := usersTable()
+	tenantADescriptor.Schema = "tenant_a"
+	tenantA, err := query.NewTable(tenantADescriptor)
+	require.NoError(t, err)
+
+	tenantBDescriptor := usersTable()
+	tenantBDescriptor.Schema = "tenant_b"
+	tenantB, err := query.NewTable(tenantBDescriptor)
+	require.NoError(t, err)
+
+	tenantAID, err := tenantA.Column("id")
+	require.NoError(t, err)
+	tenantBID, err := tenantB.Column("id")
+	require.NoError(t, err)
+
+	join := query.InnerJoin(tenantB, query.Equal(tenantAID, tenantBID))
+	_, err = query.NewJoinedSelect(tenantA, []query.Join{join}, nil, query.Project(tenantAID))
+	require.NoError(t, err)
+}
+
+// TestSelectNamesQualifiedTableInDuplicateSourceError pins the wording change
+// at query/select.go:300: joining a qualified table to itself still errors,
+// and the message names the qualified table rather than the bare name.
+func TestSelectNamesQualifiedTableInDuplicateSourceError(t *testing.T) {
+	descriptor := usersTable()
+	descriptor.Schema = "audit"
+	from, err := query.NewTable(descriptor)
+	require.NoError(t, err)
+	other, err := query.NewTable(descriptor)
+	require.NoError(t, err)
+
+	fromID, err := from.Column("id")
+	require.NoError(t, err)
+	otherID, err := other.Column("id")
+	require.NoError(t, err)
+
+	join := query.InnerJoin(other, query.Equal(fromID, otherID))
+	_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, query.Project(fromID))
+	require.ErrorContains(t, err, `duplicates table reference "audit.users"`)
+}
+
 func requireQueryValidationError(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)

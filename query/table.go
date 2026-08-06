@@ -86,6 +86,33 @@ func (t Table) Qualifier() string {
 	return t.definition.Name
 }
 
+// Schema returns the schema qualifying the table, or an empty string when the
+// table is unqualified.
+func (t Table) Schema() string {
+	return t.definition.Schema
+}
+
+// QualifierSchema returns the schema that qualifies Qualifier, or an empty
+// string when the table is aliased or unqualified. An alias replaces a
+// table's whole qualified name, so an aliased table's columns are never
+// schema-qualified.
+func (t Table) QualifierSchema() string {
+	if t.alias != "" {
+		return ""
+	}
+	return t.definition.Schema
+}
+
+// QualifiedName returns the table's name for an error message: the alias
+// when the table is aliased, "schema.name" when it is qualified, and "name"
+// otherwise. It is never a SQL identifier.
+func (t Table) QualifiedName() string {
+	if t.alias != "" {
+		return t.alias
+	}
+	return t.definition.QualifiedName()
+}
+
 // Definition returns a copy of the underlying schema descriptor.
 func (t Table) Definition() schema.Table {
 	return t.definition.Clone()
@@ -116,5 +143,5 @@ func (t Table) validate() error {
 }
 
 func (t Table) key() string {
-	return t.definition.Name + "\x00" + t.alias
+	return t.definition.Schema + "\x00" + t.definition.Name + "\x00" + t.alias
 }

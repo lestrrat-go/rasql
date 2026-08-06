@@ -388,6 +388,132 @@ func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
 	require.Equal(t, expected, actual)
 }
 
+// TestSQLiteQualifiedTableRoundTrip runs select, join, group, subquery,
+// multi-row insert, update and delete against a schema-qualified table over
+// a real SQLite database with a second database attached, pinning the
+// rendered text against a real parser rather than a golden string. Change 1
+// renders no DDL, so the qualified table is created through raw SQL against
+// the attached database, the same way a native migration would create a
+// PostgreSQL schema or a MySQL database in production.
+func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	_, err = database.ExecContext(t.Context(), `ATTACH DATABASE ':memory:' AS audit`)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE audit.events (id INTEGER NOT NULL, user_id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))`)
+	require.NoError(t, err)
+
+	client, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+
+	type eventRow struct {
+		ID     int64  `rasql:"id"`
+		UserID int64  `rasql:"user_id"`
+		Action string `rasql:"action"`
+	}
+	events, err := rasql.NewTable[eventRow](schema.Table{
+		Schema: "audit",
+		Name:   "events",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "action", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	queryEvents := events.QueryTable()
+	id, err := queryEvents.Column("id")
+	require.NoError(t, err)
+	userID, err := queryEvents.Column("user_id")
+	require.NoError(t, err)
+	action, err := queryEvents.Column("action")
+	require.NoError(t, err)
+
+	// Multi-row INSERT into the qualified table.
+	insertRows, err := query.NewInsertRows(queryEvents, []query.Column{id, userID, action}, [][]query.Expression{
+		{query.Bind(int64(1)), query.Bind(int64(10)), query.Bind("created")},
+		{query.Bind(int64(2)), query.Bind(int64(10)), query.Bind("updated")},
+		{query.Bind(int64(3)), query.Bind(int64(11)), query.Bind("created")},
+	})
+	require.NoError(t, err)
+	_, err = client.Exec(t.Context(), insertRows)
+	require.NoError(t, err)
+
+	// SELECT with a qualified predicate.
+	byUser, err := rasql.SelectFrom(client, events).
+		Where(query.Equal(userID, query.Bind(int64(10)))).
+		OrderAsc(id).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []eventRow{
+		{ID: 1, UserID: 10, Action: "created"},
+		{ID: 2, UserID: 10, Action: "updated"},
+	}, byUser)
+
+	// A grouped projection over the qualified table.
+	type userEventCount struct {
+		UserID int64 `rasql:"user_id"`
+		Total  int64 `rasql:"total"`
+	}
+	grouped, err := rasql.DecodeFrom[userEventCount](client, events).
+		Project(query.Project(userID), query.Project(query.CountAll()).As("total")).
+		GroupBy(userID).
+		OrderAsc(userID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []userEventCount{
+		{UserID: 10, Total: 2},
+		{UserID: 11, Total: 1},
+	}, grouped)
+
+	// A subquery naming the qualified table, both as the outer and inner
+	// statement.
+	prolific, err := query.NewSelect(queryEvents, query.Project(userID))
+	require.NoError(t, err)
+	prolific, err = prolific.WithGroupBy(userID)
+	require.NoError(t, err)
+	prolific, err = prolific.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
+	require.NoError(t, err)
+	viaSubquery, err := rasql.SelectFrom(client, events).
+		Where(query.InSelect(userID, prolific)).
+		OrderAsc(id).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []eventRow{
+		{ID: 1, UserID: 10, Action: "created"},
+		{ID: 2, UserID: 10, Action: "updated"},
+	}, viaSubquery)
+
+	// UPDATE against the qualified table, with a qualified predicate.
+	update, err := query.NewUpdate(queryEvents, query.Set(action, query.Bind("closed")))
+	require.NoError(t, err)
+	update, err = update.WithWhere(query.Equal(id, query.Bind(int64(1))))
+	require.NoError(t, err)
+	_, err = client.Exec(t.Context(), update)
+	require.NoError(t, err)
+
+	updated, err := rasql.SelectFrom(client, events).WhereEqual(id, int64(1)).One(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "closed", updated.Action)
+
+	// DELETE against the qualified table, with a qualified predicate.
+	_, err = rasql.DeleteFrom(client, events).WhereEqual(id, int64(3)).Exec(t.Context())
+	require.NoError(t, err)
+
+	remaining, err := rasql.SelectFrom(client, events).OrderAsc(id).All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []eventRow{
+		{ID: 1, UserID: 10, Action: "closed"},
+		{ID: 2, UserID: 10, Action: "updated"},
+	}, remaining)
+}
+
 // TestSQLiteReturningRoundTrip exercises Client.QueryWrite against a real
 // database: an INSERT reads back a database-assigned id and a defaulted
 // column through QueryWriteOne, then an UPDATE and a DELETE each read back

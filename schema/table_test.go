@@ -11,13 +11,16 @@ import (
 
 func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor := validTable()
+	descriptor.Schema = "audit"
 	table := descriptor.Clone()
 
 	descriptor.Columns[0].Name = "changed"
 	descriptor.PrimaryKey[0] = "changed"
 	descriptor.Indexes[0].Columns[0] = "changed"
 	descriptor.ForeignKeys[0].ReferencedColumns[0] = "changed"
+	descriptor.Schema = "changed"
 
+	require.Equal(t, "audit", table.Schema)
 	require.Equal(t, "id", table.Columns[0].Name)
 	require.Equal(t, "id", table.PrimaryKey[0])
 	require.Equal(t, "customer_id", table.Indexes[0].Columns[0])
@@ -392,6 +395,47 @@ func TestValidateIdentifier(t *testing.T) {
 	require.NoError(t, schema.ValidateIdentifier("customer_42"))
 	require.Error(t, schema.ValidateIdentifier("42_customer"))
 	require.Error(t, schema.ValidateIdentifier("customer-id"))
+	// A dotted name must stay rejected: schema qualification carries the
+	// namespace in a separate field rather than a dotted string, and this
+	// pins that a future change cannot weaken the rule to allow one.
+	require.ErrorContains(t, schema.ValidateIdentifier("audit.events"), "invalid character")
+}
+
+// TestTableValidatesSchemaQualifier pins the validation rule added for the
+// optional Schema field: an empty Schema is skipped, a valid identifier
+// passes, and an invalid one reports table.schema.
+func TestTableValidatesSchemaQualifier(t *testing.T) {
+	base := func(schemaName string) schema.Table {
+		table := validTable()
+		table.Schema = schemaName
+		return table
+	}
+
+	require.NoError(t, base("").Validate())
+	require.NoError(t, base("audit").Validate())
+
+	err := base("audit.events").Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "table.schema")
+
+	err = base("1bad").Validate()
+	require.Error(t, err)
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "table.schema")
+}
+
+// TestTableQualifiedName pins QualifiedName and Qualified for both an
+// unqualified and a qualified table.
+func TestTableQualifiedName(t *testing.T) {
+	unqualified := schema.Table{Name: "users"}
+	require.False(t, unqualified.Qualified())
+	require.Equal(t, "users", unqualified.QualifiedName())
+
+	qualified := schema.Table{Schema: "audit", Name: "events"}
+	require.True(t, qualified.Qualified())
+	require.Equal(t, "audit.events", qualified.QualifiedName())
 }
 
 func validTable() schema.Table {

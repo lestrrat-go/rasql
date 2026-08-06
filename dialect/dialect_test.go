@@ -57,6 +57,14 @@ func TestBuiltinsRejectInvalidInput(t *testing.T) {
 		_, err := test.QuoteIdentifier("not-valid")
 		require.Error(t, err)
 
+		// A dotted string must never be accepted as one identifier: this is
+		// the test that pins the injection guarantee behind schema
+		// qualification. It proves the only way a dot reaches rendered SQL
+		// is through two separately quoted segments, never through
+		// QuoteIdentifier splitting or otherwise interpreting one.
+		_, err = test.QuoteIdentifier("audit.events")
+		require.Error(t, err)
+
 		_, err = test.Placeholder(0)
 		require.Error(t, err)
 

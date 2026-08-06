@@ -768,6 +768,8 @@ rows, err := rasql.SelectFrom(client, employees).
 
 `employees.ID` still renders as `"employees"."id"`, while `manager.ID` renders as `"manager"."id"`. `As` fails when the alias is not a valid identifier.
 
+A table whose descriptor names a `Schema` (see [Qualify a table with a schema](02-schema.md#qualify-a-table-with-a-schema)) renders `"schema"."table"` in `FROM` and every write statement's target, and a column reached through it renders `"schema"."table"."column"`. An alias replaces a qualified table's whole name: once `events.As("e")` is taken, `e.ID` renders as `"e"."id"`, not `"audit"."e"."id"`, and this holds for every alias regardless of whether the aliased table was qualified. Two aliases from different schemas still collide under the same alias, exactly as two same-named unaliased tables from different schemas do not: the alias is what a column is qualified by, so giving two different tables the same alias in one statement is still an error.
+
 [Where conditions](#where-conditions) lists every comparison, logical connective, and null test the expression set offers.
 
 ## Decode a custom shape
