@@ -208,6 +208,76 @@ func TestWriteStatementsRejectAggregates(t *testing.T) {
 	}
 }
 
+// TestWriteStatementsRejectSubqueries covers the placement rule that keeps a
+// subquery out of every write clause: only a SELECT statement's own clauses set
+// allowsSubquery, so a write clause refuses one with the same message a write
+// clause uses for a misplaced aggregate.
+func TestWriteStatementsRejectSubqueries(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	insert, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
+	require.NoError(t, err)
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+
+	ids, err := query.NewSelect(users, query.Project(id))
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		build func() error
+	}{
+		"insert value": {
+			build: func() error {
+				_, err := query.NewInsert(users, []query.Column{id}, []query.Expression{query.Scalar(ids)})
+				return err
+			},
+		},
+		"insert returning": {
+			build: func() error {
+				_, err := insert.WithReturning(query.Project(query.Scalar(ids)))
+				return err
+			},
+		},
+		"update assignment": {
+			build: func() error {
+				_, err := query.NewUpdate(users, query.Set(id, query.Scalar(ids)))
+				return err
+			},
+		},
+		"update where": {
+			build: func() error {
+				_, err := update.WithWhere(query.InSelect(id, ids))
+				return err
+			},
+		},
+		"delete where": {
+			build: func() error {
+				_, err := deleteStatement.WithWhere(query.InSelect(id, ids))
+				return err
+			},
+		},
+		"upsert assignment": {
+			build: func() error {
+				_, err := query.NewUpsert(insert, []query.Column{id}, []query.Assignment{query.Set(email, query.Scalar(ids))})
+				return err
+			},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.build()
+			requireQueryValidationError(t, err)
+			require.ErrorContains(t, err, "only valid in the projections, JOIN ON conditions, WHERE clause, and ORDER BY clause of a SELECT statement")
+		})
+	}
+}
+
 func TestUpsertValidatesConflictAssignments(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)

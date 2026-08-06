@@ -17,6 +17,9 @@ const (
 	CapabilityDefaultValues
 	CapabilityEmptyInsert
 	CapabilityDefaultValuesUpsert
+	// CapabilitySubqueryLimit reports whether a subquery on the right-hand side
+	// of IN may set a LIMIT or an OFFSET. MySQL rejects that combination.
+	CapabilitySubqueryLimit
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -45,7 +48,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "BOOLEAN",
 			schema.TypeInteger: "BIGINT",
@@ -87,7 +90,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit,
 		types: map[schema.LogicalType]string{
 			schema.TypeBoolean: "INTEGER",
 			schema.TypeInteger: "INTEGER",

@@ -217,33 +217,54 @@ func (n NullTest) Not() bool {
 
 // Membership tests whether an expression matches one of a list of values.
 type Membership struct {
-	expr   Expression
-	values []Expression
-	not    bool
+	expr        Expression
+	values      []Expression
+	not         bool
+	subquery    Subquery
+	hasSubquery bool
 }
 
 func (Membership) expression() {}
 
 // In tests whether expression equals one of values.
 // It renders as expression IN (…). The value list takes expressions, so a column
-// or a computed operand is accepted as deliberately as a bound value; there is no
-// subquery expression in this package, so a SELECT on the right-hand side is not
-// available. Each Bind value renders as its own placeholder and costs one
-// argument, while a column renders as a quoted identifier and costs none.
-// Statement validation rejects an empty value list, because IN () is not valid
-// SQL in any supported dialect.
+// or a computed operand is accepted as deliberately as a bound value. Each Bind
+// value renders as its own placeholder and costs one argument, while a column
+// renders as a quoted identifier and costs none. Statement validation rejects an
+// empty value list, because IN () is not valid SQL in any supported dialect, and
+// rejects a Subquery placed among the values; use InSelect for
+// expression IN (SELECT …).
 func In(expression Expression, values ...Expression) Membership {
 	return Membership{expr: expression, values: append([]Expression(nil), values...)}
 }
 
 // NotIn tests whether expression differs from every one of values.
 // It renders as expression NOT IN (…) and follows the same rules as In,
-// including the rejection of an empty value list by statement validation. A NULL
-// among values never makes the test true: it is false when a non-NULL value
-// equals expression, and unknown otherwise. A WHERE clause keeps neither, so a
-// NOT IN over a list that may contain NULL matches no rows at all.
+// including the rejection of an empty value list and of a Subquery among the
+// values by statement validation; use NotInSelect for
+// expression NOT IN (SELECT …). A NULL among values never makes the test true:
+// it is false when a non-NULL value equals expression, and unknown otherwise. A
+// WHERE clause keeps neither, so a NOT IN over a list that may contain NULL
+// matches no rows at all.
 func NotIn(expression Expression, values ...Expression) Membership {
 	return Membership{expr: expression, values: append([]Expression(nil), values...), not: true}
+}
+
+// InSelect tests whether expression equals a value the statement returns.
+// It renders as expression IN (SELECT …). The statement must project exactly one
+// expression, which statement validation checks. Unlike In, it costs no argument
+// per candidate value, so a set of any size fits within the dialect's parameter
+// limit.
+func InSelect(expression Expression, statement Select) Membership {
+	return Membership{expr: expression, subquery: Scalar(statement), hasSubquery: true}
+}
+
+// NotInSelect tests whether expression differs from every value the statement
+// returns. It renders as expression NOT IN (SELECT …) and follows the same rules
+// as InSelect. A NULL among the statement's results never makes the test true,
+// so a NOT IN over a statement that may return NULL matches no rows at all.
+func NotInSelect(expression Expression, statement Select) Membership {
+	return Membership{expr: expression, subquery: Scalar(statement), hasSubquery: true, not: true}
 }
 
 // Expression returns the expression being tested.
@@ -251,7 +272,9 @@ func (m Membership) Expression() Expression {
 	return m.expr
 }
 
-// Values returns a copy of the tested values.
+// Values returns a copy of the tested values. It returns an empty slice for a
+// membership test built by InSelect or NotInSelect, whose candidates are the
+// statement Subquery returns instead.
 func (m Membership) Values() []Expression {
 	return append([]Expression(nil), m.values...)
 }
@@ -259,6 +282,40 @@ func (m Membership) Values() []Expression {
 // Not reports whether the test is NOT IN.
 func (m Membership) Not() bool {
 	return m.not
+}
+
+// Subquery returns the statement a membership test reads and reports whether the
+// test takes one. It reports false for a test built by In or NotIn, whose
+// candidates are the value list Values returns.
+func (m Membership) Subquery() (Subquery, bool) {
+	return m.subquery, m.hasSubquery
+}
+
+// Subquery is a SELECT statement used as an expression. It renders as a
+// parenthesized SELECT, and the arguments it binds join the enclosing
+// statement's argument list at the position the subquery occupies, so
+// placeholder numbering stays correct in every dialect.
+//
+// The statement is validated as part of the statement that encloses it, and it
+// reads no table of that statement: every column it names must belong to its own
+// FROM or joins. A subquery that reads an enclosing table is refused, because the
+// scope rule that makes such a correlation safe is not modelled yet.
+type Subquery struct {
+	statement Select
+}
+
+func (Subquery) expression() {}
+
+// Scalar uses statement as a single value. The statement must project exactly
+// one expression, which statement validation checks; that it returns at most one
+// row is the caller's responsibility, and the database reports a breach of it.
+func Scalar(statement Select) Subquery {
+	return Subquery{statement: statement}
+}
+
+// Statement returns a copy of the SELECT the subquery runs.
+func (s Subquery) Statement() Select {
+	return s.statement
 }
 
 // FunctionName identifies a SQL function a statement may call.

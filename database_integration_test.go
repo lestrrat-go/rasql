@@ -87,6 +87,23 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	require.NoError(t, err)
 	require.Equal(t, []record{first, second}, all)
 
+	// An InSelect predicate exercises IN (SELECT …) against a real server,
+	// which is what proves the MySQL rendering path this change adds actually
+	// runs: MySQL is the one dialect among the two here whose grammar this
+	// change had to fit without a capability gap.
+	recordActive, err := records.Column("active")
+	require.NoError(t, err)
+	activeIDs, err := query.NewSelect(records.QueryTable(), query.Project(recordID))
+	require.NoError(t, err)
+	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActive, query.Bind(true)))
+	require.NoError(t, err)
+	viaSubquery, err := rasql.SelectFrom(client, records).
+		Where(query.InSelect(recordID, activeIDs)).
+		OrderAsc(recordID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []record{first}, viaSubquery)
+
 	total, err := rasql.SelectFrom(client, records).Count(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)
@@ -94,8 +111,6 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	// RETURNING is PostgreSQL-only among the two live dialects this test runs
 	// against, so QueryWrite is exercised over the real pgx driver on
 	// PostgreSQL and pinned as a build-time rejection on MySQL.
-	recordActive, err := records.Column("active")
-	require.NoError(t, err)
 	recordEmail, err := records.Column("email")
 	require.NoError(t, err)
 	third := record{ID: 3, Active: true, Email: "grace@example.com"}

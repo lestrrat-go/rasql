@@ -42,6 +42,8 @@ type expressionContext struct {
 	clause string
 	// allowsAggregate reports whether the clause may call an aggregate at all.
 	allowsAggregate bool
+	// allowsSubquery reports whether the clause may run a subquery at all.
+	allowsSubquery bool
 	// aggregateDepth counts the aggregate calls the walk is currently inside.
 	aggregateDepth int
 }
@@ -54,8 +56,16 @@ func clauseContext(sources map[string]struct{}, clause string) expressionContext
 // aggregateClauseContext returns a context for a clause that may call an
 // aggregate. It permits the call itself; a caller that also has to refuse a
 // column read outside every aggregate reads bareColumn from the returned usage.
+// It also allows a subquery, since every clause this context serves belongs to a
+// SELECT statement.
 func aggregateClauseContext(sources map[string]struct{}, clause string) expressionContext {
-	return expressionContext{sources: sources, clause: clause, allowsAggregate: true}
+	return expressionContext{sources: sources, clause: clause, allowsAggregate: true, allowsSubquery: true}
+}
+
+// selectClauseContext returns a context for a clause of a SELECT statement that
+// must not call an aggregate but may run a subquery.
+func selectClauseContext(sources map[string]struct{}, clause string) expressionContext {
+	return expressionContext{sources: sources, clause: clause, allowsSubquery: true}
 }
 
 // projectionContext returns a context for a SELECT projection.
@@ -91,6 +101,14 @@ func (u expressionUsage) merge(other expressionUsage) expressionUsage {
 // must not call an aggregate function.
 func validateClauseExpression(expression Expression, sources map[string]struct{}, clause string, path string) error {
 	_, err := validateExpression(expression, clauseContext(sources, clause), path)
+	return err
+}
+
+// validateSelectClauseExpression validates an expression that belongs to clause
+// of a SELECT statement, which must not call an aggregate function but may run a
+// subquery.
+func validateSelectClauseExpression(expression Expression, sources map[string]struct{}, clause string, path string) error {
+	_, err := validateExpression(expression, selectClauseContext(sources, clause), path)
 	return err
 }
 
@@ -160,10 +178,21 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 	case Membership:
 		// A membership test is an ordinary predicate, not an aggregate, so it
 		// carries ctx through unchanged: the tested expression and every member of
-		// the value list sit in the same clause and at the same aggregate depth as
-		// the test itself. An aggregate hidden in either operand is therefore
-		// judged by the rule that governs the clause, and a column read there
-		// counts as a bare column exactly as it would outside the test.
+		// the value list (or the subquery) sit in the same clause and at the same
+		// aggregate depth as the test itself. An aggregate hidden in either operand
+		// is therefore judged by the rule that governs the clause, and a column
+		// read there counts as a bare column exactly as it would outside the test.
+		if expression.hasSubquery {
+			usage, err := validateExpression(expression.expr, ctx, path+".expression")
+			if err != nil {
+				return expressionUsage{}, err
+			}
+			subqueryUsage, err := validateExpression(expression.subquery, ctx, path+".subquery")
+			if err != nil {
+				return expressionUsage{}, err
+			}
+			return usage.merge(subqueryUsage), nil
+		}
 		if len(expression.values) == 0 {
 			return expressionUsage{}, validationError(path, "requires at least one value")
 		}
@@ -172,7 +201,11 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 			return expressionUsage{}, err
 		}
 		for i, value := range expression.values {
-			valueUsage, err := validateExpression(value, ctx, fmt.Sprintf("%s.values[%d]", path, i))
+			itemPath := fmt.Sprintf("%s.values[%d]", path, i)
+			if _, ok := value.(Subquery); ok {
+				return expressionUsage{}, validationError(itemPath, "puts a subquery in an IN value list; use InSelect or NotInSelect for IN (SELECT …)")
+			}
+			valueUsage, err := validateExpression(value, ctx, itemPath)
 			if err != nil {
 				return expressionUsage{}, err
 			}
@@ -181,6 +214,17 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		return usage, nil
 	case Function:
 		return validateFunction(expression, ctx, path)
+	case Subquery:
+		if !ctx.allowsSubquery {
+			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, and ORDER BY clause of a SELECT statement", ctx.clause)
+		}
+		if err := expression.statement.Validate(); err != nil {
+			return expressionUsage{}, validationError(path+".statement", "%s", err)
+		}
+		if n := len(expression.statement.projections); n != 1 {
+			return expressionUsage{}, validationError(path, "a subquery used as an expression must select exactly one expression, got %d", n)
+		}
+		return expressionUsage{}, nil
 	default:
 		return expressionUsage{}, validationError(path, "uses unsupported expression %T", expression)
 	}
