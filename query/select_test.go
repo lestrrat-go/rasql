@@ -164,31 +164,93 @@ func TestFunctionAcceptsDistinctArgument(t *testing.T) {
 	require.ErrorContains(t, err, "COUNT(DISTINCT *) is not valid")
 }
 
+// TestFunctionDistinctFollowsTheFunctionClass proves WithDistinct is judged by
+// what the called function is rather than by the modifier alone: an aggregate
+// takes it, a curated scalar refuses it because DISTINCT asks a function to
+// combine one row per distinct argument value and only an aggregate combines
+// rows, and Func carries it through unchecked because rasql does not know
+// whether the named function aggregates.
+func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	// WithDistinct changes where a call may sit no more than it changes what
+	// the call is, so it leaves Aggregates alone on either side of the split.
+	require.True(t, query.Count(userID).WithDistinct().Aggregates())
+	require.False(t, query.Lower(email).WithDistinct().Aggregates())
+	require.False(t, query.Func("SUM", userID).WithDistinct().Aggregates())
+
+	refused := map[string]query.Function{
+		"Lower":    query.Lower(email).WithDistinct(),
+		"Upper":    query.Upper(email).WithDistinct(),
+		"Abs":      query.Abs(userID).WithDistinct(),
+		"Coalesce": query.Coalesce(email, query.Bind("")).WithDistinct(),
+		"Call":     query.Call(query.FunctionLower, email).WithDistinct(),
+	}
+	for name, function := range refused {
+		t.Run(name, func(t *testing.T) {
+			_, err := query.NewSelect(users, query.Project(function).As("value"))
+			requireQueryValidationError(t, err)
+			require.ErrorContains(t, err, "does not aggregate, so it does not support DISTINCT")
+		})
+	}
+
+	// An uncurated aggregate is reachable only through Func, and DISTINCT is
+	// part of how it is called, so validation admits the pair and leaves the
+	// target database to judge the name.
+	statement, err := query.NewSelect(users, query.Project(query.Func("group_concat", email).WithDistinct()).As("tags"))
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+
+	// A Func call stays scalar with the modifier attached, so it reaches a
+	// WHERE clause where an aggregate would be refused.
+	statement, err = query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	_, err = statement.WithWhere(query.Equal(query.Func("any_value", email).WithDistinct(), query.Bind("a")))
+	require.NoError(t, err)
+}
+
 func TestFunctionConstructorsCarryTheirCall(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
 
 	tests := map[string]struct {
-		function  query.Function
-		name      query.FunctionName
-		arguments []query.Expression
-		star      bool
+		function   query.Function
+		name       query.FunctionName
+		arguments  []query.Expression
+		star       bool
+		aggregates bool
 	}{
-		"Count":    {function: query.Count(userID), name: query.FunctionCount, arguments: []query.Expression{userID}},
-		"CountAll": {function: query.CountAll(), name: query.FunctionCount, star: true},
-		"Sum":      {function: query.Sum(userID), name: query.FunctionSum, arguments: []query.Expression{userID}},
-		"Min":      {function: query.Min(userID), name: query.FunctionMin, arguments: []query.Expression{userID}},
-		"Max":      {function: query.Max(userID), name: query.FunctionMax, arguments: []query.Expression{userID}},
-		"Avg":      {function: query.Avg(userID), name: query.FunctionAvg, arguments: []query.Expression{userID}},
-		"Call":     {function: query.Call(query.FunctionSum, userID), name: query.FunctionSum, arguments: []query.Expression{userID}},
+		"Count":    {function: query.Count(userID), name: query.FunctionCount, arguments: []query.Expression{userID}, aggregates: true},
+		"CountAll": {function: query.CountAll(), name: query.FunctionCount, star: true, aggregates: true},
+		"Sum":      {function: query.Sum(userID), name: query.FunctionSum, arguments: []query.Expression{userID}, aggregates: true},
+		"Min":      {function: query.Min(userID), name: query.FunctionMin, arguments: []query.Expression{userID}, aggregates: true},
+		"Max":      {function: query.Max(userID), name: query.FunctionMax, arguments: []query.Expression{userID}, aggregates: true},
+		"Avg":      {function: query.Avg(userID), name: query.FunctionAvg, arguments: []query.Expression{userID}, aggregates: true},
+		"Call":     {function: query.Call(query.FunctionSum, userID), name: query.FunctionSum, arguments: []query.Expression{userID}, aggregates: true},
+		"Coalesce": {function: query.Coalesce(email, query.Bind("")), name: query.FunctionCoalesce, arguments: []query.Expression{email, query.Bind("")}},
+		"Lower":    {function: query.Lower(email), name: query.FunctionLower, arguments: []query.Expression{email}},
+		"Upper":    {function: query.Upper(email), name: query.FunctionUpper, arguments: []query.Expression{email}},
+		"Abs":      {function: query.Abs(userID), name: query.FunctionAbs, arguments: []query.Expression{userID}},
+		"Func":     {function: query.Func("jsonb_path_query", userID), name: query.FunctionName("jsonb_path_query"), arguments: []query.Expression{userID}},
+		// A Func call is always scalar, so Aggregates reports false even when
+		// the caller-supplied name collides with a curated aggregate.
+		"FuncNamedAfterAggregate": {function: query.Func("SUM", userID), name: query.FunctionName("SUM"), arguments: []query.Expression{userID}},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			require.Equal(t, test.name, test.function.Name())
 			require.Equal(t, test.arguments, test.function.Arguments())
 			require.Equal(t, test.star, test.function.Star())
+			require.Equal(t, test.aggregates, test.function.Aggregates())
 		})
 	}
 
@@ -230,9 +292,12 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	_, err = statement.WithWhere(query.In(otherID, query.Bind(1)))
 	requireQueryValidationError(t, err)
 
-	_, err = query.NewSelect(users, query.Project(query.Call("LOWER", userID)))
+	// LENGTH is deliberately excluded from the curated set: PostgreSQL, MySQL,
+	// and SQLite disagree on whether it counts characters or bytes, so
+	// Call refuses it rather than hiding that difference.
+	_, err = query.NewSelect(users, query.Project(query.Call("LENGTH", userID)))
 	requireQueryValidationError(t, err)
-	require.ErrorContains(t, err, `unsupported function "LOWER"`)
+	require.ErrorContains(t, err, `unsupported function "LENGTH"`)
 
 	_, err = statement.WithWhere(query.GreaterThan(userID, query.Scalar(query.Select{})))
 	requireQueryValidationError(t, err)
@@ -526,6 +591,201 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 	columns, err = columns.WithOrder(query.Asc(email))
 	require.NoError(t, err)
 	require.NoError(t, columns.Validate())
+}
+
+// TestSelectAcceptsScalarFunctions covers every clause a scalar function call
+// reaches through carrying the expression context unchanged: a projection, a
+// WHERE clause, a JOIN ON condition, a GROUP BY clause, an ORDER BY clause,
+// and a HAVING clause of a statement that groups.
+func TestSelectAcceptsScalarFunctions(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	// A scalar call in a projection needs no GROUP BY, unlike an aggregate
+	// beside a bare column.
+	projected, err := query.NewSelect(users, query.Project(query.Lower(email)).As("lower_email"))
+	require.NoError(t, err)
+	require.NoError(t, projected.Validate())
+
+	// A scalar call in WHERE, which an aggregate call is refused in.
+	filtered, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	filtered, err = filtered.WithWhere(query.Equal(query.Lower(email), query.Bind("ada@example.com")))
+	require.NoError(t, err)
+	require.NoError(t, filtered.Validate())
+
+	// A scalar call in a JOIN ON condition.
+	joined, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	joined, err = joined.WithJoin(query.InnerJoin(orders, query.Equal(userID, query.Abs(orderUserID))))
+	require.NoError(t, err)
+	require.NoError(t, joined.Validate())
+
+	// A scalar call in a GROUP BY clause.
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{query.Lower(email)}, query.Project(query.Lower(email)))
+	require.NoError(t, err)
+	require.NoError(t, grouped.Validate())
+
+	// A scalar call in an ORDER BY clause of an ungrouped, non-aggregating
+	// statement.
+	ordered, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	ordered, err = ordered.WithOrder(query.Asc(query.Lower(email)))
+	require.NoError(t, err)
+	require.NoError(t, ordered.Validate())
+
+	// A scalar call in a HAVING clause of a statement that groups.
+	having, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(email))
+	require.NoError(t, err)
+	having, err = having.WithHaving(query.NotEqual(query.Lower(email), query.Bind("done")))
+	require.NoError(t, err)
+	require.NoError(t, having.Validate())
+}
+
+// TestSelectRejectsInvalidScalarCalls covers the arity and name checks a
+// scalar call has to pass, and pins that a star call is refused for a scalar
+// name just as it is for a non-COUNT aggregate.
+func TestSelectRejectsInvalidScalarCalls(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		call    query.Expression
+		message string
+	}{
+		"Coalesce with one argument": {
+			call:    query.Coalesce(email),
+			message: `function "COALESCE" takes at least 2 argument`,
+		},
+		"Call(FunctionCoalesce) with none": {
+			call:    query.Call(query.FunctionCoalesce),
+			message: `function "COALESCE" takes at least 2 argument`,
+		},
+		"Lower with two arguments": {
+			call:    query.Call(query.FunctionLower, email, email),
+			message: `function "LOWER" takes exactly 1 argument`,
+		},
+		"unknown name": {
+			call:    query.Call(query.FunctionName("LENGTH"), email),
+			message: `unsupported function "LENGTH"`,
+		},
+		"Upper with two arguments": {
+			call:    query.Call(query.FunctionUpper, userID, userID),
+			message: `function "UPPER" takes exactly 1 argument`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := query.NewSelect(users, query.Project(test.call))
+			requireQueryValidationError(t, err)
+			require.ErrorContains(t, err, test.message)
+		})
+	}
+}
+
+// TestSelectPlacesAggregatesInsideScalarFunctions pins the placement rules
+// that fall out of carrying the expression context unchanged through a scalar
+// call: an aggregate nested inside one is judged exactly as if it sat in the
+// scalar call's place directly.
+func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	// COALESCE(SUM(x), 0) is accepted in a projection: the nested aggregate
+	// sees allowsAggregate true at depth 0.
+	projected, err := query.NewSelect(users, query.Project(query.Coalesce(query.Sum(userID), query.Bind(0))).As("total"))
+	require.NoError(t, err)
+	require.NoError(t, projected.Validate())
+
+	// The same call is refused in WHERE: the nested aggregate sees
+	// allowsAggregate false.
+	base, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	_, err = base.WithWhere(query.GreaterThan(query.Coalesce(query.Sum(userID), query.Bind(0)), query.Bind(0)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `calls aggregate function "SUM" in a WHERE clause`)
+
+	// The same call is refused in a JOIN ON condition, for the same reason.
+	_, err = base.WithJoin(query.InnerJoin(orders, query.Equal(userID, query.Coalesce(query.Sum(orderUserID), query.Bind(0)))))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `calls aggregate function "SUM" in a JOIN ON condition`)
+
+	// SUM(COALESCE(x, 0)) is accepted: the aggregate walks its arguments one
+	// level deeper into aggregate nesting, and a scalar call there is fine.
+	sumOfCoalesce, err := query.NewSelect(users, query.Project(query.Sum(query.Coalesce(userID, query.Bind(0)))).As("total"))
+	require.NoError(t, err)
+	require.NoError(t, sumOfCoalesce.Validate())
+
+	// SUM(COALESCE(SUM(x), 0)) is refused: the inner SUM sees aggregateDepth
+	// 1 through the scalar call that carries it unchanged.
+	_, err = query.NewSelect(users, query.Project(query.Sum(query.Coalesce(query.Sum(userID), query.Bind(0)))))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `calls aggregate function "SUM" inside another aggregate function`)
+
+	// LOWER(email) counts as a bare column read, exactly as email would on its
+	// own: it is refused beside CountAll() in an ungrouped projection set and
+	// accepted once the statement groups.
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	_, err = query.NewSelect(users, query.Project(query.CountAll()), query.Project(query.Lower(email)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "reads a column outside an aggregate function")
+
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(query.CountAll()), query.Project(query.Lower(email)))
+	require.NoError(t, err)
+	require.NoError(t, grouped.Validate())
+}
+
+// TestFuncValidatesEscapeHatchName pins that Func checks its caller-supplied
+// name only for being a legal identifier, reusing schema.ValidateIdentifier,
+// and that its call is always scalar: it reaches a WHERE clause even when the
+// name reuses a curated aggregate name such as SUM, because Func never routes
+// through the aggregate placement rules.
+func TestFuncValidatesEscapeHatchName(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users, query.Project(query.Func("jsonb_path_query", email, query.Bind("$.a"))).As("path"))
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+
+	base, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	filtered, err := base.WithWhere(query.Equal(query.Func("SUM", userID), query.Bind(1)))
+	require.NoError(t, err)
+	require.NoError(t, filtered.Validate())
+	// Aggregates has to agree with the placement rule validation just applied.
+	require.False(t, query.Func("SUM", userID).Aggregates())
+
+	_, err = query.NewSelect(users, query.Project(query.Func("bad-name", userID)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `invalid function name "bad-name"`)
+
+	_, err = query.NewSelect(users, query.Project(query.Func("", userID)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `invalid function name ""`)
 }
 
 // TestSelectGroupsAndFilters covers the basic shape of a grouped statement:

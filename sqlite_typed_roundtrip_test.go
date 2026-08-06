@@ -201,6 +201,84 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	require.Equal(t, []user{insertedUsers[0], insertedUsers[2]}, viaScalar)
 }
 
+// TestSQLiteTypedSelectScalarFunctionsFilterRows runs LOWER and COALESCE
+// against a real SQLite database. LOWER(email) matches a mixed-case row
+// against a lower-case bound value, and COALESCE(score, 0) both drops a row
+// whose score is NULL from a predicate and decodes as 0 when projected,
+// which is the assertion that proves the rendered text executes and its
+// result decodes rather than only that a predicate filtered correctly.
+func TestSQLiteTypedSelectScalarFunctionsFilterRows(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	client, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+		Score *int64 `rasql:"score"`
+	}
+	users, err := rasql.NewTable[user](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+			{Name: "score", Type: schema.TypeInteger, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	score, err := users.Column("score")
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, users))
+
+	ten := int64(10)
+	inserted := []user{
+		{ID: 1, Email: "Ada@Example.com", Score: &ten},
+		{ID: 2, Email: "bob@example.com", Score: nil},
+	}
+	for _, row := range inserted {
+		_, err = rasql.Insert(t.Context(), client, users, row)
+		require.NoError(t, err)
+	}
+
+	byLowerEmail, err := rasql.SelectFrom(client, users).
+		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []user{inserted[0]}, byLowerEmail)
+
+	// COALESCE(score, 0) > 0 drops the NULL row: NULL coalesces to 0, which
+	// fails the comparison, while the row scored 10 keeps it.
+	byScore, err := rasql.SelectFrom(client, users).
+		Where(query.GreaterThan(query.Coalesce(score, query.Bind(0)), query.Bind(0))).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []user{inserted[0]}, byScore)
+
+	type scoreRow struct {
+		ID    int64 `rasql:"id"`
+		Score int64 `rasql:"score"`
+	}
+	decoded, err := rasql.DecodeFrom[scoreRow](client, users).
+		Project(query.Project(userID), query.Project(query.Coalesce(score, query.Bind(0))).As("score")).
+		OrderAsc(userID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []scoreRow{
+		{ID: 1, Score: 10},
+		{ID: 2, Score: 0},
+	}, decoded)
+}
+
 func TestSQLiteTypedSelectCountsRows(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)

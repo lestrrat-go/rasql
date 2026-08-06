@@ -255,13 +255,58 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 	}
 }
 
-// validateFunction validates a function call and the placement rules that make
-// it legal SQL. Every name validFunctionName accepts is an aggregate, so a call
-// that reaches here is an aggregate call.
+// functionSpec states how many arguments a supported function takes and
+// whether the call aggregates. A maximum of 0 means the function takes any
+// number of arguments at or above the minimum.
+type functionSpec struct {
+	aggregate bool
+	minimum   int
+	maximum   int
+}
+
+// functionSpecs is the curated set of function names Call accepts, each with
+// its arity and whether it aggregates. Func bypasses this table entirely: it
+// is the escape hatch for a function name this package does not curate, and
+// validateCustomFunction checks only that its name is a legal identifier.
+var functionSpecs = map[FunctionName]functionSpec{
+	FunctionCount: {aggregate: true, minimum: 1, maximum: 1},
+	FunctionSum:   {aggregate: true, minimum: 1, maximum: 1},
+	FunctionMin:   {aggregate: true, minimum: 1, maximum: 1},
+	FunctionMax:   {aggregate: true, minimum: 1, maximum: 1},
+	FunctionAvg:   {aggregate: true, minimum: 1, maximum: 1},
+
+	FunctionCoalesce: {minimum: 2},
+	FunctionLower:    {minimum: 1, maximum: 1},
+	FunctionUpper:    {minimum: 1, maximum: 1},
+	FunctionAbs:      {minimum: 1, maximum: 1},
+}
+
+// validateFunction validates a function call and the placement rules that
+// make it legal SQL. A call built with Func skips the curated name table
+// entirely and follows the scalar placement rule with no arity check, because
+// rasql knows nothing about an escape-hatch function beyond its name.
+// Otherwise the name must be one of functionSpecs, which states whether the
+// call aggregates.
 func validateFunction(function Function, ctx expressionContext, path string) (expressionUsage, error) {
-	if !validFunctionName(function.name) {
+	if function.unchecked {
+		return validateCustomFunction(function, ctx, path)
+	}
+	spec, ok := functionSpecs[function.name]
+	if !ok {
 		return expressionUsage{}, validationError(path+".function", "unsupported function %q", function.name)
 	}
+	if spec.aggregate {
+		return validateAggregateFunction(function, ctx, path)
+	}
+	return validateScalarFunction(function, spec, ctx, path)
+}
+
+// validateAggregateFunction validates a call to one of the curated aggregate
+// names: it is only legal in a SELECT projection, in a HAVING clause, or in
+// the ORDER BY clause of a statement that groups, never inside another
+// aggregate, and its arguments are walked one level deeper into aggregate
+// nesting so a nested aggregate call is refused.
+func validateAggregateFunction(function Function, ctx expressionContext, path string) (expressionUsage, error) {
 	if ctx.aggregateDepth > 0 {
 		return expressionUsage{}, validationError(path, "calls aggregate function %q inside another aggregate function", function.name)
 	}
@@ -294,21 +339,88 @@ func validateFunction(function Function, ctx expressionContext, path string) (ex
 	return expressionUsage{aggregate: true}, nil
 }
 
+// validateScalarFunction validates a call to one of the curated scalar names:
+// COALESCE, LOWER, UPPER, or ABS. Unlike an aggregate call, ctx carries
+// through to every argument unchanged, so a scalar call is legal wherever any
+// expression is and its arguments are judged exactly as if they appeared in
+// the call's place directly — including an aggregate nested inside one, which
+// validateAggregateFunction still judges by ctx.allowsAggregate. WithDistinct
+// is refused here: DISTINCT inside a call asks the function to combine one row
+// per distinct argument value, which only an aggregate does, so LOWER(DISTINCT
+// x) is a syntax error on every supported dialect.
+func validateScalarFunction(function Function, spec functionSpec, ctx expressionContext, path string) (expressionUsage, error) {
+	if function.star {
+		return expressionUsage{}, validationError(path, "function %q does not support *", function.name)
+	}
+	if function.distinct {
+		return expressionUsage{}, validationError(path, "function %q does not aggregate, so it does not support DISTINCT", function.name)
+	}
+	if err := validateFunctionArity(function.name, len(function.arguments), spec, path); err != nil {
+		return expressionUsage{}, err
+	}
+	var usage expressionUsage
+	for i, argument := range function.arguments {
+		argumentUsage, err := validateExpression(argument, ctx, fmt.Sprintf("%s.arguments[%d]", path, i))
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		usage = usage.merge(argumentUsage)
+	}
+	return usage, nil
+}
+
+// validateCustomFunction validates a call built with Func: the escape hatch
+// that accepts any function name. Validation checks only that name is a
+// legal SQL identifier, reusing schema.ValidateIdentifier rather than
+// duplicating that rule, and reports a clear error naming the offending
+// input when it is not. The call is always treated as scalar, exactly like
+// validateScalarFunction, with no arity check, because rasql has no arity
+// table for a function it does not curate. WithDistinct is the one place the
+// two part company: validateScalarFunction refuses it, while a Func call
+// carries it through to the rendered SQL, because rasql does not know whether
+// the named function aggregates and DISTINCT is the only way to reach an
+// aggregate it does not curate, such as GROUP_CONCAT. A DISTINCT the target
+// database refuses fails there, like every other property of a Func name.
+func validateCustomFunction(function Function, ctx expressionContext, path string) (expressionUsage, error) {
+	if function.star {
+		return expressionUsage{}, validationError(path, "function %q does not support *", function.name)
+	}
+	if err := schema.ValidateIdentifier(string(function.name)); err != nil {
+		return expressionUsage{}, validationError(path+".function", "invalid function name %q: %s", function.name, err)
+	}
+	var usage expressionUsage
+	for i, argument := range function.arguments {
+		argumentUsage, err := validateExpression(argument, ctx, fmt.Sprintf("%s.arguments[%d]", path, i))
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		usage = usage.merge(argumentUsage)
+	}
+	return usage, nil
+}
+
+// validateFunctionArity checks count against the arguments spec allows,
+// reporting an exact-count message when the spec fixes one and an
+// at-least message when it does not.
+func validateFunctionArity(name FunctionName, count int, spec functionSpec, path string) error {
+	if spec.minimum == spec.maximum {
+		if count != spec.minimum {
+			return validationError(path, "function %q takes exactly %d argument(s), got %d", name, spec.minimum, count)
+		}
+		return nil
+	}
+	if count < spec.minimum {
+		return validationError(path, "function %q takes at least %d argument(s), got %d", name, spec.minimum, count)
+	}
+	if spec.maximum > 0 && count > spec.maximum {
+		return validationError(path, "function %q takes at most %d argument(s), got %d", name, spec.maximum, count)
+	}
+	return nil
+}
+
 func validBinaryOperator(operator BinaryOperator) bool {
 	switch operator {
 	case OperatorEqual, OperatorNotEqual, OperatorGreaterThan, OperatorGreaterThanOrEqual, OperatorLessThan, OperatorLessThanOrEqual, OperatorLike:
-		return true
-	default:
-		return false
-	}
-}
-
-// validFunctionName reports whether name is a supported function. Every name it
-// accepts is an aggregate; a scalar function would need its own placement rules
-// in validateFunction, which today treats each accepted call as an aggregate.
-func validFunctionName(name FunctionName) bool {
-	switch name {
-	case FunctionCount, FunctionSum, FunctionMin, FunctionMax, FunctionAvg:
 		return true
 	default:
 		return false

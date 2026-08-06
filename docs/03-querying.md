@@ -118,7 +118,7 @@ The value list of `query.In` and `query.NotIn` takes expressions, the same freed
 
 ### Aggregates
 
-`Function` calls a SQL function on its arguments. `COUNT`, `SUM`, `MIN`, `MAX`, and `AVG` are the closed set of names `Call` accepts; any other name fails validation before it reaches SQL.
+`Function` calls a SQL function on its arguments. `COUNT`, `SUM`, `MIN`, `MAX`, `AVG`, `COALESCE`, `LOWER`, `UPPER`, and `ABS` are the curated set of names `Call` accepts; any other name fails validation before it reaches SQL. `Call(FunctionName("LENGTH"), …)` fails for that reason: `LENGTH` is deliberately excluded, because PostgreSQL, MySQL, and SQLite disagree on whether it counts characters or bytes, and this package will not hide that difference behind one name. [Scalar functions](#scalar-functions) covers `COALESCE`, `LOWER`, `UPPER`, and `ABS`, plus `Func`, the escape hatch for a function this package does not curate. This section covers `COUNT`, `SUM`, `MIN`, `MAX`, and `AVG`, which aggregate.
 
 | Constructor | Renders |
 | --- | --- |
@@ -141,7 +141,178 @@ Every function above aggregates, so validation accepts one only where SQL does, 
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
 
-`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the constructors above; validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The derived table or CTE that would express one portably is unsupported. The builder's own `Count` in [Count rows](#count-rows) rejects a distinct builder for a reason of its own, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
+`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the aggregate constructors above; validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, which only an aggregate does, so validation refuses it on a curated scalar call — [Scalar functions](#scalar-functions) states that rule and what `query.Func` does with the modifier instead. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The derived table or CTE that would express one portably is unsupported. The builder's own `Count` in [Count rows](#count-rows) rejects a distinct builder for a reason of its own, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
+
+### Scalar functions
+
+`COALESCE`, `LOWER`, `UPPER`, and `ABS` are scalar rather than aggregate: a call to one of them is legal wherever any expression is, with no placement rule of its own.
+
+| Constructor | Renders |
+| --- | --- |
+| `query.Coalesce(expressions…)` | `COALESCE(expressions…)`, at least two expressions |
+| `query.Lower(expression)` | `LOWER(expression)` |
+| `query.Upper(expression)` | `UPPER(expression)` |
+| `query.Abs(expression)` | `ABS(expression)` |
+| `query.Func(name, arguments…)` | `name(arguments…)`, the escape hatch below |
+| `query.Call(name, arguments…)` | Any of `Coalesce`, `Lower`, `Upper`, or `Abs` above, named by a `query.Function…` constant. |
+| `function.Aggregates()` | Reports whether a built `query.Function` aggregates, so a caller can tell the two classes apart without repeating the constant list. A `query.Func` call reports `false` whatever its name. |
+
+A scalar call carries the placement context of wherever it sits unchanged into its arguments, so every rule in [Aggregates](#aggregates) falls out for free rather than needing its own version:
+
+- `query.Coalesce(query.Sum(x), query.Bind(0))` is accepted in a `SELECT` projection or a `HAVING` clause, the same places a bare `query.Sum(x)` is, and refused in a `WHERE` clause or a `JOIN ON` condition for the same reason a bare `query.Sum(x)` is.
+- `query.Sum(query.Coalesce(x, query.Bind(0)))` is accepted: the scalar call inside the aggregate's argument is not itself an aggregate, so it does not trip the "aggregate inside another aggregate" rule. `query.Sum(query.Coalesce(query.Sum(x), query.Bind(0)))` is still refused, because the inner `Sum` is nested two aggregates deep.
+- `query.Lower(users.Email)` counts as reading a bare column, exactly as `users.Email` on its own would: it is refused beside `query.CountAll()` in an ungrouped projection set and accepted once the statement groups, the same rule [Aggregates](#aggregates) states for a plain column.
+- A scalar call reaches `INSERT` values, `SET` assignments, and `RETURNING`, which an aggregate cannot: `SET email = LOWER(email)` and `INSERT … VALUES (COALESCE(?, ?), …)`, from `query.Coalesce(query.Bind("ada@example.com"), query.Bind(""))`, both validate and render. The `SET` half reads the target table's own `email` column, which an `UPDATE` may do because it has a row in hand. An `INSERT` `VALUES` row has no such row, so in SQL it cannot read the target table's columns at all; give a call there bound values or other expressions that read no column of the table being written.
+- `query.Function.WithDistinct()` is the one modifier from [Aggregates](#aggregates) that does not carry over: validation refuses `query.Lower(x).WithDistinct()`, because `LOWER(DISTINCT x)` is a syntax error on all three dialects. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, and only an aggregate combines rows at all.
+
+SQLite's `LOWER`/`UPPER` fold ASCII letters only, while PostgreSQL and MySQL fold according to the server's collation, so a case-insensitive match on non-ASCII text is not portable across the three dialects. MySQL's `LOWER`/`UPPER` leave a binary-typed argument unchanged. A projected scalar call has no portable result name any more than an aggregate does, so a projection that will be decoded needs `.As(alias)` the same way [Aggregates](#aggregates) states.
+
+MySQL also changes the scale a coalesced decimal decodes at. `query.Coalesce(amount, query.Bind("0.0000"))` over a `DECIMAL(19,4)` column decodes with 30 digits right of the decimal point rather than 4, because MySQL fixes the result type while it prepares the statement and a placeholder carries no scale of its own at that point, so the call becomes the widest decimal the server has, `DECIMAL(65,30)`. The number is unchanged and only its trailing zeroes differ, but a caller comparing the decoded string against a literal has to expect the widened form — see [Logical column types](02-schema.md#logical-column-types), which states the narrower rule a plain decimal column follows. Coalescing against another decimal expression of the same scale, such as a second column, keeps that scale, and so does a driver that interpolates its arguments into the SQL text client-side rather than sending them as placeholders. PostgreSQL and SQLite return the value at its own scale in every case. The same widening reaches a `query.Func` call that mixes a decimal column with a bound value only when the named function's own MySQL type rules resolve a common decimal result type across all of its arguments, as `IFNULL`, `GREATEST`, and `LEAST` do. A function that types its result from a single argument keeps that argument's scale instead: MySQL types `NULLIF` from its first argument, so `query.Func("NULLIF", amount, query.Bind("0.0000"))` over a `DECIMAL(19,4)` column still decodes at scale 4, while the same call with the placeholder first widens. The rule is about which argument the result takes its type from, not about the function name. A function that returns a string or an integer, such as `CONCAT`, has no decimal result scale to widen and is unaffected.
+
+<!-- INCLUDE(examples/rasql_scalar_function_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_scalar_function() {
+	// This example looks a member up by email regardless of case with LOWER,
+	// then reads every member's display name, falling back to their email
+	// with COALESCE when no nickname is set.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+	// A typed descriptor makes members usable with rasql.Insert. Nickname is
+	// nullable, so COALESCE below has a real NULL to fall back from.
+	type memberRow struct {
+		ID       int     `rasql:"id"`
+		Email    string  `rasql:"email"`
+		Nickname *string `rasql:"nickname"`
+	}
+	// A local result type holds the decoded id and display name.
+	type memberName struct {
+		ID   int64
+		Name string
+	}
+	members := rasql.MustTable[memberRow](schema.Table{
+		Name: "members",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+			{Name: "nickname", Type: schema.TypeText, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	if err := rasql.Create(ctx, client, members); err != nil {
+		fmt.Printf("failed to create members table: %s\n", err)
+		return
+	}
+
+	// members has no generated column fields, so its columns are looked up by
+	// name. That lookup validates them against the descriptor as the query is
+	// assembled.
+	id, err := members.Column("id")
+	if err != nil {
+		fmt.Printf("failed to find members.id: %s\n", err)
+		return
+	}
+	email, err := members.Column("email")
+	if err != nil {
+		fmt.Printf("failed to find members.email: %s\n", err)
+		return
+	}
+	nickname, err := members.Column("nickname")
+	if err != nil {
+		fmt.Printf("failed to find members.nickname: %s\n", err)
+		return
+	}
+
+	nick := "Ada"
+	for _, member := range []memberRow{
+		{ID: 1, Email: "Ada@Example.com", Nickname: &nick},
+		{ID: 2, Email: "bob@example.com", Nickname: nil},
+	} {
+		if _, err := rasql.Insert(ctx, client, members, member); err != nil {
+			fmt.Printf("failed to insert member: %s\n", err)
+			return
+		}
+	}
+
+	// LOWER(email) matches "Ada@Example.com" against the lower-case literal a
+	// caller would type, regardless of how the stored value was cased.
+	byEmail, err := rasql.DecodeFrom[memberName](client, members).
+		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
+		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query member by email: %s\n", err)
+		return
+	}
+	for member, err := range byEmail {
+		if err != nil {
+			fmt.Printf("failed to query member by email: %s\n", err)
+			return
+		}
+		fmt.Println(member.Name)
+	}
+
+	// COALESCE(nickname, email) reads every member's display name, falling
+	// back to the email once nickname is NULL.
+	names, err := rasql.DecodeFrom[memberName](client, members).
+		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
+		OrderAsc(id).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query member names: %s\n", err)
+		return
+	}
+	for member, err := range names {
+		if err != nil {
+			fmt.Printf("failed to query member names: %s\n", err)
+			return
+		}
+		fmt.Println(member.ID, member.Name)
+	}
+
+	// Output:
+	// Ada
+	// 1 Ada
+	// 2 bob@example.com
+}
+```
+source: [examples/rasql_scalar_function_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_scalar_function_example_test.go)
+<!-- END INCLUDE -->
+
+#### Escape hatch for an uncurated function
+
+`query.Func(name, arguments…)` calls the SQL function named `name` on `arguments`, and `name` is any string rather than one of the `query.Function…` constants — this is what reaches a function this package does not curate without waiting for a change to rasql, such as `query.Func("jsonb_path_query", doc, query.Bind("$.a"))`.
+
+`Func` guarantees only that `name` is a legal SQL identifier before it reaches SQL text, reusing the same identifier rule `schema.ValidateIdentifier` applies to a column or table name; validation reports a `query.ValidationError` naming the offending input when it is not. `Func` guarantees nothing about `name` beyond that: whether the named function exists on the target database, what arguments it takes, what it does, and whether it renders identically across PostgreSQL, MySQL, and SQLite are entirely the caller's responsibility. Every argument still goes through the ordinary expression nodes, so a value passed with `query.Bind` still travels as a placeholder rather than as SQL text — only the function's own name reaches SQL unescaped, and only once validation has confirmed it is a legal identifier. A call built with `Func` is always treated as scalar and reaches every clause a curated scalar call does, with no arity check and no aggregate placement rule, even when `name` happens to match a curated aggregate such as `"SUM"`; `function.Aggregates()` reports `false` for it for the same reason. Prefer `Call` with a `query.Function…` constant, or `Coalesce`, `Lower`, `Upper`, or `Abs`, whenever the function is one of them.
+
+`query.Function.WithDistinct()` is the one rule a `Func` call does not inherit from a curated scalar call: it is carried through to the rendered SQL rather than refused, so `query.Func("group_concat", tag).WithDistinct()` renders as `group_concat(DISTINCT tag)`. rasql does not know whether the named function aggregates, and `DISTINCT` is the only way to reach an aggregate it does not curate; whether the target database accepts the call is the caller's responsibility, exactly as everything else about a `Func` name is.
 
 ### Subqueries
 

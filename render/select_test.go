@@ -465,6 +465,117 @@ func TestSelectRendersDistinctSubquery(t *testing.T) {
 	require.Equal(t, []any{"active"}, rendered.Args())
 }
 
+// TestSelectRendersScalarFunctions proves COALESCE, LOWER, UPPER, and ABS
+// render as ordinary function calls with no dialect-specific branch, and
+// pins placeholder numbering with a bound argument sitting inside COALESCE
+// between two other binds.
+func TestSelectRendersScalarFunctions(t *testing.T) {
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+			{Name: "score", Type: schema.TypeInteger, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	score, err := users.Column("score")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users,
+		query.Project(query.Lower(email)).As("lower_email"),
+		query.Project(query.Upper(email)).As("upper_email"),
+		query.Project(query.Abs(score)).As("abs_score"),
+	)
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.Equal(
+		query.Coalesce(query.Bind(1), score, query.Bind(2)),
+		query.Bind(3),
+	))
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "SELECT LOWER(\"users\".\"email\") AS \"lower_email\", UPPER(\"users\".\"email\") AS \"upper_email\", ABS(\"users\".\"score\") AS \"abs_score\" FROM \"users\" WHERE (COALESCE($1, \"users\".\"score\", $2) = $3)",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "SELECT LOWER(`users`.`email`) AS `lower_email`, UPPER(`users`.`email`) AS `upper_email`, ABS(`users`.`score`) AS `abs_score` FROM `users` WHERE (COALESCE(?, `users`.`score`, ?) = ?)",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "SELECT LOWER(\"users\".\"email\") AS \"lower_email\", UPPER(\"users\".\"email\") AS \"upper_email\", ABS(\"users\".\"score\") AS \"abs_score\" FROM \"users\" WHERE (COALESCE(?, \"users\".\"score\", ?) = ?)",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Select(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{1, 2, 3}, rendered.Args())
+		})
+	}
+}
+
+// TestSelectRendersScalarFunctionEscapeHatch proves Func renders its
+// caller-supplied name raw, with no quoting, exactly like a curated function
+// name, once validation has confirmed it is a legal identifier.
+func TestSelectRendersScalarFunctionEscapeHatch(t *testing.T) {
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "doc", Type: schema.TypeJSON},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	doc, err := users.Column("doc")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users, query.Project(query.Func("jsonb_path_query", doc, query.Bind("$.a"))).As("matched"))
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(t, `SELECT jsonb_path_query("users"."doc", $1) AS "matched" FROM "users"`, rendered.SQL())
+	require.Equal(t, []any{"$.a"}, rendered.Args())
+}
+
+// TestSelectRendersDistinctEscapeHatchArgument proves a Func call carries
+// WithDistinct into the rendered SQL, which is how an aggregate this package
+// does not curate is called with DISTINCT. Validation refuses the same
+// modifier on a curated scalar call, so this path is the only one that reaches
+// the renderer with a non-aggregate name.
+func TestSelectRendersDistinctEscapeHatchArgument(t *testing.T) {
+	posts, err := query.NewTable(schema.Table{
+		Name: "posts",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "tag", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	tag, err := posts.Column("tag")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(posts, query.Project(query.Func("group_concat", tag).WithDistinct()).As("tags"))
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	require.Equal(t, `SELECT group_concat(DISTINCT "posts"."tag") AS "tags" FROM "posts"`, rendered.SQL())
+	require.Empty(t, rendered.Args())
+}
+
 // TestSelectRendersGroupedStatement proves GROUP BY and HAVING render in the
 // clause order SQL requires, between WHERE and ORDER BY, identically across all
 // three dialects except for identifier quoting and placeholder style.
