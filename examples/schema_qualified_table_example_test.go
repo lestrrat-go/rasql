@@ -18,15 +18,13 @@ type eventRow struct {
 }
 
 func Example_schema_qualified_table() {
-	// This example queries a table through a schema-qualified descriptor.
-	// Schema names a PostgreSQL schema, a MySQL database, or, as here, a
-	// SQLite attached-database name. rasql never creates the namespace
-	// itself, so the CREATE TABLE below stands in for a reviewed native
-	// migration, which is the only way rasql creates a schema in production.
-	// The DDL is written out here rather than run through rasql.Create for
-	// the same reason: qualification reaches DML and column references only,
-	// so rasql.Create would render CREATE TABLE "events" and drop the audit
-	// qualifier. Qualified DDL is not supported yet.
+	// This example creates and queries a table through a schema-qualified
+	// descriptor. Schema names a PostgreSQL schema, a MySQL database, or, as
+	// here, a SQLite attached-database name. rasql never creates the
+	// namespace itself, so the ATTACH DATABASE below stands in for a
+	// reviewed native migration, which is the only way rasql creates a
+	// namespace in production; rasql.Create then renders CREATE TABLE
+	// "audit"."events" into the namespace that migration already created.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -39,10 +37,6 @@ func Example_schema_qualified_table() {
 
 	if _, err := database.ExecContext(ctx, `ATTACH DATABASE ':memory:' AS audit`); err != nil {
 		fmt.Printf("failed to attach audit database: %s\n", err)
-		return
-	}
-	if _, err := database.ExecContext(ctx, "CREATE TABLE audit.events (id INTEGER PRIMARY KEY, action TEXT NOT NULL)"); err != nil {
-		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}
 
@@ -62,6 +56,11 @@ func Example_schema_qualified_table() {
 		},
 		PrimaryKey: []string{"id"},
 	})
+
+	if err := rasql.Create(ctx, client, events); err != nil {
+		fmt.Printf("failed to create events table: %s\n", err)
+		return
+	}
 
 	if _, err := rasql.Insert(ctx, client, events, eventRow{ID: 1, Action: "created"}); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
