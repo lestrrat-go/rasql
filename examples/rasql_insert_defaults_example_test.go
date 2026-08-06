@@ -96,7 +96,7 @@ func Example_rasql_insert_defaults() {
 		return
 	}
 
-	user, err := rasql.SelectFrom(client, defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx)
+	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query default user: %s\n", err)
 		return

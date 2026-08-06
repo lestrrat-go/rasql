@@ -30,6 +30,16 @@ func SelectFrom(d dialect.Dialect, from query.Table) SelectBuilder {
 	return SelectBuilder{dialect: d, from: from}
 }
 
+// WithDialect returns a copy of b that renders for d.
+// SelectFrom takes the dialect a builder starts with. WithDialect is for a
+// caller that assembles the statement first and chooses the dialect where it
+// renders, which is what the root package's builders do at their terminal call.
+func (b SelectBuilder) WithDialect(d dialect.Dialect) SelectBuilder {
+	b = b.clone()
+	b.dialect = d
+	return b
+}
+
 // Select adds columns from the primary table by name.
 func (b SelectBuilder) Select(columns ...string) SelectBuilder {
 	b = b.clone()

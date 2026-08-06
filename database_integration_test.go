@@ -114,11 +114,11 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	secondStored := second
 	secondStored.Amount = "5.0000"
 
-	actual, err := rasql.SelectFrom(client, records).WhereEqual(recordID, first.ID).One(t.Context())
+	actual, err := rasql.SelectFrom(records).WhereEqual(recordID, first.ID).One(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, firstStored, actual)
 
-	all, err := rasql.SelectFrom(client, records).OrderAsc(recordID).All(t.Context())
+	all, err := rasql.SelectFrom(records).OrderAsc(recordID).All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []record{firstStored, secondStored}, all)
 
@@ -134,10 +134,10 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	require.NoError(t, err)
 	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActive, query.Bind(true)))
 	require.NoError(t, err)
-	viaSubquery, err := rasql.SelectFrom(client, records).
+	viaSubquery, err := rasql.SelectFrom(records).
 		Where(query.InSelect(recordID, activeIDs)).
 		OrderAsc(recordID).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []record{firstStored}, viaSubquery)
 
@@ -151,9 +151,9 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	require.NoError(t, err)
 	scalarAmount, err := records.Column("amount")
 	require.NoError(t, err)
-	viaLower, err := rasql.SelectFrom(client, records).
+	viaLower, err := rasql.SelectFrom(records).
 		Where(query.Equal(query.Lower(scalarEmail), query.Bind(firstStored.Email))).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []record{firstStored}, viaLower)
 
@@ -173,10 +173,10 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// another decimal expression rather than a bound value would dodge the
 	// widening, but this projection exists to exercise a bound fallback, so it
 	// states both exact strings instead.
-	viaCoalesce, err := rasql.DecodeFrom[amountRow](client, records).
+	viaCoalesce, err := rasql.DecodeFrom[amountRow](records).
 		Project(query.Project(recordID), query.Project(query.Coalesce(scalarAmount, query.Bind("0.0000"))).As("amount")).
 		OrderAsc(recordID).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []amountRow{
 		{ID: first.ID, Amount: coalesced.first},
@@ -200,17 +200,17 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// expectations above already state, and this projection needs no
 	// per-dialect pair of its own. Neither amount equals the bound "0.0000",
 	// so NULLIF returns the column value on every row.
-	viaNullIf, err := rasql.DecodeFrom[amountRow](client, records).
+	viaNullIf, err := rasql.DecodeFrom[amountRow](records).
 		Project(query.Project(recordID), query.Project(query.Func("NULLIF", scalarAmount, query.Bind("0.0000"))).As("amount")).
 		OrderAsc(recordID).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []amountRow{
 		{ID: first.ID, Amount: firstStored.Amount},
 		{ID: second.ID, Amount: secondStored.Amount},
 	}, viaNullIf)
 
-	total, err := rasql.SelectFrom(client, records).Count(t.Context())
+	total, err := rasql.SelectFrom(records).Count(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)
 
@@ -240,7 +240,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		require.NoError(t, err)
 		require.Equal(t, thirdStored, inserted)
 	} else {
-		_, err := client.QueryWrite(t.Context(), insert)
+		_, err := rasql.QueryWrite(t.Context(), client, insert)
 		require.ErrorContains(t, err, "RETURNING is not supported")
 	}
 
@@ -370,7 +370,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 
 	ordersID, err := orders.Column("id")
 	require.NoError(t, err)
-	order, err := rasql.SelectFrom(client, orders).WhereEqual(ordersID, int64(1)).One(t.Context())
+	order, err := rasql.SelectFrom(orders).WhereEqual(ordersID, int64(1)).One(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, orderRow{ID: 1, CustomerID: 1}, order)
 }
@@ -442,7 +442,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 
 	eventID, err := events.Column("id")
 	require.NoError(t, err)
-	event, err := rasql.SelectFrom(client, events).WhereEqual(eventID, int64(1)).One(t.Context())
+	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, eventRow{ID: 1, ActorID: 7, Action: "created"}, event)
 }

@@ -45,7 +45,7 @@ func Example_rasql_delete() {
 	}
 
 	// WhereEqual takes a column of the target table and binds the value.
-	result, err := rasql.DeleteFrom(client, users).WhereEqual(users.ID, 1).Exec(ctx)
+	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -58,7 +58,7 @@ func Example_rasql_delete() {
 	fmt.Printf("%d user deleted by id\n", deleted)
 
 	// Where takes any predicate built through the query package.
-	result, err = rasql.DeleteFrom(client, users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx)
+	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return
@@ -72,12 +72,12 @@ func Example_rasql_delete() {
 
 	// A builder with no predicate is rejected, so a dropped Where cannot become
 	// a full-table delete by accident.
-	if _, err := rasql.DeleteFrom(client, users).Build(); err != nil {
+	if _, err := rasql.DeleteFrom(users).Build(client.Dialect()); err != nil {
 		fmt.Println(err)
 	}
 
 	// AllowAll states the full-table delete. Build renders it without executing it.
-	statement, err := rasql.DeleteFrom(client, users).AllowAll().Build()
+	statement, err := rasql.DeleteFrom(users).AllowAll().Build(client.Dialect())
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return

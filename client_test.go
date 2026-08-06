@@ -33,7 +33,7 @@ func TestClientQueryExecutesParameterizedSelect(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	sequence, err := client.Query(t.Context(), statement)
+	sequence, err := rasql.Query(t.Context(), client, statement)
 	rows := collectRows(t, sequence, err)
 	require.Len(t, rows, 1)
 
@@ -73,10 +73,10 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	sequence, err := client.SelectFrom(users).
+	sequence, err := rasql.SelectQueryFrom(users).
 		Select("id", "email").
 		WhereEqual("id", 42).
-		Query(t.Context())
+		Query(t.Context(), client)
 	rows := collectRows(t, sequence, err)
 	require.Len(t, rows, 1)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -101,10 +101,10 @@ func TestSelectBuilderWhereInMatchesRenderSelectFrom(t *testing.T) {
 
 	client, err := rasql.New(&debugQueryer{}, dialect.PostgreSQL())
 	require.NoError(t, err)
-	fromClient, err := client.SelectFrom(users).
+	fromClient, err := rasql.SelectQueryFrom(users).
 		Select("id", "email").
 		WhereIn("id", 1, 2).
-		Build()
+		Build(client.Dialect())
 	require.NoError(t, err)
 
 	require.Equal(t, fromRender.SQL(), fromClient.SQL())
@@ -165,10 +165,10 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 			AddRow(int64(1), "ada@example.com").
 			AddRow(int64(2), "bob@example.com"))
 
-	rows, err := rasql.DecodeFrom[user](client, users).
+	rows, err := rasql.DecodeFrom[user](users).
 		Project(query.Project(id), query.Project(email)).
 		Where(query.InSelect(id, activeOrders)).
-		Query(t.Context())
+		Query(t.Context(), client)
 	require.NoError(t, err)
 	decoded := make([]user, 0)
 	for value, err := range rows {
@@ -208,7 +208,7 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	rows, err := rasql.SelectFrom(client, users).WhereEqual(id, 42).Query(t.Context())
+	rows, err := rasql.SelectFrom(users).WhereEqual(id, 42).Query(t.Context(), client)
 	require.NoError(t, err)
 	decoded := make([]user, 0)
 	for value, err := range rows {
@@ -250,10 +250,10 @@ func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
 		UserID int64
 		Email  string
 	}
-	rows, err := rasql.DecodeQueryFrom[summary](client, users).
+	rows, err := rasql.DecodeQueryFrom[summary](users).
 		Project(query.Project(id).As("user_id"), query.Project(email)).
 		Where(query.Equal(id, query.Bind(42))).
-		Query(t.Context())
+		Query(t.Context(), client)
 	require.NoError(t, err)
 	decoded := make([]summary, 0)
 	for value, err := range rows {
@@ -304,11 +304,11 @@ func TestDecodeFromDecodesGroupedRows(t *testing.T) {
 			AddRow("open", int64(3)).
 			AddRow("done", int64(5)))
 
-	rows, err := rasql.DecodeFrom[statusCount](client, tasks).
+	rows, err := rasql.DecodeFrom[statusCount](tasks).
 		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
-		Query(t.Context())
+		Query(t.Context(), client)
 	require.NoError(t, err)
 	decoded := make([]statusCount, 0)
 	for value, err := range rows {
@@ -357,10 +357,10 @@ func TestDecodeFromDecodesDistinctRows(t *testing.T) {
 			AddRow("open").
 			AddRow("done"))
 
-	rows, err := rasql.DecodeFrom[statusOnly](client, tasks).
+	rows, err := rasql.DecodeFrom[statusOnly](tasks).
 		Project(query.Project(status)).
 		Distinct().
-		Query(t.Context())
+		Query(t.Context(), client)
 	require.NoError(t, err)
 	decoded := make([]statusOnly, 0)
 	for value, err := range rows {
@@ -394,7 +394,7 @@ func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
 
-	count, err := client.SelectFrom(users).WhereEqual("id", 42).Count(t.Context())
+	count, err := rasql.SelectQueryFrom(users).WhereEqual("id", 42).Count(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), count)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -432,7 +432,7 @@ func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
 
-	count, err := rasql.SelectFrom(client, users).WhereEqual(id, 42).Count(t.Context())
+	count, err := rasql.SelectFrom(users).WhereEqual(id, 42).Count(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), count)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -463,10 +463,10 @@ func TestSelectBuilderCountRejectsWrongRowCount(t *testing.T) {
 	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\"").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)).AddRow(int64(2)))
 
-	_, err = client.SelectFrom(users).Count(t.Context())
+	_, err = rasql.SelectQueryFrom(users).Count(t.Context(), client)
 	require.ErrorIs(t, err, rasql.ErrNoRows)
 
-	_, err = client.SelectFrom(users).Count(t.Context())
+	_, err = rasql.SelectQueryFrom(users).Count(t.Context(), client)
 	require.ErrorIs(t, err, rasql.ErrMultipleRows)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -476,7 +476,7 @@ func TestClientQueryAllowsDebugQueryer(t *testing.T) {
 	client, err := rasql.New(queryer, dialect.PostgreSQL())
 	require.NoError(t, err)
 
-	sequence, err := client.Query(t.Context(), selectStatement(t))
+	sequence, err := rasql.Query(t.Context(), client, selectStatement(t))
 	rows := collectRows(t, sequence, err)
 	require.Empty(t, rows)
 	require.Equal(t, "SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)", queryer.query)
@@ -528,7 +528,7 @@ func TestClientExecExecutesParameterizedInsert(t *testing.T) {
 		WithArgs(42, "ada@example.com").
 		WillReturnResult(sqlmock.NewResult(42, 1))
 
-	result, err := client.Exec(t.Context(), statement)
+	result, err := rasql.Exec(t.Context(), client, statement)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -551,8 +551,8 @@ func TestClientQueryRenderedExecutesStaticStatement(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM users WHERE id = $1").WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
 
-	sequence, err := client.QueryRendered(t.Context(), statement)
-	rows := collectRows(t, sequence, err)
+	sqlRows, err := client.QueryRendered(t.Context(), statement)
+	rows := collectRows(t, row.Scan(sqlRows), err)
 	require.Len(t, rows, 1)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -576,7 +576,7 @@ func TestClientQueryClosesRowsWhenIterationStops(t *testing.T) {
 			AddRow(int64(43), "bob@example.com")).
 		RowsWillBeClosed()
 
-	rows, err := client.Query(t.Context(), statement)
+	rows, err := rasql.Query(t.Context(), client, statement)
 	require.NoError(t, err)
 	for result, err := range rows {
 		require.NoError(t, err)
@@ -587,7 +587,7 @@ func TestClientQueryClosesRowsWhenIterationStops(t *testing.T) {
 	}
 }
 
-func TestClientQueryYieldsExecutionError(t *testing.T) {
+func TestClientQueryReturnsExecutionError(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -604,14 +604,8 @@ func TestClientQueryYieldsExecutionError(t *testing.T) {
 		WithArgs(42).
 		WillReturnError(expected)
 
-	rows, err := client.Query(t.Context(), statement)
-	require.NoError(t, err)
-	count := 0
-	for _, err := range rows {
-		require.ErrorIs(t, err, expected)
-		count++
-	}
-	require.Equal(t, 1, count)
+	_, err = rasql.Query(t.Context(), client, statement)
+	require.ErrorIs(t, err, expected)
 }
 
 func TestCreateExecutesTableAndIndexes(t *testing.T) {
@@ -667,7 +661,7 @@ func TestClientQueryWriteReturnsRows(t *testing.T) {
 		WithArgs("ada@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	sequence, err := client.QueryWrite(t.Context(), statement)
+	sequence, err := rasql.QueryWrite(t.Context(), client, statement)
 	rows := collectRows(t, sequence, err)
 	require.Len(t, rows, 1)
 
@@ -698,7 +692,7 @@ func TestClientQueryWriteRejectsStatementWithoutReturning(t *testing.T) {
 	statement, err := query.NewInsert(usersWriteTable(t), []query.Column{usersEmailColumn(t)}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 
-	_, err = client.QueryWrite(t.Context(), statement)
+	_, err = rasql.QueryWrite(t.Context(), client, statement)
 	require.ErrorContains(t, err, "rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
 }
 
@@ -715,12 +709,26 @@ func TestClientQueryWriteRejectsUnsupportedDialect(t *testing.T) {
 	require.NoError(t, err)
 	statement := insertReturningStatement(t)
 
-	_, err = client.QueryWrite(t.Context(), statement)
+	_, err = rasql.QueryWrite(t.Context(), client, statement)
 	require.ErrorContains(t, err, "RETURNING is not supported")
 }
 
-func TestClientQueryWriteRejectsInvalidClient(t *testing.T) {
-	_, err := rasql.Client{}.QueryWrite(t.Context(), insertReturningStatement(t))
+func TestQueryWriteRejectsNilExecutor(t *testing.T) {
+	_, err := rasql.QueryWrite(t.Context(), nil, insertReturningStatement(t))
+	require.ErrorContains(t, err, "rasql: executor must not be nil")
+}
+
+func TestQueryRenderedRejectsInvalidClient(t *testing.T) {
+	statement, err := render.Precompiled("SELECT id FROM users")
+	require.NoError(t, err)
+	_, err = rasql.Client{}.QueryRendered(t.Context(), statement)
+	require.ErrorContains(t, err, "rasql: invalid client")
+}
+
+func TestExecRenderedRejectsInvalidClient(t *testing.T) {
+	statement, err := render.Precompiled("DELETE FROM users")
+	require.NoError(t, err)
+	_, err = rasql.Client{}.ExecRendered(t.Context(), statement)
 	require.ErrorContains(t, err, "rasql: invalid client")
 }
 
@@ -737,7 +745,7 @@ func TestClientExecRejectsReturningStatement(t *testing.T) {
 	require.NoError(t, err)
 	statement := insertReturningStatement(t)
 
-	_, err = client.Exec(t.Context(), statement)
+	_, err = rasql.Exec(t.Context(), client, statement)
 	require.ErrorContains(t, err, "rasql: write statement has a RETURNING clause: use QueryWrite to read its rows")
 }
 
@@ -758,7 +766,7 @@ func TestClientExecStillAcceptsStatementWithoutReturning(t *testing.T) {
 		WithArgs("ada@example.com").
 		WillReturnResult(sqlmock.NewResult(42, 1))
 
-	_, err = client.Exec(t.Context(), statement)
+	_, err = rasql.Exec(t.Context(), client, statement)
 	require.NoError(t, err)
 }
 
@@ -851,6 +859,12 @@ type debugQueryer struct {
 }
 
 func (q *debugQueryer) QueryContext(_ context.Context, query string, arguments ...any) (*sql.Rows, error) {
+	q.query = query
+	q.arguments = append([]any(nil), arguments...)
+	return nil, nil
+}
+
+func (q *debugQueryer) ExecContext(_ context.Context, query string, arguments ...any) (sql.Result, error) {
 	q.query = query
 	q.arguments = append([]any(nil), arguments...)
 	return nil, nil

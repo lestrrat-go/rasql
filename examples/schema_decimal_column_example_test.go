@@ -69,7 +69,7 @@ func Example_schema_decimal_column() {
 		fmt.Printf("failed to reference id column: %s\n", err)
 		return
 	}
-	invoice, err := rasql.SelectFrom(client, invoices).WhereEqual(invoiceID, int64(1)).One(ctx)
+	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoiceID, int64(1)).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)
 		return

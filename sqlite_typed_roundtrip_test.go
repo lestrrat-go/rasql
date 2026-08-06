@@ -51,11 +51,11 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 	_, err = rasql.Insert(t.Context(), client, events, expected)
 	require.NoError(t, err)
 
-	actual, err := rasql.SelectFrom(client, events).WhereEqual(eventID, expected.ID).One(t.Context())
+	actual, err := rasql.SelectFrom(events).WhereEqual(eventID, expected.ID).One(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
 
-	_, err = rasql.SelectFrom(client, events).WhereEqual(eventID, expected.ID+1).One(t.Context())
+	_, err = rasql.SelectFrom(events).WhereEqual(eventID, expected.ID+1).One(t.Context(), client)
 	require.ErrorIs(t, err, rasql.ErrNoRows)
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
@@ -97,10 +97,10 @@ func TestSQLiteTypedSelectWhereInFiltersRows(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	actual, err := rasql.SelectFrom(client, users).
+	actual, err := rasql.SelectFrom(users).
 		WhereIn(userID, inserted[0].ID, inserted[2].ID).
 		OrderAsc(userID).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []user{inserted[0], inserted[2]}, actual)
 }
@@ -181,22 +181,22 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	highSpenders, err = highSpenders.WithWhere(query.GreaterThan(amount, query.Bind(50)))
 	require.NoError(t, err)
 
-	viaInSelect, err := rasql.SelectFrom(client, users).
+	viaInSelect, err := rasql.SelectFrom(users).
 		Where(query.InSelect(userID, highSpenders)).
 		OrderAsc(userID).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []user{insertedUsers[0], insertedUsers[2]}, viaInSelect)
 
 	average, err := query.NewSelect(orders.QueryTable(), query.Project(query.Avg(amount)))
 	require.NoError(t, err)
 
-	viaScalar, err := rasql.DecodeFrom[user](client, users).
+	viaScalar, err := rasql.DecodeFrom[user](users).
 		Project(query.Project(userID), query.Project(userEmail)).
 		Join(rasql.InnerJoin(orders, query.Equal(userID, orderUserID))).
 		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
 		OrderAsc(userID).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []user{insertedUsers[0], insertedUsers[2]}, viaScalar)
 }
@@ -250,17 +250,17 @@ func TestSQLiteTypedSelectScalarFunctionsFilterRows(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	byLowerEmail, err := rasql.SelectFrom(client, users).
+	byLowerEmail, err := rasql.SelectFrom(users).
 		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []user{inserted[0]}, byLowerEmail)
 
 	// COALESCE(score, 0) > 0 drops the NULL row: NULL coalesces to 0, which
 	// fails the comparison, while the row scored 10 keeps it.
-	byScore, err := rasql.SelectFrom(client, users).
+	byScore, err := rasql.SelectFrom(users).
 		Where(query.GreaterThan(query.Coalesce(score, query.Bind(0)), query.Bind(0))).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []user{inserted[0]}, byScore)
 
@@ -268,10 +268,10 @@ func TestSQLiteTypedSelectScalarFunctionsFilterRows(t *testing.T) {
 		ID    int64 `rasql:"id"`
 		Score int64 `rasql:"score"`
 	}
-	decoded, err := rasql.DecodeFrom[scoreRow](client, users).
+	decoded, err := rasql.DecodeFrom[scoreRow](users).
 		Project(query.Project(userID), query.Project(query.Coalesce(score, query.Bind(0))).As("score")).
 		OrderAsc(userID).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []scoreRow{
 		{ID: 1, Score: 10},
@@ -317,20 +317,20 @@ func TestSQLiteTypedSelectCountsRows(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	total, err := rasql.SelectFrom(client, events).Count(t.Context())
+	total, err := rasql.SelectFrom(events).Count(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), total)
 
-	active, err := rasql.SelectFrom(client, events).WhereEqual(eventActive, true).Count(t.Context())
+	active, err := rasql.SelectFrom(events).WhereEqual(eventActive, true).Count(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), active)
 
 	// Two predicates must both reach the counted statement, so the count has
 	// to drop the inactive row and the second active row alike.
-	activeFirst, err := rasql.SelectFrom(client, events).
+	activeFirst, err := rasql.SelectFrom(events).
 		WhereEqual(eventActive, true).
 		WhereEqual(eventID, int64(1)).
-		Count(t.Context())
+		Count(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), activeFirst)
 }
@@ -407,7 +407,7 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 	_, err = rasql.Insert(t.Context(), client, events, expected)
 	require.NoError(t, err)
 
-	actual, err := rasql.SelectFrom(client, events).WhereEqual(eventID, expected.ID).One(t.Context())
+	actual, err := rasql.SelectFrom(events).WhereEqual(eventID, expected.ID).One(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
 
@@ -417,7 +417,7 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 	_, err = rasql.Update(t.Context(), client, events, updated)
 	require.NoError(t, err)
 
-	actual, err = rasql.SelectFrom(client, events).WhereEqual(eventID, expected.ID).One(t.Context())
+	actual, err = rasql.SelectFrom(events).WhereEqual(eventID, expected.ID).One(t.Context(), client)
 	require.NoError(t, err)
 	require.Nil(t, actual.Note)
 }
@@ -461,7 +461,7 @@ func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
 	_, err = rasql.Insert(t.Context(), client, invoices, expected)
 	require.NoError(t, err)
 
-	actual, err := rasql.SelectFrom(client, invoices).WhereEqual(invoiceID, expected.ID).One(t.Context())
+	actual, err := rasql.SelectFrom(invoices).WhereEqual(invoiceID, expected.ID).One(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
 }
@@ -521,14 +521,14 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 		{query.Bind(int64(3)), query.Bind(int64(11)), query.Bind("created")},
 	})
 	require.NoError(t, err)
-	_, err = client.Exec(t.Context(), insertRows)
+	_, err = rasql.Exec(t.Context(), client, insertRows)
 	require.NoError(t, err)
 
 	// SELECT with a qualified predicate.
-	byUser, err := rasql.SelectFrom(client, events).
+	byUser, err := rasql.SelectFrom(events).
 		Where(query.Equal(userID, query.Bind(int64(10)))).
 		OrderAsc(id).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []eventRow{
 		{ID: 1, UserID: 10, Action: "created"},
@@ -540,11 +540,11 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 		UserID int64 `rasql:"user_id"`
 		Total  int64 `rasql:"total"`
 	}
-	grouped, err := rasql.DecodeFrom[userEventCount](client, events).
+	grouped, err := rasql.DecodeFrom[userEventCount](events).
 		Project(query.Project(userID), query.Project(query.CountAll()).As("total")).
 		GroupBy(userID).
 		OrderAsc(userID).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []userEventCount{
 		{UserID: 10, Total: 2},
@@ -559,10 +559,10 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	prolific, err = prolific.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
 	require.NoError(t, err)
-	viaSubquery, err := rasql.SelectFrom(client, events).
+	viaSubquery, err := rasql.SelectFrom(events).
 		Where(query.InSelect(userID, prolific)).
 		OrderAsc(id).
-		All(t.Context())
+		All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []eventRow{
 		{ID: 1, UserID: 10, Action: "created"},
@@ -574,18 +574,18 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	update, err = update.WithWhere(query.Equal(id, query.Bind(int64(1))))
 	require.NoError(t, err)
-	_, err = client.Exec(t.Context(), update)
+	_, err = rasql.Exec(t.Context(), client, update)
 	require.NoError(t, err)
 
-	updated, err := rasql.SelectFrom(client, events).WhereEqual(id, int64(1)).One(t.Context())
+	updated, err := rasql.SelectFrom(events).WhereEqual(id, int64(1)).One(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, "closed", updated.Action)
 
 	// DELETE against the qualified table, with a qualified predicate.
-	_, err = rasql.DeleteFrom(client, events).WhereEqual(id, int64(3)).Exec(t.Context())
+	_, err = rasql.DeleteFrom(events).WhereEqual(id, int64(3)).Exec(t.Context(), client)
 	require.NoError(t, err)
 
-	remaining, err := rasql.SelectFrom(client, events).OrderAsc(id).All(t.Context())
+	remaining, err := rasql.SelectFrom(events).OrderAsc(id).All(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, []eventRow{
 		{ID: 1, UserID: 10, Action: "closed"},
@@ -593,7 +593,7 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	}, remaining)
 }
 
-// TestSQLiteReturningRoundTrip exercises Client.QueryWrite against a real
+// TestSQLiteReturningRoundTrip exercises QueryWrite against a real
 // database: an INSERT reads back a database-assigned id and a defaulted
 // column through QueryWriteOne, then an UPDATE and a DELETE each read back
 // their affected rows through QueryWriteAll.
@@ -663,7 +663,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []deletedRow{{ID: 1}}, deleted)
 
-	remaining, err := rasql.SelectFrom(client, users).All(t.Context())
+	remaining, err := rasql.SelectFrom(users).All(t.Context(), client)
 	require.NoError(t, err)
 	require.Empty(t, remaining)
 }

@@ -14,25 +14,25 @@ The tables in this section enumerate every operation the public API offers. The 
 
 | Operation | Entry point | Result |
 | --- | --- | --- |
-| `SELECT` decoded as a table's row type | `rasql.SelectFrom(client, table)` | `TypedSelectBuilder[T]` |
-| `SELECT` decoded as a custom type | `rasql.DecodeFrom[R](client, table)` | `TypedSelectBuilder[R]` |
-| `SELECT` decoded from a table with no row type | `rasql.DecodeQueryFrom[R](client, queryTable)` | `TypedSelectBuilder[R]` |
-| `SELECT` without decoding | `client.SelectFrom(table.QueryTable())` | `SelectBuilder`, yielding `row.Row` |
+| `SELECT` decoded as a table's row type | `rasql.SelectFrom(table)` | `TypedSelectBuilder[T]` |
+| `SELECT` decoded as a custom type | `rasql.DecodeFrom[R](table)` | `TypedSelectBuilder[R]` |
+| `SELECT` decoded from a table with no row type | `rasql.DecodeQueryFrom[R](queryTable)` | `TypedSelectBuilder[R]` |
+| `SELECT` without decoding | `rasql.SelectQueryFrom(table.QueryTable())` | `SelectBuilder`, yielding `row.Row` |
 | `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
 | `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, client, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
-| `INSERT` of several rows | `query.NewInsertRows(table.QueryTable(), columns, rows)` then `client.Exec(ctx, statement)` | `sql.Result` |
+| `INSERT` of several rows | `query.NewInsertRows(table.QueryTable(), columns, rows)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | `UPDATE` of one typed row by primary key | `rasql.Update(ctx, client, table, value)` | `sql.Result` |
-| `DELETE` by predicate | `rasql.DeleteFrom(client, table)` | `DeleteBuilder` |
+| `DELETE` by predicate | `rasql.DeleteFrom(table)` | `DeleteBuilder` |
 | `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |
-| Upsert, partial update | `query.New…` then `client.Exec(ctx, statement)` | `sql.Result` |
-| Write with `RETURNING` | `query.New….WithReturning(...)` then `client.QueryWrite(ctx, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Row` or `[]T` / `T` |
+| Upsert, partial update | `query.New…` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
+| Write with `RETURNING` | `query.New….WithReturning(...)` then `rasql.QueryWrite(ctx, client, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Row` or `[]T` / `T` |
 | Compiled [static template](05-templates.md) | `client.ExecRendered(ctx, statement)` | `sql.Result` |
 
 Writes are covered in [Writing rows](04-writing.md); the rest of this page covers reads.
 
 ### Select builder methods
 
-`✓` marks the builders that carry the method. The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeQueryFrom`; the untyped one from `client.SelectFrom`.
+`✓` marks the builders that carry the method. The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeQueryFrom`; the untyped one from `rasql.SelectQueryFrom`.
 
 The two builders differ in how they name a column. The typed builder takes a `query.Column`, usually a generated field such as `users.ID`, so a wrong name does not compile and a join can order by a column of any table in the statement. The untyped builder has exactly one table and no generated columns, so it keeps plain names.
 
@@ -263,10 +263,10 @@ func Example_rasql_scalar_function() {
 
 	// LOWER(email) matches "Ada@Example.com" against the lower-case literal a
 	// caller would type, regardless of how the stored value was cased.
-	byEmail, err := rasql.DecodeFrom[memberName](client, members).
+	byEmail, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query member by email: %s\n", err)
 		return
@@ -281,10 +281,10 @@ func Example_rasql_scalar_function() {
 
 	// COALESCE(nickname, email) reads every member's display name, falling
 	// back to the email once nickname is NULL.
-	names, err := rasql.DecodeFrom[memberName](client, members).
+	names, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		OrderAsc(id).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query member names: %s\n", err)
 		return
@@ -327,12 +327,12 @@ owned, err = owned.WithWhere(query.Equal(projects.OwnerID, query.Bind(7)))
 allTasks, err := tasks.As("all_tasks")
 average, err := query.NewSelect(allTasks.QueryTable(), query.Project(query.Avg(allTasks.Priority)))
 
-rows, err := rasql.DecodeFrom[taskSummary](client, tasks).
+rows, err := rasql.DecodeFrom[taskSummary](tasks).
 	Project(query.Project(tasks.ID), query.Project(tasks.Title)).
 	Where(query.InSelect(tasks.ProjectID, owned)).
 	Where(query.GreaterThanOrEqual(tasks.Priority, query.Scalar(average))).
 	OrderAsc(tasks.ID).
-	All(ctx)
+	All(ctx, client)
 ```
 
 `query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit; the arguments a subquery binds join the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an `OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject; PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`.
@@ -422,11 +422,11 @@ func Example_rasql_typed_query() {
 
 	// SelectFrom knows the UsersRow result type from users. Query yields decoded
 	// rows directly, so the loop does not need manual scanning or conversion.
-	rows, err := rasql.SelectFrom(client, users).
+	rows, err := rasql.SelectFrom(users).
 		OrderAsc(users.Email).
 		Offset(1).
 		Limit(2).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -452,7 +452,7 @@ source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat
 `One` also reports the result's row count: it returns `rasql.ErrNoRows` when the statement matched no rows and `rasql.ErrMultipleRows` when it matched more than one. `rasql.ErrNoRows` wraps `sql.ErrNoRows`, so `errors.Is(err, sql.ErrNoRows)` holds too, and code already written against `database/sql` keeps working:
 
 ```go
-user, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, id).One(ctx)
+user, err := rasql.SelectFrom(users).WhereEqual(users.ID, id).One(ctx, client)
 if errors.Is(err, rasql.ErrNoRows) {
 	// no such user
 }
@@ -462,7 +462,7 @@ if errors.Is(err, rasql.ErrNoRows) {
 
 ## Filter, order, and page
 
-`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.Column` and cover the common cases without importing the `query` package. Generated tables expose one field per column, so `users.ID` is the whole reference. `Limit` and `Offset` page the result. The untyped builder from `client.SelectFrom` also has `Select`, which narrows the projection to named columns.
+`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.Column` and cover the common cases without importing the `query` package. Generated tables expose one field per column, so `users.ID` is the whole reference. `Limit` and `Offset` page the result. The untyped builder from `rasql.SelectQueryFrom` also has `Select`, which narrows the projection to named columns.
 
 `WhereIn` covers a membership test the same way. It needs at least one value: an empty list makes `Build`, `Query`, `All`, and `One` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect. A non-empty list binds each value as its own placeholder:
 
@@ -520,10 +520,10 @@ func Example_rasql_where_in() {
 	// WhereIn binds one placeholder per value and skips the users whose id is
 	// not in the list. The list must hold at least one value: an empty one makes
 	// Query return an error instead of rendering IN (), which is not valid SQL.
-	rows, err := rasql.SelectFrom(client, users).
+	rows, err := rasql.SelectFrom(users).
 		WhereIn(users.ID, 1, 3).
 		OrderAsc(users.ID).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -547,13 +547,13 @@ source: [examples/rasql_where_in_example_test.go](https://github.com/lestrrat-go
 For anything richer, `Where` and `Order` accept expressions from the `query` package:
 
 ```go
-rows, err := rasql.SelectFrom(client, users).
+rows, err := rasql.SelectFrom(users).
 	Where(query.And(
 		query.GreaterThan(users.ID, query.Bind(10)),
 		query.IsNotNull(users.ID),
 	)).
 	Order(query.Desc(users.ID)).
-	Query(ctx)
+	Query(ctx, client)
 ```
 
 A generated field cannot name a column the table does not have, because the field would not exist. A table built at run time has no such fields, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column; a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
@@ -701,12 +701,12 @@ func Example_rasql_subquery() {
 	// InSelect keeps orders placed by a domain user without costing one
 	// argument per candidate id, and Scalar compares amount against the
 	// average of every order.
-	rows, err := rasql.DecodeFrom[orderSummary](client, orders).
+	rows, err := rasql.DecodeFrom[orderSummary](orders).
 		Project(query.Project(orderUserID).As("user_id"), query.Project(amount)).
 		Where(query.InSelect(orderUserID, domainUsers)).
 		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
 		Order(query.Asc(amount)).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
 		return
@@ -785,14 +785,14 @@ func Example_rasql_count() {
 	// Count runs COUNT(*) over the builder's WHERE and joins, without decoding
 	// any row into a UserRow. It rejects a builder with Limit or Offset set,
 	// since a count of a paged statement is not the count the caller asked for.
-	total, err := rasql.SelectFrom(client, users).Count(ctx)
+	total, err := rasql.SelectFrom(users).Count(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to count users: %s\n", err)
 		return
 	}
 	fmt.Println("total:", total)
 
-	filtered, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 2).Count(ctx)
+	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID, 2).Count(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
 		return
@@ -897,12 +897,12 @@ func Example_rasql_group_by() {
 	// bare column beside COUNT(*) is refused without one. Having filters
 	// groups after aggregation, so it may call an aggregate a WHERE clause
 	// could not.
-	rows, err := rasql.DecodeFrom[statusCount](client, tasks).
+	rows, err := rasql.DecodeFrom[statusCount](tasks).
 		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Order(query.Asc(status)).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)
 		return
@@ -1011,11 +1011,11 @@ func Example_rasql_distinct() {
 	// Distinct is meaningful here because Project narrows the result to
 	// user_id alone; SelectFrom would already select the orders primary key,
 	// which makes every row unique before DISTINCT runs.
-	rows, err := rasql.DecodeFrom[orderingUser](client, orders).
+	rows, err := rasql.DecodeFrom[orderingUser](orders).
 		Project(query.Project(orderUserID).As("user_id")).
 		Distinct().
 		Order(query.Asc(orderUserID)).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)
 		return
@@ -1050,9 +1050,9 @@ manager, err := employees.As("manager")
 if err != nil {
 	return err
 }
-rows, err := rasql.SelectFrom(client, employees).
+rows, err := rasql.SelectFrom(employees).
 	Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
-	Query(ctx)
+	Query(ctx, client)
 ```
 
 `employees.ID` still renders as `"employees"."id"`, while `manager.ID` renders as `"manager"."id"`. `As` fails when the alias is not a valid identifier.
@@ -1174,12 +1174,12 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
-	rows, err := rasql.DecodeFrom[orderSummary](client, users).
+	rows, err := rasql.DecodeFrom[orderSummary](users).
 		Join(rasql.InnerJoin(orders, query.Equal(users.ID, orderUserID))).
 		Project(query.Project(users.ID).As("user_id"), query.Project(users.Email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to build order totals query: %s\n", err)
 		return
@@ -1203,7 +1203,7 @@ source: [examples/rasql_dynamic_projection_example_test.go](https://github.com/l
 
 ## See the SQL without a database
 
-`rasql.New` accepts any `rasql.Queryer`, not only `*sql.DB` and `*sql.Tx`. A few lines of debug implementation print statements instead of running them, which is useful for checking what a builder produces against each dialect.
+`rasql.New` accepts any `rasql.Handle`, not only `*sql.DB` and `*sql.Tx`. A few lines of debug implementation print statements instead of running them, which is useful for checking what a builder produces against each dialect.
 
 <!-- INCLUDE(examples/rasql_debug_query_example_test.go) -->
 ```go
@@ -1218,7 +1218,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 )
 
-// statementPrinter is a debug-only rasql.Queryer. It follows the same
+// statementPrinter is a debug-only rasql.Handle. It follows the same
 // QueryContext contract as *sql.DB, but prints statements instead of running them.
 type statementPrinter struct{}
 
@@ -1228,9 +1228,15 @@ func (statementPrinter) QueryContext(_ context.Context, query string, arguments 
 	return nil, nil
 }
 
+func (statementPrinter) ExecContext(_ context.Context, query string, arguments ...any) (sql.Result, error) {
+	fmt.Println(query)
+	fmt.Printf("%v\n", arguments)
+	return nil, fmt.Errorf("statementPrinter does not execute statements")
+}
+
 func Example_rasql_debug_query() {
 	// This example prints the SQL for a typed query without opening a database.
-	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Queryer. This
+	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Handle. This
 	// debug Queryer lets the example show the generated statement without a database.
 	client, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
 	if err != nil {
@@ -1241,7 +1247,7 @@ func Example_rasql_debug_query() {
 	// users is declared in query_example_tables_test.go with the shape rasqlgen
 	// emits; an application would write store.Users() instead.
 	count := 0
-	rows, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).Query(context.Background())
+	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Query(context.Background(), client)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

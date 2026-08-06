@@ -131,13 +131,13 @@ func Example_rasql_static_template() {
 		return
 	}
 
-	// QueryRendered creates the rangeable sequence from the template statement.
-	rows, err := client.QueryRendered(ctx, statement)
+	// QueryRendered runs the template statement; row.Scan turns its rows into a rangeable sequence.
+	sqlRows, err := client.QueryRendered(ctx, statement)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
 	}
-	for result, err := range rows {
+	for result, err := range row.Scan(sqlRows) {
 		if err != nil {
 			fmt.Printf("failed to query user: %s\n", err)
 			return
