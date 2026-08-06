@@ -401,6 +401,8 @@ func rowFieldType(logicalType schema.LogicalType) string {
 		return "[]byte"
 	case schema.TypeTime:
 		return "time.Time"
+	case schema.TypeDecimal:
+		return "string"
 	default:
 		return "any"
 	}
@@ -437,6 +439,17 @@ func writeColumns(source *bytes.Buffer, columns []schema.Column, indent string) 
 		if column.Default != "" {
 			source.WriteString(", Default: ")
 			source.WriteString(quote(column.Default))
+		}
+		if column.Precision != 0 {
+			source.WriteString(", Precision: ")
+			source.WriteString(strconv.Itoa(column.Precision))
+		}
+		// A stated scale is emitted even when it is zero, because Scale's zero
+		// value means no scale was stated and would not validate.
+		if scale, stated := column.Scale.Value(); stated {
+			source.WriteString(", Scale: schema.NewDecimalScale(")
+			source.WriteString(strconv.Itoa(scale))
+			source.WriteString(")")
 		}
 		source.WriteString("},\n")
 	}
@@ -584,6 +597,8 @@ func typeConstant(logicalType schema.LogicalType) string {
 		return "schema.TypeJSON"
 	case schema.TypeUUID:
 		return "schema.TypeUUID"
+	case schema.TypeDecimal:
+		return "schema.TypeDecimal"
 	default:
 		return "schema.LogicalType(" + quote(string(logicalType)) + ")"
 	}

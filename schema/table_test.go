@@ -1,6 +1,7 @@
 package schema_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -21,6 +22,60 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	require.Equal(t, "id", table.PrimaryKey[0])
 	require.Equal(t, "customer_id", table.Indexes[0].Columns[0])
 	require.Equal(t, "id", table.ForeignKeys[0].ReferencedColumns[0])
+
+	amount, ok := table.Column("amount")
+	require.True(t, ok)
+	require.Equal(t, 19, amount.Precision)
+	scale, stated := amount.Scale.Value()
+	require.True(t, stated)
+	require.Equal(t, 4, scale)
+}
+
+// TestDecimalScale covers the distinction the type exists for: a stated scale
+// of zero must not read back the same as a scale nobody stated.
+func TestDecimalScale(t *testing.T) {
+	var unstated schema.DecimalScale
+	_, stated := unstated.Value()
+	require.False(t, stated)
+
+	value, stated := schema.NewDecimalScale(0).Value()
+	require.True(t, stated)
+	require.Equal(t, 0, value)
+
+	value, stated = schema.NewDecimalScale(4).Value()
+	require.True(t, stated)
+	require.Equal(t, 4, value)
+}
+
+// TestDecimalScaleJSON pins the snapshot form rasqlgen's -input reads: a
+// stated scale is a plain JSON number, and an unstated one is null rather than
+// a number that would decode back as a stated scale of zero.
+func TestDecimalScaleJSON(t *testing.T) {
+	encoded, err := json.Marshal(schema.Column{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(0)})
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"Scale":0`)
+
+	encoded, err = json.Marshal(schema.Column{Name: "id", Type: schema.TypeInteger})
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"Scale":null`)
+
+	var decoded schema.Column
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"amount","Type":"decimal","Precision":19,"Scale":0}`), &decoded))
+	scale, stated := decoded.Scale.Value()
+	require.True(t, stated)
+	require.Equal(t, 0, scale)
+
+	decoded = schema.Column{}
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"amount","Type":"decimal","Precision":19}`), &decoded))
+	_, stated = decoded.Scale.Value()
+	require.False(t, stated)
+
+	decoded = schema.Column{}
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"amount","Type":"decimal","Precision":19,"Scale":null}`), &decoded))
+	_, stated = decoded.Scale.Value()
+	require.False(t, stated)
+
+	require.Error(t, json.Unmarshal([]byte(`{"Scale":"four"}`), &decoded))
 }
 
 func TestTableColumn(t *testing.T) {
@@ -121,6 +176,30 @@ func TestTableValidate(t *testing.T) {
 				ReferencedColumns: []string{"id"},
 			}},
 		},
+		"decimal column with zero precision": {
+			Name:    "payments",
+			Columns: []schema.Column{{Name: "amount", Type: schema.TypeDecimal, Precision: 0, Scale: schema.NewDecimalScale(0)}},
+		},
+		"decimal column with negative scale": {
+			Name:    "payments",
+			Columns: []schema.Column{{Name: "amount", Type: schema.TypeDecimal, Precision: 4, Scale: schema.NewDecimalScale(-1)}},
+		},
+		"decimal scale exceeds precision": {
+			Name:    "payments",
+			Columns: []schema.Column{{Name: "amount", Type: schema.TypeDecimal, Precision: 4, Scale: schema.NewDecimalScale(5)}},
+		},
+		"decimal column with no scale": {
+			Name:    "payments",
+			Columns: []schema.Column{{Name: "amount", Type: schema.TypeDecimal, Precision: 19}},
+		},
+		"precision on non-decimal column": {
+			Name:    "payments",
+			Columns: []schema.Column{{Name: "amount", Type: schema.TypeText, Precision: 3}},
+		},
+		"scale on non-decimal column": {
+			Name:    "payments",
+			Columns: []schema.Column{{Name: "amount", Type: schema.TypeText, Scale: schema.NewDecimalScale(0)}},
+		},
 	}
 
 	for name, table := range tests {
@@ -132,6 +211,67 @@ func TestTableValidate(t *testing.T) {
 			require.True(t, errors.As(err, &validationErr))
 		})
 	}
+}
+
+// TestTableValidateDecimalColumnMessages pins the exact wording of each
+// decimal validation error, since TestTableValidate's shared case table only
+// checks that a *schema.ValidationError came back, not what it says.
+func TestTableValidateDecimalColumnMessages(t *testing.T) {
+	tests := map[string]struct {
+		column  schema.Column
+		wantErr string
+	}{
+		"zero precision": {
+			column:  schema.Column{Name: "amount", Type: schema.TypeDecimal, Precision: 0, Scale: schema.NewDecimalScale(0)},
+			wantErr: "must state a precision of at least 1",
+		},
+		"negative scale": {
+			column:  schema.Column{Name: "amount", Type: schema.TypeDecimal, Precision: 4, Scale: schema.NewDecimalScale(-1)},
+			wantErr: "must not be negative",
+		},
+		"scale exceeds precision": {
+			column:  schema.Column{Name: "amount", Type: schema.TypeDecimal, Precision: 4, Scale: schema.NewDecimalScale(5)},
+			wantErr: "scale 5 exceeds precision 4",
+		},
+		"no scale at all": {
+			column:  schema.Column{Name: "amount", Type: schema.TypeDecimal, Precision: 19},
+			wantErr: "must state a scale",
+		},
+		"precision on non-decimal column": {
+			column:  schema.Column{Name: "amount", Type: schema.TypeText, Precision: 3},
+			wantErr: "apply only to a decimal column",
+		},
+		"scale on non-decimal column": {
+			column:  schema.Column{Name: "amount", Type: schema.TypeText, Scale: schema.NewDecimalScale(0)},
+			wantErr: "apply only to a decimal column",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			table := schema.Table{Name: "payments", Columns: []schema.Column{test.column}}
+			err := table.Validate()
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
+// TestTableValidateAcceptsDecimalColumn is the positive counterpart: a
+// decimal column with a valid precision and scale must validate cleanly. A
+// stated scale of zero is one of those valid scales, so it is covered here
+// rather than among the rejections.
+func TestTableValidateAcceptsDecimalColumn(t *testing.T) {
+	table := schema.Table{
+		Name: "payments",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "quantity", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(0)},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	require.NoError(t, table.Validate())
 }
 
 func TestTableValidateDuplicateConstraintNameReportsPath(t *testing.T) {
@@ -192,6 +332,7 @@ func validTable() schema.Table {
 			{Name: "id", Type: schema.TypeInteger},
 			{Name: "customer_id", Type: schema.TypeInteger},
 			{Name: "status", Type: schema.TypeText, Default: "'new'"},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
 		},
 		PrimaryKey: []string{"id"},
 		UniqueConstraints: []schema.UniqueConstraint{{

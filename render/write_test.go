@@ -246,7 +246,7 @@ func (upsertOnlyDialect) QuoteIdentifier(name string) (string, error) { return `
 
 func (upsertOnlyDialect) Placeholder(int) (string, error) { return "?", nil }
 
-func (upsertOnlyDialect) TypeName(schema.LogicalType) (string, error) { return "", nil }
+func (upsertOnlyDialect) TypeName(schema.Column) (string, error) { return "", nil }
 
 func (d upsertOnlyDialect) UpsertStyle() dialect.UpsertStyle { return d.style }
 

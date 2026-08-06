@@ -237,6 +237,31 @@ func TestAssignRejectsExactDecimalSourcesForFloat64(t *testing.T) {
 	})
 }
 
+// TestAssignDecodesExactDecimalIntoString is the mirror of
+// TestAssignRejectsExactDecimalSourcesForFloat64: the same two driver values
+// that a float64 destination rejects both decode cleanly into a string, with
+// every digit unchanged. Nothing in row/ changes for schema.TypeDecimal, so
+// this test exists to pin the behavior that design depends on.
+func TestAssignDecodesExactDecimalIntoString(t *testing.T) {
+	t.Run("string source", func(t *testing.T) {
+		result, err := row.New([]string{"pg_numeric"}, []any{"1234.5678901234567890"})
+		require.NoError(t, err)
+
+		var destination string
+		require.NoError(t, row.Assign(result, "pg_numeric", &destination))
+		require.Equal(t, "1234.5678901234567890", destination)
+	})
+
+	t.Run("byte slice source", func(t *testing.T) {
+		result, err := row.New([]string{"mysql_decimal"}, []any{[]byte("1234.5678901234567890")})
+		require.NoError(t, err)
+
+		var destination string
+		require.NoError(t, row.Assign(result, "mysql_decimal", &destination))
+		require.Equal(t, "1234.5678901234567890", destination)
+	})
+}
+
 // selfDecodedUser maps its own columns and carries a tag that names a different
 // column, so a decode through the tag is distinguishable from one through the method.
 type selfDecodedUser struct {
