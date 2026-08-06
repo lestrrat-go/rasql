@@ -189,6 +189,27 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	requireSameDecimal(t, firstStored.Amount, coalesced.first)
 	requireSameDecimal(t, secondStored.Amount, coalesced.second)
 
+	// NULLIF is the counterexample the documentation on query.Coalesce and in
+	// docs/03-querying.md now names: the widening above is not a property of
+	// mixing any function with a placeholder, it is a property of a function
+	// whose result type is resolved across all of its arguments. MySQL types
+	// NULLIF from its first argument alone, so a decimal column passed first
+	// keeps its declared DECIMAL(19,4) and decodes at scale 4 even though the
+	// second argument is a scaleless placeholder. PostgreSQL types NULLIF the
+	// same way, so both live dialects read back the plain-column strings the
+	// expectations above already state, and this projection needs no
+	// per-dialect pair of its own. Neither amount equals the bound "0.0000",
+	// so NULLIF returns the column value on every row.
+	viaNullIf, err := rasql.DecodeFrom[amountRow](client, records).
+		Project(query.Project(recordID), query.Project(query.Func("NULLIF", scalarAmount, query.Bind("0.0000"))).As("amount")).
+		OrderAsc(recordID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []amountRow{
+		{ID: first.ID, Amount: firstStored.Amount},
+		{ID: second.ID, Amount: secondStored.Amount},
+	}, viaNullIf)
+
 	total, err := rasql.SelectFrom(client, records).Count(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)

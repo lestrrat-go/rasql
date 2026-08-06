@@ -441,9 +441,14 @@ func Avg(expression Expression) Function {
 // placeholders. PostgreSQL and SQLite are unaffected: both return the value at
 // its own scale. The same widening reaches a call built with Func that mixes a
 // decimal column with a bound value only when the named function's own MySQL
-// type rules resolve a common decimal result type across its arguments, as
-// IFNULL and NULLIF do. A function that returns a string or an integer, such
-// as CONCAT, has no decimal result scale to widen and is unaffected.
+// type rules resolve a common decimal result type across all of its arguments,
+// as IFNULL, GREATEST, and LEAST do. A function that types its result from a
+// single argument keeps that argument's scale instead: MySQL types NULLIF from
+// its first argument, so NULLIF on a decimal column passed first keeps the
+// column's declared scale, while the same call with the placeholder first
+// widens. The rule is about which argument the result takes its type from, not
+// about the function name. A function that returns a string or an integer,
+// such as CONCAT, has no decimal result scale to widen and is unaffected.
 func Coalesce(expressions ...Expression) Function {
 	return Call(FunctionCoalesce, expressions...)
 }
