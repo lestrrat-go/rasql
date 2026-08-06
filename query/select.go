@@ -229,7 +229,7 @@ func (s Select) Validate() error {
 			return validationError(path+".source", "duplicates table reference %q", join.source.Qualifier())
 		}
 		sources[join.source.key()] = struct{}{}
-		if err := validateClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {
+		if err := validateSelectClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {
 			return err
 		}
 	}
@@ -239,7 +239,7 @@ func (s Select) Validate() error {
 		return err
 	}
 	if s.where != nil {
-		if err := validateClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
+		if err := validateSelectClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
 	}
@@ -268,7 +268,7 @@ func (s Select) Validate() error {
 // unsupported GROUP BY, exactly as in the projection set itself.
 func validateOrder(order Order, sources map[string]struct{}, projections expressionUsage, path string) error {
 	if !projections.aggregate {
-		return validateClauseExpression(order.expression, sources, "an ORDER BY clause", path)
+		return validateSelectClauseExpression(order.expression, sources, "an ORDER BY clause", path)
 	}
 	usage, err := validateExpression(order.expression, aggregateClauseContext(sources, "an ORDER BY clause"), path)
 	if err != nil {
