@@ -101,6 +101,8 @@ type Select struct {
 	from        Table
 	joins       []Join
 	where       Expression
+	groupBy     []Expression
+	having      Expression
 	orderBy     []Order
 	limit       int
 	hasLimit    bool
@@ -112,6 +114,25 @@ type Select struct {
 func NewSelect(from Table, projections ...Projection) (Select, error) {
 	statement := Select{
 		from:        from,
+		projections: append([]Projection(nil), projections...),
+	}
+	if err := statement.Validate(); err != nil {
+		return Select{}, err
+	}
+	return statement, nil
+}
+
+// NewGroupedSelect creates a validated grouped SELECT statement.
+// It is NewSelect for a statement that groups. The grouping has to be supplied
+// here rather than added afterwards, because a grouped statement may project a
+// column outside an aggregate beside one and an ungrouped statement may not, so
+// NewSelect would refuse the projection set before WithGroupBy could make it
+// legal. A grouping expression must not call an aggregate function and must not
+// be a bare bound value.
+func NewGroupedSelect(from Table, groupBy []Expression, projections ...Projection) (Select, error) {
+	statement := Select{
+		from:        from,
+		groupBy:     append([]Expression(nil), groupBy...),
 		projections: append([]Projection(nil), projections...),
 	}
 	if err := statement.Validate(); err != nil {
@@ -134,6 +155,36 @@ func (s Select) WithJoin(join Join) (Select, error) {
 func (s Select) WithWhere(expression Expression) (Select, error) {
 	copy := s.clone()
 	copy.where = expression
+	if err := copy.Validate(); err != nil {
+		return Select{}, err
+	}
+	return copy, nil
+}
+
+// WithGroupBy returns a copy of s with expressions appended to its grouping.
+// It refines a statement NewSelect already accepted, which is every statement
+// whose projections either all aggregate or never aggregate. A projection set
+// that mixes the two has to start from NewGroupedSelect, because NewSelect
+// refuses it before this method can be called.
+func (s Select) WithGroupBy(expressions ...Expression) (Select, error) {
+	copy := s.clone()
+	copy.groupBy = append(copy.groupBy, expressions...)
+	if err := copy.Validate(); err != nil {
+		return Select{}, err
+	}
+	return copy, nil
+}
+
+// WithHaving returns a copy of s with expression as its grouped predicate,
+// replacing any predicate set before it.
+// HAVING filters groups after aggregation, so it may call an aggregate. It
+// requires a statement that groups: either an explicit GROUP BY, or a
+// projection set in which every projection aggregates, which is one group.
+// Without a GROUP BY it follows the same rule as ORDER BY over an aggregating
+// statement, and may read a column only inside an aggregate.
+func (s Select) WithHaving(expression Expression) (Select, error) {
+	copy := s.clone()
+	copy.having = expression
 	if err := copy.Validate(); err != nil {
 		return Select{}, err
 	}
@@ -192,6 +243,16 @@ func (s Select) Where() Expression {
 	return s.where
 }
 
+// GroupBy returns a copy of the grouping expressions.
+func (s Select) GroupBy() []Expression {
+	return append([]Expression(nil), s.groupBy...)
+}
+
+// Having returns the grouped predicate, or nil when none is set.
+func (s Select) Having() Expression {
+	return s.having
+}
+
 // OrderBy returns a copy of result ordering.
 func (s Select) OrderBy() []Order {
 	return append([]Order(nil), s.orderBy...)
@@ -234,7 +295,18 @@ func (s Select) Validate() error {
 		}
 	}
 
-	projections, err := s.validateProjectionSet(sources)
+	grouped := len(s.groupBy) > 0
+	for i, expression := range s.groupBy {
+		path := fmt.Sprintf("group_by[%d]", i)
+		if err := validateClauseExpression(expression, sources, "a GROUP BY clause", path); err != nil {
+			return err
+		}
+		if _, ok := expression.(Value); ok {
+			return validationError(path, "must not be a bound value")
+		}
+	}
+
+	projections, err := s.validateProjectionSet(sources, grouped)
 	if err != nil {
 		return err
 	}
@@ -243,8 +315,20 @@ func (s Select) Validate() error {
 			return err
 		}
 	}
+	if s.having != nil {
+		if !grouped && !projections.aggregate {
+			return validationError("having", "requires a GROUP BY clause or a projection set that aggregates")
+		}
+		usage, err := validateExpression(s.having, aggregateClauseContext(sources, "a HAVING clause"), "having")
+		if err != nil {
+			return err
+		}
+		if !grouped && usage.bareColumn {
+			return validationError("having", "reads a column outside an aggregate function while the projections aggregate, which requires a GROUP BY clause")
+		}
+	}
 	for i, order := range s.orderBy {
-		if err := validateOrder(order, sources, projections, fmt.Sprintf("order_by[%d]", i)); err != nil {
+		if err := validateOrder(order, sources, projections, grouped, fmt.Sprintf("order_by[%d]", i)); err != nil {
 			return err
 		}
 	}
@@ -257,16 +341,23 @@ func (s Select) Validate() error {
 	return nil
 }
 
-// validateOrder validates one ORDER BY expression against what the projection
-// set does, which projections reports. ORDER BY runs after aggregation, so the
-// legal shape follows the projections and has exactly two cases, because
-// validateProjectionSet already refused the mixed set. Projections that never
-// aggregate leave one result row per source row, so ORDER BY reads columns
-// freely and must not aggregate. Projections that all aggregate leave a single
-// group, so ORDER BY may call an aggregate, while a column it reads outside
-// every aggregate belongs to no row of that group and would need the
-// unsupported GROUP BY, exactly as in the projection set itself.
-func validateOrder(order Order, sources map[string]struct{}, projections expressionUsage, path string) error {
+// validateOrder validates one ORDER BY expression against what the statement
+// groups and what the projection set does, which projections reports. ORDER BY
+// runs after aggregation. A statement that groups explicitly may read its
+// grouping keys freely and may call an aggregate, so no bareColumn check
+// applies. An ungrouped statement follows the projection set instead, which has
+// exactly two cases because validateProjectionSet already refused the mixed
+// set: projections that never aggregate leave one result row per source row, so
+// ORDER BY reads columns freely and must not aggregate; projections that all
+// aggregate leave a single implicit group, so ORDER BY may call an aggregate,
+// while a column it reads outside every aggregate belongs to no row of that
+// group and needs an explicit GROUP BY, exactly as in the projection set
+// itself.
+func validateOrder(order Order, sources map[string]struct{}, projections expressionUsage, grouped bool, path string) error {
+	if grouped {
+		_, err := validateExpression(order.expression, aggregateClauseContext(sources, "an ORDER BY clause"), path)
+		return err
+	}
 	if !projections.aggregate {
 		return validateSelectClauseExpression(order.expression, sources, "an ORDER BY clause", path)
 	}
@@ -275,7 +366,7 @@ func validateOrder(order Order, sources map[string]struct{}, projections express
 		return err
 	}
 	if usage.bareColumn {
-		return validationError(path, "reads a column outside an aggregate function while the projections aggregate, which requires the unsupported GROUP BY")
+		return validationError(path, "reads a column outside an aggregate function while the projections aggregate, which requires a GROUP BY clause")
 	}
 	return nil
 }
@@ -283,13 +374,15 @@ func validateOrder(order Order, sources map[string]struct{}, projections express
 // validateProjectionSet validates every projection and the rules that span the
 // set, and reports what the set as a whole reads so a later clause can apply the
 // rules that depend on it. A statement that both aggregates and reads a column
-// outside an aggregate needs GROUP BY to mean anything, and GROUP BY is
-// unsupported, so no such statement has a rendering any supported dialect
-// answers usefully: PostgreSQL rejects the ungrouped column and SQLite pairs the
-// aggregate with an arbitrary row. Validation refuses the combination instead,
-// which leaves every accepted set either free of aggregates or entirely
-// aggregate.
-func (s Select) validateProjectionSet(sources map[string]struct{}) (expressionUsage, error) {
+// outside an aggregate needs GROUP BY to mean anything, so an ungrouped
+// statement refuses the combination instead of rendering SQL no supported
+// dialect answers usefully: PostgreSQL rejects the ungrouped column and SQLite
+// pairs the aggregate with an arbitrary row. A grouped statement may mix the two
+// freely; validation does not check that a column projected outside an
+// aggregate appears among the grouping keys, and leaves that to the database,
+// because a precise version of that check needs primary-key and outer-join
+// reasoning this package does not have.
+func (s Select) validateProjectionSet(sources map[string]struct{}, grouped bool) (expressionUsage, error) {
 	var (
 		total         expressionUsage
 		aggregatePath string
@@ -314,8 +407,8 @@ func (s Select) validateProjectionSet(sources map[string]struct{}) (expressionUs
 		}
 		total = total.merge(usage)
 	}
-	if total.aggregate && total.bareColumn {
-		return expressionUsage{}, validationError(columnPath+".expression", "reads a column outside an aggregate function while %s aggregates, which requires the unsupported GROUP BY", aggregatePath)
+	if !grouped && total.aggregate && total.bareColumn {
+		return expressionUsage{}, validationError(columnPath+".expression", "reads a column outside an aggregate function while %s aggregates, which requires a GROUP BY clause", aggregatePath)
 	}
 	return total, nil
 }
@@ -324,6 +417,7 @@ func (s Select) clone() Select {
 	copy := s
 	copy.projections = append([]Projection(nil), s.projections...)
 	copy.joins = append([]Join(nil), s.joins...)
+	copy.groupBy = append([]Expression(nil), s.groupBy...)
 	copy.orderBy = append([]Order(nil), s.orderBy...)
 	return copy
 }

@@ -263,6 +263,62 @@ func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
 	require.Equal(t, []summary{{UserID: 42, Email: "ada@example.com"}}, decoded)
 }
 
+// TestDecodeFromDecodesGroupedRows proves a grouped aggregate query reaches a
+// typed caller: GroupBy and Having on TypedSelectBuilder render into the
+// statement DecodeFrom builds, and the two result columns decode into a
+// two-field result struct.
+func TestDecodeFromDecodesGroupedRows(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	type task struct {
+		ID     int64  `rasql:"id"`
+		Status string `rasql:"status"`
+	}
+	tasks, err := rasql.NewTable[task](schema.Table{
+		Name: "tasks",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "status", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	status, err := tasks.Column("status")
+	require.NoError(t, err)
+
+	type statusCount struct {
+		Status string `rasql:"status"`
+		Total  int64  `rasql:"total"`
+	}
+
+	mock.ExpectQuery("SELECT \"tasks\".\"status\", COUNT(*) AS \"total\" FROM \"tasks\" GROUP BY \"tasks\".\"status\" HAVING (COUNT(*) > $1)").
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "total"}).
+			AddRow("open", int64(3)).
+			AddRow("done", int64(5)))
+
+	rows, err := rasql.DecodeFrom[statusCount](client, tasks).
+		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
+		GroupBy(status).
+		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		Query(t.Context())
+	require.NoError(t, err)
+	decoded := make([]statusCount, 0)
+	for value, err := range rows {
+		require.NoError(t, err)
+		decoded = append(decoded, value)
+	}
+	require.Equal(t, []statusCount{{Status: "open", Total: 3}, {Status: "done", Total: 5}}, decoded)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)

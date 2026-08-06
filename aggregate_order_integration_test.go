@@ -28,6 +28,11 @@ type aggregateOrderingCase struct {
 	// bareColumnSQL. It is the one point the two servers disagree on, so the
 	// test's doc comment carries the reason.
 	serverRefusesBareColumn bool
+	// nonAggregateHavingSQL spells, in this dialect's quoting, a HAVING clause
+	// on a query whose projections do not aggregate. Both servers refuse it,
+	// which is what proves the model's HAVING-without-GROUP-BY rule matches
+	// SQL rather than being stricter than it needs to be.
+	nonAggregateHavingSQL func(table string) string
 }
 
 // TestAggregateOrderingAgainstLiveDatabases proves the ORDER BY rule against the
@@ -51,6 +56,9 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 				return `SELECT COUNT(*) FROM "` + table + `" ORDER BY "` + table + `"."id"`
 			},
 			serverRefusesBareColumn: true,
+			nonAggregateHavingSQL: func(table string) string {
+				return `SELECT "` + table + `"."id" FROM "` + table + `" HAVING ("` + table + `"."id" > 1)`
+			},
 		},
 		{
 			name:    "mysql",
@@ -58,6 +66,9 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 			dialect: dialect.MySQL(),
 			bareColumnSQL: func(table string) string {
 				return "SELECT COUNT(*) FROM `" + table + "` ORDER BY `" + table + "`.`id`"
+			},
+			nonAggregateHavingSQL: func(table string) string {
+				return "SELECT `" + table + "`.`id` FROM `" + table + "` HAVING (`" + table + "`.`id` > 1)"
 			},
 			// This case leaves serverRefusesBareColumn false on measured
 			// behavior: MySQL 8.4.11, from the mysql:8.4 image CI uses, with
@@ -130,6 +141,37 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 				require.Equal(t, int64(2), count)
 			})
 		}
+	})
+
+	t.Run("the database runs a grouped mixed projection and refuses HAVING on a non-aggregate query", func(t *testing.T) {
+		// SQLite cannot speak for either half of this: TestSQLiteRunsGroupedStatements
+		// covers the grouped-mixed-projection half, and TestSQLiteRefusesMisplacedAggregates
+		// records that SQLite refuses the misplaced shapes it does refuse, but
+		// HAVING without GROUP BY on a non-aggregate query is refused by
+		// PostgreSQL and MySQL specifically, which is the rule WithHaving matches.
+		email, err := table.Column("email")
+		require.NoError(t, err)
+		grouped := render.SelectFrom(test.dialect, table).
+			Project(query.Project(email), query.Project(query.CountAll()).As("count")).
+			GroupBy(email)
+		statement, err := grouped.Build()
+		require.NoError(t, err)
+
+		rows, err := database.QueryContext(t.Context(), statement.SQL(), statement.Args()...)
+		require.NoError(t, err)
+		defer rows.Close()
+		seen := map[string]int64{}
+		for rows.Next() {
+			var gotEmail string
+			var count int64
+			require.NoError(t, rows.Scan(&gotEmail, &count))
+			seen[gotEmail] = count
+		}
+		require.NoError(t, rows.Err())
+		require.Len(t, seen, 2, "two fixtures, each with a distinct email, form two groups")
+
+		err = runStatement(t, database, test.nonAggregateHavingSQL(tableName))
+		require.Error(t, err, "both servers refuse a HAVING clause on a query whose projections do not aggregate")
 	})
 
 	t.Run("the server answers a bare-column ordering its own way", func(t *testing.T) {

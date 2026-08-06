@@ -9,17 +9,19 @@ import (
 
 // SelectBuilder builds parameterized SQL through an immutable fluent API.
 type SelectBuilder struct {
-	dialect     dialect.Dialect
-	from        query.Table
-	projections []query.Projection
-	joins       []query.Join
-	predicates  []query.Expression
-	orders      []query.Order
-	limit       int
-	hasLimit    bool
-	offset      int
-	hasOffset   bool
-	err         error
+	dialect          dialect.Dialect
+	from             query.Table
+	projections      []query.Projection
+	joins            []query.Join
+	predicates       []query.Expression
+	groupBy          []query.Expression
+	havingPredicates []query.Expression
+	orders           []query.Order
+	limit            int
+	hasLimit         bool
+	offset           int
+	hasOffset        bool
+	err              error
 }
 
 // SelectFrom starts a fluent SELECT builder for d using from as its primary table.
@@ -117,6 +119,49 @@ func (b SelectBuilder) WhereIn(columnName string, values ...any) SelectBuilder {
 	return b
 }
 
+// GroupBy adds grouping expressions created through the basic query API.
+// Repeated calls append in the order they were made.
+func (b SelectBuilder) GroupBy(expressions ...query.Expression) SelectBuilder {
+	b = b.clone()
+	if b.err != nil {
+		return b
+	}
+	b.groupBy = append(b.groupBy, expressions...)
+	return b
+}
+
+// GroupByColumns adds primary-table columns to the grouping by name.
+// It is the untyped counterpart of passing a generated query.Column to GroupBy.
+func (b SelectBuilder) GroupByColumns(names ...string) SelectBuilder {
+	b = b.clone()
+	if b.err != nil {
+		return b
+	}
+	for _, name := range names {
+		column, err := b.from.Column(name)
+		if err != nil {
+			return b.withError(err)
+		}
+		b.groupBy = append(b.groupBy, column)
+	}
+	return b
+}
+
+// Having adds a grouped predicate created through the basic query API.
+// Repeated calls combine with AND in the order they were made, exactly as Where
+// does. Use one call with query.Or for a top-level OR.
+func (b SelectBuilder) Having(expression query.Expression) SelectBuilder {
+	b = b.clone()
+	if b.err != nil {
+		return b
+	}
+	if expression == nil {
+		return b.withError(fmt.Errorf("HAVING expression must not be nil"))
+	}
+	b.havingPredicates = append(b.havingPredicates, expression)
+	return b
+}
+
 // Order adds ordering created through the basic query API.
 func (b SelectBuilder) Order(orders ...query.Order) SelectBuilder {
 	b = b.clone()
@@ -168,6 +213,12 @@ func (b SelectBuilder) Build() (Statement, error) {
 	if err != nil {
 		return Statement{}, err
 	}
+	if predicate, ok := combinePredicates(b.havingPredicates); ok {
+		statement, err = statement.WithHaving(predicate)
+		if err != nil {
+			return Statement{}, err
+		}
+	}
 	if len(b.orders) > 0 {
 		statement, err = statement.WithOrder(b.orders...)
 		if err != nil {
@@ -193,7 +244,10 @@ func (b SelectBuilder) Build() (Statement, error) {
 // rows b matches. It projects COUNT(*) under the result name "count" in place of
 // b's projections, and drops ordering, which cannot change a count. It reports
 // an error when b sets a limit or an offset, because a count of a paged
-// statement is not the count the caller built the statement to ask for.
+// statement is not the count the caller built the statement to ask for; when b
+// groups, because a grouped count returns one row per group rather than the
+// single row Count expects; and when b sets a HAVING clause, because BuildCount
+// discards the projections that clause was written against.
 func (b SelectBuilder) BuildCount() (Statement, error) {
 	if b.err != nil {
 		return Statement{}, b.err
@@ -203,6 +257,12 @@ func (b SelectBuilder) BuildCount() (Statement, error) {
 	}
 	if b.hasOffset {
 		return Statement{}, fmt.Errorf("cannot count a statement with an offset")
+	}
+	if len(b.groupBy) > 0 {
+		return Statement{}, fmt.Errorf("cannot count a grouped statement")
+	}
+	if len(b.havingPredicates) > 0 {
+		return Statement{}, fmt.Errorf("cannot count a statement with a HAVING clause")
 	}
 	statement, err := b.buildFromJoinsWhere(query.Project(query.CountAll()).As("count"))
 	if err != nil {
@@ -214,9 +274,12 @@ func (b SelectBuilder) BuildCount() (Statement, error) {
 // buildFromJoinsWhere assembles a query.Select from b's from, joins, and
 // accumulated predicates, using projections in place of b's own. Build and
 // BuildCount share it so both carry every predicate, combined with AND in the
-// order the calls were made, into the statement they build.
+// order the calls were made, into the statement they build. It builds through
+// query.NewGroupedSelect when b holds a grouping, because query.NewSelect would
+// refuse a projection set that mixes an aggregate with a bare column before the
+// grouping that makes it legal could be attached.
 func (b SelectBuilder) buildFromJoinsWhere(projections ...query.Projection) (query.Select, error) {
-	statement, err := query.NewSelect(b.from, projections...)
+	statement, err := b.newSelect(projections...)
 	if err != nil {
 		return query.Select{}, err
 	}
@@ -233,6 +296,15 @@ func (b SelectBuilder) buildFromJoinsWhere(projections ...query.Projection) (que
 		}
 	}
 	return statement, nil
+}
+
+// newSelect starts a query.Select with projections, through query.NewGroupedSelect
+// when b holds a grouping and through query.NewSelect otherwise.
+func (b SelectBuilder) newSelect(projections ...query.Projection) (query.Select, error) {
+	if len(b.groupBy) > 0 {
+		return query.NewGroupedSelect(b.from, b.groupBy, projections...)
+	}
+	return query.NewSelect(b.from, projections...)
 }
 
 func (b SelectBuilder) orderColumn(name string, descending bool) SelectBuilder {
@@ -264,6 +336,8 @@ func (b SelectBuilder) clone() SelectBuilder {
 	copy.projections = append([]query.Projection(nil), b.projections...)
 	copy.joins = append([]query.Join(nil), b.joins...)
 	copy.predicates = append([]query.Expression(nil), b.predicates...)
+	copy.groupBy = append([]query.Expression(nil), b.groupBy...)
+	copy.havingPredicates = append([]query.Expression(nil), b.havingPredicates...)
 	copy.orders = append([]query.Order(nil), b.orders...)
 	return copy
 }

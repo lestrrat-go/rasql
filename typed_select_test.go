@@ -125,6 +125,37 @@ func TestOneSentinelsAreDistinct(t *testing.T) {
 	require.NotErrorIs(t, rasql.ErrMultipleRows, rasql.ErrNoRows)
 }
 
+// TestTypedSelectGroupBy proves TypedSelectBuilder.GroupBy and .Having reach
+// Build, and that TypedSelectBuilder.Count reports the grouping error rather
+// than running a query, since clientForBuild sets no mock expectation for one.
+func TestTypedSelectGroupBy(t *testing.T) {
+	users := deleteUsersTable(t)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	type emailCount struct {
+		Email string `rasql:"email"`
+		Total int64  `rasql:"total"`
+	}
+
+	statement, err := rasql.DecodeFrom[emailCount](clientForBuild(t), users).
+		Project(query.Project(email), query.Project(query.CountAll()).As("total")).
+		GroupBy(email).
+		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		Build()
+	require.NoError(t, err)
+	require.Equal(t,
+		`SELECT "users"."email", COUNT(*) AS "total" FROM "users" GROUP BY "users"."email" HAVING (COUNT(*) > $1)`,
+		statement.SQL())
+	require.Equal(t, []any{1}, statement.Args())
+
+	_, err = rasql.DecodeFrom[emailCount](clientForBuild(t), users).
+		GroupBy(email).
+		Count(t.Context())
+	require.Error(t, err)
+	require.ErrorContains(t, err, "cannot count a grouped statement")
+}
+
 func TestTypedSelectCombinesPredicates(t *testing.T) {
 	t.Run("WhereEqual then Where combine with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)

@@ -46,6 +46,9 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `WhereEqual(name, value)` | Adds `column = value` for a primary-table column. | | ✓ |
 | `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.Column`, one placeholder per value. | ✓ | |
 | `WhereIn(name, values…)` | Adds `column IN (values…)` for a primary-table column, one placeholder per value. | | ✓ |
+| `GroupBy(expressions…)` | Adds grouping built with the basic query API. | ✓ | ✓ |
+| `GroupByColumns(names…)` | Adds primary-table columns to the grouping by name. | | ✓ |
+| `Having(expression)` | Adds a grouped predicate from a `query` expression; combines with `AND` like `Where`. | ✓ | ✓ |
 | `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. | ✓ | ✓ |
 | `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.Column`. | ✓ | |
 | `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. | | ✓ |
@@ -182,7 +185,7 @@ The builders cover the common statements. These constructors build the same stat
 | `query.NewDelete(from)` | `DELETE` |
 | `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |
 
-Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](04-writing.md#reading-a-returning-clause) covers. Each returns a new validated statement rather than changing the one it was called on.
+Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithGroupBy`, `WithHaving`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](04-writing.md#reading-a-returning-clause) covers. Each returns a new validated statement rather than changing the one it was called on.
 
 ## Select typed rows
 

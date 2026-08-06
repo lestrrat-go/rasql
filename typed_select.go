@@ -112,6 +112,21 @@ func (b TypedSelectBuilder[T]) WhereIn(column query.Column, values ...any) Typed
 	return b
 }
 
+// GroupBy adds grouping expressions created through the basic query API.
+// Repeated calls append in the order they were made.
+func (b TypedSelectBuilder[T]) GroupBy(expressions ...query.Expression) TypedSelectBuilder[T] {
+	b.builder = b.builder.GroupBy(expressions...)
+	return b
+}
+
+// Having adds a grouped predicate created through the basic query API.
+// Repeated calls combine with AND in the order they were made, exactly as Where
+// does. Use one call with query.Or for a top-level OR.
+func (b TypedSelectBuilder[T]) Having(expression query.Expression) TypedSelectBuilder[T] {
+	b.builder = b.builder.Having(expression)
+	return b
+}
+
 // Order adds ordering created through the basic query API.
 func (b TypedSelectBuilder[T]) Order(orders ...query.Order) TypedSelectBuilder[T] {
 	b.builder = b.builder.Order(orders...)

@@ -349,6 +349,13 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 			},
 			message: "reads a column outside an aggregate function while projections[0] aggregates",
 		},
+		"group by": {
+			build: func() error {
+				_, err := query.NewGroupedSelect(users, []query.Expression{query.Count(userID)}, query.Project(userID))
+				return err
+			},
+			message: `calls aggregate function "COUNT" in a GROUP BY clause`,
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -409,6 +416,166 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 	columns, err = columns.WithOrder(query.Asc(email))
 	require.NoError(t, err)
 	require.NoError(t, columns.Validate())
+}
+
+// TestSelectGroupsAndFilters covers the basic shape of a grouped statement:
+// NewGroupedSelect accepts a mixed projection set once a grouping is supplied,
+// WithGroupBy refines an already-valid ungrouped statement, and WithHaving sets
+// and then replaces the grouped predicate.
+func TestSelectGroupsAndFilters(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{email},
+		query.Project(email),
+		query.Project(query.CountAll()).As("total"),
+	)
+	require.NoError(t, err)
+	require.Nil(t, grouped.Having())
+
+	keys := grouped.GroupBy()
+	require.Equal(t, []query.Expression{email}, keys)
+	keys[0] = nil
+	require.Equal(t, []query.Expression{email}, grouped.GroupBy(), "mutating the returned slice must not change the statement")
+
+	aggregateOnly, err := query.NewSelect(users, query.Project(query.CountAll()))
+	require.NoError(t, err)
+	refined, err := aggregateOnly.WithGroupBy(userID)
+	require.NoError(t, err)
+	require.Equal(t, []query.Expression{userID}, refined.GroupBy())
+
+	withHaving, err := refined.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
+	require.NoError(t, err)
+	require.Equal(t, query.Expression(query.GreaterThan(query.CountAll(), query.Bind(1))), withHaving.Having())
+
+	replaced, err := withHaving.WithHaving(query.LessThan(query.CountAll(), query.Bind(10)))
+	require.NoError(t, err)
+	require.Equal(t, query.Expression(query.LessThan(query.CountAll(), query.Bind(10))), replaced.Having())
+}
+
+// TestSelectRejectsInvalidGrouping covers the rules a GROUP BY expression has to
+// follow: no aggregate, no table outside the statement, and no bare bound value.
+func TestSelectRejectsInvalidGrouping(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	_, err = query.NewGroupedSelect(users, []query.Expression{query.CountAll()}, query.Project(userID))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `calls aggregate function "COUNT" in a GROUP BY clause`)
+
+	_, err = query.NewGroupedSelect(users, []query.Expression{orderUserID}, query.Project(userID))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "references table")
+	require.ErrorContains(t, err, "outside the statement")
+
+	_, err = query.NewGroupedSelect(users, []query.Expression{query.Bind(1)}, query.Project(userID))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "must not be a bound value")
+
+	// A grouping expression that merely contains a bound value, rather than
+	// being one, is a real grouping key and stays legal.
+	nested, err := query.NewGroupedSelect(users, []query.Expression{query.GreaterThan(userID, query.Bind(3))}, query.Project(userID))
+	require.NoError(t, err)
+	require.NoError(t, nested.Validate())
+
+	// NewGroupedSelect with no grouping keys behaves exactly like NewSelect: it
+	// leaves the statement ungrouped, so a mixed projection set is refused with
+	// the identical message NewSelect gives, rather than being silently
+	// accepted because the call went through the grouped constructor.
+	_, errFromNewSelect := query.NewSelect(users, query.Project(userID), query.Project(query.CountAll()))
+	requireQueryValidationError(t, errFromNewSelect)
+	_, errFromEmptyGroup := query.NewGroupedSelect(users, nil, query.Project(userID), query.Project(query.CountAll()))
+	requireQueryValidationError(t, errFromEmptyGroup)
+	require.Equal(t, errFromNewSelect.Error(), errFromEmptyGroup.Error())
+}
+
+// TestSelectRejectsInvalidHaving covers the rules that make a HAVING clause
+// legal: it needs a statement that groups, either explicitly or through an
+// aggregate-only projection set, and follows the same aggregate-placement rules
+// as every other clause.
+func TestSelectRejectsInvalidHaving(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	plain, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	_, err = plain.WithHaving(query.GreaterThan(userID, query.Bind(1)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "requires a GROUP BY clause or a projection set that aggregates")
+
+	aggregateOnly, err := query.NewSelect(users, query.Project(query.CountAll()))
+	require.NoError(t, err)
+	_, err = aggregateOnly.WithHaving(userID)
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "reads a column outside an aggregate function while the projections aggregate, which requires a GROUP BY clause")
+
+	_, err = aggregateOnly.WithHaving(query.GreaterThan(query.Count(orderUserID), query.Bind(1)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "references table")
+	require.ErrorContains(t, err, "outside the statement")
+
+	_, err = aggregateOnly.WithHaving(query.GreaterThan(query.Max(query.Max(userID)), query.Bind(1)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `calls aggregate function "MAX" inside another aggregate function`)
+
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(email), query.Project(query.CountAll()))
+	require.NoError(t, err)
+	withHaving, err := grouped.WithHaving(query.NotEqual(email, query.Bind("done")))
+	require.NoError(t, err)
+	require.NoError(t, withHaving.Validate())
+}
+
+// TestSelectAcceptsGroupedStatements pins what must keep validating once a
+// statement groups, the counterpart to TestSelectAcceptsWellPlacedAggregates.
+func TestSelectAcceptsGroupedStatements(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	// A grouped statement may mix a bare column with an aggregate.
+	statement, err := query.NewGroupedSelect(users, []query.Expression{email},
+		query.Project(email),
+		query.Project(query.CountAll()).As("total"),
+	)
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+
+	// A grouped HAVING may read a bare column.
+	withHaving, err := statement.WithHaving(query.NotEqual(email, query.Bind("done")))
+	require.NoError(t, err)
+	require.NoError(t, withHaving.Validate())
+
+	// A grouped ORDER BY may read a bare column.
+	withOrder, err := statement.WithOrder(query.Asc(email))
+	require.NoError(t, err)
+	require.NoError(t, withOrder.Validate())
+
+	// HAVING over an aggregate needs no GROUP BY when every projection
+	// aggregates, because that projection set is already one group.
+	aggregateOnly, err := query.NewSelect(users, query.Project(query.CountAll()))
+	require.NoError(t, err)
+	aggregateHaving, err := aggregateOnly.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
+	require.NoError(t, err)
+	require.NoError(t, aggregateHaving.Validate())
 }
 
 // TestSelectJudgesAggregatesInsideMembership pins how the clause-aware walk

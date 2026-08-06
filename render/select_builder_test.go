@@ -131,6 +131,73 @@ func TestSelectBuilderBuildsCountStatement(t *testing.T) {
 	}
 }
 
+func TestSelectBuilderBuildsGroupedStatement(t *testing.T) {
+	users := fluentUsers(t)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+
+	rendered, err := render.SelectFrom(dialect.PostgreSQL(), users).
+		Project(query.Project(id), query.Project(query.CountAll()).As("total")).
+		GroupByColumns("id").
+		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		Having(query.LessThan(query.CountAll(), query.Bind(100))).
+		Build()
+	require.NoError(t, err)
+	require.Equal(t,
+		`SELECT "users"."id", COUNT(*) AS "total" FROM "users" GROUP BY "users"."id" HAVING ((COUNT(*) > $1) AND (COUNT(*) < $2))`,
+		rendered.SQL())
+	require.Equal(t, []any{1, 100}, rendered.Args())
+
+	viaExpression, err := render.SelectFrom(dialect.PostgreSQL(), users).
+		Project(query.Project(id), query.Project(query.CountAll()).As("total")).
+		GroupBy(id).
+		Build()
+	require.NoError(t, err)
+	require.Contains(t, viaExpression.SQL(), ` GROUP BY "users"."id"`)
+}
+
+func TestSelectBuilderGroupingIsImmutable(t *testing.T) {
+	users := fluentUsers(t)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+
+	base := render.SelectFrom(dialect.PostgreSQL(), users).
+		Project(query.Project(id), query.Project(query.CountAll()).As("total")).
+		GroupByColumns("id")
+	havingAdded := base.Having(query.GreaterThan(query.CountAll(), query.Bind(1)))
+
+	baseStatement, err := base.Build()
+	require.NoError(t, err)
+	require.NotContains(t, baseStatement.SQL(), " HAVING ")
+	havingStatement, err := havingAdded.Build()
+	require.NoError(t, err)
+	require.Contains(t, havingStatement.SQL(), " HAVING ")
+
+	// A second GroupBy call on the original builder must not reach a copy
+	// already taken from it, matching TestSelectBuilderIsImmutable.
+	moreGrouping := base.GroupBy(id)
+	baseAgain, err := base.Build()
+	require.NoError(t, err)
+	require.Equal(t, baseStatement.SQL(), baseAgain.SQL())
+	moreGroupingStatement, err := moreGrouping.Build()
+	require.NoError(t, err)
+	require.NotEqual(t, baseStatement.SQL(), moreGroupingStatement.SQL())
+}
+
+func TestSelectBuilderRejectsCountWithGrouping(t *testing.T) {
+	users := fluentUsers(t)
+
+	_, err := render.SelectFrom(dialect.PostgreSQL(), users).GroupByColumns("id").BuildCount()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "cannot count a grouped statement")
+
+	_, err = render.SelectFrom(dialect.PostgreSQL(), users).
+		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		BuildCount()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "cannot count a statement with a HAVING clause")
+}
+
 func TestSelectBuilderRejectsCountWithPaging(t *testing.T) {
 	users := fluentUsers(t)
 
@@ -162,6 +229,8 @@ func TestSelectBuilderReportsBuildErrors(t *testing.T) {
 	_, err = render.SelectFrom(dialect.PostgreSQL(), users).WhereIn("id").Build()
 	require.Error(t, err)
 	_, err = render.SelectFrom(dialect.PostgreSQL(), users).WhereIn("missing", 1).Build()
+	require.Error(t, err)
+	_, err = render.SelectFrom(dialect.PostgreSQL(), users).GroupByColumns("missing").Build()
 	require.Error(t, err)
 }
 

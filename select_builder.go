@@ -63,6 +63,28 @@ func (b SelectBuilder) WhereIn(columnName string, values ...any) SelectBuilder {
 	return b
 }
 
+// GroupBy adds grouping expressions created through the basic query API.
+// Repeated calls append in the order they were made.
+func (b SelectBuilder) GroupBy(expressions ...query.Expression) SelectBuilder {
+	b.builder = b.builder.GroupBy(expressions...)
+	return b
+}
+
+// GroupByColumns adds primary-table columns to the grouping by name.
+// It is the untyped counterpart of passing a generated query.Column to GroupBy.
+func (b SelectBuilder) GroupByColumns(names ...string) SelectBuilder {
+	b.builder = b.builder.GroupByColumns(names...)
+	return b
+}
+
+// Having adds a grouped predicate created through the basic query API.
+// Repeated calls combine with AND in the order they were made, exactly as Where
+// does. Use one call with query.Or for a top-level OR.
+func (b SelectBuilder) Having(expression query.Expression) SelectBuilder {
+	b.builder = b.builder.Having(expression)
+	return b
+}
+
 // Order adds ordering created through the basic query API.
 func (b SelectBuilder) Order(orders ...query.Order) SelectBuilder {
 	b.builder = b.builder.Order(orders...)
