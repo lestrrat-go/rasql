@@ -54,8 +54,8 @@ func TestCreateTableRendersDecimalColumns(t *testing.T) {
 		Name: "invoices",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
-			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: 4, Nullable: true},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: schema.NewDecimalScale(4), Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -93,7 +93,7 @@ func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 		Name: "invoices",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 100, Scale: 4},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 100, Scale: schema.NewDecimalScale(4)},
 		},
 		PrimaryKey: []string{"id"},
 	}

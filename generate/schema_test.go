@@ -152,8 +152,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 		Name: "invoices",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
-			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: 4, Nullable: true},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: schema.NewDecimalScale(4), Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -165,8 +165,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "type InvoicesRow struct")
 	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
 	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
-	require.Contains(t, string(source), `{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},`)
-	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.TypeDecimal, Nullable: true, Precision: 5, Scale: 4},`)
+	require.Contains(t, string(source), `{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},`)
+	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.TypeDecimal, Nullable: true, Precision: 5, Scale: schema.NewDecimalScale(4)},`)
 	require.Contains(t, string(source), "Email")
 	require.Contains(t, string(source), "CreatedAt")
 	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
@@ -240,8 +240,9 @@ func TestSchemaGeneratesDecimalColumns(t *testing.T) {
 		Name: "invoices",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
-			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: 4, Nullable: true},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: schema.NewDecimalScale(4), Nullable: true},
+			{Name: "quantity", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(0)},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -250,8 +251,11 @@ func TestSchemaGeneratesDecimalColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
 	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
-	require.Contains(t, string(source), `{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},`)
-	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.TypeDecimal, Nullable: true, Precision: 5, Scale: 4},`)
+	require.Contains(t, string(source), `{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},`)
+	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.TypeDecimal, Nullable: true, Precision: 5, Scale: schema.NewDecimalScale(4)},`)
+	// A stated scale of zero must survive generation: emitting nothing would
+	// leave the regenerated descriptor stating no scale at all.
+	require.Contains(t, string(source), `{Name: "quantity", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(0)},`)
 }
 
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {

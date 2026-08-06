@@ -1,6 +1,56 @@
 package schema
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// DecimalScale is the number of digits a TypeDecimal column keeps to the right
+// of the decimal point. Its zero value states no scale at all, which is a
+// different thing from a stated scale of zero: DECIMAL(19,0) is a legitimate
+// column and a descriptor that simply forgot to say so is not. Use
+// NewDecimalScale to state one, including a scale of zero.
+type DecimalScale struct {
+	value int
+	set   bool
+}
+
+// NewDecimalScale returns a DecimalScale that states value.
+func NewDecimalScale(value int) DecimalScale {
+	return DecimalScale{value: value, set: true}
+}
+
+// Value returns the stated scale and reports whether a scale was stated at all.
+// The returned scale is meaningless when the second result is false.
+func (s DecimalScale) Value() (int, bool) {
+	return s.value, s.set
+}
+
+// MarshalJSON encodes a stated scale as a JSON number and an unstated one as
+// null, so that a snapshot of a schema.Table keeps the plain-number form a
+// tool such as rasqlgen reads back.
+func (s DecimalScale) MarshalJSON() ([]byte, error) {
+	if !s.set {
+		return []byte("null"), nil
+	}
+	return json.Marshal(s.value)
+}
+
+// UnmarshalJSON decodes a JSON number as a stated scale and null as an
+// unstated one. A snapshot written before a column had a scale therefore
+// decodes as unstated and is refused by Table.Validate rather than read as 0.
+func (s *DecimalScale) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*s = DecimalScale{}
+		return nil
+	}
+	var value int
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("schema: decode decimal scale: %w", err)
+	}
+	*s = NewDecimalScale(value)
+	return nil
+}
 
 // Column describes a table column.
 type Column struct {
@@ -16,9 +66,10 @@ type Column struct {
 	Precision int
 
 	// Scale is the number of those digits that fall to the right of the
-	// decimal point. It must not be negative and must not exceed Precision,
-	// and must be zero for every logical type other than TypeDecimal.
-	Scale int
+	// decimal point. A TypeDecimal column must state one, and the stated scale
+	// must not be negative and must not exceed Precision. Every other logical
+	// type must leave it unstated.
+	Scale DecimalScale
 }
 
 // UniqueConstraint requires the listed columns to be unique together.
@@ -119,13 +170,17 @@ func (t Table) Validate() error {
 			if column.Precision < 1 {
 				return validationError(path+".precision", "decimal column must state a precision of at least 1")
 			}
-			if column.Scale < 0 {
+			scale, stated := column.Scale.Value()
+			if !stated {
+				return validationError(path+".scale", "decimal column must state a scale: use schema.NewDecimalScale, which can state a scale of 0")
+			}
+			if scale < 0 {
 				return validationError(path+".scale", "decimal scale must not be negative")
 			}
-			if column.Scale > column.Precision {
-				return validationError(path+".scale", "decimal scale %d exceeds precision %d", column.Scale, column.Precision)
+			if scale > column.Precision {
+				return validationError(path+".scale", "decimal scale %d exceeds precision %d", scale, column.Precision)
 			}
-		} else if column.Precision != 0 || column.Scale != 0 {
+		} else if _, stated := column.Scale.Value(); column.Precision != 0 || stated {
 			return validationError(path+".precision", "precision and scale apply only to a decimal column, not %q", column.Type)
 		}
 		if _, exists := columns[column.Name]; exists {

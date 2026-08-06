@@ -41,12 +41,14 @@ func Example_schema_decimal_column() {
 	}
 
 	// A TypeDecimal column must state Precision and Scale; Table.Validate
-	// rejects a decimal column that omits either.
+	// rejects a decimal column that omits either. Scale is stated through
+	// schema.NewDecimalScale so that a scale of 0 is distinguishable from a
+	// column that named no scale at all.
 	invoices := rasql.MustTable[invoiceRow](schema.Table{
 		Name: "invoices",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
 		},
 		PrimaryKey: []string{"id"},
 	})

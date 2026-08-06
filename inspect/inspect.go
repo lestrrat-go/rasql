@@ -385,8 +385,11 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			if !numericPrecision.Valid {
 				return nil, fmt.Errorf("inspect: column %q: unconstrained NUMERIC has no precision to record: declare it as NUMERIC(precision, scale)", name)
 			}
+			if !numericScale.Valid {
+				return nil, fmt.Errorf("inspect: column %q: decimal column reports no scale to record: declare it as NUMERIC(precision, scale)", name)
+			}
 			column.Precision = int(numericPrecision.Int64)
-			column.Scale = int(numericScale.Int64)
+			column.Scale = schema.NewDecimalScale(int(numericScale.Int64))
 		}
 		columns = append(columns, column)
 	}
@@ -765,13 +768,18 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 			return schema.TypeUUID, nil
 		}
 	case "mysql":
+		decimal, err := mysqlDecimalDeclaration(typeName, databaseType)
+		if err != nil {
+			return "", err
+		}
+		if decimal {
+			return schema.TypeDecimal, nil
+		}
 		switch {
 		case typeName == "BOOLEAN" || typeName == "BOOL" || typeName == "TINYINT(1)":
 			return schema.TypeBoolean, nil
 		case strings.Contains(typeName, "INT"):
 			return schema.TypeInteger, nil
-		case strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC"):
-			return schema.TypeDecimal, nil
 		case strings.Contains(typeName, "FLOAT") || strings.Contains(typeName, "DOUBLE"):
 			return schema.TypeFloat, nil
 		case strings.Contains(typeName, "BLOB") || strings.Contains(typeName, "BINARY"):
@@ -806,6 +814,68 @@ func normalizeType(dialectName string, databaseType string) (schema.LogicalType,
 		}
 	}
 	return "", fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
+}
+
+// mysqlDecimalDeclaration reports whether typeName, an upper-cased MySQL
+// COLUMN_TYPE, declares an exact decimal column this package can represent.
+// COLUMN_TYPE is a whole type declaration rather than a bare type name, so it
+// is matched as a whole: a substring test would accept catalog text such as
+// FOODECIMALBAR, and the catalog is read from a server the application may not
+// control. Only DECIMAL or NUMERIC, optionally followed by (precision) or
+// (precision, scale), is a decimal.
+//
+// A DECIMAL or NUMERIC declaration carrying UNSIGNED, ZEROFILL or any other
+// trailing modifier returns an error instead of a logical type. schema.Column
+// cannot record such a modifier, and UNSIGNED in particular narrows the values
+// the column permits, so a descriptor that dropped it would re-render as a
+// column with a different meaning. Anything that is not a decimal declaration
+// at all reports false with no error, leaving the caller's remaining type
+// matches to run.
+func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, error) {
+	base := typeName
+	rest := ""
+	if index := strings.IndexAny(typeName, " ("); index >= 0 {
+		base = typeName[:index]
+		rest = typeName[index:]
+	}
+	if base != "DECIMAL" && base != "NUMERIC" {
+		return false, nil
+	}
+
+	rest = strings.TrimSpace(rest)
+	if strings.HasPrefix(rest, "(") {
+		end := strings.Index(rest, ")")
+		if end < 0 || !validDecimalArguments(rest[1:end]) {
+			return false, fmt.Errorf("unsupported mysql type %q: a decimal column must be declared %s(precision, scale)", databaseType, base)
+		}
+		rest = strings.TrimSpace(rest[end+1:])
+	}
+	if rest != "" {
+		return false, fmt.Errorf("mysql type %q cannot be represented: a decimal column must carry no %s modifier, because rasql cannot record one and re-rendering the column without it would change the values it permits", databaseType, rest)
+	}
+	return true, nil
+}
+
+// validDecimalArguments reports whether arguments is the inside of a MySQL
+// decimal type's parentheses: a digit run for the precision, optionally
+// followed by a comma and a digit run for the scale.
+func validDecimalArguments(arguments string) bool {
+	parts := strings.Split(arguments, ",")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func text(value any) string {

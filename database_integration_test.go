@@ -82,7 +82,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 
 	// PostgreSQL and MySQL both return an exact decimal in the scale its
 	// column declares, zero-padded on the right. The "amount" column here is
-	// declared Scale: 4, so it is NUMERIC(19,4) on PostgreSQL and
+	// declared Scale 4, so it is NUMERIC(19,4) on PostgreSQL and
 	// DECIMAL(19,4) on MySQL, and the inserted "19.99" reads back as
 	// "19.9900" while "5.00" reads back as "5.0000". That padding is the
 	// column's declared scale, which is precisely the information an exact
@@ -168,7 +168,7 @@ func integrationTable(name string) schema.Table {
 			{Name: "id", Type: schema.TypeInteger},
 			{Name: "active", Type: schema.TypeBoolean},
 			{Name: "email", Type: schema.TypeText},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
+			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
 		},
 		PrimaryKey: []string{"id"},
 	}

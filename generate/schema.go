@@ -444,9 +444,12 @@ func writeColumns(source *bytes.Buffer, columns []schema.Column, indent string) 
 			source.WriteString(", Precision: ")
 			source.WriteString(strconv.Itoa(column.Precision))
 		}
-		if column.Scale != 0 {
-			source.WriteString(", Scale: ")
-			source.WriteString(strconv.Itoa(column.Scale))
+		// A stated scale is emitted even when it is zero, because Scale's zero
+		// value means no scale was stated and would not validate.
+		if scale, stated := column.Scale.Value(); stated {
+			source.WriteString(", Scale: schema.NewDecimalScale(")
+			source.WriteString(strconv.Itoa(scale))
+			source.WriteString(")")
 		}
 		source.WriteString("},\n")
 	}

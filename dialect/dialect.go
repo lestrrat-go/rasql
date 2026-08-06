@@ -159,21 +159,26 @@ func (d builtin) TypeName(column schema.Column) (string, error) {
 	return typeName, nil
 }
 
-// decimalTypeName renders the DDL type for a TypeDecimal column. SQLite has
-// no bound to check and renders its decimalName with no precision/scale
-// suffix; PostgreSQL and MySQL each enforce their own maximum and render
-// NAME(p,s).
+// decimalTypeName renders the DDL type for a TypeDecimal column. Every dialect
+// requires a stated scale, because a descriptor that leaves it unstated does
+// not say what the column means. SQLite then has no bound to check and renders
+// its decimalName with no precision/scale suffix; PostgreSQL and MySQL each
+// enforce their own maximum and render NAME(p,s).
 func (d builtin) decimalTypeName(column schema.Column) (string, error) {
+	scale, stated := column.Scale.Value()
+	if !stated {
+		return "", fmt.Errorf("dialect %s: decimal column %q states no scale", d.name, column.Name)
+	}
 	if d.maxPrecision == 0 && d.maxScale == 0 {
 		return d.decimalName, nil
 	}
 	if column.Precision > d.maxPrecision {
 		return "", fmt.Errorf("dialect %s: decimal precision %d exceeds the maximum of %d", d.name, column.Precision, d.maxPrecision)
 	}
-	if column.Scale > d.maxScale {
-		return "", fmt.Errorf("dialect %s: decimal scale %d exceeds the maximum of %d", d.name, column.Scale, d.maxScale)
+	if scale > d.maxScale {
+		return "", fmt.Errorf("dialect %s: decimal scale %d exceeds the maximum of %d", d.name, scale, d.maxScale)
 	}
-	return fmt.Sprintf("%s(%d,%d)", d.decimalName, column.Precision, column.Scale), nil
+	return fmt.Sprintf("%s(%d,%d)", d.decimalName, column.Precision, scale), nil
 }
 
 func (d builtin) UpsertStyle() UpsertStyle {

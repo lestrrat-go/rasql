@@ -76,7 +76,7 @@ func TestPostgreSQLInspectorNormalizesNumericColumn(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "payments")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: 4},
+		{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
 	}, table.Columns)
 }
 
@@ -99,6 +99,32 @@ func TestPostgreSQLInspectorRejectsUnconstrainedNumericColumn(t *testing.T) {
 
 	_, err = inspector.Table(t.Context(), "payments")
 	require.ErrorContains(t, err, "unconstrained NUMERIC has no precision to record")
+	require.ErrorContains(t, err, `"amount"`)
+}
+
+// TestPostgreSQLInspectorRejectsDecimalColumnWithoutScale covers a catalog row
+// that reports a precision but a NULL scale. Reading the NULL as 0 would turn
+// a NUMERIC(10,2) column into a descriptor that re-renders as NUMERIC(10,0)
+// and drops the column's fractional digits, so inspection refuses it instead.
+func TestPostgreSQLInspectorRejectsDecimalColumnWithoutScale(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("amount", "numeric", "NO", nil, int64(10), nil))
+
+	_, err = inspector.Table(t.Context(), "payments")
+	require.ErrorContains(t, err, "reports no scale to record")
 	require.ErrorContains(t, err, `"amount"`)
 }
 
@@ -626,8 +652,126 @@ func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "payments")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "amount", Type: schema.TypeDecimal, Precision: 10, Scale: 2},
+		{Name: "amount", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(2)},
 	}, table.Columns)
+}
+
+// TestMySQLInspectorMatchesDecimalColumnTypeExactly covers the two ways a
+// MySQL COLUMN_TYPE can look like a decimal without being one this package can
+// represent. The catalog is read from a server the application may not
+// control, so a decimal is recognized from the whole declaration: catalog text
+// that merely contains DECIMAL or NUMERIC is an unsupported type, and a real
+// decimal declaration carrying a modifier is refused rather than silently
+// re-rendered without it.
+func TestMySQLInspectorMatchesDecimalColumnTypeExactly(t *testing.T) {
+	tests := map[string]struct {
+		columnType string
+		wantErr    string
+	}{
+		"decimal as a substring": {
+			columnType: "FOODECIMALBAR",
+			wantErr:    `unsupported mysql type "FOODECIMALBAR"`,
+		},
+		"numeric as a substring": {
+			columnType: "NOT_A_TYPE_NUMERICAL",
+			wantErr:    `unsupported mysql type "NOT_A_TYPE_NUMERICAL"`,
+		},
+		"unsigned decimal": {
+			columnType: "decimal(10,2) unsigned",
+			wantErr:    "must carry no UNSIGNED modifier",
+		},
+		"zerofill decimal": {
+			columnType: "decimal(10,2) unsigned zerofill",
+			wantErr:    "must carry no UNSIGNED ZEROFILL modifier",
+		},
+		"decimal alias": {
+			columnType: "fixed(10,2)",
+			wantErr:    `unsupported mysql type "fixed(10,2)"`,
+		},
+		"malformed precision": {
+			columnType: "decimal(ten,two)",
+			wantErr:    "a decimal column must be declared DECIMAL(precision, scale)",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("payments").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("amount", test.columnType, "NO", nil, int64(10), int64(2)))
+
+			_, err = inspector.Table(t.Context(), "payments")
+			require.ErrorContains(t, err, test.wantErr)
+			require.ErrorContains(t, err, `"amount"`)
+		})
+	}
+}
+
+// TestMySQLInspectorAcceptsDocumentedDecimalSpellings is the positive
+// counterpart: every spelling MySQL documents for a decimal type still
+// normalizes to schema.TypeDecimal.
+func TestMySQLInspectorAcceptsDocumentedDecimalSpellings(t *testing.T) {
+	for _, columnType := range []string{"decimal", "decimal(10)", "decimal(10,2)", "numeric(10,2)", "DECIMAL(10, 2)"} {
+		t.Run(columnType, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("payments").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("amount", columnType, "NO", nil, int64(10), int64(2)))
+			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+				WithArgs("payments").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+
+			table, err := inspector.Table(t.Context(), "payments")
+			require.NoError(t, err)
+			require.Equal(t, []schema.Column{
+				{Name: "amount", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(2)},
+			}, table.Columns)
+		})
+	}
+}
+
+// TestMySQLInspectorRejectsDecimalColumnWithoutScale is the MySQL counterpart
+// of the PostgreSQL NULL-scale refusal.
+func TestMySQLInspectorRejectsDecimalColumnWithoutScale(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+		WithArgs("payments").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("amount", "decimal(10,2)", "NO", nil, int64(10), nil))
+
+	_, err = inspector.Table(t.Context(), "payments")
+	require.ErrorContains(t, err, "reports no scale to record")
+	require.ErrorContains(t, err, `"amount"`)
 }
 
 // TestSQLiteInspectorRejectsDecimalColumn pins the explicit-refusal property:

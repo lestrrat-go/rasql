@@ -90,32 +90,44 @@ func TestBuiltinsRenderDecimalTypeNames(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			typeName, err := test.dialect.TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 19, Scale: 4})
+			typeName, err := test.dialect.TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)})
 			require.NoError(t, err)
 			require.Equal(t, test.typeName, typeName)
 
-			scaleTypeName, err := test.dialect.TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 10, Scale: 0})
+			scaleTypeName, err := test.dialect.TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(0)})
 			require.NoError(t, err)
 			require.Equal(t, test.scaleTypeName, scaleTypeName)
 		})
 	}
 }
 
+// TestBuiltinsRejectDecimalWithoutScale checks that every dialect, SQLite
+// included, refuses a decimal column that states no scale, rather than
+// rendering one whose meaning the descriptor never gave.
+func TestBuiltinsRejectDecimalWithoutScale(t *testing.T) {
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
+		t.Run(d.Name(), func(t *testing.T) {
+			_, err := d.TypeName(schema.Column{Name: "amount", Type: schema.TypeDecimal, Precision: 19})
+			require.ErrorContains(t, err, `decimal column "amount" states no scale`)
+		})
+	}
+}
+
 func TestBuiltinsRejectUnrepresentableDecimals(t *testing.T) {
-	_, err := dialect.MySQL().TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 100, Scale: 4})
+	_, err := dialect.MySQL().TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 100, Scale: schema.NewDecimalScale(4)})
 	require.ErrorContains(t, err, "decimal precision 100 exceeds the maximum of 65")
 
-	_, err = dialect.MySQL().TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 31, Scale: 31})
+	_, err = dialect.MySQL().TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 31, Scale: schema.NewDecimalScale(31)})
 	require.ErrorContains(t, err, "decimal scale 31 exceeds the maximum of 30")
 
-	_, err = dialect.PostgreSQL().TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 1001, Scale: 4})
+	_, err = dialect.PostgreSQL().TypeName(schema.Column{Type: schema.TypeDecimal, Precision: 1001, Scale: schema.NewDecimalScale(4)})
 	require.ErrorContains(t, err, "decimal precision 1001 exceeds the maximum of 1000")
 
 	// SQLite has no bound, so none of the above precision/scale values error.
 	for _, column := range []schema.Column{
-		{Type: schema.TypeDecimal, Precision: 100, Scale: 4},
-		{Type: schema.TypeDecimal, Precision: 31, Scale: 31},
-		{Type: schema.TypeDecimal, Precision: 1001, Scale: 4},
+		{Type: schema.TypeDecimal, Precision: 100, Scale: schema.NewDecimalScale(4)},
+		{Type: schema.TypeDecimal, Precision: 31, Scale: schema.NewDecimalScale(31)},
+		{Type: schema.TypeDecimal, Precision: 1001, Scale: schema.NewDecimalScale(4)},
 	} {
 		typeName, err := dialect.SQLite().TypeName(column)
 		require.NoError(t, err)
