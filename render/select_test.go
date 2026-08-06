@@ -102,6 +102,113 @@ func aggregateSelectStatement(t *testing.T) query.Select {
 	return statement
 }
 
+// TestSelectRendersGroupedStatement proves GROUP BY and HAVING render in the
+// clause order SQL requires, between WHERE and ORDER BY, identically across all
+// three dialects except for identifier quoting and placeholder style.
+func TestSelectRendersGroupedStatement(t *testing.T) {
+	statement := groupedSelectStatement(t)
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     `SELECT "tasks"."status", COUNT(*) AS "total" FROM "tasks" WHERE ("tasks"."status" <> $1) GROUP BY "tasks"."status" HAVING (COUNT(*) > $2) ORDER BY COUNT(*) DESC`,
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "SELECT `tasks`.`status`, COUNT(*) AS `total` FROM `tasks` WHERE (`tasks`.`status` <> ?) GROUP BY `tasks`.`status` HAVING (COUNT(*) > ?) ORDER BY COUNT(*) DESC",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     `SELECT "tasks"."status", COUNT(*) AS "total" FROM "tasks" WHERE ("tasks"."status" <> ?) GROUP BY "tasks"."status" HAVING (COUNT(*) > ?) ORDER BY COUNT(*) DESC`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Select(test.dialect, statement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{"done", 1}, rendered.Args())
+		})
+	}
+}
+
+func groupedSelectStatement(t *testing.T) query.Select {
+	t.Helper()
+	tasks, err := query.NewTable(schema.Table{
+		Name: "tasks",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "status", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	status, err := tasks.Column("status")
+	require.NoError(t, err)
+
+	statement, err := query.NewGroupedSelect(tasks, []query.Expression{status},
+		query.Project(status),
+		query.Project(query.CountAll()).As("total"),
+	)
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.NotEqual(status, query.Bind("done")))
+	require.NoError(t, err)
+	statement, err = statement.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
+	require.NoError(t, err)
+	// A grouped statement is one group per key, so ORDER BY may call an
+	// aggregate exactly as it may over an aggregate-only projection set.
+	statement, err = statement.WithOrder(query.Desc(query.CountAll()))
+	require.NoError(t, err)
+	return statement
+}
+
+// TestSelectRendersSubqueryInGroupedClauses proves the two clauses this package
+// gained last render a subquery like every other SELECT clause: the subquery's
+// own arguments join the enclosing statement's list at the position the clause
+// occupies, so placeholder numbering stays correct across GROUP BY and HAVING.
+func TestSelectRendersSubqueryInGroupedClauses(t *testing.T) {
+	tasks, err := query.NewTable(schema.Table{
+		Name: "tasks",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "priority", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	priority, err := tasks.Column("priority")
+	require.NoError(t, err)
+	allTasks, err := tasks.As("all_tasks")
+	require.NoError(t, err)
+	allPriority, err := allTasks.Column("priority")
+	require.NoError(t, err)
+
+	average, err := query.NewSelect(allTasks, query.Project(query.Avg(allPriority)))
+	require.NoError(t, err)
+	average, err = average.WithWhere(query.GreaterThan(allPriority, query.Bind(0)))
+	require.NoError(t, err)
+
+	statement, err := query.NewGroupedSelect(tasks,
+		[]query.Expression{query.GreaterThan(priority, query.Scalar(average))},
+		query.Project(query.CountAll()).As("total"),
+	)
+	require.NoError(t, err)
+	statement, err = statement.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		`SELECT COUNT(*) AS "total" FROM "tasks" GROUP BY ("tasks"."priority" > (SELECT AVG("all_tasks"."priority") FROM "tasks" AS "all_tasks" WHERE ("all_tasks"."priority" > $1))) HAVING (COUNT(*) > $2)`,
+		rendered.SQL(),
+	)
+	require.Equal(t, []any{0, 1}, rendered.Args())
+}
+
 func TestSelectRejectsNilDialect(t *testing.T) {
 	_, err := render.Select(nil, selectStatement(t))
 	require.Error(t, err)

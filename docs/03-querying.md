@@ -46,6 +46,9 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `WhereEqual(name, value)` | Adds `column = value` for a primary-table column. | | ✓ |
 | `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.Column`, one placeholder per value. | ✓ | |
 | `WhereIn(name, values…)` | Adds `column IN (values…)` for a primary-table column, one placeholder per value. | | ✓ |
+| `GroupBy(expressions…)` | Adds grouping built with the basic query API. | ✓ | ✓ |
+| `GroupByColumns(names…)` | Adds primary-table columns to the grouping by name. | | ✓ |
+| `Having(expression)` | Adds a grouped predicate from a `query` expression; combines with `AND` like `Where`. | ✓ | ✓ |
 | `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. | ✓ | ✓ |
 | `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.Column`. | ✓ | |
 | `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. | | ✓ |
@@ -128,10 +131,11 @@ The value list of `query.In` and `query.NotIn` takes expressions, the same freed
 
 Every function above aggregates, so validation accepts one only where SQL does, and reports a `query.ValidationError` everywhere else:
 
-- A `SELECT` projection may call an aggregate. A `WHERE` clause, a `JOIN ON` condition, and every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — reject one.
+- A `SELECT` projection and a `HAVING` clause may call an aggregate. A `WHERE` clause, a `JOIN ON` condition, a `GROUP BY` clause, and every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — reject one.
 - An aggregate must not contain another, at any depth: `query.Sum(query.Sum(column))` is refused, since no supported dialect runs it.
-- A projection set that calls an aggregate must not also read a column outside one, because reconciling the two needs `GROUP BY`, which this package does not support yet. Project `query.CountAll()` on its own, or beside another aggregate, rather than beside `users.ID`.
-- An `ORDER BY` clause follows the projections. When no projection aggregates, ordering reads columns freely and may not call an aggregate. When every projection aggregates, the statement is one group, so ordering may call an aggregate — `query.Asc(query.CountAll())` — and every column it reads has to sit inside one; `query.Asc(users.ID)` beside an aggregate projection is refused for the same `GROUP BY` reason as the projection rule above.
+- An ungrouped projection set that calls an aggregate must not also read a column outside one, because reconciling the two needs `GROUP BY`. Project `query.CountAll()` on its own, or beside another aggregate, rather than beside `users.ID` — or build the statement with `query.NewGroupedSelect` and group by `users.ID`, which [Group rows](#group-rows) covers.
+- An `ORDER BY` clause follows the projections. A statement that groups explicitly may read its grouping keys freely and may call an aggregate. Otherwise: when no projection aggregates, ordering reads columns freely and may not call an aggregate; when the projection set aggregates, the statement is one implicit group, so ordering may call an aggregate — `query.Asc(query.CountAll())` — and every column it reads has to sit inside one; `query.Asc(users.ID)` beside an aggregate projection is refused for the same `GROUP BY` reason as the projection rule above, unless the statement groups.
+- A `HAVING` clause needs a statement that groups, which means one of two things: an explicit `GROUP BY`, or a projection set that aggregates and reads no column outside an aggregate, which is one group. Not every projection in that second set has to aggregate — a projection that reads no column, such as `query.Bind(7)`, may sit beside `query.CountAll()` and the set still counts as one group. A `HAVING` on a statement with neither is refused, so `Having` over a projection set that reads plain columns needs a `GroupBy` beside it. Without a `GROUP BY` the clause follows the same rule as `ORDER BY` over that one implicit group, so a column it reads has to sit inside an aggregate: `query.GreaterThan(query.CountAll(), query.Bind(1))` is accepted and `query.GreaterThan(users.ID, query.Bind(1))` is refused. A statement that groups explicitly drops that restriction and may read its grouping keys freely.
 - Every rule above applies to the operands of a membership test, because `query.In` and `query.NotIn` are ordinary predicates rather than aggregates. `query.In(users.ID, query.Count(users.ID))` in a `WHERE` clause is refused exactly as `query.Equal(users.ID, query.Count(users.ID))` is, and a column read from an `IN` list counts as a column read outside an aggregate wherever a bare column would.
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
@@ -140,7 +144,7 @@ An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite eac
 
 `query.Subquery` is a `SELECT` statement used as an expression: `query.Scalar(statement)` uses it as a single value, and `query.InSelect`/`query.NotInSelect` use it as the right-hand side of a membership test. In every form, `statement` must project exactly one expression — validation reports the count when it does not — because `x > (SELECT a, b …)` is as invalid as `x IN (SELECT a, b …)`.
 
-A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, and `ORDER BY` clause of a `SELECT` statement, and nowhere else: every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — refuses one, the same way those clauses refuse an aggregate. A subquery reads no table of the statement that encloses it: every column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a correlation. A subquery may nest inside another subquery to any depth.
+A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `GROUP BY` clause, `HAVING` clause, and `ORDER BY` clause of a `SELECT` statement, and nowhere else: every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — refuses one, the same way those clauses refuse an aggregate. A subquery reads no table of the statement that encloses it: every column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a correlation. A subquery may nest inside another subquery to any depth.
 
 ```go
 owned, err := query.NewSelect(projects.QueryTable(), query.Project(projects.ID))
@@ -177,12 +181,14 @@ The builders cover the common statements. These constructors build the same stat
 | Constructor | Statement |
 | --- | --- |
 | `query.NewSelect(from, projections…)` | `SELECT` |
+| `query.NewGroupedSelect(from, groupBy, projections…)` | `SELECT` that groups; needed when the projections mix an aggregate with a bare column, which `NewSelect` refuses. |
+| `query.NewJoinedSelect(from, joins, groupBy, projections…)` | `SELECT` that carries its joins from the start; needed when a projection or a grouping expression reads a joined table, which the other two refuse because they validate before `WithJoin` can run. Pass a nil `groupBy` when the statement does not group. |
 | `query.NewInsert(into, columns, values)` | `INSERT` |
 | `query.NewUpdate(table, assignments…)` | `UPDATE`, with `query.Set(column, expression)` per assignment. |
 | `query.NewDelete(from)` | `DELETE` |
 | `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |
 
-Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](04-writing.md#reading-a-returning-clause) covers. Each returns a new validated statement rather than changing the one it was called on.
+Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithGroupBy`, `WithHaving`, `WithOrder`, `WithLimit`, and `WithOffset` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](04-writing.md#reading-a-returning-clause) covers. Each returns a new validated statement rather than changing the one it was called on.
 
 ## Select typed rows
 
@@ -628,6 +634,122 @@ source: [examples/rasql_count_example_test.go](https://github.com/lestrrat-go/ra
 <!-- END INCLUDE -->
 
 `Count` rejects a builder that sets `Limit` or `Offset`, because a count of a paged statement is not the count the caller built the statement to ask for; count an unpaged builder, then page a copy of it for the rows. `SUM` and `AVG` have no equivalent helper, because their result types are not portable across dialects — project them with `query.Sum` or `query.Avg` and decode through `rasql.DecodeFrom[R]` instead, as [Aggregates](#aggregates) covers.
+
+## Group rows
+
+`GroupBy` adds a `GROUP BY` clause, which is what lets a projection set mix a bare column with an aggregate: [Aggregates](#aggregates) refuses that combination without one. `Having` adds a `HAVING` clause, filtering groups after aggregation the way `Where` filters rows before it; repeated calls combine with `AND` in the order they were made, exactly as `Where` does. `Having` needs groups to filter, so it requires either a `GroupBy` or a projection set that aggregates and reads no column outside an aggregate, a set in which a projection reading no column — a bound value, say — may sit beside the aggregate. [Aggregates](#aggregates) states what each of those two cases allows the clause to read.
+
+<!-- INCLUDE(examples/rasql_group_by_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_group_by() {
+	// This example counts tasks per status and keeps only the statuses with
+	// more than one task, using GROUP BY and HAVING together.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+
+	// A typed descriptor makes tasks usable with rasql.Insert.
+	type taskRow struct {
+		ID     int    `rasql:"id"`
+		Status string `rasql:"status"`
+	}
+	// A local result type holds one row per group.
+	type statusCount struct {
+		Status string
+		Total  int64
+	}
+	tasks := rasql.MustTable[taskRow](schema.Table{
+		Name: "tasks",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "status", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	if err := rasql.Create(ctx, client, tasks); err != nil {
+		fmt.Printf("failed to create tasks table: %s\n", err)
+		return
+	}
+	for _, task := range []taskRow{
+		{ID: 1, Status: "open"},
+		{ID: 2, Status: "open"},
+		{ID: 3, Status: "done"},
+		{ID: 4, Status: "done"},
+		{ID: 5, Status: "done"},
+	} {
+		if _, err := rasql.Insert(ctx, client, tasks, task); err != nil {
+			fmt.Printf("failed to insert task: %s\n", err)
+			return
+		}
+	}
+
+	// tasks has no generated column field for status, so it is looked up by
+	// name. That lookup validates it against the descriptor as the query is
+	// assembled.
+	status, err := tasks.Column("status")
+	if err != nil {
+		fmt.Printf("failed to find tasks.status: %s\n", err)
+		return
+	}
+
+	// GroupBy adds the GROUP BY clause the mixed projection below needs: a
+	// bare column beside COUNT(*) is refused without one. Having filters
+	// groups after aggregation, so it may call an aggregate a WHERE clause
+	// could not.
+	rows, err := rasql.DecodeFrom[statusCount](client, tasks).
+		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
+		GroupBy(status).
+		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		Order(query.Asc(status)).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query status counts: %s\n", err)
+		return
+	}
+	for found, err := range rows {
+		if err != nil {
+			fmt.Printf("failed to query status counts: %s\n", err)
+			return
+		}
+		fmt.Println(found.Status, found.Total)
+	}
+
+	// Output:
+	// done 3
+	// open 2
+}
+```
+source: [examples/rasql_group_by_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_group_by_example_test.go)
+<!-- END INCLUDE -->
+
+The untyped builder groups by a primary-table column name with `GroupByColumns`, the counterpart to `Select`'s `names…` form, without importing the `query` package.
 
 ## Alias a table for a self-join
 

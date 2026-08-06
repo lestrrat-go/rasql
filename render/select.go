@@ -104,6 +104,25 @@ func (r *renderer) writeSelect(statement query.Select) error {
 		}
 	}
 
+	groupBy := statement.GroupBy()
+	if len(groupBy) > 0 {
+		r.builder.WriteString(" GROUP BY ")
+		for i, expression := range groupBy {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			if err := r.writeExpression(expression); err != nil {
+				return err
+			}
+		}
+	}
+	if having := statement.Having(); having != nil {
+		r.builder.WriteString(" HAVING ")
+		if err := r.writeExpression(having); err != nil {
+			return err
+		}
+	}
+
 	orders := statement.OrderBy()
 	if len(orders) > 0 {
 		r.builder.WriteString(" ORDER BY ")

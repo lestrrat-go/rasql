@@ -331,13 +331,15 @@ const (
 
 // Function calls a SQL function on its arguments. Every supported function
 // aggregates, so statement validation accepts a call only where SQL does: in a
-// SELECT projection, or in an ORDER BY clause of a statement whose projections
-// all aggregate, never inside another aggregate, and never in a projection set
-// that also reads a column outside an aggregate, which would need the
-// unsupported GROUP BY. That same GROUP BY rule governs the ORDER BY of an
-// aggregating statement, whose ordering expressions may read a column only
-// inside an aggregate. Any other placement fails with a ValidationError before
-// the statement is rendered.
+// SELECT projection, in a HAVING clause, or in an ORDER BY clause of a
+// statement that groups, never inside another aggregate. An ungrouped
+// projection set that both aggregates and reads a column outside an aggregate
+// needs an explicit GROUP BY to mean anything, so it is refused, and the same
+// rule governs the ORDER BY and HAVING of an ungrouped aggregating statement,
+// whose expressions may then read a column only inside an aggregate. A grouped
+// statement drops both restrictions: its projections, its ORDER BY, and its
+// HAVING clause may read a column freely alongside an aggregate. Any other
+// placement fails with a ValidationError before the statement is rendered.
 type Function struct {
 	name      FunctionName
 	arguments []Expression
