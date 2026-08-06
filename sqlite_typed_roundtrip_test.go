@@ -348,7 +348,10 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 // NUMERIC(19,4)-to-REAL truncation change 2 documents: SQLite has no exact
 // decimal storage class, so a TypeDecimal column is declared TEXT and the
 // inserted digits must come back byte-identical rather than rounded through
-// float64.
+// float64. Byte-identical is a property of SQLite's TEXT storage, not of the
+// decimal type: PostgreSQL and MySQL return a decimal in its column's
+// declared scale, zero-padded on the right, which TestDatabaseIntegration
+// pins against the live servers.
 func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)

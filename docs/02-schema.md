@@ -76,7 +76,7 @@ A column's `Type` is a logical type, not a database type. The dialect maps it to
 
 A column is also `Nullable` or not, and may carry a `Default` written as SQL text. Identifiers must be simple: `schema.ValidateIdentifier` accepts a leading letter or underscore followed by letters, digits, or underscores, and everything else is rejected rather than quoted around.
 
-`schema.TypeDecimal` is an exact decimal, for money, quantities, and any other value a binary floating-point `TypeFloat` would round. A decimal column must set `Precision` (the total number of significant digits, at least 1) and `Scale` (the number of those digits right of the decimal point, no more than `Precision`); `Table.Validate` rejects a decimal column that omits either and rejects `Precision` or `Scale` on any other logical type. Each dialect renders `Precision`/`Scale` into its own DDL: PostgreSQL and MySQL render `NUMERIC(p,s)` and `DECIMAL(p,s)`, each exact and each enforcing its own maximum precision and scale. SQLite has no exact decimal storage class, so it renders `TEXT` instead: the column round-trips its digits exactly, decoding to a Go `string` on every dialect, but a SQLite decimal column compares and orders lexicographically rather than numerically, since it is stored as text rather than a number. A caller that wants a real decimal type in Go, rather than a `string`, can write its own row struct with a field implementing `sql.Scanner` and `driver.Valuer`; `row.Assign` checks for that interface before every built-in conversion, so the raw driver value reaches it unchanged.
+`schema.TypeDecimal` is an exact decimal, for money, quantities, and any other value a binary floating-point `TypeFloat` would round. A decimal column must set `Precision` (the total number of significant digits, at least 1) and `Scale` (the number of those digits right of the decimal point, no more than `Precision`); `Table.Validate` rejects a decimal column that omits either and rejects `Precision` or `Scale` on any other logical type. Each dialect renders `Precision`/`Scale` into its own DDL: PostgreSQL and MySQL render `NUMERIC(p,s)` and `DECIMAL(p,s)`, each exact and each enforcing its own maximum precision and scale. On both, a decimal column decodes to its declared scale in string form, zero-padded on the right: a `NUMERIC(19,4)` column yields `"19.9900"` for the value `19.99`, not `"19.99"`, so a caller comparing decimal strings has to compare on the declared scale. SQLite has no exact decimal storage class, so it renders `TEXT` instead: the column round-trips its digits exactly and applies no such padding, decoding to a Go `string` on every dialect, but a SQLite decimal column compares and orders lexicographically rather than numerically, since it is stored as text rather than a number. A caller that wants a real decimal type in Go, rather than a `string`, can write its own row struct with a field implementing `sql.Scanner` and `driver.Valuer`; `row.Assign` checks for that interface before every built-in conversion, so the raw driver value reaches it unchanged.
 
 <!-- INCLUDE(examples/schema_decimal_column_example_test.go) -->
 ```go
@@ -94,8 +94,10 @@ import (
 )
 
 // invoiceRow maps the one schema.TypeDecimal column this example declares.
-// The column decodes into a Go string, so the exact digits inserted are the
-// exact digits read back.
+// The column decodes into a Go string on every dialect. This example runs on
+// SQLite, which stores such a column as TEXT and hands back the exact digits
+// inserted; PostgreSQL and MySQL instead return the value in the column's
+// declared scale, so the same "19.99" reads back as "19.9900" there.
 type invoiceRow struct {
 	ID     int64  `rasql:"id"`
 	Amount string `rasql:"amount"`
@@ -103,7 +105,7 @@ type invoiceRow struct {
 
 func Example_schema_decimal_column() {
 	// This example declares a schema.TypeDecimal column, creates its table in
-	// SQLite, and shows that the inserted string round-trips unchanged.
+	// SQLite, and shows that the inserted string round-trips unchanged there.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

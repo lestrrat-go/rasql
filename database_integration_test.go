@@ -80,13 +80,28 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	_, err = rasql.Update(t.Context(), client, records, first)
 	require.NoError(t, err)
 
+	// PostgreSQL and MySQL both return an exact decimal in the scale its
+	// column declares, zero-padded on the right. The "amount" column here is
+	// declared Scale: 4, so it is NUMERIC(19,4) on PostgreSQL and
+	// DECIMAL(19,4) on MySQL, and the inserted "19.99" reads back as
+	// "19.9900" while "5.00" reads back as "5.0000". That padding is the
+	// column's declared scale, which is precisely the information an exact
+	// decimal type exists to preserve, so rasql surfaces the server's digits
+	// unchanged rather than trimming them. The expectations below therefore
+	// state the padded form deliberately -- do not "correct" them back to the
+	// shorter literals that were inserted.
+	firstStored := first
+	firstStored.Amount = "19.9900"
+	secondStored := second
+	secondStored.Amount = "5.0000"
+
 	actual, err := rasql.SelectFrom(client, records).WhereEqual(recordID, first.ID).One(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, first, actual)
+	require.Equal(t, firstStored, actual)
 
 	all, err := rasql.SelectFrom(client, records).OrderAsc(recordID).All(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, []record{first, second}, all)
+	require.Equal(t, []record{firstStored, secondStored}, all)
 
 	// An InSelect predicate exercises IN (SELECT …) against a real server,
 	// which is what proves the MySQL rendering path this change adds actually
@@ -117,6 +132,11 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	recordAmount, err := records.Column("amount")
 	require.NoError(t, err)
 	third := record{ID: 3, Active: true, Email: "grace@example.com", Amount: "42.50"}
+	// RETURNING reads the row back from the server, so the decimal arrives in
+	// the column's declared scale for the same reason the two expectations
+	// above do.
+	thirdStored := third
+	thirdStored.Amount = "42.5000"
 	insert, err := query.NewInsert(
 		records.QueryTable(),
 		[]query.Column{recordID, recordActive, recordEmail, recordAmount},
@@ -128,7 +148,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect) 
 	if d.Supports(dialect.CapabilityReturning) {
 		inserted, err := rasql.QueryWriteOne[record](t.Context(), client, insert)
 		require.NoError(t, err)
-		require.Equal(t, third, inserted)
+		require.Equal(t, thirdStored, inserted)
 	} else {
 		_, err := client.QueryWrite(t.Context(), insert)
 		require.ErrorContains(t, err, "RETURNING is not supported")

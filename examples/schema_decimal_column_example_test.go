@@ -12,8 +12,10 @@ import (
 )
 
 // invoiceRow maps the one schema.TypeDecimal column this example declares.
-// The column decodes into a Go string, so the exact digits inserted are the
-// exact digits read back.
+// The column decodes into a Go string on every dialect. This example runs on
+// SQLite, which stores such a column as TEXT and hands back the exact digits
+// inserted; PostgreSQL and MySQL instead return the value in the column's
+// declared scale, so the same "19.99" reads back as "19.9900" there.
 type invoiceRow struct {
 	ID     int64  `rasql:"id"`
 	Amount string `rasql:"amount"`
@@ -21,7 +23,7 @@ type invoiceRow struct {
 
 func Example_schema_decimal_column() {
 	// This example declares a schema.TypeDecimal column, creates its table in
-	// SQLite, and shows that the inserted string round-trips unchanged.
+	// SQLite, and shows that the inserted string round-trips unchanged there.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
