@@ -141,7 +141,7 @@ Every function above aggregates, so validation accepts one only where SQL does, 
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
 
-`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the constructors above; validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. This is the way to count distinct rows at all: the builder's own `Count` in [Count rows](#count-rows) rejects a distinct builder, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
+`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the constructors above; validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The derived table or CTE that would express one portably is unsupported. The builder's own `Count` in [Count rows](#count-rows) rejects a distinct builder for a reason of its own, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
 
 ### Subqueries
 
@@ -865,7 +865,7 @@ func Example_rasql_distinct() {
 source: [examples/rasql_distinct_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_distinct_example_test.go)
 <!-- END INCLUDE -->
 
-`Count` rejects a distinct builder, because it replaces the projections with `COUNT(*)`: `SELECT DISTINCT COUNT(*)` is always exactly one row, never the number of distinct rows. Count distinct rows with `query.Count(column).WithDistinct()` instead, which [Aggregates](#aggregates) covers, and decode the result through `rasql.DecodeFrom[R]`.
+`Count` rejects a distinct builder, because it replaces the projections with `COUNT(*)`: `SELECT DISTINCT COUNT(*)` is always exactly one row, never the number of distinct rows. `query.Count(column).WithDistinct()`, which [Aggregates](#aggregates) covers, counts the distinct non-NULL values of one column and decodes through `rasql.DecodeFrom[R]`. It is not a count of the rows `Distinct()` returns: it ignores NULL, which `DISTINCT` keeps as a value, and it takes only one expression rather than the several a distinct row de-duplicates on. The derived table or CTE that a portable distinct-row count needs is unsupported.
 
 `DISTINCT ON`, PostgreSQL's syntax for keeping one row per group by explicit ordering, is out of scope: it needs its own dialect capability, since PostgreSQL is the only supported database that has it.
 

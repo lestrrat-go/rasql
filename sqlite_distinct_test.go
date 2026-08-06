@@ -79,6 +79,90 @@ func TestSQLiteRunsDistinctStatements(t *testing.T) {
 	})
 }
 
+// TestSQLiteDistinctCountDropsNULL proves the divergence documented in
+// docs/03-querying.md under Aggregates and Select distinct rows:
+// COUNT(DISTINCT column) counts the distinct non-NULL values of one column,
+// while SELECT DISTINCT over that same column keeps NULL as a value of its
+// own. The two therefore answer differently over data holding a NULL, which is
+// why COUNT(DISTINCT column) is not a count of the rows SELECT DISTINCT
+// returns.
+func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
+	definition := schema.Table{
+		Name: "visits",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "city", Type: schema.TypeText, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	// An in-memory SQLite database is per connection, so keep the test on one.
+	database.SetMaxOpenConns(1)
+
+	client, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	type visit struct {
+		ID   int64   `rasql:"id"`
+		City *string `rasql:"city"`
+	}
+	visits, err := rasql.NewTable[visit](definition)
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, visits))
+	tokyo := "tokyo"
+	// NULL, NULL, tokyo: two distinct rows, one distinct non-NULL value.
+	for _, fixture := range []visit{
+		{ID: 1, City: nil},
+		{ID: 2, City: nil},
+		{ID: 3, City: &tokyo},
+	} {
+		_, err = rasql.Insert(t.Context(), client, visits, fixture)
+		require.NoError(t, err)
+	}
+
+	table, err := query.NewTable(definition)
+	require.NoError(t, err)
+	city, err := table.Column("city")
+	require.NoError(t, err)
+
+	t.Run("SELECT DISTINCT keeps NULL as a value", func(t *testing.T) {
+		statement, err := query.NewSelect(table, query.Project(city))
+		require.NoError(t, err)
+		statement, err = statement.WithDistinct()
+		require.NoError(t, err)
+		rendered, err := render.Select(dialect.SQLite(), statement)
+		require.NoError(t, err)
+
+		var cities []*string
+		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var c *string
+			require.NoError(t, rows.Scan(&c))
+			cities = append(cities, c)
+		}
+		require.NoError(t, rows.Err())
+		require.Len(t, cities, 2, "NULL and tokyo are two distinct rows")
+	})
+
+	t.Run("COUNT(DISTINCT column) drops NULL", func(t *testing.T) {
+		statement, err := query.NewSelect(table, query.Project(query.Count(city).WithDistinct()).As("distinct_cities"))
+		require.NoError(t, err)
+		rendered, err := render.Select(dialect.SQLite(), statement)
+		require.NoError(t, err)
+
+		var count int64
+		result := database.QueryRowContext(t.Context(), rendered.SQL(), rendered.Args()...)
+		require.NoError(t, result.Scan(&count))
+		require.Equal(t, int64(1), count, "the two NULL rows contribute no value to count")
+	})
+}
+
 // TestSQLiteAnswersUnprojectedDistinctOrderArbitrarily proves the rationale
 // behind the maintainer decision documented at query/select.go's WithDistinct:
 // rasql renders a DISTINCT statement ordered by a column outside its

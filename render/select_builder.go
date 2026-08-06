@@ -267,8 +267,10 @@ func (b SelectBuilder) Build() (Statement, error) {
 // discards the projections that clause was written against; and when b is
 // distinct, because BuildCount replaces the projections with COUNT(*), which
 // would turn SELECT DISTINCT a, b into SELECT DISTINCT COUNT(*) — always one
-// row, never the count of distinct rows. Call WithDistinct on query.Count
-// instead for COUNT(DISTINCT column).
+// row, never the count of distinct rows. There is no distinct-row count to
+// offer in its place: query.Count(column).WithDistinct() renders
+// COUNT(DISTINCT column), which counts the distinct non-NULL values of one
+// column rather than the rows SELECT DISTINCT returns.
 func (b SelectBuilder) BuildCount() (Statement, error) {
 	if b.err != nil {
 		return Statement{}, b.err
