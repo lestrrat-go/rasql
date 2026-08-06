@@ -248,6 +248,27 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		r.builder.WriteString("NULL)")
 		return nil
 	case query.Membership:
+		if subquery, ok := expression.Subquery(); ok {
+			_, hasLimit := subquery.Statement().Limit()
+			_, hasOffset := subquery.Statement().Offset()
+			if (hasLimit || hasOffset) && !r.dialect.Supports(dialect.CapabilitySubqueryLimit) {
+				return fmt.Errorf("a subquery used with IN must not set LIMIT or OFFSET")
+			}
+			r.builder.WriteByte('(')
+			if err := r.writeExpression(expression.Expression()); err != nil {
+				return err
+			}
+			if expression.Not() {
+				r.builder.WriteString(" NOT IN ")
+			} else {
+				r.builder.WriteString(" IN ")
+			}
+			if err := r.writeExpression(subquery); err != nil {
+				return err
+			}
+			r.builder.WriteByte(')')
+			return nil
+		}
 		values := expression.Values()
 		if len(values) == 0 {
 			return fmt.Errorf("IN requires at least one value")
@@ -270,6 +291,13 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 			}
 		}
 		r.builder.WriteString("))")
+		return nil
+	case query.Subquery:
+		r.builder.WriteByte('(')
+		if err := r.writeSelect(expression.Statement()); err != nil {
+			return err
+		}
+		r.builder.WriteByte(')')
 		return nil
 	default:
 		return fmt.Errorf("unsupported expression %T", expression)

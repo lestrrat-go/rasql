@@ -124,6 +124,32 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `unsupported function "LOWER"`)
 
+	_, err = statement.WithWhere(query.GreaterThan(userID, query.Scalar(query.Select{})))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "from")
+
+	twoProjections, err := query.NewSelect(users, query.Project(userID), query.Project(query.Bind(1)))
+	require.NoError(t, err)
+	_, err = statement.WithWhere(query.GreaterThan(userID, query.Scalar(twoProjections)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "must select exactly one expression, got 2")
+
+	_, err = statement.WithWhere(query.In(userID, query.Scalar(twoProjections)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "use InSelect or NotInSelect")
+
+	// A subquery cannot correlate: its WHERE reads no table outside its own FROM
+	// and joins, so a caller who tries to reference the enclosing table hits the
+	// same "outside the statement" error the table-scope check already reports
+	// for any expression, before the subquery is even nested inside another
+	// statement.
+	correlated, err := query.NewSelect(other, query.Project(otherID))
+	require.NoError(t, err)
+	_, err = correlated.WithWhere(query.Equal(userID, query.Bind(1)))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "references table")
+	require.ErrorContains(t, err, "outside the statement")
+
 	_, err = query.NewSelect(users, query.Project(query.Call(query.FunctionSum)))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "takes exactly one argument, got 0")
@@ -162,6 +188,62 @@ func TestSelectAcceptsMembershipPredicate(t *testing.T) {
 	statement, err = statement.WithWhere(notIn)
 	require.NoError(t, err)
 	require.Equal(t, query.Expression(notIn), statement.Where())
+}
+
+// TestSelectAcceptsSubqueryPredicates covers the placements a subquery is legal
+// in: as the right-hand side of an InSelect/NotInSelect membership test, and as
+// a Scalar operand of a comparison, including one nested two levels deep.
+func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	orders, err := query.NewTable(ordersTable())
+	require.NoError(t, err)
+	orderID, err := orders.Column("id")
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+	amount, err := orders.Column("amount")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+
+	orderedUserIDs, err := query.NewSelect(orders, query.Project(orderUserID))
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.InSelect(userID, orderedUserIDs))
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+
+	averageAmount, err := query.NewSelect(orders, query.Project(query.Avg(amount)))
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+	statement, err = statement.WithWhere(query.GreaterThanOrEqual(userID, query.Scalar(averageAmount)))
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+
+	notInStatement, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	notInStatement, err = notInStatement.WithWhere(query.NotInSelect(userID, orderedUserIDs))
+	require.NoError(t, err)
+	require.NoError(t, notInStatement.Validate())
+
+	// A subquery two levels deep: the outer statement's InSelect reads a
+	// statement whose own WHERE runs another InSelect.
+	innermost, err := query.NewSelect(orders, query.Project(orderID))
+	require.NoError(t, err)
+	innermost, err = innermost.WithWhere(query.GreaterThan(amount, query.Bind(10)))
+	require.NoError(t, err)
+	nested, err := query.NewSelect(orders, query.Project(orderUserID))
+	require.NoError(t, err)
+	nested, err = nested.WithWhere(query.InSelect(orderID, innermost))
+	require.NoError(t, err)
+	deep, err := query.NewSelect(users, query.Project(userID))
+	require.NoError(t, err)
+	deep, err = deep.WithWhere(query.InSelect(userID, nested))
+	require.NoError(t, err)
+	require.NoError(t, deep.Validate())
 }
 
 // TestSelectRejectsMisplacedAggregates covers the placement rules that make an

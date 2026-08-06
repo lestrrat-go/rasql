@@ -105,6 +105,102 @@ func TestSQLiteTypedSelectWhereInFiltersRows(t *testing.T) {
 	require.Equal(t, []user{inserted[0], inserted[2]}, actual)
 }
 
+// TestSQLiteTypedSelectSubqueryFiltersRows runs InSelect and Scalar against a
+// real SQLite database: InSelect keeps users who placed a high-value order, and
+// Scalar keeps orders at or above the average order amount.
+func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	client, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[user](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	userEmail, err := users.Column("email")
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, users))
+
+	type orderRow struct {
+		ID     int64 `rasql:"id"`
+		UserID int64 `rasql:"user_id"`
+		Amount int64 `rasql:"amount"`
+	}
+	orders, err := rasql.NewTable[orderRow](schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "amount", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+	amount, err := orders.Column("amount")
+	require.NoError(t, err)
+	require.NoError(t, rasql.Create(t.Context(), client, orders))
+
+	insertedUsers := []user{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+		{ID: 3, Email: "cyd@example.com"},
+	}
+	for _, row := range insertedUsers {
+		_, err = rasql.Insert(t.Context(), client, users, row)
+		require.NoError(t, err)
+	}
+	for _, row := range []orderRow{
+		{ID: 1, UserID: 1, Amount: 80},
+		{ID: 2, UserID: 2, Amount: 20},
+		{ID: 3, UserID: 3, Amount: 100},
+	} {
+		_, err = rasql.Insert(t.Context(), client, orders, row)
+		require.NoError(t, err)
+	}
+
+	highSpenders, err := query.NewSelect(orders.QueryTable(), query.Project(orderUserID))
+	require.NoError(t, err)
+	highSpenders, err = highSpenders.WithWhere(query.GreaterThan(amount, query.Bind(50)))
+	require.NoError(t, err)
+
+	viaInSelect, err := rasql.SelectFrom(client, users).
+		Where(query.InSelect(userID, highSpenders)).
+		OrderAsc(userID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []user{insertedUsers[0], insertedUsers[2]}, viaInSelect)
+
+	average, err := query.NewSelect(orders.QueryTable(), query.Project(query.Avg(amount)))
+	require.NoError(t, err)
+
+	viaScalar, err := rasql.DecodeFrom[user](client, users).
+		Project(query.Project(userID), query.Project(userEmail)).
+		Join(rasql.InnerJoin(orders, query.Equal(userID, orderUserID))).
+		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
+		OrderAsc(userID).
+		All(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []user{insertedUsers[0], insertedUsers[2]}, viaScalar)
+}
+
 func TestSQLiteTypedSelectCountsRows(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)

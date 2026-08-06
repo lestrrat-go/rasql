@@ -93,11 +93,14 @@ Every constructor below takes and returns `query.Expression`, so conditions nest
 | `query.IsNotNull(expression)` | `expression IS NOT NULL` |
 | `query.In(expression, values…)` | `expression IN (values…)` |
 | `query.NotIn(expression, values…)` | `expression NOT IN (values…)` |
+| `query.InSelect(expression, statement)` | `expression IN (SELECT …)` |
+| `query.NotInSelect(expression, statement)` | `expression NOT IN (SELECT …)` |
+| `query.Scalar(statement)` | `(SELECT …)`, used as a single value |
 | `query.And(expressions…)` | `(a AND b …)` |
 | `query.Or(expressions…)` | `(a OR b …)` |
 | `query.Negate(expression)` | `NOT (expression)` |
 
-The value list of `query.In` and `query.NotIn` takes expressions, the same freedom the comparison constructors give both of their operands. Each `query.Bind` value becomes its own placeholder, so a list of `N` bound values costs `N` arguments against the dialect's parameter limit. A non-value operand is accepted deliberately and costs no argument: a column such as `orders.UserID` renders as a quoted identifier, which is how a column-to-column test like `query.In(users.ID, orders.UserID)` is written. There is no subquery expression in the `query` package, so a `SELECT` on the right-hand side is not available. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect. A membership test is an ordinary predicate, so the placement rules in [Aggregates](#aggregates) reach its operands as they reach the operands of a comparison.
+The value list of `query.In` and `query.NotIn` takes expressions, the same freedom the comparison constructors give both of their operands. Each `query.Bind` value becomes its own placeholder, so a list of `N` bound values costs `N` arguments against the dialect's parameter limit. A non-value operand is accepted deliberately and costs no argument: a column such as `orders.UserID` renders as a quoted identifier, which is how a column-to-column test like `query.In(users.ID, orders.UserID)` is written. `query.InSelect` and `query.NotInSelect` take a `SELECT` statement in place of a value list, and [Subqueries](#subqueries) covers the placement rules and the one MySQL restriction that governs them. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect. A membership test is an ordinary predicate, so the placement rules in [Aggregates](#aggregates) reach its operands as they reach the operands of a comparison.
 
 ### Operands
 
@@ -131,6 +134,29 @@ Every function above aggregates, so validation accepts one only where SQL does, 
 - Every rule above applies to the operands of a membership test, because `query.In` and `query.NotIn` are ordinary predicates rather than aggregates. `query.In(users.ID, query.Count(users.ID))` in a `WHERE` clause is refused exactly as `query.Equal(users.ID, query.Count(users.ID))` is, and a column read from an `IN` list counts as a column read outside an aggregate wherever a bare column would.
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
+
+### Subqueries
+
+`query.Subquery` is a `SELECT` statement used as an expression: `query.Scalar(statement)` uses it as a single value, and `query.InSelect`/`query.NotInSelect` use it as the right-hand side of a membership test. In every form, `statement` must project exactly one expression — validation reports the count when it does not — because `x > (SELECT a, b …)` is as invalid as `x IN (SELECT a, b …)`.
+
+A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, and `ORDER BY` clause of a `SELECT` statement, and nowhere else: every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — refuses one, the same way those clauses refuse an aggregate. A subquery reads no table of the statement that encloses it: every column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a correlation. A subquery may nest inside another subquery to any depth.
+
+```go
+owned, err := query.NewSelect(projects.QueryTable(), query.Project(projects.ID))
+owned, err = owned.WithWhere(query.Equal(projects.OwnerID, query.Bind(7)))
+
+allTasks, err := tasks.As("all_tasks")
+average, err := query.NewSelect(allTasks.QueryTable(), query.Project(query.Avg(allTasks.Priority)))
+
+rows, err := rasql.DecodeFrom[taskSummary](client, tasks).
+	Project(query.Project(tasks.ID), query.Project(tasks.Title)).
+	Where(query.InSelect(tasks.ProjectID, owned)).
+	Where(query.GreaterThanOrEqual(tasks.Priority, query.Scalar(average))).
+	OrderAsc(tasks.ID).
+	All(ctx)
+```
+
+`query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit; the arguments a subquery binds join the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an `OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject; PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`.
 
 ### Projections, joins, and ordering
 
@@ -350,6 +376,174 @@ rows, err := rasql.SelectFrom(client, users).
 ```
 
 A generated field cannot name a column the table does not have, because the field would not exist. A table built at run time has no such fields, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column; a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
+
+## Filter with a subquery
+
+`query.InSelect` and `query.Scalar` take a `SELECT` statement as the right-hand side of a predicate, in place of a value list or a bound value. Each subquery is validated and rendered as its own statement; [Subqueries](#subqueries) covers the placement rules, including MySQL's restriction on `LIMIT` inside an `InSelect` statement.
+
+<!-- INCLUDE(examples/rasql_subquery_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_subquery() {
+	// This example selects orders placed by a user reachable by email domain,
+	// then narrows to orders at or above the average amount across every order.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+	// A typed descriptor makes orders usable with rasql.Insert as well.
+	type orderRow struct {
+		ID     int `rasql:"id"`
+		UserID int `rasql:"user_id"`
+		Amount int `rasql:"amount"`
+	}
+	// A local result type projects only orders columns, so no join is needed:
+	// both subqueries below run as their own SELECT, never as part of this one.
+	type orderSummary struct {
+		UserID int64
+		Amount int64
+	}
+	orders := rasql.MustTable[orderRow](schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "amount", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	// Create both descriptors before querying orders against the users subquery.
+	if err := rasql.Create(ctx, client, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+	if err := rasql.Create(ctx, client, orders); err != nil {
+		fmt.Printf("failed to create orders table: %s\n", err)
+		return
+	}
+
+	// orders has no generated column fields, so its columns are looked up by name.
+	// That lookup validates them against the descriptor as the query is assembled.
+	orderUserID, err := orders.Column("user_id")
+	if err != nil {
+		fmt.Printf("failed to find orders.user_id: %s\n", err)
+		return
+	}
+	amount, err := orders.Column("amount")
+	if err != nil {
+		fmt.Printf("failed to find orders.amount: %s\n", err)
+		return
+	}
+
+	for _, user := range []UserRow{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+		{ID: 3, Email: "cyd@other.example"},
+	} {
+		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+			fmt.Printf("failed to insert user: %s\n", err)
+			return
+		}
+	}
+	for _, order := range []orderRow{
+		{ID: 1, UserID: 1, Amount: 80},
+		{ID: 2, UserID: 2, Amount: 20},
+		{ID: 3, UserID: 3, Amount: 100},
+	} {
+		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
+			fmt.Printf("failed to insert order: %s\n", err)
+			return
+		}
+	}
+
+	// domainUsers selects the id of every user whose email ends in the chosen
+	// domain. It reads no table of the enclosing statement, so it validates and
+	// renders as its own SELECT.
+	domainUsers, err := query.NewSelect(users.QueryTable(), query.Project(users.ID))
+	if err != nil {
+		fmt.Printf("failed to build domain-users subquery: %s\n", err)
+		return
+	}
+	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email, query.Bind("%@example.com")))
+	if err != nil {
+		fmt.Printf("failed to filter domain-users subquery: %s\n", err)
+		return
+	}
+
+	// allOrders aliases orders so the average subquery is a separate scope from
+	// the orders read by the enclosing statement, even though it names the same
+	// table.
+	allOrders, err := rasql.As(orders, "all_orders")
+	if err != nil {
+		fmt.Printf("failed to alias orders: %s\n", err)
+		return
+	}
+	allOrdersAmount, err := allOrders.Column("amount")
+	if err != nil {
+		fmt.Printf("failed to find all_orders.amount: %s\n", err)
+		return
+	}
+	average, err := query.NewSelect(allOrders.QueryTable(), query.Project(query.Avg(allOrdersAmount)))
+	if err != nil {
+		fmt.Printf("failed to build average subquery: %s\n", err)
+		return
+	}
+
+	// InSelect keeps orders placed by a domain user without costing one
+	// argument per candidate id, and Scalar compares amount against the
+	// average of every order.
+	rows, err := rasql.DecodeFrom[orderSummary](client, orders).
+		Project(query.Project(orderUserID).As("user_id"), query.Project(amount)).
+		Where(query.InSelect(orderUserID, domainUsers)).
+		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
+		Order(query.Asc(amount)).
+		Query(ctx)
+	if err != nil {
+		fmt.Printf("failed to query orders: %s\n", err)
+		return
+	}
+	for summary, err := range rows {
+		if err != nil {
+			fmt.Printf("failed to query orders: %s\n", err)
+			return
+		}
+		fmt.Println(summary.UserID, summary.Amount)
+	}
+
+	// Output:
+	// 1 80
+}
+```
+source: [examples/rasql_subquery_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_subquery_example_test.go)
+<!-- END INCLUDE -->
 
 ## Count rows
 

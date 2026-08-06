@@ -111,6 +111,73 @@ func TestSelectBuilderWhereInMatchesRenderSelectFrom(t *testing.T) {
 	require.Equal(t, fromRender.Args(), fromClient.Args())
 }
 
+func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[user](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	orders, err := query.NewTable(schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "status", Type: schema.TypeInteger},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+	orderStatus, err := orders.Column("status")
+	require.NoError(t, err)
+
+	activeOrders, err := query.NewSelect(orders, query.Project(orderUserID))
+	require.NoError(t, err)
+	activeOrders, err = activeOrders.WithWhere(query.Equal(orderStatus, query.Bind(7)))
+	require.NoError(t, err)
+
+	mock.ExpectQuery(`SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" IN (SELECT "orders"."user_id" FROM "orders" WHERE ("orders"."status" = $1)))`).
+		WithArgs(7).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).
+			AddRow(int64(1), "ada@example.com").
+			AddRow(int64(2), "bob@example.com"))
+
+	rows, err := rasql.DecodeFrom[user](client, users).
+		Project(query.Project(id), query.Project(email)).
+		Where(query.InSelect(id, activeOrders)).
+		Query(t.Context())
+	require.NoError(t, err)
+	decoded := make([]user, 0)
+	for value, err := range rows {
+		require.NoError(t, err)
+		decoded = append(decoded, value)
+	}
+	require.Equal(t, []user{{ID: 1, Email: "ada@example.com"}, {ID: 2, Email: "bob@example.com"}}, decoded)
+}
+
 func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
