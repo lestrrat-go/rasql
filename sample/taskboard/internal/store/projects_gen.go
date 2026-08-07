@@ -40,36 +40,33 @@ func (r *ProjectsRow) ScanRow(src row.ScanSource) error {
 // ScanDestinations maps result-column names to fields on r.
 func (r *ProjectsRow) ScanDestinations(columns []string) ([]any, error) {
 	destinations := make([]any, len(columns))
-	var scannedID bool
-	var scannedOwnerID bool
-	var scannedName bool
-	var scannedArchived bool
+	var scanned uint64
 	var discard any
 	for index, column := range columns {
 		switch column {
 		case "id":
-			if scannedID {
+			if scanned&(uint64(1)<<0) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedID = true
+			scanned |= uint64(1) << 0
 			destinations[index] = &r.ID
 		case "owner_id":
-			if scannedOwnerID {
+			if scanned&(uint64(1)<<1) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedOwnerID = true
+			scanned |= uint64(1) << 1
 			destinations[index] = &r.OwnerID
 		case "name":
-			if scannedName {
+			if scanned&(uint64(1)<<2) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedName = true
+			scanned |= uint64(1) << 2
 			destinations[index] = &r.Name
 		case "archived":
-			if scannedArchived {
+			if scanned&(uint64(1)<<3) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedArchived = true
+			scanned |= uint64(1) << 3
 			destinations[index] = &r.Archived
 		default:
 			destinations[index] = &discard
