@@ -1,4 +1,4 @@
-package main
+package rasqlgen
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -17,6 +18,12 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
+
+var commandOutput io.Writer = os.Stderr
+
+func run(args []string) error {
+	return Run(args, commandOutput)
+}
 
 func TestRunSchemaGeneratesSource(t *testing.T) {
 	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
