@@ -3,15 +3,199 @@ package rasql_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+type directScanUser struct {
+	ID    int64
+	Email string
+}
+
+type staticScanUser struct {
+	ID    int64
+	Email string
+}
+
+type plannedScanUser struct {
+	Name string
+}
+
+var plannedScanCalls int
+
+func (u *plannedScanUser) ScanDestinations(columns []string) ([]any, error) {
+	plannedScanCalls++
+	if len(columns) != 1 || columns[0] != "name" {
+		return nil, fmt.Errorf("unexpected result columns %q", columns)
+	}
+	return []any{&u.Name}, nil
+}
+
+func (u *staticScanUser) ScanRow(source row.ScanSource) error {
+	return source.Scan(&u.ID, &u.Email)
+}
+
+func (u *staticScanUser) DecodeRow(row.Dynamic) error {
+	return errors.New("static scanner must bypass DecodeRow")
+}
+
+func (u *directScanUser) ScanRow(source row.ScanSource) error {
+	return source.Scan(&u.ID, &u.Email)
+}
+
+func (u *directScanUser) ScanDestinations(columns []string) ([]any, error) {
+	destinations := make([]any, len(columns))
+	var discard any
+	for index, column := range columns {
+		switch column {
+		case "id":
+			destinations[index] = &u.ID
+		case "email":
+			destinations[index] = &u.Email
+		default:
+			destinations[index] = &discard
+		}
+	}
+	return destinations, nil
+}
+
+func (u *directScanUser) DecodeRow(row.Dynamic) error {
+	return errors.New("direct scanner must bypass DecodeRow")
+}
+
+func TestTypedSelectScansKnownProjectionDirectly(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[staticScanUser](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\"").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(7), "ada@example.com"))
+
+	result, err := rasql.SelectFrom(users).One(t.Context(), client)
+	require.NoError(t, err)
+	require.Equal(t, staticScanUser{ID: 7, Email: "ada@example.com"}, result)
+}
+
+func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[directScanUser](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT \"users\".\"email\" FROM \"users\"").
+		WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("ada@example.com"))
+
+	result, err := rasql.DecodeFrom[directScanUser](users).
+		Project(query.Project(email)).
+		One(t.Context(), client)
+	require.NoError(t, err)
+	require.Equal(t, directScanUser{Email: "ada@example.com"}, result)
+}
+
+func TestTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[directScanUser](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\", $1 AS \"ignored\" FROM \"users\"").
+		WithArgs("ignored").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "ignored"}).AddRow(int64(7), "ada@example.com", "ignored"))
+
+	result, err := rasql.SelectFrom(users).
+		Project(query.Project(query.Bind("ignored")).As("ignored")).
+		One(t.Context(), client)
+	require.NoError(t, err)
+	require.Equal(t, directScanUser{ID: 7, Email: "ada@example.com"}, result)
+}
+
+func TestTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[plannedScanUser](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "name", Type: schema.TypeText},
+		},
+	})
+	require.NoError(t, err)
+	name, err := users.Column("name")
+	require.NoError(t, err)
+	plannedScanCalls = 0
+	mock.ExpectQuery("SELECT \"users\".\"name\" FROM \"users\"").
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("Ada Lovelace").AddRow("Grace Hopper"))
+
+	rows, err := rasql.DecodeFrom[plannedScanUser](users).
+		Project(query.Project(name)).
+		All(t.Context(), client)
+	require.NoError(t, err)
+	require.Equal(t, []plannedScanUser{{Name: "Ada Lovelace"}, {Name: "Grace Hopper"}}, rows)
+	require.Equal(t, 1, plannedScanCalls)
+}
 
 func TestTypedSelectOneStopsAfterSecondRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))

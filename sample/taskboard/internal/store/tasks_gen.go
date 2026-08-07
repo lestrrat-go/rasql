@@ -3,6 +3,8 @@
 package store
 
 import (
+	"fmt"
+
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/row"
@@ -36,6 +38,66 @@ func (r *TasksRow) DecodeRow(src row.Dynamic) error {
 		return err
 	}
 	return row.Assign(src, "priority", &r.Priority)
+}
+
+// ScanRow scans each result column directly into its field.
+func (r *TasksRow) ScanRow(src row.ScanSource) error {
+	return src.Scan(&r.ID, &r.ProjectID, &r.AssigneeID, &r.Title, &r.Status, &r.Priority)
+}
+
+// ScanDestinations maps result-column names to fields on r.
+func (r *TasksRow) ScanDestinations(columns []string) ([]any, error) {
+	destinations := make([]any, len(columns))
+	var scannedID bool
+	var scannedProjectID bool
+	var scannedAssigneeID bool
+	var scannedTitle bool
+	var scannedStatus bool
+	var scannedPriority bool
+	var discard any
+	for index, column := range columns {
+		switch column {
+		case "id":
+			if scannedID {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedID = true
+			destinations[index] = &r.ID
+		case "project_id":
+			if scannedProjectID {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedProjectID = true
+			destinations[index] = &r.ProjectID
+		case "assignee_id":
+			if scannedAssigneeID {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedAssigneeID = true
+			destinations[index] = &r.AssigneeID
+		case "title":
+			if scannedTitle {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedTitle = true
+			destinations[index] = &r.Title
+		case "status":
+			if scannedStatus {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedStatus = true
+			destinations[index] = &r.Status
+		case "priority":
+			if scannedPriority {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedPriority = true
+			destinations[index] = &r.Priority
+		default:
+			destinations[index] = &discard
+		}
+	}
+	return destinations, nil
 }
 
 // ColumnValue returns the value of the named column.

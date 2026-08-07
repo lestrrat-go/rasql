@@ -3,6 +3,8 @@ package rasql_test
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"reflect"
 	"runtime"
 	"strings"
@@ -322,22 +324,42 @@ func TestQueryWriteOneReportsDecodeError(t *testing.T) {
 	require.ErrorContains(t, err, "rasql: decode row 0: row: column \"email\" is not present")
 }
 
-// generatedReturningUser has the method-based mapping rasqlgen writes for a row
-// type, so QueryWriteOne can be pinned to honor it the same way Insert and
-// Update do.
+// generatedReturningUser has the direct scan mapping rasqlgen writes for a row
+// type. DecodeRow fails when called so the test proves QueryWriteOne bypasses
+// dynamic decoding.
 type generatedReturningUser struct {
 	ID    int64
 	Email string
 }
 
 func (u *generatedReturningUser) DecodeRow(source row.Dynamic) error {
-	if err := row.Assign(source, "id", &u.ID); err != nil {
-		return err
-	}
-	return row.Assign(source, "email", &u.Email)
+	return errors.New("direct scanner must bypass DecodeRow")
 }
 
-func TestQueryWriteOneHonorsGeneratedRowType(t *testing.T) {
+func (u *generatedReturningUser) ScanColumns() []string {
+	return []string{"id", "email"}
+}
+
+func (u *generatedReturningUser) ScanRow(source row.ScanSource) error {
+	return source.Scan(&u.ID, &u.Email)
+}
+
+func (u *generatedReturningUser) ScanDestinations(columns []string) ([]any, error) {
+	destinations := make([]any, len(columns))
+	for index, column := range columns {
+		switch column {
+		case "id":
+			destinations[index] = &u.ID
+		case "email":
+			destinations[index] = &u.Email
+		default:
+			return nil, fmt.Errorf("unknown column %q", column)
+		}
+	}
+	return destinations, nil
+}
+
+func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
