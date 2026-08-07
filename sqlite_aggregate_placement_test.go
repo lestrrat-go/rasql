@@ -172,7 +172,7 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 
 		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 		require.NoError(t, err)
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		seen := map[string]int64{}
 		for rows.Next() {
 			var gotEmail string
@@ -200,7 +200,7 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 
 		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 		require.NoError(t, err)
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		var ids []int64
 		for rows.Next() {
 			var gotID, total int64
@@ -237,7 +237,7 @@ func TestSQLiteRunsScalarFunctionsBesideAggregates(t *testing.T) {
 
 	rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	seen := map[string]int64{}
 	for rows.Next() {
 		var gotEmail string
@@ -304,7 +304,7 @@ func runStatement(t *testing.T, database *sql.DB, statement string) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 	}
 	return rows.Err()

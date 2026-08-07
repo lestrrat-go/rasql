@@ -104,7 +104,7 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -216,7 +216,7 @@ func Example_schema_decimal_column() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -383,7 +383,7 @@ func Example_inspect_sqlite_table() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// Pretend this DDL already exists in an application-owned SQLite database.
 	if _, err := database.ExecContext(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, nickname TEXT)"); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)

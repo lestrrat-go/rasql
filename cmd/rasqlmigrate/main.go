@@ -34,7 +34,7 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -65,18 +65,18 @@ func run(args []string) error {
 }
 
 func printUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: rasqlmigrate <command> [flags]")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Commands:")
-	fmt.Fprintln(output, "  new      Create a directory for one migration")
-	fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
-	fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
-	fmt.Fprintln(output, "  apply    Apply pending migrations")
-	fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
-	fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "A migration directory contains ordered .sql files. Each file contains one native SQL statement.")
-	fmt.Fprintln(output, "Run 'rasqlmigrate <command> -h' for command flags.")
+	_, _ = fmt.Fprintln(output, "Usage: rasqlmigrate <command> [flags]")
+	_, _ = fmt.Fprintln(output)
+	_, _ = fmt.Fprintln(output, "Commands:")
+	_, _ = fmt.Fprintln(output, "  new      Create a directory for one migration")
+	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
+	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
+	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations")
+	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
+	_, _ = fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
+	_, _ = fmt.Fprintln(output)
+	_, _ = fmt.Fprintln(output, "A migration directory contains ordered .sql files. Each file contains one native SQL statement.")
+	_, _ = fmt.Fprintln(output, "Run 'rasqlmigrate <command> -h' for command flags.")
 }
 
 func runDiff(args []string) error {
@@ -116,7 +116,7 @@ func runDiff(args []string) error {
 		return err
 	}
 	if plan.Empty() {
-		fmt.Fprintln(commandOutput, "no schema changes")
+		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
 		return nil
 	}
 	if *outputDirectory == "" {
@@ -126,7 +126,7 @@ func runDiff(args []string) error {
 	if err := diff.WriteMigration(*outputDirectory, plan); err != nil {
 		return err
 	}
-	fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
+	_, _ = fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
 	return nil
 }
 
@@ -163,7 +163,7 @@ func runNew(args []string) error {
 	if err := os.Mkdir(output, 0o700); err != nil {
 		return fmt.Errorf("create migration directory %q: %w", output, err)
 	}
-	fmt.Fprintf(commandOutput, "created %s; add ordered .sql files\n", output)
+	_, _ = fmt.Fprintf(commandOutput, "created %s; add ordered .sql files\n", output)
 	return nil
 }
 
@@ -201,7 +201,7 @@ func runApply(args []string) error {
 	if err := runner.Apply(context.Background(), migrations...); err != nil {
 		return redactError(err, *dsn)
 	}
-	fmt.Fprintln(commandOutput, "migration apply completed")
+	_, _ = fmt.Fprintln(commandOutput, "migration apply completed")
 	return nil
 }
 
@@ -224,7 +224,7 @@ func runStatus(args []string) error {
 		return redactError(err, *dsn)
 	}
 	for _, entry := range entries {
-		fmt.Fprintf(commandOutput, "%s\t%s\n", entry.State, entry.ID)
+		_, _ = fmt.Fprintf(commandOutput, "%s\t%s\n", entry.State, entry.ID)
 	}
 	return nil
 }
@@ -252,7 +252,7 @@ func runVerify(args []string) error {
 			return fmt.Errorf("verify migrations: migration %q is %s", entry.ID, entry.State)
 		}
 	}
-	fmt.Fprintln(commandOutput, "migration verification passed")
+	_, _ = fmt.Fprintln(commandOutput, "migration verification passed")
 	return nil
 }
 
@@ -398,13 +398,13 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 	for _, migration := range migrations {
 		for _, statement := range migration.Statements {
 			if !first {
-				fmt.Fprintln(output)
+				_, _ = fmt.Fprintln(output)
 			}
 			first = false
-			fmt.Fprintf(output, "-- %s/%s\n", migration.ID, statement.Source)
-			fmt.Fprint(output, statement.SQL)
+			_, _ = fmt.Fprintf(output, "-- %s/%s\n", migration.ID, statement.Source)
+			_, _ = fmt.Fprint(output, statement.SQL)
 			if !strings.HasSuffix(statement.SQL, "\n") {
-				fmt.Fprintln(output)
+				_, _ = fmt.Fprintln(output)
 			}
 		}
 	}
@@ -413,12 +413,12 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 func writeDiffPlan(output io.Writer, plan diff.Plan) {
 	for index, statement := range plan.Statements {
 		if index > 0 {
-			fmt.Fprintln(output)
+			_, _ = fmt.Fprintln(output)
 		}
-		fmt.Fprintf(output, "-- %s: %s\n", statement.Source, statement.Summary)
-		fmt.Fprint(output, statement.SQL)
+		_, _ = fmt.Fprintf(output, "-- %s: %s\n", statement.Source, statement.Summary)
+		_, _ = fmt.Fprint(output, statement.SQL)
 		if !strings.HasSuffix(statement.SQL, "\n") {
-			fmt.Fprintln(output)
+			_, _ = fmt.Fprintln(output)
 		}
 	}
 }

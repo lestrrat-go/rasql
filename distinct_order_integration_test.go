@@ -104,7 +104,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 
 		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 		if err == nil {
-			rows.Close()
+			_ = rows.Close()
 		}
 		require.Error(t, err, "%s must refuse ORDER BY on a column outside the distinct projections", test.name)
 	})
@@ -122,7 +122,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 		var cities []string
 		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 		require.NoError(t, err)
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var c string
 			require.NoError(t, rows.Scan(&c))

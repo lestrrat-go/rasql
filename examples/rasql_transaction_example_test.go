@@ -22,7 +22,7 @@ func Example_rasql_transaction() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -47,7 +47,7 @@ func Example_rasql_transaction() {
 	}
 	// Rollback reports nothing once Commit has already succeeded, which is what
 	// makes this bare defer correct rather than an error every caller discards.
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)

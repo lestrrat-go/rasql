@@ -416,5 +416,5 @@ func isNilDialect(d dialect.Dialect) bool {
 		return true
 	}
 	value := reflect.ValueOf(d)
-	return value.Kind() == reflect.Ptr && value.IsNil()
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }

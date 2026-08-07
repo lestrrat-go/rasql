@@ -31,7 +31,7 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
