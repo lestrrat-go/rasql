@@ -5,15 +5,16 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 )
 
-// DeleteBuilder builds and executes a DELETE statement through an immutable fluent API.
+// DeleteBuilder builds a DELETE statement through an immutable fluent API and
+// executes it against an Executor at its terminal call.
 // Build and Exec reject a builder that carries no predicate, so a dropped Where cannot
 // become a full-table delete. AllowAll states the full-table delete when that is the intent.
 type DeleteBuilder struct {
-	client     Client
 	from       query.Table
 	predicates []query.Expression
 	allowAll   bool
@@ -23,18 +24,19 @@ type DeleteBuilder struct {
 // DeleteFrom starts a fluent DELETE builder for table.
 // Build and Exec report an error when the builder carries no predicate.
 // Call AllowAll to delete every row of the target table.
-func DeleteFrom[T any](client Client, table Table[T]) DeleteBuilder {
+func DeleteFrom[T any](table Table[T]) DeleteBuilder {
 	if isNilTable(table) {
-		return client.DeleteFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))
+		return DeleteQueryFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))
 	}
-	return client.DeleteFrom(table.QueryTable())
+	return DeleteQueryFrom(table.QueryTable())
 }
 
-// DeleteFrom starts a fluent DELETE builder using table as its target.
+// DeleteQueryFrom starts a fluent DELETE builder using table as its target.
+// It is the untyped counterpart of DeleteFrom, for a query.Table with no Go row type.
 // Build and Exec report an error when the builder carries no predicate.
 // Call AllowAll to delete every row of the target table.
-func (c Client) DeleteFrom(table query.Table) DeleteBuilder {
-	return DeleteBuilder{client: c, from: table}
+func DeleteQueryFrom(table query.Table) DeleteBuilder {
+	return DeleteBuilder{from: table}
 }
 
 // Where adds a predicate created through the basic query API.
@@ -93,22 +95,25 @@ func (b DeleteBuilder) AllowAll() DeleteBuilder {
 	return b
 }
 
-// Build validates and renders the statement without executing it.
-func (b DeleteBuilder) Build() (render.Statement, error) {
+// Build validates the statement and renders it for d without executing it.
+func (b DeleteBuilder) Build(d dialect.Dialect) (render.Statement, error) {
 	statement, err := b.statement()
 	if err != nil {
 		return render.Statement{}, err
 	}
-	return render.Delete(b.client.dialect, statement)
+	return render.Delete(d, statement)
 }
 
-// Exec builds and executes the statement.
-func (b DeleteBuilder) Exec(ctx context.Context) (sql.Result, error) {
+// Exec builds the statement and executes it.
+func (b DeleteBuilder) Exec(ctx context.Context, x Executor) (sql.Result, error) {
+	if isNil(x) {
+		return nil, fmt.Errorf("rasql: executor must not be nil")
+	}
 	statement, err := b.statement()
 	if err != nil {
 		return nil, err
 	}
-	return b.client.Exec(ctx, statement)
+	return Exec(ctx, x, statement)
 }
 
 func (b DeleteBuilder) statement() (query.Delete, error) {

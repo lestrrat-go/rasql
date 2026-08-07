@@ -48,7 +48,7 @@ func Example_rasql_update() {
 		return
 	}
 
-	user, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).One(ctx)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return

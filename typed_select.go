@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"iter"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 )
 
 // SelectFrom starts a typed fluent SELECT builder for table.
 // It selects every table column by default so All and One can decode T.
-func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
+func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 	if isNilTable(table) {
-		return TypedSelectBuilder[T]{builder: client.SelectFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))}
+		return TypedSelectBuilder[T]{builder: SelectQueryFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))}
 	}
 	reference := table.QueryTable()
 	definition := reference.Definition()
@@ -21,25 +22,25 @@ func SelectFrom[T any](client Client, table Table[T]) TypedSelectBuilder[T] {
 	for index, column := range definition.Columns {
 		columns[index] = column.Name
 	}
-	return TypedSelectBuilder[T]{builder: client.SelectFrom(reference).Select(columns...)}
+	return TypedSelectBuilder[T]{builder: SelectQueryFrom(reference).Select(columns...)}
 }
 
 // DecodeFrom starts a typed fluent SELECT builder for a custom result shape.
 // R is explicit and T is inferred from table. R is mapped by its DecodeRow
 // method when it has one, and projected column names map to R's rasql tags or
 // snake-cased exported field names otherwise.
-func DecodeFrom[R any, T any](client Client, table Table[T]) TypedSelectBuilder[R] {
+func DecodeFrom[R any, T any](table Table[T]) TypedSelectBuilder[R] {
 	if isNilTable(table) {
-		return TypedSelectBuilder[R]{builder: client.SelectFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))}
+		return TypedSelectBuilder[R]{builder: SelectQueryFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))}
 	}
-	return TypedSelectBuilder[R]{builder: client.SelectFrom(table.QueryTable())}
+	return TypedSelectBuilder[R]{builder: SelectQueryFrom(table.QueryTable())}
 }
 
 // DecodeQueryFrom starts a typed fluent SELECT builder for a table with no Go row type.
 // R is mapped by its DecodeRow method when it has one, and projected column names
 // map to R's rasql tags or snake-cased exported field names otherwise.
-func DecodeQueryFrom[R any](client Client, table query.Table) TypedSelectBuilder[R] {
-	return TypedSelectBuilder[R]{builder: client.SelectFrom(table)}
+func DecodeQueryFrom[R any](table query.Table) TypedSelectBuilder[R] {
+	return TypedSelectBuilder[R]{builder: SelectQueryFrom(table)}
 }
 
 // InnerJoin returns an INNER JOIN on table with on as its condition.
@@ -166,14 +167,14 @@ func (b TypedSelectBuilder[T]) Offset(offset int) TypedSelectBuilder[T] {
 	return b
 }
 
-// Build validates and renders the statement without executing it.
-func (b TypedSelectBuilder[T]) Build() (render.Statement, error) {
-	return b.builder.Build()
+// Build validates the statement and renders it for d without executing it.
+func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (render.Statement, error) {
+	return b.builder.Build(d)
 }
 
 // Query returns a rangeable sequence that decodes each result row as T.
-func (b TypedSelectBuilder[T]) Query(ctx context.Context) (iter.Seq2[T, error], error) {
-	rows, err := b.builder.Query(ctx)
+func (b TypedSelectBuilder[T]) Query(ctx context.Context, x Executor) (iter.Seq2[T, error], error) {
+	rows, err := b.builder.Query(ctx, x)
 	if err != nil {
 		return nil, err
 	}
@@ -181,8 +182,8 @@ func (b TypedSelectBuilder[T]) Query(ctx context.Context) (iter.Seq2[T, error], 
 }
 
 // All collects every row from Query.
-func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
-	rows, err := b.Query(ctx)
+func (b TypedSelectBuilder[T]) All(ctx context.Context, x Executor) ([]T, error) {
+	rows, err := b.Query(ctx, x)
 	if err != nil {
 		return nil, err
 	}
@@ -195,16 +196,16 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context) ([]T, error) {
 // then page a copy of it for the rows.
 // Like [TypedSelectBuilder.One], it reports [ErrNoRows] or [ErrMultipleRows]
 // when the database returns anything other than the one row COUNT(*) produces.
-func (b TypedSelectBuilder[T]) Count(ctx context.Context) (int64, error) {
-	return b.builder.Count(ctx)
+func (b TypedSelectBuilder[T]) Count(ctx context.Context, x Executor) (int64, error) {
+	return b.builder.Count(ctx, x)
 }
 
 // One returns exactly one row from Query.
 // It returns [ErrNoRows] when the statement matched no rows and
 // [ErrMultipleRows] when it matched more than one.
-func (b TypedSelectBuilder[T]) One(ctx context.Context) (T, error) {
+func (b TypedSelectBuilder[T]) One(ctx context.Context, x Executor) (T, error) {
 	var zero T
-	rows, err := b.Query(ctx)
+	rows, err := b.Query(ctx, x)
 	if err != nil {
 		return zero, err
 	}

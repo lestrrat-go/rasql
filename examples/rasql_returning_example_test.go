@@ -12,7 +12,7 @@ import (
 )
 
 // Example_rasql_returning reads the row a RETURNING clause produces, which
-// Client.Exec cannot do because it discards result rows.
+// rasql.Exec cannot do because it discards result rows.
 func Example_rasql_returning() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")

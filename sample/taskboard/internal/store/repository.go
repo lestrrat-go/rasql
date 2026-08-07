@@ -21,14 +21,14 @@ func New(client rasql.Client) Repository {
 
 // SeedDemo writes the example's initial Taskboard data.
 func (repository Repository) SeedDemo(ctx context.Context) error {
-	existing, err := rasql.DecodeFrom[member](repository.client, members).
+	existing, err := rasql.DecodeFrom[member](members).
 		Project(
 			query.Project(members.ID),
 			query.Project(members.Name),
 			query.Project(members.Email),
 		).
 		Limit(1).
-		All(ctx)
+		All(ctx, repository.client)
 	if err != nil {
 		return fmt.Errorf("read existing demo members: %w", err)
 	}
@@ -75,7 +75,7 @@ func (repository Repository) SeedDemo(ctx context.Context) error {
 
 // OpenTasks returns up to limit unfinished tasks for projectID in display order.
 func (repository Repository) OpenTasks(ctx context.Context, projectID int64, limit int, offset int) ([]taskboard.Summary, error) {
-	return rasql.DecodeFrom[taskboard.Summary](repository.client, tasks).
+	return rasql.DecodeFrom[taskboard.Summary](tasks).
 		Join(rasql.InnerJoin(projects, query.Equal(tasks.ProjectID, projects.ID))).
 		Project(
 			query.Project(tasks.Title),
@@ -88,5 +88,5 @@ func (repository Repository) OpenTasks(ctx context.Context, projectID int64, lim
 		Order(query.Asc(tasks.Priority), query.Asc(tasks.ID)).
 		Limit(limit).
 		Offset(offset).
-		All(ctx)
+		All(ctx, repository.client)
 }

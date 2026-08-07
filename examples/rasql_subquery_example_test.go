@@ -135,12 +135,12 @@ func Example_rasql_subquery() {
 	// InSelect keeps orders placed by a domain user without costing one
 	// argument per candidate id, and Scalar compares amount against the
 	// average of every order.
-	rows, err := rasql.DecodeFrom[orderSummary](client, orders).
+	rows, err := rasql.DecodeFrom[orderSummary](orders).
 		Project(query.Project(orderUserID).As("user_id"), query.Project(amount)).
 		Where(query.InSelect(orderUserID, domainUsers)).
 		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
 		Order(query.Asc(amount)).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
 		return

@@ -163,8 +163,8 @@ Which fields put a wrapper on the field path is where the two directions still d
 A column named by a string is checked when the query runs, so these two lines are indistinguishable until then:
 
 ```go
-client.SelectFrom(store.Users().QueryTable()).WhereEqual("id", 42)
-client.SelectFrom(store.Users().QueryTable()).WhereEqual("emial", 42)
+rasql.SelectQueryFrom(store.Users().QueryTable()).WhereEqual("id", 42)
+rasql.SelectQueryFrom(store.Users().QueryTable()).WhereEqual("emial", 42)
 ```
 
 The second one fails on execution with `rasql: render SELECT: query column: table "users" has no column "emial"`, wherever the query first runs.
@@ -173,8 +173,8 @@ The typed builder takes a `query.Column` instead, so the same typo stops at the 
 
 ```go
 users := store.Users()
-rasql.SelectFrom(client, users).WhereEqual(users.ID, 42)    // builds
-rasql.SelectFrom(client, users).WhereEqual(users.Emial, 42) // does not
+rasql.SelectFrom(users).WhereEqual(users.ID, 42)    // builds
+rasql.SelectFrom(users).WhereEqual(users.Emial, 42) // does not
 ```
 
 ```
@@ -185,7 +185,7 @@ Passing a name instead of a field does not compile either:
 
 ```
 cannot use "id" (untyped string constant) as query.Column value in argument to
-rasql.SelectFrom(client, users).WhereEqual
+rasql.SelectFrom(users).WhereEqual
 ```
 
 Three things make that work. The generator derives each field from the same descriptor it renders SQL from, so the field list and the table cannot drift apart. The builders accept a `query.Column` rather than a name, so there is no string left to misspell. Each field is bound to its table once, when the table value is built, which is why `As` rebuilds them and an aliased table qualifies its columns correctly.

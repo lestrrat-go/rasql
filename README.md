@@ -141,7 +141,7 @@ func Example_rasql_quickstart() {
 	}
 
 	// One returns a single decoded row and fails when the result holds any other count.
-	user, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 1).One(ctx)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
@@ -155,7 +155,7 @@ func Example_rasql_quickstart() {
 	}
 
 	// All collects every result row instead of ranging over them.
-	found, err := rasql.SelectFrom(client, users).OrderAsc(users.ID).All(ctx)
+	found, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -163,7 +163,7 @@ func Example_rasql_quickstart() {
 	fmt.Println(len(found), found[0].Email)
 
 	// DeleteFrom builds the predicate from generated columns, like the select builder.
-	result, err := rasql.DeleteFrom(client, users).WhereEqual(users.ID, 1).Exec(ctx)
+	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -184,9 +184,9 @@ func Example_rasql_quickstart() {
 source: [examples/rasql_quickstart_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_quickstart_example_test.go)
 <!-- END INCLUDE -->
 
-`users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(client, store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()` or `dialect.MySQL()` to run the same code against another database; only the driver and the DSN change with it.
+`users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()` or `dialect.MySQL()` to run the same code against another database; only the driver and the DSN change with it.
 
-Inserts, updates, deletes, and typed selects have dedicated helpers. Upserts and anything else beyond them are built through the `query` package and run with `client.Exec`, except a statement with a `RETURNING` clause, which reads its rows back through `client.QueryWrite` instead.
+Inserts, updates, deletes, and typed selects have dedicated helpers. Upserts and anything else beyond them are built through the `query` package and run with `rasql.Exec`, except a statement with a `RETURNING` clause, which reads its rows back through `rasql.QueryWrite` instead.
 
 The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since an in-memory database belongs to one connection. A real application also creates its tables through migrations rather than `rasql.Create`.
 

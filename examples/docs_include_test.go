@@ -53,9 +53,10 @@ func TestDocExamplesMatchSource(t *testing.T) {
 	require.NotZero(t, blocks, "no example blocks found in the documentation")
 }
 
-// execMethod matches the Client.Exec method by name. The word boundary keeps
+// execMethod matches the Exec entry point by name, in either the historical
+// Client.Exec spelling or the rasql.Exec one. The word boundary keeps
 // ExecRendered and a builder's own Exec out, since neither rejects RETURNING.
-var execMethod = regexp.MustCompile(`\b[Cc]lient\.Exec\b`)
+var execMethod = regexp.MustCompile(`\b(?:[Cc]lient|rasql)\.Exec\b`)
 
 // returningClause matches the SQL keyword naming the clause Client.Exec refuses
 // to run.
@@ -176,6 +177,16 @@ var execPassageFixtures = []struct {
 		name:    "invented passage names ExecRendered only",
 		passage: "`client.ExecRendered` runs a statement that is already rendered, which is how a compiled static template is executed.",
 		reject:  false,
+	},
+	{
+		name:    "invented prose states the rejection in the rasql.Exec spelling",
+		passage: "`rasql.Exec` rejects a write carrying a `RETURNING` clause, so decode those rows with `rasql.QueryWriteOne[T]`.",
+		reject:  false,
+	},
+	{
+		name:    "invented prose names RETURNING without a QueryWrite route in the rasql.Exec spelling",
+		passage: "`rasql.Exec` runs any `query.WriteStatement`, including one that carries a `RETURNING` clause.",
+		reject:  true,
 	},
 }
 

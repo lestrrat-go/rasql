@@ -3,6 +3,7 @@ package rasql_test
 import (
 	"testing"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
@@ -12,11 +13,11 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("repeated WhereEqual combines with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		client := clientForBuild(t)
-		statement, err := client.SelectFrom(users.QueryTable()).
+		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
 			Select("id", "email").
 			WhereEqual("id", 42).
 			WhereEqual("email", "ada@example.com").
-			Build()
+			Build(client.Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" = $2))`,
@@ -29,11 +30,11 @@ func TestSelectBuilder(t *testing.T) {
 		client := clientForBuild(t)
 		email, err := users.Column("email")
 		require.NoError(t, err)
-		statement, err := client.SelectFrom(users.QueryTable()).
+		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
 			Select("id", "email").
 			WhereEqual("id", 42).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
-			Build()
+			Build(client.Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" = $2))`,
@@ -44,10 +45,10 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("a lone Where is unchanged", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		client := clientForBuild(t)
-		statement, err := client.SelectFrom(users.QueryTable()).
+		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
 			Select("id", "email").
 			WhereEqual("id", 42).
-			Build()
+			Build(client.Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)`,
@@ -58,17 +59,17 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("Distinct de-duplicates result rows", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		client := clientForBuild(t)
-		statement, err := client.SelectFrom(users.QueryTable()).
+		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
 			Select("email").
 			Distinct().
-			Build()
+			Build(client.Dialect())
 		require.NoError(t, err)
 		require.Equal(t, `SELECT DISTINCT "users"."email" FROM "users"`, statement.SQL())
 
-		_, err = client.SelectFrom(users.QueryTable()).
+		_, err = rasql.SelectQueryFrom(users.QueryTable()).
 			Select("email").
 			Distinct().
-			Count(t.Context())
+			Count(t.Context(), client)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "cannot count a distinct statement")
 	})
@@ -84,11 +85,11 @@ func TestSelectBuilder(t *testing.T) {
 		orderUserID, err := orders.Column("user_id")
 		require.NoError(t, err)
 
-		statement, err := clientForBuild(t).SelectFrom(users.QueryTable()).
+		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
 			Project(query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
 			Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
 			GroupBy(orderUserID).
-			Build()
+			Build(clientForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "orders"."user_id", COUNT(*) AS "total" FROM "users" INNER JOIN "orders" ON ("users"."id" = "orders"."user_id") GROUP BY "orders"."user_id"`,

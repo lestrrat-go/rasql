@@ -45,7 +45,7 @@ func TestTypedSelectOneStopsAfterSecondRow(t *testing.T) {
 			RowError(2, thirdRowError)).
 		RowsWillBeClosed()
 
-	_, err = rasql.SelectFrom(client, users).One(t.Context())
+	_, err = rasql.SelectFrom(users).One(t.Context(), client)
 	require.EqualError(t, err, "rasql: expected one row, got more than one")
 	require.ErrorIs(t, err, rasql.ErrMultipleRows)
 	require.NotErrorIs(t, err, rasql.ErrNoRows)
@@ -80,7 +80,7 @@ func TestTypedSelectOneNoRows(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"})).
 		RowsWillBeClosed()
 
-	_, err = rasql.SelectFrom(client, users).One(t.Context())
+	_, err = rasql.SelectFrom(users).One(t.Context(), client)
 	require.EqualError(t, err, "rasql: expected one row, got none")
 	require.ErrorIs(t, err, rasql.ErrNoRows)
 	require.ErrorIs(t, err, sql.ErrNoRows)
@@ -114,7 +114,7 @@ func TestTypedSelectOneQueryFailureIsNotNoRows(t *testing.T) {
 	mock.ExpectQuery("SELECT \"users\".\"id\" FROM \"users\"").
 		WillReturnError(driverError)
 
-	_, err = rasql.SelectFrom(client, users).One(t.Context())
+	_, err = rasql.SelectFrom(users).One(t.Context(), client)
 	require.NotErrorIs(t, err, rasql.ErrNoRows)
 	require.NotErrorIs(t, err, sql.ErrNoRows)
 	require.ErrorIs(t, err, driverError)
@@ -138,20 +138,21 @@ func TestTypedSelectGroupBy(t *testing.T) {
 		Total int64  `rasql:"total"`
 	}
 
-	statement, err := rasql.DecodeFrom[emailCount](clientForBuild(t), users).
+	client := clientForBuild(t)
+	statement, err := rasql.DecodeFrom[emailCount](users).
 		Project(query.Project(email), query.Project(query.CountAll()).As("total")).
 		GroupBy(email).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
-		Build()
+		Build(client.Dialect())
 	require.NoError(t, err)
 	require.Equal(t,
 		`SELECT "users"."email", COUNT(*) AS "total" FROM "users" GROUP BY "users"."email" HAVING (COUNT(*) > $1)`,
 		statement.SQL())
 	require.Equal(t, []any{1}, statement.Args())
 
-	_, err = rasql.DecodeFrom[emailCount](clientForBuild(t), users).
+	_, err = rasql.DecodeFrom[emailCount](users).
 		GroupBy(email).
-		Count(t.Context())
+		Count(t.Context(), client)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "cannot count a grouped statement")
 }
@@ -169,17 +170,18 @@ func TestTypedSelectDistinct(t *testing.T) {
 		Email string `rasql:"email"`
 	}
 
-	statement, err := rasql.DecodeFrom[emailOnly](clientForBuild(t), users).
+	client := clientForBuild(t)
+	statement, err := rasql.DecodeFrom[emailOnly](users).
 		Project(query.Project(email)).
 		Distinct().
-		Build()
+		Build(client.Dialect())
 	require.NoError(t, err)
 	require.Equal(t, `SELECT DISTINCT "users"."email" FROM "users"`, statement.SQL())
 
-	_, err = rasql.DecodeFrom[emailOnly](clientForBuild(t), users).
+	_, err = rasql.DecodeFrom[emailOnly](users).
 		Project(query.Project(email)).
 		Distinct().
-		Count(t.Context())
+		Count(t.Context(), client)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "cannot count a distinct statement")
 }
@@ -201,12 +203,12 @@ func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
 		Total  int64 `rasql:"total"`
 	}
 
-	statement, err := rasql.DecodeFrom[userOrderCount](clientForBuild(t), users).
+	statement, err := rasql.DecodeFrom[userOrderCount](users).
 		Project(query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
 		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
 		GroupBy(orderUserID).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
-		Build()
+		Build(clientForBuild(t).Dialect())
 	require.NoError(t, err)
 	require.Equal(t,
 		`SELECT "orders"."user_id", COUNT(*) AS "total" FROM "users" INNER JOIN "orders" ON ("users"."id" = "orders"."user_id") GROUP BY "orders"."user_id" HAVING (COUNT(*) > $1)`,
@@ -222,10 +224,10 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 		email, err := users.Column("email")
 		require.NoError(t, err)
 
-		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+		statement, err := rasql.SelectFrom(users).
 			WhereEqual(id, 42).
 			Where(query.Like(email, query.Bind("%@example.com"))).
-			Build()
+			Build(clientForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" LIKE $2))`,
@@ -238,12 +240,12 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 		email, err := users.Column("email")
 		require.NoError(t, err)
 
-		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+		statement, err := rasql.SelectFrom(users).
 			Where(query.Or(
 				query.Equal(email, query.Bind("ada@example.com")),
 				query.Equal(email, query.Bind("bob@example.com")),
 			)).
-			Build()
+			Build(clientForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."email" = $1) OR ("users"."email" = $2))`,
@@ -257,13 +259,13 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 		email, err := users.Column("email")
 		require.NoError(t, err)
 
-		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+		statement, err := rasql.SelectFrom(users).
 			Where(query.Or(
 				query.Equal(email, query.Bind("ada@example.com")),
 				query.Equal(email, query.Bind("bob@example.com")),
 			)).
 			WhereEqual(id, 42).
-			Build()
+			Build(clientForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "users"."id", "users"."email" FROM "users" WHERE ((("users"."email" = $1) OR ("users"."email" = $2)) AND ("users"."id" = $3))`,
@@ -278,10 +280,10 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 		email, err := users.Column("email")
 		require.NoError(t, err)
 
-		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+		statement, err := rasql.SelectFrom(users).
 			WhereEqual(email, "ada@example.com").
 			WhereIn(id, 1, 2).
-			Build()
+			Build(clientForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."email" = $1) AND ("users"."id" IN ($2, $3)))`,
@@ -312,11 +314,11 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 		// WhereEqual takes a primary-table column, Where takes a column of the
 		// joined table; accumulating them must not bypass the "column must be
 		// in the statement" validation for either.
-		statement, err := rasql.SelectFrom(clientForBuild(t), users).
+		statement, err := rasql.SelectFrom(users).
 			Join(rasql.InnerJoin(orders, query.Equal(userID, ordersUserID))).
 			WhereEqual(userID, 42).
 			Where(query.GreaterThan(ordersUserID, query.Bind(0))).
-			Build()
+			Build(clientForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`SELECT "users"."id", "users"."email" FROM "users" INNER JOIN "orders" ON ("users"."id" = "orders"."user_id") WHERE (("users"."id" = $1) AND ("orders"."user_id" > $2))`,
@@ -354,7 +356,7 @@ func TestTypedSelectWhereIn(t *testing.T) {
 			WithArgs(1, 2).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)).AddRow(int64(2)))
 
-		rows, err := rasql.SelectFrom(client, users).WhereIn(id, 1, 2).All(t.Context())
+		rows, err := rasql.SelectFrom(users).WhereIn(id, 1, 2).All(t.Context(), client)
 		require.NoError(t, err)
 		require.Equal(t, []user{{ID: 1}, {ID: 2}}, rows)
 	})
@@ -384,7 +386,7 @@ func TestTypedSelectWhereIn(t *testing.T) {
 		id, err := users.Column("id")
 		require.NoError(t, err)
 
-		_, err = rasql.SelectFrom(client, users).WhereIn(id).One(t.Context())
+		_, err = rasql.SelectFrom(users).WhereIn(id).One(t.Context(), client)
 		require.ErrorContains(t, err, "at least one value")
 	})
 }
