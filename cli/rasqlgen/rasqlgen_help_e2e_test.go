@@ -1,4 +1,4 @@
-package main_test
+package rasqlgen_test
 
 import (
 	"os/exec"
