@@ -54,7 +54,7 @@ type UsersRow struct {
 }
 
 // DecodeRow assigns each result column to its field.
-func (r *UsersRow) DecodeRow(src row.Row) error {
+func (r *UsersRow) DecodeRow(src row.Dynamic) error {
 	if err := row.Assign(src, "id", &r.ID); err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ A generated row type carries no `rasql` tags. The generator already knows which 
 
 | Interface | Method | Used by |
 | --- | --- | --- |
-| `row.Decoder` | `DecodeRow(row.Row) error` | `row.Decode`, and through it every typed select. |
+| `row.Decoder` | `DecodeRow(row.Dynamic) error` | `row.Decode`, and through it every typed select. |
 | `rasql.ColumnValuer` | `ColumnValue(name string) (any, bool)` | `rasql.Insert` and `rasql.Update`. |
 
 `row.Decode` looks for `DecodeRow` first and falls back to tags and snake-cased field names, and `Insert` and `Update` look for `ColumnValue` the same way. Neither direction follows a mapping method promoted from an embedded field blindly, which the trap below covers. Nothing about hand-written row types changes: tags stay the documented default for them, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). Writing both methods by hand states the mapping three times — once in the fields, once in `DecodeRow`, once in `ColumnValue` — and nothing checks that the three agree, which is a job for the generator rather than for a person.
@@ -127,7 +127,7 @@ type userReport struct {
 	FullName string
 }
 
-func (r *userReport) DecodeRow(src row.Row) error {
+func (r *userReport) DecodeRow(src row.Dynamic) error {
 	if err := row.Assign(src, "email", &r.Email); err != nil {
 		return err
 	}

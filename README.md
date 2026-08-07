@@ -51,7 +51,7 @@ type UsersRow struct {
 }
 
 // DecodeRow assigns each result column to its field.
-func (r *UsersRow) DecodeRow(src row.Row) error {
+func (r *UsersRow) DecodeRow(src row.Dynamic) error {
 	if err := row.Assign(src, "id", &r.ID); err != nil {
 		return err
 	}

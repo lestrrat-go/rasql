@@ -216,7 +216,7 @@ func TestQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42))).
 				RowsWillBeClosed()
 		},
-		func() (iter.Seq2[row.Row, error], error) {
+		func() (iter.Seq2[row.Dynamic, error], error) {
 			return rasql.Query(t.Context(), client, statement)
 		})
 }
@@ -240,7 +240,7 @@ func TestQueryWriteRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42))).
 				RowsWillBeClosed()
 		},
-		func() (iter.Seq2[row.Row, error], error) {
+		func() (iter.Seq2[row.Dynamic, error], error) {
 			return rasql.QueryWrite(t.Context(), client, statement)
 		})
 }
@@ -255,7 +255,7 @@ func TestSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42))).
 				RowsWillBeClosed()
 		},
-		func() (iter.Seq2[row.Row, error], error) {
+		func() (iter.Seq2[row.Dynamic, error], error) {
 			return rasql.SelectQueryFrom(users.QueryTable()).Select("id").Query(t.Context(), client)
 		})
 }

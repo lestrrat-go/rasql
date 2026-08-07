@@ -170,7 +170,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "Email")
 	require.Contains(t, string(source), "CreatedAt")
 	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
-	require.Contains(t, string(source), "func (r *UsersRow) DecodeRow(src row.Row) error {")
+	require.Contains(t, string(source), "func (r *UsersRow) DecodeRow(src row.Dynamic) error {")
 	require.Contains(t, string(source), "if err := row.Assign(src, \"id\", &r.ID); err != nil {")
 	require.Contains(t, string(source), "if err := row.Assign(src, \"email\", &r.Email); err != nil {")
 	require.Contains(t, string(source), "\treturn row.Assign(src, \"created_at\", &r.CreatedAt)\n")

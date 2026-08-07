@@ -17,7 +17,7 @@ The tables in this section enumerate every operation the public API offers. The 
 | `SELECT` decoded as a table's row type | `rasql.SelectFrom(table)` | `TypedSelectBuilder[T]` |
 | `SELECT` decoded as a custom type | `rasql.DecodeFrom[R](table)` | `TypedSelectBuilder[R]` |
 | `SELECT` decoded from a table with no row type | `rasql.DecodeQueryFrom[R](queryTable)` | `TypedSelectBuilder[R]` |
-| `SELECT` without decoding | `rasql.SelectQueryFrom(table.QueryTable())` | `SelectBuilder`, yielding `row.Row` |
+| `SELECT` without decoding | `rasql.SelectQueryFrom(table.QueryTable())` | `SelectBuilder`, yielding `row.Dynamic` |
 | `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
 | `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, client, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
 | `INSERT` of several rows | `query.NewInsertRows(table.QueryTable(), columns, rows)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
@@ -25,7 +25,7 @@ The tables in this section enumerate every operation the public API offers. The 
 | `DELETE` by predicate | `rasql.DeleteFrom(table)` | `DeleteBuilder` |
 | `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |
 | Upsert, partial update | `query.New…` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
-| Write with `RETURNING` | `query.New….WithReturning(...)` then `rasql.QueryWrite(ctx, client, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Row` or `[]T` / `T` |
+| Write with `RETURNING` | `query.New….WithReturning(...)` then `rasql.QueryWrite(ctx, client, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Dynamic` or `[]T` / `T` |
 | Compiled [static template](05-templates.md) | `client.ExecRendered(ctx, statement)` | `sql.Result` |
 
 Writes are covered in [Writing rows](04-writing.md); the rest of this page covers reads.
