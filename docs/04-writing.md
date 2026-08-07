@@ -116,7 +116,7 @@ type defaultUserRow struct {
 	Status string
 }
 
-func (r *defaultUserRow) DecodeRow(source row.Row) error {
+func (r *defaultUserRow) DecodeRow(source row.Dynamic) error {
 	if err := row.Assign(source, "id", &r.ID); err != nil {
 		return err
 	}
@@ -417,7 +417,7 @@ Either keep conflict keys unique within one statement, or account for that updat
 
 ### Reading a `RETURNING` clause
 
-`WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `rasql.QueryWrite` renders and runs it, returning the same rangeable `row.Row` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do:
+`WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `rasql.QueryWrite` renders and runs it, returning the same rangeable `row.Dynamic` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do:
 
 <!-- INCLUDE(examples/rasql_returning_example_test.go) -->
 ```go

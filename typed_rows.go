@@ -7,9 +7,9 @@ import (
 	"github.com/lestrrat-go/rasql/row"
 )
 
-// decodeRows adapts a rangeable sequence of row.Row into one that decodes each
+// decodeRows adapts a rangeable sequence of row.Dynamic into one that decodes each
 // row as T.
-func decodeRows[T any](rows iter.Seq2[row.Row, error]) iter.Seq2[T, error] {
+func decodeRows[T any](rows iter.Seq2[row.Dynamic, error]) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		index := 0

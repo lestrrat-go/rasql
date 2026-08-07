@@ -21,7 +21,7 @@ type defaultUserRow struct {
 	Status string
 }
 
-func (r *defaultUserRow) DecodeRow(source row.Row) error {
+func (r *defaultUserRow) DecodeRow(source row.Dynamic) error {
 	if err := row.Assign(source, "id", &r.ID); err != nil {
 		return err
 	}

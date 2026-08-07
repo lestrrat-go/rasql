@@ -344,7 +344,7 @@ type generatedEventRow struct {
 	Note      *string
 }
 
-func (r *generatedEventRow) DecodeRow(src row.Row) error {
+func (r *generatedEventRow) DecodeRow(src row.Dynamic) error {
 	if err := row.Assign(src, "id", &r.ID); err != nil {
 		return err
 	}

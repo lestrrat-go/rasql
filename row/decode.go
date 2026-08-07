@@ -37,11 +37,11 @@ var timeLayouts = []string{
 // knows nothing about the fields declared around it, so those fields win.
 // Declaring DecodeRow on the outer type maps such a struct by method again.
 type Decoder interface {
-	DecodeRow(Row) error
+	DecodeRow(Dynamic) error
 }
 
 // Get decodes the named value in r as T.
-func Get[T any](r Row, name string) (T, error) {
+func Get[T any](r Dynamic, name string) (T, error) {
 	var result T
 	if err := Assign(r, name, &result); err != nil {
 		return result, err
@@ -50,7 +50,7 @@ func Get[T any](r Row, name string) (T, error) {
 }
 
 // Assign decodes the named value in r into destination.
-func Assign[T any](r Row, name string, destination *T) error {
+func Assign[T any](r Dynamic, name string, destination *T) error {
 	if destination == nil {
 		return fmt.Errorf("row: destination for column %q must not be nil", name)
 	}
@@ -67,7 +67,7 @@ func Assign[T any](r Row, name string, destination *T) error {
 // Decode populates T through its DecodeRow method when it declares one, and from
 // rasql-tagged fields or snake-cased exported field names otherwise. Decoder
 // states which of the two a struct that embeds a Decoder takes.
-func Decode[T any](r Row) (T, error) {
+func Decode[T any](r Dynamic) (T, error) {
 	var result T
 	// A row type that states its own mapping needs no fields to map, so its
 	// DecodeRow is called and nothing is read by reflection. A DecodeRow promoted

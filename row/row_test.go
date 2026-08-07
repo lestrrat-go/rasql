@@ -317,7 +317,7 @@ type selfDecodedUser struct {
 	Extra string
 }
 
-func (u *selfDecodedUser) DecodeRow(r row.Row) error {
+func (u *selfDecodedUser) DecodeRow(r row.Dynamic) error {
 	if err := row.Assign(r, "id", &u.ID); err != nil {
 		return err
 	}
@@ -331,14 +331,14 @@ func (u *selfDecodedUser) DecodeRow(r row.Row) error {
 // failingDecoder reports an error from DecodeRow so Decode's wrapping is visible.
 type failingDecoder struct{}
 
-func (failingDecoder) DecodeRow(row.Row) error {
+func (failingDecoder) DecodeRow(row.Dynamic) error {
 	return errors.New("mapping failed")
 }
 
 // selfDecodedCount is not a struct, which the reflection path rejects.
 type selfDecodedCount int64
 
-func (c *selfDecodedCount) DecodeRow(r row.Row) error {
+func (c *selfDecodedCount) DecodeRow(r row.Dynamic) error {
 	return row.Assign(r, "id", (*int64)(c))
 }
 
@@ -402,7 +402,7 @@ type ExportedDecodedUser struct {
 	ID int64
 }
 
-func (u *ExportedDecodedUser) DecodeRow(r row.Row) error {
+func (u *ExportedDecodedUser) DecodeRow(r row.Dynamic) error {
 	return row.Assign(r, "id", &u.ID)
 }
 
@@ -469,7 +469,7 @@ type valueDecodingWrapper struct {
 	ID int64 `rasql:"id"`
 }
 
-func (valueDecodingWrapper) DecodeRow(row.Row) error {
+func (valueDecodingWrapper) DecodeRow(row.Dynamic) error {
 	return errors.New("declared value receiver ran")
 }
 
@@ -482,7 +482,7 @@ type pointerDecodingWrapper struct {
 	Trace string
 }
 
-func (u *pointerDecodingWrapper) DecodeRow(r row.Row) error {
+func (u *pointerDecodingWrapper) DecodeRow(r row.Dynamic) error {
 	if err := row.Assign(r, "id", &u.ID); err != nil {
 		return err
 	}

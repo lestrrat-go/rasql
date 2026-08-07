@@ -330,7 +330,7 @@ type generatedReturningUser struct {
 	Email string
 }
 
-func (u *generatedReturningUser) DecodeRow(source row.Row) error {
+func (u *generatedReturningUser) DecodeRow(source row.Dynamic) error {
 	if err := row.Assign(source, "id", &u.ID); err != nil {
 		return err
 	}

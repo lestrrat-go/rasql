@@ -19,8 +19,8 @@ import (
 //
 // The sequence is single-use. Ranging over it a second time yields nothing,
 // because the underlying rows are already closed.
-func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
-	return func(yield func(Row, error) bool) {
+func Scan(rows *sql.Rows) iter.Seq2[Dynamic, error] {
+	return func(yield func(Dynamic, error) bool) {
 		if rows == nil {
 			return
 		}
@@ -28,7 +28,7 @@ func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
 
 		names, err := rows.Columns()
 		if err != nil {
-			yield(Row{}, fmt.Errorf("row: read result columns: %w", err))
+			yield(Dynamic{}, fmt.Errorf("row: read result columns: %w", err))
 			return
 		}
 		for rows.Next() {
@@ -38,12 +38,12 @@ func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
 				destinations[index] = &values[index]
 			}
 			if err := rows.Scan(destinations...); err != nil {
-				yield(Row{}, fmt.Errorf("row: scan result row: %w", err))
+				yield(Dynamic{}, fmt.Errorf("row: scan result row: %w", err))
 				return
 			}
 			decoded, err := New(names, values)
 			if err != nil {
-				yield(Row{}, fmt.Errorf("row: create result row: %w", err))
+				yield(Dynamic{}, fmt.Errorf("row: create result row: %w", err))
 				return
 			}
 			if !yield(decoded, nil) {
@@ -51,7 +51,7 @@ func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
 			}
 		}
 		if err := rows.Err(); err != nil {
-			yield(Row{}, fmt.Errorf("row: iterate result rows: %w", err))
+			yield(Dynamic{}, fmt.Errorf("row: iterate result rows: %w", err))
 		}
 	}
 }

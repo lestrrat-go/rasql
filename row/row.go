@@ -6,23 +6,23 @@ import (
 	"time"
 )
 
-// Row contains one database result row.
-type Row struct {
+// Dynamic contains one database result row whose columns are known only at run time.
+type Dynamic struct {
 	values map[string]any
 }
 
 // New validates column names and values and returns an independent row value.
-func New(names []string, values []any) (Row, error) {
+func New(names []string, values []any) (Dynamic, error) {
 	if len(names) != len(values) {
-		return Row{}, fmt.Errorf("row: %d column names for %d values", len(names), len(values))
+		return Dynamic{}, fmt.Errorf("row: %d column names for %d values", len(names), len(values))
 	}
-	result := Row{values: make(map[string]any, len(names))}
+	result := Dynamic{values: make(map[string]any, len(names))}
 	for i, name := range names {
 		if name == "" {
-			return Row{}, fmt.Errorf("row: column name at index %d is empty", i)
+			return Dynamic{}, fmt.Errorf("row: column name at index %d is empty", i)
 		}
 		if _, exists := result.values[name]; exists {
-			return Row{}, fmt.Errorf("row: duplicate column name %q", name)
+			return Dynamic{}, fmt.Errorf("row: duplicate column name %q", name)
 		}
 		result.values[name] = cloneValue(values[i])
 	}
@@ -52,7 +52,7 @@ func (c Column[T]) Name() string {
 }
 
 // Get decodes c from r.
-func (c Column[T]) Get(r Row) (T, error) {
+func (c Column[T]) Get(r Dynamic) (T, error) {
 	var zero T
 	if c.name == "" || c.decoder == nil {
 		return zero, fmt.Errorf("row: invalid typed column")
