@@ -25,7 +25,7 @@ func TestRunSchemaGeneratesSource(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -48,7 +48,7 @@ func TestRunSchemaKeepsUnsignedColumnsFromInput(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	data := []byte(`[{"Name":"events","Columns":[{"Name":"id","Type":"integer","Unsigned":true},{"Name":"sequence","Type":"integer"}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -67,7 +67,7 @@ func TestRunSchemaFiltersInputTables(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	data := []byte(`[
 		{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
 		{"Name":"orders","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}
@@ -88,7 +88,7 @@ func TestRunSchemaRejectsDuplicateFilteredInputTables(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	data := []byte(`[
 		{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
 		{"Name":"users","Columns":[{"Name":"email","Type":"text"}],"PrimaryKey":["email"]}
@@ -108,7 +108,7 @@ func TestRunSchemaRejectsUnknownInputTable(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -145,7 +145,7 @@ func TestRunSchemaRejectsDuplicateTableFlag(t *testing.T) {
 				require.NoError(t, os.RemoveAll(directory))
 			})
 			input := filepath.Join(directory, "schema.json")
-			output := filepath.Join(directory, "schema.go")
+			output := filepath.Join(directory, "schema_gen.go")
 			data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 			require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -181,7 +181,7 @@ func TestRunSchemaSuccessLeavesNoTemporaryFile(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -193,7 +193,7 @@ func TestRunSchemaSuccessLeavesNoTemporaryFile(t *testing.T) {
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
-	require.ElementsMatch(t, []string{"schema.json", "schema.go"}, names)
+	require.ElementsMatch(t, []string{"schema.json", "schema_gen.go"}, names)
 }
 
 // TestRunSchemaOutputDirectoryMissingReturnsError confirms that an -output
@@ -207,7 +207,7 @@ func TestRunSchemaOutputDirectoryMissingReturnsError(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "missing", "schema.go")
+	output := filepath.Join(directory, "missing", "schema_gen.go")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -311,7 +311,7 @@ func TestRunAcceptsSafeOutputPaths(t *testing.T) {
 				t.Cleanup(func() {
 					require.NoError(t, os.RemoveAll(directory))
 				})
-				output := filepath.Join(directory, "missing", "out.go")
+				output := filepath.Join(directory, "missing", "out_gen.go")
 				args := append(fixture.write(t, directory), "-output", output)
 
 				err = run(args)
@@ -325,13 +325,32 @@ func TestRunAcceptsSafeOutputPaths(t *testing.T) {
 				t.Cleanup(func() {
 					require.NoError(t, os.RemoveAll(directory))
 				})
-				output := filepath.Join(directory, "out.go")
+				output := filepath.Join(directory, "out_gen.go")
 				args := append(fixture.write(t, directory), "-output", output)
 
 				require.NoError(t, run(args))
 				_, err = os.Stat(output)
 				require.NoError(t, err)
 			})
+		})
+	}
+}
+
+func TestRunRejectsOutputWithoutGeneratedSuffix(t *testing.T) {
+	for _, fixture := range outputCommandFixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			directory, err := os.MkdirTemp(".", ".tmp-output-name-*")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, os.RemoveAll(directory))
+			})
+			output := filepath.Join(directory, "output.go")
+			args := append(fixture.write(t, directory), "-output", output)
+
+			err = run(args)
+
+			require.ErrorContains(t, err, "must end in _gen.go")
+			require.NoFileExists(t, output)
 		})
 	}
 }
@@ -390,7 +409,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectClose()
 
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output})
 	require.NoError(t, err)
 	source, err := os.ReadFile(output)
@@ -434,7 +453,7 @@ func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
 					require.NoError(t, os.RemoveAll(directory))
 				})
 				input := filepath.Join(directory, "schema.json")
-				output := filepath.Join(directory, "schema.go")
+				output := filepath.Join(directory, "schema_gen.go")
 				data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 				require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -481,7 +500,7 @@ func TestRunSchemaInspectionRespectsTimeout(t *testing.T) {
 	mock.ExpectRollback()
 	mock.ExpectClose()
 
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	start := time.Now()
 	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-timeout", "20ms", "-package", "generated", "-output", output})
 	elapsed := time.Since(start)
@@ -518,7 +537,7 @@ func TestRunSchemaRejectsTransactionBeginFailure(t *testing.T) {
 	mock.ExpectBegin().WillReturnError(errors.New("connection refused"))
 	mock.ExpectClose()
 
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output})
 	require.ErrorContains(t, err, "begin PostgreSQL inspection transaction")
 	require.ErrorContains(t, err, "connection refused")
@@ -586,7 +605,7 @@ func TestRunSchemaBeginsRepeatableReadReadOnlyTransaction(t *testing.T) {
 		openDatabase = previousOpenDatabase
 	})
 
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output})
 	require.Error(t, err)
 
@@ -608,7 +627,7 @@ func TestRunQueryGeneratesSource(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "user.sql")
-	output := filepath.Join(directory, "query.go")
+	output := filepath.Join(directory, "query_gen.go")
 	require.NoError(t, os.WriteFile(input, []byte("SELECT id FROM users WHERE id = {{bind \"id\"}}"), 0o600))
 
 	require.NoError(t, run([]string{"query", "-input", input, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", output}))
@@ -792,7 +811,7 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 				require.NoError(t, os.RemoveAll(directory))
 			})
 			input := filepath.Join(directory, testCase.inputName)
-			generated := filepath.Join(directory, "generated.go")
+			generated := filepath.Join(directory, "generated_gen.go")
 			require.NoError(t, os.WriteFile(input, []byte(testCase.inputContent), 0o600))
 
 			err = run(testCase.buildArgs(input, generated))
@@ -831,7 +850,7 @@ func TestRunSchemaRejectsOversizedInput(t *testing.T) {
 	})
 
 	validInput := filepath.Join(directory, "schema.json")
-	validOutput := filepath.Join(directory, "schema.go")
+	validOutput := filepath.Join(directory, "schema_gen.go")
 	validData := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 	require.LessOrEqual(t, len(validData), maxInputBytes)
 	require.NoError(t, os.WriteFile(validInput, validData, 0o600))
@@ -841,7 +860,7 @@ func TestRunSchemaRejectsOversizedInput(t *testing.T) {
 	require.NoError(t, err)
 
 	oversizedInput := filepath.Join(directory, "oversized-schema.json")
-	oversizedOutput := filepath.Join(directory, "oversized-schema.go")
+	oversizedOutput := filepath.Join(directory, "oversized-schema_gen.go")
 	oversizedData := bytes.Repeat([]byte("x"), maxInputBytes+1)
 	require.NoError(t, os.WriteFile(oversizedInput, oversizedData, 0o600))
 
@@ -865,7 +884,7 @@ func TestRunQueryRejectsOversizedInput(t *testing.T) {
 	})
 
 	validInput := filepath.Join(directory, "user.sql")
-	validOutput := filepath.Join(directory, "query.go")
+	validOutput := filepath.Join(directory, "query_gen.go")
 	validData := []byte(`SELECT id FROM users WHERE id = {{bind "id"}}`)
 	require.LessOrEqual(t, len(validData), maxInputBytes)
 	require.NoError(t, os.WriteFile(validInput, validData, 0o600))
@@ -875,7 +894,7 @@ func TestRunQueryRejectsOversizedInput(t *testing.T) {
 	require.NoError(t, err)
 
 	oversizedInput := filepath.Join(directory, "oversized-user.sql")
-	oversizedOutput := filepath.Join(directory, "oversized-query.go")
+	oversizedOutput := filepath.Join(directory, "oversized-query_gen.go")
 	oversizedData := bytes.Repeat([]byte("x"), maxInputBytes+1)
 	require.NoError(t, os.WriteFile(oversizedInput, oversizedData, 0o600))
 

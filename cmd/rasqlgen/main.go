@@ -99,7 +99,7 @@ func runSchema(args []string) error {
 	var tableNames tableNames
 	flags.Var(&tableNames, "table", "database table to generate; repeat for multiple tables (duplicate values are rejected)")
 	packageName := flags.String("package", "", "generated package name")
-	output := flags.String("output", "", "path for generated Go source")
+	output := flags.String("output", "", "path for generated Go source ending in _gen.go")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
@@ -233,7 +233,7 @@ func runQuery(args []string) error {
 	functionName := flags.String("function", "", "generated function name")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	packageName := flags.String("package", "", "generated package name")
-	output := flags.String("output", "", "path for generated Go source")
+	output := flags.String("output", "", "path for generated Go source ending in _gen.go")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
@@ -292,7 +292,8 @@ func unexpectedArgumentsError(rest []string) error {
 }
 
 // writeGeneratedFile writes source to path without ever truncating an
-// existing file in place. When path is a symbolic link it writes through
+// existing file in place. Its resolved destination must end in _gen.go.
+// When path is a symbolic link it writes through
 // the link to the file the link points at, leaving the link itself intact.
 // A path that names a directory, or a symbolic link that resolves to one,
 // is rejected with an error instead of being written into, regardless of
@@ -318,6 +319,9 @@ func writeGeneratedFile(path string, source []byte) error {
 	destination, err := resolveOutputPath(path)
 	if err != nil {
 		return err
+	}
+	if !strings.HasSuffix(destination, "_gen.go") {
+		return fmt.Errorf("generated output %q must end in _gen.go", destination)
 	}
 	mode, err := generatedFileMode(destination)
 	if err != nil {

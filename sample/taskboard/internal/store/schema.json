@@ -1,0 +1,64 @@
+[
+  {
+    "Name": "members",
+    "Columns": [
+      {"Name": "id", "Type": "integer"},
+      {"Name": "name", "Type": "text"},
+      {"Name": "email", "Type": "text"}
+    ],
+    "PrimaryKey": ["id"],
+    "UniqueConstraints": [
+      {"Columns": ["email"]}
+    ]
+  },
+  {
+    "Name": "projects",
+    "Columns": [
+      {"Name": "id", "Type": "integer"},
+      {"Name": "owner_id", "Type": "integer"},
+      {"Name": "name", "Type": "text"},
+      {"Name": "archived", "Type": "boolean", "Default": "FALSE"}
+    ],
+    "PrimaryKey": ["id"],
+    "ForeignKeys": [
+      {
+        "Columns": ["owner_id"],
+        "ReferencedTable": "members",
+        "ReferencedColumns": ["id"]
+      }
+    ]
+  },
+  {
+    "Name": "tasks",
+    "Columns": [
+      {"Name": "id", "Type": "integer"},
+      {"Name": "project_id", "Type": "integer"},
+      {"Name": "assignee_id", "Type": "integer"},
+      {"Name": "title", "Type": "text"},
+      {"Name": "status", "Type": "text"},
+      {"Name": "priority", "Type": "integer"}
+    ],
+    "PrimaryKey": ["id"],
+    "Checks": [
+      {"Expression": "status IN ('todo', 'in_progress', 'done')"}
+    ],
+    "Indexes": [
+      {
+        "Name": "tasks_open_by_project",
+        "Columns": ["project_id", "status", "priority"]
+      }
+    ],
+    "ForeignKeys": [
+      {
+        "Columns": ["project_id"],
+        "ReferencedTable": "projects",
+        "ReferencedColumns": ["id"]
+      },
+      {
+        "Columns": ["assignee_id"],
+        "ReferencedTable": "members",
+        "ReferencedColumns": ["id"]
+      }
+    ]
+  }
+]
