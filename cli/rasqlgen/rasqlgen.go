@@ -15,12 +15,14 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/schema"
 	querytemplate "github.com/lestrrat-go/rasql/template"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -86,7 +88,7 @@ func printUsage(output io.Writer) {
 func runSchema(args []string, writer io.Writer) error {
 	flags := newFlagSet("schema", writer)
 	input := flags.String("input", "", "path to a JSON array of schema tables (max 64 MiB)")
-	dsn := flags.String("dsn", "", "PostgreSQL connection string")
+	dsn := flags.String("dsn", "", "database connection string")
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
 	timeout := flags.Duration("timeout", 30*time.Second, "deadline for -dsn metadata inspection")
 	var tableNames tableNames
@@ -127,19 +129,20 @@ func runSchema(args []string, writer io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if d.Name() != dialect.PostgreSQL().Name() {
-			return fmt.Errorf("schema direct inspection supports PostgreSQL, not %q", d.Name())
-		}
-		database, err := openDatabase("pgx", *dsn)
+		driverName, databaseName, err := inspectionDriver(d)
 		if err != nil {
-			return fmt.Errorf("open PostgreSQL database: %w", err)
+			return err
+		}
+		database, err := openDatabase(driverName, *dsn)
+		if err != nil {
+			return fmt.Errorf("open %s database: %w", databaseName, err)
 		}
 		defer database.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 		defer cancel()
 		tx, err := database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
-			return fmt.Errorf("begin PostgreSQL inspection transaction: %w", err)
+			return fmt.Errorf("begin %s inspection transaction: %w", databaseName, err)
 		}
 		inspector, err := inspect.New(tx, d)
 		if err != nil {
@@ -152,7 +155,7 @@ func runSchema(args []string, writer io.Writer) error {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit PostgreSQL inspection transaction: %w", err)
+			return fmt.Errorf("commit %s inspection transaction: %w", databaseName, err)
 		}
 	default:
 		return errors.New("schema requires either -input or -dsn")
@@ -488,5 +491,18 @@ func builtinDialect(name string) (dialect.Dialect, error) {
 		return dialect.SQLite(), nil
 	default:
 		return nil, fmt.Errorf("unsupported dialect %q", name)
+	}
+}
+
+func inspectionDriver(d dialect.Dialect) (string, string, error) {
+	switch d.Name() {
+	case "postgresql":
+		return "pgx", "PostgreSQL", nil
+	case "mysql":
+		return "mysql", "MySQL", nil
+	case "sqlite":
+		return "sqlite", "SQLite", nil
+	default:
+		return "", "", fmt.Errorf("schema direct inspection supports PostgreSQL, MySQL, and SQLite, not %q", d.Name())
 	}
 }

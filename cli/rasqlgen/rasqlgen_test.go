@@ -425,6 +425,71 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	require.Contains(t, string(source), "func Users() UsersTable {")
 }
 
+func TestRunSchemaInspectsSQLite(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	databasePath := filepath.Join(directory, "schema.db")
+	database, err := sql.Open("sqlite", databasePath)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+	require.NoError(t, err)
+
+	output := filepath.Join(directory, "schema_gen.go")
+	err = run([]string{"schema", "-dsn", databasePath, "-dialect", "sqlite", "-table", "users", "-package", "generated", "-output", output})
+	require.NoError(t, err)
+	source, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "type UsersRow struct {")
+	require.Contains(t, string(source), "ID   int64")
+	require.Contains(t, string(source), "Name string")
+}
+
+func TestRunSchemaInspectsMySQL(t *testing.T) {
+	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(directory))
+	})
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	previousOpenDatabase := openDatabase
+	openDatabase = func(driverName string, dataSourceName string) (*sql.DB, error) {
+		require.Equal(t, "mysql", driverName)
+		require.Equal(t, "rasql:rasql@tcp(localhost:3306)/rasql", dataSourceName)
+		return database, nil
+	}
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+	})
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil))
+	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints JOIN information_schema\\.key_column_usage").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	mock.ExpectCommit()
+	mock.ExpectClose()
+
+	output := filepath.Join(directory, "schema_gen.go")
+	err = run([]string{"schema", "-dsn", "rasql:rasql@tcp(localhost:3306)/rasql", "-dialect", "mysql", "-table", "users", "-package", "generated", "-output", output})
+	require.NoError(t, err)
+	source, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "type UsersRow struct {")
+	require.Contains(t, string(source), "ID int64")
+}
+
 func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
 	sources := []struct {
 		name string
