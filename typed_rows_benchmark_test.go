@@ -45,6 +45,39 @@ func (r *benchmarkMemberRow) ScanRow(source row.ScanSource) error {
 
 func (r *benchmarkMemberRow) ScanDestinations(columns []string) ([]any, error) {
 	destinations := make([]any, len(columns))
+	var scanned uint64
+	var discard any
+	for index, column := range columns {
+		switch column {
+		case "id":
+			if scanned&(uint64(1)<<0) != 0 {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scanned |= uint64(1) << 0
+			destinations[index] = &r.ID
+		case "name":
+			if scanned&(uint64(1)<<1) != 0 {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scanned |= uint64(1) << 1
+			destinations[index] = &r.Name
+		case "email":
+			if scanned&(uint64(1)<<2) != 0 {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scanned |= uint64(1) << 2
+			destinations[index] = &r.Email
+		default:
+			destinations[index] = &discard
+		}
+	}
+	return destinations, nil
+}
+
+type benchmarkMemberRowBool benchmarkMemberRow
+
+func (r *benchmarkMemberRowBool) ScanDestinations(columns []string) ([]any, error) {
+	destinations := make([]any, len(columns))
 	var scannedID bool
 	var scannedName bool
 	var scannedEmail bool
@@ -82,6 +115,36 @@ type benchmarkMemberName struct {
 
 func (r *benchmarkMemberName) DecodeRow(source row.Dynamic) error {
 	return row.Assign(source, "name", &r.Name)
+}
+
+func BenchmarkScanDestinations(b *testing.B) {
+	columns := []string{"id", "name", "email"}
+	b.Run("bitmask", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			var result benchmarkMemberRow
+			destinations, err := result.ScanDestinations(columns)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(destinations) != len(columns) {
+				b.Fatalf("got %d destinations, want %d", len(destinations), len(columns))
+			}
+		}
+	})
+	b.Run("bool", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			var result benchmarkMemberRowBool
+			destinations, err := result.ScanDestinations(columns)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(destinations) != len(columns) {
+				b.Fatalf("got %d destinations, want %d", len(destinations), len(columns))
+			}
+		}
+	})
 }
 
 func BenchmarkTypedRowScan(b *testing.B) {

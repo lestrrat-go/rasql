@@ -413,28 +413,47 @@ func writeRowScan(source *bytes.Buffer, table schema.Table) {
 	source.WriteString(typeName)
 	source.WriteString(") ScanDestinations(columns []string) ([]any, error) {\n")
 	source.WriteString("\tdestinations := make([]any, len(columns))\n")
-	for _, column := range table.Columns {
-		source.WriteString("\tvar scanned")
-		source.WriteString(goName(column.Name))
-		source.WriteString(" bool\n")
+	maskWords := (len(table.Columns) + 63) / 64
+	if maskWords <= 1 {
+		source.WriteString("\tvar scanned uint64\n")
+	} else {
+		source.WriteString("\tvar scanned [")
+		source.WriteString(strconv.Itoa(maskWords))
+		source.WriteString("]uint64\n")
 	}
 	source.WriteString("\tvar discard any\n")
 	source.WriteString("\tfor index, column := range columns {\n\t\tswitch column {\n")
-	for _, column := range table.Columns {
+	for index, column := range table.Columns {
 		field := goName(column.Name)
+		word := index / 64
+		bit := index % 64
 		source.WriteString("\t\tcase ")
 		source.WriteString(quote(column.Name))
-		source.WriteString(":\n\t\t\tif scanned")
-		source.WriteString(field)
-		source.WriteString(" {\n\t\t\t\treturn nil, fmt.Errorf(\"duplicate result column %q\", column)\n\t\t\t}\n")
-		source.WriteString("\t\t\tscanned")
-		source.WriteString(field)
-		source.WriteString(" = true\n\t\t\tdestinations[index] = &r.")
+		source.WriteString(":\n\t\t\tif ")
+		writeScanMask(source, maskWords, word)
+		source.WriteString(" & (uint64(1) << ")
+		source.WriteString(strconv.Itoa(bit))
+		source.WriteString(")")
+		source.WriteString(" != 0 {\n\t\t\t\treturn nil, fmt.Errorf(\"duplicate result column %q\", column)\n\t\t\t}\n\t\t\t")
+		writeScanMask(source, maskWords, word)
+		source.WriteString(" |= uint64(1) << ")
+		source.WriteString(strconv.Itoa(bit))
+		source.WriteString("\n\t\t\tdestinations[index] = &r.")
 		source.WriteString(field)
 		source.WriteString("\n")
 	}
 	source.WriteString("\t\tdefault:\n\t\t\tdestinations[index] = &discard\n\t\t}\n\t}\n")
 	source.WriteString("\treturn destinations, nil\n}\n")
+}
+
+func writeScanMask(source *bytes.Buffer, maskWords, word int) {
+	if maskWords <= 1 {
+		source.WriteString("scanned")
+		return
+	}
+	source.WriteString("scanned[")
+	source.WriteString(strconv.Itoa(word))
+	source.WriteString("]")
 }
 
 // writeRowColumnValue writes the rasql.ColumnValuer implementation, which is

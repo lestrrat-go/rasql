@@ -36,29 +36,27 @@ func (r *MembersRow) ScanRow(src row.ScanSource) error {
 // ScanDestinations maps result-column names to fields on r.
 func (r *MembersRow) ScanDestinations(columns []string) ([]any, error) {
 	destinations := make([]any, len(columns))
-	var scannedID bool
-	var scannedName bool
-	var scannedEmail bool
+	var scanned uint64
 	var discard any
 	for index, column := range columns {
 		switch column {
 		case "id":
-			if scannedID {
+			if scanned&(uint64(1)<<0) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedID = true
+			scanned |= uint64(1) << 0
 			destinations[index] = &r.ID
 		case "name":
-			if scannedName {
+			if scanned&(uint64(1)<<1) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedName = true
+			scanned |= uint64(1) << 1
 			destinations[index] = &r.Name
 		case "email":
-			if scannedEmail {
+			if scanned&(uint64(1)<<2) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedEmail = true
+			scanned |= uint64(1) << 2
 			destinations[index] = &r.Email
 		default:
 			destinations[index] = &discard

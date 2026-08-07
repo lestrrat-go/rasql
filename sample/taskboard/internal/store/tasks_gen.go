@@ -48,50 +48,45 @@ func (r *TasksRow) ScanRow(src row.ScanSource) error {
 // ScanDestinations maps result-column names to fields on r.
 func (r *TasksRow) ScanDestinations(columns []string) ([]any, error) {
 	destinations := make([]any, len(columns))
-	var scannedID bool
-	var scannedProjectID bool
-	var scannedAssigneeID bool
-	var scannedTitle bool
-	var scannedStatus bool
-	var scannedPriority bool
+	var scanned uint64
 	var discard any
 	for index, column := range columns {
 		switch column {
 		case "id":
-			if scannedID {
+			if scanned&(uint64(1)<<0) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedID = true
+			scanned |= uint64(1) << 0
 			destinations[index] = &r.ID
 		case "project_id":
-			if scannedProjectID {
+			if scanned&(uint64(1)<<1) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedProjectID = true
+			scanned |= uint64(1) << 1
 			destinations[index] = &r.ProjectID
 		case "assignee_id":
-			if scannedAssigneeID {
+			if scanned&(uint64(1)<<2) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedAssigneeID = true
+			scanned |= uint64(1) << 2
 			destinations[index] = &r.AssigneeID
 		case "title":
-			if scannedTitle {
+			if scanned&(uint64(1)<<3) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedTitle = true
+			scanned |= uint64(1) << 3
 			destinations[index] = &r.Title
 		case "status":
-			if scannedStatus {
+			if scanned&(uint64(1)<<4) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedStatus = true
+			scanned |= uint64(1) << 4
 			destinations[index] = &r.Status
 		case "priority":
-			if scannedPriority {
+			if scanned&(uint64(1)<<5) != 0 {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scannedPriority = true
+			scanned |= uint64(1) << 5
 			destinations[index] = &r.Priority
 		default:
 			destinations[index] = &discard
