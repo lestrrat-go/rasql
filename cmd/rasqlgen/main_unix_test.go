@@ -40,7 +40,7 @@ func TestRunSchemaPreservesExistingOutputWhenWriteFails(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "schema.go")
+	output := filepath.Join(directory, "schema_gen.go")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 	sentinel := []byte("SENTINEL-DATA-DO-NOT-TRUNCATE")
@@ -103,7 +103,7 @@ func TestRunSchemaKeepsOutputModeBits(t *testing.T) {
 				require.NoError(t, os.RemoveAll(directory))
 			})
 			input := filepath.Join(directory, "schema.json")
-			output := filepath.Join(directory, "schema.go")
+			output := filepath.Join(directory, "schema_gen.go")
 			require.NoError(t, os.WriteFile(input, data, 0o600))
 			if tc.existing != 0 {
 				require.NoError(t, os.WriteFile(output, []byte("// stale\n"), tc.existing))
@@ -185,7 +185,7 @@ func TestRunRejectsSymlinkToDirectoryOutput(t *testing.T) {
 // at holding stale content, while the run still reported success, so the
 // write has to resolve the link first and replace its target instead.
 func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
-	t.Run("link to a file in the same directory keeps the link and updates its target", func(t *testing.T) {
+	t.Run("link to a non-generated target is rejected", func(t *testing.T) {
 		directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
 		require.NoError(t, err)
 		t.Cleanup(func() {
@@ -193,12 +193,33 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 		})
 		input := schemaFixtureInput(t, directory)
 		target := filepath.Join(directory, "target.go")
-		output := filepath.Join(directory, "output.go")
+		output := filepath.Join(directory, "output_gen.go")
+		sentinel := []byte("SENTINEL-DATA")
+		require.NoError(t, os.WriteFile(target, sentinel, 0o600))
+		require.NoError(t, os.Symlink("target.go", output))
+
+		err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
+
+		require.ErrorContains(t, err, "must end in _gen.go")
+		got, err := os.ReadFile(target)
+		require.NoError(t, err)
+		require.Equal(t, sentinel, got)
+	})
+
+	t.Run("link to a file in the same directory keeps the link and updates its target", func(t *testing.T) {
+		directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, os.RemoveAll(directory))
+		})
+		input := schemaFixtureInput(t, directory)
+		target := filepath.Join(directory, "target_gen.go")
+		output := filepath.Join(directory, "output_gen.go")
 		require.NoError(t, os.WriteFile(target, []byte("SENTINEL-DATA"), 0o644))
 		// os.WriteFile masks perm with the umask, so set the bits
 		// explicitly to keep the fixture deterministic.
 		require.NoError(t, os.Chmod(target, 0o644))
-		require.NoError(t, os.Symlink("target.go", output))
+		require.NoError(t, os.Symlink("target_gen.go", output))
 
 		require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
 
@@ -207,7 +228,7 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 		require.NotZero(t, link.Mode()&fs.ModeSymlink, "output must still be a symbolic link")
 		destination, err := os.Readlink(output)
 		require.NoError(t, err)
-		require.Equal(t, "target.go", destination)
+		require.Equal(t, "target_gen.go", destination)
 		source, err := os.ReadFile(target)
 		require.NoError(t, err)
 		require.Contains(t, string(source), "func Users() UsersTable {")
@@ -223,7 +244,7 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 		for _, entry := range entries {
 			names = append(names, entry.Name())
 		}
-		require.ElementsMatch(t, []string{"schema.json", "target.go", "output.go"}, names)
+		require.ElementsMatch(t, []string{"schema.json", "target_gen.go", "output_gen.go"}, names)
 	})
 
 	t.Run("link to a file in another directory puts the temporary file beside the target", func(t *testing.T) {
@@ -240,10 +261,10 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 		require.NoError(t, os.Mkdir(linkDirectory, 0o700))
 		require.NoError(t, os.Mkdir(targetDirectory, 0o700))
 		input := schemaFixtureInput(t, root)
-		target := filepath.Join(targetDirectory, "target.go")
-		output := filepath.Join(linkDirectory, "output.go")
+		target := filepath.Join(targetDirectory, "target_gen.go")
+		output := filepath.Join(linkDirectory, "output_gen.go")
 		require.NoError(t, os.WriteFile(target, []byte("SENTINEL-DATA"), 0o600))
-		require.NoError(t, os.Symlink(filepath.Join("..", "target", "target.go"), output))
+		require.NoError(t, os.Symlink(filepath.Join("..", "target", "target_gen.go"), output))
 		// Denying writes to the directory holding the link makes this a
 		// mechanical check rather than an inspection of the temporary
 		// file's name: a temporary file created beside the link instead
@@ -272,9 +293,9 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 			require.NoError(t, os.RemoveAll(directory))
 		})
 		input := schemaFixtureInput(t, directory)
-		target := filepath.Join(directory, "target.go")
-		output := filepath.Join(directory, "output.go")
-		require.NoError(t, os.Symlink("target.go", output))
+		target := filepath.Join(directory, "target_gen.go")
+		output := filepath.Join(directory, "output_gen.go")
+		require.NoError(t, os.Symlink("target_gen.go", output))
 
 		require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
 
@@ -304,19 +325,19 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Join(root, "actual", "nested"), 0o700))
 		require.NoError(t, os.Mkdir(filepath.Join(root, "link"), 0o700))
 		require.NoError(t, os.Symlink(filepath.Join("..", "actual", "nested"), filepath.Join(root, "link", "alias")))
-		require.NoError(t, os.Symlink(filepath.Join("..", "target.go"), filepath.Join(root, "actual", "nested", "output.go")))
-		output := filepath.Join(root, "link", "alias", "output.go")
+		require.NoError(t, os.Symlink(filepath.Join("..", "target_gen.go"), filepath.Join(root, "actual", "nested", "output_gen.go")))
+		output := filepath.Join(root, "link", "alias", "output_gen.go")
 		// This is where the filesystem, and therefore an ordinary open of
 		// output, puts the link's target.
-		target := filepath.Join(root, "actual", "target.go")
+		target := filepath.Join(root, "actual", "target_gen.go")
 
 		require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", output}))
 
 		source, err := os.ReadFile(target)
 		require.NoError(t, err)
 		require.Contains(t, string(source), "func Users() UsersTable {")
-		require.NoFileExists(t, filepath.Join(root, "link", "target.go"), "the lexical parent must not receive the generated source")
-		link, err := os.Lstat(filepath.Join(root, "actual", "nested", "output.go"))
+		require.NoFileExists(t, filepath.Join(root, "link", "target_gen.go"), "the lexical parent must not receive the generated source")
+		link, err := os.Lstat(filepath.Join(root, "actual", "nested", "output_gen.go"))
 		require.NoError(t, err)
 		require.NotZero(t, link.Mode()&fs.ModeSymlink, "output must still be a symbolic link")
 	})
@@ -343,20 +364,20 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 					require.NoError(t, os.RemoveAll(directory))
 				})
 				input := schemaFixtureInput(t, directory)
-				target := filepath.Join(directory, "target.go")
+				target := filepath.Join(directory, "target_gen.go")
 				// Every link but the last points at the next one, and the
 				// last points at a path that does not exist yet, so the
 				// chain ends the way a checked-in link to a not yet
 				// generated file does.
 				for i := range tc.links {
-					name := filepath.Join(directory, fmt.Sprintf("l%d.go", i))
-					next := fmt.Sprintf("l%d.go", i+1)
+					name := filepath.Join(directory, fmt.Sprintf("l%d_gen.go", i))
+					next := fmt.Sprintf("l%d_gen.go", i+1)
 					if i == tc.links-1 {
-						next = "target.go"
+						next = "target_gen.go"
 					}
 					require.NoError(t, os.Symlink(next, name))
 				}
-				output := filepath.Join(directory, "l0.go")
+				output := filepath.Join(directory, "l0_gen.go")
 
 				err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
 
@@ -387,8 +408,8 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 			require.NoError(t, os.RemoveAll(directory))
 		})
 		input := schemaFixtureInput(t, directory)
-		output := filepath.Join(directory, "output.go")
-		require.NoError(t, os.Symlink("output.go", output))
+		output := filepath.Join(directory, "output_gen.go")
+		require.NoError(t, os.Symlink("output_gen.go", output))
 
 		err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
 		require.Error(t, err)
@@ -403,7 +424,7 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 		for _, entry := range entries {
 			names = append(names, entry.Name())
 		}
-		require.ElementsMatch(t, []string{"schema.json", "output.go"}, names)
+		require.ElementsMatch(t, []string{"schema.json", "output_gen.go"}, names)
 	})
 
 	t.Run("two links pointing at each other fail without touching anything", func(t *testing.T) {
@@ -413,10 +434,10 @@ func TestRunSchemaWritesThroughOutputSymlink(t *testing.T) {
 			require.NoError(t, os.RemoveAll(directory))
 		})
 		input := schemaFixtureInput(t, directory)
-		output := filepath.Join(directory, "output.go")
-		other := filepath.Join(directory, "other.go")
-		require.NoError(t, os.Symlink("other.go", output))
-		require.NoError(t, os.Symlink("output.go", other))
+		output := filepath.Join(directory, "output_gen.go")
+		other := filepath.Join(directory, "other_gen.go")
+		require.NoError(t, os.Symlink("other_gen.go", output))
+		require.NoError(t, os.Symlink("output_gen.go", other))
 
 		err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
 		require.Error(t, err)

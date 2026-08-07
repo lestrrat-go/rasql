@@ -21,7 +21,10 @@ func New(client rasql.Client) Repository {
 
 // SeedDemo writes the example's initial Taskboard data.
 func (repository Repository) SeedDemo(ctx context.Context) error {
-	existing, err := rasql.DecodeFrom[member](members).
+	members := Members()
+	projects := Projects()
+	tasks := Tasks()
+	existing, err := rasql.DecodeFrom[MembersRow](members).
 		Project(
 			query.Project(members.ID),
 			query.Project(members.Name),
@@ -35,7 +38,7 @@ func (repository Repository) SeedDemo(ctx context.Context) error {
 	if len(existing) > 0 {
 		return nil
 	}
-	for _, member := range []member{
+	for _, member := range []MembersRow{
 		{ID: 1, Name: "Ada Lovelace", Email: "ada@example.com"},
 		{ID: 2, Name: "Grace Hopper", Email: "grace@example.com"},
 	} {
@@ -44,12 +47,12 @@ func (repository Repository) SeedDemo(ctx context.Context) error {
 		}
 	}
 
-	project := project{ID: 100, OwnerID: 1, Name: "Website refresh"}
+	project := ProjectsRow{ID: 100, OwnerID: 1, Name: "Website refresh"}
 	if _, err := rasql.Insert(ctx, repository.client, projects, project); err != nil {
 		return fmt.Errorf("insert project: %w", err)
 	}
 
-	for _, task := range []task{
+	for _, task := range []TasksRow{
 		{ID: 1, ProjectID: project.ID, AssigneeID: 1, Title: "Draft rollout plan", Status: "todo", Priority: 1},
 		{ID: 2, ProjectID: project.ID, AssigneeID: 2, Title: "Review onboarding emails", Status: "todo", Priority: 2},
 		{ID: 3, ProjectID: project.ID, AssigneeID: 1, Title: "Archive old mockups", Status: "done", Priority: 3},
@@ -59,7 +62,7 @@ func (repository Repository) SeedDemo(ctx context.Context) error {
 		}
 	}
 
-	started := task{
+	started := TasksRow{
 		ID:         1,
 		ProjectID:  project.ID,
 		AssigneeID: 1,
@@ -75,6 +78,8 @@ func (repository Repository) SeedDemo(ctx context.Context) error {
 
 // OpenTasks returns up to limit unfinished tasks for projectID in display order.
 func (repository Repository) OpenTasks(ctx context.Context, projectID int64, limit int, offset int) ([]taskboard.Summary, error) {
+	tasks := Tasks()
+	projects := Projects()
 	return rasql.DecodeFrom[taskboard.Summary](tasks).
 		Join(rasql.InnerJoin(projects, query.Equal(tasks.ProjectID, projects.ID))).
 		Project(

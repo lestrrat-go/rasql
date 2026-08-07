@@ -31,7 +31,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | `-dialect` | Dialect for `-dsn`, defaulting to `postgresql`. |
 | `-timeout` | Deadline for `-dsn` metadata inspection, defaulting to 30s. The deadline does not apply to `-input`, but every `schema` invocation rejects a zero or negative value. |
 | `-package` | Package name for the generated file. Required. |
-| `-output` | Path of the generated file. Required. |
+| `-output` | Path of the generated file. Required and must end in `_gen.go`. |
 
 Supply either `-dsn` or `-input`, never both. Direct inspection currently supports PostgreSQL only; the command bundles the pgx driver, so nothing needs importing to use `-dsn`. It preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys, including exact decimal columns (`NUMERIC`/`DECIMAL`), which generate a Go `string` field and whose generated descriptor restates the column's `Precision` and `Scale`. A generated `Scale` reads `schema.NewDecimalScale(s)` rather than a bare number, and is emitted even when `s` is `0`, because the zero value of `schema.DecimalScale` means no scale was stated and `Table.Validate` rejects a decimal column that states none. It reports an error when an index or constraint has metadata that the schema descriptor cannot reproduce, and when a column is a bare, unconstrained `NUMERIC`, since PostgreSQL reports no precision for it to record.
 
@@ -236,7 +236,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen query \
   -output internal/store/user_by_email_gen.go
 ```
 
-Every flag is required. `-dialect` accepts `postgresql` (or `postgres`), `mysql`, and `sqlite`. The package, function, and bind names must be usable Go identifiers. The function name cannot be `init`, and `main` cannot be generated in package `main`. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
+Every flag is required. `-dialect` accepts `postgresql` (or `postgres`), `mysql`, and `sqlite`. The package, function, and bind names must be usable Go identifiers. The function name cannot be `init`, and `main` cannot be generated in package `main`. `-output` must end in `_gen.go`. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
 
 The input is a static template, so it holds SQL text plus `{{bind "name"}}` actions and nothing else:
 
