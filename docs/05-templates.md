@@ -157,7 +157,7 @@ func Example_rasql_static_template() {
 source: [examples/rasql_static_template_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_static_template_example_test.go)
 <!-- END INCLUDE -->
 
-`QueryRendered` returns rows, and `ExecRendered` runs a statement that returns none. Because the result shape comes from hand-written SQL, rows arrive as `row.Row` rather than a generated type. Read them in one of three ways:
+`QueryRendered` returns rows, and `ExecRendered` runs a statement that returns none. Because the result shape comes from hand-written SQL, rows arrive as `row.Dynamic` rather than a generated type. Read them in one of three ways:
 
 | Call | Gives |
 | --- | --- |

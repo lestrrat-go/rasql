@@ -26,7 +26,7 @@ func TestScan(t *testing.T) {
 		rows, err := database.QueryContext(t.Context(), "SELECT")
 		require.NoError(t, err)
 
-		decoded := make([]row.Row, 0)
+		decoded := make([]row.Dynamic, 0)
 		for result, err := range row.Scan(rows) {
 			require.NoError(t, err)
 			decoded = append(decoded, result)

@@ -22,7 +22,7 @@ type SelectBuilder struct {
 
 // SelectQueryFrom starts a fluent SELECT builder using table as its primary
 // table. It is the untyped counterpart of SelectFrom, for a query.Table with no
-// Go row type, and its terminals yield row.Row rather than a decoded type.
+// Go row type, and its terminals yield row.Dynamic rather than a decoded type.
 func SelectQueryFrom(table query.Table) SelectBuilder {
 	return SelectBuilder{builder: render.SelectFrom(nil, table)}
 }
@@ -140,7 +140,7 @@ func (b SelectBuilder) Build(d dialect.Dialect) (render.Statement, error) {
 // The statement runs when the sequence is first ranged over, not when Query
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
-func (b SelectBuilder) Query(ctx context.Context, x Executor) (iter.Seq2[row.Row, error], error) {
+func (b SelectBuilder) Query(ctx context.Context, x Executor) (iter.Seq2[row.Dynamic, error], error) {
 	if isNil(x) {
 		return nil, fmt.Errorf("rasql: executor must not be nil")
 	}
@@ -176,7 +176,7 @@ func (b SelectBuilder) Count(ctx context.Context, x Executor) (int64, error) {
 
 // countValues adapts a sequence of result rows into the int64 held by each
 // row's "count" result column, the name BuildCount projects COUNT(*) under.
-func countValues(rows iter.Seq2[row.Row, error]) iter.Seq2[int64, error] {
+func countValues(rows iter.Seq2[row.Dynamic, error]) iter.Seq2[int64, error] {
 	return func(yield func(int64, error) bool) {
 		for result, err := range rows {
 			if err != nil {

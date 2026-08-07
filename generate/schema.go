@@ -344,7 +344,7 @@ func writeRowDecode(source *bytes.Buffer, table schema.Table) {
 	source.WriteString("// DecodeRow assigns each result column to its field.\n")
 	source.WriteString("func (r *")
 	source.WriteString(typeName)
-	source.WriteString(") DecodeRow(src row.Row) error {\n")
+	source.WriteString(") DecodeRow(src row.Dynamic) error {\n")
 	last := len(table.Columns) - 1
 	for index, column := range table.Columns {
 		if index == last {

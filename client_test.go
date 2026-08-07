@@ -880,10 +880,10 @@ func (q *debugQueryer) ExecContext(_ context.Context, query string, arguments ..
 	return nil, nil
 }
 
-func collectRows(t *testing.T, sequence iter.Seq2[row.Row, error], queryError error) []row.Row {
+func collectRows(t *testing.T, sequence iter.Seq2[row.Dynamic, error], queryError error) []row.Dynamic {
 	t.Helper()
 	require.NoError(t, queryError)
-	result := make([]row.Row, 0)
+	result := make([]row.Dynamic, 0)
 	for value, err := range sequence {
 		require.NoError(t, err)
 		result = append(result, value)

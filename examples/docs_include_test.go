@@ -149,7 +149,7 @@ var execPassageFixtures = []struct {
 	{
 		name: "invented table keeps a RETURNING row beside an Exec row that claims it",
 		passage: "| Upsert, `RETURNING`, partial update | `query.New…` then `client.Exec(ctx, statement)` | `sql.Result` |\n" +
-			"| Write with `RETURNING` | `client.QueryWrite(ctx, statement)` | `row.Row` |",
+			"| Write with `RETURNING` | `client.QueryWrite(ctx, statement)` | `row.Dynamic` |",
 		reject: true,
 	},
 	{
@@ -170,7 +170,7 @@ var execPassageFixtures = []struct {
 	{
 		name: "invented table routes RETURNING away from Exec",
 		passage: "| Upsert, partial update | `query.New…` then `client.Exec(ctx, statement)` | `sql.Result` |\n" +
-			"| Write with `RETURNING` | `client.QueryWrite(ctx, statement)` | `row.Row` |",
+			"| Write with `RETURNING` | `client.QueryWrite(ctx, statement)` | `row.Dynamic` |",
 		reject: false,
 	},
 	{

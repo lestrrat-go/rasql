@@ -138,7 +138,7 @@ var (
 // The statement runs when the sequence is first ranged over, not when Query
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
-func Query(ctx context.Context, x Executor, statement query.Select) (iter.Seq2[row.Row, error], error) {
+func Query(ctx context.Context, x Executor, statement query.Select) (iter.Seq2[row.Dynamic, error], error) {
 	if isNil(x) {
 		return nil, fmt.Errorf("rasql: executor must not be nil")
 	}
@@ -157,7 +157,7 @@ func Query(ctx context.Context, x Executor, statement query.Select) (iter.Seq2[r
 // rows never executes it. Like Query, it runs the statement when the sequence
 // is first ranged over rather than when QueryWrite returns, so a write whose
 // sequence is abandoned never reaches the database.
-func QueryWrite(ctx context.Context, x Executor, statement query.WriteStatement) (iter.Seq2[row.Row, error], error) {
+func QueryWrite(ctx context.Context, x Executor, statement query.WriteStatement) (iter.Seq2[row.Dynamic, error], error) {
 	if isNil(x) {
 		return nil, fmt.Errorf("rasql: executor must not be nil")
 	}
@@ -176,11 +176,11 @@ func QueryWrite(ctx context.Context, x Executor, statement query.WriteStatement)
 // terminal that hands result rows to row.Scan goes through it, which keeps the
 // rule in one place: the *sql.Rows is created and consumed inside the same
 // closure.
-func scanRendered(ctx context.Context, x Executor, statement render.Statement) iter.Seq2[row.Row, error] {
-	return func(yield func(row.Row, error) bool) {
+func scanRendered(ctx context.Context, x Executor, statement render.Statement) iter.Seq2[row.Dynamic, error] {
+	return func(yield func(row.Dynamic, error) bool) {
 		rows, err := x.QueryRendered(ctx, statement)
 		if err != nil {
-			yield(row.Row{}, err)
+			yield(row.Dynamic{}, err)
 			return
 		}
 		row.Scan(rows)(yield)
