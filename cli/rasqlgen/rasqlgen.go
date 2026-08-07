@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,7 +95,7 @@ func runSchema(args []string, writer io.Writer) error {
 	var tableNames tableNames
 	flags.Var(&tableNames, "table", "database table to generate; repeat for multiple tables (duplicate values are rejected)")
 	packageName := flags.String("package", "", "generated package name")
-	output := flags.String("output", "", "path for generated Go source ending in _gen.go")
+	output := flags.String("output", "", "directory for generated Go source files")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
@@ -160,14 +161,51 @@ func runSchema(args []string, writer io.Writer) error {
 	default:
 		return errors.New("schema requires either -input or -dsn")
 	}
-	source, err := generate.Schema(*packageName, tables...)
-	if err != nil {
-		return err
-	}
-	if err := writeGeneratedFile(*output, source); err != nil {
+	if err := writeGeneratedSchemaFiles(*output, *packageName, tables); err != nil {
 		return fmt.Errorf("write schema output: %w", err)
 	}
 	return nil
+}
+
+func writeGeneratedSchemaFiles(directory string, packageName string, tables []schema.Table) error {
+	info, err := os.Stat(directory)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("schema output %q is not a directory", directory)
+	}
+	if err := generate.ValidateSchema(packageName, tables...); err != nil {
+		return err
+	}
+
+	sorted := append([]schema.Table(nil), tables...)
+	sort.Slice(sorted, func(left, right int) bool {
+		return sorted[left].Name < sorted[right].Name
+	})
+	filenames := make(map[string]string, len(sorted))
+	for _, table := range sorted {
+		filename := schemaOutputFilename(table.Name)
+		if other, exists := filenames[filename]; exists {
+			return fmt.Errorf("schema tables %q and %q both generate %q", other, table.Name, filename)
+		}
+		filenames[filename] = table.Name
+	}
+	for _, table := range sorted {
+		source, err := generate.Schema(packageName, table)
+		if err != nil {
+			return err
+		}
+		filename := schemaOutputFilename(table.Name)
+		if err := writeGeneratedFile(filepath.Join(directory, filename), source); err != nil {
+			return fmt.Errorf("write table %q: %w", table.Name, err)
+		}
+	}
+	return nil
+}
+
+func schemaOutputFilename(tableName string) string {
+	return strings.ToLower(tableName) + "_gen.go"
 }
 
 func inspectTables(ctx context.Context, inspector inspect.Inspector, names []string) ([]schema.Table, error) {

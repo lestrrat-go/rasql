@@ -1,6 +1,6 @@
 # `rasqlgen`
 
-`rasqlgen` writes Go source: table descriptors from a database or a schema snapshot, and query functions from [static templates](05-templates.md). Its output is deterministic, so regenerating an unchanged input produces an identical file and an accidental edit shows up in review.
+`rasqlgen` writes Go source: table descriptors from a database or a schema snapshot, and query functions from [static templates](05-templates.md). Its output is deterministic, so regenerating unchanged input produces identical files and an accidental edit shows up in review.
 
 Run it from the module without installing a binary:
 
@@ -20,7 +20,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
   -table users \
   -table orders \
   -package store \
-  -output internal/store/rasql_gen.go
+  -output internal/store
 ```
 
 | Flag | Meaning |
@@ -30,10 +30,12 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | `-table` | Table to generate; repeat it for each table. Required with `-dsn`; filters a JSON snapshot from `-input`. Passing the same table name twice is an error. |
 | `-dialect` | Dialect and driver for `-dsn`, defaulting to `postgresql`. |
 | `-timeout` | Deadline for `-dsn` metadata inspection, defaulting to 30s. The deadline does not apply to `-input`, but every `schema` invocation rejects a zero or negative value. |
-| `-package` | Package name for the generated file. Required. |
-| `-output` | Path of the generated file. Required and must end in `_gen.go`. |
+| `-package` | Package name for the generated files. Required. |
+| `-output` | Existing directory for generated files. Required. |
 
 Supply either `-dsn` or `-input`, never both. Direct inspection supports PostgreSQL, MySQL, and SQLite; the command bundles their `pgx`, `mysql`, and `sqlite` drivers, so nothing needs importing to use `-dsn`. PostgreSQL inspection preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys, including exact decimal columns (`NUMERIC`/`DECIMAL`), which generate a Go `string` field and whose generated descriptor restates the column's `Precision` and `Scale`. MySQL and SQLite inspection currently preserves supported columns and primary keys. A generated `Scale` reads `schema.NewDecimalScale(s)` rather than a bare number, and is emitted even when `s` is `0`, because the zero value of `schema.DecimalScale` means no scale was stated and `Table.Validate` rejects a decimal column that states none. It reports an error when an inspected type, index, or constraint has metadata that the schema descriptor cannot reproduce, and when a PostgreSQL column is a bare, unconstrained `NUMERIC`, since PostgreSQL reports no precision for it to record.
+
+`schema` writes one file per table, named `<table>_gen.go` in lowercase. The example writes `users_gen.go` and `orders_gen.go` in `internal/store`.
 
 `-dsn` reads every requested table in one transaction and commits it after the last read, so a migration that commits partway through cannot split the generated descriptor across two schema versions. It requests repeatable-read and read-only modes where the driver supports them. `-timeout` bounds that whole transaction, from opening it through the last metadata query; a server that accepts the connection but never answers cancels the command instead of hanging it indefinitely.
 
@@ -257,9 +259,9 @@ The SQL is compiled at generation time, so nothing parses the template at run ti
 Put the command in a `go:generate` line beside the package it writes into:
 
 ```go
-//go:generate go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema -input schema.json -package store -output rasql_gen.go
+//go:generate go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema -input schema.json -package store -output .
 ```
 
-`rasqlgen` never writes the output file in place. It writes a temporary file beside the output and renames the temporary file over it once the write has fully succeeded, so a run that fails leaves the existing generated file untouched instead of empty or truncated, and an existing file keeps its own permission bits, along with its sticky bit. Setuid and setgid are not carried across, because Linux clears both when an unprivileged process writes a file, so writing the output in place would have dropped them too. When `-output` names a symbolic link, the generated source goes to the file the link points at and the link itself survives, so a checked-in link to a generated file keeps working; a link pointing at a path that does not exist yet has that path created. When `-output` names a directory, or a symbolic link that resolves to one, `rasqlgen` rejects it with an error rather than writing into it — this holds with or without a trailing slash, so a mistyped `-output gen/` fails instead of silently creating `gen/gen`. On Unix platforms that replacement is atomic, so an interrupted run is covered too. Elsewhere it is not: Go's `os.Rename` is documented as non-atomic on non-Unix platforms even within a single directory, so an interrupted run there can leave the output file missing or still holding its old contents.
+`rasqlgen` never writes a generated file in place. It writes a temporary file beside each table or query file and renames it over the destination only after the write succeeds, so a failed run leaves an existing file untouched. Existing files keep their permission bits and sticky bit. On Unix platforms that replacement is atomic. Schema output directories must already exist; a symbolic link to a directory is allowed.
 
 Then `go generate ./...` refreshes everything. Because output is deterministic, a CI job can regenerate and fail when `git diff` is not empty, which catches a generated file that drifted from its source.
