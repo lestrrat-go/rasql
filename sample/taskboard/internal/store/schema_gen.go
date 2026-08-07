@@ -64,9 +64,6 @@ var membersTable = newMembersTable(rasql.MustTable[MembersRow](schema.Table{
 		{Name: "email", Type: schema.TypeText},
 	},
 	PrimaryKey: []string{"id"},
-	UniqueConstraints: []schema.UniqueConstraint{
-		{Name: "", Columns: []string{"email"}},
-	},
 }))
 
 // Members returns the descriptor for the "members" table.
@@ -147,9 +144,6 @@ var projectsTable = newProjectsTable(rasql.MustTable[ProjectsRow](schema.Table{
 		{Name: "archived", Type: schema.TypeBoolean, Default: "FALSE"},
 	},
 	PrimaryKey: []string{"id"},
-	ForeignKeys: []schema.ForeignKey{
-		{Name: "", Columns: []string{"owner_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},
-	},
 }))
 
 // Projects returns the descriptor for the "projects" table.
@@ -248,16 +242,6 @@ var tasksTable = newTasksTable(rasql.MustTable[TasksRow](schema.Table{
 		{Name: "priority", Type: schema.TypeInteger},
 	},
 	PrimaryKey: []string{"id"},
-	Checks: []schema.CheckConstraint{
-		{Name: "", Expression: "status IN ('todo', 'in_progress', 'done')"},
-	},
-	Indexes: []schema.Index{
-		{Name: "tasks_open_by_project", Columns: []string{"project_id", "status", "priority"}},
-	},
-	ForeignKeys: []schema.ForeignKey{
-		{Name: "", Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}},
-		{Name: "", Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},
-	},
 }))
 
 // Tasks returns the descriptor for the "tasks" table.
