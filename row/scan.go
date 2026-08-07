@@ -6,6 +6,30 @@ import (
 	"iter"
 )
 
+// ScanSource provides database/sql's Scan operation. Both [sql.Row] and
+// [sql.Rows] implement it.
+type ScanSource interface {
+	Scan(...any) error
+}
+
+// Scanner is implemented by row types that scan matching result columns
+// directly into their fields. ScanColumns returns the expected columns in the
+// order ScanRow passes their destinations to source.
+//
+// Generated row types implement Scanner. Typed queries use it when the result
+// columns exactly match ScanColumns.
+type Scanner interface {
+	ScanColumns() []string
+	ScanRow(ScanSource) error
+}
+
+// DestinationScanner is implemented by row types that map result-column names
+// to destinations for [ScanSource.Scan]. Generated row types implement it so
+// typed queries can scan partial or reordered result sets without Dynamic.
+type DestinationScanner interface {
+	ScanDestinations([]string) ([]any, error)
+}
+
 // Scan returns a rangeable sequence of the result rows in rows.
 //
 // Scan takes ownership of rows and closes them when the sequence ends, whether

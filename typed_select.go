@@ -174,11 +174,14 @@ func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (render.Statement, error
 
 // Query returns a rangeable sequence that decodes each result row as T.
 func (b TypedSelectBuilder[T]) Query(ctx context.Context, x Executor) (iter.Seq2[T, error], error) {
-	rows, err := b.builder.Query(ctx, x)
-	if err != nil {
-		return nil, err
+	if isNil(x) {
+		return nil, fmt.Errorf("rasql: executor must not be nil")
 	}
-	return decodeRows[T](rows), nil
+	statement, err := b.builder.Build(x.Dialect())
+	if err != nil {
+		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	return scanTypedRendered[T](ctx, x, statement), nil
 }
 
 // All collects every row from Query.

@@ -158,17 +158,25 @@ func Query(ctx context.Context, x Executor, statement query.Select) (iter.Seq2[r
 // is first ranged over rather than when QueryWrite returns, so a write whose
 // sequence is abandoned never reaches the database.
 func QueryWrite(ctx context.Context, x Executor, statement query.WriteStatement) (iter.Seq2[row.Dynamic, error], error) {
+	rendered, err := renderQueryWrite(x, statement)
+	if err != nil {
+		return nil, err
+	}
+	return scanRendered(ctx, x, rendered), nil
+}
+
+func renderQueryWrite(x Executor, statement query.WriteStatement) (render.Statement, error) {
 	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+		return render.Statement{}, fmt.Errorf("rasql: executor must not be nil")
 	}
 	if isNil(statement) || len(statement.Returning()) == 0 {
-		return nil, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
+		return render.Statement{}, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
 	}
 	rendered, err := render.Write(x.Dialect(), statement)
 	if err != nil {
-		return nil, fmt.Errorf("rasql: render write statement: %w", err)
+		return render.Statement{}, fmt.Errorf("rasql: render write statement: %w", err)
 	}
-	return scanRendered(ctx, x, rendered), nil
+	return rendered, nil
 }
 
 // scanRendered defers running statement until the returned sequence is ranged

@@ -3,6 +3,8 @@
 package store
 
 import (
+	"fmt"
+
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/row"
@@ -28,6 +30,57 @@ func (r *ProjectsRow) DecodeRow(src row.Dynamic) error {
 		return err
 	}
 	return row.Assign(src, "archived", &r.Archived)
+}
+
+// ScanColumns returns the expected result-column names in scan order.
+func (r *ProjectsRow) ScanColumns() []string {
+	return []string{"id", "owner_id", "name", "archived"}
+}
+
+// ScanRow scans each result column directly into its field.
+func (r *ProjectsRow) ScanRow(src row.ScanSource) error {
+	return src.Scan(&r.ID, &r.OwnerID, &r.Name, &r.Archived)
+}
+
+// ScanDestinations maps result-column names to fields on r.
+func (r *ProjectsRow) ScanDestinations(columns []string) ([]any, error) {
+	destinations := make([]any, len(columns))
+	var scannedID bool
+	var scannedOwnerID bool
+	var scannedName bool
+	var scannedArchived bool
+	var discard any
+	for index, column := range columns {
+		switch column {
+		case "id":
+			if scannedID {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedID = true
+			destinations[index] = &r.ID
+		case "owner_id":
+			if scannedOwnerID {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedOwnerID = true
+			destinations[index] = &r.OwnerID
+		case "name":
+			if scannedName {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedName = true
+			destinations[index] = &r.Name
+		case "archived":
+			if scannedArchived {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			scannedArchived = true
+			destinations[index] = &r.Archived
+		default:
+			destinations[index] = &discard
+		}
+	}
+	return destinations, nil
 }
 
 // ColumnValue returns the value of the named column.
