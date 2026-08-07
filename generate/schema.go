@@ -28,22 +28,18 @@ var reservedFieldNames = map[string]struct{}{
 	"tableRow":    {},
 }
 
+// ValidateSchema checks whether packageName and tables can produce Go source.
+// It checks names across all tables, so callers that generate one file per
+// table can still reject collisions between those files before writing any.
+func ValidateSchema(packageName string, tables ...schema.Table) error {
+	_, err := prepareSchema(packageName, tables)
+	return err
+}
+
 // Schema returns formatted Go source declaring reusable table descriptors in packageName.
 func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
-	if !token.IsIdentifier(packageName) {
-		return nil, fmt.Errorf("generate: invalid package name %q", packageName)
-	}
-	clones := make([]schema.Table, len(tables))
-	for i, table := range tables {
-		if err := table.Validate(); err != nil {
-			return nil, fmt.Errorf("generate: table at index %d: %w", i, err)
-		}
-		clones[i] = table.Clone()
-	}
-	sort.Slice(clones, func(left, right int) bool {
-		return clones[left].Name < clones[right].Name
-	})
-	if err := validateVariableNames(clones); err != nil {
+	clones, err := prepareSchema(packageName, tables)
+	if err != nil {
 		return nil, err
 	}
 
@@ -87,6 +83,26 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 		return nil, fmt.Errorf("generate: format source: %w", err)
 	}
 	return formatted, nil
+}
+
+func prepareSchema(packageName string, tables []schema.Table) ([]schema.Table, error) {
+	if !token.IsIdentifier(packageName) {
+		return nil, fmt.Errorf("generate: invalid package name %q", packageName)
+	}
+	clones := make([]schema.Table, len(tables))
+	for i, table := range tables {
+		if err := table.Validate(); err != nil {
+			return nil, fmt.Errorf("generate: table at index %d: %w", i, err)
+		}
+		clones[i] = table.Clone()
+	}
+	sort.Slice(clones, func(left, right int) bool {
+		return clones[left].Name < clones[right].Name
+	})
+	if err := validateVariableNames(clones); err != nil {
+		return nil, err
+	}
+	return clones, nil
 }
 
 func validateVariableNames(tables []schema.Table) error {
