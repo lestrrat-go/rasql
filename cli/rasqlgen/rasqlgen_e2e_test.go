@@ -25,8 +25,12 @@ func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
 	goMod := "module example.com/consumer\n\ngo 1.26\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(consumer, "go.mod"), []byte(goMod), 0o600))
 	input := filepath.Join(consumer, "schema.json")
-	output := filepath.Join(outputDirectory, "rasql_gen.go")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	usersOutput := filepath.Join(outputDirectory, "users_gen.go")
+	ordersOutput := filepath.Join(outputDirectory, "orders_gen.go")
+	data := []byte(`[
+		{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
+		{"Name":"orders","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}
+	]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
 	command := exec.CommandContext(t.Context(), "go", "get", "github.com/lestrrat-go/rasql/cmd/rasqlgen@v0.0.0")
@@ -34,17 +38,21 @@ func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
 	commandOutput, err := command.CombinedOutput()
 	require.NoError(t, err, string(commandOutput))
 
-	command = exec.CommandContext(t.Context(), "go", "run", "github.com/lestrrat-go/rasql/cmd/rasqlgen", "schema", "-input", input, "-package", "store", "-output", output)
+	command = exec.CommandContext(t.Context(), "go", "run", "github.com/lestrrat-go/rasql/cmd/rasqlgen", "schema", "-input", input, "-package", "store", "-output", outputDirectory)
 	command.Dir = consumer
 	commandOutput, err = command.CombinedOutput()
 	require.NoError(t, err, string(commandOutput))
 
-	source, err := os.ReadFile(output)
+	source, err := os.ReadFile(usersOutput)
 	require.NoError(t, err)
 	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 	require.Contains(t, string(source), "\tID query.Column\n")
 	require.Contains(t, string(source), "func (t UsersTable) As(alias string) (UsersTable, error) {")
+	orders, err := os.ReadFile(ordersOutput)
+	require.NoError(t, err)
+	require.Contains(t, string(orders), "func Orders() OrdersTable {")
+	require.NotContains(t, string(orders), "func Users() UsersTable {")
 
 	command = exec.CommandContext(t.Context(), "go", "test", "./...")
 	command.Dir = consumer
