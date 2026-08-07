@@ -49,7 +49,7 @@ func TestTxWriteReachesTransactionAndCommits(t *testing.T) {
 
 	tx, err := rasql.Begin(t.Context(), database, dialect.SQLite(), nil)
 	require.NoError(t, err)
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	statement, err := render.Precompiled("INSERT INTO users (id) VALUES (?)", 42)
 	require.NoError(t, err)

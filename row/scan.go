@@ -24,7 +24,7 @@ func Scan(rows *sql.Rows) iter.Seq2[Dynamic, error] {
 		if rows == nil {
 			return
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		names, err := rows.Columns()
 		if err != nil {

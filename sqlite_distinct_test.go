@@ -36,7 +36,7 @@ func TestSQLiteRunsDistinctStatements(t *testing.T) {
 		var cities []string
 		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 		require.NoError(t, err)
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var c string
 			require.NoError(t, rows.Scan(&c))
@@ -140,7 +140,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 		var cities []*string
 		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 		require.NoError(t, err)
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var c *string
 			require.NoError(t, rows.Scan(&c))
@@ -196,7 +196,7 @@ func TestSQLiteAnswersUnprojectedDistinctOrderArbitrarily(t *testing.T) {
 	var cities []string
 	rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var c string
 		require.NoError(t, rows.Scan(&c))

@@ -42,7 +42,7 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 	if err != nil {
 		return nil, fmt.Errorf("migrate: open database connection: %w", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if err := r.ensureHistory(ctx, connection); err != nil {
 		return nil, err
 	}

@@ -718,7 +718,7 @@ func TestSQLiteMultiRowInsertExecutes(t *testing.T) {
 
 	rows, err := database.QueryContext(t.Context(), "SELECT \"id\", \"email\" FROM \"users\" ORDER BY \"id\"")
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ids []int
 	var emails []string

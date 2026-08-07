@@ -88,7 +88,7 @@ func (r Runner) Apply(ctx context.Context, migrations ...Migration) error {
 	if err != nil {
 		return fmt.Errorf("migrate: open database connection: %w", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	switch r.dialect.Name() {
 	case "postgresql":
@@ -146,7 +146,7 @@ func (r Runner) applyPostgreSQL(ctx context.Context, connection *sql.Conn, migra
 	if err != nil {
 		return fmt.Errorf("migrate: begin PostgreSQL transaction: %w", err)
 	}
-	defer transaction.Rollback()
+	defer func() { _ = transaction.Rollback() }()
 	if _, err := transaction.ExecContext(ctx, "LOCK TABLE "+r.historySQL+" IN EXCLUSIVE MODE"); err != nil {
 		return fmt.Errorf("migrate: lock migration history: %w", err)
 	}
@@ -278,7 +278,7 @@ func (r Runner) applied(ctx context.Context, queries queryer) (map[string]string
 	if err != nil {
 		return nil, fmt.Errorf("migrate: read applied migrations: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	applied := make(map[string]string)
 	for rows.Next() {
 		var id string

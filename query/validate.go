@@ -138,7 +138,7 @@ func validateSelectClauseExpression(expression Expression, sources map[string]st
 }
 
 func validateExpression(expression Expression, ctx expressionContext, path string) (expressionUsage, error) {
-	if expression == nil || (reflect.ValueOf(expression).Kind() == reflect.Ptr && reflect.ValueOf(expression).IsNil()) {
+	if expression == nil || (reflect.ValueOf(expression).Kind() == reflect.Pointer && reflect.ValueOf(expression).IsNil()) {
 		return expressionUsage{}, validationError(path, "must not be nil")
 	}
 

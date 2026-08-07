@@ -207,7 +207,7 @@ func createFreshMySQLDatabase(t *testing.T, server *mysql.Config) *mysql.Config 
 	name := UniqueName(t, "rasql_test")
 
 	admin := mysqlOpenDB(t, server)
-	defer admin.Close()
+	defer func() { _ = admin.Close() }()
 	if err := admin.PingContext(t.Context()); err != nil {
 		t.Fatalf("dbtest: connect via %s to create a fresh MySQL database: %v", mysqlEnvVar, err)
 	}
@@ -241,7 +241,7 @@ func createFreshMySQLDatabase(t *testing.T, server *mysql.Config) *mysql.Config 
 	fresh.DBName = name
 
 	verify := mysqlOpenDB(t, fresh)
-	defer verify.Close()
+	defer func() { _ = verify.Close() }()
 	if err := verify.PingContext(t.Context()); err != nil {
 		t.Fatalf("dbtest: reconnect to fresh MySQL database %q: %v", name, err)
 	}
@@ -267,7 +267,7 @@ func dropMySQLDatabase(t *testing.T, server *mysql.Config, name string) {
 	defer cancel()
 
 	admin := mysqlOpenDB(t, server)
-	defer admin.Close()
+	defer func() { _ = admin.Close() }()
 	if _, err := admin.ExecContext(ctx, mysqlDropDatabaseStatement(name)); err != nil {
 		t.Errorf("dbtest: drop fresh MySQL database %q: %v", name, err)
 	}

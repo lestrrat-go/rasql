@@ -76,13 +76,13 @@ func Run(args []string, writer io.Writer) error {
 }
 
 func printUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: rasqlgen <command> [flags]")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Commands:")
-	fmt.Fprintln(output, "  schema    Generate Go source from a schema")
-	fmt.Fprintln(output, "  query     Generate Go source from a SQL template")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Run 'rasqlgen <command> -h' for command flags.")
+	_, _ = fmt.Fprintln(output, "Usage: rasqlgen <command> [flags]")
+	_, _ = fmt.Fprintln(output)
+	_, _ = fmt.Fprintln(output, "Commands:")
+	_, _ = fmt.Fprintln(output, "  schema    Generate Go source from a schema")
+	_, _ = fmt.Fprintln(output, "  query     Generate Go source from a SQL template")
+	_, _ = fmt.Fprintln(output)
+	_, _ = fmt.Fprintln(output, "Run 'rasqlgen <command> -h' for command flags.")
 }
 
 func runSchema(args []string, writer io.Writer) error {
@@ -137,7 +137,7 @@ func runSchema(args []string, writer io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("open %s database: %w", databaseName, err)
 		}
-		defer database.Close()
+		defer func() { _ = database.Close() }()
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 		defer cancel()
 		tx, err := database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})

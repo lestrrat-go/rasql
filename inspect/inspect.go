@@ -203,7 +203,7 @@ func (i Inspector) postgreSQLServerVersion(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("inspect: read PostgreSQL server version: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
@@ -282,7 +282,7 @@ func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName s
 	if err != nil {
 		return false, 0, fmt.Errorf("inspect: count table %q catalog columns: %w", tableName, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
@@ -305,7 +305,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	if err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: read SQLite columns: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type primaryColumn struct {
 		position int64
@@ -363,7 +363,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read columns: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	columns := make([]schema.Column, 0)
 	for rows.Next() {
@@ -410,7 +410,7 @@ func (i Inspector) readPrimaryKey(ctx context.Context, query string, argument an
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read primary key: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	columns := make([]string, 0)
 	for rows.Next() {
@@ -432,7 +432,7 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read unique constraints: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var constraints []schema.UniqueConstraint
 	for rows.Next() {
@@ -475,7 +475,7 @@ func (i Inspector) readChecks(ctx context.Context, query string, argument any) (
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read check constraints: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var checks []schema.CheckConstraint
 	for rows.Next() {
@@ -509,7 +509,7 @@ func (i Inspector) rejectUnsupportedIndexes(ctx context.Context, query string, a
 	if err != nil {
 		return fmt.Errorf("inspect: read unsupported indexes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
@@ -529,7 +529,7 @@ func (i Inspector) rejectUnsupportedExclusionConstraints(ctx context.Context, qu
 	if err != nil {
 		return fmt.Errorf("inspect: read unsupported exclusion constraints: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
@@ -549,7 +549,7 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any) 
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read indexes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var indexes []schema.Index
 	for rows.Next() {
@@ -575,7 +575,7 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read foreign keys: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var keys []schema.ForeignKey
 	for rows.Next() {
@@ -983,7 +983,7 @@ func isNil(value any) bool {
 	}
 	reflectValue := reflect.ValueOf(value)
 	switch reflectValue.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return reflectValue.IsNil()
 	default:
 		return false
