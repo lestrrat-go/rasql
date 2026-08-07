@@ -52,9 +52,9 @@ func readInputFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-// Run executes rasqlgen with args and writes command output to output.
-func Run(args []string, output io.Writer) error {
-	if output == nil {
+// Run executes rasqlgen with args and writes command output to writer.
+func Run(args []string, writer io.Writer) error {
+	if writer == nil {
 		return errors.New("rasqlgen: command output must not be nil")
 	}
 	if len(args) == 0 {
@@ -62,12 +62,12 @@ func Run(args []string, output io.Writer) error {
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
-		printUsage(output)
+		printUsage(writer)
 		return flag.ErrHelp
 	case "schema":
-		return runSchema(args[1:], output)
+		return runSchema(args[1:], writer)
 	case "query":
-		return runQuery(args[1:], output)
+		return runQuery(args[1:], writer)
 	default:
 		return fmt.Errorf("unknown rasqlgen command %q", args[0])
 	}
@@ -83,8 +83,8 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "Run 'rasqlgen <command> -h' for command flags.")
 }
 
-func runSchema(args []string, output io.Writer) error {
-	flags := newFlagSet("schema", output)
+func runSchema(args []string, writer io.Writer) error {
+	flags := newFlagSet("schema", writer)
 	input := flags.String("input", "", "path to a JSON array of schema tables (max 64 MiB)")
 	dsn := flags.String("dsn", "", "PostgreSQL connection string")
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
@@ -220,8 +220,8 @@ func (names *tableNames) Set(name string) error {
 	return nil
 }
 
-func runQuery(args []string, output io.Writer) error {
-	flags := newFlagSet("query", output)
+func runQuery(args []string, writer io.Writer) error {
+	flags := newFlagSet("query", writer)
 	input := flags.String("input", "", "path to a static SQL template (max 64 MiB)")
 	functionName := flags.String("function", "", "generated function name")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
@@ -472,9 +472,9 @@ func generatedFileMode(path string) (fs.FileMode, error) {
 	return info.Mode() & (fs.ModePerm | fs.ModeSticky), nil
 }
 
-func newFlagSet(name string, output io.Writer) *flag.FlagSet {
+func newFlagSet(name string, writer io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	flags.SetOutput(output)
+	flags.SetOutput(writer)
 	return flags
 }
 
