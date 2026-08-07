@@ -195,7 +195,7 @@ func Example_rasql_scalar_function() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -393,7 +393,7 @@ func Example_rasql_typed_query() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -491,7 +491,7 @@ func Example_rasql_where_in() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -590,7 +590,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -755,7 +755,7 @@ func Example_rasql_count() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -838,7 +838,7 @@ func Example_rasql_group_by() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -956,7 +956,7 @@ func Example_rasql_distinct() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
@@ -1106,7 +1106,7 @@ func Example_rasql_dynamic_projection() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 

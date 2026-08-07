@@ -453,7 +453,7 @@ func TestSQLiteExecutesQualifiedDDL(t *testing.T) {
 
 	rows, err := database.QueryContext(t.Context(), `SELECT name FROM audit.sqlite_schema WHERE type IN ('table', 'index') ORDER BY name`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var names []string
 	for rows.Next() {
 		var name string

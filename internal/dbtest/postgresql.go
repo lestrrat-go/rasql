@@ -210,7 +210,7 @@ func createFreshPostgreSQLDatabase(t *testing.T, server *pgx.ConnConfig) *pgx.Co
 	name := UniqueName(t, "rasql_test")
 
 	admin := stdlib.OpenDB(*server)
-	defer admin.Close()
+	defer func() { _ = admin.Close() }()
 	if err := admin.PingContext(t.Context()); err != nil {
 		t.Fatalf("dbtest: connect via %s to create a fresh PostgreSQL database: %v", postgresEnvVar, err)
 	}
@@ -244,7 +244,7 @@ func createFreshPostgreSQLDatabase(t *testing.T, server *pgx.ConnConfig) *pgx.Co
 	fresh.Database = name
 
 	verify := stdlib.OpenDB(*fresh)
-	defer verify.Close()
+	defer func() { _ = verify.Close() }()
 	if err := verify.PingContext(t.Context()); err != nil {
 		t.Fatalf("dbtest: reconnect to fresh PostgreSQL database %q: %v", name, err)
 	}
@@ -273,7 +273,7 @@ func dropPostgreSQLDatabase(t *testing.T, server *pgx.ConnConfig, name string) {
 	defer cancel()
 
 	admin := stdlib.OpenDB(*server)
-	defer admin.Close()
+	defer func() { _ = admin.Close() }()
 	if _, err := admin.ExecContext(ctx, pgDropDatabaseStatement(name)); err != nil {
 		t.Errorf("dbtest: drop fresh PostgreSQL database %q: %v", name, err)
 	}

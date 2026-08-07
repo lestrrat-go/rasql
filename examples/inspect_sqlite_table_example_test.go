@@ -18,7 +18,7 @@ func Example_inspect_sqlite_table() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	// Pretend this DDL already exists in an application-owned SQLite database.
 	if _, err := database.ExecContext(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, nickname TEXT)"); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)

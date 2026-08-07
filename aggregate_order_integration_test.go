@@ -168,7 +168,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 
 		rows, err := database.QueryContext(t.Context(), statement.SQL(), statement.Args()...)
 		require.NoError(t, err)
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		seen := map[string]int64{}
 		for rows.Next() {
 			var gotEmail string

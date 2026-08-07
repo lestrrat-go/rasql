@@ -3,6 +3,7 @@
 package dbtest
 
 import (
+	"errors"
 	"os"
 	"syscall"
 )
@@ -36,7 +37,9 @@ func acquireLock(path string) (*fileLock, error) {
 		return nil, err
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
-		file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
 		return nil, err
 	}
 	return &fileLock{file: file}, nil
@@ -44,6 +47,9 @@ func acquireLock(path string) (*fileLock, error) {
 
 // release unlocks and closes the underlying file.
 func (l *fileLock) release() error {
-	defer l.file.Close()
-	return syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	if err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN); err != nil {
+		_ = l.file.Close()
+		return err
+	}
+	return l.file.Close()
 }

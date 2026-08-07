@@ -213,7 +213,7 @@ func nilPointerDereference(recovered any) bool {
 	}
 
 	failureType := reflect.TypeOf(recovered)
-	for failureType != nil && failureType.Kind() == reflect.Ptr {
+	for failureType != nil && failureType.Kind() == reflect.Pointer {
 		failureType = failureType.Elem()
 	}
 	if failureType == nil || failureType.PkgPath() != "runtime" {
