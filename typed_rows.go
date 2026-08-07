@@ -34,7 +34,9 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 			return
 		}
 		if fast && slices.Equal(names, fastScanner.ScanColumns()) {
-			defer rows.Close()
+			defer func() {
+				_ = rows.Close()
+			}()
 			index := 0
 			for rows.Next() {
 				var result T
@@ -58,7 +60,9 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 			return
 		}
 
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 		index := 0
 		var result T
 		scanner := any(&result).(row.DestinationScanner)

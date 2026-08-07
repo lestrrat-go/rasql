@@ -227,9 +227,7 @@ func (r *benchmarkResultRows) Next(destinations []driver.Value) error {
 	if r.remaining == 0 {
 		return io.EOF
 	}
-	for index, value := range r.values {
-		destinations[index] = value
-	}
+	copy(destinations, r.values)
 	r.remaining--
 	return nil
 }
