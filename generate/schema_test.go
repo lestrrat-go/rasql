@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
@@ -95,6 +96,9 @@ func TestGeneratedRowMapsResultColumns(t *testing.T) {
 	require.Equal(t, int64(7), decoded.ID)
 	require.Nil(t, decoded.Email)
 	require.Equal(t, createdAt, decoded.CreatedAt)
+
+	_, err = decoded.ScanDestinations([]string{"id", "id"})
+	require.EqualError(t, err, "duplicate result column \"id\"")
 }
 
 type scanSource struct {
@@ -216,6 +220,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "func (r *UsersRow) ScanRow(src row.ScanSource) error {")
 	require.Contains(t, string(source), "\treturn src.Scan(&r.ID, &r.Email, &r.CreatedAt)\n")
 	require.Contains(t, string(source), "func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {")
+	require.Contains(t, string(source), "\tvar scanned uint64\n")
+	require.Contains(t, string(source), "scanned |= uint64(1) << 0")
 	require.Contains(t, string(source), "\t\tcase \"created_at\":")
 	require.Contains(t, string(source), "\t\t\tdestinations[index] = &r.CreatedAt")
 	require.Contains(t, string(source), "func (r UsersRow) ColumnValue(name string) (any, bool) {")
@@ -274,6 +280,22 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Errorf(t, err, "misspelled column field compiled:\n%s", output)
 	require.Contains(t, string(output), "users.Emial undefined")
 	require.Contains(t, string(output), "as query.Column value")
+}
+
+func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
+	columns := make([]schema.Column, 65)
+	for index := range columns {
+		columns[index] = schema.Column{Name: "column_" + strconv.Itoa(index), Type: schema.TypeInteger}
+	}
+
+	source, err := generate.Schema("generated", schema.Table{
+		Name:       "wide",
+		Columns:    columns,
+		PrimaryKey: []string{"column_0"},
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(source), "\tvar scanned [2]uint64\n")
+	require.Contains(t, string(source), "scanned[1]&(uint64(1)<<0)")
 }
 
 // TestSchemaGeneratesDecimalColumns pins the generator's decimal mapping in
