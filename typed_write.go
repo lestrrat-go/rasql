@@ -98,14 +98,11 @@ func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
 // QueryWriteAll runs statement through QueryWrite and decodes every
 // returned row as T. The RETURNING projections must cover the columns T maps.
 func QueryWriteAll[T any](ctx context.Context, x Executor, statement query.WriteStatement) ([]T, error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
-	}
-	rows, err := QueryWrite(ctx, x, statement)
+	rendered, err := renderQueryWrite(x, statement)
 	if err != nil {
 		return nil, err
 	}
-	return collectAll(decodeRows[T](rows))
+	return collectAll(scanTypedRendered[T](ctx, x, rendered))
 }
 
 // QueryWriteOne runs statement through QueryWrite and decodes exactly one
@@ -115,14 +112,11 @@ func QueryWriteAll[T any](ctx context.Context, x Executor, statement query.Write
 // [TypedSelectBuilder.One] reports.
 func QueryWriteOne[T any](ctx context.Context, x Executor, statement query.WriteStatement) (T, error) {
 	var zero T
-	if isNil(x) {
-		return zero, fmt.Errorf("rasql: executor must not be nil")
-	}
-	rows, err := QueryWrite(ctx, x, statement)
+	rendered, err := renderQueryWrite(x, statement)
 	if err != nil {
 		return zero, err
 	}
-	return exactlyOne(decodeRows[T](rows))
+	return exactlyOne(scanTypedRendered[T](ctx, x, rendered))
 }
 
 // Update encodes value's rasql-tagged fields and updates its table row.

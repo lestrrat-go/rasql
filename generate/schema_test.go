@@ -71,6 +71,45 @@ func TestGeneratedRowSuppliesItsOwnColumnValues(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestGeneratedRowScansDirectly(t *testing.T) {
+	var scanner row.Scanner = &generated.UsersRow{}
+
+	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
+	err := scanner.ScanRow(scanSource{id: 7, email: "ada@example.com", createdAt: createdAt})
+	require.NoError(t, err)
+	decoded := scanner.(*generated.UsersRow)
+	require.Equal(t, int64(7), decoded.ID)
+	require.NotNil(t, decoded.Email)
+	require.Equal(t, "ada@example.com", *decoded.Email)
+	require.Equal(t, createdAt, decoded.CreatedAt)
+}
+
+func TestGeneratedRowMapsResultColumns(t *testing.T) {
+	var decoded generated.UsersRow
+	destinations, err := decoded.ScanDestinations([]string{"created_at", "id"})
+	require.NoError(t, err)
+
+	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
+	*destinations[0].(*time.Time) = createdAt
+	*destinations[1].(*int64) = 7
+	require.Equal(t, int64(7), decoded.ID)
+	require.Nil(t, decoded.Email)
+	require.Equal(t, createdAt, decoded.CreatedAt)
+}
+
+type scanSource struct {
+	id        int64
+	email     string
+	createdAt time.Time
+}
+
+func (s scanSource) Scan(destinations ...any) error {
+	*destinations[0].(*int64) = s.id
+	*destinations[1].(**string) = &s.email
+	*destinations[2].(*time.Time) = s.createdAt
+	return nil
+}
+
 func TestGeneratedColumnFields(t *testing.T) {
 	users := generated.Users()
 	require.Equal(t, "id", users.ID.Name())
@@ -174,6 +213,11 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "if err := row.Assign(src, \"id\", &r.ID); err != nil {")
 	require.Contains(t, string(source), "if err := row.Assign(src, \"email\", &r.Email); err != nil {")
 	require.Contains(t, string(source), "\treturn row.Assign(src, \"created_at\", &r.CreatedAt)\n")
+	require.Contains(t, string(source), "func (r *UsersRow) ScanRow(src row.ScanSource) error {")
+	require.Contains(t, string(source), "\treturn src.Scan(&r.ID, &r.Email, &r.CreatedAt)\n")
+	require.Contains(t, string(source), "func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {")
+	require.Contains(t, string(source), "\t\tcase \"created_at\":")
+	require.Contains(t, string(source), "\t\t\tdestinations[index] = &r.CreatedAt")
 	require.Contains(t, string(source), "func (r UsersRow) ColumnValue(name string) (any, bool) {")
 	require.Contains(t, string(source), "\tcase \"created_at\":\n\t\treturn r.CreatedAt, true\n")
 	require.Contains(t, string(source), "\treturn nil, false\n")

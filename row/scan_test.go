@@ -1,12 +1,18 @@
 package row_test
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql/row"
 	"github.com/stretchr/testify/require"
+)
+
+var (
+	_ row.ScanSource = (*sql.Row)(nil)
+	_ row.ScanSource = (*sql.Rows)(nil)
 )
 
 func TestScan(t *testing.T) {

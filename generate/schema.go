@@ -19,13 +19,16 @@ import (
 // the field would shadow the embedded rasql.Table or its methods, or collide
 // with a mapping method declared on the row type.
 var reservedFieldNames = map[string]struct{}{
-	"As":          {},
-	"Column":      {},
-	"ColumnValue": {},
-	"DecodeRow":   {},
-	"QueryTable":  {},
-	"Table":       {},
-	"tableRow":    {},
+	"As":               {},
+	"Column":           {},
+	"ColumnValue":      {},
+	"DecodeRow":        {},
+	"QueryTable":       {},
+	"ScanColumns":      {},
+	"ScanDestinations": {},
+	"ScanRow":          {},
+	"Table":            {},
+	"tableRow":         {},
 }
 
 // ValidateSchema checks whether packageName and tables can produce Go source.
@@ -51,9 +54,11 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 	// An empty schema declares nothing, so importing anything would not compile.
 	if len(clones) > 0 {
 		source.WriteString("import (\n")
+		source.WriteString("\t\"fmt\"\n")
 		if containsTime(clones) {
-			source.WriteString("\t\"time\"\n\n")
+			source.WriteString("\t\"time\"\n")
 		}
+		source.WriteString("\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql/row\"\n")
@@ -64,6 +69,8 @@ func Schema(packageName string, tables ...schema.Table) ([]byte, error) {
 		writeRowType(&source, table)
 		source.WriteString("\n")
 		writeRowDecode(&source, table)
+		source.WriteString("\n")
+		writeRowScan(&source, table)
 		source.WriteString("\n")
 		writeRowColumnValue(&source, table)
 		source.WriteString("\n")
@@ -382,6 +389,52 @@ func writeRowAssign(source *bytes.Buffer, column schema.Column) {
 	source.WriteString(", &r.")
 	source.WriteString(goName(column.Name))
 	source.WriteString(")")
+}
+
+// writeRowScan writes the direct database/sql scan path and the runtime result
+// column mapping path.
+func writeRowScan(source *bytes.Buffer, table schema.Table) {
+	typeName := rowTypeName(table.Name)
+	source.WriteString("// ScanRow scans each result column directly into its field.\n")
+	source.WriteString("func (r *")
+	source.WriteString(typeName)
+	source.WriteString(") ScanRow(src row.ScanSource) error {\n\treturn src.Scan(")
+	for index, column := range table.Columns {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString("&r.")
+		source.WriteString(goName(column.Name))
+	}
+	source.WriteString(")\n}\n")
+
+	source.WriteString("\n// ScanDestinations maps result-column names to fields on r.\n")
+	source.WriteString("func (r *")
+	source.WriteString(typeName)
+	source.WriteString(") ScanDestinations(columns []string) ([]any, error) {\n")
+	source.WriteString("\tdestinations := make([]any, len(columns))\n")
+	for _, column := range table.Columns {
+		source.WriteString("\tvar scanned")
+		source.WriteString(goName(column.Name))
+		source.WriteString(" bool\n")
+	}
+	source.WriteString("\tvar discard any\n")
+	source.WriteString("\tfor index, column := range columns {\n\t\tswitch column {\n")
+	for _, column := range table.Columns {
+		field := goName(column.Name)
+		source.WriteString("\t\tcase ")
+		source.WriteString(quote(column.Name))
+		source.WriteString(":\n\t\t\tif scanned")
+		source.WriteString(field)
+		source.WriteString(" {\n\t\t\t\treturn nil, fmt.Errorf(\"duplicate result column %q\", column)\n\t\t\t}\n")
+		source.WriteString("\t\t\tscanned")
+		source.WriteString(field)
+		source.WriteString(" = true\n\t\t\tdestinations[index] = &r.")
+		source.WriteString(field)
+		source.WriteString("\n")
+	}
+	source.WriteString("\t\tdefault:\n\t\t\tdestinations[index] = &discard\n\t\t}\n\t}\n")
+	source.WriteString("\treturn destinations, nil\n}\n")
 }
 
 // writeRowColumnValue writes the rasql.ColumnValuer implementation, which is
