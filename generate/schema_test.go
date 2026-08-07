@@ -73,7 +73,6 @@ func TestGeneratedRowSuppliesItsOwnColumnValues(t *testing.T) {
 
 func TestGeneratedRowScansDirectly(t *testing.T) {
 	var scanner row.Scanner = &generated.UsersRow{}
-	require.Equal(t, []string{"id", "email", "created_at"}, scanner.ScanColumns())
 
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
 	err := scanner.ScanRow(scanSource{id: 7, email: "ada@example.com", createdAt: createdAt})
@@ -214,8 +213,6 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "if err := row.Assign(src, \"id\", &r.ID); err != nil {")
 	require.Contains(t, string(source), "if err := row.Assign(src, \"email\", &r.Email); err != nil {")
 	require.Contains(t, string(source), "\treturn row.Assign(src, \"created_at\", &r.CreatedAt)\n")
-	require.Contains(t, string(source), "func (r *UsersRow) ScanColumns() []string {")
-	require.Contains(t, string(source), "\treturn []string{\"id\", \"email\", \"created_at\"}\n")
 	require.Contains(t, string(source), "func (r *UsersRow) ScanRow(src row.ScanSource) error {")
 	require.Contains(t, string(source), "\treturn src.Scan(&r.ID, &r.Email, &r.CreatedAt)\n")
 	require.Contains(t, string(source), "func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {")

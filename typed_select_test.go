@@ -20,6 +20,11 @@ type directScanUser struct {
 	Email string
 }
 
+type staticScanUser struct {
+	ID    int64
+	Email string
+}
+
 type plannedScanUser struct {
 	Name string
 }
@@ -34,8 +39,12 @@ func (u *plannedScanUser) ScanDestinations(columns []string) ([]any, error) {
 	return []any{&u.Name}, nil
 }
 
-func (u *directScanUser) ScanColumns() []string {
-	return []string{"id", "email"}
+func (u *staticScanUser) ScanRow(source row.ScanSource) error {
+	return source.Scan(&u.ID, &u.Email)
+}
+
+func (u *staticScanUser) DecodeRow(row.Dynamic) error {
+	return errors.New("static scanner must bypass DecodeRow")
 }
 
 func (u *directScanUser) ScanRow(source row.ScanSource) error {
@@ -44,6 +53,7 @@ func (u *directScanUser) ScanRow(source row.ScanSource) error {
 
 func (u *directScanUser) ScanDestinations(columns []string) ([]any, error) {
 	destinations := make([]any, len(columns))
+	var discard any
 	for index, column := range columns {
 		switch column {
 		case "id":
@@ -51,7 +61,7 @@ func (u *directScanUser) ScanDestinations(columns []string) ([]any, error) {
 		case "email":
 			destinations[index] = &u.Email
 		default:
-			return nil, fmt.Errorf("unknown column %q", column)
+			destinations[index] = &discard
 		}
 	}
 	return destinations, nil
@@ -61,7 +71,7 @@ func (u *directScanUser) DecodeRow(row.Dynamic) error {
 	return errors.New("direct scanner must bypass DecodeRow")
 }
 
-func TestTypedSelectScansGeneratedRowsDirectly(t *testing.T) {
+func TestTypedSelectScansKnownProjectionDirectly(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -72,7 +82,7 @@ func TestTypedSelectScansGeneratedRowsDirectly(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[directScanUser](schema.Table{
+	users, err := rasql.NewTable[staticScanUser](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.TypeInteger},
@@ -87,7 +97,7 @@ func TestTypedSelectScansGeneratedRowsDirectly(t *testing.T) {
 
 	result, err := rasql.SelectFrom(users).One(t.Context(), client)
 	require.NoError(t, err)
-	require.Equal(t, directScanUser{ID: 7, Email: "ada@example.com"}, result)
+	require.Equal(t, staticScanUser{ID: 7, Email: "ada@example.com"}, result)
 }
 
 func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
@@ -121,6 +131,38 @@ func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
 		One(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, directScanUser{Email: "ada@example.com"}, result)
+}
+
+func TestTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[directScanUser](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.TypeInteger},
+			{Name: "email", Type: schema.TypeText},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\", $1 AS \"ignored\" FROM \"users\"").
+		WithArgs("ignored").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "ignored"}).AddRow(int64(7), "ada@example.com", "ignored"))
+
+	result, err := rasql.SelectFrom(users).
+		Project(query.Project(query.Bind("ignored")).As("ignored")).
+		One(t.Context(), client)
+	require.NoError(t, err)
+	require.Equal(t, directScanUser{ID: 7, Email: "ada@example.com"}, result)
 }
 
 func TestTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {

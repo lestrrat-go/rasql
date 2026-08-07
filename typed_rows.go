@@ -5,15 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"iter"
-	"slices"
 
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/row"
 )
 
-// scanTypedRows scans complete generated rows directly. Partial and reordered
-// generated rows map result-column names to field destinations before Scan.
-// Other row types use the dynamic decoder.
+// scanTypedRows maps runtime result-column names to generated fields before
+// Scan. Other row types use the dynamic decoder.
 func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
@@ -22,9 +20,7 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 		}
 
 		var probe T
-		fastScanner, fast := any(&probe).(row.Scanner)
-		_, dynamic := any(&probe).(row.DestinationScanner)
-		if !fast && !dynamic {
+		if _, dynamic := any(&probe).(row.DestinationScanner); !dynamic {
 			decodeRows[T](row.Scan(rows))(yield)
 			return
 		}
@@ -33,33 +29,6 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 			yield(zero, fmt.Errorf("row: read result columns: %w", err))
 			return
 		}
-		if fast && slices.Equal(names, fastScanner.ScanColumns()) {
-			defer func() {
-				_ = rows.Close()
-			}()
-			index := 0
-			for rows.Next() {
-				var result T
-				scanner := any(&result).(row.Scanner)
-				if err := scanner.ScanRow(rows); err != nil {
-					yield(zero, fmt.Errorf("rasql: scan row %d: %w", index, err))
-					return
-				}
-				index++
-				if !yield(result, nil) {
-					return
-				}
-			}
-			if err := rows.Err(); err != nil {
-				yield(zero, fmt.Errorf("row: iterate result rows: %w", err))
-			}
-			return
-		}
-		if !dynamic {
-			decodeRows[T](row.Scan(rows))(yield)
-			return
-		}
-
 		defer func() {
 			_ = rows.Close()
 		}()
@@ -87,9 +56,55 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 	}
 }
 
-// scanTypedRendered defers the query until iteration begins and scans each
-// result directly into a generated row when its result shape matches.
+// scanTypedRowsStatic scans a complete, statically-known generated row
+// projection directly into its fields. Other row types use the dynamic decoder.
+func scanTypedRowsStatic[T any](rows *sql.Rows) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
+		if rows == nil {
+			return
+		}
+
+		var result T
+		scanner, ok := any(&result).(row.Scanner)
+		if !ok {
+			decodeRows[T](row.Scan(rows))(yield)
+			return
+		}
+
+		defer func() {
+			_ = rows.Close()
+		}()
+		index := 0
+		for rows.Next() {
+			if err := scanner.ScanRow(rows); err != nil {
+				yield(zero, fmt.Errorf("rasql: scan row %d: %w", index, err))
+				return
+			}
+			index++
+			if !yield(result, nil) {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			yield(zero, fmt.Errorf("row: iterate result rows: %w", err))
+		}
+	}
+}
+
+// scanTypedRendered defers the query until iteration begins and maps each
+// result column to a generated row field at runtime.
 func scanTypedRendered[T any](ctx context.Context, x Executor, statement render.Statement) iter.Seq2[T, error] {
+	return scanTypedRenderedWith(ctx, x, statement, scanTypedRows[T])
+}
+
+// scanTypedRenderedStatic defers the query until iteration begins and scans a
+// statically-known complete generated row projection directly into its fields.
+func scanTypedRenderedStatic[T any](ctx context.Context, x Executor, statement render.Statement) iter.Seq2[T, error] {
+	return scanTypedRenderedWith(ctx, x, statement, scanTypedRowsStatic[T])
+}
+
+func scanTypedRenderedWith[T any](ctx context.Context, x Executor, statement render.Statement, scan func(*sql.Rows) iter.Seq2[T, error]) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		rows, err := x.QueryRendered(ctx, statement)
@@ -97,7 +112,7 @@ func scanTypedRendered[T any](ctx context.Context, x Executor, statement render.
 			yield(zero, err)
 			return
 		}
-		scanTypedRows[T](rows)(yield)
+		scan(rows)(yield)
 	}
 }
 

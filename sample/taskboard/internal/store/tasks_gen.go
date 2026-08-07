@@ -40,11 +40,6 @@ func (r *TasksRow) DecodeRow(src row.Dynamic) error {
 	return row.Assign(src, "priority", &r.Priority)
 }
 
-// ScanColumns returns the expected result-column names in scan order.
-func (r *TasksRow) ScanColumns() []string {
-	return []string{"id", "project_id", "assignee_id", "title", "status", "priority"}
-}
-
 // ScanRow scans each result column directly into its field.
 func (r *TasksRow) ScanRow(src row.ScanSource) error {
 	return src.Scan(&r.ID, &r.ProjectID, &r.AssigneeID, &r.Title, &r.Status, &r.Priority)

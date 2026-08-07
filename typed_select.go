@@ -22,7 +22,10 @@ func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 	for index, column := range definition.Columns {
 		columns[index] = column.Name
 	}
-	return TypedSelectBuilder[T]{builder: SelectQueryFrom(reference).Select(columns...)}
+	return TypedSelectBuilder[T]{
+		builder:    SelectQueryFrom(reference).Select(columns...),
+		staticScan: true,
+	}
 }
 
 // DecodeFrom starts a typed fluent SELECT builder for a custom result shape.
@@ -65,12 +68,16 @@ func LeftJoin[T any](table Table[T], on query.Expression) query.Join {
 
 // TypedSelectBuilder builds a SELECT that decodes rows as T.
 type TypedSelectBuilder[T any] struct {
-	builder SelectBuilder
+	builder    SelectBuilder
+	staticScan bool
 }
 
 // Project adds projections created through the basic query API.
 func (b TypedSelectBuilder[T]) Project(projections ...query.Projection) TypedSelectBuilder[T] {
 	b.builder = b.builder.Project(projections...)
+	if len(projections) > 0 {
+		b.staticScan = false
+	}
 	return b
 }
 
@@ -180,6 +187,9 @@ func (b TypedSelectBuilder[T]) Query(ctx context.Context, x Executor) (iter.Seq2
 	statement, err := b.builder.Build(x.Dialect())
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	if b.staticScan {
+		return scanTypedRenderedStatic[T](ctx, x, statement), nil
 	}
 	return scanTypedRendered[T](ctx, x, statement), nil
 }

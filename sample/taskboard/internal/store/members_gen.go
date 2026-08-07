@@ -28,11 +28,6 @@ func (r *MembersRow) DecodeRow(src row.Dynamic) error {
 	return row.Assign(src, "email", &r.Email)
 }
 
-// ScanColumns returns the expected result-column names in scan order.
-func (r *MembersRow) ScanColumns() []string {
-	return []string{"id", "name", "email"}
-}
-
 // ScanRow scans each result column directly into its field.
 func (r *MembersRow) ScanRow(src row.ScanSource) error {
 	return src.Scan(&r.ID, &r.Name, &r.Email)

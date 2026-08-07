@@ -39,10 +39,6 @@ func (r *benchmarkMemberRow) DecodeRow(source row.Dynamic) error {
 	return row.Assign(source, "email", &r.Email)
 }
 
-func (r *benchmarkMemberRow) ScanColumns() []string {
-	return []string{"id", "name", "email"}
-}
-
 func (r *benchmarkMemberRow) ScanRow(source row.ScanSource) error {
 	return source.Scan(&r.ID, &r.Name, &r.Email)
 }
@@ -89,10 +85,10 @@ func (r *benchmarkMemberName) DecodeRow(source row.Dynamic) error {
 }
 
 func BenchmarkTypedRowScan(b *testing.B) {
-	b.Run("full_generated", func(b *testing.B) {
+	b.Run("full_static_generated", func(b *testing.B) {
 		b.ReportAllocs()
 		benchmarkQueryRows(b, benchmarkFullQuery, func(rows *sql.Rows) {
-			for result, err := range scanTypedRows[benchmarkMemberRow](rows) {
+			for result, err := range scanTypedRowsStatic[benchmarkMemberRow](rows) {
 				if err != nil {
 					b.Fatal(err)
 				}

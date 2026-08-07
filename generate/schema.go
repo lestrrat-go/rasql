@@ -391,22 +391,10 @@ func writeRowAssign(source *bytes.Buffer, column schema.Column) {
 	source.WriteString(")")
 }
 
-// writeRowScan writes the direct database/sql scan path. The expected names
-// let the typed query path prove the result shape before it bypasses Dynamic.
+// writeRowScan writes the direct database/sql scan path and the runtime result
+// column mapping path.
 func writeRowScan(source *bytes.Buffer, table schema.Table) {
 	typeName := rowTypeName(table.Name)
-	source.WriteString("// ScanColumns returns the expected result-column names in scan order.\n")
-	source.WriteString("func (r *")
-	source.WriteString(typeName)
-	source.WriteString(") ScanColumns() []string {\n\treturn []string{")
-	for index, column := range table.Columns {
-		if index > 0 {
-			source.WriteString(", ")
-		}
-		source.WriteString(quote(column.Name))
-	}
-	source.WriteString("}\n}\n\n")
-
 	source.WriteString("// ScanRow scans each result column directly into its field.\n")
 	source.WriteString("func (r *")
 	source.WriteString(typeName)

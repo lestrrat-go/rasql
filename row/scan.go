@@ -12,14 +12,12 @@ type ScanSource interface {
 	Scan(...any) error
 }
 
-// Scanner is implemented by row types that scan matching result columns
-// directly into their fields. ScanColumns returns the expected columns in the
-// order ScanRow passes their destinations to source.
+// Scanner is implemented by row types that scan a statically-known result
+// projection directly into their fields.
 //
-// Generated row types implement Scanner. Typed queries use it when the result
-// columns exactly match ScanColumns.
+// Generated row types implement Scanner. Typed queries use it when their
+// builder owns the complete table projection.
 type Scanner interface {
-	ScanColumns() []string
 	ScanRow(ScanSource) error
 }
 

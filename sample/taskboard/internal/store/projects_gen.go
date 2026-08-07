@@ -32,11 +32,6 @@ func (r *ProjectsRow) DecodeRow(src row.Dynamic) error {
 	return row.Assign(src, "archived", &r.Archived)
 }
 
-// ScanColumns returns the expected result-column names in scan order.
-func (r *ProjectsRow) ScanColumns() []string {
-	return []string{"id", "owner_id", "name", "archived"}
-}
-
 // ScanRow scans each result column directly into its field.
 func (r *ProjectsRow) ScanRow(src row.ScanSource) error {
 	return src.Scan(&r.ID, &r.OwnerID, &r.Name, &r.Archived)
