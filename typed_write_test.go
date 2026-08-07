@@ -19,7 +19,7 @@ import (
 
 type insertCompatibilityUser struct{}
 
-var _ func(context.Context, rasql.Client, rasql.Table[insertCompatibilityUser], insertCompatibilityUser) (sql.Result, error) = rasql.Insert[insertCompatibilityUser]
+var _ func(context.Context, rasql.Executor, rasql.Table[insertCompatibilityUser], insertCompatibilityUser) (sql.Result, error) = rasql.Insert[insertCompatibilityUser]
 
 func TestInsertExecutesTypedRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))

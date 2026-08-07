@@ -81,6 +81,29 @@ func TestSelectBuilderIsImmutable(t *testing.T) {
 	require.Contains(t, filteredStatement.SQL(), " WHERE ")
 }
 
+func TestSelectBuilderWithDialectSetsTheRenderingDialect(t *testing.T) {
+	users := fluentUsers(t)
+
+	builder := render.SelectFrom(nil, users).Select("id")
+	_, err := builder.Build()
+	require.ErrorContains(t, err, "dialect must not be nil")
+
+	rendered, err := builder.WithDialect(dialect.PostgreSQL()).Build()
+	require.NoError(t, err)
+	require.Equal(t, `SELECT "users"."id" FROM "users"`, rendered.SQL())
+}
+
+func TestSelectBuilderWithDialectDoesNotMutateReceiver(t *testing.T) {
+	users := fluentUsers(t)
+
+	base := render.SelectFrom(dialect.PostgreSQL(), users).Select("id")
+	_ = base.WithDialect(dialect.MySQL())
+
+	rendered, err := base.Build()
+	require.NoError(t, err)
+	require.Equal(t, `SELECT "users"."id" FROM "users"`, rendered.SQL())
+}
+
 func TestSelectBuilderBuildsCountStatement(t *testing.T) {
 	users := fluentUsers(t)
 	orders, err := query.NewTable(schema.Table{

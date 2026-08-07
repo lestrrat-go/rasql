@@ -90,10 +90,10 @@ func Example_rasql_scalar_function() {
 
 	// LOWER(email) matches "Ada@Example.com" against the lower-case literal a
 	// caller would type, regardless of how the stored value was cased.
-	byEmail, err := rasql.DecodeFrom[memberName](client, members).
+	byEmail, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query member by email: %s\n", err)
 		return
@@ -108,10 +108,10 @@ func Example_rasql_scalar_function() {
 
 	// COALESCE(nickname, email) reads every member's display name, falling
 	// back to the email once nickname is NULL.
-	names, err := rasql.DecodeFrom[memberName](client, members).
+	names, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		OrderAsc(id).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query member names: %s\n", err)
 		return

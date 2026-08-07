@@ -80,12 +80,12 @@ func Example_rasql_group_by() {
 	// bare column beside COUNT(*) is refused without one. Having filters
 	// groups after aggregation, so it may call an aggregate a WHERE clause
 	// could not.
-	rows, err := rasql.DecodeFrom[statusCount](client, tasks).
+	rows, err := rasql.DecodeFrom[statusCount](tasks).
 		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Order(query.Asc(status)).
-		Query(ctx)
+		Query(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)
 		return

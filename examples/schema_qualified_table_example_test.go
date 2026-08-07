@@ -72,7 +72,7 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to reference id column: %s\n", err)
 		return
 	}
-	event, err := rasql.SelectFrom(client, events).WhereEqual(eventID, int64(1)).One(ctx)
+	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)
 		return

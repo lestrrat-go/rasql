@@ -28,15 +28,21 @@ type ColumnValuer interface {
 // Insert encodes value's rasql-tagged fields and writes it to table.
 // Value must have one exported tagged field for every table column,
 // or implement ColumnValuer.
-func Insert[T any](ctx context.Context, client Client, table Table[T], value T) (sql.Result, error) {
-	return InsertWithOptions(ctx, client, table, value)
+func Insert[T any](ctx context.Context, x Executor, table Table[T], value T) (sql.Result, error) {
+	if isNil(x) {
+		return nil, fmt.Errorf("rasql: executor must not be nil")
+	}
+	return InsertWithOptions(ctx, x, table, value)
 }
 
 // InsertWithOptions encodes value's rasql-tagged fields and writes it to table.
 // Value must have one exported tagged field for every table column,
 // or implement ColumnValuer. DefaultColumns omits named columns so the
 // database applies their defaults.
-func InsertWithOptions[T any](ctx context.Context, client Client, table Table[T], value T, options ...InsertOption) (sql.Result, error) {
+func InsertWithOptions[T any](ctx context.Context, x Executor, table Table[T], value T, options ...InsertOption) (sql.Result, error) {
+	if isNil(x) {
+		return nil, fmt.Errorf("rasql: executor must not be nil")
+	}
 	defaults, err := insertDefaults(options)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: configure INSERT: %w", err)
@@ -45,7 +51,7 @@ func InsertWithOptions[T any](ctx context.Context, client Client, table Table[T]
 	if err != nil {
 		return nil, fmt.Errorf("rasql: build INSERT: %w", err)
 	}
-	return client.Exec(ctx, statement)
+	return Exec(ctx, x, statement)
 }
 
 // InsertOption configures InsertWithOptions.
@@ -89,24 +95,30 @@ func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
 	return config.defaultColumns, nil
 }
 
-// QueryWriteAll runs statement through Client.QueryWrite and decodes every
+// QueryWriteAll runs statement through QueryWrite and decodes every
 // returned row as T. The RETURNING projections must cover the columns T maps.
-func QueryWriteAll[T any](ctx context.Context, client Client, statement query.WriteStatement) ([]T, error) {
-	rows, err := client.QueryWrite(ctx, statement)
+func QueryWriteAll[T any](ctx context.Context, x Executor, statement query.WriteStatement) ([]T, error) {
+	if isNil(x) {
+		return nil, fmt.Errorf("rasql: executor must not be nil")
+	}
+	rows, err := QueryWrite(ctx, x, statement)
 	if err != nil {
 		return nil, err
 	}
 	return collectAll(decodeRows[T](rows))
 }
 
-// QueryWriteOne runs statement through Client.QueryWrite and decodes exactly one
+// QueryWriteOne runs statement through QueryWrite and decodes exactly one
 // returned row as T.
 // It returns [ErrNoRows] when RETURNING produced no rows and [ErrMultipleRows]
 // when it produced more than one, the same sentinels
 // [TypedSelectBuilder.One] reports.
-func QueryWriteOne[T any](ctx context.Context, client Client, statement query.WriteStatement) (T, error) {
+func QueryWriteOne[T any](ctx context.Context, x Executor, statement query.WriteStatement) (T, error) {
 	var zero T
-	rows, err := client.QueryWrite(ctx, statement)
+	if isNil(x) {
+		return zero, fmt.Errorf("rasql: executor must not be nil")
+	}
+	rows, err := QueryWrite(ctx, x, statement)
 	if err != nil {
 		return zero, err
 	}
@@ -117,12 +129,15 @@ func QueryWriteOne[T any](ctx context.Context, client Client, statement query.Wr
 // It matches primary-key fields and updates every non-primary-key column.
 // Value must have one exported tagged field for every table column,
 // or implement ColumnValuer.
-func Update[T any](ctx context.Context, client Client, table Table[T], value T) (sql.Result, error) {
+func Update[T any](ctx context.Context, x Executor, table Table[T], value T) (sql.Result, error) {
+	if isNil(x) {
+		return nil, fmt.Errorf("rasql: executor must not be nil")
+	}
 	statement, err := typedUpdate(table, value)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: build UPDATE: %w", err)
 	}
-	return client.Exec(ctx, statement)
+	return Exec(ctx, x, statement)
 }
 
 func typedInsert[T any](table Table[T], value T, defaultColumns map[string]struct{}) (query.Insert, error) {

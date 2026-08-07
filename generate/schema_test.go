@@ -125,8 +125,8 @@ import (
 
 func Rejected(ctx context.Context, client rasql.Client) {
 	users := generated.Users()
-	_, _ = rasql.SelectFrom(client, users).WhereEqual(users.Emial, 42).One(ctx)
-	_, _ = rasql.SelectFrom(client, users).WhereEqual("id", 42).One(ctx)
+	_, _ = rasql.SelectFrom(users).WhereEqual(users.Emial, 42).One(ctx, client)
+	_, _ = rasql.SelectFrom(users).WhereEqual("id", 42).One(ctx, client)
 }
 `
 

@@ -51,14 +51,14 @@ func Example_rasql_count() {
 	// Count runs COUNT(*) over the builder's WHERE and joins, without decoding
 	// any row into a UserRow. It rejects a builder with Limit or Offset set,
 	// since a count of a paged statement is not the count the caller asked for.
-	total, err := rasql.SelectFrom(client, users).Count(ctx)
+	total, err := rasql.SelectFrom(users).Count(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to count users: %s\n", err)
 		return
 	}
 	fmt.Println("total:", total)
 
-	filtered, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 2).Count(ctx)
+	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID, 2).Count(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
 		return

@@ -1,6 +1,6 @@
 # Writing rows
 
-The root package writes a typed row without building a statement by hand. For anything the typed helpers do not cover, the `query` package builds the statement and `Client.Exec` runs it, except a statement carrying a `RETURNING` clause, which reads its rows back through `Client.QueryWrite` or the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]`.
+The root package writes a typed row without building a statement by hand. For anything the typed helpers do not cover, the `query` package builds the statement and `rasql.Exec` runs it, except a statement carrying a `RETURNING` clause, which reads its rows back through `rasql.QueryWrite` or the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]`.
 
 Every write operation, predicate, and statement constructor is listed in the [operation reference](03-querying.md#operation-reference).
 
@@ -14,7 +14,7 @@ if err := rasql.Create(ctx, client, users); err != nil {
 }
 ```
 
-Each statement runs on its own. To create several tables atomically, build the client from a `*sql.Tx` and commit once every `Create` has succeeded.
+Each statement runs on its own. To create several tables atomically, run `Create` through a `rasql.Tx` from `rasql.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
 
 A descriptor that names a [`Schema`](02-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.Create` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `Create` fails with the server's own error.
 
@@ -191,7 +191,7 @@ func Example_rasql_insert_defaults() {
 		return
 	}
 
-	user, err := rasql.SelectFrom(client, defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx)
+	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query default user: %s\n", err)
 		return
@@ -261,7 +261,7 @@ func Example_rasql_update() {
 		return
 	}
 
-	user, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).One(ctx)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
@@ -330,7 +330,7 @@ func Example_rasql_delete() {
 	}
 
 	// WhereEqual takes a column of the target table and binds the value.
-	result, err := rasql.DeleteFrom(client, users).WhereEqual(users.ID, 1).Exec(ctx)
+	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -343,7 +343,7 @@ func Example_rasql_delete() {
 	fmt.Printf("%d user deleted by id\n", deleted)
 
 	// Where takes any predicate built through the query package.
-	result, err = rasql.DeleteFrom(client, users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx)
+	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return
@@ -357,12 +357,12 @@ func Example_rasql_delete() {
 
 	// A builder with no predicate is rejected, so a dropped Where cannot become
 	// a full-table delete by accident.
-	if _, err := rasql.DeleteFrom(client, users).Build(); err != nil {
+	if _, err := rasql.DeleteFrom(users).Build(client.Dialect()); err != nil {
 		fmt.Println(err)
 	}
 
 	// AllowAll states the full-table delete. Build renders it without executing it.
-	statement, err := rasql.DeleteFrom(client, users).AllowAll().Build()
+	statement, err := rasql.DeleteFrom(users).AllowAll().Build(client.Dialect())
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -383,9 +383,9 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 
 ## Statements the typed helpers do not cover
 
-`Client.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for a partial update, conflict handling, or a multi-row insert. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `Client.QueryWrite` for one of those instead.
+`rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for a partial update, conflict handling, or a multi-row insert. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `rasql.QueryWrite` for one of those instead.
 
-`NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Build the client from a `*sql.Tx` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
+`NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through a `rasql.Tx` from `rasql.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
 ```go
 statement, err := query.NewUpdate(users.QueryTable(), query.Set(users.Email, query.Bind("ada@example.com")))
@@ -396,7 +396,7 @@ statement, err = statement.WithWhere(query.LessThan(users.ID, query.Bind(100)))
 if err != nil {
 	return err
 }
-result, err := client.Exec(ctx, statement)
+result, err := rasql.Exec(ctx, client, statement)
 ```
 
 Each `With…` method returns a new validated statement rather than changing the one it was called on, matching the immutable style of the select builders. `NewUpsert` accepts an explicit conflict target the same way; check `dialect.CapabilityConflictTarget` before relying on it, since MySQL lacks it and rejects a statement that sets one.
@@ -417,7 +417,7 @@ Either keep conflict keys unique within one statement, or account for that updat
 
 ### Reading a `RETURNING` clause
 
-`WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `Client.QueryWrite` renders and runs it, returning the same rangeable `row.Row` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do:
+`WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `rasql.QueryWrite` renders and runs it, returning the same rangeable `row.Row` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do:
 
 <!-- INCLUDE(examples/rasql_returning_example_test.go) -->
 ```go
@@ -435,7 +435,7 @@ import (
 )
 
 // Example_rasql_returning reads the row a RETURNING clause produces, which
-// Client.Exec cannot do because it discards result rows.
+// rasql.Exec cannot do because it discards result rows.
 func Example_rasql_returning() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -489,6 +489,109 @@ source: [examples/rasql_returning_example_test.go](https://github.com/lestrrat-g
 A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result.LastInsertId()` from `Exec` instead.
 
 `Client.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](05-templates.md) is executed.
+
+## Transactions
+
+`rasql.Begin` takes a `*sql.DB` (anything implementing `rasql.Beginner`), a dialect, and `*sql.TxOptions`, which may be `nil`. It returns a `rasql.Tx`, which is an `Executor` like `Client`, so every builder terminal and every free function that takes an `Executor` — `rasql.Insert`, `rasql.Update`, `rasql.Create`, and the rest — accepts it in place of `client`.
+
+The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation.
+
+A transaction cannot be nested: `Tx` does not implement `Beginner`, so passing one to `Begin` does not compile.
+
+<!-- INCLUDE(examples/rasql_transaction_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_rasql_transaction() {
+	// This example writes two rows and reads them back inside one transaction,
+	// then reads them again through the plain client after it commits.
+	// users and UserRow are declared in query_example_tables_test.go with the
+	// shape rasqlgen emits; an application that generated into package store
+	// would write store.Users() and store.UsersRow instead.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer database.Close()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	// A Client couples a database handle with the dialect used to render SQL.
+	client, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql client: %s\n", err)
+		return
+	}
+	// Create the table before any transaction starts.
+	if err := rasql.Create(ctx, client, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+
+	// Begin takes the *sql.DB, not the client: a Tx renders its own statements
+	// and does not go through client at all.
+	tx, err := rasql.Begin(ctx, database, dialect.SQLite(), nil)
+	if err != nil {
+		fmt.Printf("failed to begin transaction: %s\n", err)
+		return
+	}
+	// Rollback reports nothing once Commit has already succeeded, which is what
+	// makes this bare defer correct rather than an error every caller discards.
+	defer tx.Rollback()
+
+	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 2, Email: "grace@example.com"}); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+
+	// The same builder shape that runs against client also runs against tx: it
+	// reads the two rows written above, before they are committed.
+	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, tx)
+	if err != nil {
+		fmt.Printf("failed to query users in transaction: %s\n", err)
+		return
+	}
+	fmt.Printf("%d rows visible in transaction\n", len(inTx))
+
+	if err := tx.Commit(); err != nil {
+		fmt.Printf("failed to commit transaction: %s\n", err)
+		return
+	}
+
+	// Nothing touches client between Begin and Commit above. That is this
+	// example's own constraint, not rasql's: SetMaxOpenConns(1) gives it one
+	// connection, and the transaction holds it until Commit or Rollback
+	// releases it back to the pool.
+	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, client)
+	if err != nil {
+		fmt.Printf("failed to query users after commit: %s\n", err)
+		return
+	}
+	fmt.Printf("%d rows visible after commit\n", len(afterCommit))
+
+	// Output:
+	// 2 rows visible in transaction
+	// 2 rows visible after commit
+}
+```
+source: [examples/rasql_transaction_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_transaction_example_test.go)
+<!-- END INCLUDE -->
 
 ## Next
 

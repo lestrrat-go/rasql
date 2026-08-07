@@ -87,11 +87,11 @@ A `rasql.Client` pairs a database handle with the dialect used to render SQL:
 client, err := rasql.New(database, dialect.SQLite())
 ```
 
-`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Queryer`, which `*sql.DB` and `*sql.Tx` both do. Pass a `*sql.Tx` to run a group of statements in one transaction, or a custom implementation to inspect SQL without a database, as [Querying](03-querying.md) shows.
+`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Querying](03-querying.md) shows. To start a transaction, use `rasql.Begin` instead, which the [Transactions](04-writing.md#transactions) section covers.
 
 Pick the dialect that matches the database: `dialect.PostgreSQL()`, `dialect.MySQL()`, or `dialect.SQLite()`. The dialect decides how identifiers are quoted, how placeholders are numbered, how logical column types become DDL, and which syntax the renderer may use.
 
-A `Client` is a value, not a handle to close. It is safe for concurrent use whenever the `Queryer` inside it is, so `*sql.DB` based clients can be shared across goroutines.
+A `Client` is a value, not a handle to close. It is safe for concurrent use whenever the `Handle` inside it is, so `*sql.DB` based clients can be shared across goroutines.
 
 ## Run the first query
 
@@ -142,7 +142,7 @@ func Example_rasql_sqlite_query() {
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
-	user, err := rasql.SelectFrom(client, users).WhereEqual(users.ID, 42).One(ctx)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -161,7 +161,7 @@ The example moves through four steps.
 
 1. `rasql.Create` renders the table description as DDL and executes it, followed by any indexes. A real application usually creates tables through migrations instead, so this step is mostly a convenience for tests and examples.
 2. `rasql.Insert` reads the tagged fields of `UserRow` and writes them as bound values. See [Writing rows](04-writing.md).
-3. `rasql.SelectFrom(client, users)` starts a builder that already knows the result type. `WhereEqual` binds `42` as an argument rather than putting it into the SQL text.
+3. `rasql.SelectFrom(users)` starts a builder that already knows the result type. `WhereEqual` binds `42` as an argument rather than putting it into the SQL text.
 4. `One` executes the statement and returns a single decoded `UserRow`, reporting `rasql.ErrNoRows` when the result holds no row and `rasql.ErrMultipleRows` when it holds more than one.
 
 The `database.SetMaxOpenConns(1)` call is a SQLite detail, not a `rasql` requirement. An in-memory SQLite database belongs to a single connection, so a pooled second connection would not see the created table.
@@ -171,7 +171,7 @@ The `database.SetMaxOpenConns(1)` call is a SQLite detail, not a `rasql` require
 Query methods return the construction error before iteration begins, so an invalid statement fails at the call rather than midway through a loop. When ranging over results, the sequence yields rows first and at most one error after them, which is why every example checks the error inside the loop:
 
 ```go
-rows, err := rasql.SelectFrom(client, users).Query(ctx)
+rows, err := rasql.SelectFrom(users).Query(ctx, client)
 if err != nil {
 	// The statement could not be validated or rendered.
 }
