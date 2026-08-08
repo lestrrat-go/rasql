@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/method"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/row"
 )
 
 // ColumnValuer is implemented by row types that supply their own column values.
@@ -95,20 +96,12 @@ func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
 	return config.defaultColumns, nil
 }
 
-// destinationScanner is the mapping contract generated row types use when a
-// result projection is known only at runtime. Generated rows map every column
-// of their target table, so a RETURNING projection that omits one of those
-// columns would otherwise leave that field at its zero value.
-type destinationScanner interface {
-	ScanDestinations([]string) ([]any, error)
-}
-
 func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
 	if isNil(statement) || len(statement.Returning()) == 0 {
 		return nil
 	}
 	var result T
-	if _, ok := any(&result).(destinationScanner); !ok {
+	if _, ok := any(&result).(row.GeneratedRow); !ok {
 		return nil
 	}
 

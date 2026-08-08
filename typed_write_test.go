@@ -359,6 +359,8 @@ func (u *generatedReturningUser) ScanDestinations(columns []string) ([]any, erro
 	return destinations, nil
 }
 
+func (*generatedReturningUser) IsGeneratedRow() {}
+
 func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -456,6 +458,44 @@ func TestQueryWriteRejectsIncompleteGeneratedReturning(t *testing.T) {
 
 	_, err = rasql.QueryWriteAll[generatedReturningUser](t.Context(), client, statement)
 	require.EqualError(t, err, `rasql: RETURNING projections omit generated row column "email"`)
+}
+
+type partialReturningUser struct {
+	ID    int64
+	Email string
+}
+
+func (u *partialReturningUser) ScanDestinations(columns []string) ([]any, error) {
+	destinations := make([]any, len(columns))
+	var discard any
+	for index, column := range columns {
+		if column == "id" {
+			destinations[index] = &u.ID
+			continue
+		}
+		destinations[index] = &discard
+	}
+	return destinations, nil
+}
+
+func TestQueryWriteAllowsIncompleteCustomReturning(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement := deleteReturningStatement(t)
+	mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+
+	result, err := rasql.QueryWriteOne[partialReturningUser](t.Context(), client, statement)
+	require.NoError(t, err)
+	require.Equal(t, partialReturningUser{ID: 1}, result)
 }
 
 // deleteReturningStatement builds a DELETE that returns id, which the
