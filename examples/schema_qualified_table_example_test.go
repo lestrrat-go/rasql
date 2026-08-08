@@ -51,8 +51,8 @@ func Example_schema_qualified_table() {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "action", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "action", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})

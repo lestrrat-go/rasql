@@ -63,8 +63,8 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -86,8 +86,8 @@ func TestSelectBuilderWhereInMatchesRenderSelectFrom(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -128,8 +128,8 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	users, err := rasql.NewTable[user](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -142,9 +142,9 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "status", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -191,8 +191,8 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -232,8 +232,8 @@ func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -284,8 +284,8 @@ func TestDecodeFromDecodesGroupedRows(t *testing.T) {
 	tasks, err := rasql.NewTable[task](schema.Table{
 		Name: "tasks",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "status", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -339,8 +339,8 @@ func TestDecodeFromDecodesDistinctRows(t *testing.T) {
 	tasks, err := rasql.NewTable[task](schema.Table{
 		Name: "tasks",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "status", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -384,8 +384,8 @@ func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -413,8 +413,8 @@ func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -451,7 +451,7 @@ func TestSelectBuilderCountRejectsWrongRowCount(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -512,8 +512,8 @@ func TestClientExecExecutesParameterizedInsert(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -631,8 +631,8 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 		Indexes: []schema.Index{{
@@ -809,8 +809,8 @@ func usersWriteTable(t *testing.T) query.Table {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -846,8 +846,8 @@ func selectStatement(t *testing.T) query.Select {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})

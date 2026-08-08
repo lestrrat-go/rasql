@@ -98,9 +98,9 @@ func newMembersTable(table rasql.Table[MembersRow]) MembersTable {
 var membersTable = newMembersTable(rasql.MustTable[MembersRow](schema.Table{
 	Name: "members",
 	Columns: []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "name", Type: schema.TypeText},
-		{Name: "email", Type: schema.TypeText},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "name", Type: schema.TextType{}},
+		{Name: "email", Type: schema.TextType{}},
 	},
 	PrimaryKey: []string{"id"},
 }))

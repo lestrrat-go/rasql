@@ -81,9 +81,9 @@ func qualifiedJoinSelectStatement(t *testing.T) query.Select {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "action", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "action", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -92,8 +92,8 @@ func qualifiedJoinSelectStatement(t *testing.T) query.Select {
 		Schema: "tenant",
 		Name:   "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -129,7 +129,7 @@ func TestSelectRendersAliasWithoutSchema(t *testing.T) {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -156,8 +156,8 @@ func TestSelectRendersQualifiedTableInGroupedStatement(t *testing.T) {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -191,7 +191,7 @@ func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 	})
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
 		Schema: "tenant",
 		Name:   "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -264,8 +264,8 @@ func aggregateSelectStatement(t *testing.T) query.Select {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -325,7 +325,7 @@ func distinctSelectStatement(t *testing.T) query.Select {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -335,9 +335,9 @@ func distinctSelectStatement(t *testing.T) query.Select {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeFloat},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.FloatType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -375,8 +375,8 @@ func TestSelectRendersDistinctFunctionArgument(t *testing.T) {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -422,8 +422,8 @@ func TestSelectRendersDistinctSubquery(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "status", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -431,8 +431,8 @@ func TestSelectRendersDistinctSubquery(t *testing.T) {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -473,9 +473,9 @@ func TestSelectRendersScalarFunctions(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
-			{Name: "score", Type: schema.TypeInteger, Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "score", Type: schema.IntegerType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -531,8 +531,8 @@ func TestSelectRendersScalarFunctionEscapeHatch(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "doc", Type: schema.TypeJSON},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "doc", Type: schema.JSONType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -558,8 +558,8 @@ func TestSelectRendersDistinctEscapeHatchArgument(t *testing.T) {
 	posts, err := query.NewTable(schema.Table{
 		Name: "posts",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "tag", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "tag", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -614,8 +614,8 @@ func groupedSelectStatement(t *testing.T) query.Select {
 	tasks, err := query.NewTable(schema.Table{
 		Name: "tasks",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "status", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -647,8 +647,8 @@ func TestSelectRendersSubqueryInGroupedClauses(t *testing.T) {
 	tasks, err := query.NewTable(schema.Table{
 		Name: "tasks",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "priority", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "priority", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -792,8 +792,8 @@ func TestSelectRendersSubqueryPlaceholdersInOrder(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "status", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -801,9 +801,9 @@ func TestSelectRendersSubqueryPlaceholdersInOrder(t *testing.T) {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -848,7 +848,7 @@ func TestSelectRejectsLimitedSubqueryInMembership(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -856,8 +856,8 @@ func TestSelectRejectsLimitedSubqueryInMembership(t *testing.T) {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -911,10 +911,10 @@ func subqueryStatement(t *testing.T) query.Select {
 	tasksDefinition := schema.Table{
 		Name: "tasks",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "project_id", Type: schema.TypeInteger},
-			{Name: "title", Type: schema.TypeText},
-			{Name: "priority", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "project_id", Type: schema.IntegerType{}},
+			{Name: "title", Type: schema.TextType{}},
+			{Name: "priority", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -923,8 +923,8 @@ func subqueryStatement(t *testing.T) query.Select {
 	projects, err := query.NewTable(schema.Table{
 		Name: "projects",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "owner_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "owner_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -971,7 +971,7 @@ func columnMembershipStatement(t *testing.T) query.Select {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -979,8 +979,8 @@ func columnMembershipStatement(t *testing.T) query.Select {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -1009,8 +1009,8 @@ func membershipStatement(t *testing.T) query.Select {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -1036,7 +1036,7 @@ func selectStatement(t *testing.T) query.Select {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -1046,9 +1046,9 @@ func selectStatement(t *testing.T) query.Select {
 	orders, err := query.NewTable(schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeFloat},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.FloatType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})

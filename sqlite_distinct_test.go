@@ -90,8 +90,8 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 	definition := schema.Table{
 		Name: "visits",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "city", Type: schema.TypeText, Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "city", Type: schema.TextType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -218,9 +218,9 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.Table) {
 	definition := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "city", Type: schema.TypeText},
-			{Name: "age", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "city", Type: schema.TextType{}},
+			{Name: "age", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}

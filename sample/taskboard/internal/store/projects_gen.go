@@ -112,10 +112,10 @@ func newProjectsTable(table rasql.Table[ProjectsRow]) ProjectsTable {
 var projectsTable = newProjectsTable(rasql.MustTable[ProjectsRow](schema.Table{
 	Name: "projects",
 	Columns: []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "owner_id", Type: schema.TypeInteger},
-		{Name: "name", Type: schema.TypeText},
-		{Name: "archived", Type: schema.TypeBoolean, Default: "FALSE"},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "owner_id", Type: schema.IntegerType{}},
+		{Name: "name", Type: schema.TextType{}},
+		{Name: "archived", Type: schema.BooleanType{}, Default: "FALSE"},
 	},
 	PrimaryKey: []string{"id"},
 }))

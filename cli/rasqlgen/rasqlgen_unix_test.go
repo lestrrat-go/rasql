@@ -158,7 +158,7 @@ func TestRunSchemaWritesToOutputDirectorySymlink(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	require.NoError(t, os.WriteFile(input, []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`), 0o600))
+	require.NoError(t, os.WriteFile(input, []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`), 0o600))
 	target := filepath.Join(directory, "generated")
 	require.NoError(t, os.Mkdir(target, 0o700))
 	output := filepath.Join(directory, "output")

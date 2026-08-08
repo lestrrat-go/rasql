@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// DecimalScale is the number of digits a TypeDecimal column keeps to the right
+// DecimalScale is the number of digits a DecimalType column keeps to the right
 // of the decimal point. Its zero value states no scale at all, which is a
 // different thing from a stated scale of zero: DECIMAL(19,0) is a legitimate
 // column and a descriptor that simply forgot to say so is not. Use
@@ -55,34 +55,45 @@ func (s *DecimalScale) UnmarshalJSON(data []byte) error {
 // Column describes a table column.
 type Column struct {
 	Name     string
-	Type     LogicalType
+	Type     ColumnType
 	Nullable bool
 	Default  string
+}
 
-	// Precision is the total number of significant digits a TypeDecimal column
-	// stores, counting those on both sides of the decimal point. It must be at
-	// least 1, and must be zero for every other logical type. Each dialect
-	// enforces its own upper bound when it renders DDL.
-	Precision int
+// MarshalJSON encodes a column type as a tagged object so type-specific
+// options cannot appear as fields on unrelated column types.
+func (c Column) MarshalJSON() ([]byte, error) {
+	type wireColumn struct {
+		Name     string          `json:"Name"`
+		Type     json.RawMessage `json:"Type"`
+		Nullable bool            `json:"Nullable"`
+		Default  string          `json:"Default"`
+	}
+	typeData, err := marshalColumnType(c.Type)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(wireColumn{Name: c.Name, Type: typeData, Nullable: c.Nullable, Default: c.Default})
+}
 
-	// Scale is the number of those digits that fall to the right of the
-	// decimal point. A TypeDecimal column must state one, and the stated scale
-	// must not be negative and must not exceed Precision. Every other logical
-	// type must leave it unstated.
-	Scale DecimalScale
-
-	// Unsigned states that a TypeInteger column stores no negative values, so
-	// it reaches 18446744073709551615 instead of 9223372036854775807. It must
-	// be false for every other logical type. Unlike Scale it is a plain bool,
-	// because signedness has exactly two states and its default is the signed
-	// one every existing descriptor already means; the zero value is therefore
-	// the truth about an existing column rather than a missing statement.
-	//
-	// Only MySQL has unsigned integer types. PostgreSQL has none, and SQLite
-	// stores a signed 64-bit value whatever a column is declared, so both
-	// dialects report an error for an unsigned column instead of rendering it
-	// signed and narrowing the values it permits.
-	Unsigned bool
+// UnmarshalJSON decodes the tagged column type representation.
+func (c *Column) UnmarshalJSON(data []byte) error {
+	type wireColumn struct {
+		Name     string          `json:"Name"`
+		Type     json.RawMessage `json:"Type"`
+		Nullable bool            `json:"Nullable"`
+		Default  string          `json:"Default"`
+	}
+	var wire wireColumn
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	columnType, err := unmarshalColumnType(wire.Type)
+	if err != nil {
+		return err
+	}
+	*c = Column{Name: wire.Name, Type: columnType, Nullable: wire.Nullable, Default: wire.Default}
+	return nil
 }
 
 // UniqueConstraint requires the listed columns to be unique together.
@@ -228,28 +239,24 @@ func (t Table) Validate() error {
 		if err := ValidateIdentifier(column.Name); err != nil {
 			return validationError(path+".name", "%s", err)
 		}
-		if !column.Type.Valid() {
-			return validationError(path+".type", "unsupported logical type %q", column.Type)
+		if !validColumnType(column.Type) {
+			return validationError(path+".type", "unsupported column type %T", column.Type)
 		}
-		if column.Type == TypeDecimal {
-			if column.Precision < 1 {
-				return validationError(path+".precision", "decimal column must state a precision of at least 1")
+		switch typed := column.Type.(type) {
+		case DecimalType:
+			if typed.Precision < 1 {
+				return validationError(path+".type.precision", "decimal column must state a precision of at least 1")
 			}
-			scale, stated := column.Scale.Value()
+			scale, stated := typed.Scale.Value()
 			if !stated {
-				return validationError(path+".scale", "decimal column must state a scale: use schema.NewDecimalScale, which can state a scale of 0")
+				return validationError(path+".type.scale", "decimal column must state a scale: use schema.NewDecimalScale, which can state a scale of 0")
 			}
 			if scale < 0 {
-				return validationError(path+".scale", "decimal scale must not be negative")
+				return validationError(path+".type.scale", "decimal scale must not be negative")
 			}
-			if scale > column.Precision {
-				return validationError(path+".scale", "decimal scale %d exceeds precision %d", scale, column.Precision)
+			if scale > typed.Precision {
+				return validationError(path+".type.scale", "decimal scale %d exceeds precision %d", scale, typed.Precision)
 			}
-		} else if _, stated := column.Scale.Value(); column.Precision != 0 || stated {
-			return validationError(path+".precision", "precision and scale apply only to a decimal column, not %q", column.Type)
-		}
-		if column.Unsigned && column.Type != TypeInteger {
-			return validationError(path+".unsigned", "unsigned applies only to an integer column, not %q", column.Type)
 		}
 		if _, exists := columns[column.Name]; exists {
 			return validationError(path+".name", "duplicates column %q", column.Name)

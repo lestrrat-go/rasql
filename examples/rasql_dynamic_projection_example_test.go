@@ -47,9 +47,9 @@ func Example_rasql_dynamic_projection() {
 	orders := rasql.MustTable[orderRow](schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "total", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "total", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})

@@ -36,7 +36,7 @@ func Example_inspect_sqlite_table() {
 		fmt.Printf("failed to inspect users table: %s\n", err)
 		return
 	}
-	fmt.Printf("%s: %s, %s, %s\n", table.Name, table.Columns[0].Type, table.Columns[1].Type, table.Columns[2].Type)
+	fmt.Printf("%s: %s, %s, %s\n", table.Name, table.Columns[0].Type.Kind(), table.Columns[1].Type.Kind(), table.Columns[2].Type.Kind())
 	fmt.Println(table.PrimaryKey)
 
 	// Output:

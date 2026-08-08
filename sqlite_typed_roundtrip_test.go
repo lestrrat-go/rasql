@@ -32,9 +32,9 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 	events, err := rasql.NewTable[event](schema.Table{
 		Name: "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "active", Type: schema.TypeBoolean},
-			{Name: "created_at", Type: schema.TypeTime},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "active", Type: schema.BooleanType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -77,8 +77,8 @@ func TestSQLiteTypedSelectWhereInFiltersRows(t *testing.T) {
 	users, err := rasql.NewTable[user](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -125,8 +125,8 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	users, err := rasql.NewTable[user](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -145,9 +145,9 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	orders, err := rasql.NewTable[orderRow](schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -225,9 +225,9 @@ func TestSQLiteTypedSelectScalarFunctionsFilterRows(t *testing.T) {
 	users, err := rasql.NewTable[user](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
-			{Name: "score", Type: schema.TypeInteger, Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "score", Type: schema.IntegerType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -296,8 +296,8 @@ func TestSQLiteTypedSelectCountsRows(t *testing.T) {
 	events, err := rasql.NewTable[event](schema.Table{
 		Name: "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "active", Type: schema.TypeBoolean},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "active", Type: schema.BooleanType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -384,10 +384,10 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 	events, err := rasql.NewTable[generatedEventRow](schema.Table{
 		Name: "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "active", Type: schema.TypeBoolean},
-			{Name: "created_at", Type: schema.TypeTime},
-			{Name: "note", Type: schema.TypeText, Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "active", Type: schema.BooleanType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
+			{Name: "note", Type: schema.TextType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -424,7 +424,7 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 
 // TestSQLiteDecimalRoundTripsExactly is the test that would have caught the
 // NUMERIC(19,4)-to-REAL truncation change 2 documents: SQLite has no exact
-// decimal storage class, so a TypeDecimal column is declared TEXT and the
+// decimal storage class, so a DecimalType column is declared TEXT and the
 // inserted digits must come back byte-identical rather than rounded through
 // float64. Byte-identical is a property of SQLite's TEXT storage, not of the
 // decimal type: PostgreSQL and MySQL return a decimal in its column's
@@ -447,8 +447,8 @@ func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
 	invoices, err := rasql.NewTable[invoice](schema.Table{
 		Name: "invoices",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -498,9 +498,9 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "action", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "action", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -615,9 +615,9 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	table := schema.Table{
 		Name: "returning_users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
-			{Name: "status", Type: schema.TypeText, Default: "'pending'"},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
 		},
 		PrimaryKey: []string{"id"},
 	}

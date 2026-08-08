@@ -140,12 +140,12 @@ func newTasksTable(table rasql.Table[TasksRow]) TasksTable {
 var tasksTable = newTasksTable(rasql.MustTable[TasksRow](schema.Table{
 	Name: "tasks",
 	Columns: []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "project_id", Type: schema.TypeInteger},
-		{Name: "assignee_id", Type: schema.TypeInteger},
-		{Name: "title", Type: schema.TypeText},
-		{Name: "status", Type: schema.TypeText},
-		{Name: "priority", Type: schema.TypeInteger},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "project_id", Type: schema.IntegerType{}},
+		{Name: "assignee_id", Type: schema.IntegerType{}},
+		{Name: "title", Type: schema.TextType{}},
+		{Name: "status", Type: schema.TextType{}},
+		{Name: "priority", Type: schema.IntegerType{}},
 	},
 	PrimaryKey: []string{"id"},
 }))
