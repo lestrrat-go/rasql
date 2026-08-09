@@ -46,7 +46,7 @@ func (b DeleteBuilder) Where(expression query.Expression) DeleteBuilder {
 	if b.err != nil {
 		return b
 	}
-	if expression == nil {
+	if isNil(expression) {
 		return b.withError(fmt.Errorf("rasql: WHERE expression must not be nil"))
 	}
 	b = b.clone()
