@@ -7,6 +7,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -367,6 +368,141 @@ func TestDeleteFrom(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, typedAllowAll.SQL(), fromQueryAllowAll.SQL())
 	})
+}
+
+func TestDeleteReturningBuild(t *testing.T) {
+	users := deleteUsersTable(t)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	statement, err := rasql.DeleteFrom(users).
+		WhereEqual(id, 42).
+		Returning(query.Project(id), query.Project(email)).
+		Build(clientForBuild(t).Dialect())
+	require.NoError(t, err)
+	require.Equal(t, `DELETE FROM "users" WHERE ("users"."id" = $1) RETURNING "id", "email"`, statement.SQL())
+	require.Equal(t, []any{42}, statement.Args())
+}
+
+func TestDeleteReturningQuery(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users := deleteUsersTable(t)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	mock.ExpectQuery("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1) RETURNING \"id\", \"email\"").
+		WithArgs(42).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
+
+	sequence, err := rasql.DeleteFrom(users).
+		WhereEqual(id, 42).
+		Returning(query.Project(id), query.Project(email)).
+		Query(t.Context(), client)
+	rows := collectRows(t, sequence, err)
+	require.Len(t, rows, 1)
+	idColumn, err := row.Int64("id")
+	require.NoError(t, err)
+	emailColumn, err := row.String("email")
+	require.NoError(t, err)
+	gotID, err := idColumn.Get(rows[0])
+	require.NoError(t, err)
+	gotEmail, err := emailColumn.Get(rows[0])
+	require.NoError(t, err)
+	require.Equal(t, int64(42), gotID)
+	require.Equal(t, "ada@example.com", gotEmail)
+}
+
+func TestDeleteReturningTypedHelpers(t *testing.T) {
+	t.Run("all", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+		mock.ExpectQuery("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1) RETURNING \"id\", \"email\"").
+			WithArgs(42).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
+
+		rows, err := rasql.QueryDeleteAll[deleteUser](
+			t.Context(),
+			client,
+			rasql.DeleteFrom(users).WhereEqual(id, 42).Returning(query.Project(id), query.Project(email)),
+		)
+		require.NoError(t, err)
+		require.Equal(t, []deleteUser{{ID: 42, Email: "ada@example.com"}}, rows)
+	})
+
+	t.Run("one", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		client, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users := deleteUsersTable(t)
+		id, err := users.Column("id")
+		require.NoError(t, err)
+		email, err := users.Column("email")
+		require.NoError(t, err)
+		mock.ExpectQuery("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1) RETURNING \"id\", \"email\"").
+			WithArgs(42).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
+
+		user, err := rasql.QueryDeleteOne[deleteUser](
+			t.Context(),
+			client,
+			rasql.DeleteFrom(users).WhereEqual(id, 42).Returning(query.Project(id), query.Project(email)),
+		)
+		require.NoError(t, err)
+		require.Equal(t, deleteUser{ID: 42, Email: "ada@example.com"}, user)
+	})
+}
+
+func TestDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
+	users := deleteUsersTable(t)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+
+	_, err = rasql.DeleteFrom(users).
+		WhereEqual(id, 42).
+		Returning(query.Project(id)).
+		Build(dialect.MySQL())
+	require.ErrorContains(t, err, "RETURNING is not supported")
+}
+
+func TestDeleteReturningRequiresProjection(t *testing.T) {
+	users := deleteUsersTable(t)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+
+	_, err = rasql.DeleteFrom(users).WhereEqual(id, 42).Returning().Build(dialect.PostgreSQL())
+	require.EqualError(t, err, "rasql: RETURNING requires at least one projection")
 }
 
 // clientForBuild returns a client that renders statements without executing them.
