@@ -150,9 +150,7 @@ func derivedRelationships(table schema.Table) []schema.Relationship {
 			continue
 		}
 		name := key.Columns[0]
-		if strings.HasSuffix(name, "_id") {
-			name = strings.TrimSuffix(name, "_id")
-		}
+		name = strings.TrimSuffix(name, "_id")
 		name = variableName(name)
 		if name == "" {
 			name = variableName(key.ReferencedTable)
