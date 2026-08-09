@@ -340,24 +340,6 @@ func manualMigrationError(diagnostics []string) error {
 	return fmt.Errorf("postgresql schema diff requires manual migration:\n%s", strings.Join(lines, "\n"))
 }
 
-func sortedTableKeys(tables map[string]tableDefinition) []string {
-	keys := make([]string, 0, len(tables))
-	for key := range tables {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedIndexKeys(indexes map[string]indexDefinition) []string {
-	keys := make([]string, 0, len(indexes))
-	for key := range indexes {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 func qualifiedNameKey(name pgquery.QualifiedName) string {
 	var key strings.Builder
 	for _, part := range name {
