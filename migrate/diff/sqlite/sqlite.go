@@ -392,7 +392,7 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 func primaryKeyContainsColumn(constraint sqlitequery.TableConstraint, name string) bool {
 	for _, column := range constraint.Columns {
 		expression, ok := column.Expression.(*sqlitequery.IdentifierExpression)
-		if ok && len(expression.Name) == 1 && expression.Name[0].Name == name {
+		if ok && len(expression.Name) == 1 && sqliteIdentifierKey(expression.Name[0].Name) == sqliteIdentifierKey(name) {
 			return true
 		}
 	}
@@ -507,10 +507,11 @@ func (s *schemaSnapshot) addTable(source string, statement *sqlitequery.CreateTa
 	}
 	columns := make(map[string]struct{}, len(statement.Columns))
 	for _, column := range statement.Columns {
-		if _, exists := columns[column.Name.Name]; exists {
+		key := sqliteIdentifierKey(column.Name.Name)
+		if _, exists := columns[key]; exists {
 			return fmt.Errorf("sqlite schema source %q defines duplicate column %q in table %s", source, column.Name.Name, displayName(statement.Name))
 		}
-		columns[column.Name.Name] = struct{}{}
+		columns[key] = struct{}{}
 	}
 	normalized := *statement
 	normalized.Columns = append([]sqlitequery.ColumnDefinition(nil), statement.Columns...)
@@ -593,14 +594,15 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 
 	baselineColumns := make(map[string]sqlitequery.ColumnDefinition, len(baseline.normalized.Columns))
 	for _, column := range baseline.normalized.Columns {
-		baselineColumns[column.Name.Name] = column
+		baselineColumns[sqliteIdentifierKey(column.Name.Name)] = column
 	}
 	targetColumns := make(map[string]sqlitequery.ColumnDefinition, len(target.normalized.Columns))
 	for _, column := range target.normalized.Columns {
-		targetColumns[column.Name.Name] = column
+		targetColumns[sqliteIdentifierKey(column.Name.Name)] = column
 	}
 	for _, column := range target.normalized.Columns {
-		previous, exists := baselineColumns[column.Name.Name]
+		key := sqliteIdentifierKey(column.Name.Name)
+		previous, exists := baselineColumns[key]
 		if !exists {
 			if diagnostic := columnAddDiagnostic(column); diagnostic != "" {
 				diagnostics = append(diagnostics, fmt.Sprintf("new column %s.%s %s", displayName(target.normalized.Name), column.Name.Name, diagnostic))
@@ -630,7 +632,7 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 		}
 	}
 	for _, column := range baseline.normalized.Columns {
-		if _, exists := targetColumns[column.Name.Name]; !exists {
+		if _, exists := targetColumns[sqliteIdentifierKey(column.Name.Name)]; !exists {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.normalized.Name), column.Name.Name))
 		}
 	}
@@ -770,7 +772,7 @@ func foreignKeyActionsForColumn(table tableDefinition, columnName string) []fore
 			if constraint.Kind != sqlitequery.ConstraintReferences {
 				continue
 			}
-			if column.Name.Name == columnName && index < len(table.foreignKeys) {
+			if sqliteIdentifierKey(column.Name.Name) == sqliteIdentifierKey(columnName) && index < len(table.foreignKeys) {
 				actions = append(actions, table.foreignKeys[index])
 			}
 			index++
@@ -916,9 +918,20 @@ func sortedIndexKeys(indexes map[string]indexDefinition) []string {
 func qualifiedNameKey(name sqlitequery.QualifiedName) string {
 	var key strings.Builder
 	for _, part := range name {
-		fmt.Fprintf(&key, "%d:%s", len(part.Name), part.Name)
+		value := sqliteIdentifierKey(part.Name)
+		fmt.Fprintf(&key, "%d:%s", len(value), value)
 	}
 	return key.String()
+}
+
+func sqliteIdentifierKey(value string) string {
+	key := []byte(value)
+	for index, character := range key {
+		if character >= 'A' && character <= 'Z' {
+			key[index] += 'a' - 'A'
+		}
+	}
+	return string(key)
 }
 
 func displayName(name sqlitequery.QualifiedName) string {
