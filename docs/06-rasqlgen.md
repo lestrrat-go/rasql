@@ -37,6 +37,8 @@ Supply either `-dsn` or `-input`, never both. Direct inspection supports Postgre
 
 `schema` writes one file per table, named `<table>_gen.go` in lowercase. The example writes `users_gen.go` and `orders_gen.go` in `internal/store`.
 
+When selected tables contain supported foreign keys, `rasqlgen` also emits typed relationship descriptors in those files. It uses the complete selected-table set to connect each generated file to its target, so a relationship method is emitted only when the target table is selected too. See [Relationships](02-schema.md#relationships) for the supported slice and its eager-loading behavior.
+
 `-dsn` reads every requested table in one transaction and commits it after the last read, so a migration that commits partway through cannot split the generated descriptor across two schema versions. It requests repeatable-read and read-only modes where the driver supports them. `-timeout` bounds that whole transaction, from opening it through the last metadata query; a server that accepts the connection but never answers cancels the command instead of hanging it indefinitely.
 
 `-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.Table` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, whether with `-input` or `-dsn`, is rejected as a flag-parsing error rather than silently collapsed to one table. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
@@ -107,6 +109,30 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 ```
 
 `store.Users()` returns a `store.UsersTable`, ready for `rasql.SelectFrom`, `rasql.Insert`, and `rasql.Update` because it embeds `rasql.Table[store.UsersRow]`. Its column fields are what the typed builders take: `store.Users().ID` is a `query.Column`, so `WhereEqual(users.ID, 1)` cannot name a column the table does not have. `store.Users().QueryTable()` gives the `query.Table` the lower-level API takes.
+
+### Generated relationships
+
+When the input contains tables with a single-column foreign key to another
+generated table's single-column primary key, `rasqlgen` emits a typed
+relationship in both directions. The foreign-key column must be non-null and
+must use the same supported Go key type as the referenced primary key.
+
+For `orders.user_id REFERENCES users(id)`, `store.Orders().User()` returns
+the belongs-to relation and `store.Users().Orders()` returns its inverse
+has-many relation. Call each relation's `Load` method with the executor and
+the already-fetched rows to perform the batched eager load.
+
+Each relation also has `Join()`, which returns the existing `query.Join` value
+for use with `rasql.SelectFrom` or `rasql.DecodeFrom`. `Load` uses one `IN`
+query for the supplied rows and returns a map keyed by the primary or foreign
+key, so callers can attach the results without an N+1 query loop. Empty input
+returns an empty map without touching the executor.
+
+This first slice intentionally does not generate relations for composite
+foreign keys, nullable foreign keys, non-primary unique targets, many-to-many
+join tables, polymorphic associations, nested preloading, or keys whose Go
+type is not comparable. Those cases remain available through the existing
+explicit `query.Join` and typed builder APIs.
 
 The descriptor is a package-level variable, which Go cannot mark constant, so it stays unexported and only the accessor is exported. Importing code therefore cannot swap the descriptor out from under the rest of the program.
 

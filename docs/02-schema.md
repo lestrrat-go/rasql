@@ -56,8 +56,17 @@ source: [examples/schema_table_definition_example_test.go](https://github.com/le
 | `Checks` | Check constraints. |
 | `Indexes` | Secondary indexes. |
 | `ForeignKeys` | References to other tables, with their update and delete actions. |
+| `Relationships` | Optional named relationship metadata used by generated relationship APIs. |
 
 Call `Validate` before using a descriptor. It reports a `*schema.ValidationError` naming the part that is wrong, such as a primary key that lists a column the table does not declare. Non-empty names given to `UniqueConstraints`, `Checks`, and `ForeignKeys` must be unique across all three, since a dialect renders them together into one `CREATE TABLE` constraint list. `MustTable` and `NewTable` validate as well, so a separate `Validate` call is only needed for a descriptor built at runtime that is not immediately turned into a table.
+
+## Relationships
+
+`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.Relationship` with kind `schema.RelationshipBelongsTo` from each foreign key when `Relationships` is empty. Set `Relationships` explicitly when the generated method name should differ from the local column name. Relationship metadata does not change DDL.
+
+The generated API covers one bounded slice: a non-null single-column foreign key that targets a non-null single-column primary key with the same generated Go type. When both tables are generated in the package, the child table exposes a belongs-to method and the parent table exposes the inverse has-many method. Each relation exposes `Join` and `Load`; `Load` fetches all related rows with one secondary `IN` query and groups them by key. Callers must split very large parent slices themselves when they approach the database parameter limit.
+
+Composite keys, nullable foreign keys, nullable or non-primary target columns, many-to-many links, polymorphic links, nested preloading, and relationships whose target table is not generated in the package remain unsupported. The foreign key and its ordinary SQL join remain available for each of those cases.
 
 ## Qualify a table with a schema
 

@@ -165,6 +165,7 @@ type Table struct {
 	Checks            []CheckConstraint
 	Indexes           []Index
 	ForeignKeys       []ForeignKey
+	Relationships     []Relationship
 }
 
 // Qualified reports whether t names a schema.
@@ -205,6 +206,10 @@ func (t Table) Clone() Table {
 		clone.ForeignKeys[i] = key
 		clone.ForeignKeys[i].Columns = append([]string(nil), key.Columns...)
 		clone.ForeignKeys[i].ReferencedColumns = append([]string(nil), key.ReferencedColumns...)
+	}
+	clone.Relationships = make([]Relationship, len(t.Relationships))
+	for i, relationship := range t.Relationships {
+		clone.Relationships[i] = relationship.Clone()
 	}
 	return clone
 }
@@ -277,7 +282,43 @@ func (t Table) Validate() error {
 	if err := validateIndexes(t.Indexes, columns); err != nil {
 		return err
 	}
-	return validateForeignKeys(t.ForeignKeys, columns, constraintNames)
+	if err := validateForeignKeys(t.ForeignKeys, columns, constraintNames); err != nil {
+		return err
+	}
+	return validateRelationships(t.Relationships, columns)
+}
+
+func validateRelationships(relationships []Relationship, columns map[string]struct{}) error {
+	for i, relationship := range relationships {
+		path := fmt.Sprintf("relationships[%d]", i)
+		if relationship.Name == "" {
+			return validationError(path+".name", "must not be empty")
+		}
+		if err := ValidateIdentifier(relationship.Name); err != nil {
+			return validationError(path+".name", "%s", err)
+		}
+		if relationship.Kind != RelationshipBelongsTo {
+			return validationError(path+".kind", "unsupported relationship kind %q", relationship.Kind)
+		}
+		if err := validateColumnList(path+".columns", relationship.Columns, columns, true); err != nil {
+			return err
+		}
+		if relationship.ReferencedSchema != "" {
+			if err := ValidateIdentifier(relationship.ReferencedSchema); err != nil {
+				return validationError(path+".referenced_schema", "%s", err)
+			}
+		}
+		if err := ValidateIdentifier(relationship.ReferencedTable); err != nil {
+			return validationError(path+".referenced_table", "%s", err)
+		}
+		if err := validateIdentifierList(path+".referenced_columns", relationship.ReferencedColumns, true); err != nil {
+			return err
+		}
+		if len(relationship.Columns) != len(relationship.ReferencedColumns) {
+			return validationError(path, "has %d local columns and %d referenced columns", len(relationship.Columns), len(relationship.ReferencedColumns))
+		}
+	}
+	return nil
 }
 
 // validateNamedColumnLists validates constraints and records each non-empty
