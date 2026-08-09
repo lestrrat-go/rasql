@@ -1070,7 +1070,7 @@ func TestSQLiteInspectorRejectsDecimalColumn(t *testing.T) {
 	mock.ExpectQuery("PRAGMA table_list(\"payments\")").
 		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
 			AddRow("main", "payments", "table", 1, 0, 0))
-	mock.ExpectQuery("PRAGMA table_xinfo(\"payments\")").
+	mock.ExpectQuery("PRAGMA \"main\".table_xinfo(\"payments\")").
 		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
 			AddRow(0, "amount", "DECIMAL(19,4)", 1, nil, 0, 0))
 
@@ -1094,18 +1094,18 @@ func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
 	mock.ExpectQuery("PRAGMA table_list(\"events\")").
 		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
 			AddRow("main", "events", "table", 3, 0, 0))
-	mock.ExpectQuery("PRAGMA table_xinfo(\"events\")").
+	mock.ExpectQuery("PRAGMA \"main\".table_xinfo(\"events\")").
 		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
 			AddRow(0, "sequence", "INTEGER", 1, nil, 2, 0).
 			AddRow(1, "stream_id", "TEXT", 1, nil, 1, 0).
 			AddRow(2, "payload", "BLOB", 0, nil, 0, 0))
-	mock.ExpectQuery("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").
+	mock.ExpectQuery("SELECT sql FROM \"main\".sqlite_master WHERE type = 'table' AND name = ?").
 		WithArgs("events").
 		WillReturnRows(sqlmock.NewRows([]string{"sql"}).
 			AddRow("CREATE TABLE events (sequence INTEGER, stream_id TEXT, payload BLOB)"))
-	mock.ExpectQuery(`PRAGMA index_list("events")`).
+	mock.ExpectQuery(`PRAGMA "main".index_list("events")`).
 		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "unique", "origin", "partial"}))
-	mock.ExpectQuery(`PRAGMA foreign_key_list("events")`).
+	mock.ExpectQuery(`PRAGMA "main".foreign_key_list("events")`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "seq", "table", "from", "to", "on_update", "on_delete", "match"}))
 
 	table, err := inspector.Table(t.Context(), "events")
@@ -1141,6 +1141,24 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	require.NotContains(t, string(source), "ID *int64")
 }
 
+func TestSQLiteInspectorReadsTempTable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TEMP TABLE selected_temp (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "selected_temp")
+	require.NoError(t, err)
+	require.Equal(t, "selected_temp", table.Name)
+	require.Equal(t, []schema.Column{{Name: "id", Type: schema.IntegerType{}}}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
 func TestSQLiteInspectorUsesCanonicalTableNameForMixedCaseIdentifiers(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -1155,16 +1173,16 @@ func TestSQLiteInspectorUsesCanonicalTableNameForMixedCaseIdentifiers(t *testing
 	mock.ExpectQuery("PRAGMA table_list(\"members\")").
 		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
 			AddRow("main", "Members", "table", 1, 0, 0))
-	mock.ExpectQuery("PRAGMA table_xinfo(\"Members\")").
+	mock.ExpectQuery("PRAGMA \"main\".table_xinfo(\"Members\")").
 		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
 			AddRow(0, "id", "INTEGER", 0, nil, 1, 0))
-	mock.ExpectQuery("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").
+	mock.ExpectQuery("SELECT sql FROM \"main\".sqlite_master WHERE type = 'table' AND name = ?").
 		WithArgs("Members").
 		WillReturnRows(sqlmock.NewRows([]string{"sql"}).
 			AddRow("CREATE TABLE Members (id INTEGER PRIMARY KEY)"))
-	mock.ExpectQuery(`PRAGMA index_list("Members")`).
+	mock.ExpectQuery(`PRAGMA "main".index_list("Members")`).
 		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "unique", "origin", "partial"}))
-	mock.ExpectQuery(`PRAGMA foreign_key_list("Members")`).
+	mock.ExpectQuery(`PRAGMA "main".foreign_key_list("Members")`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "seq", "table", "from", "to", "on_update", "on_delete", "match"}))
 
 	table, err := inspector.Table(t.Context(), "members")
@@ -1307,10 +1325,10 @@ func TestSQLiteInspectorRejectsVirtualTableDefinition(t *testing.T) {
 	mock.ExpectQuery(`PRAGMA table_list("virtual_table")`).
 		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
 			AddRow("main", "virtual_table", "table", 5, 0, 0))
-	mock.ExpectQuery(`PRAGMA table_xinfo("virtual_table")`).
+	mock.ExpectQuery(`PRAGMA "main".table_xinfo("virtual_table")`).
 		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
 			AddRow(0, "id", "INTEGER", 0, nil, 0, 0))
-	mock.ExpectQuery("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").
+	mock.ExpectQuery("SELECT sql FROM \"main\".sqlite_master WHERE type = 'table' AND name = ?").
 		WithArgs("virtual_table").
 		WillReturnRows(sqlmock.NewRows([]string{"sql"}).
 			AddRow("CREATE VIRTUAL TABLE virtual_table USING rtree(id, minx, maxx, miny, maxy)"))

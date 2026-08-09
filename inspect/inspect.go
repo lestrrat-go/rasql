@@ -307,7 +307,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	}
 	tableName = options.name
 
-	query := "PRAGMA table_xinfo(\"" + sqlitePragmaIdentifier(tableName) + "\")"
+	query := sqliteQualifiedPragma(options.database, "table_xinfo", tableName)
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: read SQLite columns: %w", err)
@@ -365,14 +365,14 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	if options.withoutRowID || options.strict {
 		return schema.Table{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: STRICT and WITHOUT ROWID table options are unsupported", tableName)
 	}
-	definition, err := i.sqliteTableDefinition(ctx, tableName)
+	definition, err := i.sqliteTableDefinition(ctx, options.database, tableName)
 	if err != nil {
 		return schema.Table{}, err
 	}
 	if err := validateSQLitePrimaryKey(definition, tableName); err != nil {
 		return schema.Table{}, err
 	}
-	indexes, uniqueConstraints, err := i.sqliteIndexes(ctx, tableName)
+	indexes, uniqueConstraints, err := i.sqliteIndexes(ctx, options.database, tableName)
 	if err != nil {
 		return schema.Table{}, err
 	}
@@ -388,7 +388,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	if err != nil {
 		return schema.Table{}, err
 	}
-	foreignKeys, err := i.sqliteForeignKeys(ctx, tableName)
+	foreignKeys, err := i.sqliteForeignKeys(ctx, options.database, tableName)
 	if err != nil {
 		return schema.Table{}, err
 	}
@@ -408,6 +408,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 }
 
 type sqliteTableOptions struct {
+	database     string
 	name         string
 	withoutRowID bool
 	strict       bool
@@ -441,11 +442,11 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, tableName string) (sq
 	if !strings.EqualFold(kind, "table") {
 		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: table kind %q is unsupported", tableName, kind)
 	}
-	return sqliteTableOptions{name: name, withoutRowID: withoutRowID != 0, strict: strict != 0}, nil
+	return sqliteTableOptions{database: databaseName, name: name, withoutRowID: withoutRowID != 0, strict: strict != 0}, nil
 }
 
-func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) (*sqlitequery.CreateTableStatement, error) {
-	query := "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?"
+func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tableName string) (*sqlitequery.CreateTableStatement, error) {
+	query := `SELECT sql FROM "` + sqlitePragmaIdentifier(databaseName) + `".sqlite_master WHERE type = 'table' AND name = ?`
 	rows, err := i.queryer.QueryContext(ctx, query, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read SQLite table definition: %w", err)
@@ -878,8 +879,8 @@ func sqliteIdentifierName(identifier *sqlitequery.Identifier) string {
 	return identifier.Name
 }
 
-func (i Inspector) sqliteForeignKeys(ctx context.Context, tableName string) ([]schema.ForeignKey, error) {
-	query := "PRAGMA foreign_key_list(\"" + sqlitePragmaIdentifier(tableName) + "\")"
+func (i Inspector) sqliteForeignKeys(ctx context.Context, databaseName, tableName string) ([]schema.ForeignKey, error) {
+	query := sqliteQualifiedPragma(databaseName, "foreign_key_list", tableName)
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read SQLite foreign keys: %w", err)
@@ -966,8 +967,8 @@ func sqliteReferenceAction(action string) (schema.ReferenceAction, error) {
 	}
 }
 
-func (i Inspector) sqliteIndexes(ctx context.Context, tableName string) ([]schema.Index, []schema.UniqueConstraint, error) {
-	query := "PRAGMA index_list(\"" + sqlitePragmaIdentifier(tableName) + "\")"
+func (i Inspector) sqliteIndexes(ctx context.Context, databaseName, tableName string) ([]schema.Index, []schema.UniqueConstraint, error) {
+	query := sqliteQualifiedPragma(databaseName, "index_list", tableName)
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, nil, fmt.Errorf("inspect: read SQLite indexes: %w", err)
@@ -1000,7 +1001,7 @@ func (i Inspector) sqliteIndexes(ctx context.Context, tableName string) ([]schem
 			uniqueConstraints = append(uniqueConstraints, schema.UniqueConstraint{})
 			continue
 		}
-		columns, err := i.sqliteIndexColumns(ctx, name)
+		columns, err := i.sqliteIndexColumns(ctx, databaseName, name)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1012,8 +1013,8 @@ func (i Inspector) sqliteIndexes(ctx context.Context, tableName string) ([]schem
 	return indexes, uniqueConstraints, nil
 }
 
-func (i Inspector) sqliteIndexColumns(ctx context.Context, indexName string) ([]string, error) {
-	query := "PRAGMA index_xinfo(\"" + sqlitePragmaIdentifier(indexName) + "\")"
+func (i Inspector) sqliteIndexColumns(ctx context.Context, databaseName, indexName string) ([]string, error) {
+	query := sqliteQualifiedPragma(databaseName, "index_xinfo", indexName)
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read SQLite index %q columns: %w", indexName, err)
@@ -1053,6 +1054,10 @@ func (i Inspector) sqliteIndexColumns(ctx context.Context, indexName string) ([]
 
 func sqlitePragmaIdentifier(value string) string {
 	return strings.ReplaceAll(value, `"`, `""`)
+}
+
+func sqliteQualifiedPragma(databaseName, pragmaName, identifier string) string {
+	return `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".` + pragmaName + `("` + sqlitePragmaIdentifier(identifier) + `")`
 }
 
 func (i Inspector) readColumns(ctx context.Context, query string, argument any) ([]schema.Column, error) {
