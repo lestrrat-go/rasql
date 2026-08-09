@@ -49,9 +49,9 @@ func Example_rasql_subquery() {
 	orders := rasql.MustTable[orderRow](schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})

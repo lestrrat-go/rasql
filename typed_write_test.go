@@ -37,8 +37,8 @@ func TestInsertExecutesTypedRow(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -93,9 +93,9 @@ func TestInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
 	users, err := rasql.NewTable[generatedDefaultUser](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger, Default: "generated_user_id()"},
-			{Name: "email", Type: schema.TypeText},
-			{Name: "status", Type: schema.TypeText, Default: "'pending'"},
+			{Name: "id", Type: schema.IntegerType{}, Default: "generated_user_id()"},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -121,8 +121,8 @@ func TestInsertRejectsUnknownDefaultColumn(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -155,8 +155,8 @@ func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
 	users, err := rasql.NewTable[user](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger, Default: "next_user_id()"},
-			{Name: "email", Type: schema.TypeText, Default: "'unknown'"},
+			{Name: "id", Type: schema.IntegerType{}, Default: "next_user_id()"},
+			{Name: "email", Type: schema.TextType{}, Default: "'unknown'"},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -182,8 +182,8 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -220,8 +220,8 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -359,6 +359,8 @@ func (u *generatedReturningUser) ScanDestinations(columns []string) ([]any, erro
 	return destinations, nil
 }
 
+func (*generatedReturningUser) IsGeneratedRow() {}
+
 func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -373,8 +375,8 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -396,6 +398,106 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	require.Equal(t, generatedReturningUser{ID: 1, Email: "ada@example.com"}, result)
 }
 
+func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users, err := query.NewTable(schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+	statement, err := query.NewInsert(users, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	require.NoError(t, err)
+	mock.ExpectQuery("INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\"").
+		WithArgs("ada@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).
+			AddRow(int64(1), "ada@example.com").
+			AddRow(int64(2), "bob@example.com"))
+
+	rows, err := rasql.QueryWriteAll[generatedReturningUser](t.Context(), client, statement)
+	require.NoError(t, err)
+	require.Equal(t, []generatedReturningUser{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+	}, rows)
+}
+
+func TestQueryWriteRejectsIncompleteGeneratedReturning(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement := deleteReturningStatement(t)
+
+	_, err = rasql.QueryWriteOne[generatedReturningUser](t.Context(), client, statement)
+	require.EqualError(t, err, `rasql: RETURNING projections omit generated row column "email"`)
+
+	_, err = rasql.QueryWriteAll[generatedReturningUser](t.Context(), client, statement)
+	require.EqualError(t, err, `rasql: RETURNING projections omit generated row column "email"`)
+}
+
+type partialReturningUser struct {
+	ID    int64
+	Email string
+}
+
+func (u *partialReturningUser) ScanDestinations(columns []string) ([]any, error) {
+	destinations := make([]any, len(columns))
+	var discard any
+	for index, column := range columns {
+		if column == "id" {
+			destinations[index] = &u.ID
+			continue
+		}
+		destinations[index] = &discard
+	}
+	return destinations, nil
+}
+
+func TestQueryWriteAllowsIncompleteCustomReturning(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	statement := deleteReturningStatement(t)
+	mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+
+	result, err := rasql.QueryWriteOne[partialReturningUser](t.Context(), client, statement)
+	require.NoError(t, err)
+	require.Equal(t, partialReturningUser{ID: 1}, result)
+}
+
 // deleteReturningStatement builds a DELETE that returns id, which the
 // QueryWriteOne error-path tests share.
 func deleteReturningStatement(t *testing.T) query.Delete {
@@ -403,8 +505,8 @@ func deleteReturningStatement(t *testing.T) query.Delete {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -432,8 +534,8 @@ func TestUpdateExecutesTypedRow(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -462,8 +564,8 @@ func TestUpdateRejectsTableWithoutPrimaryKey(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 	}
 	users, err := rasql.NewTable[user](table)
@@ -486,8 +588,8 @@ func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 		ID int64 `rasql:"id"`
 	}
 	columns := []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "email", Type: schema.TypeText},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "email", Type: schema.TextType{}},
 	}
 
 	keyed, err := rasql.NewTable[user](schema.Table{
@@ -534,9 +636,9 @@ func TestUpdateMatchesCompositePrimaryKey(t *testing.T) {
 	table := schema.Table{
 		Name: "memberships",
 		Columns: []schema.Column{
-			{Name: "account_id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "role", Type: schema.TypeText},
+			{Name: "account_id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "role", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"account_id", "user_id"},
 	}
@@ -739,8 +841,8 @@ func TestWritesUseColumnValuer(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -824,8 +926,8 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -884,8 +986,8 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -1004,8 +1106,8 @@ func usersTable() schema.Table {
 	return schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -1307,8 +1409,8 @@ func TestInsertRejectsMissingTaggedColumn(t *testing.T) {
 	table := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}

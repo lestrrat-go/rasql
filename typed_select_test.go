@@ -85,8 +85,8 @@ func TestTypedSelectScansKnownProjectionDirectly(t *testing.T) {
 	users, err := rasql.NewTable[staticScanUser](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -114,8 +114,8 @@ func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
 	users, err := rasql.NewTable[directScanUser](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -147,8 +147,8 @@ func TestTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
 	users, err := rasql.NewTable[directScanUser](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -179,7 +179,7 @@ func TestTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
 	users, err := rasql.NewTable[plannedScanUser](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "name", Type: schema.TypeText},
+			{Name: "name", Type: schema.TextType{}},
 		},
 	})
 	require.NoError(t, err)
@@ -214,7 +214,7 @@ func TestTypedSelectOneStopsAfterSecondRow(t *testing.T) {
 	users, err := rasql.NewTable[user](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -254,7 +254,7 @@ func TestTypedSelectOneNoRows(t *testing.T) {
 	users, err := rasql.NewTable[user](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -288,7 +288,7 @@ func TestTypedSelectOneQueryFailureIsNotNoRows(t *testing.T) {
 	users, err := rasql.NewTable[user](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -484,8 +484,8 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 		orders, err := rasql.NewTable[order](schema.Table{
 			Name: "orders",
 			Columns: []schema.Column{
-				{Name: "id", Type: schema.TypeInteger},
-				{Name: "user_id", Type: schema.TypeInteger},
+				{Name: "id", Type: schema.IntegerType{}},
+				{Name: "user_id", Type: schema.IntegerType{}},
 			},
 			PrimaryKey: []string{"id"},
 		})
@@ -529,7 +529,7 @@ func TestTypedSelectWhereIn(t *testing.T) {
 		users, err := rasql.NewTable[user](schema.Table{
 			Name: "users",
 			Columns: []schema.Column{
-				{Name: "id", Type: schema.TypeInteger},
+				{Name: "id", Type: schema.IntegerType{}},
 			},
 			PrimaryKey: []string{"id"},
 		})
@@ -562,7 +562,7 @@ func TestTypedSelectWhereIn(t *testing.T) {
 		users, err := rasql.NewTable[user](schema.Table{
 			Name: "users",
 			Columns: []schema.Column{
-				{Name: "id", Type: schema.TypeInteger},
+				{Name: "id", Type: schema.IntegerType{}},
 			},
 			PrimaryKey: []string{"id"},
 		})

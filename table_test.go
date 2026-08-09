@@ -169,9 +169,9 @@ func staffDefinition() schema.Table {
 	return schema.Table{
 		Name: "staff",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "manager_id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "manager_id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -192,7 +192,7 @@ func contractors(t *testing.T) rasql.Table[staffRow] {
 
 	table, err := rasql.NewTable[staffRow](schema.Table{
 		Name:       "contractors",
-		Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)

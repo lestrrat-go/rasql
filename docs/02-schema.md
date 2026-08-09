@@ -23,8 +23,8 @@ func Example_schema_table_definition() {
 		Name: "users",
 		// Columns list each database column and its dialect-neutral logical type.
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		// PrimaryKey names columns from Columns that uniquely identify each row.
 		PrimaryKey: []string{"id"},
@@ -124,8 +124,8 @@ func Example_schema_qualified_table() {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "action", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "action", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -168,19 +168,19 @@ A column's `Type` is a logical type, not a database type. The dialect maps it to
 
 | Logical type | Typical Go value |
 | --- | --- |
-| `schema.TypeBoolean` | `bool` |
-| `schema.TypeInteger` | `int64` |
-| `schema.TypeFloat` | `float64` |
-| `schema.TypeText` | `string` |
-| `schema.TypeBytes` | `[]byte` |
-| `schema.TypeTime` | `time.Time` |
-| `schema.TypeJSON` | `[]byte` or a type that marshals itself |
-| `schema.TypeUUID` | `string` or a UUID type |
-| `schema.TypeDecimal` | `string` |
+| `schema.BooleanType` | `bool` |
+| `schema.IntegerType` | `int64` |
+| `schema.FloatType` | `float64` |
+| `schema.TextType` | `string` |
+| `schema.BytesType` | `[]byte` |
+| `schema.TimeType` | `time.Time` |
+| `schema.JSONType` | `[]byte` or a type that marshals itself |
+| `schema.UUIDType` | `string` or a UUID type |
+| `schema.DecimalType` | `string` |
 
-A column is also `Nullable` or not, may be `Unsigned` (see [Unsigned integer columns](#unsigned-integer-columns) below, where the typical Go value is `uint64` rather than `int64`), and may carry a `Default` written as SQL text. Identifiers must be simple: `schema.ValidateIdentifier` accepts a leading letter or underscore followed by letters, digits, or underscores, and everything else is rejected rather than quoted around.
+A column also carries `Nullable`, `Default`, and its concrete `Type`. Type-specific options live on that type: `IntegerType.Unsigned` describes unsigned integers, while `DecimalType` carries `Precision` and `Scale`. Identifiers must be simple: `schema.ValidateIdentifier` accepts a leading letter or underscore followed by letters, digits, or underscores, and everything else is rejected rather than quoted around.
 
-`schema.TypeDecimal` is an exact decimal, for money, quantities, and any other value a binary floating-point `TypeFloat` would round. A decimal column must set `Precision` (the total number of significant digits, at least 1) and `Scale` (the number of those digits right of the decimal point, no more than `Precision`); `Table.Validate` rejects a decimal column that omits either and rejects `Precision` or `Scale` on any other logical type. `Scale` is a `schema.DecimalScale` rather than a plain `int`, and is stated with `schema.NewDecimalScale`, because a `DECIMAL(19,0)` column is legitimate and its zero scale has to be distinguishable from a descriptor that named no scale at all; the zero value of `schema.DecimalScale` means "no scale stated" and `DecimalScale.Value` returns the stated scale together with whether one was stated. Each dialect renders `Precision`/`Scale` into its own DDL: PostgreSQL and MySQL render `NUMERIC(p,s)` and `DECIMAL(p,s)`, each exact and each enforcing its own maximum precision and scale. On both, a decimal column decodes to its declared scale in string form, zero-padded on the right: a `NUMERIC(19,4)` column yields `"19.9900"` for the value `19.99`, not `"19.99"`, so a caller comparing decimal strings has to compare on the declared scale. That declared scale governs the column itself; a projected expression over it need not keep it, and [Scalar functions](03-querying.md#scalar-functions) states where MySQL widens one. SQLite has no exact decimal storage class, so it renders `TEXT` instead: the column round-trips its digits exactly and applies no such padding, decoding to a Go `string` on every dialect, but a SQLite decimal column compares and orders lexicographically rather than numerically, since it is stored as text rather than a number. A caller that wants a real decimal type in Go, rather than a `string`, can write its own row struct with a field implementing `sql.Scanner` and `driver.Valuer`; `row.Assign` checks for that interface before every built-in conversion, so the raw driver value reaches it unchanged.
+`schema.DecimalType` is an exact decimal, for money, quantities, and any other value a binary floating-point `FloatType` would round. A decimal type must set `Precision` (the total number of significant digits, at least 1) and `Scale` (the number of those digits right of the decimal point, no more than `Precision`); `Table.Validate` rejects a decimal type that omits either. `Scale` is a `schema.DecimalScale` rather than a plain `int`, and is stated with `schema.NewDecimalScale`, because a `DECIMAL(19,0)` column is legitimate and its zero scale has to be distinguishable from a descriptor that named no scale at all; the zero value of `schema.DecimalScale` means "no scale stated" and `DecimalScale.Value` returns the stated scale together with whether one was stated. Each dialect renders `Precision`/`Scale` into its own DDL: PostgreSQL and MySQL render `NUMERIC(p,s)` and `DECIMAL(p,s)`, each exact and each enforcing its own maximum precision and scale. On both, a decimal column decodes to its declared scale in string form, zero-padded on the right: a `NUMERIC(19,4)` column yields `"19.9900"` for the value `19.99`, not `"19.99"`, so a caller comparing decimal strings has to compare on the declared scale. That declared scale governs the column itself; a projected expression over it need not keep it, and [Scalar functions](03-querying.md#scalar-functions) states where MySQL widens one. SQLite has no exact decimal storage class, so it renders `TEXT` instead: the column round-trips its digits exactly and applies no such padding, decoding to a Go `string` on every dialect, but a SQLite decimal column compares and orders lexicographically rather than numerically, since it is stored as text rather than a number. A caller that wants a real decimal type in Go, rather than a `string`, can write its own row struct with a field implementing `sql.Scanner` and `driver.Valuer`; `row.Assign` checks for that interface before every built-in conversion, so the raw driver value reaches it unchanged.
 
 <!-- INCLUDE(examples/schema_decimal_column_example_test.go) -->
 ```go
@@ -197,7 +197,7 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// invoiceRow maps the one schema.TypeDecimal column this example declares.
+// invoiceRow maps the one schema.DecimalType column this example declares.
 // The column decodes into a Go string on every dialect. This example runs on
 // SQLite, which stores such a column as TEXT and hands back the exact digits
 // inserted; PostgreSQL and MySQL instead return the value in the column's
@@ -208,7 +208,7 @@ type invoiceRow struct {
 }
 
 func Example_schema_decimal_column() {
-	// This example declares a schema.TypeDecimal column, creates its table in
+	// This example declares a schema.DecimalType column, creates its table in
 	// SQLite, and shows that the inserted string round-trips unchanged there.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -226,15 +226,15 @@ func Example_schema_decimal_column() {
 		return
 	}
 
-	// A TypeDecimal column must state Precision and Scale; Table.Validate
+	// A DecimalType column must state Precision and Scale; Table.Validate
 	// rejects a decimal column that omits either. Scale is stated through
 	// schema.NewDecimalScale so that a scale of 0 is distinguishable from a
 	// column that named no scale at all.
 	invoices := rasql.MustTable[invoiceRow](schema.Table{
 		Name: "invoices",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -272,7 +272,7 @@ source: [examples/schema_decimal_column_example_test.go](https://github.com/lest
 
 ## Unsigned integer columns
 
-A `schema.TypeInteger` column is signed unless it sets `Unsigned`, which states that the column stores no negative values and so reaches 18446744073709551615 instead of 9223372036854775807. `Unsigned` is a plain `bool` rather than a value type like `Scale`, because signedness has exactly two states and the default is the signed one every descriptor written before this field already meant. `Table.Validate` rejects `Unsigned` on any other logical type, since no other logical type has a signedness for a dialect to render.
+A `schema.IntegerType` column is signed unless `IntegerType.Unsigned` is true. An unsigned column stores no negative values and reaches 18446744073709551615 instead of 9223372036854775807. Other concrete column types cannot carry this option. `Table.Validate` still checks the type-specific values, while dialects reject unsigned integers when they have no unsigned integer syntax.
 
 Engines differ here, and rasql says so instead of papering over it. MySQL has unsigned integer types and renders such a column `BIGINT UNSIGNED`. PostgreSQL has none, and SQLite stores a signed 64-bit value whatever a column is declared, so both report an error naming the column rather than render a signed `BIGINT` that would reject the values the descriptor permits. A schema that has to run on all three declares the column signed, and narrows the range it claims to what every engine can hold.
 
@@ -302,8 +302,8 @@ func Example_schema_unsigned_column() {
 			// An unsigned column reaches 18446744073709551615, where a signed
 			// one stops at 9223372036854775807. rasqlgen generates a uint64
 			// field for it rather than an int64 one.
-			{Name: "id", Type: schema.TypeInteger, Unsigned: true},
-			{Name: "sequence", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
+			{Name: "sequence", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -401,7 +401,7 @@ func Example_inspect_sqlite_table() {
 		fmt.Printf("failed to inspect users table: %s\n", err)
 		return
 	}
-	fmt.Printf("%s: %s, %s, %s\n", table.Name, table.Columns[0].Type, table.Columns[1].Type, table.Columns[2].Type)
+	fmt.Printf("%s: %s, %s, %s\n", table.Name, table.Columns[0].Type.Kind(), table.Columns[1].Type.Kind(), table.Columns[2].Type.Kind())
 	fmt.Println(table.PrimaryKey)
 
 	// Output:
@@ -412,9 +412,9 @@ func Example_inspect_sqlite_table() {
 source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_example_test.go)
 <!-- END INCLUDE -->
 
-`inspect.New` takes the same kind of handle as `rasql.New` plus the dialect that describes the database being read. `Table` looks up one table by name. The result is an ordinary descriptor, so it can be validated, compared against a checked-in definition, or handed to the generator. A PostgreSQL `NUMERIC(p,s)` or MySQL `DECIMAL(p,s)` column normalizes to `schema.TypeDecimal` with `Precision` and `Scale` filled in from the catalog. Catalog metadata comes from whichever server the application points at, so a decimal is recognized only from a type declaration matched in full, never from a substring of one: on MySQL, `COLUMN_TYPE` must read exactly `DECIMAL` or `NUMERIC`, optionally followed by `(precision)` or `(precision, scale)`, and catalog text such as `FOODECIMALBAR` is an unsupported type rather than a decimal. Four decimal shapes return an error rather than a descriptor: a PostgreSQL column declared as bare, unconstrained `numeric` has no precision the catalog can report, so `Table` refuses it rather than guess one; a decimal column whose catalog row reports no scale is refused for the same reason, since recording the missing scale as 0 would drop the column's fractional digits; a MySQL `DECIMAL`/`NUMERIC` declaration carrying `UNSIGNED`, `ZEROFILL` or any other modifier is refused, because `schema.Column` cannot record the modifier and re-rendering the column without it would change the values the column permits; and any SQLite `DECIMAL`/`NUMERIC` column is refused outright, since such a column actually holds `REAL` values in SQLite (see [Logical column types](#logical-column-types) above) and `schema.TypeDecimal` would claim an exactness the stored data does not have. A SQLite column that rasql itself created as `TypeDecimal` was declared `TEXT`, and inspects back as `schema.TypeText`, not `schema.TypeDecimal`: SQLite's catalog does not record enough to recover the original logical type.
+`inspect.New` takes the same kind of handle as `rasql.New` plus the dialect that describes the database being read. `Table` looks up one table by name. The result is an ordinary descriptor, so it can be validated, compared against a checked-in definition, or handed to the generator. A PostgreSQL `NUMERIC(p,s)` or MySQL `DECIMAL(p,s)` column normalizes to `schema.DecimalType` with `Precision` and `Scale` filled in from the catalog. Catalog metadata comes from whichever server the application points at, so a decimal is recognized only from a type declaration matched in full, never from a substring of one: on MySQL, `COLUMN_TYPE` must read exactly `DECIMAL` or `NUMERIC`, optionally followed by `(precision)` or `(precision, scale)`, and catalog text such as `FOODECIMALBAR` is an unsupported type rather than a decimal. Four decimal shapes return an error rather than a descriptor: a PostgreSQL column declared as bare, unconstrained `numeric` has no precision the catalog can report, so `Table` refuses it rather than guess one; a decimal column whose catalog row reports no scale is refused for the same reason, since recording the missing scale as 0 would drop the column's fractional digits; a MySQL `DECIMAL`/`NUMERIC` declaration carrying `UNSIGNED`, `ZEROFILL` or any other modifier is refused, because `DecimalType` cannot record the modifier and re-rendering the column without it would change the values the column permits; and any SQLite `DECIMAL`/`NUMERIC` column is refused outright, since such a column actually holds `REAL` values in SQLite (see [Logical column types](#logical-column-types) above) and `schema.DecimalType` would claim an exactness the stored data does not have. A SQLite column that rasql itself created as `DecimalType` was declared `TEXT`, and inspects back as `schema.TextType`, not `schema.DecimalType`: SQLite's catalog does not record enough to recover the original logical type.
 
-Integer declarations are matched the same way, and for the same reason. On MySQL, `COLUMN_TYPE` must read exactly `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `INTEGER` or `BIGINT`, optionally followed by a display width and then by `UNSIGNED`; a declaration carrying `UNSIGNED` sets `Column.Unsigned`, and one carrying `ZEROFILL` or any other modifier is refused, since `schema.Column` cannot record it. Matching the whole declaration is what makes the `UNSIGNED` visible at all: a substring test on `INT` cannot see what follows the type, which is how a `bigint(20) unsigned` column used to inspect as a plain signed integer and re-render as `BIGINT`, losing every value above 9223372036854775807. It also accepted MySQL's `POINT`, which is not an integer at all and is now an unsupported type. PostgreSQL has no unsigned integer type and SQLite stores a signed 64-bit value whatever a column is declared, so neither ever reports an unsigned column; a SQLite column declared `UNSIGNED BIG INT` inspects as the signed integer column it really is.
+Integer declarations are matched the same way, and for the same reason. On MySQL, `COLUMN_TYPE` must read exactly `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `INTEGER` or `BIGINT`, optionally followed by a display width and then by `UNSIGNED`; a declaration carrying `UNSIGNED` sets `IntegerType.Unsigned`, and one carrying `ZEROFILL` or any other modifier is refused, since the concrete type cannot record it. Matching the whole declaration is what makes the `UNSIGNED` visible at all: a substring test on `INT` cannot see what follows the type, which is how a `bigint(20) unsigned` column used to inspect as a plain signed integer and re-render as `BIGINT`, losing every value above 9223372036854775807. It also accepted MySQL's `POINT`, which is not an integer at all and is now an unsupported type. PostgreSQL has no unsigned integer type and SQLite stores a signed 64-bit value whatever a column is declared, so neither ever reports an unsigned column; a SQLite column declared `UNSIGNED BIG INT` inspects as the signed integer column it really is.
 
 For PostgreSQL and SQLite, `Table` never returns a descriptor silently missing columns or a primary key. PostgreSQL's `information_schema` views are filtered by the inspecting role's privileges, while `pg_catalog` is not, so `inspect` reads the true column count and the primary key from `pg_catalog` rather than trusting `information_schema` alone. A role whose grants hide some or all of a table's columns gets `inspect.IncompleteMetadataError`, and a name that does not exist gets `inspect.TableNotFoundError`. A plain read-only role gets its primary key from `pg_catalog` too, so it sees a complete descriptor with no error. MySQL has the same `information_schema` filtering but no unfiltered catalog to cross-check against, so a restricted MySQL grant can make inspection silently under-report a table's columns or primary key, with no way for this package to detect it.
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/method"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/row"
 )
 
 // ColumnValuer is implemented by row types that supply their own column values.
@@ -95,9 +96,80 @@ func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
 	return config.defaultColumns, nil
 }
 
+func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
+	if isNil(statement) || len(statement.Returning()) == 0 {
+		return nil
+	}
+	var result T
+	if _, ok := any(&result).(row.GeneratedRow); !ok {
+		return nil
+	}
+
+	target, ok := writeTargetTable(statement)
+	if !ok {
+		return nil
+	}
+	returned := make(map[string]struct{}, len(statement.Returning()))
+	for _, projection := range statement.Returning() {
+		name := projection.Alias()
+		if name == "" {
+			column, ok := projection.Expression().(query.Column)
+			if !ok {
+				continue
+			}
+			name = column.Name()
+		}
+		returned[name] = struct{}{}
+	}
+	for _, column := range target.Definition().Columns {
+		if _, ok := returned[column.Name]; !ok {
+			return fmt.Errorf("rasql: RETURNING projections omit generated row column %q", column.Name)
+		}
+	}
+	return nil
+}
+
+func writeTargetTable(statement query.WriteStatement) (query.Table, bool) {
+	switch statement := statement.(type) {
+	case query.Insert:
+		return statement.Into(), true
+	case *query.Insert:
+		if statement == nil {
+			return query.Table{}, false
+		}
+		return statement.Into(), true
+	case query.Update:
+		return statement.Table(), true
+	case *query.Update:
+		if statement == nil {
+			return query.Table{}, false
+		}
+		return statement.Table(), true
+	case query.Delete:
+		return statement.From(), true
+	case *query.Delete:
+		if statement == nil {
+			return query.Table{}, false
+		}
+		return statement.From(), true
+	case query.Upsert:
+		return statement.Insert().Into(), true
+	case *query.Upsert:
+		if statement == nil {
+			return query.Table{}, false
+		}
+		return statement.Insert().Into(), true
+	default:
+		return query.Table{}, false
+	}
+}
+
 // QueryWriteAll runs statement through QueryWrite and decodes every
 // returned row as T. The RETURNING projections must cover the columns T maps.
 func QueryWriteAll[T any](ctx context.Context, x Executor, statement query.WriteStatement) ([]T, error) {
+	if err := validateTypedWriteReturning[T](statement); err != nil {
+		return nil, err
+	}
 	rendered, err := renderQueryWrite(x, statement)
 	if err != nil {
 		return nil, err
@@ -112,6 +184,9 @@ func QueryWriteAll[T any](ctx context.Context, x Executor, statement query.Write
 // [TypedSelectBuilder.One] reports.
 func QueryWriteOne[T any](ctx context.Context, x Executor, statement query.WriteStatement) (T, error) {
 	var zero T
+	if err := validateTypedWriteReturning[T](statement); err != nil {
+		return zero, err
+	}
 	rendered, err := renderQueryWrite(x, statement)
 	if err != nil {
 		return zero, err

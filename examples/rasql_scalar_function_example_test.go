@@ -47,9 +47,9 @@ func Example_rasql_scalar_function() {
 	members := rasql.MustTable[memberRow](schema.Table{
 		Name: "members",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
-			{Name: "nickname", Type: schema.TypeText, Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "nickname", Type: schema.TextType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	})

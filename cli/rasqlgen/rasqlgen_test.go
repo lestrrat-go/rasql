@@ -32,7 +32,7 @@ func TestRunSchemaGeneratesSource(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
 	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
@@ -54,7 +54,7 @@ func TestRunSchemaKeepsUnsignedColumnsFromInput(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"events","Columns":[{"Name":"id","Type":"integer","Unsigned":true},{"Name":"sequence","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	data := []byte(`[{"Name":"events","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":true}},{"Name":"sequence","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
 	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
@@ -62,7 +62,7 @@ func TestRunSchemaKeepsUnsignedColumnsFromInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
 	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
-	require.Contains(t, string(source), `{Name: "id", Type: schema.TypeInteger, Unsigned: true},`)
+	require.Contains(t, string(source), `{Name: "id", Type: schema.IntegerType{Unsigned: true}},`)
 }
 
 func TestRunSchemaFiltersInputTables(t *testing.T) {
@@ -73,8 +73,8 @@ func TestRunSchemaFiltersInputTables(t *testing.T) {
 	})
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[
-		{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
-		{"Name":"orders","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}
+		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
+		{"Name":"orders","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}
 	]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -93,8 +93,8 @@ func TestRunSchemaRejectsDuplicateFilteredInputTables(t *testing.T) {
 	})
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[
-		{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
-		{"Name":"users","Columns":[{"Name":"email","Type":"text"}],"PrimaryKey":["email"]}
+		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
+		{"Name":"users","Columns":[{"Name":"email","Type":{"Kind":"text"}}],"PrimaryKey":["email"]}
 	]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -111,7 +111,7 @@ func TestRunSchemaRejectsUnknownInputTable(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
 	err = run([]string{"schema", "-input", input, "-table", "orders", "-package", "generated", "-output", directory})
@@ -147,7 +147,7 @@ func TestRunSchemaRejectsDuplicateTableFlag(t *testing.T) {
 				require.NoError(t, os.RemoveAll(directory))
 			})
 			input := filepath.Join(directory, "schema.json")
-			data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+			data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 			require.NoError(t, os.WriteFile(input, data, 0o600))
 
 			database, mock, err := sqlmock.New()
@@ -179,8 +179,8 @@ func TestRunSchemaGeneratesOneFilePerTable(t *testing.T) {
 	})
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[
-		{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
-		{"Name":"orders","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}
+		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
+		{"Name":"orders","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}
 	]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -203,8 +203,8 @@ func TestRunSchemaRejectsCrossFileNameCollisionsBeforeWriting(t *testing.T) {
 	})
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[
-		{"Name":"api_keys","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
-		{"Name":"api__keys","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}
+		{"Name":"api_keys","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
+		{"Name":"api__keys","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}
 	]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
@@ -224,7 +224,7 @@ func TestRunSchemaSuccessLeavesNoTemporaryFile(t *testing.T) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
 	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
@@ -248,7 +248,7 @@ func TestRunSchemaOutputDirectoryMissingReturnsError(t *testing.T) {
 	})
 	input := filepath.Join(directory, "schema.json")
 	output := filepath.Join(directory, "missing")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
 	err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
@@ -264,7 +264,7 @@ func TestRunSchemaRejectsFileOutput(t *testing.T) {
 	})
 	input := filepath.Join(directory, "schema.json")
 	output := filepath.Join(directory, "schema_gen.go")
-	require.NoError(t, os.WriteFile(input, []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`), 0o600))
+	require.NoError(t, os.WriteFile(input, []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`), 0o600))
 	require.NoError(t, os.WriteFile(output, []byte("SENTINEL"), 0o600))
 
 	err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
@@ -490,7 +490,7 @@ func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
 					require.NoError(t, os.RemoveAll(directory))
 				})
 				input := filepath.Join(directory, "schema.json")
-				data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+				data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 				require.NoError(t, os.WriteFile(input, data, 0o600))
 
 				err = run(append(source.args(input, directory), "-timeout", timeout.value))
@@ -769,7 +769,7 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 		commandOutput = previousCommandOutput
 	})
 
-	const schemaContent = `[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`
+	const schemaContent = `[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`
 	const queryContent = `SELECT id FROM users WHERE id = {{bind "id"}}`
 
 	testCases := []struct {
@@ -883,7 +883,7 @@ func TestRunSchemaRejectsOversizedInput(t *testing.T) {
 	})
 
 	validInput := filepath.Join(directory, "schema.json")
-	validData := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}]`)
+	validData := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.LessOrEqual(t, len(validData), maxInputBytes)
 	require.NoError(t, os.WriteFile(validInput, validData, 0o600))
 

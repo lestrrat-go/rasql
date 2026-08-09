@@ -70,15 +70,15 @@ func PostgreSQL() Dialect {
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
-		types: map[schema.LogicalType]string{
-			schema.TypeBoolean: "BOOLEAN",
-			schema.TypeInteger: "BIGINT",
-			schema.TypeFloat:   "DOUBLE PRECISION",
-			schema.TypeText:    "TEXT",
-			schema.TypeBytes:   "BYTEA",
-			schema.TypeTime:    "TIMESTAMPTZ",
-			schema.TypeJSON:    "JSONB",
-			schema.TypeUUID:    "UUID",
+		types: map[schema.TypeKind]string{
+			schema.KindBoolean: "BOOLEAN",
+			schema.KindInteger: "BIGINT",
+			schema.KindFloat:   "DOUBLE PRECISION",
+			schema.KindText:    "TEXT",
+			schema.KindBytes:   "BYTEA",
+			schema.KindTime:    "TIMESTAMPTZ",
+			schema.KindJSON:    "JSONB",
+			schema.KindUUID:    "UUID",
 		},
 	}
 }
@@ -97,15 +97,15 @@ func MySQL() Dialect {
 		// MySQL is the only supported engine with unsigned integer types, so it
 		// is the only builtin that states one here.
 		unsignedInteger: "BIGINT UNSIGNED",
-		types: map[schema.LogicalType]string{
-			schema.TypeBoolean: "BOOLEAN",
-			schema.TypeInteger: "BIGINT",
-			schema.TypeFloat:   "DOUBLE",
-			schema.TypeText:    "TEXT",
-			schema.TypeBytes:   "BLOB",
-			schema.TypeTime:    "DATETIME",
-			schema.TypeJSON:    "JSON",
-			schema.TypeUUID:    "CHAR(36)",
+		types: map[schema.TypeKind]string{
+			schema.KindBoolean: "BOOLEAN",
+			schema.KindInteger: "BIGINT",
+			schema.KindFloat:   "DOUBLE",
+			schema.KindText:    "TEXT",
+			schema.KindBytes:   "BLOB",
+			schema.KindTime:    "DATETIME",
+			schema.KindJSON:    "JSON",
+			schema.KindUUID:    "CHAR(36)",
 		},
 	}
 }
@@ -119,15 +119,15 @@ func SQLite() Dialect {
 		upsert:       UpsertOnConflict,
 		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityQualifiedIndexName,
 		decimalName:  "TEXT",
-		types: map[schema.LogicalType]string{
-			schema.TypeBoolean: "INTEGER",
-			schema.TypeInteger: "INTEGER",
-			schema.TypeFloat:   "REAL",
-			schema.TypeText:    "TEXT",
-			schema.TypeBytes:   "BLOB",
-			schema.TypeTime:    "TEXT",
-			schema.TypeJSON:    "TEXT",
-			schema.TypeUUID:    "TEXT",
+		types: map[schema.TypeKind]string{
+			schema.KindBoolean: "INTEGER",
+			schema.KindInteger: "INTEGER",
+			schema.KindFloat:   "REAL",
+			schema.KindText:    "TEXT",
+			schema.KindBytes:   "BLOB",
+			schema.KindTime:    "TEXT",
+			schema.KindJSON:    "TEXT",
+			schema.KindUUID:    "TEXT",
 		},
 	}
 }
@@ -138,11 +138,11 @@ type builtin struct {
 	placeholder  func(int) string
 	upsert       UpsertStyle
 	capabilities Capability
-	types        map[schema.LogicalType]string
+	types        map[schema.TypeKind]string
 	decimalName  string
 	maxPrecision int
 	maxScale     int
-	// unsignedInteger is the DDL type for an unsigned schema.TypeInteger
+	// unsignedInteger is the DDL type for an unsigned schema.IntegerType
 	// column, and is empty on a dialect that has no unsigned integer type.
 	unsignedInteger string
 }
@@ -166,15 +166,23 @@ func (d builtin) Placeholder(position int) (string, error) {
 }
 
 func (d builtin) TypeName(column schema.Column) (string, error) {
-	if column.Unsigned {
-		return d.unsignedTypeName(column)
+	if column.Type == nil {
+		return "", fmt.Errorf("dialect %s: unsupported nil column type", d.name)
 	}
-	if column.Type == schema.TypeDecimal {
-		return d.decimalTypeName(column)
+	switch typed := column.Type.(type) {
+	case schema.IntegerType:
+		if typed.Unsigned {
+			return d.unsignedTypeName(column)
+		}
+	case schema.DecimalType:
+		return d.decimalTypeName(column, typed)
+	case schema.BooleanType, schema.FloatType, schema.TextType, schema.BytesType, schema.TimeType, schema.JSONType, schema.UUIDType:
+	default:
+		return "", fmt.Errorf("dialect %s: unsupported column type %T", d.name, column.Type)
 	}
-	typeName, ok := d.types[column.Type]
+	typeName, ok := d.types[column.Type.Kind()]
 	if !ok {
-		return "", fmt.Errorf("dialect %s: unsupported logical type %q", d.name, column.Type)
+		return "", fmt.Errorf("dialect %s: unsupported column type %q", d.name, column.Type.Kind())
 	}
 	return typeName, nil
 }
@@ -187,35 +195,32 @@ func (d builtin) TypeName(column schema.Column) (string, error) {
 // Refusing is loud and recoverable, and the caller's fix is to declare the
 // column signed and say so in the descriptor.
 func (d builtin) unsignedTypeName(column schema.Column) (string, error) {
-	if column.Type != schema.TypeInteger {
-		return "", fmt.Errorf("dialect %s: column %q cannot be represented: unsigned applies only to an integer column, not %q", d.name, column.Name, column.Type)
-	}
 	if d.unsignedInteger == "" {
 		return "", fmt.Errorf("dialect %s: unsigned integer column %q cannot be represented: this dialect has no unsigned integer type, and rendering the column signed would narrow the values it permits", d.name, column.Name)
 	}
 	return d.unsignedInteger, nil
 }
 
-// decimalTypeName renders the DDL type for a TypeDecimal column. Every dialect
+// decimalTypeName renders the DDL type for a DecimalType column. Every dialect
 // requires a stated scale, because a descriptor that leaves it unstated does
 // not say what the column means. SQLite then has no bound to check and renders
 // its decimalName with no precision/scale suffix; PostgreSQL and MySQL each
 // enforce their own maximum and render NAME(p,s).
-func (d builtin) decimalTypeName(column schema.Column) (string, error) {
-	scale, stated := column.Scale.Value()
+func (d builtin) decimalTypeName(column schema.Column, decimal schema.DecimalType) (string, error) {
+	scale, stated := decimal.Scale.Value()
 	if !stated {
 		return "", fmt.Errorf("dialect %s: decimal column %q states no scale", d.name, column.Name)
 	}
 	if d.maxPrecision == 0 && d.maxScale == 0 {
 		return d.decimalName, nil
 	}
-	if column.Precision > d.maxPrecision {
-		return "", fmt.Errorf("dialect %s: decimal precision %d exceeds the maximum of %d", d.name, column.Precision, d.maxPrecision)
+	if decimal.Precision > d.maxPrecision {
+		return "", fmt.Errorf("dialect %s: decimal precision %d exceeds the maximum of %d", d.name, decimal.Precision, d.maxPrecision)
 	}
 	if scale > d.maxScale {
 		return "", fmt.Errorf("dialect %s: decimal scale %d exceeds the maximum of %d", d.name, scale, d.maxScale)
 	}
-	return fmt.Sprintf("%s(%d,%d)", d.decimalName, column.Precision, scale), nil
+	return fmt.Sprintf("%s(%d,%d)", d.decimalName, decimal.Precision, scale), nil
 }
 
 func (d builtin) UpsertStyle() UpsertStyle {

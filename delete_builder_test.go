@@ -22,8 +22,8 @@ func deleteUsersTable(t *testing.T) rasql.Table[deleteUser] {
 	users, err := rasql.NewTable[deleteUser](schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -93,7 +93,7 @@ func TestDeleteFrom(t *testing.T) {
 	t.Run("WhereIn with a column from another table reports an error", func(t *testing.T) {
 		other, err := rasql.NewTable[deleteUser](schema.Table{
 			Name:       "archived_users",
-			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestDeleteFrom(t *testing.T) {
 	t.Run("column from another table reports an error", func(t *testing.T) {
 		other, err := rasql.NewTable[deleteUser](schema.Table{
 			Name:       "archived_users",
-			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
@@ -304,7 +304,7 @@ func TestDeleteFrom(t *testing.T) {
 		require.NoError(t, err)
 		other, err := rasql.NewTable[deleteUser](schema.Table{
 			Name:       "archived_users",
-			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)

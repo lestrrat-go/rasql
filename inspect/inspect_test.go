@@ -42,8 +42,8 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "email", Type: schema.TypeText, Nullable: true},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "email", Type: schema.TextType{}, Nullable: true},
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 	require.Nil(t, table.UniqueConstraints)
@@ -77,7 +77,7 @@ func TestPostgreSQLInspectorNormalizesNumericColumn(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "payments")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+		{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 	}, table.Columns)
 }
 
@@ -615,9 +615,9 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "active", Type: schema.TypeBoolean},
-		{Name: "login_attempts", Type: schema.TypeInteger},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "active", Type: schema.BooleanType{}},
+		{Name: "login_attempts", Type: schema.IntegerType{}},
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 
@@ -661,8 +661,8 @@ func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "id", Type: schema.TypeInteger, Unsigned: true},
-		{Name: "sequence", Type: schema.TypeInteger},
+		{Name: "id", Type: schema.IntegerType{Unsigned: true}},
+		{Name: "sequence", Type: schema.IntegerType{}},
 	}, table.Columns)
 
 	rendered, err := render.CreateTable(dialect.MySQL(), table)
@@ -729,7 +729,7 @@ func TestMySQLInspectorMatchesIntegerColumnTypeExactly(t *testing.T) {
 
 // TestMySQLInspectorAcceptsDocumentedIntegerSpellings is the positive
 // counterpart: every integer spelling MySQL's catalog produces, with and
-// without a display width, normalizes to schema.TypeInteger carrying the
+// without a display width, normalizes to schema.IntegerType carrying the
 // signedness the declaration states. TINYINT(1) stays a boolean, and its
 // unsigned form stays an integer, as both did before signedness was recorded.
 func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
@@ -737,17 +737,17 @@ func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
 		columnType string
 		want       schema.Column
 	}{
-		"bigint":                            {columnType: "bigint", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
-		"bigint with width":                 {columnType: "bigint(20)", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
-		"bigint unsigned":                   {columnType: "bigint unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
-		"bigint width unsigned":             {columnType: "bigint(20) unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
-		"int unsigned":                      {columnType: "int(10) unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
-		"integer alias":                     {columnType: "integer", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
-		"smallint unsigned":                 {columnType: "smallint unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
-		"mediumint":                         {columnType: "mediumint", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
-		"tinyint":                           {columnType: "tinyint", want: schema.Column{Name: "id", Type: schema.TypeInteger}},
-		"tinyint(1) is a boolean":           {columnType: "tinyint(1)", want: schema.Column{Name: "id", Type: schema.TypeBoolean}},
-		"unsigned tinyint(1) is an integer": {columnType: "tinyint(1) unsigned", want: schema.Column{Name: "id", Type: schema.TypeInteger, Unsigned: true}},
+		"bigint":                            {columnType: "bigint", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
+		"bigint with width":                 {columnType: "bigint(20)", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
+		"bigint unsigned":                   {columnType: "bigint unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"bigint width unsigned":             {columnType: "bigint(20) unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"int unsigned":                      {columnType: "int(10) unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"integer alias":                     {columnType: "integer", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
+		"smallint unsigned":                 {columnType: "smallint unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"mediumint":                         {columnType: "mediumint", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
+		"tinyint":                           {columnType: "tinyint", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
+		"tinyint(1) is a boolean":           {columnType: "tinyint(1)", want: schema.Column{Name: "id", Type: schema.BooleanType{}}},
+		"unsigned tinyint(1) is an integer": {columnType: "tinyint(1) unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
 	}
 
 	for name, test := range tests {
@@ -801,7 +801,7 @@ func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "payments")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "amount", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(2)},
+		{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}},
 	}, table.Columns)
 }
 
@@ -869,7 +869,7 @@ func TestMySQLInspectorMatchesDecimalColumnTypeExactly(t *testing.T) {
 
 // TestMySQLInspectorAcceptsDocumentedDecimalSpellings is the positive
 // counterpart: every spelling MySQL documents for a decimal type still
-// normalizes to schema.TypeDecimal.
+// normalizes to schema.DecimalType.
 func TestMySQLInspectorAcceptsDocumentedDecimalSpellings(t *testing.T) {
 	for _, columnType := range []string{"decimal", "decimal(10)", "decimal(10,2)", "numeric(10,2)", "DECIMAL(10, 2)"} {
 		t.Run(columnType, func(t *testing.T) {
@@ -894,7 +894,7 @@ func TestMySQLInspectorAcceptsDocumentedDecimalSpellings(t *testing.T) {
 			table, err := inspector.Table(t.Context(), "payments")
 			require.NoError(t, err)
 			require.Equal(t, []schema.Column{
-				{Name: "amount", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(2)},
+				{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}},
 			}, table.Columns)
 		})
 	}
@@ -969,7 +969,7 @@ func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
 	require.Equal(t, []string{"stream_id", "sequence"}, table.PrimaryKey)
-	require.Equal(t, schema.TypeBytes, table.Columns[2].Type)
+	require.Equal(t, schema.BytesType{}, table.Columns[2].Type)
 	require.True(t, table.Columns[2].Nullable)
 }
 
@@ -988,8 +988,8 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "payload", Type: schema.TypeBytes, Nullable: true},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 
@@ -1196,8 +1196,8 @@ func TestPostgreSQLInspectorReturnsCompleteDescriptorWhenCountsAgree(t *testing.
 	table, err := inspector.Table(t.Context(), "widgets")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "name", Type: schema.TypeText},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "name", Type: schema.TextType{}},
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 }

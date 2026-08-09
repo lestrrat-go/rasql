@@ -28,6 +28,14 @@ type DestinationScanner interface {
 	ScanDestinations([]string) ([]any, error)
 }
 
+// GeneratedRow is implemented by rows emitted by rasqlgen. It marks the
+// generated mapping contract used by typed writes to validate RETURNING
+// projections. Custom DestinationScanner implementations do not need it.
+type GeneratedRow interface {
+	DestinationScanner
+	IsGeneratedRow()
+}
+
 // Scan returns a rangeable sequence of the result rows in rows.
 //
 // Scan takes ownership of rows and closes them when the sequence ends, whether
