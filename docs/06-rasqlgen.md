@@ -246,7 +246,7 @@ The input is a static template, so it holds SQL text plus `{{bind "name"}}` acti
 SELECT id, email FROM users WHERE email = {{bind "email"}}
 ```
 
-The generated function takes one parameter per distinct bind name, in the order the names first appear, and returns the statement ready for `client.QueryRendered` or `client.ExecRendered`:
+The generated function takes one parameter per distinct bind name, in the order the names first appear, and returns the statement ready for `rasql.QueryRendered[T]`, `client.QueryRendered`, or `client.ExecRendered`:
 
 ```go
 func UserByEmail(email any) (render.Statement, error)

@@ -18,6 +18,7 @@ The tables in this section enumerate every operation the public API offers. The 
 | `SELECT` decoded as a custom type | `rasql.DecodeFrom[R](table)` | `TypedSelectBuilder[R]` |
 | `SELECT` decoded from a table with no row type | `rasql.DecodeQueryFrom[R](queryTable)` | `TypedSelectBuilder[R]` |
 | `SELECT` without decoding | `rasql.SelectQueryFrom(table.QueryTable())` | `SelectBuilder`, yielding `row.Dynamic` |
+| Typed static SQL | `rasql.QueryRendered[T](ctx, executor, statement)` | `iter.Seq2[T, error]` |
 | `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
 | `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, client, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
 | `INSERT` of several rows | `query.NewInsertRows(table.QueryTable(), columns, rows)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
