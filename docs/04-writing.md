@@ -87,6 +87,8 @@ source: [examples/rasql_insert_example_test.go](https://github.com/lestrrat-go/r
 
 The value must carry one exported tagged field for every column of the table, so a row that omits a column is a compile-time or validation problem rather than a silent `NULL`. A generated row type has no tags and supplies its column values through a `ColumnValue` method instead, which [the two mapping methods](06-rasqlgen.md#the-two-mapping-methods) covers. `Insert` returns the driver's `sql.Result`, which reports rows affected and, on databases that support it, the last inserted id.
 
+`rasql.InsertMany` applies the same mapping to a slice of values and emits one parameterized multi-row `INSERT`. `InsertManyWithOptions` accepts `DefaultColumns` and omits those columns from every row. An empty slice is rejected, and callers that need to split a very large batch should make several calls so each statement stays under the database's parameter limit.
+
 ## Use database defaults
 
 Pass `rasql.DefaultColumns` to `rasql.InsertWithOptions` to omit named columns from an insert. The database supplies those values. `InsertWithOptions` never treats a Go zero value as absent, so every column not named by `DefaultColumns` remains a bound value. When every column is named, PostgreSQL, MySQL, and SQLite render an all-default insert.
@@ -277,6 +279,12 @@ source: [examples/rasql_update_example_test.go](https://github.com/lestrrat-go/r
 
 The row identifies itself, so there is no separate predicate to keep in step with it. A table without a primary key cannot be updated this way; build an `UPDATE` through the `query` package instead.
 
+## Update selected fields or many rows
+
+`rasql.UpdateWithOptions` keeps the typed mapping while selecting only the fields to assign. `UpdateColumns` names the non-primary-key fields to write, so a partial row value can omit every other field. Without `UpdateWhere`, the primary-key fields still identify one row. `UpdateWhere` replaces that primary-key predicate with an explicit, parameterized `query.Expression`, which updates every matching row. The typed helper rejects an unconditional update; use the lower-level `query` package when that behavior is intentional.
+
+Use `rasql.UpdateMany` when the operation is intentionally bulk. It requires `UpdateWhere`, so omitting the predicate fails before execution.
+
 ## Delete rows
 
 `rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` and `WhereIn` take a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly. `WhereIn` needs at least one value; `Build` and `Exec` return an error for an empty list rather than rendering `IN ()`, which is not valid SQL in any supported dialect.
@@ -381,9 +389,9 @@ source: [examples/rasql_delete_example_test.go](https://github.com/lestrrat-go/r
 
 A delete matches whatever the predicate matches, so it is not tied to a primary key the way `Update` is. `Build` renders the statement without executing it when you want to see the SQL first; combine it with `AllowAll` to render a full-table delete.
 
-## Statements the typed helpers do not cover
+## Build advanced write statements
 
-`rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for a partial update, conflict handling, or a multi-row insert. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `rasql.QueryWrite` for one of those instead.
+`rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for conflict handling or SQL shapes not covered by the typed helpers. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `rasql.QueryWrite` for one of those instead.
 
 `NewUpdate` and `NewDelete` accept a missing predicate while a statement is being assembled, but rendering and execution reject that shape unless the intent is explicit. Call `statement.AllowAll()` and use the returned statement when every row should be changed. A predicate and `AllowAll` cannot be combined.
 

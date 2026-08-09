@@ -59,6 +59,99 @@ func TestInsertExecutesTypedRow(t *testing.T) {
 	require.EqualValues(t, 1, rows)
 }
 
+func TestInsertManyExecutesOneParameterizedStatement(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[user](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	mock.ExpectExec(`INSERT INTO "users" ("id", "email") VALUES ($1, $2), ($3, $4)`).
+		WithArgs(int64(1), "ada@example.com", int64(2), "grace@example.com").
+		WillReturnResult(sqlmock.NewResult(1, 2))
+
+	result, err := rasql.InsertMany(t.Context(), client, users, []user{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "grace@example.com"},
+	})
+	require.NoError(t, err)
+	rows, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 2, rows)
+}
+
+func TestInsertManyWithOptionsUsesDefaultsForEveryRow(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	type user struct {
+		ID     int64  `rasql:"id"`
+		Email  string `rasql:"email"`
+		Status string `rasql:"status"`
+	}
+	users, err := rasql.NewTable[user](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}, Default: "next_user_id()"},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	mock.ExpectExec(`INSERT INTO "users" ("email", "status") VALUES ($1, $2), ($3, $4)`).
+		WithArgs("ada@example.com", "", "grace@example.com", "").
+		WillReturnResult(sqlmock.NewResult(1, 2))
+
+	_, err = rasql.InsertManyWithOptions(
+		t.Context(),
+		client,
+		users,
+		[]user{{Email: "ada@example.com"}, {Email: "grace@example.com"}},
+		rasql.DefaultColumns("id"),
+	)
+	require.NoError(t, err)
+}
+
+func TestInsertManyRejectsEmptyRows(t *testing.T) {
+	type user struct {
+		ID int64 `rasql:"id"`
+	}
+	users, err := rasql.NewTable[user](schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	_, err = rasql.InsertMany(t.Context(), rasql.Client{}, users, []user{})
+	require.ErrorContains(t, err, "rows must not be empty")
+}
+
 // generatedDefaultUser has the method-based mapping rasqlgen writes for a row
 // type, including fields whose values come from database defaults on insert.
 type generatedDefaultUser struct {
@@ -558,6 +651,110 @@ func TestUpdateExecutesTypedRow(t *testing.T) {
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rows)
+}
+
+func TestUpdateWithOptionsUpdatesSelectedFieldsByPrimaryKey(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	type patch struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[patch](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	mock.ExpectExec(`UPDATE "users" SET "email" = $1 WHERE ("users"."id" = $2)`).
+		WithArgs("grace@example.com", int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	_, err = rasql.UpdateWithOptions(
+		t.Context(),
+		client,
+		users,
+		patch{ID: 42, Email: "grace@example.com"},
+		rasql.UpdateColumns("email"),
+	)
+	require.NoError(t, err)
+}
+
+func TestUpdateManyBulkUpdatesPartialRowByPredicate(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	type patch struct {
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[patch](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	mock.ExpectExec(`UPDATE "users" SET "email" = $1 WHERE ("users"."id" IN ($2, $3))`).
+		WithArgs("review@example.com", int64(1), int64(2)).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	_, err = rasql.UpdateMany(
+		t.Context(),
+		client,
+		users,
+		patch{Email: "review@example.com"},
+		rasql.UpdateColumns("email"),
+		rasql.UpdateWhere(query.In(id, query.Bind(int64(1)), query.Bind(int64(2)))),
+	)
+	require.NoError(t, err)
+}
+
+func TestUpdateWithOptionsRejectsInvalidConfiguration(t *testing.T) {
+	type patch struct {
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.NewTable[patch](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	_, err = rasql.UpdateWithOptions(t.Context(), rasql.Client{}, users, patch{}, rasql.UpdateColumns("missing"))
+	require.ErrorContains(t, err, `has no column "missing" selected for update`)
+	_, err = rasql.UpdateWithOptions(t.Context(), rasql.Client{}, users, patch{}, rasql.UpdateWhere(nil))
+	require.ErrorContains(t, err, "update predicate must not be nil")
+	_, err = rasql.UpdateWithOptions(t.Context(), rasql.Client{}, users, patch{Email: "x"}, rasql.UpdateColumns("email"))
+	require.ErrorContains(t, err, `row value has no field tagged for column "id"`)
+	_, err = rasql.UpdateMany(t.Context(), rasql.Client{}, users, patch{Email: "x"}, rasql.UpdateColumns("email"))
+	require.ErrorContains(t, err, "bulk update requires an explicit UpdateWhere predicate")
 }
 
 func TestUpdateRejectsTableWithoutPrimaryKey(t *testing.T) {
