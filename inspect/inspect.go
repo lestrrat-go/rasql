@@ -300,7 +300,7 @@ func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName s
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
-	query := "PRAGMA table_info(\"" + tableName + "\")"
+	query := "PRAGMA table_info(\"" + sqlitePragmaIdentifier(tableName) + "\")"
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: read SQLite columns: %w", err)
@@ -351,11 +351,88 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	for index, column := range primaryColumns {
 		primaryKey[index] = column.name
 	}
-	table := schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
+	indexes, err := i.sqliteIndexes(ctx, tableName)
+	if err != nil {
+		return schema.Table{}, err
+	}
+	table := schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey, Indexes: indexes}
 	if err := table.Validate(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
+}
+
+func (i Inspector) sqliteIndexes(ctx context.Context, tableName string) ([]schema.Index, error) {
+	query := "PRAGMA index_list(\"" + sqlitePragmaIdentifier(tableName) + "\")"
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read SQLite indexes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	indexes := make([]schema.Index, 0)
+	for rows.Next() {
+		var sequence int64
+		var name string
+		var unique bool
+		var origin string
+		var partial bool
+		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			return nil, fmt.Errorf("inspect: scan SQLite index: %w", err)
+		}
+		if origin != "c" {
+			continue
+		}
+		if partial {
+			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: partial indexes are unsupported", name)
+		}
+		if err := schema.ValidateIdentifier(name); err != nil {
+			return nil, fmt.Errorf("inspect: SQLite index %q: %w", name, err)
+		}
+		columns, err := i.sqliteIndexColumns(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		indexes = append(indexes, schema.Index{Name: name, Columns: columns, Unique: unique})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate SQLite indexes: %w", err)
+	}
+	return indexes, nil
+}
+
+func (i Inspector) sqliteIndexColumns(ctx context.Context, indexName string) ([]string, error) {
+	query := "PRAGMA index_info(\"" + sqlitePragmaIdentifier(indexName) + "\")"
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read SQLite index %q columns: %w", indexName, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	columns := make([]string, 0)
+	for rows.Next() {
+		var sequence int64
+		var tableColumn int64
+		var name sql.NullString
+		if err := rows.Scan(&sequence, &tableColumn, &name); err != nil {
+			return nil, fmt.Errorf("inspect: scan SQLite index %q column: %w", indexName, err)
+		}
+		if !name.Valid {
+			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: expression indexes are unsupported", indexName)
+		}
+		columns = append(columns, name.String)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate SQLite index %q columns: %w", indexName, err)
+	}
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("inspect: SQLite index %q has no columns", indexName)
+	}
+	return columns, nil
+}
+
+func sqlitePragmaIdentifier(value string) string {
+	return strings.ReplaceAll(value, `"`, `""`)
 }
 
 func (i Inspector) readColumns(ctx context.Context, query string, argument any) ([]schema.Column, error) {

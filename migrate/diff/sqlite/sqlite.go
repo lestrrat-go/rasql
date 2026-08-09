@@ -57,6 +57,80 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 	return snapshot, nil
 }
 
+// normalizeCreateTable puts SQLite primary keys and their implied nullability
+// into the same representation regardless of whether the source used inline
+// or table-level syntax. SQLite inspection renders this normalized form.
+func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
+	var primaryKey sqlitequery.TableConstraint
+	var hasPrimaryKey bool
+	constraints := make([]sqlitequery.TableConstraint, 0, len(statement.Constraints)+1)
+	for _, constraint := range statement.Constraints {
+		if constraint.Kind != sqlitequery.ConstraintPrimaryKey {
+			constraints = append(constraints, constraint)
+			continue
+		}
+		if !hasPrimaryKey {
+			primaryKey = constraint
+			primaryKey.Name = nil
+			hasPrimaryKey = true
+		}
+	}
+
+	inlineColumns := make([]sqlitequery.IndexedColumn, 0)
+	for columnIndex := range statement.Columns {
+		column := &statement.Columns[columnIndex]
+		columnConstraints := make([]sqlitequery.ColumnConstraint, 0, len(column.Constraints))
+		for _, constraint := range column.Constraints {
+			if constraint.Kind != sqlitequery.ConstraintPrimaryKey {
+				columnConstraints = append(columnConstraints, constraint)
+				continue
+			}
+			inlineColumns = append(inlineColumns, sqlitequery.IndexedColumn{
+				Expression: &sqlitequery.IdentifierExpression{Name: sqlitequery.QualifiedName{column.Name}},
+			})
+		}
+		column.Constraints = columnConstraints
+	}
+	if len(inlineColumns) > 0 && !hasPrimaryKey {
+		primaryKey = sqlitequery.TableConstraint{
+			Kind:    sqlitequery.ConstraintPrimaryKey,
+			Columns: inlineColumns,
+		}
+		hasPrimaryKey = true
+	}
+	if hasPrimaryKey {
+		primaryKey.Name = nil
+		for index := range statement.Columns {
+			column := &statement.Columns[index]
+			if !primaryKeyContainsColumn(primaryKey, column.Name.Name) || hasColumnConstraint(*column, sqlitequery.ConstraintNotNull) {
+				continue
+			}
+			column.Constraints = append(column.Constraints, sqlitequery.ColumnConstraint{Kind: sqlitequery.ConstraintNotNull})
+		}
+		constraints = append(constraints, primaryKey)
+	}
+	statement.Constraints = constraints
+}
+
+func primaryKeyContainsColumn(constraint sqlitequery.TableConstraint, name string) bool {
+	for _, column := range constraint.Columns {
+		expression, ok := column.Expression.(*sqlitequery.IdentifierExpression)
+		if ok && len(expression.Name) == 1 && expression.Name[0].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasColumnConstraint(column sqlitequery.ColumnDefinition, kind sqlitequery.ConstraintKind) bool {
+	for _, constraint := range column.Constraints {
+		if constraint.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // Diff returns safe, additive changes from from to to.
 func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	baseline, ok := from.(*schemaSnapshot)
@@ -81,7 +155,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			generated = append(generated, statement)
 			continue
 		}
-		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement)
+		statements, tableDiagnostics, err := diffTable(baselineTable.normalized, targetTable.normalized)
 		if err != nil {
 			return diff.Plan{}, err
 		}
@@ -140,8 +214,9 @@ func (*schemaSnapshot) Dialect() string {
 }
 
 type tableDefinition struct {
-	source    string
-	statement *sqlitequery.CreateTableStatement
+	source     string
+	statement  *sqlitequery.CreateTableStatement
+	normalized *sqlitequery.CreateTableStatement
 }
 
 func (s *schemaSnapshot) addTable(source string, statement *sqlitequery.CreateTableStatement) error {
@@ -159,7 +234,14 @@ func (s *schemaSnapshot) addTable(source string, statement *sqlitequery.CreateTa
 		}
 		columns[column.Name.Name] = struct{}{}
 	}
-	s.tables[key] = tableDefinition{source: source, statement: statement}
+	normalized := *statement
+	normalized.Columns = append([]sqlitequery.ColumnDefinition(nil), statement.Columns...)
+	for index := range normalized.Columns {
+		normalized.Columns[index].Constraints = append([]sqlitequery.ColumnConstraint(nil), statement.Columns[index].Constraints...)
+	}
+	normalized.Constraints = append([]sqlitequery.TableConstraint(nil), statement.Constraints...)
+	normalizeCreateTable(&normalized)
+	s.tables[key] = tableDefinition{source: source, statement: statement, normalized: &normalized}
 	return nil
 }
 

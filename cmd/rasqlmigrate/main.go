@@ -15,6 +15,9 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
+	pgquery "github.com/lestrrat-go/rasql-pg/query"
+	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/migrate"
@@ -136,6 +139,59 @@ func runDiff(args []string) error {
 	return nil
 }
 
+func validateLivePlan(plan diff.Plan, dialectName string, tableName string) error {
+	for _, statement := range plan.Statements {
+		switch dialectName {
+		case "postgres", "postgresql":
+			parsed, err := pgquery.ParseStatement(statement.SQL)
+			if err != nil {
+				return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
+			}
+			switch parsed := parsed.(type) {
+			case *pgquery.CreateTableStatement:
+				if parsed.Name.String() != tableName {
+					return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
+				}
+			case *pgquery.CreateIndexStatement:
+				if parsed.Table.String() != tableName {
+					return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
+				}
+			}
+		case "mysql":
+			parsed, err := mysqlquery.ParseStatement(statement.SQL)
+			if err != nil {
+				return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
+			}
+			switch parsed := parsed.(type) {
+			case *mysqlquery.CreateTableStatement:
+				if parsed.Name.String() != tableName {
+					return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
+				}
+			case *mysqlquery.CreateIndexStatement:
+				if parsed.Table.String() != tableName {
+					return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
+				}
+			}
+		case "sqlite":
+			parsed, err := sqlitequery.ParseStatement(statement.SQL)
+			if err != nil {
+				return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
+			}
+			switch parsed := parsed.(type) {
+			case *sqlitequery.CreateTableStatement:
+				if parsed.Name.String() != tableName {
+					return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
+				}
+			case *sqlitequery.CreateIndexStatement:
+				if parsed.Table.String() != tableName {
+					return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func runDiffLive(args []string) error {
 	flags := newFlagSet("diff-live")
 	dialectName := flags.String("dialect", "", "database dialect; PostgreSQL, MySQL, and SQLite are currently supported")
@@ -188,6 +244,9 @@ func runDiffLive(args []string) error {
 	}
 	plan, err := analyzer.Diff(baseline, target)
 	if err != nil {
+		return err
+	}
+	if err := validateLivePlan(plan, *dialectName, *tableName); err != nil {
 		return err
 	}
 	if plan.Empty() {

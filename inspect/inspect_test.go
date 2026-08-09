@@ -965,6 +965,8 @@ func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
 			AddRow(0, "sequence", "INTEGER", 1, nil, 2).
 			AddRow(1, "stream_id", "TEXT", 1, nil, 1).
 			AddRow(2, "payload", "BLOB", 0, nil, 0))
+	mock.ExpectQuery(`PRAGMA index_list("events")`).
+		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "unique", "origin", "partial"}))
 
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
