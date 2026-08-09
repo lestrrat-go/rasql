@@ -3,6 +3,7 @@ package rasql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -37,18 +38,34 @@ type Handle interface {
 type Client struct {
 	handle  Handle
 	dialect dialect.Dialect
+	hooks   []Hook
 }
 
 // New creates a query client. It does not open a connection or start a
-// transaction. Use Begin for a client bound to a transaction.
-func New(handle Handle, d dialect.Dialect) (Client, error) {
+// transaction. Use Begin for a client bound to a transaction. Optional hooks
+// observe statements executed by the returned client.
+func New(handle Handle, d dialect.Dialect, hooks ...Hook) (Client, error) {
 	if isNil(handle) {
 		return Client{}, fmt.Errorf("rasql: handle must not be nil")
 	}
 	if isNil(d) {
 		return Client{}, fmt.Errorf("rasql: dialect must not be nil")
 	}
-	return Client{handle: handle, dialect: d}, nil
+	client := Client{handle: handle, dialect: d}
+	return client.WithHooks(hooks...)
+}
+
+// WithHooks returns a copy of c that runs hooks around rendered queries and
+// mutations. Hooks are retained when the copy is used as an Executor. It does
+// not wrap the database handle, so Client remains a Client and its SQL and
+// bound arguments remain unchanged.
+func (c Client) WithHooks(hooks ...Hook) (Client, error) {
+	configured, err := appendHooks(c.hooks, hooks)
+	if err != nil {
+		return Client{}, err
+	}
+	c.hooks = configured
+	return c, nil
 }
 
 // Dialect returns the dialect this client renders SQL for.
@@ -68,9 +85,22 @@ func (c Client) QueryRendered(ctx context.Context, statement render.Statement) (
 	if statement.SQL() == "" {
 		return nil, fmt.Errorf("rasql: statement SQL must not be empty")
 	}
+	operation := Operation{kind: QueryOperation, statement: statement}
+	entered, err := c.beforeHooks(ctx, operation)
+	if err != nil {
+		return nil, afterHooks(ctx, operation, entered, err)
+	}
 	rows, err := c.handle.QueryContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
-		return nil, fmt.Errorf("rasql: execute query: %w", err)
+		err = fmt.Errorf("rasql: execute query: %w", err)
+	}
+	if hookErr := afterHooks(ctx, operation, entered, err); hookErr != nil {
+		if rows != nil {
+			if closeErr := rows.Close(); closeErr != nil {
+				hookErr = errors.Join(hookErr, fmt.Errorf("rasql: close query rows: %w", closeErr))
+			}
+		}
+		return nil, hookErr
 	}
 	return rows, nil
 }
@@ -83,9 +113,17 @@ func (c Client) ExecRendered(ctx context.Context, statement render.Statement) (s
 	if statement.SQL() == "" {
 		return nil, fmt.Errorf("rasql: statement SQL must not be empty")
 	}
+	operation := Operation{kind: ExecOperation, statement: statement}
+	entered, err := c.beforeHooks(ctx, operation)
+	if err != nil {
+		return nil, afterHooks(ctx, operation, entered, err)
+	}
 	result, err := c.handle.ExecContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
-		return nil, fmt.Errorf("rasql: execute statement: %w", err)
+		err = fmt.Errorf("rasql: execute statement: %w", err)
+	}
+	if hookErr := afterHooks(ctx, operation, entered, err); hookErr != nil {
+		return nil, hookErr
 	}
 	return result, nil
 }

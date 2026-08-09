@@ -492,9 +492,35 @@ A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result
 
 `Client.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](05-templates.md) is executed.
 
+## Operational hooks
+
+`rasql.Hook` provides a small observation and policy boundary around rendered database operations. A hook receives the operation kind, the exact SQL text, and a copy of the bound arguments. `Before` hooks can reject a statement before it reaches `database/sql`; `After` hooks receive the execution error, if any, and can report or reject the result.
+
+Hooks run in registration order before execution and reverse registration order after execution. A hook cannot replace the SQL or its bound arguments, so policy checks and logging do not change the statement sent to the driver.
+
+```go
+policy := rasql.HookFunc{
+	BeforeFunc: func(ctx context.Context, operation rasql.Operation) error {
+		if operation.Kind() == rasql.ExecOperation && operation.SQL() == "DELETE FROM users" {
+			return errors.New("unfiltered deletes are disabled")
+		}
+		return nil
+	},
+}
+
+client, err = client.WithHooks(policy)
+if err != nil {
+	// Handle invalid hook configuration.
+}
+```
+
+Pass hooks to `rasql.New`, or add them with `Client.WithHooks`. Pass them to `rasql.Begin` or add them with `Tx.WithHooks` when the operation runs inside a transaction. These methods return the same concrete `Client` or `Tx` value, so transaction ownership and explicit `Commit` or `Rollback` remain visible.
+
+Hooks cover calls through `Client` and `Tx`, including the high-level builders and static rendered statements. They do not wrap `Begin`, `Commit`, `Rollback`, direct `database/sql` calls, or the migration and inspection packages, which use their own database handles. Hooks are synchronous and do not add retries, tracing spans, tenant filters, or automatic redaction; applications must implement those policies in their hooks or at their database boundary.
+
 ## Transactions
 
-`rasql.Begin` takes a `*sql.DB` (anything implementing `rasql.Beginner`), a dialect, and `*sql.TxOptions`, which may be `nil`. It returns a `rasql.Tx`, which is an `Executor` like `Client`, so every builder terminal and every free function that takes an `Executor` — `rasql.Insert`, `rasql.Update`, `rasql.Create`, and the rest — accepts it in place of `client`.
+`rasql.Begin` takes a `*sql.DB` (anything implementing `rasql.Beginner`), a dialect, `*sql.TxOptions`, and optional hooks, which may be omitted. It returns a `rasql.Tx`, which is an `Executor` like `Client`, so every builder terminal and every free function that takes an `Executor` — `rasql.Insert`, `rasql.Update`, `rasql.Create`, and the rest — accepts it in place of `client`.
 
 The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation.
 
