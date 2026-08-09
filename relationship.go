@@ -2,6 +2,8 @@ package rasql
 
 import (
 	"context"
+	"reflect"
+	"strconv"
 
 	"github.com/lestrrat-go/rasql/query"
 )
@@ -32,7 +34,7 @@ func LoadHasMany[Parent, Child any, Key comparable](
 			continue
 		}
 		seen[key] = struct{}{}
-		keys = append(keys, key)
+		keys = append(keys, relationshipQueryKey(key))
 		grouped[key] = nil
 	}
 	children, err := SelectFrom(childTable).WhereIn(childKeyColumn, keys...).All(ctx, x)
@@ -73,7 +75,7 @@ func LoadBelongsTo[Child, Parent any, Key comparable](
 			continue
 		}
 		seen[key] = struct{}{}
-		keys = append(keys, key)
+		keys = append(keys, relationshipQueryKey(key))
 	}
 	parents, err := SelectFrom(parentTable).WhereIn(parentKeyColumn, keys...).All(ctx, x)
 	if err != nil {
@@ -83,4 +85,15 @@ func LoadBelongsTo[Child, Parent any, Key comparable](
 		loaded[parentKey(parent)] = parent
 	}
 	return loaded, nil
+}
+
+// relationshipQueryKey converts only high-bit unsigned integers to a value
+// database/sql can bind. The original key remains in the result map, so
+// callers still receive the generated uint64 key type.
+func relationshipQueryKey(key any) any {
+	value := reflect.ValueOf(key)
+	if value.IsValid() && value.Kind() == reflect.Uint64 && value.Uint() > 1<<63-1 {
+		return strconv.FormatUint(value.Uint(), 10)
+	}
+	return key
 }

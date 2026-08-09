@@ -19,6 +19,15 @@ type relationshipOrder struct {
 	UserID int64
 }
 
+type unsignedRelationshipUser struct {
+	ID uint64
+}
+
+type unsignedRelationshipOrder struct {
+	ID     uint64
+	UserID uint64
+}
+
 func TestLoadHasManyGroupsRowsByParentKey(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -92,6 +101,66 @@ func TestLoadBelongsToGroupsRowsByForeignKey(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, map[int64]relationshipUser{1: {ID: 1}, 2: {ID: 2}}, loaded)
+}
+
+func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	users, err := rasql.NewTable[unsignedRelationshipUser](schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	orders, err := rasql.NewTable[unsignedRelationshipOrder](schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
+			{Name: "user_id", Type: schema.IntegerType{Unsigned: true}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	userID, err := users.Column("id")
+	require.NoError(t, err)
+	orderUserID, err := orders.Column("user_id")
+	require.NoError(t, err)
+
+	const key = uint64(1 << 63)
+	const keyText = "9223372036854775808"
+	mock.ExpectQuery("SELECT `orders`.`id`, `orders`.`user_id` FROM `orders` WHERE (`orders`.`user_id` IN (?))").
+		WithArgs(keyText).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
+
+	hasMany, err := rasql.LoadHasMany(t.Context(), client, orders, orderUserID,
+		[]unsignedRelationshipUser{{ID: key}},
+		func(user unsignedRelationshipUser) uint64 { return user.ID },
+		func(order unsignedRelationshipOrder) uint64 { return order.UserID },
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64][]unsignedRelationshipOrder{
+		key: nil,
+	}, hasMany)
+
+	mock.ExpectQuery("SELECT `users`.`id` FROM `users` WHERE (`users`.`id` IN (?))").
+		WithArgs(keyText).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	belongsTo, err := rasql.LoadBelongsTo(t.Context(), client, users, userID,
+		[]unsignedRelationshipOrder{{ID: 10, UserID: key}},
+		func(order unsignedRelationshipOrder) uint64 { return order.UserID },
+		func(user unsignedRelationshipUser) uint64 { return user.ID },
+	)
+	require.NoError(t, err)
+	require.Empty(t, belongsTo)
 }
 
 func TestLoadRelationshipsSkipsEmptyInput(t *testing.T) {
