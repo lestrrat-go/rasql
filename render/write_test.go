@@ -87,6 +87,44 @@ func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 	}
 }
 
+func TestUnconditionalWritesRequireExplicitAllowAll(t *testing.T) {
+	users, id, email := writeTable(t)
+
+	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
+	require.NoError(t, err)
+	_, err = render.Update(dialect.PostgreSQL(), update)
+	require.ErrorContains(t, err, "UPDATE requires a WHERE predicate or an explicit AllowAll")
+
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	_, err = render.Delete(dialect.PostgreSQL(), deleteStatement)
+	require.ErrorContains(t, err, "DELETE requires a WHERE predicate or an explicit AllowAll")
+
+	allowedUpdate, err := update.AllowAll()
+	require.NoError(t, err)
+	rendered, err := render.Update(dialect.PostgreSQL(), allowedUpdate)
+	require.NoError(t, err)
+	require.Equal(t, "UPDATE \"users\" SET \"email\" = $1", rendered.SQL())
+	require.Equal(t, []any{"grace@example.com"}, rendered.Args())
+
+	allowedDelete, err := deleteStatement.AllowAll()
+	require.NoError(t, err)
+	rendered, err = render.Delete(dialect.PostgreSQL(), allowedDelete)
+	require.NoError(t, err)
+	require.Equal(t, "DELETE FROM \"users\"", rendered.SQL())
+	require.Empty(t, rendered.Args())
+
+	targetedUpdate, err := update.WithWhere(query.Equal(id, query.Bind(1)))
+	require.NoError(t, err)
+	_, err = render.Update(dialect.PostgreSQL(), targetedUpdate)
+	require.NoError(t, err)
+
+	targetedDelete, err := deleteStatement.WithWhere(query.Equal(id, query.Bind(1)))
+	require.NoError(t, err)
+	_, err = render.Delete(dialect.PostgreSQL(), targetedDelete)
+	require.NoError(t, err)
+}
+
 // TestUpdateRendersScalarFunctionAssignment proves a scalar function call in
 // a SET assignment renders with no dialect-specific branch, identically to a
 // SELECT projection, across all three built-in dialects.
