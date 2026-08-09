@@ -428,6 +428,37 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 	require.NoErrorf(t, err, "go test output:\n%s", output)
 }
 
+func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	memberships := schema.Table{
+		Name: "memberships",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "billing_user_id", Type: schema.IntegerType{}},
+			{Name: "shipping_user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+	}
+
+	source, err := generate.Schema("generated", users, memberships)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+	require.Contains(t, text, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
+	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Join() query.Join")
+	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Join() query.Join")
+	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+}
+
 // TestSchemaGeneratesDecimalColumns pins the generator's decimal mapping in
 // isolation: a DecimalType column becomes a Go string field, and the
 // descriptor literal restates Precision and Scale in declaration order.

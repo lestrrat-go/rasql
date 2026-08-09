@@ -512,6 +512,9 @@ func relationshipSpecs(table schema.Table, allTables []schema.Table) []relations
 				continue
 			}
 			method := variableName(child.Name)
+			if _, exists := usedMethods[method]; exists {
+				method = goName(relationship.Name) + method
+			}
 			if reservedRelationshipMethod(method) {
 				continue
 			}
