@@ -135,6 +135,46 @@ func TestDiffIgnoresSQLiteForeignKeyConstraintOrder(t *testing.T) {
 	require.Empty(t, plan.Statements)
 }
 
+func TestDiffUsesSQLiteCaseInsensitiveIdentifiers(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE Members (ID integer PRIMARY KEY, Email text);
+		CREATE INDEX Members_Email_IDX ON Members (Email);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT);
+		CREATE INDEX members_email_idx ON members (email);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffCanonicalizesMixedCaseTablesAndUnorderedForeignKeys(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE "ParentA" ("ID" integer PRIMARY KEY);
+		CREATE TABLE "ParentB" ("ID" integer PRIMARY KEY);
+		CREATE TABLE "MixedCase" (
+			"B_ID" integer REFERENCES "ParentB"("ID") ON UPDATE CASCADE,
+			"A_ID" integer REFERENCES "ParentA"("ID") ON DELETE CASCADE
+		);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE "parenta" ("id" INTEGER PRIMARY KEY);
+		CREATE TABLE "parentb" ("id" INTEGER PRIMARY KEY);
+		CREATE TABLE "mixedcase" (
+			"a_id" INTEGER REFERENCES "parenta"("id") ON DELETE CASCADE,
+			"b_id" INTEGER REFERENCES "parentb"("id") ON UPDATE CASCADE
+		);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
 func TestDiffDetectsChangedSQLiteForeignKeyAction(t *testing.T) {
 	analyzer := sqlite.New()
 	baseline := parseSnapshot(t, analyzer, `

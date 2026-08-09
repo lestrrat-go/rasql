@@ -8,8 +8,10 @@ import (
 	"unicode"
 
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // Analyzer compares the supported MySQL desired-schema subset.
@@ -23,6 +25,32 @@ func New() Analyzer {
 // Dialect identifies MySQL schema sources.
 func (Analyzer) Dialect() string {
 	return "mysql"
+}
+
+// LiveSources converts one inspected MySQL table into desired-schema sources.
+func (Analyzer) LiveSources(table schema.Table) ([]diff.Source, error) {
+	return diff.SourcesFromTable(dialect.MySQL(), table)
+}
+
+// ValidateLivePlan ensures generated MySQL statements stay within the selected table.
+func (Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
+	for _, statement := range plan.Statements {
+		parsed, err := mysqlquery.ParseStatement(statement.SQL)
+		if err != nil {
+			return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
+		}
+		switch parsed := parsed.(type) {
+		case *mysqlquery.CreateTableStatement:
+			if parsed.Name.String() != tableName {
+				return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
+			}
+		case *mysqlquery.CreateIndexStatement:
+			if parsed.Table.String() != tableName {
+				return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
+			}
+		}
+	}
+	return nil
 }
 
 // Parse reads CREATE TABLE and named CREATE INDEX statements from sources.
@@ -68,51 +96,47 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		return diff.Plan{}, fmt.Errorf("mysql schema diff requires a MySQL target snapshot")
 	}
 
+	comparison := diff.CompareSchemas(
+		diff.Schema[tableDefinition, indexDefinition]{Tables: baseline.tables, Indexes: baseline.indexes},
+		diff.Schema[tableDefinition, indexDefinition]{Tables: target.tables, Indexes: target.indexes},
+		func(left, right tableDefinition) bool { return ast.Equal(left.statement, right.statement) },
+		func(left, right indexDefinition) bool { return sameIndex(left.statement, right.statement) },
+	)
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
-	for _, key := range sortedTableKeys(target.tables) {
-		targetTable := target.tables[key]
-		baselineTable, exists := baseline.tables[key]
-		if !exists {
-			statement, err := createTableStatement(targetTable.statement)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
-			continue
+	for _, entry := range comparison.Tables.Added {
+		statement, err := createTableStatement(entry.Value.statement)
+		if err != nil {
+			return diff.Plan{}, err
 		}
-		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement)
+		generated = append(generated, statement)
+	}
+	for _, pair := range comparison.Tables.Matched {
+		statements, tableDiagnostics, err := diffTable(pair.Baseline.statement, pair.Target.statement)
 		if err != nil {
 			return diff.Plan{}, err
 		}
 		generated = append(generated, statements...)
 		diagnostics = append(diagnostics, tableDiagnostics...)
 	}
-	for _, key := range sortedTableKeys(baseline.tables) {
-		if _, exists := target.tables[key]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(baseline.tables[key].statement.Name)))
-		}
+	for _, entry := range comparison.Tables.Removed {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(entry.Value.statement.Name)))
 	}
 
-	for _, key := range sortedIndexKeys(target.indexes) {
-		targetIndex := target.indexes[key]
-		baselineIndex, exists := baseline.indexes[key]
-		if !exists {
-			statement, err := createIndexStatement(targetIndex.statement)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
-			continue
+	for _, entry := range comparison.Indexes.Added {
+		statement, err := createIndexStatement(entry.Value.statement)
+		if err != nil {
+			return diff.Plan{}, err
 		}
-		if !sameIndex(baselineIndex.statement, targetIndex.statement) {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(targetIndex.statement.Name)))
+		generated = append(generated, statement)
+	}
+	for _, pair := range comparison.Indexes.Matched {
+		if !pair.Equal {
+			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(pair.Target.statement.Name)))
 		}
 	}
-	for _, key := range sortedIndexKeys(baseline.indexes) {
-		if _, exists := target.indexes[key]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(baseline.indexes[key].statement.Name)))
-		}
+	for _, entry := range comparison.Indexes.Removed {
+		diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(entry.Value.statement.Name)))
 	}
 	if len(diagnostics) > 0 {
 		return diff.Plan{}, manualMigrationError(diagnostics)
@@ -307,24 +331,6 @@ func manualMigrationError(diagnostics []string) error {
 		lines[index] = "- " + diagnostic
 	}
 	return fmt.Errorf("mysql schema diff requires manual migration:\n%s", strings.Join(lines, "\n"))
-}
-
-func sortedTableKeys(tables map[string]tableDefinition) []string {
-	keys := make([]string, 0, len(tables))
-	for key := range tables {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedIndexKeys(indexes map[string]indexDefinition) []string {
-	keys := make([]string, 0, len(indexes))
-	for key := range indexes {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func qualifiedNameKey(name mysqlquery.QualifiedName) string {

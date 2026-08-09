@@ -8,8 +8,10 @@ import (
 	"unicode"
 
 	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // Analyzer compares the supported SQLite desired-schema subset.
@@ -23,6 +25,32 @@ func New() Analyzer {
 // Dialect identifies SQLite schema sources.
 func (Analyzer) Dialect() string {
 	return "sqlite"
+}
+
+// LiveSources converts one inspected SQLite table into desired-schema sources.
+func (Analyzer) LiveSources(table schema.Table) ([]diff.Source, error) {
+	return diff.SourcesFromTable(dialect.SQLite(), table)
+}
+
+// ValidateLivePlan ensures generated SQLite statements stay within the selected table.
+func (Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
+	for _, statement := range plan.Statements {
+		parsed, err := sqlitequery.ParseStatement(statement.SQL)
+		if err != nil {
+			return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
+		}
+		switch parsed := parsed.(type) {
+		case *sqlitequery.CreateTableStatement:
+			if sqliteIdentifierKey(parsed.Name.String()) != sqliteIdentifierKey(tableName) {
+				return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
+			}
+		case *sqlitequery.CreateIndexStatement:
+			if sqliteIdentifierKey(parsed.Table.String()) != sqliteIdentifierKey(tableName) {
+				return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
+			}
+		}
+	}
+	return nil
 }
 
 // Parse reads CREATE TABLE and named CREATE INDEX statements from sources.
@@ -332,7 +360,8 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 		column := &statement.Columns[columnIndex]
 		columnConstraints := make([]sqlitequery.ColumnConstraint, 0, len(column.Constraints))
 		for _, constraint := range column.Constraints {
-			if constraint.Kind == sqlitequery.ConstraintReferences {
+			switch constraint.Kind {
+			case sqlitequery.ConstraintReferences:
 				constraints = append(constraints, sqlitequery.TableConstraint{
 					Name: constraint.Name,
 					Kind: sqlitequery.ConstraintForeignKey,
@@ -340,6 +369,21 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 						Expression: &sqlitequery.IdentifierExpression{Name: sqlitequery.QualifiedName{column.Name}},
 					}},
 					References: constraint.References,
+				})
+				continue
+			case sqlitequery.ConstraintUnique:
+				constraints = append(constraints, sqlitequery.TableConstraint{
+					Name:     constraint.Name,
+					Kind:     sqlitequery.ConstraintUnique,
+					Columns:  []sqlitequery.IndexedColumn{{Expression: &sqlitequery.IdentifierExpression{Name: sqlitequery.QualifiedName{column.Name}}}},
+					Conflict: constraint.Conflict,
+				})
+				continue
+			case sqlitequery.ConstraintCheck:
+				constraints = append(constraints, sqlitequery.TableConstraint{
+					Name:       constraint.Name,
+					Kind:       sqlitequery.ConstraintCheck,
+					Expression: constraint.Expression,
 				})
 				continue
 			}
@@ -364,6 +408,9 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 				hasPrimaryKey = true
 			}
 		}
+		sort.SliceStable(columnConstraints, func(left, right int) bool {
+			return columnConstraints[left].Kind < columnConstraints[right].Kind
+		})
 		column.Constraints = columnConstraints
 	}
 	if len(inlineColumns) > 0 && !hasPrimaryKey {
@@ -419,51 +466,49 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		return diff.Plan{}, fmt.Errorf("sqlite schema diff requires a SQLite target snapshot")
 	}
 
+	comparison := diff.CompareSchemas(
+		diff.Schema[tableDefinition, indexDefinition]{Tables: baseline.tables, Indexes: baseline.indexes},
+		diff.Schema[tableDefinition, indexDefinition]{Tables: target.tables, Indexes: target.indexes},
+		func(left, right tableDefinition) bool {
+			return ast.Equal(left.normalized, right.normalized) && sameTableConstraints(left, right)
+		},
+		func(left, right indexDefinition) bool { return sameIndex(left.statement, right.statement) },
+	)
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
-	for _, key := range sortedTableKeys(target.tables) {
-		targetTable := target.tables[key]
-		baselineTable, exists := baseline.tables[key]
-		if !exists {
-			statement, err := createTableStatement(targetTable)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
-			continue
+	for _, entry := range comparison.Tables.Added {
+		statement, err := createTableStatement(entry.Value)
+		if err != nil {
+			return diff.Plan{}, err
 		}
-		statements, tableDiagnostics, err := diffTable(baselineTable, targetTable)
+		generated = append(generated, statement)
+	}
+	for _, pair := range comparison.Tables.Matched {
+		statements, tableDiagnostics, err := diffTable(pair.Baseline, pair.Target)
 		if err != nil {
 			return diff.Plan{}, err
 		}
 		generated = append(generated, statements...)
 		diagnostics = append(diagnostics, tableDiagnostics...)
 	}
-	for _, key := range sortedTableKeys(baseline.tables) {
-		if _, exists := target.tables[key]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(baseline.tables[key].statement.Name)))
-		}
+	for _, entry := range comparison.Tables.Removed {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(entry.Value.statement.Name)))
 	}
 
-	for _, key := range sortedIndexKeys(target.indexes) {
-		targetIndex := target.indexes[key]
-		baselineIndex, exists := baseline.indexes[key]
-		if !exists {
-			statement, err := createIndexStatement(targetIndex.statement)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
-			continue
+	for _, entry := range comparison.Indexes.Added {
+		statement, err := createIndexStatement(entry.Value.statement)
+		if err != nil {
+			return diff.Plan{}, err
 		}
-		if !sameIndex(baselineIndex.statement, targetIndex.statement) {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(targetIndex.statement.Name)))
+		generated = append(generated, statement)
+	}
+	for _, pair := range comparison.Indexes.Matched {
+		if !pair.Equal {
+			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(pair.Target.statement.Name)))
 		}
 	}
-	for _, key := range sortedIndexKeys(baseline.indexes) {
-		if _, exists := target.indexes[key]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(baseline.indexes[key].statement.Name)))
-		}
+	for _, entry := range comparison.Indexes.Removed {
+		diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(entry.Value.statement.Name)))
 	}
 	if len(diagnostics) > 0 {
 		return diff.Plan{}, manualMigrationError(diagnostics)
@@ -604,7 +649,7 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 		key := sqliteIdentifierKey(column.Name.Name)
 		previous, exists := baselineColumns[key]
 		if !exists {
-			if diagnostic := columnAddDiagnostic(column); diagnostic != "" {
+			if diagnostic := columnAddDiagnostic(targetColumn(target, column.Name.Name)); diagnostic != "" {
 				diagnostics = append(diagnostics, fmt.Sprintf("new column %s.%s %s", displayName(target.normalized.Name), column.Name.Name, diagnostic))
 				continue
 			}
@@ -627,7 +672,7 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 			})
 			continue
 		}
-		if !ast.Equal(previous, column) {
+		if !sameColumn(previous, column) {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.normalized.Name), column.Name.Name))
 		}
 	}
@@ -637,6 +682,15 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 		}
 	}
 	return generated, diagnostics, nil
+}
+
+func targetColumn(table tableDefinition, name string) sqlitequery.ColumnDefinition {
+	for _, column := range table.statement.Columns {
+		if sqliteIdentifierKey(column.Name.Name) == sqliteIdentifierKey(name) {
+			return column
+		}
+	}
+	return sqlitequery.ColumnDefinition{Name: sqlitequery.Identifier{Name: name}}
 }
 
 func columnAddDiagnostic(column sqlitequery.ColumnDefinition) string {
@@ -690,7 +744,7 @@ func sameTableConstraints(left, right tableDefinition) bool {
 	for _, leftConstraint := range leftConstraints {
 		found := false
 		for index, rightConstraint := range rightConstraints {
-			if matched[index] || leftConstraint.action != rightConstraint.action || !ast.Equal(leftConstraint.constraint, rightConstraint.constraint) {
+			if matched[index] || leftConstraint.action != rightConstraint.action || !ast.Equal(canonicalizeTableConstraint(leftConstraint.constraint), canonicalizeTableConstraint(rightConstraint.constraint)) {
 				continue
 			}
 			matched[index] = true
@@ -784,9 +838,162 @@ func foreignKeyActionsForColumn(table tableDefinition, columnName string) []fore
 func sameIndex(left *sqlitequery.CreateIndexStatement, right *sqlitequery.CreateIndexStatement) bool {
 	leftCopy := *left
 	leftCopy.IfNotExists = false
+	canonicalizeIndex(&leftCopy)
 	rightCopy := *right
 	rightCopy.IfNotExists = false
+	canonicalizeIndex(&rightCopy)
 	return ast.Equal(leftCopy, rightCopy)
+}
+
+func sameColumn(left, right sqlitequery.ColumnDefinition) bool {
+	return ast.Equal(canonicalizeColumn(left), canonicalizeColumn(right))
+}
+
+func canonicalizeColumn(column sqlitequery.ColumnDefinition) sqlitequery.ColumnDefinition {
+	canonical := column
+	canonical.Name.Name = sqliteIdentifierKey(canonical.Name.Name)
+	canonical.Type.Words = canonicalizeWords(canonical.Type.Words)
+	canonical.Type.Modifiers = canonicalizeExpressions(canonical.Type.Modifiers)
+	canonical.Constraints = make([]sqlitequery.ColumnConstraint, len(column.Constraints))
+	for index, constraint := range column.Constraints {
+		canonical.Constraints[index] = canonicalizeColumnConstraint(constraint)
+	}
+	return canonical
+}
+
+func canonicalizeColumnConstraint(constraint sqlitequery.ColumnConstraint) sqlitequery.ColumnConstraint {
+	canonical := constraint
+	canonical.Name = canonicalizeIdentifier(canonical.Name)
+	canonical.Expression = canonicalizeExpression(canonical.Expression)
+	canonical.References = canonicalizeReference(canonical.References)
+	canonical.Collation = canonicalizeIdentifier(canonical.Collation)
+	if canonical.Generated != nil {
+		generated := *canonical.Generated
+		generated.Expression = canonicalizeExpression(generated.Expression)
+		canonical.Generated = &generated
+	}
+	return canonical
+}
+
+func canonicalizeTableConstraint(constraint sqlitequery.TableConstraint) sqlitequery.TableConstraint {
+	canonical := constraint
+	canonical.Name = canonicalizeIdentifier(canonical.Name)
+	canonical.Columns = canonicalizeIndexedColumns(canonical.Columns)
+	canonical.Expression = canonicalizeExpression(canonical.Expression)
+	canonical.References = canonicalizeReference(canonical.References)
+	return canonical
+}
+
+func canonicalizeIndexedColumns(columns []sqlitequery.IndexedColumn) []sqlitequery.IndexedColumn {
+	canonical := make([]sqlitequery.IndexedColumn, len(columns))
+	for index, column := range columns {
+		canonical[index] = column
+		canonical[index].Expression = canonicalizeExpression(column.Expression)
+		canonical[index].Collation = canonicalizeIdentifier(column.Collation)
+	}
+	return canonical
+}
+
+func canonicalizeReference(reference *sqlitequery.Reference) *sqlitequery.Reference {
+	if reference == nil {
+		return nil
+	}
+	canonical := *reference
+	canonical.Table = canonicalizeQualifiedName(canonical.Table)
+	canonical.Columns = make([]sqlitequery.Identifier, len(reference.Columns))
+	for index, column := range reference.Columns {
+		canonical.Columns[index] = canonicalizeIdentifierValue(column)
+	}
+	return &canonical
+}
+
+func canonicalizeIdentifier(identifier *sqlitequery.Identifier) *sqlitequery.Identifier {
+	if identifier == nil {
+		return nil
+	}
+	canonical := *identifier
+	canonical.Name = sqliteIdentifierKey(canonical.Name)
+	return &canonical
+}
+
+func canonicalizeIdentifierValue(identifier sqlitequery.Identifier) sqlitequery.Identifier {
+	identifier.Name = sqliteIdentifierKey(identifier.Name)
+	return identifier
+}
+
+func canonicalizeExpressions(expressions []sqlitequery.Expression) []sqlitequery.Expression {
+	canonical := make([]sqlitequery.Expression, len(expressions))
+	for index, expression := range expressions {
+		canonical[index] = canonicalizeExpression(expression)
+	}
+	return canonical
+}
+
+func canonicalizeWords(words []string) []string {
+	canonical := make([]string, len(words))
+	for index, word := range words {
+		canonical[index] = strings.ToLower(word)
+	}
+	return canonical
+}
+
+func canonicalizeExpression(expression sqlitequery.Expression) sqlitequery.Expression {
+	switch expression := expression.(type) {
+	case *sqlitequery.IdentifierExpression:
+		if expression == nil {
+			return nil
+		}
+		canonical := *expression
+		canonical.Name = canonicalizeQualifiedName(canonical.Name)
+		return &canonical
+	case *sqlitequery.StarExpression:
+		if expression == nil {
+			return nil
+		}
+		canonical := *expression
+		canonical.Qualifier = canonicalizeQualifiedName(canonical.Qualifier)
+		return &canonical
+	case *sqlitequery.UnaryExpression:
+		if expression == nil {
+			return nil
+		}
+		canonical := *expression
+		canonical.Expression = canonicalizeExpression(expression.Expression)
+		return &canonical
+	case *sqlitequery.BinaryExpression:
+		if expression == nil {
+			return nil
+		}
+		canonical := *expression
+		canonical.Left = canonicalizeExpression(expression.Left)
+		canonical.Right = canonicalizeExpression(expression.Right)
+		return &canonical
+	case *sqlitequery.CallExpression:
+		if expression == nil {
+			return nil
+		}
+		canonical := *expression
+		canonical.Function = canonicalizeQualifiedName(expression.Function)
+		canonical.Arguments = canonicalizeExpressions(expression.Arguments)
+		return &canonical
+	default:
+		return expression
+	}
+}
+
+func canonicalizeIndex(statement *sqlitequery.CreateIndexStatement) {
+	statement.Name = canonicalizeQualifiedName(statement.Name)
+	statement.Table = canonicalizeQualifiedName(statement.Table)
+	statement.Elements = canonicalizeIndexedColumns(statement.Elements)
+	statement.Where = canonicalizeExpression(statement.Where)
+}
+
+func canonicalizeQualifiedName(name sqlitequery.QualifiedName) sqlitequery.QualifiedName {
+	canonical := append(sqlitequery.QualifiedName(nil), name...)
+	for index := range canonical {
+		canonical[index].Name = sqliteIdentifierKey(canonical[index].Name)
+	}
+	return canonical
 }
 
 func serializeWithReferenceActions(statement sqlitequery.Statement, actions []foreignKeyActions) (string, error) {

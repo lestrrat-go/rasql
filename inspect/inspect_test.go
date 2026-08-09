@@ -612,6 +612,7 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	mock.ExpectQuery(primaryKeyQuery).
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	expectMySQLIndexes(mock, "users")
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -628,6 +629,44 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64$`, string(source))
 	require.Contains(t, string(source), `row.Assign(src, "active", &r.Active)`)
 	require.Contains(t, string(source), `row.Assign(src, "login_attempts", &r.LoginAttempts)`)
+}
+
+func expectMySQLIndexes(mock sqlmock.Sqlmock, tableName string) {
+	mock.ExpectQuery("SELECT index_name, 0, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' AND non_unique = 1 ORDER BY index_name, seq_in_index").
+		WithArgs(tableName).
+		WillReturnRows(sqlmock.NewRows([]string{"index_name", "0", "column_name"}))
+}
+
+func TestMySQLInspectorReadsOrdinaryIndexes(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	primaryKeyQuery := "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position"
+	indexesQuery := "SELECT index_name, 0, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' AND non_unique = 1 ORDER BY index_name, seq_in_index"
+	mock.ExpectQuery(columnsQuery).
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil).
+			AddRow("email", "varchar(255)", "NO", nil, nil, nil))
+	mock.ExpectQuery(primaryKeyQuery).
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	mock.ExpectQuery(indexesQuery).
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"index_name", "0", "column_name"}).
+			AddRow("users_email_idx", false, "email"))
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Index{{Name: "users_email_idx", Columns: []string{"email"}}}, table.Indexes)
 }
 
 // TestMySQLInspectorRecordsUnsignedIntegerColumn follows one unsigned column
@@ -658,6 +697,7 @@ func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
 	mock.ExpectQuery(primaryKeyQuery).
 		WithArgs("events").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	expectMySQLIndexes(mock, "events")
 
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
@@ -770,6 +810,7 @@ func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
 			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
 				WithArgs("events").
 				WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+			expectMySQLIndexes(mock, "events")
 
 			table, err := inspector.Table(t.Context(), "events")
 			require.NoError(t, err)
@@ -798,6 +839,7 @@ func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {
 	mock.ExpectQuery(primaryKeyQuery).
 		WithArgs("payments").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+	expectMySQLIndexes(mock, "payments")
 
 	table, err := inspector.Table(t.Context(), "payments")
 	require.NoError(t, err)
@@ -891,6 +933,7 @@ func TestMySQLInspectorAcceptsDocumentedDecimalSpellings(t *testing.T) {
 			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
 				WithArgs("payments").
 				WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+			expectMySQLIndexes(mock, "payments")
 
 			table, err := inspector.Table(t.Context(), "payments")
 			require.NoError(t, err)

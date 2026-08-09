@@ -217,6 +217,49 @@ func TestRunDiffLivePreservesSQLiteIndexes(t *testing.T) {
 	require.Equal(t, "no schema changes\n", outputBuffer.String())
 }
 
+func TestRunDiffLiveNormalizesSQLiteInlineConstraints(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT UNIQUE CHECK (length(email) > 0))`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT CHECK (length(email) > 0) UNIQUE);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
+func TestRunDiffLiveMatchesSQLiteIndexNameCase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT); CREATE INDEX Members_Name_IDX ON members (name)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT);\n")
+	writeTestSchema(t, target, "indexes/members_name.sql", "CREATE INDEX members_name_idx ON members (name);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
 func TestRunDiffLiveRejectsExtraSQLiteTargetTable(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "application.db")
 	database, err := sql.Open("sqlite", dsn)

@@ -15,9 +15,6 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
-	pgquery "github.com/lestrrat-go/rasql-pg/query"
-	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/migrate"
@@ -25,8 +22,6 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
-	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite"
 )
 
@@ -139,59 +134,6 @@ func runDiff(args []string) error {
 	return nil
 }
 
-func validateLivePlan(plan diff.Plan, dialectName string, tableName string) error {
-	for _, statement := range plan.Statements {
-		switch dialectName {
-		case "postgres", "postgresql":
-			parsed, err := pgquery.ParseStatement(statement.SQL)
-			if err != nil {
-				return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
-			}
-			switch parsed := parsed.(type) {
-			case *pgquery.CreateTableStatement:
-				if parsed.Name.String() != tableName {
-					return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
-				}
-			case *pgquery.CreateIndexStatement:
-				if parsed.Table.String() != tableName {
-					return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
-				}
-			}
-		case "mysql":
-			parsed, err := mysqlquery.ParseStatement(statement.SQL)
-			if err != nil {
-				return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
-			}
-			switch parsed := parsed.(type) {
-			case *mysqlquery.CreateTableStatement:
-				if parsed.Name.String() != tableName {
-					return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
-				}
-			case *mysqlquery.CreateIndexStatement:
-				if parsed.Table.String() != tableName {
-					return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
-				}
-			}
-		case "sqlite":
-			parsed, err := sqlitequery.ParseStatement(statement.SQL)
-			if err != nil {
-				return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
-			}
-			switch parsed := parsed.(type) {
-			case *sqlitequery.CreateTableStatement:
-				if parsed.Name.String() != tableName {
-					return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
-				}
-			case *sqlitequery.CreateIndexStatement:
-				if parsed.Table.String() != tableName {
-					return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
-				}
-			}
-		}
-	}
-	return nil
-}
-
 func runDiffLive(args []string) error {
 	flags := newFlagSet("diff-live")
 	dialectName := flags.String("dialect", "", "database dialect; PostgreSQL, MySQL, and SQLite are currently supported")
@@ -213,6 +155,10 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return err
 	}
+	liveAnalyzer, ok := analyzer.(diff.LiveAnalyzer)
+	if !ok {
+		return fmt.Errorf("schema diff dialect %q does not support live inspection", *dialectName)
+	}
 	database, closeDatabase, err := openMigrationDatabase(context.Background(), d, *dsn)
 	if err != nil {
 		return err
@@ -226,7 +172,7 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return redactError(err, *dsn)
 	}
-	liveSources, err := schemaSources(liveTable, d)
+	liveSources, err := liveAnalyzer.LiveSources(liveTable)
 	if err != nil {
 		return err
 	}
@@ -246,7 +192,7 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := validateLivePlan(plan, *dialectName, *tableName); err != nil {
+	if err := liveAnalyzer.ValidateLivePlan(plan, *tableName); err != nil {
 		return err
 	}
 	if plan.Empty() {
@@ -442,25 +388,6 @@ func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (
 		return nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
 	}
 	return database, closeDatabase, nil
-}
-
-func schemaSources(table schema.Table, d dialect.Dialect) ([]diff.Source, error) {
-	created, err := render.CreateTable(d, table)
-	if err != nil {
-		return nil, fmt.Errorf("render inspected table %q: %w", table.QualifiedName(), err)
-	}
-	sources := []diff.Source{{Path: "live/" + table.Name + ".sql", SQL: created.SQL() + ";\n"}}
-	indexes, err := render.CreateIndexes(d, table)
-	if err != nil {
-		return nil, fmt.Errorf("render indexes for inspected table %q: %w", table.QualifiedName(), err)
-	}
-	for index, statement := range indexes {
-		sources = append(sources, diff.Source{
-			Path: fmt.Sprintf("live/index_%d.sql", index+1),
-			SQL:  statement.SQL() + ";\n",
-		})
-	}
-	return sources, nil
 }
 
 func migrationDialect(name string) (dialect.Dialect, error) {
