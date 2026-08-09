@@ -32,6 +32,38 @@ func (a ReferenceAction) valid() bool {
 	}
 }
 
+// RelationshipKind identifies the relationship shape represented by a
+// descriptor.
+type RelationshipKind string
+
+const (
+	// RelationshipBelongsTo identifies a row that points at one related row
+	// through a foreign key.
+	RelationshipBelongsTo RelationshipKind = "belongs_to"
+	// RelationshipHasMany identifies the inverse collection of a belongs-to
+	// relationship.
+	RelationshipHasMany RelationshipKind = "has_many"
+)
+
+// Relationship describes a navigable relationship derived from a foreign key.
+// The first relationship slice supports belongs-to relationships. The column
+// lists are copied by Table.Relationships, so callers may inspect them safely.
+type Relationship struct {
+	Name              string
+	Kind              RelationshipKind
+	Columns           []string
+	ReferencedSchema  string
+	ReferencedTable   string
+	ReferencedColumns []string
+}
+
+// Clone returns a copy of r that does not share slices with r.
+func (r Relationship) Clone() Relationship {
+	r.Columns = append([]string(nil), r.Columns...)
+	r.ReferencedColumns = append([]string(nil), r.ReferencedColumns...)
+	return r
+}
+
 // ValidationError identifies an invalid part of a schema descriptor.
 type ValidationError struct {
 	Path    string
