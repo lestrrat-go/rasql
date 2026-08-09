@@ -53,7 +53,7 @@ type Tx struct {
 // A Beginner that reports success while returning a nil transaction is
 // rejected with an error rather than wrapped, so a hand-written one cannot
 // produce a Tx that panics on its first use.
-func Begin(ctx context.Context, db Beginner, d dialect.Dialect, opts *sql.TxOptions) (Tx, error) {
+func Begin(ctx context.Context, db Beginner, d dialect.Dialect, opts *sql.TxOptions, hooks ...Hook) (Tx, error) {
 	if isNil(db) {
 		return Tx{}, fmt.Errorf("rasql: beginner must not be nil")
 	}
@@ -70,7 +70,7 @@ func Begin(ctx context.Context, db Beginner, d dialect.Dialect, opts *sql.TxOpti
 		// Rollback below as a nil receiver.
 		return Tx{}, fmt.Errorf("rasql: beginner returned a nil transaction without an error")
 	}
-	client, err := New(transaction, d)
+	client, err := New(transaction, d, hooks...)
 	if err != nil {
 		// The transaction is already open, so it is rolled back rather than
 		// leaked. Its own error cannot reach the caller, who never received
@@ -79,6 +79,18 @@ func Begin(ctx context.Context, db Beginner, d dialect.Dialect, opts *sql.TxOpti
 		return Tx{}, err
 	}
 	return Tx{client: client, tx: transaction}, nil
+}
+
+// WithHooks returns a copy of t that runs hooks around statements executed in
+// this transaction. It preserves Tx, so callers still commit or roll back the
+// same explicit transaction.
+func (t Tx) WithHooks(hooks ...Hook) (Tx, error) {
+	client, err := t.client.WithHooks(hooks...)
+	if err != nil {
+		return Tx{}, err
+	}
+	t.client = client
+	return t, nil
 }
 
 // Dialect returns the dialect this transaction renders SQL for.
