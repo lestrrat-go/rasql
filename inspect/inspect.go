@@ -301,6 +301,12 @@ func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName s
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
+	options, err := i.sqliteTableOptions(ctx, tableName)
+	if err != nil {
+		return schema.Table{}, err
+	}
+	tableName = options.name
+
 	query := "PRAGMA table_xinfo(\"" + sqlitePragmaIdentifier(tableName) + "\")"
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
@@ -356,10 +362,6 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	for index, column := range primaryColumns {
 		primaryKey[index] = column.name
 	}
-	options, err := i.sqliteTableOptions(ctx, tableName)
-	if err != nil {
-		return schema.Table{}, err
-	}
 	if options.withoutRowID || options.strict {
 		return schema.Table{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: STRICT and WITHOUT ROWID table options are unsupported", tableName)
 	}
@@ -406,6 +408,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 }
 
 type sqliteTableOptions struct {
+	name         string
 	withoutRowID bool
 	strict       bool
 }
@@ -435,7 +438,7 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, tableName string) (sq
 	if err := rows.Err(); err != nil {
 		return sqliteTableOptions{}, fmt.Errorf("inspect: iterate SQLite table options: %w", err)
 	}
-	return sqliteTableOptions{withoutRowID: withoutRowID != 0, strict: strict != 0}, nil
+	return sqliteTableOptions{name: name, withoutRowID: withoutRowID != 0, strict: strict != 0}, nil
 }
 
 func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) (*sqlitequery.CreateTableStatement, error) {
@@ -472,7 +475,7 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) 
 		return nil, nil
 	}
 	createTable, ok := statement.(*sqlitequery.CreateTableStatement)
-	if !ok || createTable.Name.String() != tableName {
+	if !ok || !strings.EqualFold(createTable.Name.String(), tableName) {
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
 	}
 	return createTable, nil
