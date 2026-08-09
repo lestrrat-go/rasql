@@ -222,6 +222,9 @@ func (r *renderer) writeUpsertAssignments(assignments []query.Assignment, style 
 }
 
 func (r *renderer) writeUpdate(statement query.Update) error {
+	if statement.Where() == nil && !statement.AllowsAll() {
+		return fmt.Errorf("UPDATE requires a WHERE predicate or an explicit AllowAll")
+	}
 	table, err := r.quoteQualified(statement.Table().Schema(), statement.Table().Name())
 	if err != nil {
 		return err
@@ -253,6 +256,9 @@ func (r *renderer) writeUpdate(statement query.Update) error {
 }
 
 func (r *renderer) writeDelete(statement query.Delete) error {
+	if statement.Where() == nil && !statement.AllowsAll() {
+		return fmt.Errorf("DELETE requires a WHERE predicate or an explicit AllowAll")
+	}
 	table, err := r.quoteQualified(statement.From().Schema(), statement.From().Name())
 	if err != nil {
 		return err

@@ -780,6 +780,109 @@ func TestClientExecStillAcceptsStatementWithoutReturning(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestExecRejectsUnconditionalMutations(t *testing.T) {
+	users := usersWriteTable(t)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		statement func() (query.WriteStatement, error)
+		message   string
+	}{
+		{
+			name: "update",
+			statement: func() (query.WriteStatement, error) {
+				return query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
+			},
+			message: "UPDATE requires a WHERE predicate or an explicit AllowAll",
+		},
+		{
+			name: "delete",
+			statement: func() (query.WriteStatement, error) {
+				return query.NewDelete(users)
+			},
+			message: "DELETE requires a WHERE predicate or an explicit AllowAll",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			client, err := rasql.New(database, dialect.PostgreSQL())
+			require.NoError(t, err)
+			statement, err := testCase.statement()
+			require.NoError(t, err)
+
+			_, err = rasql.Exec(t.Context(), client, statement)
+			require.ErrorContains(t, err, testCase.message)
+		})
+	}
+}
+
+func TestExecRunsTargetedAndExplicitlyAllowedMutations(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	client, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users := usersWriteTable(t)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	targetedUpdate, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
+	require.NoError(t, err)
+	targetedUpdate, err = targetedUpdate.WithWhere(query.Equal(id, query.Bind(42)))
+	require.NoError(t, err)
+	targetedDelete, err := query.NewDelete(users)
+	require.NoError(t, err)
+	targetedDelete, err = targetedDelete.WithWhere(query.Equal(id, query.Bind(42)))
+	require.NoError(t, err)
+	allowedUpdate, err := query.NewUpdate(users, query.Set(email, query.Bind("ada@example.com")))
+	require.NoError(t, err)
+	allowedUpdate, err = allowedUpdate.AllowAll()
+	require.NoError(t, err)
+	allowedDelete, err := query.NewDelete(users)
+	require.NoError(t, err)
+	allowedDelete, err = allowedDelete.AllowAll()
+	require.NoError(t, err)
+
+	mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
+		WithArgs("grace@example.com", 42).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1)").
+		WithArgs(42).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1").
+		WithArgs("ada@example.com").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec("DELETE FROM \"users\"").
+		WillReturnResult(sqlmock.NewResult(0, 3))
+
+	_, err = rasql.Exec(t.Context(), client, targetedUpdate)
+	require.NoError(t, err)
+	_, err = rasql.Exec(t.Context(), client, targetedDelete)
+	require.NoError(t, err)
+	_, err = rasql.Exec(t.Context(), client, allowedUpdate)
+	require.NoError(t, err)
+	_, err = rasql.Exec(t.Context(), client, allowedDelete)
+	require.NoError(t, err)
+}
+
 func TestClientDialectReturnsConfiguredDialect(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
