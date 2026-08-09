@@ -365,6 +365,13 @@ func TestGeneratedRelationships(t *testing.T) {
 	require.Equal(t, "id", hasMany.ParentKey.Name())
 	require.Equal(t, "user_id", hasMany.ChildKey.Name())
 	require.Equal(t, query.JoinInner, hasMany.Join().Type())
+
+	aliasedUsers, err := users.As("u")
+	require.NoError(t, err)
+	require.Equal(t, "u", aliasedUsers.Orders().ParentKey.Source().Qualifier())
+	aliasedOrders, err := orders.As("o")
+	require.NoError(t, err)
+	require.Equal(t, "o", aliasedOrders.User().ChildKey.Source().Qualifier())
 }
 `
 
