@@ -1115,6 +1115,61 @@ func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
 	require.True(t, table.Columns[2].Nullable)
 }
 
+func TestSQLiteInspectorRejectsIncompleteColumnMetadata(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery("PRAGMA table_list(\"events\")").
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
+			AddRow("main", "events", "table", 2, 0, 0))
+	mock.ExpectQuery("PRAGMA \"main\".table_xinfo(\"events\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
+			AddRow(0, "id", "INTEGER", 1, nil, 1, 0))
+
+	table, err := inspector.Table(t.Context(), "events")
+	require.Equal(t, schema.Table{}, table)
+	require.ErrorIs(t, err, inspect.ErrIncompleteMetadata)
+	var incomplete *inspect.IncompleteMetadataError
+	require.ErrorAs(t, err, &incomplete)
+	require.Equal(t, "events", incomplete.Table)
+	require.Equal(t, 1, incomplete.Visible)
+	require.Equal(t, 2, incomplete.Actual)
+}
+
+func TestSQLiteInspectorRejectsCreateTableAsSelectDefinition(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery("PRAGMA table_list(\"copy\")").
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
+			AddRow("main", "copy", "table", 1, 0, 0))
+	mock.ExpectQuery("PRAGMA \"main\".table_xinfo(\"copy\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
+			AddRow(0, "id", "INTEGER", 0, nil, 0, 0))
+	mock.ExpectQuery("SELECT sql FROM \"main\".sqlite_master WHERE type = 'table' AND name = ?").
+		WithArgs("copy").
+		WillReturnRows(sqlmock.NewRows([]string{"sql"}).
+			AddRow("CREATE TABLE copy AS SELECT id FROM source"))
+
+	table, err := inspector.Table(t.Context(), "copy")
+	require.Equal(t, schema.Table{}, table)
+	require.ErrorContains(t, err, "CREATE TABLE AS SELECT")
+}
+
 func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -1327,7 +1382,11 @@ func TestSQLiteInspectorRejectsVirtualTableDefinition(t *testing.T) {
 			AddRow("main", "virtual_table", "table", 5, 0, 0))
 	mock.ExpectQuery(`PRAGMA "main".table_xinfo("virtual_table")`).
 		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
-			AddRow(0, "id", "INTEGER", 0, nil, 0, 0))
+			AddRow(0, "id", "INTEGER", 0, nil, 0, 0).
+			AddRow(1, "minx", "REAL", 0, nil, 0, 0).
+			AddRow(2, "maxx", "REAL", 0, nil, 0, 0).
+			AddRow(3, "miny", "REAL", 0, nil, 0, 0).
+			AddRow(4, "maxy", "REAL", 0, nil, 0, 0))
 	mock.ExpectQuery("SELECT sql FROM \"main\".sqlite_master WHERE type = 'table' AND name = ?").
 		WithArgs("virtual_table").
 		WillReturnRows(sqlmock.NewRows([]string{"sql"}).

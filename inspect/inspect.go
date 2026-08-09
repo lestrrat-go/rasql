@@ -54,30 +54,26 @@ func (e *TableNotFoundError) Unwrap() error {
 }
 
 // ErrIncompleteMetadata is the sentinel wrapped by every
-// [IncompleteMetadataError], so callers that only need to detect a privilege
-// problem can use errors.Is instead of errors.As.
+// [IncompleteMetadataError], so callers can use errors.Is instead of
+// errors.As when they only need to detect a metadata mismatch.
 var ErrIncompleteMetadata = errors.New("inspect: incomplete table metadata")
 
-// IncompleteMetadataError reports that the inspecting role sees fewer
-// columns of Table than actually exist. PostgreSQL's information_schema.columns
-// filters each row by has_column_privilege, so a role granted SELECT on only
-// some columns, or none, gets a short or empty result with no error of its
-// own; pg_catalog carries no such filter and reports the true count. Visible
-// and Actual let a caller distinguish this from a schema rasql genuinely
-// cannot represent: a privilege gap is fixed with GRANT, a representability
-// gap needs a schema change, and only one of those is this error.
+// IncompleteMetadataError reports that the metadata query sees a different
+// number of columns than the database catalog reports. PostgreSQL can produce this when
+// information_schema.columns filters rows by has_column_privilege. SQLite can
+// produce this when table_list and table_xinfo disagree. Visible and Actual
+// identify the two counts.
 type IncompleteMetadataError struct {
 	// Table is the requested table name.
 	Table string
-	// Visible is the column count information_schema exposed to the
-	// inspecting role.
+	// Visible is the column count the metadata query exposed.
 	Visible int
-	// Actual is the true column count reported by pg_catalog.
+	// Actual is the true column count reported by the database catalog.
 	Actual int
 }
 
 func (e *IncompleteMetadataError) Error() string {
-	return fmt.Sprintf("inspect: table %q column metadata could not be read: pg_catalog reports %d columns but information_schema.columns exposed %d, so the inspecting role holds insufficient column privileges on the table", e.Table, e.Actual, e.Visible)
+	return fmt.Sprintf("inspect: table %q column metadata could not be read: the catalog reports %d columns but the metadata query exposed %d", e.Table, e.Actual, e.Visible)
 }
 
 // Unwrap exposes ErrIncompleteMetadata so errors.Is(err, ErrIncompleteMetadata)
@@ -112,8 +108,10 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 // Table reads the supported schema metadata for tableName. For PostgreSQL it
 // returns [TableNotFoundError] when tableName does not exist and
 // [IncompleteMetadataError] when the inspecting role's privileges hide some
-// or all of the table's columns; see the package doc for the MySQL
-// limitation, which this method cannot detect.
+// or all of the table's columns. SQLite returns [TableNotFoundError] when the
+// table is absent and [IncompleteMetadataError] when its catalog column count
+// disagrees with the rows returned by table_xinfo. See the package doc for the
+// MySQL limitation, which this method cannot detect.
 func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, error) {
 	if err := schema.ValidateIdentifier(tableName); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: invalid table name: %w", err)
@@ -320,7 +318,9 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	}
 	columns := make([]schema.Column, 0)
 	primaryColumns := make([]primaryColumn, 0)
+	var metadataRows int64
 	for rows.Next() {
+		metadataRows++
 		var ordinal int64
 		var name string
 		var databaseType string
@@ -351,6 +351,9 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	}
 	if err := rows.Err(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: iterate SQLite columns: %w", err)
+	}
+	if metadataRows != options.columnCount {
+		return schema.Table{}, &IncompleteMetadataError{Table: tableName, Visible: int(metadataRows), Actual: int(options.columnCount)}
 	}
 	if len(columns) == 0 {
 		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
@@ -410,6 +413,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 type sqliteTableOptions struct {
 	database     string
 	name         string
+	columnCount  int64
 	withoutRowID bool
 	strict       bool
 }
@@ -442,7 +446,7 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, tableName string) (sq
 	if !strings.EqualFold(kind, "table") {
 		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: table kind %q is unsupported", tableName, kind)
 	}
-	return sqliteTableOptions{database: databaseName, name: name, withoutRowID: withoutRowID != 0, strict: strict != 0}, nil
+	return sqliteTableOptions{database: databaseName, name: name, columnCount: columnCount, withoutRowID: withoutRowID != 0, strict: strict != 0}, nil
 }
 
 func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tableName string) (*sqlitequery.CreateTableStatement, error) {
@@ -479,11 +483,14 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tabl
 		if strings.Contains(strings.ToUpper(definition.String), "CHECK") {
 			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition contains an unsupported CHECK form: %w", tableName, err)
 		}
-		return nil, nil
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unsupported: %w", tableName, err)
 	}
 	createTable, ok := statement.(*sqlitequery.CreateTableStatement)
 	if !ok || !strings.EqualFold(createTable.Name.String(), tableName) {
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
+	}
+	if createTable.As != nil {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE TABLE AS SELECT definitions are unsupported", tableName)
 	}
 	return createTable, nil
 }
