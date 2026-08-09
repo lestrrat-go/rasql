@@ -3,6 +3,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // DecimalScale is the number of digits a DecimalType column keeps to the right
@@ -285,10 +286,10 @@ func (t Table) Validate() error {
 	if err := validateForeignKeys(t.ForeignKeys, columns, constraintNames); err != nil {
 		return err
 	}
-	return validateRelationships(t.Relationships, columns)
+	return validateRelationships(t.Relationships, t.ForeignKeys, columns)
 }
 
-func validateRelationships(relationships []Relationship, columns map[string]struct{}) error {
+func validateRelationships(relationships []Relationship, foreignKeys []ForeignKey, columns map[string]struct{}) error {
 	for i, relationship := range relationships {
 		path := fmt.Sprintf("relationships[%d]", i)
 		if relationship.Name == "" {
@@ -316,6 +317,19 @@ func validateRelationships(relationships []Relationship, columns map[string]stru
 		}
 		if len(relationship.Columns) != len(relationship.ReferencedColumns) {
 			return validationError(path, "has %d local columns and %d referenced columns", len(relationship.Columns), len(relationship.ReferencedColumns))
+		}
+		matched := false
+		for _, foreignKey := range foreignKeys {
+			if foreignKey.ReferencedSchema == relationship.ReferencedSchema &&
+				foreignKey.ReferencedTable == relationship.ReferencedTable &&
+				slices.Equal(foreignKey.Columns, relationship.Columns) &&
+				slices.Equal(foreignKey.ReferencedColumns, relationship.ReferencedColumns) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return validationError(path, "does not match a declared foreign key")
 		}
 	}
 	return nil

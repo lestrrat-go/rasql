@@ -405,6 +405,12 @@ func TestTableValidatesRelationshipMetadata(t *testing.T) {
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "customer_id", Type: schema.IntegerType{}},
 		},
+		ForeignKeys: []schema.ForeignKey{{
+			Name:              "orders_customer_id_fkey",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+		}},
 		Relationships: []schema.Relationship{{
 			Name:              "Customer",
 			Kind:              schema.RelationshipBelongsTo,
@@ -418,6 +424,32 @@ func TestTableValidatesRelationshipMetadata(t *testing.T) {
 	table.Relationships[0].Columns = []string{"missing"}
 	err := table.Validate()
 	require.ErrorContains(t, err, "relationships[0].columns[0]")
+}
+
+func TestTableRejectsRelationshipWithoutMatchingForeignKey(t *testing.T) {
+	table := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "other_id", Type: schema.IntegerType{}},
+		},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.Relationship{{
+			Name:              "User",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"other_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "relationships[0]: does not match a declared foreign key")
 }
 
 func TestValidateIdentifier(t *testing.T) {
