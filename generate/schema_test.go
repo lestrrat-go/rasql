@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
@@ -174,6 +175,19 @@ func TestGeneratedSelfJoinRendersAlias(t *testing.T) {
 		rendered.SQL(),
 	)
 }
+
+func TestGeneratedRelationships(t *testing.T) {
+	orders := generated.Orders()
+	belongsTo := orders.User()
+	require.Equal(t, "users", belongsTo.Parent.QueryTable().Name())
+	require.Equal(t, "orders", belongsTo.Child.QueryTable().Name())
+	require.Equal(t, "id", belongsTo.ParentKey.Name())
+	require.Equal(t, "user_id", belongsTo.ChildKey.Name())
+
+	hasMany := generated.Users().Orders()
+	require.Equal(t, "users", hasMany.Parent.QueryTable().Name())
+	require.Equal(t, "orders", hasMany.Child.QueryTable().Name())
+}
 `
 
 // rejectedUsageSource must not compile. It names a column field that does not
@@ -211,6 +225,11 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
 	}
 	invoices := schema.Table{
 		Name: "invoices",
@@ -262,6 +281,9 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{")
 	require.Contains(t, string(source), "func Orders() OrdersTable {")
 	require.Contains(t, string(source), "func Users() UsersTable {")
+	require.Contains(t, string(source), "type OrdersTableUserRelation struct {")
+	require.Contains(t, string(source), "func (t OrdersTable) User() OrdersTableUserRelation {")
+	require.Contains(t, string(source), "func (t UsersTable) Orders() UsersTableOrdersRelation {")
 	require.Contains(t, string(source), "func (t UsersTable) As(alias string) (UsersTable, error) {")
 	require.NotContains(t, string(source), "var Users =")
 	require.Less(t, stringIndex(t, source, "var ordersTable"), stringIndex(t, source, "var usersTable"))
@@ -319,6 +341,365 @@ func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(source), "\tvar scanned [2]uint64\n")
 	require.Contains(t, string(source), "scanned[1]&(uint64(1)<<0)")
+}
+
+const generatedRelationshipUsageTest = `package generated_test
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"testing"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
+	"github.com/stretchr/testify/require"
+)
+
+type recordingExecutor struct {
+	statement render.Statement
+}
+
+func (e *recordingExecutor) Dialect() dialect.Dialect {
+	return dialect.PostgreSQL()
+}
+
+func (e *recordingExecutor) QueryRendered(_ context.Context, statement render.Statement) (*sql.Rows, error) {
+	e.statement = statement
+	return nil, errors.New("query recorded")
+}
+
+func (e *recordingExecutor) ExecRendered(_ context.Context, _ render.Statement) (sql.Result, error) {
+	return nil, errors.New("exec not supported")
+}
+
+func TestGeneratedRelationships(t *testing.T) {
+	users := generated.Users()
+	orders := generated.Orders()
+	require.Equal(t, "tenant", users.QueryTable().Schema())
+	require.Equal(t, "tenant", orders.QueryTable().Schema())
+
+	belongsTo := orders.User()
+	require.Equal(t, "tenant", belongsTo.Parent.QueryTable().Schema())
+	require.Equal(t, "tenant", belongsTo.Child.QueryTable().Schema())
+	require.Equal(t, "id", belongsTo.ParentKey.Name())
+	require.Equal(t, "user_id", belongsTo.ChildKey.Name())
+	require.Equal(t, query.JoinInner, belongsTo.Join().Type())
+	require.Equal(t, "tenant", belongsTo.Join().Source().Schema())
+
+	belongsToExecutor := &recordingExecutor{}
+	_, err := belongsTo.Load(t.Context(), belongsToExecutor, []generated.OrdersRow{{UserID: 7}})
+	require.EqualError(t, err, "query recorded")
+	require.Equal(t, "SELECT \"tenant\".\"users\".\"id\" FROM \"tenant\".\"users\" WHERE (\"tenant\".\"users\".\"id\" IN ($1))", belongsToExecutor.statement.SQL())
+
+	hasMany := users.Orders()
+	require.Equal(t, "id", hasMany.ParentKey.Name())
+	require.Equal(t, "user_id", hasMany.ChildKey.Name())
+	require.Equal(t, query.JoinInner, hasMany.Join().Type())
+	require.Equal(t, "tenant", hasMany.Join().Source().Schema())
+
+	hasManyExecutor := &recordingExecutor{}
+	_, err = hasMany.Load(t.Context(), hasManyExecutor, []generated.UsersRow{{ID: 7}})
+	require.EqualError(t, err, "query recorded")
+	require.Equal(t, "SELECT \"tenant\".\"orders\".\"id\", \"tenant\".\"orders\".\"user_id\" FROM \"tenant\".\"orders\" WHERE (\"tenant\".\"orders\".\"user_id\" IN ($1))", hasManyExecutor.statement.SQL())
+
+	aliasedUsers, err := users.As("u")
+	require.NoError(t, err)
+	require.Equal(t, "u", aliasedUsers.Orders().ParentKey.Source().Qualifier())
+	aliasedOrders, err := orders.As("o")
+	require.NoError(t, err)
+	require.Equal(t, "o", aliasedOrders.User().ChildKey.Source().Qualifier())
+}
+`
+
+const generatedSelfReferentialRelationshipUsageTest = `package generated_test
+
+import (
+	"testing"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/stretchr/testify/require"
+)
+
+func TestGeneratedSelfReferentialRelationshipsRender(t *testing.T) {
+	employees := generated.Employees()
+	manager := employees.Manager()
+	statement, err := rasql.SelectFrom(employees).Join(manager.Join()).Build(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, ` + "`" + `SELECT "employees"."id", "employees"."manager_id" FROM "employees" INNER JOIN "employees" AS "employees_manager_parent" ON ("employees_manager_parent"."id" = "employees"."manager_id")` + "`" + `, statement.SQL())
+
+	children := employees.Employees()
+	statement, err = rasql.SelectFrom(employees).Join(children.Join()).Build(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, ` + "`" + `SELECT "employees"."id", "employees"."manager_id" FROM "employees" INNER JOIN "employees" AS "employees_employees_child" ON ("employees"."id" = "employees_employees_child"."manager_id")` + "`" + `, statement.SQL())
+}
+`
+
+func TestSchemaGeneratesTypedRelationships(t *testing.T) {
+	users := schema.Table{
+		Schema:     "tenant",
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Schema: "tenant",
+		Name:   "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Name:              "orders_user_id_fkey",
+			Columns:           []string{"user_id"},
+			ReferencedSchema:  "tenant",
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", users, orders)
+	require.NoError(t, err)
+	usersSource, err := generate.SchemaTable("generated", users, users, orders)
+	require.NoError(t, err)
+	ordersSource, err := generate.SchemaTable("generated", orders, users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func (t OrdersTable) User() OrdersTableUserRelation")
+	require.Contains(t, string(source), "func (t UsersTable) Orders() UsersTableOrdersRelation")
+	require.Contains(t, string(source), "func (r UsersTableOrdersRelation) Load")
+	require.Contains(t, string(source), "Relationships: []schema.Relationship{")
+	require.Contains(t, string(usersSource), "func (t UsersTable) Orders() UsersTableOrdersRelation")
+	require.Contains(t, string(ordersSource), "func (t OrdersTable) User() OrdersTableUserRelation")
+
+	directory, err := os.MkdirTemp(".", ".tmp-relationship-schema-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(directory)) })
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "users_gen.go"), usersSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "orders_gen.go"), ordersSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedRelationshipUsageTest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
+
+func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	memberships := schema.Table{
+		Name: "memberships",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "billing_user_id", Type: schema.IntegerType{}},
+			{Name: "shipping_user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+	}
+
+	source, err := generate.Schema("generated", users, memberships)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+	require.Contains(t, text, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
+	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Join() query.Join")
+	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Join() query.Join")
+	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+}
+
+func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	generateSource := func(foreignKeys []schema.ForeignKey) string {
+		memberships := schema.Table{
+			Name: "memberships",
+			Columns: []schema.Column{
+				{Name: "id", Type: schema.IntegerType{}},
+				{Name: "billing_user_id", Type: schema.IntegerType{}},
+				{Name: "shipping_user_id", Type: schema.IntegerType{}},
+			},
+			PrimaryKey:  []string{"id"},
+			ForeignKeys: foreignKeys,
+		}
+		source, err := generate.Schema("generated", users, memberships)
+		require.NoError(t, err)
+		return string(source)
+	}
+	foreignKeys := []schema.ForeignKey{
+		{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+	}
+
+	for _, source := range []string{
+		generateSource(foreignKeys),
+		generateSource([]schema.ForeignKey{foreignKeys[1], foreignKeys[0]}),
+	} {
+		memberships := generatedMethodBlock(t, source, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+		require.Contains(t, memberships, "ChildKey: child.BillingUserID")
+		shipping := generatedMethodBlock(t, source, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
+		require.Contains(t, shipping, "ChildKey: child.ShippingUserID")
+	}
+}
+
+func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
+	employees := schema.Table{
+		Name: "employees",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "manager_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"manager_id"},
+			ReferencedTable:   "employees",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", employees)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t EmployeesTable) Manager() EmployeesTableManagerRelation")
+	require.Contains(t, text, "func (t EmployeesTable) Employees() EmployeesTableEmployeesRelation")
+	require.Contains(t, text, "func (r EmployeesTableEmployeesRelation) Load(ctx context.Context, x rasql.Executor, parents []EmployeesRow)")
+}
+
+func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
+	employees := schema.Table{
+		Name: "employees",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "manager_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"manager_id"},
+			ReferencedTable:   "employees",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", employees)
+	require.NoError(t, err)
+	directory, err := os.MkdirTemp(".", ".tmp-self-relationship-schema-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(directory)) })
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedSelfReferentialRelationshipUsageTest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
+
+func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	aliases := schema.Table{
+		Name: "as",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", users, aliases)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) UserAs() UsersTableUserAsRelation")
+	require.Contains(t, text, "func (r UsersTableUserAsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+}
+
+func generatedMethodBlock(t *testing.T, source, signature string) string {
+	t.Helper()
+	start := strings.Index(source, signature)
+	require.GreaterOrEqual(t, start, 0)
+	rest := source[start:]
+	next := strings.Index(rest[len(signature):], "\nfunc ")
+	if next < 0 {
+		return rest
+	}
+	return rest[:len(signature)+next]
+}
+
+func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	memberships := schema.Table{
+		Name: "memberships",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "billing_user_id", Type: schema.IntegerType{}},
+			{Name: "shipping_user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+		Relationships: []schema.Relationship{{
+			Name:              "BillingUser",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"billing_user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", users, memberships)
+	require.NoError(t, err)
+	text := string(source)
+	for _, expected := range []string{
+		"func (t MembershipsTable) BillingUser() MembershipsTableBillingUserRelation",
+		"func (t MembershipsTable) ShippingUser() MembershipsTableShippingUserRelation",
+		"func (t UsersTable) Memberships() UsersTableMembershipsRelation",
+		"func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation",
+		"func (r MembershipsTableBillingUserRelation) Load(ctx context.Context, x rasql.Executor, children []MembershipsRow)",
+		"func (r MembershipsTableShippingUserRelation) Load(ctx context.Context, x rasql.Executor, children []MembershipsRow)",
+	} {
+		require.Contains(t, text, expected)
+	}
 }
 
 // TestSchemaGeneratesDecimalColumns pins the generator's decimal mapping in
@@ -396,6 +777,48 @@ func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
 	}
 }
 
+func TestSchemaRejectsCollidingRelationshipMethodNames(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.Relationship{
+			{
+				Name:              "BillingUser",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+			{
+				Name:              "billing_user",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+		},
+	}
+
+	_, err := generate.Schema("generated", users, orders)
+	require.ErrorContains(t, err, `relationships[0] "BillingUser"`)
+	require.ErrorContains(t, err, `relationships[1] "billing_user"`)
+	require.ErrorContains(t, err, `duplicate generated method "BillingUser"`)
+}
+
 func TestSchemaAllowsScanColumns(t *testing.T) {
 	source, err := generate.Schema("generated", schema.Table{
 		Name: "users",
@@ -424,6 +847,93 @@ func TestSchemaRejectsCollidingGeneratedNames(t *testing.T) {
 	)
 	require.ErrorContains(t, err, "duplicates generated name")
 	require.ErrorContains(t, err, "UsersTable")
+}
+
+func TestSchemaRejectsRelationshipTypeCollisions(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	collision := schema.Table{
+		Name:       "users_table_orders_relation",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := generate.Schema("generated", users, orders, collision)
+	require.ErrorContains(t, err, `relationship "Orders" on table "users"`)
+	require.ErrorContains(t, err, `UsersTableOrdersRelation`)
+}
+
+func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.Relationship{{
+			Name:              "as",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	err := generate.ValidateSchema("generated", users, orders)
+	require.ErrorContains(t, err, `relationship "as" on table "orders" uses reserved generated method "As"`)
+}
+
+func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "as_id", Type: schema.IntegerType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"as_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "AsID *int64")
+	require.NotContains(t, string(source), "func (t OrdersTable) As() OrdersTableAsRelation")
 }
 
 func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {

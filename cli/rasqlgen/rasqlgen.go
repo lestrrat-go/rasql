@@ -192,7 +192,7 @@ func writeGeneratedSchemaFiles(directory string, packageName string, tables []sc
 		filenames[filename] = table.Name
 	}
 	for _, table := range sorted {
-		source, err := generate.Schema(packageName, table)
+		source, err := generate.SchemaTable(packageName, table, sorted...)
 		if err != nil {
 			return err
 		}

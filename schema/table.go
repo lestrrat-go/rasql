@@ -3,6 +3,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // DecimalScale is the number of digits a DecimalType column keeps to the right
@@ -153,10 +154,9 @@ type Table struct {
 	// never creates, drops or connects to the namespace itself: an
 	// application that needs "audit" to exist creates it with a reviewed
 	// native migration, the same way every other piece of DDL this library
-	// does not synthesize gets created. inspect never reports a Schema, and
-	// rasqlgen never emits one, so a qualified table is re-read through a
-	// hand-written descriptor until qualified inspection and generation
-	// land.
+	// does not synthesize gets created. inspect never reports a Schema, so a
+	// qualified table returned by inspection is re-read through a hand-written
+	// descriptor.
 	Schema            string
 	Name              string
 	Columns           []Column
@@ -165,6 +165,7 @@ type Table struct {
 	Checks            []CheckConstraint
 	Indexes           []Index
 	ForeignKeys       []ForeignKey
+	Relationships     []Relationship
 }
 
 // Qualified reports whether t names a schema.
@@ -205,6 +206,10 @@ func (t Table) Clone() Table {
 		clone.ForeignKeys[i] = key
 		clone.ForeignKeys[i].Columns = append([]string(nil), key.Columns...)
 		clone.ForeignKeys[i].ReferencedColumns = append([]string(nil), key.ReferencedColumns...)
+	}
+	clone.Relationships = make([]Relationship, len(t.Relationships))
+	for i, relationship := range t.Relationships {
+		clone.Relationships[i] = relationship.Clone()
 	}
 	return clone
 }
@@ -277,7 +282,56 @@ func (t Table) Validate() error {
 	if err := validateIndexes(t.Indexes, columns); err != nil {
 		return err
 	}
-	return validateForeignKeys(t.ForeignKeys, columns, constraintNames)
+	if err := validateForeignKeys(t.ForeignKeys, columns, constraintNames); err != nil {
+		return err
+	}
+	return validateRelationships(t.Relationships, t.ForeignKeys, columns)
+}
+
+func validateRelationships(relationships []Relationship, foreignKeys []ForeignKey, columns map[string]struct{}) error {
+	for i, relationship := range relationships {
+		path := fmt.Sprintf("relationships[%d]", i)
+		if relationship.Name == "" {
+			return validationError(path+".name", "must not be empty")
+		}
+		if err := ValidateIdentifier(relationship.Name); err != nil {
+			return validationError(path+".name", "%s", err)
+		}
+		if relationship.Kind != RelationshipBelongsTo {
+			return validationError(path+".kind", "unsupported relationship kind %q", relationship.Kind)
+		}
+		if err := validateColumnList(path+".columns", relationship.Columns, columns, true); err != nil {
+			return err
+		}
+		if relationship.ReferencedSchema != "" {
+			if err := ValidateIdentifier(relationship.ReferencedSchema); err != nil {
+				return validationError(path+".referenced_schema", "%s", err)
+			}
+		}
+		if err := ValidateIdentifier(relationship.ReferencedTable); err != nil {
+			return validationError(path+".referenced_table", "%s", err)
+		}
+		if err := validateIdentifierList(path+".referenced_columns", relationship.ReferencedColumns, true); err != nil {
+			return err
+		}
+		if len(relationship.Columns) != len(relationship.ReferencedColumns) {
+			return validationError(path, "has %d local columns and %d referenced columns", len(relationship.Columns), len(relationship.ReferencedColumns))
+		}
+		matched := false
+		for _, foreignKey := range foreignKeys {
+			if foreignKey.ReferencedSchema == relationship.ReferencedSchema &&
+				foreignKey.ReferencedTable == relationship.ReferencedTable &&
+				slices.Equal(foreignKey.Columns, relationship.Columns) &&
+				slices.Equal(foreignKey.ReferencedColumns, relationship.ReferencedColumns) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return validationError(path, "does not match a declared foreign key")
+		}
+	}
+	return nil
 }
 
 // validateNamedColumnLists validates constraints and records each non-empty

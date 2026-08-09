@@ -12,12 +12,20 @@ import (
 func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor := validTable()
 	descriptor.Schema = "audit"
+	descriptor.Relationships = []schema.Relationship{{
+		Name:              "Customer",
+		Kind:              schema.RelationshipBelongsTo,
+		Columns:           []string{"customer_id"},
+		ReferencedTable:   "customers",
+		ReferencedColumns: []string{"id"},
+	}}
 	table := descriptor.Clone()
 
 	descriptor.Columns[0].Name = "changed"
 	descriptor.PrimaryKey[0] = "changed"
 	descriptor.Indexes[0].Columns[0] = "changed"
 	descriptor.ForeignKeys[0].ReferencedColumns[0] = "changed"
+	descriptor.Relationships[0].Columns[0] = "changed"
 	descriptor.Schema = "changed"
 
 	require.Equal(t, "audit", table.Schema)
@@ -25,6 +33,7 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	require.Equal(t, "id", table.PrimaryKey[0])
 	require.Equal(t, "customer_id", table.Indexes[0].Columns[0])
 	require.Equal(t, "id", table.ForeignKeys[0].ReferencedColumns[0])
+	require.Equal(t, "customer_id", table.Relationships[0].Columns[0])
 
 	amount, ok := table.Column("amount")
 	require.True(t, ok)
@@ -387,6 +396,60 @@ func TestTableValidateAllowsRepeatedEmptyConstraintNames(t *testing.T) {
 	}
 
 	require.NoError(t, table.Validate())
+}
+
+func TestTableValidatesRelationshipMetadata(t *testing.T) {
+	table := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+		},
+		ForeignKeys: []schema.ForeignKey{{
+			Name:              "orders_customer_id_fkey",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.Relationship{{
+			Name:              "Customer",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	require.NoError(t, table.Validate())
+
+	table.Relationships[0].Columns = []string{"missing"}
+	err := table.Validate()
+	require.ErrorContains(t, err, "relationships[0].columns[0]")
+}
+
+func TestTableRejectsRelationshipWithoutMatchingForeignKey(t *testing.T) {
+	table := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "other_id", Type: schema.IntegerType{}},
+		},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.Relationship{{
+			Name:              "User",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"other_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "relationships[0]: does not match a declared foreign key")
 }
 
 func TestValidateIdentifier(t *testing.T) {
