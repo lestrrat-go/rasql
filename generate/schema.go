@@ -249,6 +249,9 @@ func validateVariableNames(tables []schema.Table) error {
 			name  string
 		})
 		for index, relationship := range table.Relationships {
+			if !relationshipSupportedForTable(table, relationship, tables) {
+				continue
+			}
 			method := goName(relationship.Name)
 			if !token.IsIdentifier(method) {
 				return fmt.Errorf("generate: relationship %q on table %q cannot become a Go method", relationship.Name, table.Name)
@@ -265,6 +268,9 @@ func validateVariableNames(tables []schema.Table) error {
 			}{index: index, name: relationship.Name}
 		}
 		for _, relationship := range table.Relationships {
+			if !relationshipSupportedForTable(table, relationship, tables) {
+				continue
+			}
 			method := goName(relationship.Name)
 			if _, exists := fields[method]; exists {
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated field %q", relationship.Name, table.Name, method)
@@ -285,6 +291,34 @@ func validateVariableNames(tables []schema.Table) error {
 		}
 	}
 	return nil
+}
+
+func relationshipSupported(child, parent schema.Table, relationship schema.Relationship) (schema.Column, schema.Column, string, bool) {
+	if relationship.Kind != schema.RelationshipBelongsTo || len(relationship.Columns) != 1 || len(relationship.ReferencedColumns) != 1 {
+		return schema.Column{}, schema.Column{}, "", false
+	}
+	childColumn, ok := child.Column(relationship.Columns[0])
+	if !ok || childColumn.Nullable {
+		return schema.Column{}, schema.Column{}, "", false
+	}
+	parentColumn, ok := parent.Column(relationship.ReferencedColumns[0])
+	if !ok || parentColumn.Nullable || len(parent.PrimaryKey) != 1 || parent.PrimaryKey[0] != parentColumn.Name {
+		return schema.Column{}, schema.Column{}, "", false
+	}
+	keyType, ok := relationKeyType(parentColumn)
+	if !ok || keyType != rowFieldType(childColumn) {
+		return schema.Column{}, schema.Column{}, "", false
+	}
+	return parentColumn, childColumn, keyType, true
+}
+
+func relationshipSupportedForTable(table schema.Table, relationship schema.Relationship, allTables []schema.Table) bool {
+	parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
+	if !ok {
+		return false
+	}
+	_, _, _, ok = relationshipSupported(table, parent, relationship)
+	return ok
 }
 
 // variableName returns the exported Go identifier for a table name. It
@@ -527,23 +561,12 @@ func relationshipSpecs(table schema.Table, allTables []schema.Table) []relations
 	result := make([]relationshipSpec, 0)
 	usedMethods := make(map[string]struct{})
 	for _, relationship := range table.Relationships {
-		if relationship.Kind != schema.RelationshipBelongsTo || len(relationship.Columns) != 1 || len(relationship.ReferencedColumns) != 1 {
-			continue
-		}
 		parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
 		if !ok {
 			continue
 		}
-		childColumn, ok := table.Column(relationship.Columns[0])
-		if !ok || childColumn.Nullable {
-			continue
-		}
-		parentColumn, ok := parent.Column(relationship.ReferencedColumns[0])
-		if !ok || parentColumn.Nullable || len(parent.PrimaryKey) != 1 || parent.PrimaryKey[0] != parentColumn.Name {
-			continue
-		}
-		keyType, ok := relationKeyType(parentColumn)
-		if !ok || keyType != rowFieldType(childColumn) {
+		parentColumn, childColumn, keyType, ok := relationshipSupported(table, parent, relationship)
+		if !ok {
 			continue
 		}
 		method := goName(relationship.Name)
@@ -571,22 +594,11 @@ func relationshipSpecs(table schema.Table, allTables []schema.Table) []relations
 	candidates := make([]inverseRelationshipCandidate, 0)
 	for _, child := range allTables {
 		for _, relationship := range child.Relationships {
-			if relationship.Kind != schema.RelationshipBelongsTo || len(relationship.Columns) != 1 || len(relationship.ReferencedColumns) != 1 {
-				continue
-			}
 			if relationship.ReferencedTable != table.Name || relationship.ReferencedSchema != table.Schema {
 				continue
 			}
-			childColumn, ok := child.Column(relationship.Columns[0])
-			if !ok || childColumn.Nullable {
-				continue
-			}
-			parentColumn, ok := table.Column(relationship.ReferencedColumns[0])
-			if !ok || parentColumn.Nullable || len(table.PrimaryKey) != 1 || table.PrimaryKey[0] != parentColumn.Name {
-				continue
-			}
-			keyType, ok := relationKeyType(parentColumn)
-			if !ok || keyType != rowFieldType(childColumn) {
+			parentColumn, childColumn, keyType, ok := relationshipSupported(child, table, relationship)
+			if !ok {
 				continue
 			}
 			candidates = append(candidates, inverseRelationshipCandidate{

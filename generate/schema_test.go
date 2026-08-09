@@ -910,6 +910,32 @@ func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
 	require.ErrorContains(t, err, `relationship "as" on table "orders" uses reserved generated method "As"`)
 }
 
+func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "as_id", Type: schema.IntegerType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"as_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "AsID *int64")
+	require.NotContains(t, string(source), "func (t OrdersTable) As() OrdersTableAsRelation")
+}
+
 func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
 	apiKeys := schema.Table{
 		Name: "api_keys",
