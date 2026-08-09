@@ -506,6 +506,14 @@ type relationshipSpec struct {
 	parentKeyType string
 }
 
+type inverseRelationshipCandidate struct {
+	child        schema.Table
+	relationship schema.Relationship
+	parentColumn schema.Column
+	childColumn  schema.Column
+	keyType      string
+}
+
 func containsRelationships(tables, allTables []schema.Table) bool {
 	for _, table := range tables {
 		if len(relationshipSpecs(table, allTables)) > 0 {
@@ -560,10 +568,8 @@ func relationshipSpecs(table schema.Table, allTables []schema.Table) []relations
 		})
 	}
 
+	candidates := make([]inverseRelationshipCandidate, 0)
 	for _, child := range allTables {
-		if child.Name == table.Name && child.Schema == table.Schema {
-			continue
-		}
 		for _, relationship := range child.Relationships {
 			if relationship.Kind != schema.RelationshipBelongsTo || len(relationship.Columns) != 1 || len(relationship.ReferencedColumns) != 1 {
 				continue
@@ -583,32 +589,80 @@ func relationshipSpecs(table schema.Table, allTables []schema.Table) []relations
 			if !ok || keyType != rowFieldType(childColumn) {
 				continue
 			}
-			method := variableName(child.Name)
-			if _, exists := usedMethods[method]; exists {
-				method = goName(relationship.Name) + method
-			}
-			if reservedRelationshipMethod(method) {
-				continue
-			}
-			if _, exists := usedMethods[method]; exists {
-				continue
-			}
-			usedMethods[method] = struct{}{}
-			result = append(result, relationshipSpec{
-				kind:          schema.RelationshipHasMany,
-				method:        method,
-				typeName:      tableTypeName(table.Name) + method + "Relation",
-				parent:        table,
-				child:         child,
-				parentColumn:  parentColumn,
-				childColumn:   childColumn,
-				parentField:   goName(parentColumn.Name),
-				childField:    goName(childColumn.Name),
-				parentKeyType: keyType,
+			candidates = append(candidates, inverseRelationshipCandidate{
+				child:        child,
+				relationship: relationship,
+				parentColumn: parentColumn,
+				childColumn:  childColumn,
+				keyType:      keyType,
 			})
 		}
 	}
+	sort.SliceStable(candidates, func(left, right int) bool {
+		leftKey := inverseRelationshipSortKey(candidates[left])
+		rightKey := inverseRelationshipSortKey(candidates[right])
+		return leftKey < rightKey
+	})
+	for _, candidate := range candidates {
+		method := inverseRelationshipMethodName(candidate.child, candidate.relationship, usedMethods)
+		if method == "" {
+			continue
+		}
+		usedMethods[method] = struct{}{}
+		result = append(result, relationshipSpec{
+			kind:          schema.RelationshipHasMany,
+			method:        method,
+			typeName:      tableTypeName(table.Name) + method + "Relation",
+			parent:        table,
+			child:         candidate.child,
+			parentColumn:  candidate.parentColumn,
+			childColumn:   candidate.childColumn,
+			parentField:   goName(candidate.parentColumn.Name),
+			childField:    goName(candidate.childColumn.Name),
+			parentKeyType: candidate.keyType,
+		})
+	}
 	return result
+}
+
+func inverseRelationshipSortKey(candidate inverseRelationshipCandidate) string {
+	return strings.Join([]string{
+		candidate.child.Schema,
+		candidate.child.Name,
+		candidate.relationship.Name,
+		strings.Join(candidate.relationship.Columns, "\x00"),
+		strings.Join(candidate.relationship.ReferencedColumns, "\x00"),
+		candidate.parentColumn.Name,
+		candidate.childColumn.Name,
+	}, "\x00")
+}
+
+// Inverse methods use the child table name when it is available. A collision
+// or reserved name gets the relationship name as a stable prefix, followed by
+// a numeric suffix only when that name is also occupied.
+func inverseRelationshipMethodName(child schema.Table, relationship schema.Relationship, usedMethods map[string]struct{}) string {
+	base := variableName(child.Name)
+	if base == "" {
+		return ""
+	}
+	if _, exists := usedMethods[base]; !exists && !reservedRelationshipMethod(base) {
+		return base
+	}
+
+	prefix := goName(relationship.Name)
+	if prefix == "" {
+		return ""
+	}
+	base = prefix + base
+	if _, exists := usedMethods[base]; !exists && !reservedRelationshipMethod(base) {
+		return base
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := base + strconv.Itoa(suffix)
+		if _, exists := usedMethods[candidate]; !exists && !reservedRelationshipMethod(candidate) {
+			return candidate
+		}
+	}
 }
 
 func relationshipTable(tables []schema.Table, referencedSchema, referencedName string) (schema.Table, bool) {

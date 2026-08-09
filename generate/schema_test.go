@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
@@ -457,6 +458,105 @@ func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
 	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Join() query.Join")
 	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+}
+
+func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	generateSource := func(foreignKeys []schema.ForeignKey) string {
+		memberships := schema.Table{
+			Name: "memberships",
+			Columns: []schema.Column{
+				{Name: "id", Type: schema.IntegerType{}},
+				{Name: "billing_user_id", Type: schema.IntegerType{}},
+				{Name: "shipping_user_id", Type: schema.IntegerType{}},
+			},
+			PrimaryKey:  []string{"id"},
+			ForeignKeys: foreignKeys,
+		}
+		source, err := generate.Schema("generated", users, memberships)
+		require.NoError(t, err)
+		return string(source)
+	}
+	foreignKeys := []schema.ForeignKey{
+		{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+	}
+
+	for _, source := range []string{
+		generateSource(foreignKeys),
+		generateSource([]schema.ForeignKey{foreignKeys[1], foreignKeys[0]}),
+	} {
+		memberships := generatedMethodBlock(t, source, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+		require.Contains(t, memberships, "ChildKey: child.BillingUserID")
+		shipping := generatedMethodBlock(t, source, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
+		require.Contains(t, shipping, "ChildKey: child.ShippingUserID")
+	}
+}
+
+func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
+	employees := schema.Table{
+		Name: "employees",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "manager_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"manager_id"},
+			ReferencedTable:   "employees",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", employees)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t EmployeesTable) Manager() EmployeesTableManagerRelation")
+	require.Contains(t, text, "func (t EmployeesTable) Employees() EmployeesTableEmployeesRelation")
+	require.Contains(t, text, "func (r EmployeesTableEmployeesRelation) Load(ctx context.Context, x rasql.Executor, parents []EmployeesRow)")
+}
+
+func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	aliases := schema.Table{
+		Name: "as",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", users, aliases)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) UserAs() UsersTableUserAsRelation")
+	require.Contains(t, text, "func (r UsersTableUserAsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+}
+
+func generatedMethodBlock(t *testing.T, source, signature string) string {
+	t.Helper()
+	start := strings.Index(source, signature)
+	require.GreaterOrEqual(t, start, 0)
+	rest := source[start:]
+	next := strings.Index(rest[len(signature):], "\nfunc ")
+	if next < 0 {
+		return rest
+	}
+	return rest[:len(signature)+next]
 }
 
 func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
