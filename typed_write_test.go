@@ -137,6 +137,68 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryRow(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testing.T) {
+	type user struct {
+		ID     int64  `rasql:"id"`
+		Status string `rasql:"status"`
+	}
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     `INSERT INTO "users" DEFAULT VALUES`,
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "INSERT INTO `users` () VALUES ()",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     `INSERT INTO "users" DEFAULT VALUES`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			client, err := rasql.New(database, test.dialect)
+			require.NoError(t, err)
+			users, err := rasql.NewTable[user](schema.Table{
+				Name: "users",
+				Columns: []schema.Column{
+					{Name: "id", Type: schema.IntegerType{}, Default: "next_user_id()"},
+					{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
+				},
+				PrimaryKey: []string{"id"},
+			})
+			require.NoError(t, err)
+			mock.ExpectExec(test.sql).WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectExec(test.sql).WillReturnResult(sqlmock.NewResult(2, 1))
+
+			result, err := rasql.InsertManyWithOptions(
+				t.Context(),
+				client,
+				users,
+				[]user{{}, {}},
+				rasql.DefaultColumns("id", "status"),
+			)
+			require.NoError(t, err)
+			rows, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.EqualValues(t, 2, rows)
+		})
+	}
+}
+
 func TestInsertManyRejectsEmptyRows(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`

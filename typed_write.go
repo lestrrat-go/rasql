@@ -67,7 +67,9 @@ func InsertMany[T any](ctx context.Context, x Executor, table Table[T], values [
 
 // InsertManyWithOptions is InsertMany with the same database-default options
 // as InsertWithOptions. The selected default columns are omitted from every
-// row, while every unselected column remains a bound value.
+// row, while every unselected column remains a bound value. When every column
+// uses a database default, it executes one default-values INSERT per row because
+// the supported dialects do not share a multi-row default-values syntax.
 func InsertManyWithOptions[T any](ctx context.Context, x Executor, table Table[T], values []T, options ...InsertOption) (sql.Result, error) {
 	if isNil(x) {
 		return nil, fmt.Errorf("rasql: executor must not be nil")
@@ -79,6 +81,9 @@ func InsertManyWithOptions[T any](ctx context.Context, x Executor, table Table[T
 	statement, err := typedInsertMany(table, values, defaults)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: build INSERT: %w", err)
+	}
+	if statement.UsesDefaultValues() && len(values) > 1 {
+		return execDefaultInserts(ctx, x, statement, len(values))
 	}
 	return Exec(ctx, x, statement)
 }
@@ -368,9 +373,6 @@ func typedInsertMany[T any](table Table[T], values []T, defaultColumns map[strin
 		columns = append(columns, column)
 	}
 	if len(columns) == 0 {
-		if len(values) != 1 {
-			return query.Insert{}, fmt.Errorf("batch insert cannot use database defaults for every column")
-		}
 		return query.NewDefaultInsert(reference)
 	}
 
@@ -392,6 +394,36 @@ func typedInsertValues(columns []query.Column, fields map[string]any) []query.Ex
 		values = append(values, query.Bind(fields[column.Name()]))
 	}
 	return values
+}
+
+type defaultInsertResults []sql.Result
+
+func (r defaultInsertResults) LastInsertId() (int64, error) {
+	return r[len(r)-1].LastInsertId()
+}
+
+func (r defaultInsertResults) RowsAffected() (int64, error) {
+	var total int64
+	for _, result := range r {
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		total += rows
+	}
+	return total, nil
+}
+
+func execDefaultInserts(ctx context.Context, x Executor, statement query.Insert, count int) (sql.Result, error) {
+	results := make(defaultInsertResults, count)
+	for i := range count {
+		result, err := Exec(ctx, x, statement)
+		if err != nil {
+			return nil, fmt.Errorf("rasql: execute default INSERT row %d: %w", i, err)
+		}
+		results[i] = result
+	}
+	return results, nil
 }
 
 func typedInsert[T any](table Table[T], value T, defaultColumns map[string]struct{}) (query.Insert, error) {
