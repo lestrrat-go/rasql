@@ -63,6 +63,7 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 	var primaryKey sqlitequery.TableConstraint
 	var hasPrimaryKey bool
+	var inlineAutoincrement bool
 	constraints := make([]sqlitequery.TableConstraint, 0, len(statement.Constraints)+1)
 	for _, constraint := range statement.Constraints {
 		if constraint.Kind != sqlitequery.ConstraintPrimaryKey {
@@ -87,7 +88,20 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 			}
 			inlineColumns = append(inlineColumns, sqlitequery.IndexedColumn{
 				Expression: &sqlitequery.IdentifierExpression{Name: sqlitequery.QualifiedName{column.Name}},
+				Direction:  constraint.Direction,
 			})
+			if constraint.Autoincrement {
+				columnConstraints = append(columnConstraints, constraint)
+				inlineAutoincrement = true
+			}
+			if !hasPrimaryKey {
+				primaryKey = sqlitequery.TableConstraint{
+					Kind:     sqlitequery.ConstraintPrimaryKey,
+					Conflict: constraint.Conflict,
+					Columns:  append([]sqlitequery.IndexedColumn(nil), inlineColumns...),
+				}
+				hasPrimaryKey = true
+			}
 		}
 		column.Constraints = columnConstraints
 	}
@@ -107,7 +121,9 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 			}
 			column.Constraints = append(column.Constraints, sqlitequery.ColumnConstraint{Kind: sqlitequery.ConstraintNotNull})
 		}
-		constraints = append(constraints, primaryKey)
+		if !inlineAutoincrement {
+			constraints = append(constraints, primaryKey)
+		}
 	}
 	statement.Constraints = constraints
 }

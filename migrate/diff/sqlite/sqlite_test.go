@@ -140,6 +140,24 @@ func TestDiffRejectsChangedOptions(t *testing.T) {
 	require.ErrorContains(t, err, "table members options changed")
 }
 
+func TestDiffDoesNotNormalizeAwaySQLitePrimaryKeyMetadata(t *testing.T) {
+	analyzer := sqlite.New()
+	for _, test := range []struct {
+		name   string
+		target string
+	}{
+		{name: "autoincrement", target: "CREATE TABLE members (id integer PRIMARY KEY AUTOINCREMENT);"},
+		{name: "conflict resolution", target: "CREATE TABLE members (id integer PRIMARY KEY ON CONFLICT REPLACE);"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY);")
+			target := parseSnapshot(t, analyzer, test.target)
+			_, err := analyzer.Diff(baseline, target)
+			require.ErrorContains(t, err, "table members constraints changed")
+		})
+	}
+}
+
 func TestParseRejectsCreateTableAsSelect(t *testing.T) {
 	analyzer := sqlite.New()
 	_, err := analyzer.Parse([]diff.Source{{Path: "member_copy.sql", SQL: "CREATE TABLE member_copy AS SELECT id FROM members;"}})

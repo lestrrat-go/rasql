@@ -939,9 +939,9 @@ func TestSQLiteInspectorRejectsDecimalColumn(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	mock.ExpectQuery("PRAGMA table_info(\"payments\")").
-		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
-			AddRow(0, "amount", "DECIMAL(19,4)", 1, nil, 0))
+	mock.ExpectQuery("PRAGMA table_xinfo(\"payments\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
+			AddRow(0, "amount", "DECIMAL(19,4)", 1, nil, 0, 0))
 
 	_, err = inspector.Table(t.Context(), "payments")
 	require.ErrorContains(t, err, "is not exact in SQLite")
@@ -960,13 +960,22 @@ func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	mock.ExpectQuery("PRAGMA table_info(\"events\")").
-		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
-			AddRow(0, "sequence", "INTEGER", 1, nil, 2).
-			AddRow(1, "stream_id", "TEXT", 1, nil, 1).
-			AddRow(2, "payload", "BLOB", 0, nil, 0))
+	mock.ExpectQuery("PRAGMA table_xinfo(\"events\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
+			AddRow(0, "sequence", "INTEGER", 1, nil, 2, 0).
+			AddRow(1, "stream_id", "TEXT", 1, nil, 1, 0).
+			AddRow(2, "payload", "BLOB", 0, nil, 0, 0))
+	mock.ExpectQuery("PRAGMA table_list(\"events\")").
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
+			AddRow("main", "events", "table", 3, 0, 0))
+	mock.ExpectQuery("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").
+		WithArgs("events").
+		WillReturnRows(sqlmock.NewRows([]string{"sql"}).
+			AddRow("CREATE TABLE events (sequence INTEGER, stream_id TEXT, payload BLOB)"))
 	mock.ExpectQuery(`PRAGMA index_list("events")`).
 		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "unique", "origin", "partial"}))
+	mock.ExpectQuery(`PRAGMA foreign_key_list("events")`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "seq", "table", "from", "to", "on_update", "on_delete", "match"}))
 
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
@@ -999,6 +1008,64 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*ID\s+int64$`, string(source))
 	require.NotContains(t, string(source), "ID *int64")
+}
+
+func TestSQLiteInspectorReadsTableConstraints(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id), email TEXT UNIQUE, CHECK (length(email) > 0))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "children")
+	require.NoError(t, err)
+	require.Equal(t, []schema.UniqueConstraint{{Columns: []string{"email"}}}, table.UniqueConstraints)
+	require.Equal(t, []schema.CheckConstraint{{Expression: "length(email) > 0"}}, table.Checks)
+	require.Equal(t, []schema.ForeignKey{{
+		Columns:           []string{"parent_id"},
+		ReferencedTable:   "parents",
+		ReferencedColumns: []string{"id"},
+		OnDelete:          schema.ReferenceActionNoAction,
+		OnUpdate:          schema.ReferenceActionNoAction,
+	}}, table.ForeignKeys)
+}
+
+func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	for _, statement := range []string{
+		"CREATE TABLE generated (value INTEGER, doubled INTEGER GENERATED ALWAYS AS (value * 2) STORED)",
+		"CREATE TABLE autoincremented (id INTEGER PRIMARY KEY AUTOINCREMENT)",
+		"CREATE TABLE strict_table (id INTEGER PRIMARY KEY) STRICT",
+		"CREATE TABLE without_rowid (id INTEGER PRIMARY KEY) WITHOUT ROWID",
+	} {
+		_, err = database.ExecContext(t.Context(), statement)
+		require.NoError(t, err)
+	}
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	for _, test := range []struct {
+		table string
+		want  string
+	}{
+		{table: "generated", want: "generated column"},
+		{table: "autoincremented", want: "AUTOINCREMENT"},
+		{table: "strict_table", want: "STRICT"},
+		{table: "without_rowid", want: "WITHOUT ROWID"},
+	} {
+		t.Run(test.table, func(t *testing.T) {
+			_, err := inspector.Table(t.Context(), test.table)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
 }
 
 // nilPointerDialect is a stub dialect.Dialect implemented with pointer
@@ -1281,8 +1348,8 @@ func TestSQLiteInspectorReportsTableNotFound(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	mock.ExpectQuery("PRAGMA table_info(\"ghosts\")").
-		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}))
+	mock.ExpectQuery("PRAGMA table_xinfo(\"ghosts\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}))
 
 	_, err = inspector.Table(t.Context(), "ghosts")
 	require.Error(t, err)
