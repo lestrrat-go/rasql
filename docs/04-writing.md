@@ -287,7 +287,7 @@ Use `rasql.UpdateMany` when the operation is intentionally bulk. It requires `Up
 
 ## Delete rows
 
-`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` and `WhereIn` take a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly. `WhereIn` needs at least one value; `Build` and `Exec` return an error for an empty list rather than rendering `IN ()`, which is not valid SQL in any supported dialect.
+`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` and `WhereIn` take a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly. `WhereIn` needs at least one value; `Build` and `Exec` return an error for an empty list rather than rendering `IN ()`, which is not valid SQL in any supported dialect. Call `Returning` to read deleted rows on dialects that support `RETURNING`.
 
 <!-- INCLUDE(examples/rasql_delete_example_test.go) -->
 ```go
@@ -495,6 +495,28 @@ source: [examples/rasql_returning_example_test.go](https://github.com/lestrrat-g
 <!-- END INCLUDE -->
 
 `QueryWriteOne` reports its row count through the same sentinels `One` does, described under [Select typed rows](03-querying.md#select-typed-rows): `rasql.ErrNoRows` when `RETURNING` produced no rows, and `rasql.ErrMultipleRows` when it produced more than one.
+
+A fluent delete uses the same dynamic and typed terminals:
+
+```go
+builder := rasql.DeleteFrom(users).
+	WhereEqual(users.ID, 42).
+	Returning(query.Project(users.ID), query.Project(users.Email))
+
+rows, err := builder.Query(ctx, client)
+```
+
+`Query` returns `row.Dynamic` values. `QueryDeleteAll[T]` and `QueryDeleteOne[T]`
+decode the projections into `T` and follow the same empty or multiple-row rules
+as `QueryWriteAll[T]` and `QueryWriteOne[T]`. Use one terminal per builder:
+
+```go
+builder := rasql.DeleteFrom(users).
+	WhereEqual(users.ID, 42).
+	Returning(query.Project(users.ID), query.Project(users.Email))
+
+deleted, err := rasql.QueryDeleteOne[UserRow](ctx, client, builder)
+```
 
 A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result.LastInsertId()` from `Exec` instead.
 

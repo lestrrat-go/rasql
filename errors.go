@@ -5,8 +5,9 @@ import (
 	"errors"
 )
 
-// ErrNoRows is returned by [TypedSelectBuilder.One], [QueryWriteOne], and the
-// Count methods when the statement matched no rows. It lets a caller tell an
+// ErrNoRows is returned by [TypedSelectBuilder.One], [QueryWriteOne],
+// [QueryDeleteOne], and the Count methods when the statement matched no rows.
+// It lets a caller tell an
 // absent row from a
 // failed query, which is otherwise indistinguishable because both arrive as a
 // non-nil error.
@@ -24,8 +25,9 @@ import (
 // because none of them treats an empty result as a failure.
 var ErrNoRows error = noRowsError{}
 
-// ErrMultipleRows is returned by [TypedSelectBuilder.One], [QueryWriteOne], and
-// the Count methods when the statement matched more than one row. It usually
+// ErrMultipleRows is returned by [TypedSelectBuilder.One], [QueryWriteOne],
+// [QueryDeleteOne], and the Count methods when the statement matched more than
+// one row. It usually
 // means the predicate is not unique, so it deserves a different response from
 // ErrNoRows.
 //

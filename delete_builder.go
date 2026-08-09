@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"iter"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/row"
 )
 
 // DeleteBuilder builds a DELETE statement through an immutable fluent API and
@@ -19,6 +21,15 @@ type DeleteBuilder struct {
 	predicates []query.Expression
 	allowAll   bool
 	err        error
+}
+
+// DeleteReturningBuilder adds a RETURNING clause to a delete builder.
+// Query returns dynamic rows; QueryDeleteAll and QueryDeleteOne decode rows
+// into a caller-selected type.
+type DeleteReturningBuilder struct {
+	builder     DeleteBuilder
+	projections []query.Projection
+	err         error
 }
 
 // DeleteFrom starts a fluent DELETE builder for table.
@@ -95,6 +106,13 @@ func (b DeleteBuilder) AllowAll() DeleteBuilder {
 	return b
 }
 
+// Returning adds projections to the delete's RETURNING clause. Query runs the
+// delete and returns dynamic rows, while QueryDeleteAll and QueryDeleteOne
+// decode those rows into a caller-selected type.
+func (b DeleteBuilder) Returning(projections ...query.Projection) DeleteReturningBuilder {
+	return DeleteReturningBuilder{builder: b}.Returning(projections...)
+}
+
 // Build validates the statement and renders it for d without executing it.
 func (b DeleteBuilder) Build(d dialect.Dialect) (render.Statement, error) {
 	statement, err := b.statement()
@@ -114,6 +132,90 @@ func (b DeleteBuilder) Exec(ctx context.Context, x Executor) (sql.Result, error)
 		return nil, err
 	}
 	return Exec(ctx, x, statement)
+}
+
+// Returning adds projections to an existing delete RETURNING builder.
+func (b DeleteReturningBuilder) Returning(projections ...query.Projection) DeleteReturningBuilder {
+	if b.err != nil {
+		return b
+	}
+	if len(projections) == 0 {
+		return b.withError(fmt.Errorf("rasql: RETURNING requires at least one projection"))
+	}
+	b = b.clone()
+	b.projections = append(b.projections, projections...)
+	return b
+}
+
+// Build validates and renders the delete with its RETURNING clause.
+func (b DeleteReturningBuilder) Build(d dialect.Dialect) (render.Statement, error) {
+	statement, err := b.statement()
+	if err != nil {
+		return render.Statement{}, err
+	}
+	return render.Delete(d, statement)
+}
+
+// Query runs the delete and returns its RETURNING rows as a rangeable sequence
+// of dynamic rows. The statement runs when the sequence is first ranged.
+func (b DeleteReturningBuilder) Query(ctx context.Context, x Executor) (iter.Seq2[row.Dynamic, error], error) {
+	if isNil(x) {
+		return nil, fmt.Errorf("rasql: executor must not be nil")
+	}
+	statement, err := b.statement()
+	if err != nil {
+		return nil, err
+	}
+	return QueryWrite(ctx, x, statement)
+}
+
+// QueryDeleteAll runs a fluent delete with RETURNING and decodes every returned
+// row as T.
+func QueryDeleteAll[T any](ctx context.Context, x Executor, b DeleteReturningBuilder) ([]T, error) {
+	statement, err := b.statement()
+	if err != nil {
+		return nil, err
+	}
+	return QueryWriteAll[T](ctx, x, statement)
+}
+
+// QueryDeleteOne runs a fluent delete with RETURNING and decodes exactly one
+// returned row as T.
+func QueryDeleteOne[T any](ctx context.Context, x Executor, b DeleteReturningBuilder) (T, error) {
+	var zero T
+	statement, err := b.statement()
+	if err != nil {
+		return zero, err
+	}
+	return QueryWriteOne[T](ctx, x, statement)
+}
+
+func (b DeleteReturningBuilder) statement() (query.Delete, error) {
+	if b.err != nil {
+		return query.Delete{}, b.err
+	}
+	statement, err := b.builder.statement()
+	if err != nil {
+		return query.Delete{}, err
+	}
+	statement, err = statement.WithReturning(b.projections...)
+	if err != nil {
+		return query.Delete{}, fmt.Errorf("rasql: build DELETE RETURNING: %w", err)
+	}
+	return statement, nil
+}
+
+func (b DeleteReturningBuilder) withError(err error) DeleteReturningBuilder {
+	if b.err == nil {
+		b.err = err
+	}
+	return b
+}
+
+func (b DeleteReturningBuilder) clone() DeleteReturningBuilder {
+	copy := b
+	copy.projections = append([]query.Projection(nil), b.projections...)
+	return copy
 }
 
 func (b DeleteBuilder) statement() (query.Delete, error) {
