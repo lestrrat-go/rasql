@@ -464,7 +464,7 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) 
 	if sqliteDefinitionContainsForeignKeyKeyword(definition.String) {
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: DEFERRABLE and INITIALLY foreign-key clauses are unsupported", tableName)
 	}
-	statement, err := sqlitequery.ParseStatement(definition.String)
+	statement, err := sqlitequery.ParseStatement(sqliteNormalizeForeignKeyActions(definition.String))
 	if err != nil {
 		if strings.Contains(strings.ToUpper(definition.String), "CHECK") {
 			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition contains an unsupported CHECK form: %w", tableName, err)
@@ -476,6 +476,165 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) 
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
 	}
 	return createTable, nil
+}
+
+func sqliteNormalizeForeignKeyActions(definition string) string {
+	var normalized strings.Builder
+	normalized.Grow(len(definition))
+	references := false
+	parentheses := 0
+	copied := 0
+	for index := 0; index < len(definition); {
+		switch definition[index] {
+		case '\'', '"', '`':
+			index = skipSQLiteQuoted(definition, index, definition[index])
+			continue
+		case '[':
+			index++
+			for index < len(definition) {
+				if definition[index] == ']' {
+					index++
+					break
+				}
+				index++
+			}
+			continue
+		case '-':
+			if index+1 < len(definition) && definition[index+1] == '-' {
+				index += 2
+				for index < len(definition) && definition[index] != '\n' {
+					index++
+				}
+				continue
+			}
+		case '/':
+			if index+1 < len(definition) && definition[index+1] == '*' {
+				index += 2
+				for index+1 < len(definition) && (definition[index] != '*' || definition[index+1] != '/') {
+					index++
+				}
+				if index+1 < len(definition) {
+					index += 2
+				}
+				continue
+			}
+		case '(':
+			parentheses++
+			index++
+			continue
+		case ')':
+			if parentheses > 0 {
+				parentheses--
+			}
+			index++
+			continue
+		case ',':
+			if parentheses == 1 {
+				references = false
+			}
+			index++
+			continue
+		}
+		if !sqliteIdentifierStart(definition[index]) {
+			index++
+			continue
+		}
+		start := index
+		index++
+		for index < len(definition) && sqliteIdentifierPart(definition[index]) {
+			index++
+		}
+		token := definition[start:index]
+		if references && strings.EqualFold(token, "ON") {
+			if end, ok := sqliteForeignKeyActionEnd(definition, start); ok {
+				normalized.WriteString(definition[copied:start])
+				normalized.WriteByte(' ')
+				index = end
+				copied = index
+				continue
+			}
+		}
+		if strings.EqualFold(token, "REFERENCES") && parentheses == 1 {
+			references = true
+		}
+	}
+	normalized.WriteString(definition[copied:])
+	return normalized.String()
+}
+
+func sqliteForeignKeyActionEnd(definition string, index int) (int, bool) {
+	index, ok := sqliteMatchKeyword(definition, index, "ON")
+	if !ok {
+		return 0, false
+	}
+	action := index
+	index, ok = sqliteMatchKeyword(definition, action, "DELETE")
+	if !ok {
+		index, ok = sqliteMatchKeyword(definition, action, "UPDATE")
+		if !ok {
+			return 0, false
+		}
+	}
+	if next, ok := sqliteMatchKeyword(definition, index, "NO"); ok {
+		return sqliteMatchKeyword(definition, next, "ACTION")
+	}
+	if next, ok := sqliteMatchKeyword(definition, index, "SET"); ok {
+		if next, ok = sqliteMatchKeyword(definition, next, "NULL"); ok {
+			return next, true
+		}
+		return sqliteMatchKeyword(definition, next, "DEFAULT")
+	}
+	if next, ok := sqliteMatchKeyword(definition, index, "RESTRICT"); ok {
+		return next, true
+	}
+	return sqliteMatchKeyword(definition, index, "CASCADE")
+}
+
+func sqliteMatchKeyword(value string, index int, keyword string) (int, bool) {
+	index = sqliteSkipSpaceAndComments(value, index)
+	if index+len(keyword) > len(value) || !strings.EqualFold(value[index:index+len(keyword)], keyword) {
+		return 0, false
+	}
+	end := index + len(keyword)
+	if end < len(value) && sqliteIdentifierPart(value[end]) {
+		return 0, false
+	}
+	return end, true
+}
+
+func sqliteSkipSpaceAndComments(value string, index int) int {
+	for {
+		start := index
+		for index < len(value) {
+			switch value[index] {
+			case ' ', '\t', '\n', '\r', '\f':
+				index++
+			default:
+				goto comments
+			}
+		}
+	comments:
+		if index+1 < len(value) && value[index] == '-' && value[index+1] == '-' {
+			index += 2
+			for index < len(value) && value[index] != '\n' {
+				index++
+			}
+			continue
+		}
+		if index+1 < len(value) && value[index] == '/' && value[index+1] == '*' {
+			index += 2
+			for index+1 < len(value) && (value[index] != '*' || value[index+1] != '/') {
+				index++
+			}
+			if index+1 < len(value) {
+				index += 2
+			}
+			continue
+		}
+		if index == start {
+			return index
+		}
+	}
 }
 
 func sqliteDefinitionContainsForeignKeyKeyword(definition string) bool {

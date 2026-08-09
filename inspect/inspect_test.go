@@ -1037,6 +1037,32 @@ func TestSQLiteInspectorReadsTableConstraints(t *testing.T) {
 	}}, table.ForeignKeys)
 }
 
+func TestSQLiteInspectorReadsConstraintsWithForeignKeyActions(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE ON UPDATE SET NULL, email TEXT UNIQUE, CHECK (parent_id > 0))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "children")
+	require.NoError(t, err)
+	require.Equal(t, []schema.UniqueConstraint{{Columns: []string{"email"}}}, table.UniqueConstraints)
+	require.Equal(t, []schema.CheckConstraint{{Expression: "parent_id > 0"}}, table.Checks)
+	require.Equal(t, []schema.ForeignKey{{
+		Columns:           []string{"parent_id"},
+		ReferencedTable:   "parents",
+		ReferencedColumns: []string{"id"},
+		OnDelete:          schema.ReferenceActionCascade,
+		OnUpdate:          schema.ReferenceActionSetNull,
+	}}, table.ForeignKeys)
+}
+
 func TestSQLiteInspectorRejectsDeferrableForeignKeys(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
