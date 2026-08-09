@@ -141,6 +141,39 @@ func TestRunDiffLivePreservesSQLiteForeignKeys(t *testing.T) {
 	require.Equal(t, "no schema changes\n", outputBuffer.String())
 }
 
+func TestRunDiffLivePreservesMultipleSQLiteForeignKeys(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `
+		CREATE TABLE parent_a (id INTEGER PRIMARY KEY);
+		CREATE TABLE parent_b (id INTEGER PRIMARY KEY);
+		CREATE TABLE multi (
+			a_id INTEGER REFERENCES parent_a(id) ON DELETE CASCADE,
+			b_id INTEGER REFERENCES parent_b(id) ON UPDATE CASCADE
+		);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/multi.sql", `
+		CREATE TABLE multi (
+			a_id INTEGER REFERENCES parent_a(id) ON DELETE CASCADE,
+			b_id INTEGER REFERENCES parent_b(id) ON UPDATE CASCADE
+		);
+	`)
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "multi",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
 func TestRunDiffLivePreservesSQLiteIndexes(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "application.db")
 	database, err := sql.Open("sqlite", dsn)

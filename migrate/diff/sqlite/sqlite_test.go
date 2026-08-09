@@ -111,6 +111,45 @@ func TestDiffPreservesSQLiteForeignKeyActions(t *testing.T) {
 	require.Empty(t, plan.Statements)
 }
 
+func TestDiffIgnoresSQLiteForeignKeyConstraintOrder(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE parent_a (id integer PRIMARY KEY);
+		CREATE TABLE parent_b (id integer PRIMARY KEY);
+		CREATE TABLE multi (
+			b_id integer REFERENCES parent_b(id) ON UPDATE CASCADE,
+			a_id integer REFERENCES parent_a(id) ON DELETE CASCADE
+		);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE parent_a (id integer PRIMARY KEY);
+		CREATE TABLE parent_b (id integer PRIMARY KEY);
+		CREATE TABLE multi (
+			a_id integer REFERENCES parent_a(id) ON DELETE CASCADE,
+			b_id integer REFERENCES parent_b(id) ON UPDATE CASCADE
+		);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffDetectsChangedSQLiteForeignKeyAction(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE parent_a (id integer PRIMARY KEY);
+		CREATE TABLE multi (a_id integer REFERENCES parent_a(id) ON DELETE CASCADE);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE parent_a (id integer PRIMARY KEY);
+		CREATE TABLE multi (a_id integer REFERENCES parent_a(id) ON DELETE SET NULL);
+	`)
+
+	_, err := analyzer.Diff(baseline, target)
+	require.ErrorContains(t, err, "table multi constraints changed")
+}
+
 func TestDiffGeneratesNewTableWithSQLiteForeignKeyActions(t *testing.T) {
 	analyzer := sqlite.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE parents (id integer PRIMARY KEY);")
