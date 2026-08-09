@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -1013,6 +1014,7 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 func TestSQLiteInspectorReadsTableConstraints(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE parents (id INTEGER PRIMARY KEY)")
@@ -1033,6 +1035,39 @@ func TestSQLiteInspectorReadsTableConstraints(t *testing.T) {
 		OnDelete:          schema.ReferenceActionNoAction,
 		OnUpdate:          schema.ReferenceActionNoAction,
 	}}, table.ForeignKeys)
+}
+
+func TestSQLiteInspectorRejectsDeferrableForeignKeys(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = inspector.Table(t.Context(), "children")
+	require.ErrorContains(t, err, "DEFERRABLE and INITIALLY foreign-key clauses are unsupported")
+}
+
+func TestSQLiteInspectorRejectsDescendingIndexes(t *testing.T) {
+	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "database.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE children (parent_id INTEGER)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE INDEX children_parent_idx ON children (parent_id DESC)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = inspector.Table(t.Context(), "children")
+	require.ErrorContains(t, err, "descending columns are unsupported")
 }
 
 func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {

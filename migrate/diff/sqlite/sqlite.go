@@ -82,6 +82,17 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 		column := &statement.Columns[columnIndex]
 		columnConstraints := make([]sqlitequery.ColumnConstraint, 0, len(column.Constraints))
 		for _, constraint := range column.Constraints {
+			if constraint.Kind == sqlitequery.ConstraintReferences {
+				constraints = append(constraints, sqlitequery.TableConstraint{
+					Name: constraint.Name,
+					Kind: sqlitequery.ConstraintForeignKey,
+					Columns: []sqlitequery.IndexedColumn{{
+						Expression: &sqlitequery.IdentifierExpression{Name: sqlitequery.QualifiedName{column.Name}},
+					}},
+					References: constraint.References,
+				})
+				continue
+			}
 			if constraint.Kind != sqlitequery.ConstraintPrimaryKey {
 				columnConstraints = append(columnConstraints, constraint)
 				continue

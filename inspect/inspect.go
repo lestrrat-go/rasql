@@ -461,6 +461,9 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) 
 	if !definition.Valid || definition.String == "" {
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unavailable", tableName)
 	}
+	if sqliteDefinitionContainsForeignKeyKeyword(definition.String) {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: DEFERRABLE and INITIALLY foreign-key clauses are unsupported", tableName)
+	}
 	statement, err := sqlitequery.ParseStatement(definition.String)
 	if err != nil {
 		if strings.Contains(strings.ToUpper(definition.String), "CHECK") {
@@ -473,6 +476,104 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) 
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
 	}
 	return createTable, nil
+}
+
+func sqliteDefinitionContainsForeignKeyKeyword(definition string) bool {
+	references := false
+	parentheses := 0
+	for index := 0; index < len(definition); {
+		switch definition[index] {
+		case '\'', '"', '`':
+			index = skipSQLiteQuoted(definition, index, definition[index])
+			continue
+		case '[':
+			index++
+			for index < len(definition) {
+				if definition[index] == ']' {
+					index++
+					break
+				}
+				index++
+			}
+			continue
+		case '-':
+			if index+1 < len(definition) && definition[index+1] == '-' {
+				index += 2
+				for index < len(definition) && definition[index] != '\n' {
+					index++
+				}
+				continue
+			}
+		case '/':
+			if index+1 < len(definition) && definition[index+1] == '*' {
+				index += 2
+				for index+1 < len(definition) && (definition[index] != '*' || definition[index+1] != '/') {
+					index++
+				}
+				if index+1 < len(definition) {
+					index += 2
+				}
+				continue
+			}
+		case '(':
+			parentheses++
+			index++
+			continue
+		case ')':
+			if parentheses > 0 {
+				parentheses--
+			}
+			index++
+			continue
+		case ',':
+			if parentheses == 1 {
+				references = false
+			}
+			index++
+			continue
+		}
+		if !sqliteIdentifierStart(definition[index]) {
+			index++
+			continue
+		}
+		start := index
+		index++
+		for index < len(definition) && sqliteIdentifierPart(definition[index]) {
+			index++
+		}
+		token := definition[start:index]
+		if strings.EqualFold(token, "REFERENCES") {
+			references = true
+		}
+		if references && (strings.EqualFold(token, "DEFERRABLE") || strings.EqualFold(token, "INITIALLY")) {
+			return true
+		}
+	}
+	return false
+}
+
+func skipSQLiteQuoted(value string, index int, quote byte) int {
+	index++
+	for index < len(value) {
+		if value[index] != quote {
+			index++
+			continue
+		}
+		if index+1 < len(value) && value[index+1] == quote {
+			index += 2
+			continue
+		}
+		return index + 1
+	}
+	return len(value)
+}
+
+func sqliteIdentifierStart(value byte) bool {
+	return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+}
+
+func sqliteIdentifierPart(value byte) bool {
+	return sqliteIdentifierStart(value) || value >= '0' && value <= '9' || value == '$'
 }
 
 func validateSQLitePrimaryKey(statement *sqlitequery.CreateTableStatement, tableName string) error {
@@ -731,7 +832,7 @@ func (i Inspector) sqliteIndexes(ctx context.Context, tableName string) ([]schem
 }
 
 func (i Inspector) sqliteIndexColumns(ctx context.Context, indexName string) ([]string, error) {
-	query := "PRAGMA index_info(\"" + sqlitePragmaIdentifier(indexName) + "\")"
+	query := "PRAGMA index_xinfo(\"" + sqlitePragmaIdentifier(indexName) + "\")"
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read SQLite index %q columns: %w", indexName, err)
@@ -740,14 +841,23 @@ func (i Inspector) sqliteIndexColumns(ctx context.Context, indexName string) ([]
 
 	columns := make([]string, 0)
 	for rows.Next() {
-		var sequence int64
-		var tableColumn int64
+		var sequence, tableColumn, descending, keyColumn int64
 		var name sql.NullString
-		if err := rows.Scan(&sequence, &tableColumn, &name); err != nil {
+		var collation string
+		if err := rows.Scan(&sequence, &tableColumn, &name, &descending, &collation, &keyColumn); err != nil {
 			return nil, fmt.Errorf("inspect: scan SQLite index %q column: %w", indexName, err)
+		}
+		if keyColumn == 0 {
+			continue
 		}
 		if !name.Valid {
 			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: expression indexes are unsupported", indexName)
+		}
+		if descending != 0 {
+			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: descending columns are unsupported", indexName)
+		}
+		if !strings.EqualFold(collation, "BINARY") {
+			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: nondefault collations are unsupported", indexName)
 		}
 		columns = append(columns, name.String)
 	}
