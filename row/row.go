@@ -91,14 +91,12 @@ type Null[T any] struct {
 
 // Nullable wraps decoder so it accepts a NULL result value.
 func Nullable[T any](decoder ColumnDecoder[T]) ColumnDecoder[Null[T]] {
-	if isNilDecoder(decoder) {
-		return ColumnDecoderFunc[Null[T]](func(any) (Null[T], error) {
-			return Null[T]{}, fmt.Errorf("row: nullable decoder must not be nil")
-		})
-	}
 	return ColumnDecoderFunc[Null[T]](func(value any) (Null[T], error) {
 		if value == nil {
 			return Null[T]{}, nil
+		}
+		if isNilDecoder(decoder) {
+			return Null[T]{}, fmt.Errorf("row: nullable decoder must not be nil")
 		}
 		decoded, err := decoder.Decode(value)
 		if err != nil {

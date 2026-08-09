@@ -88,6 +88,18 @@ func TestNullableDecoderPreservesNull(t *testing.T) {
 	require.False(t, got.Valid)
 }
 
+func TestNullableDecoderPreservesNullWithNilDecoder(t *testing.T) {
+	result, err := row.New([]string{"name"}, []any{nil})
+	require.NoError(t, err)
+	var decoder row.ColumnDecoder[string]
+	name, err := row.NewColumn("name", row.Nullable(decoder))
+	require.NoError(t, err)
+
+	got, err := name.Get(result)
+	require.NoError(t, err)
+	require.False(t, got.Valid)
+}
+
 func TestNullableDecoderRejectsNilDecoder(t *testing.T) {
 	result, err := row.New([]string{"name"}, []any{"Ada"})
 	require.NoError(t, err)
