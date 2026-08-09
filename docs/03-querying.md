@@ -21,11 +21,16 @@ The tables in this section enumerate every operation the public API offers. The 
 | Typed static SQL | `rasql.QueryRendered[T](ctx, executor, statement)` | `iter.Seq2[T, error]` |
 | `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
 | `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, client, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
-| `INSERT` of several rows | `query.NewInsertRows(table.QueryTable(), columns, rows)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
+| `INSERT` of several typed rows | `rasql.InsertMany(ctx, client, table, values)` | `sql.Result` |
+| `INSERT` of several typed rows with defaults | `rasql.InsertManyWithOptions(ctx, client, table, values, rasql.DefaultColumns(...))` | `sql.Result` |
+| `INSERT` of expression rows | `query.NewInsertRows(table.QueryTable(), columns, rows)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | `UPDATE` of one typed row by primary key | `rasql.Update(ctx, client, table, value)` | `sql.Result` |
+| `UPDATE` selected typed fields | `rasql.UpdateWithOptions(ctx, client, table, value, rasql.UpdateColumns(...))` | `sql.Result` |
+| `UPDATE` many rows by predicate | `rasql.UpdateMany(ctx, client, table, value, rasql.UpdateColumns(...), rasql.UpdateWhere(...))` | `sql.Result` |
+| `UPDATE` with arbitrary expressions | `query.NewUpdate(table.QueryTable(), assignments…)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | `DELETE` by predicate | `rasql.DeleteFrom(table)` | `DeleteBuilder` |
 | `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |
-| Upsert, partial update | `query.New…` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
+| Upsert | `query.New…` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | Write with `RETURNING` | `query.New….WithReturning(...)` then `rasql.QueryWrite(ctx, client, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Dynamic` or `[]T` / `T` |
 | Compiled [static template](05-templates.md) | `client.ExecRendered(ctx, statement)` | `sql.Result` |
 
