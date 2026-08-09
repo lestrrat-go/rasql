@@ -31,6 +31,43 @@ func deleteUsersTable(t *testing.T) rasql.Table[deleteUser] {
 	return users
 }
 
+func TestDeleteRejectsNilPredicate(t *testing.T) {
+	users := deleteUsersTable(t)
+	d := clientForBuild(t).Dialect()
+	var typedNil *query.Binary
+	for _, builder := range []struct {
+		name  string
+		build func(query.Expression) error
+	}{
+		{
+			name: "DeleteFrom",
+			build: func(expression query.Expression) error {
+				_, err := rasql.DeleteFrom(users).Where(expression).Build(d)
+				return err
+			},
+		},
+		{
+			name: "DeleteQueryFrom",
+			build: func(expression query.Expression) error {
+				_, err := rasql.DeleteQueryFrom(users.QueryTable()).Where(expression).Build(d)
+				return err
+			},
+		},
+	} {
+		for _, predicate := range []struct {
+			name       string
+			expression query.Expression
+		}{
+			{name: "nil interface"},
+			{name: "typed nil", expression: typedNil},
+		} {
+			t.Run(builder.name+"/"+predicate.name, func(t *testing.T) {
+				require.ErrorContains(t, builder.build(predicate.expression), "WHERE expression must not be nil")
+			})
+		}
+	}
+}
+
 func TestDeleteFrom(t *testing.T) {
 	t.Run("WhereEqual deletes matching rows", func(t *testing.T) {
 		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -209,11 +246,6 @@ func TestDeleteFrom(t *testing.T) {
 
 		_, err = rasql.DeleteFrom(deleteUsersTable(t)).WhereEqual(archivedID, 1).Build(clientForBuild(t).Dialect())
 		require.ErrorContains(t, err, "archived_users")
-	})
-
-	t.Run("nil expression reports an error", func(t *testing.T) {
-		_, err := rasql.DeleteFrom(deleteUsersTable(t)).Where(nil).Build(clientForBuild(t).Dialect())
-		require.ErrorContains(t, err, "must not be nil")
 	})
 
 	t.Run("repeated Where combines with AND", func(t *testing.T) {
