@@ -373,6 +373,11 @@ func typedInsertMany[T any](table Table[T], values []T, defaultColumns map[strin
 		columns = append(columns, column)
 	}
 	if len(columns) == 0 {
+		for i := 1; i < len(values); i++ {
+			if _, _, err := typedRowFields(table, values[i]); err != nil {
+				return query.Insert{}, fmt.Errorf("row %d: %w", i, err)
+			}
+		}
 		return query.NewDefaultInsert(reference)
 	}
 

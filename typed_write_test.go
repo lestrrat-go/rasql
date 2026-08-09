@@ -199,6 +199,31 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testin
 	}
 }
 
+func TestInsertManyWithOptionsValidatesAllDefaultRows(t *testing.T) {
+	type user struct {
+		ID     int64  `rasql:"id"`
+		Status string `rasql:"status"`
+	}
+	users, err := rasql.NewTable[*user](schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}, Default: "next_user_id()"},
+			{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	_, err = rasql.InsertManyWithOptions(
+		t.Context(),
+		rasql.Client{},
+		users,
+		[]*user{&user{}, nil},
+		rasql.DefaultColumns("id", "status"),
+	)
+	require.ErrorContains(t, err, `row 1: row value must not be nil`)
+}
+
 func TestInsertManyRejectsEmptyRows(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
