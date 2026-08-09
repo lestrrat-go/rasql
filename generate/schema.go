@@ -691,6 +691,14 @@ func reservedRelationshipMethod(name string) bool {
 	return reserved
 }
 
+func selfRelationshipAlias(relationship relationshipSpec) string {
+	role := "parent"
+	if relationship.kind == schema.RelationshipHasMany {
+		role = "child"
+	}
+	return strings.ToLower(variableName(relationship.parent.Name)) + "_" + strings.ToLower(relationship.method) + "_" + role
+}
+
 func writeRelationships(source *bytes.Buffer, table schema.Table, allTables []schema.Table) {
 	for _, relationship := range relationshipSpecs(table, allTables) {
 		source.WriteString("// ")
@@ -727,6 +735,19 @@ func writeRelationships(source *bytes.Buffer, table schema.Table, allTables []sc
 			source.WriteString("\tchild := t\n\tparent := ")
 			source.WriteString(variableName(relationship.parent.Name))
 			source.WriteString("()\n")
+		}
+		if relationship.parent.Schema == relationship.child.Schema && relationship.parent.Name == relationship.child.Name {
+			joined := "parent"
+			if relationship.kind == schema.RelationshipHasMany {
+				joined = "child"
+			}
+			source.WriteString("\taliased, err := ")
+			source.WriteString(joined)
+			source.WriteString(".As(")
+			source.WriteString(quote(selfRelationshipAlias(relationship)))
+			source.WriteString(")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\t")
+			source.WriteString(joined)
+			source.WriteString(" = aliased\n")
 		}
 		source.WriteString("\treturn ")
 		source.WriteString(relationship.typeName)

@@ -414,6 +414,31 @@ func TestGeneratedRelationships(t *testing.T) {
 }
 `
 
+const generatedSelfReferentialRelationshipUsageTest = `package generated_test
+
+import (
+	"testing"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/stretchr/testify/require"
+)
+
+func TestGeneratedSelfReferentialRelationshipsRender(t *testing.T) {
+	employees := generated.Employees()
+	manager := employees.Manager()
+	statement, err := rasql.SelectFrom(employees).Join(manager.Join()).Build(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, ` + "`" + `SELECT "employees"."id", "employees"."manager_id" FROM "employees" INNER JOIN "employees" AS "employees_manager_parent" ON ("employees_manager_parent"."id" = "employees"."manager_id")` + "`" + `, statement.SQL())
+
+	children := employees.Employees()
+	statement, err = rasql.SelectFrom(employees).Join(children.Join()).Build(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, ` + "`" + `SELECT "employees"."id", "employees"."manager_id" FROM "employees" INNER JOIN "employees" AS "employees_employees_child" ON ("employees"."id" = "employees_employees_child"."manager_id")` + "`" + `, statement.SQL())
+}
+`
+
 func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 	users := schema.Table{
 		Schema:     "tenant",
@@ -559,6 +584,41 @@ func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
 	require.Contains(t, text, "func (t EmployeesTable) Manager() EmployeesTableManagerRelation")
 	require.Contains(t, text, "func (t EmployeesTable) Employees() EmployeesTableEmployeesRelation")
 	require.Contains(t, text, "func (r EmployeesTableEmployeesRelation) Load(ctx context.Context, x rasql.Executor, parents []EmployeesRow)")
+}
+
+func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
+	employees := schema.Table{
+		Name: "employees",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "manager_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"manager_id"},
+			ReferencedTable:   "employees",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", employees)
+	require.NoError(t, err)
+	directory, err := os.MkdirTemp(".", ".tmp-self-relationship-schema-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(directory)) })
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedSelfReferentialRelationshipUsageTest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
 }
 
 func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {

@@ -128,6 +128,10 @@ query for the supplied rows and returns a map keyed by the primary or foreign
 key, so callers can attach the results without an N+1 query loop. Empty input
 returns an empty map without touching the executor.
 
+For a self-referential table, the generated relation aliases its joined side
+and rebinds the relation keys, so `Join()` can be used directly without a
+manual `As` call.
+
 This first slice intentionally does not generate relations for composite
 foreign keys, nullable foreign keys, non-primary unique targets, many-to-many
 join tables, polymorphic associations, nested preloading, or keys whose Go
