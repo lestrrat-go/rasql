@@ -346,26 +346,64 @@ func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
 const generatedRelationshipUsageTest = `package generated_test
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"testing"
 
 	"example.com/generated"
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/stretchr/testify/require"
 )
+
+type recordingExecutor struct {
+	statement render.Statement
+}
+
+func (e *recordingExecutor) Dialect() dialect.Dialect {
+	return dialect.PostgreSQL()
+}
+
+func (e *recordingExecutor) QueryRendered(_ context.Context, statement render.Statement) (*sql.Rows, error) {
+	e.statement = statement
+	return nil, errors.New("query recorded")
+}
+
+func (e *recordingExecutor) ExecRendered(_ context.Context, _ render.Statement) (sql.Result, error) {
+	return nil, errors.New("exec not supported")
+}
 
 func TestGeneratedRelationships(t *testing.T) {
 	users := generated.Users()
 	orders := generated.Orders()
+	require.Equal(t, "tenant", users.QueryTable().Schema())
+	require.Equal(t, "tenant", orders.QueryTable().Schema())
 
 	belongsTo := orders.User()
+	require.Equal(t, "tenant", belongsTo.Parent.QueryTable().Schema())
+	require.Equal(t, "tenant", belongsTo.Child.QueryTable().Schema())
 	require.Equal(t, "id", belongsTo.ParentKey.Name())
 	require.Equal(t, "user_id", belongsTo.ChildKey.Name())
 	require.Equal(t, query.JoinInner, belongsTo.Join().Type())
+	require.Equal(t, "tenant", belongsTo.Join().Source().Schema())
+
+	belongsToExecutor := &recordingExecutor{}
+	_, err := belongsTo.Load(t.Context(), belongsToExecutor, []generated.OrdersRow{{UserID: 7}})
+	require.EqualError(t, err, "query recorded")
+	require.Equal(t, "SELECT \"tenant\".\"users\".\"id\" FROM \"tenant\".\"users\" WHERE (\"tenant\".\"users\".\"id\" IN ($1))", belongsToExecutor.statement.SQL())
 
 	hasMany := users.Orders()
 	require.Equal(t, "id", hasMany.ParentKey.Name())
 	require.Equal(t, "user_id", hasMany.ChildKey.Name())
 	require.Equal(t, query.JoinInner, hasMany.Join().Type())
+	require.Equal(t, "tenant", hasMany.Join().Source().Schema())
+
+	hasManyExecutor := &recordingExecutor{}
+	_, err = hasMany.Load(t.Context(), hasManyExecutor, []generated.UsersRow{{ID: 7}})
+	require.EqualError(t, err, "query recorded")
+	require.Equal(t, "SELECT \"tenant\".\"orders\".\"id\", \"tenant\".\"orders\".\"user_id\" FROM \"tenant\".\"orders\" WHERE (\"tenant\".\"orders\".\"user_id\" IN ($1))", hasManyExecutor.statement.SQL())
 
 	aliasedUsers, err := users.As("u")
 	require.NoError(t, err)
@@ -378,12 +416,14 @@ func TestGeneratedRelationships(t *testing.T) {
 
 func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 	users := schema.Table{
+		Schema:     "tenant",
 		Name:       "users",
 		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
 	orders := schema.Table{
-		Name: "orders",
+		Schema: "tenant",
+		Name:   "orders",
 		Columns: []schema.Column{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
@@ -392,6 +432,7 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 		ForeignKeys: []schema.ForeignKey{{
 			Name:              "orders_user_id_fkey",
 			Columns:           []string{"user_id"},
+			ReferencedSchema:  "tenant",
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
 		}},

@@ -1035,6 +1035,9 @@ func rowFieldType(column schema.Column) string {
 
 func writeTable(source *bytes.Buffer, table schema.Table, indent string) {
 	source.WriteString("schema.Table{\n")
+	if table.Schema != "" {
+		writeField(source, indent+"\t", "Schema", quote(table.Schema))
+	}
 	writeField(source, indent+"\t", "Name", quote(table.Name))
 	writeColumns(source, table.Columns, indent+"\t")
 	writeStrings(source, table.PrimaryKey, indent+"\t", "PrimaryKey")

@@ -154,10 +154,9 @@ type Table struct {
 	// never creates, drops or connects to the namespace itself: an
 	// application that needs "audit" to exist creates it with a reviewed
 	// native migration, the same way every other piece of DDL this library
-	// does not synthesize gets created. inspect never reports a Schema, and
-	// rasqlgen never emits one, so a qualified table is re-read through a
-	// hand-written descriptor until qualified inspection and generation
-	// land.
+	// does not synthesize gets created. inspect never reports a Schema, so a
+	// qualified table returned by inspection is re-read through a hand-written
+	// descriptor.
 	Schema            string
 	Name              string
 	Columns           []Column
