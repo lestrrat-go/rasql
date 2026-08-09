@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// invoiceRow maps the one schema.TypeDecimal column this example declares.
+// invoiceRow maps the one schema.DecimalType column this example declares.
 // The column decodes into a Go string on every dialect. This example runs on
 // SQLite, which stores such a column as TEXT and hands back the exact digits
 // inserted; PostgreSQL and MySQL instead return the value in the column's
@@ -22,7 +22,7 @@ type invoiceRow struct {
 }
 
 func Example_schema_decimal_column() {
-	// This example declares a schema.TypeDecimal column, creates its table in
+	// This example declares a schema.DecimalType column, creates its table in
 	// SQLite, and shows that the inserted string round-trips unchanged there.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -40,15 +40,15 @@ func Example_schema_decimal_column() {
 		return
 	}
 
-	// A TypeDecimal column must state Precision and Scale; Table.Validate
+	// A DecimalType column must state Precision and Scale; Table.Validate
 	// rejects a decimal column that omits either. Scale is stated through
 	// schema.NewDecimalScale so that a scale of 0 is distinguishable from a
 	// column that named no scale at all.
 	invoices := rasql.MustTable[invoiceRow](schema.Table{
 		Name: "invoices",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 		},
 		PrimaryKey: []string{"id"},
 	})

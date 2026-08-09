@@ -751,9 +751,9 @@ func qualifiedWriteTable(t *testing.T) (query.Table, query.Column, query.Column,
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "action", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "action", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -772,8 +772,8 @@ func writeTable(t *testing.T) (query.Table, query.Column, query.Column) {
 	users, err := query.NewTable(schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})

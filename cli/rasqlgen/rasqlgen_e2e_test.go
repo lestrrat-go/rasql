@@ -28,8 +28,8 @@ func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
 	usersOutput := filepath.Join(outputDirectory, "users_gen.go")
 	ordersOutput := filepath.Join(outputDirectory, "orders_gen.go")
 	data := []byte(`[
-		{"Name":"users","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]},
-		{"Name":"orders","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}
+		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
+		{"Name":"orders","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}
 	]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 

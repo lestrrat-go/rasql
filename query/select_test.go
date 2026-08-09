@@ -1432,8 +1432,8 @@ func usersTable() schema.Table {
 	return schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -1443,9 +1443,9 @@ func ordersTable() schema.Table {
 	return schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeFloat},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.FloatType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}

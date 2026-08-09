@@ -44,8 +44,8 @@ func Example_rasql_distinct() {
 	orders := rasql.MustTable[orderRow](schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})

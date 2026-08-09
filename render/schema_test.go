@@ -15,9 +15,9 @@ func TestCreateTableRendersDialectTypesAndConstraints(t *testing.T) {
 	table := schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "customer_id", Type: schema.TypeInteger},
-			{Name: "metadata", Type: schema.TypeJSON, Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+			{Name: "metadata", Type: schema.JSONType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 		UniqueConstraints: []schema.UniqueConstraint{{
@@ -55,9 +55,9 @@ func TestCreateTableRendersDecimalColumns(t *testing.T) {
 	table := schema.Table{
 		Name: "invoices",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
-			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: schema.NewDecimalScale(4), Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
+			{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -99,8 +99,8 @@ func TestCreateTableRendersUnsignedIntegerColumns(t *testing.T) {
 	table := schema.Table{
 		Name: "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger, Unsigned: true},
-			{Name: "sequence", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
+			{Name: "sequence", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -123,8 +123,8 @@ func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.Table{
 		Name: "invoices",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 100, Scale: schema.NewDecimalScale(4)},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 100, Scale: schema.NewDecimalScale(4)}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -144,7 +144,7 @@ func TestCreateTableRendersQualifiedName(t *testing.T) {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -189,8 +189,8 @@ func TestCreateTableRendersQualifiedForeignKey(t *testing.T) {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 		ForeignKeys: []schema.ForeignKey{{
@@ -243,8 +243,8 @@ func TestCreateIndexRendersDialectQualifierPosition(t *testing.T) {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 		Indexes: []schema.Index{
@@ -319,9 +319,9 @@ func TestUnqualifiedDDLIsUnchanged(t *testing.T) {
 	table := schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "customer_id", Type: schema.TypeInteger},
-			{Name: "metadata", Type: schema.TypeJSON, Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+			{Name: "metadata", Type: schema.JSONType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 		UniqueConstraints: []schema.UniqueConstraint{{
@@ -390,7 +390,7 @@ func TestUnqualifiedDDLIsUnchanged(t *testing.T) {
 }
 
 // TestCreateTableRendersQualifiedDecimalColumn pins that qualification and
-// the decimal-column work (schema.TypeDecimal's Precision/Scale rendering)
+// the decimal-column work (schema.DecimalType's Precision/Scale rendering)
 // do not interact: a decimal column inside a qualified table renders its
 // NUMERIC(p,s) type exactly as it would unqualified, next to a qualified
 // table name.
@@ -399,8 +399,8 @@ func TestCreateTableRendersQualifiedDecimalColumn(t *testing.T) {
 		Schema: "audit",
 		Name:   "invoices",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -429,8 +429,8 @@ func TestSQLiteExecutesQualifiedDDL(t *testing.T) {
 		Schema: "audit",
 		Name:   "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 		Indexes: []schema.Index{

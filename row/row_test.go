@@ -261,7 +261,7 @@ func TestAssignDecodesIntegersAcrossSignedness(t *testing.T) {
 }
 
 // TestAssignRejectsExactDecimalSourcesForFloat64 records why rasql maps NUMERIC
-// and DECIMAL columns to a rejected inspection rather than schema.TypeFloat: the
+// and DECIMAL columns to a rejected inspection rather than schema.FloatType: the
 // drivers hand back the exact decimal as a string or []byte, and a float64
 // destination accepts neither, so the generated field could never decode it.
 func TestAssignRejectsExactDecimalSourcesForFloat64(t *testing.T) {
@@ -287,7 +287,7 @@ func TestAssignRejectsExactDecimalSourcesForFloat64(t *testing.T) {
 // TestAssignDecodesExactDecimalIntoString is the mirror of
 // TestAssignRejectsExactDecimalSourcesForFloat64: the same two driver values
 // that a float64 destination rejects both decode cleanly into a string, with
-// every digit unchanged. Nothing in row/ changes for schema.TypeDecimal, so
+// every digit unchanged. Nothing in row/ changes for schema.DecimalType, so
 // this test exists to pin the behavior that design depends on.
 func TestAssignDecodesExactDecimalIntoString(t *testing.T) {
 	t.Run("string source", func(t *testing.T) {

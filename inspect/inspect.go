@@ -328,11 +328,11 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 		// signed 64-bit value however it was declared, so even a column
 		// declared UNSIGNED BIG INT is signed storage. The descriptor records
 		// that truth rather than the declaration.
-		logicalType, _, err := normalizeType(i.dialect.Name(), databaseType)
+		columnType, err := normalizeType(i.dialect.Name(), databaseType)
 		if err != nil {
 			return schema.Table{}, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
-		column := schema.Column{Name: name, Type: logicalType, Nullable: notNull == 0 && primaryPosition == 0, Default: text(defaultValue)}
+		column := schema.Column{Name: name, Type: columnType, Nullable: notNull == 0 && primaryPosition == 0, Default: text(defaultValue)}
 		columns = append(columns, column)
 		if primaryPosition > 0 {
 			primaryColumns = append(primaryColumns, primaryColumn{position: primaryPosition, name: name})
@@ -376,26 +376,27 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale); err != nil {
 			return nil, fmt.Errorf("inspect: scan column: %w", err)
 		}
-		logicalType, unsigned, err := normalizeType(i.dialect.Name(), databaseType)
+		columnType, err := normalizeType(i.dialect.Name(), databaseType)
 		if err != nil {
 			return nil, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
 		column := schema.Column{
 			Name:     name,
-			Type:     logicalType,
+			Type:     columnType,
 			Nullable: strings.EqualFold(nullable, "YES"),
 			Default:  text(defaultValue),
-			Unsigned: unsigned,
 		}
-		if logicalType == schema.TypeDecimal {
+		if _, ok := columnType.(schema.DecimalType); ok {
 			if !numericPrecision.Valid {
 				return nil, fmt.Errorf("inspect: column %q: unconstrained NUMERIC has no precision to record: declare it as NUMERIC(precision, scale)", name)
 			}
 			if !numericScale.Valid {
 				return nil, fmt.Errorf("inspect: column %q: decimal column reports no scale to record: declare it as NUMERIC(precision, scale)", name)
 			}
-			column.Precision = int(numericPrecision.Int64)
-			column.Scale = schema.NewDecimalScale(int(numericScale.Int64))
+			column.Type = schema.DecimalType{
+				Precision: int(numericPrecision.Int64),
+				Scale:     schema.NewDecimalScale(int(numericScale.Int64)),
+			}
 		}
 		columns = append(columns, column)
 	}
@@ -749,99 +750,98 @@ func postgreSQLCatalogBoolean(version int, introducedVersion int, column string)
 	return "FALSE"
 }
 
-// normalizeType maps one native column type to a logical type and reports
-// whether the column is unsigned. Only MySQL can report an unsigned column:
-// PostgreSQL has no unsigned integer type, and SQLite stores a signed 64-bit
-// value whatever a column is declared, so both always report false.
-func normalizeType(dialectName string, databaseType string) (schema.LogicalType, bool, error) {
+// normalizeType maps one native column type to a concrete schema column type.
+// Only MySQL can report an unsigned column. PostgreSQL has no unsigned integer
+// type, and SQLite stores a signed 64-bit value whatever a column is declared.
+func normalizeType(dialectName string, databaseType string) (schema.ColumnType, error) {
 	typeName := strings.ToUpper(strings.TrimSpace(databaseType))
 	switch dialectName {
 	case "postgresql":
 		switch typeName {
 		case "BOOLEAN":
-			return schema.TypeBoolean, false, nil
+			return schema.BooleanType{}, nil
 		case "SMALLINT", "INTEGER", "BIGINT":
-			return schema.TypeInteger, false, nil
+			return schema.IntegerType{}, nil
 		case "REAL", "DOUBLE PRECISION":
-			return schema.TypeFloat, false, nil
+			return schema.FloatType{}, nil
 		case "NUMERIC", "DECIMAL":
-			return schema.TypeDecimal, false, nil
+			return schema.DecimalType{}, nil
 		case "TEXT", "CHARACTER VARYING", "CHARACTER", "VARCHAR", "CHAR":
-			return schema.TypeText, false, nil
+			return schema.TextType{}, nil
 		case "BYTEA":
-			return schema.TypeBytes, false, nil
+			return schema.BytesType{}, nil
 		case "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE", "DATE", "TIME WITH TIME ZONE", "TIME WITHOUT TIME ZONE":
-			return schema.TypeTime, false, nil
+			return schema.TimeType{}, nil
 		case "JSON", "JSONB":
-			return schema.TypeJSON, false, nil
+			return schema.JSONType{}, nil
 		case "UUID":
-			return schema.TypeUUID, false, nil
+			return schema.UUIDType{}, nil
 		}
 	case "mysql":
 		return normalizeMySQLType(typeName, databaseType)
 	case "sqlite":
 		switch {
 		case strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC"):
-			return "", false, fmt.Errorf("exact decimal type %q is not exact in SQLite: a NUMERIC-affinity column stores REAL, so declare the column TEXT", databaseType)
+			return nil, fmt.Errorf("exact decimal type %q is not exact in SQLite: a NUMERIC-affinity column stores REAL, so declare the column TEXT", databaseType)
 		case strings.Contains(typeName, "BOOL"):
-			return schema.TypeBoolean, false, nil
+			return schema.BooleanType{}, nil
 		case strings.Contains(typeName, "INT"):
-			return schema.TypeInteger, false, nil
+			return schema.IntegerType{}, nil
 		case strings.Contains(typeName, "CHAR") || strings.Contains(typeName, "CLOB") || strings.Contains(typeName, "TEXT"):
-			return schema.TypeText, false, nil
+			return schema.TextType{}, nil
 		case strings.Contains(typeName, "BLOB") || typeName == "":
-			return schema.TypeBytes, false, nil
+			return schema.BytesType{}, nil
 		case strings.Contains(typeName, "REAL") || strings.Contains(typeName, "FLOA") || strings.Contains(typeName, "DOUB"):
-			return schema.TypeFloat, false, nil
+			return schema.FloatType{}, nil
 		case strings.Contains(typeName, "JSON"):
-			return schema.TypeJSON, false, nil
+			return schema.JSONType{}, nil
 		case strings.Contains(typeName, "DATE") || strings.Contains(typeName, "TIME"):
-			return schema.TypeTime, false, nil
+			return schema.TimeType{}, nil
 		case strings.Contains(typeName, "UUID"):
-			return schema.TypeUUID, false, nil
+			return schema.UUIDType{}, nil
 		}
 	}
-	return "", false, fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
+	return nil, fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
 }
 
 // normalizeMySQLType maps one MySQL COLUMN_TYPE, already upper-cased as
 // typeName, to a logical type and its signedness. databaseType is the original
 // catalog text, quoted back in errors.
-func normalizeMySQLType(typeName string, databaseType string) (schema.LogicalType, bool, error) {
+func normalizeMySQLType(typeName string, databaseType string) (schema.ColumnType, error) {
 	decimal, err := mysqlDecimalDeclaration(typeName, databaseType)
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
 	if decimal {
-		return schema.TypeDecimal, false, nil
+		return schema.DecimalType{}, nil
 	}
 	// BOOLEAN, BOOL and TINYINT(1) are the same MySQL column, and the catalog
 	// spells it TINYINT(1). It is matched before the integer declaration so
 	// that spelling stays a boolean; TINYINT(1) UNSIGNED is a different column
 	// and remains an integer, as it was before signedness was recorded.
 	if typeName == "BOOLEAN" || typeName == "BOOL" || typeName == "TINYINT(1)" {
-		return schema.TypeBoolean, false, nil
+		return schema.BooleanType{}, nil
 	}
 	integer, unsigned, err := mysqlIntegerDeclaration(typeName, databaseType)
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
 	if integer {
-		return schema.TypeInteger, unsigned, nil
+		return schema.IntegerType{Unsigned: unsigned}, nil
 	}
 	switch {
 	case strings.Contains(typeName, "FLOAT") || strings.Contains(typeName, "DOUBLE"):
-		return schema.TypeFloat, false, nil
+		return schema.FloatType{}, nil
 	case strings.Contains(typeName, "BLOB") || strings.Contains(typeName, "BINARY"):
-		return schema.TypeBytes, false, nil
+		return schema.BytesType{}, nil
 	case typeName == "JSON":
-		return schema.TypeJSON, false, nil
+		return schema.JSONType{}, nil
 	case strings.Contains(typeName, "DATE") || strings.Contains(typeName, "TIME"):
-		return schema.TypeTime, false, nil
+		return schema.TimeType{}, nil
 	case strings.Contains(typeName, "CHAR") || strings.Contains(typeName, "TEXT") || strings.Contains(typeName, "ENUM") || strings.Contains(typeName, "SET"):
-		return schema.TypeText, false, nil
+		return schema.TextType{}, nil
 	}
-	return "", false, fmt.Errorf("unsupported mysql type %q", databaseType)
+	return nil, fmt.Errorf("unsupported mysql type %q", databaseType)
 }
 
 // mysqlDecimalDeclaration reports whether typeName, an upper-cased MySQL
@@ -854,7 +854,7 @@ func normalizeMySQLType(typeName string, databaseType string) (schema.LogicalTyp
 //
 // A DECIMAL or NUMERIC declaration carrying UNSIGNED, ZEROFILL or any other
 // trailing modifier returns an error instead of a logical type.
-// schema.Column.Unsigned states the signedness of an integer column only, so a
+// schema.IntegerType.Unsigned states the signedness of an integer column only, so a
 // decimal's UNSIGNED still has nowhere to be recorded, and it narrows the
 // values the column permits, so a descriptor that dropped it would re-render as
 // a column with a different meaning. Anything that is not a decimal declaration

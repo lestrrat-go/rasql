@@ -268,10 +268,10 @@ func integrationTable(name string) schema.Table {
 	return schema.Table{
 		Name: name,
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "active", Type: schema.TypeBoolean},
-			{Name: "email", Type: schema.TypeText},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "active", Type: schema.BooleanType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -311,8 +311,8 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	customers, err := rasql.NewTable[customerRow](schema.Table{
 		Name: customersName,
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "name", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "name", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -344,8 +344,8 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		Schema: schemaName,
 		Name:   ordersName,
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "customer_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 		ForeignKeys: []schema.ForeignKey{{
@@ -404,13 +404,13 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		Schema: schemaName,
 		Name:   eventsName,
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "actor_id", Type: schema.TypeInteger},
-			{Name: "action", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "actor_id", Type: schema.IntegerType{}},
+			{Name: "action", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 		// The index names actor_id, not the action column beside it,
-		// because MySQL maps schema.TypeText to TEXT and refuses an index
+		// because MySQL maps schema.TextType to TEXT and refuses an index
 		// on a BLOB/TEXT column unless the index states a key length --
 		// which schema.Index has no field for. actor_id is a fixed-width
 		// BIGINT, so it indexes on every dialect and the qualified

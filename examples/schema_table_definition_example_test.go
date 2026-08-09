@@ -15,8 +15,8 @@ func Example_schema_table_definition() {
 		Name: "users",
 		// Columns list each database column and its dialect-neutral logical type.
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		// PrimaryKey names columns from Columns that uniquely identify each row.
 		PrimaryKey: []string{"id"},

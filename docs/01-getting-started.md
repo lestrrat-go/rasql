@@ -55,8 +55,8 @@ func newUsersTable(table rasql.Table[UserRow]) UsersTable {
 var users = newUsersTable(rasql.MustTable[UserRow](schema.Table{
 	Name: "users",
 	Columns: []schema.Column{
-		{Name: "id", Type: schema.TypeInteger},
-		{Name: "email", Type: schema.TypeText},
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "email", Type: schema.TextType{}},
 	},
 	PrimaryKey: []string{"id"},
 }))

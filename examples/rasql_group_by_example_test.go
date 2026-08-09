@@ -45,8 +45,8 @@ func Example_rasql_group_by() {
 	tasks := rasql.MustTable[taskRow](schema.Table{
 		Name: "tasks",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "status", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})

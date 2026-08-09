@@ -18,8 +18,8 @@ func Example_schema_unsigned_column() {
 			// An unsigned column reaches 18446744073709551615, where a signed
 			// one stops at 9223372036854775807. rasqlgen generates a uint64
 			// field for it rather than an int64 one.
-			{Name: "id", Type: schema.TypeInteger, Unsigned: true},
-			{Name: "sequence", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
+			{Name: "sequence", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}

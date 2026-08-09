@@ -56,9 +56,9 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 	definition := schema.Table{
 		Name: tableName,
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "city", Type: schema.TypeText},
-			{Name: "age", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "city", Type: schema.TextType{}},
+			{Name: "age", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}

@@ -30,6 +30,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var _ row.GeneratedRow = (*generated.UsersRow)(nil)
+
 func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
 	result, err := row.New(
@@ -85,13 +87,29 @@ func TestGeneratedRowScansDirectly(t *testing.T) {
 	require.Equal(t, createdAt, decoded.CreatedAt)
 }
 
+func TestGeneratedRowScansTextTimes(t *testing.T) {
+	for _, value := range []any{
+		"2026-08-01 12:30:00",
+		[]byte("2026-08-01 12:30:00"),
+	} {
+		row := &generated.UsersRow{}
+		require.NoError(t, row.ScanRow(scanSource{id: 7, email: "ada@example.com", createdAt: value}))
+		require.Equal(t, time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC), row.CreatedAt)
+
+		destinations, err := row.ScanDestinations([]string{"created_at"})
+		require.NoError(t, err)
+		require.NoError(t, destinations[0].(interface{ Scan(any) error }).Scan(value))
+		require.Equal(t, time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC), row.CreatedAt)
+	}
+}
+
 func TestGeneratedRowMapsResultColumns(t *testing.T) {
 	var decoded generated.UsersRow
 	destinations, err := decoded.ScanDestinations([]string{"created_at", "id"})
 	require.NoError(t, err)
 
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
-	*destinations[0].(*time.Time) = createdAt
+	require.NoError(t, destinations[0].(interface{ Scan(any) error }).Scan(createdAt))
 	*destinations[1].(*int64) = 7
 	require.Equal(t, int64(7), decoded.ID)
 	require.Nil(t, decoded.Email)
@@ -104,13 +122,16 @@ func TestGeneratedRowMapsResultColumns(t *testing.T) {
 type scanSource struct {
 	id        int64
 	email     string
-	createdAt time.Time
+	createdAt any
 }
 
 func (s scanSource) Scan(destinations ...any) error {
 	*destinations[0].(*int64) = s.id
 	*destinations[1].(**string) = &s.email
-	*destinations[2].(*time.Time) = s.createdAt
+	if scanner, ok := destinations[2].(interface{ Scan(any) error }); ok {
+		return scanner.Scan(s.createdAt)
+	}
+	*destinations[2].(*time.Time) = s.createdAt.(time.Time)
 	return nil
 }
 
@@ -177,26 +198,26 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	users := schema.Table{
 		Name: "users",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText, Nullable: true},
-			{Name: "created_at", Type: schema.TypeTime},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}, Nullable: true},
+			{Name: "created_at", Type: schema.TimeType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
 	orders := schema.Table{
 		Name: "orders",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "user_id", Type: schema.TypeInteger},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
 	invoices := schema.Table{
 		Name: "invoices",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
-			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: schema.NewDecimalScale(4), Nullable: true},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
+			{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -208,8 +229,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "type InvoicesRow struct")
 	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
 	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
-	require.Contains(t, string(source), `{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},`)
-	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.TypeDecimal, Nullable: true, Precision: 5, Scale: schema.NewDecimalScale(4)},`)
+	require.Contains(t, string(source), `{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},`)
+	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},`)
 	require.Contains(t, string(source), "Email")
 	require.Contains(t, string(source), "CreatedAt")
 	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
@@ -217,13 +238,15 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "if err := row.Assign(src, \"id\", &r.ID); err != nil {")
 	require.Contains(t, string(source), "if err := row.Assign(src, \"email\", &r.Email); err != nil {")
 	require.Contains(t, string(source), "\treturn row.Assign(src, \"created_at\", &r.CreatedAt)\n")
+	require.Contains(t, string(source), "type usersTimeScanner func(any) error")
 	require.Contains(t, string(source), "func (r *UsersRow) ScanRow(src row.ScanSource) error {")
-	require.Contains(t, string(source), "\treturn src.Scan(&r.ID, &r.Email, &r.CreatedAt)\n")
+	require.Contains(t, string(source), "timeScanner2 := usersTimeScanner(func(value any) error {")
+	require.Contains(t, string(source), "return src.Scan(&r.ID, &r.Email, &timeScanner2)")
 	require.Contains(t, string(source), "func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {")
 	require.Contains(t, string(source), "\tvar scanned uint64\n")
 	require.Contains(t, string(source), "scanned |= uint64(1) << 0")
 	require.Contains(t, string(source), "\t\tcase \"created_at\":")
-	require.Contains(t, string(source), "\t\t\tdestinations[index] = &r.CreatedAt")
+	require.Contains(t, string(source), "\t\t\tdestinations[index] = &timeScanner2")
 	require.Contains(t, string(source), "func (r UsersRow) ColumnValue(name string) (any, bool) {")
 	require.Contains(t, string(source), "\tcase \"created_at\":\n\t\treturn r.CreatedAt, true\n")
 	require.Contains(t, string(source), "\treturn nil, false\n")
@@ -285,7 +308,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
 	columns := make([]schema.Column, 65)
 	for index := range columns {
-		columns[index] = schema.Column{Name: "column_" + strconv.Itoa(index), Type: schema.TypeInteger}
+		columns[index] = schema.Column{Name: "column_" + strconv.Itoa(index), Type: schema.IntegerType{}}
 	}
 
 	source, err := generate.Schema("generated", schema.Table{
@@ -299,16 +322,16 @@ func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
 }
 
 // TestSchemaGeneratesDecimalColumns pins the generator's decimal mapping in
-// isolation: a TypeDecimal column becomes a Go string field, and the
+// isolation: a DecimalType column becomes a Go string field, and the
 // descriptor literal restates Precision and Scale in declaration order.
 func TestSchemaGeneratesDecimalColumns(t *testing.T) {
 	invoices := schema.Table{
 		Name: "invoices",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},
-			{Name: "tax_rate", Type: schema.TypeDecimal, Precision: 5, Scale: schema.NewDecimalScale(4), Nullable: true},
-			{Name: "quantity", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(0)},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
+			{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},
+			{Name: "quantity", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(0)}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -317,11 +340,11 @@ func TestSchemaGeneratesDecimalColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
 	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
-	require.Contains(t, string(source), `{Name: "amount", Type: schema.TypeDecimal, Precision: 19, Scale: schema.NewDecimalScale(4)},`)
-	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.TypeDecimal, Nullable: true, Precision: 5, Scale: schema.NewDecimalScale(4)},`)
+	require.Contains(t, string(source), `{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},`)
+	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},`)
 	// A stated scale of zero must survive generation: emitting nothing would
 	// leave the regenerated descriptor stating no scale at all.
-	require.Contains(t, string(source), `{Name: "quantity", Type: schema.TypeDecimal, Precision: 10, Scale: schema.NewDecimalScale(0)},`)
+	require.Contains(t, string(source), `{Name: "quantity", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(0)}},`)
 }
 
 // TestSchemaGeneratesUnsignedIntegerColumns pins the generator's signedness
@@ -333,9 +356,9 @@ func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
 	events := schema.Table{
 		Name: "events",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger, Unsigned: true},
-			{Name: "sequence", Type: schema.TypeInteger},
-			{Name: "parent_id", Type: schema.TypeInteger, Nullable: true, Unsigned: true},
+			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
+			{Name: "sequence", Type: schema.IntegerType{}},
+			{Name: "parent_id", Type: schema.IntegerType{Unsigned: true}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -345,9 +368,9 @@ func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
 	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
 	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
 	require.Regexp(t, `(?m)^\s*ParentID\s+\*uint64$`, string(source))
-	require.Contains(t, string(source), `{Name: "id", Type: schema.TypeInteger, Unsigned: true},`)
-	require.Contains(t, string(source), `{Name: "sequence", Type: schema.TypeInteger},`)
-	require.Contains(t, string(source), `{Name: "parent_id", Type: schema.TypeInteger, Nullable: true, Unsigned: true},`)
+	require.Contains(t, string(source), `{Name: "id", Type: schema.IntegerType{Unsigned: true}},`)
+	require.Contains(t, string(source), `{Name: "sequence", Type: schema.IntegerType{}},`)
+	require.Contains(t, string(source), `{Name: "parent_id", Type: schema.IntegerType{Unsigned: true}, Nullable: true},`)
 }
 
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {
@@ -361,8 +384,8 @@ func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
 			_, err := generate.Schema("generated", schema.Table{
 				Name: "users",
 				Columns: []schema.Column{
-					{Name: "id", Type: schema.TypeInteger},
-					{Name: columnName, Type: schema.TypeText},
+					{Name: "id", Type: schema.IntegerType{}},
+					{Name: columnName, Type: schema.TextType{}},
 				},
 				PrimaryKey: []string{"id"},
 			})
@@ -373,16 +396,29 @@ func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
 	}
 }
 
+func TestSchemaAllowsScanColumns(t *testing.T) {
+	source, err := generate.Schema("generated", schema.Table{
+		Name: "users",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "scan_columns", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(source), "ScanColumns string")
+}
+
 func TestSchemaRejectsCollidingGeneratedNames(t *testing.T) {
 	_, err := generate.Schema("generated",
 		schema.Table{
 			Name:       "users",
-			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		},
 		schema.Table{
 			Name:       "users_table",
-			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		},
 	)
@@ -394,8 +430,8 @@ func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
 	apiKeys := schema.Table{
 		Name: "api_keys",
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "api_key", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "api_key", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
@@ -415,12 +451,12 @@ func TestSchemaRejectsCollidingInitialismNames(t *testing.T) {
 	_, err := generate.Schema("generated",
 		schema.Table{
 			Name:       "api_keys",
-			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		},
 		schema.Table{
 			Name:       "APIKeys",
-			Columns:    []schema.Column{{Name: "id", Type: schema.TypeInteger}},
+			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		},
 	)

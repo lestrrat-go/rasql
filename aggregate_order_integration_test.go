@@ -109,8 +109,8 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	definition := schema.Table{
 		Name: tableName,
 		Columns: []schema.Column{
-			{Name: "id", Type: schema.TypeInteger},
-			{Name: "email", Type: schema.TypeText},
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
