@@ -29,6 +29,7 @@ The tables in this section enumerate every operation the public API offers. The 
 | `UPDATE` many rows by predicate | `rasql.UpdateMany(ctx, client, table, value, rasql.UpdateColumns(...), rasql.UpdateWhere(...))` | `sql.Result` |
 | `UPDATE` with arbitrary expressions | `query.NewUpdate(table.QueryTable(), assignments…)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | `DELETE` by predicate | `rasql.DeleteFrom(table)` | `DeleteBuilder` |
+| `DELETE` with `RETURNING` | `rasql.DeleteFrom(table).Returning(...)` | `DeleteReturningBuilder` |
 | `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |
 | Upsert | `query.New…` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | Write with `RETURNING` | `query.New….WithReturning(...)` then `rasql.QueryWrite(ctx, client, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Dynamic` or `[]T` / `T` |
@@ -81,8 +82,13 @@ which is not valid SQL in any supported dialect.
 | `Where(expression)` | Adds a predicate from a `query` expression. |
 | `WhereEqual(column, value)` | Adds `column = value` for a `query.Column` of the target table. |
 | `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.Column` of the target table, one placeholder per value. |
+| `Returning(projections…)` | Adds a `RETURNING` clause and returns `DeleteReturningBuilder`; MySQL does not support it. |
 | `Build(d)` | Renders `render.Statement` for a `dialect.Dialect` without executing. |
 | `Exec(ctx, executor)` | Executes and returns `sql.Result`. |
+
+`DeleteReturningBuilder.Query(ctx, executor)` returns dynamic rows. Pass the
+builder to `rasql.QueryDeleteAll[T]` or `rasql.QueryDeleteOne[T]` to decode typed
+rows.
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate on the delete builder the same way: repeated calls combine with `AND` in the order they were made. Each of them supplies the predicate that `Build` and `Exec` require, so a delete still needs one of them or an explicit `AllowAll`. `WhereIn` needs at least one value: an empty list makes `Build` and `Exec` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect.
 
