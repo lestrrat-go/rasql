@@ -3,6 +3,7 @@ package row
 
 import (
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -40,7 +41,7 @@ func NewColumn[T any](name string, decoder ColumnDecoder[T]) (Column[T], error) 
 	if name == "" {
 		return Column[T]{}, fmt.Errorf("row: column name must not be empty")
 	}
-	if decoder == nil {
+	if isNilDecoder(decoder) {
 		return Column[T]{}, fmt.Errorf("row: decoder for column %q must not be nil", name)
 	}
 	return Column[T]{name: name, decoder: decoder}, nil
@@ -94,12 +95,28 @@ func Nullable[T any](decoder ColumnDecoder[T]) ColumnDecoder[Null[T]] {
 		if value == nil {
 			return Null[T]{}, nil
 		}
+		if isNilDecoder(decoder) {
+			return Null[T]{}, fmt.Errorf("row: nullable decoder must not be nil")
+		}
 		decoded, err := decoder.Decode(value)
 		if err != nil {
 			return Null[T]{}, err
 		}
 		return Null[T]{Value: decoded, Valid: true}, nil
 	})
+}
+
+func isNilDecoder(decoder any) bool {
+	if decoder == nil {
+		return true
+	}
+	value := reflect.ValueOf(decoder)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // Bool decodes a boolean result value.

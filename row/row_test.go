@@ -88,6 +88,46 @@ func TestNullableDecoderPreservesNull(t *testing.T) {
 	require.False(t, got.Valid)
 }
 
+func TestNullableDecoderPreservesNullWithNilDecoder(t *testing.T) {
+	result, err := row.New([]string{"name"}, []any{nil})
+	require.NoError(t, err)
+	var decoder row.ColumnDecoder[string]
+	name, err := row.NewColumn("name", row.Nullable(decoder))
+	require.NoError(t, err)
+
+	got, err := name.Get(result)
+	require.NoError(t, err)
+	require.False(t, got.Valid)
+}
+
+func TestNullableDecoderRejectsNilDecoder(t *testing.T) {
+	result, err := row.New([]string{"name"}, []any{"Ada"})
+	require.NoError(t, err)
+	var typedNil row.ColumnDecoderFunc[string]
+
+	for _, test := range []struct {
+		name    string
+		decoder row.ColumnDecoder[string]
+	}{
+		{name: "nil interface"},
+		{name: "typed nil", decoder: typedNil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			name, err := row.NewColumn("name", row.Nullable(test.decoder))
+			require.NoError(t, err)
+
+			_, err = name.Get(result)
+			require.ErrorContains(t, err, "nullable decoder must not be nil")
+		})
+	}
+}
+
+func TestNewColumnRejectsTypedNilDecoder(t *testing.T) {
+	var decoder row.ColumnDecoderFunc[string]
+	_, err := row.NewColumn("name", decoder)
+	require.ErrorContains(t, err, "decoder for column \"name\" must not be nil")
+}
+
 func TestTypedColumnsRejectWrongType(t *testing.T) {
 	result, err := row.New([]string{"id"}, []any{"42"})
 	require.NoError(t, err)
