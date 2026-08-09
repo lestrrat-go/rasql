@@ -103,12 +103,12 @@ func TestRunDiffLivePreservesSQLiteForeignKeys(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "application.db")
 	database, err := sql.Open("sqlite", dsn)
 	require.NoError(t, err)
-	_, err = database.ExecContext(t.Context(), `CREATE TABLE parents (id INTEGER PRIMARY KEY); CREATE TABLE children (parent_id INTEGER REFERENCES parents(id))`)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE parents (id INTEGER PRIMARY KEY); CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE)`)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
 	target := filepath.Join(t.TempDir(), "target")
-	writeTestSchema(t, target, "tables/children.sql", "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id));\n")
+	writeTestSchema(t, target, "tables/children.sql", "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE);\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{
 		"diff-live",

@@ -32,14 +32,14 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		indexes: make(map[string]indexDefinition),
 	}
 	for _, source := range sources {
-		parsed, err := sqlitequery.Parse(source.SQL)
+		parsed, actions, err := parseSource(source)
 		if err != nil {
 			return nil, fmt.Errorf("sqlite schema source %q: %w", source.Path, err)
 		}
 		for index, statement := range parsed.Statements {
 			switch statement := statement.(type) {
 			case *sqlitequery.CreateTableStatement:
-				if err := snapshot.addTable(source.Path, statement); err != nil {
+				if err := snapshot.addTable(source.Path, statement, actions[index]); err != nil {
 					return nil, err
 				}
 			case *sqlitequery.CreateIndexStatement:
@@ -55,6 +55,256 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		return nil, fmt.Errorf("sqlite schema has no CREATE TABLE statements")
 	}
 	return snapshot, nil
+}
+
+type foreignKeyActions struct {
+	onDelete string
+	onUpdate string
+}
+
+type sqliteToken struct {
+	text   string
+	start  int
+	end    int
+	word   bool
+	quoted bool
+}
+
+type sqliteSpan struct {
+	start int
+	end   int
+}
+
+func parseSource(source diff.Source) (*sqlitequery.Query, map[int][]foreignKeyActions, error) {
+	withoutActions, actions := stripReferenceActions(source.SQL)
+	parsed, err := sqlitequery.Parse(withoutActions)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	actionsByStatement := make(map[int][]foreignKeyActions)
+	actionIndex := 0
+	for index, statement := range parsed.Statements {
+		table, ok := statement.(*sqlitequery.CreateTableStatement)
+		if !ok {
+			continue
+		}
+		count := foreignKeyCount(table)
+		if actionIndex+count > len(actions) {
+			return nil, nil, fmt.Errorf("foreign-key action count does not match CREATE TABLE statements")
+		}
+		actionsByStatement[index] = append([]foreignKeyActions(nil), actions[actionIndex:actionIndex+count]...)
+		actionIndex += count
+	}
+	if actionIndex != len(actions) {
+		return nil, nil, fmt.Errorf("foreign-key action count does not match CREATE TABLE statements")
+	}
+	return parsed, actionsByStatement, nil
+}
+
+func foreignKeyCount(statement *sqlitequery.CreateTableStatement) int {
+	count := 0
+	for _, column := range statement.Columns {
+		for _, constraint := range column.Constraints {
+			if constraint.Kind == sqlitequery.ConstraintReferences {
+				count++
+			}
+		}
+	}
+	for _, constraint := range statement.Constraints {
+		if constraint.Kind == sqlitequery.ConstraintForeignKey {
+			count++
+		}
+	}
+	return count
+}
+
+func stripReferenceActions(source string) (string, []foreignKeyActions) {
+	tokens := tokenizeSQLite(source)
+	actions := make([]foreignKeyActions, 0)
+	removals := make([]sqliteSpan, 0)
+	parentheses := 0
+	bodyParentheses := 0
+	active := -1
+	for index := 0; index < len(tokens); index++ {
+		token := tokens[index]
+		switch token.text {
+		case "(":
+			parentheses++
+			if bodyParentheses == 0 {
+				bodyParentheses = parentheses
+			}
+		case ")":
+			if parentheses > 0 {
+				parentheses--
+			}
+		case ",":
+			if bodyParentheses > 0 && parentheses == bodyParentheses {
+				active = -1
+			}
+		case ";":
+			parentheses = 0
+			bodyParentheses = 0
+			active = -1
+		default:
+			if !token.word {
+				continue
+			}
+			if strings.EqualFold(token.text, "references") {
+				actions = append(actions, foreignKeyActions{})
+				active = len(actions) - 1
+				continue
+			}
+			if active < 0 || !strings.EqualFold(token.text, "on") {
+				continue
+			}
+			action, end, ok := parseReferenceAction(tokens, index)
+			if !ok {
+				continue
+			}
+			if action.kind == "DELETE" {
+				actions[active].onDelete = action.value
+			} else {
+				actions[active].onUpdate = action.value
+			}
+			removals = append(removals, sqliteSpan{start: token.start, end: tokens[end].end})
+			index = end
+		}
+	}
+	if len(removals) == 0 {
+		return source, actions
+	}
+	var result strings.Builder
+	previous := 0
+	for _, removal := range removals {
+		result.WriteString(source[previous:removal.start])
+		previous = removal.end
+	}
+	result.WriteString(source[previous:])
+	return result.String(), actions
+}
+
+type parsedReferenceAction struct {
+	kind  string
+	value string
+}
+
+func parseReferenceAction(tokens []sqliteToken, index int) (parsedReferenceAction, int, bool) {
+	if index+2 >= len(tokens) || !tokens[index+1].word {
+		return parsedReferenceAction{}, index, false
+	}
+	kind := strings.ToUpper(tokens[index+1].text)
+	if kind != "DELETE" && kind != "UPDATE" {
+		return parsedReferenceAction{}, index, false
+	}
+	if index+3 >= len(tokens) || !tokens[index+2].word {
+		return parsedReferenceAction{}, index, false
+	}
+	action := strings.ToUpper(tokens[index+2].text)
+	end := index + 2
+	switch action {
+	case "CASCADE", "RESTRICT":
+	case "NO":
+		if index+3 >= len(tokens) || !tokens[index+3].word || !strings.EqualFold(tokens[index+3].text, "action") {
+			return parsedReferenceAction{}, index, false
+		}
+		action = ""
+		end++
+	case "SET":
+		if index+3 >= len(tokens) || !tokens[index+3].word {
+			return parsedReferenceAction{}, index, false
+		}
+		value := strings.ToUpper(tokens[index+3].text)
+		if value != "NULL" && value != "DEFAULT" {
+			return parsedReferenceAction{}, index, false
+		}
+		action += " " + value
+		end++
+	default:
+		return parsedReferenceAction{}, index, false
+	}
+	return parsedReferenceAction{kind: kind, value: action}, end, true
+}
+
+func tokenizeSQLite(source string) []sqliteToken {
+	tokens := make([]sqliteToken, 0)
+	for index := 0; index < len(source); {
+		if source[index] == ' ' || source[index] == '\t' || source[index] == '\n' || source[index] == '\r' {
+			index++
+			continue
+		}
+		start := index
+		switch source[index] {
+		case '\'', '"', '`':
+			quote := source[index]
+			index++
+			for index < len(source) {
+				if source[index] != quote {
+					index++
+					continue
+				}
+				if index+1 < len(source) && source[index+1] == quote {
+					index += 2
+					continue
+				}
+				index++
+				break
+			}
+			tokens = append(tokens, sqliteToken{text: source[start:index], start: start, end: index, quoted: true})
+		case '[':
+			index++
+			for index < len(source) && source[index] != ']' {
+				index++
+			}
+			if index < len(source) {
+				index++
+			}
+			tokens = append(tokens, sqliteToken{text: source[start:index], start: start, end: index, quoted: true})
+		case '-':
+			if index+1 < len(source) && source[index+1] == '-' {
+				index += 2
+				for index < len(source) && source[index] != '\n' {
+					index++
+				}
+				continue
+			}
+			index++
+			tokens = append(tokens, sqliteToken{text: source[start:index], start: start, end: index})
+		case '/':
+			if index+1 < len(source) && source[index+1] == '*' {
+				index += 2
+				for index+1 < len(source) && (source[index] != '*' || source[index+1] != '/') {
+					index++
+				}
+				if index+1 < len(source) {
+					index += 2
+				}
+				continue
+			}
+			index++
+			tokens = append(tokens, sqliteToken{text: source[start:index], start: start, end: index})
+		default:
+			if sqliteTokenWordStart(source[index]) {
+				index++
+				for index < len(source) && sqliteTokenWordPart(source[index]) {
+					index++
+				}
+				tokens = append(tokens, sqliteToken{text: source[start:index], start: start, end: index, word: true})
+				continue
+			}
+			index++
+			tokens = append(tokens, sqliteToken{text: source[start:index], start: start, end: index})
+		}
+	}
+	return tokens
+}
+
+func sqliteTokenWordStart(value byte) bool {
+	return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+}
+
+func sqliteTokenWordPart(value byte) bool {
+	return sqliteTokenWordStart(value) || value >= '0' && value <= '9' || value == '$'
 }
 
 // normalizeCreateTable puts SQLite primary keys and their implied nullability
@@ -175,14 +425,14 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		targetTable := target.tables[key]
 		baselineTable, exists := baseline.tables[key]
 		if !exists {
-			statement, err := createTableStatement(targetTable.statement)
+			statement, err := createTableStatement(targetTable)
 			if err != nil {
 				return diff.Plan{}, err
 			}
 			generated = append(generated, statement)
 			continue
 		}
-		statements, tableDiagnostics, err := diffTable(baselineTable.normalized, targetTable.normalized)
+		statements, tableDiagnostics, err := diffTable(baselineTable, targetTable)
 		if err != nil {
 			return diff.Plan{}, err
 		}
@@ -241,12 +491,13 @@ func (*schemaSnapshot) Dialect() string {
 }
 
 type tableDefinition struct {
-	source     string
-	statement  *sqlitequery.CreateTableStatement
-	normalized *sqlitequery.CreateTableStatement
+	source      string
+	statement   *sqlitequery.CreateTableStatement
+	normalized  *sqlitequery.CreateTableStatement
+	foreignKeys []foreignKeyActions
 }
 
-func (s *schemaSnapshot) addTable(source string, statement *sqlitequery.CreateTableStatement) error {
+func (s *schemaSnapshot) addTable(source string, statement *sqlitequery.CreateTableStatement, foreignKeys []foreignKeyActions) error {
 	if statement.As != nil {
 		return fmt.Errorf("sqlite schema source %q contains CREATE TABLE AS SELECT for %s, which has no declared table shape", source, displayName(statement.Name))
 	}
@@ -268,7 +519,12 @@ func (s *schemaSnapshot) addTable(source string, statement *sqlitequery.CreateTa
 	}
 	normalized.Constraints = append([]sqlitequery.TableConstraint(nil), statement.Constraints...)
 	normalizeCreateTable(&normalized)
-	s.tables[key] = tableDefinition{source: source, statement: statement, normalized: &normalized}
+	s.tables[key] = tableDefinition{
+		source:      source,
+		statement:   statement,
+		normalized:  &normalized,
+		foreignKeys: append([]foreignKeyActions(nil), foreignKeys...),
+	}
 	return nil
 }
 
@@ -292,10 +548,10 @@ type generatedStatement struct {
 	summary string
 }
 
-func createTableStatement(table *sqlitequery.CreateTableStatement) (generatedStatement, error) {
-	copy := *table
+func createTableStatement(table tableDefinition) (generatedStatement, error) {
+	copy := *table.statement
 	copy.IfNotExists = false
-	sql, err := serialize(&copy)
+	sql, err := serializeWithReferenceActions(&copy, table.foreignKeys)
 	if err != nil {
 		return generatedStatement{}, err
 	}
@@ -322,46 +578,46 @@ func createIndexStatement(index *sqlitequery.CreateIndexStatement) (generatedSta
 	}, nil
 }
 
-func diffTable(baseline *sqlitequery.CreateTableStatement, target *sqlitequery.CreateTableStatement) ([]generatedStatement, []string, error) {
+func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedStatement, []string, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
-	if baseline.Persistence != target.Persistence {
-		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.Name)))
+	if baseline.normalized.Persistence != target.normalized.Persistence {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.normalized.Name)))
 	}
-	if !ast.Equal(baseline.Options, target.Options) {
-		diagnostics = append(diagnostics, fmt.Sprintf("table %s options changed", displayName(target.Name)))
+	if !ast.Equal(baseline.normalized.Options, target.normalized.Options) {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s options changed", displayName(target.normalized.Name)))
 	}
-	if !ast.Equal(baseline.Constraints, target.Constraints) {
-		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.Name)))
+	if !ast.Equal(baseline.normalized.Constraints, target.normalized.Constraints) || !sameForeignKeyActions(baseline.foreignKeys, target.foreignKeys) {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.normalized.Name)))
 	}
 
-	baselineColumns := make(map[string]sqlitequery.ColumnDefinition, len(baseline.Columns))
-	for _, column := range baseline.Columns {
+	baselineColumns := make(map[string]sqlitequery.ColumnDefinition, len(baseline.normalized.Columns))
+	for _, column := range baseline.normalized.Columns {
 		baselineColumns[column.Name.Name] = column
 	}
-	targetColumns := make(map[string]sqlitequery.ColumnDefinition, len(target.Columns))
-	for _, column := range target.Columns {
+	targetColumns := make(map[string]sqlitequery.ColumnDefinition, len(target.normalized.Columns))
+	for _, column := range target.normalized.Columns {
 		targetColumns[column.Name.Name] = column
 	}
-	for _, column := range target.Columns {
+	for _, column := range target.normalized.Columns {
 		previous, exists := baselineColumns[column.Name.Name]
 		if !exists {
 			if diagnostic := columnAddDiagnostic(column); diagnostic != "" {
-				diagnostics = append(diagnostics, fmt.Sprintf("new column %s.%s %s", displayName(target.Name), column.Name.Name, diagnostic))
+				diagnostics = append(diagnostics, fmt.Sprintf("new column %s.%s %s", displayName(target.normalized.Name), column.Name.Name, diagnostic))
 				continue
 			}
 			statement := &sqlitequery.AlterTableStatement{
-				Name: target.Name,
+				Name: target.normalized.Name,
 				Action: sqlitequery.AlterTableAction{
 					Kind:   sqlitequery.AlterTableAddColumn,
 					Column: &column,
 				},
 			}
-			sql, err := serialize(statement)
+			sql, err := serializeWithReferenceActions(statement, foreignKeyActionsForColumn(target, column.Name.Name))
 			if err != nil {
 				return nil, nil, err
 			}
-			name := displayName(target.Name)
+			name := displayName(target.normalized.Name)
 			generated = append(generated, generatedStatement{
 				name:    "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name),
 				sql:     sql,
@@ -370,12 +626,12 @@ func diffTable(baseline *sqlitequery.CreateTableStatement, target *sqlitequery.C
 			continue
 		}
 		if !ast.Equal(previous, column) {
-			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.Name), column.Name.Name))
+			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.normalized.Name), column.Name.Name))
 		}
 	}
-	for _, column := range baseline.Columns {
+	for _, column := range baseline.normalized.Columns {
 		if _, exists := targetColumns[column.Name.Name]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.Name), column.Name.Name))
+			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.normalized.Name), column.Name.Name))
 		}
 	}
 	return generated, diagnostics, nil
@@ -416,12 +672,132 @@ func columnAddDiagnostic(column sqlitequery.ColumnDefinition) string {
 	return ""
 }
 
+func sameForeignKeyActions(left, right []foreignKeyActions) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func foreignKeyActionsForColumn(table tableDefinition, columnName string) []foreignKeyActions {
+	actions := make([]foreignKeyActions, 0)
+	index := 0
+	for _, column := range table.statement.Columns {
+		for _, constraint := range column.Constraints {
+			if constraint.Kind != sqlitequery.ConstraintReferences {
+				continue
+			}
+			if column.Name.Name == columnName && index < len(table.foreignKeys) {
+				actions = append(actions, table.foreignKeys[index])
+			}
+			index++
+		}
+	}
+	return actions
+}
+
 func sameIndex(left *sqlitequery.CreateIndexStatement, right *sqlitequery.CreateIndexStatement) bool {
 	leftCopy := *left
 	leftCopy.IfNotExists = false
 	rightCopy := *right
 	rightCopy.IfNotExists = false
 	return ast.Equal(leftCopy, rightCopy)
+}
+
+func serializeWithReferenceActions(statement sqlitequery.Statement, actions []foreignKeyActions) (string, error) {
+	serialized, err := serialize(statement)
+	if err != nil || len(actions) == 0 {
+		return serialized, err
+	}
+	tokens := tokenizeSQLite(serialized)
+	insertions := make([]struct {
+		position int
+		value    string
+	}, 0, len(actions))
+	actionIndex := 0
+	for index, token := range tokens {
+		if !token.word || !strings.EqualFold(token.text, "references") {
+			continue
+		}
+		if actionIndex >= len(actions) {
+			return "", fmt.Errorf("sqlite schema diff: foreign-key action count does not match serialized statement")
+		}
+		end, ok := referenceEnd(tokens, index+1)
+		if !ok {
+			return "", fmt.Errorf("sqlite schema diff: cannot locate the end of a REFERENCES clause")
+		}
+		value := referenceActionSQL(actions[actionIndex])
+		if value != "" {
+			insertions = append(insertions, struct {
+				position int
+				value    string
+			}{position: tokens[end].end, value: value})
+		}
+		actionIndex++
+	}
+	if actionIndex != len(actions) {
+		return "", fmt.Errorf("sqlite schema diff: foreign-key action count does not match serialized statement")
+	}
+	if len(insertions) == 0 {
+		return serialized, nil
+	}
+	var result strings.Builder
+	previous := 0
+	for _, insertion := range insertions {
+		result.WriteString(serialized[previous:insertion.position])
+		result.WriteString(insertion.value)
+		previous = insertion.position
+	}
+	result.WriteString(serialized[previous:])
+	return result.String(), nil
+}
+
+func referenceEnd(tokens []sqliteToken, index int) (int, bool) {
+	if index >= len(tokens) || !sqliteNameToken(tokens[index]) {
+		return 0, false
+	}
+	end := index
+	for end+2 < len(tokens) && tokens[end+1].text == "." && sqliteNameToken(tokens[end+2]) {
+		end += 2
+	}
+	if end+1 < len(tokens) && tokens[end+1].text == "(" {
+		depth := 0
+		for current := end + 1; current < len(tokens); current++ {
+			switch tokens[current].text {
+			case "(":
+				depth++
+			case ")":
+				depth--
+				if depth == 0 {
+					return current, true
+				}
+			}
+		}
+		return 0, false
+	}
+	return end, true
+}
+
+func sqliteNameToken(token sqliteToken) bool {
+	return token.word || token.quoted
+}
+
+func referenceActionSQL(actions foreignKeyActions) string {
+	var result strings.Builder
+	if actions.onDelete != "" {
+		result.WriteString(" ON DELETE ")
+		result.WriteString(actions.onDelete)
+	}
+	if actions.onUpdate != "" {
+		result.WriteString(" ON UPDATE ")
+		result.WriteString(actions.onUpdate)
+	}
+	return result.String()
 }
 
 func serialize(statement sqlitequery.Statement) (string, error) {

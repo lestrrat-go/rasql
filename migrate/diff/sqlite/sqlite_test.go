@@ -95,6 +95,38 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 	}}, plan.Statements)
 }
 
+func TestDiffPreservesSQLiteForeignKeyActions(t *testing.T) {
+	analyzer := sqlite.New()
+	schema := `
+		CREATE TABLE parents (id integer PRIMARY KEY);
+		CREATE TABLE children (
+			parent_id integer REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE
+		);
+	`
+	baseline := parseSnapshot(t, analyzer, schema)
+	target := parseSnapshot(t, analyzer, schema)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffGeneratesNewTableWithSQLiteForeignKeyActions(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE parents (id integer PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE parents (id integer PRIMARY KEY);
+		CREATE TABLE children (
+			parent_id integer,
+			FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE
+		);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, "CREATE TABLE children (parent_id integer, FOREIGN KEY (parent_id) REFERENCES parents (id) ON DELETE CASCADE ON UPDATE CASCADE);\n", plan.Statements[0].SQL)
+}
+
 func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {
 	analyzer := sqlite.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY);")
