@@ -192,6 +192,8 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 	require.NoError(t, err)
 	statement, err := query.NewUpdate(users, query.Set(id, query.Bind(int64(1))))
 	require.NoError(t, err)
+	statement, err = statement.AllowAll()
+	require.NoError(t, err)
 	statement, err = statement.WithReturning(query.Project(id))
 	require.NoError(t, err)
 	mock.ExpectQuery("UPDATE \"users\" SET \"id\" = $1 RETURNING \"id\"").
@@ -514,6 +516,8 @@ func deleteReturningStatement(t *testing.T) query.Delete {
 	id, err := users.Column("id")
 	require.NoError(t, err)
 	statement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	statement, err = statement.AllowAll()
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(query.Project(id))
 	require.NoError(t, err)

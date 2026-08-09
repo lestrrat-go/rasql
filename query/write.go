@@ -316,11 +316,13 @@ type Update struct {
 	sets      []Assignment
 	where     Expression
 	returning []Projection
+	allowAll  bool
 }
 
 func (Update) writeStatement() {}
 
-// NewUpdate creates a validated UPDATE statement.
+// NewUpdate creates a validated UPDATE statement. A statement with no
+// predicate requires AllowAll before it can be rendered or executed.
 func NewUpdate(table Table, assignments ...Assignment) (Update, error) {
 	statement := Update{table: table, sets: append([]Assignment(nil), assignments...)}
 	if err := statement.Validate(); err != nil {
@@ -333,6 +335,23 @@ func NewUpdate(table Table, assignments ...Assignment) (Update, error) {
 func (s Update) WithWhere(expression Expression) (Update, error) {
 	copy := s.clone()
 	copy.where = expression
+	if expression != nil && copy.allowAll {
+		return Update{}, fmt.Errorf("query: UPDATE AllowAll must not be combined with a WHERE predicate")
+	}
+	if err := copy.Validate(); err != nil {
+		return Update{}, err
+	}
+	return copy, nil
+}
+
+// AllowAll returns a copy of s that explicitly permits updating every row.
+// It returns an error when s already carries a predicate.
+func (s Update) AllowAll() (Update, error) {
+	if s.where != nil {
+		return Update{}, fmt.Errorf("query: UPDATE AllowAll must not be combined with a WHERE predicate")
+	}
+	copy := s.clone()
+	copy.allowAll = true
 	if err := copy.Validate(); err != nil {
 		return Update{}, err
 	}
@@ -362,6 +381,11 @@ func (s Update) Assignments() []Assignment {
 // Where returns the predicate, or nil when no predicate is set.
 func (s Update) Where() Expression {
 	return s.where
+}
+
+// AllowsAll reports whether s explicitly permits updating every row.
+func (s Update) AllowsAll() bool {
+	return s.allowAll
 }
 
 // Returning returns a copy of the returning projections.
@@ -397,6 +421,9 @@ func (s Update) Validate() error {
 			return err
 		}
 	}
+	if s.allowAll && s.where != nil {
+		return validationError("allowAll", "must not be combined with a WHERE predicate")
+	}
 	return validateProjections(s.returning, sources, "returning")
 }
 
@@ -412,13 +439,13 @@ type Delete struct {
 	from      Table
 	where     Expression
 	returning []Projection
+	allowAll  bool
 }
 
 func (Delete) writeStatement() {}
 
 // NewDelete creates a validated DELETE statement.
-// A statement with no predicate deletes every row. This constructor accepts that shape;
-// the fluent builder in the rasql package requires an explicit opt-in for it.
+// A statement with no predicate requires AllowAll before it can be rendered or executed.
 func NewDelete(from Table) (Delete, error) {
 	statement := Delete{from: from}
 	if err := statement.Validate(); err != nil {
@@ -431,6 +458,23 @@ func NewDelete(from Table) (Delete, error) {
 func (s Delete) WithWhere(expression Expression) (Delete, error) {
 	copy := s
 	copy.where = expression
+	if expression != nil && copy.allowAll {
+		return Delete{}, fmt.Errorf("query: DELETE AllowAll must not be combined with a WHERE predicate")
+	}
+	if err := copy.Validate(); err != nil {
+		return Delete{}, err
+	}
+	return copy, nil
+}
+
+// AllowAll returns a copy of s that explicitly permits deleting every row.
+// It returns an error when s already carries a predicate.
+func (s Delete) AllowAll() (Delete, error) {
+	if s.where != nil {
+		return Delete{}, fmt.Errorf("query: DELETE AllowAll must not be combined with a WHERE predicate")
+	}
+	copy := s
+	copy.allowAll = true
 	if err := copy.Validate(); err != nil {
 		return Delete{}, err
 	}
@@ -458,6 +502,11 @@ func (s Delete) Where() Expression {
 	return s.where
 }
 
+// AllowsAll reports whether s explicitly permits deleting every row.
+func (s Delete) AllowsAll() bool {
+	return s.allowAll
+}
+
 // Returning returns a copy of the returning projections.
 func (s Delete) Returning() []Projection {
 	return append([]Projection(nil), s.returning...)
@@ -473,6 +522,9 @@ func (s Delete) Validate() error {
 		if err := validateClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
+	}
+	if s.allowAll && s.where != nil {
+		return validationError("allowAll", "must not be combined with a WHERE predicate")
 	}
 	return validateProjections(s.returning, sources, "returning")
 }

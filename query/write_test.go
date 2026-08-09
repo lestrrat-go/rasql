@@ -112,6 +112,41 @@ func TestWriteStatementsValidate(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestWriteStatementsRequireExplicitAllowAll(t *testing.T) {
+	users, err := query.NewTable(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
+	require.NoError(t, err)
+	require.False(t, update.AllowsAll())
+	allowedUpdate, err := update.AllowAll()
+	require.NoError(t, err)
+	require.True(t, allowedUpdate.AllowsAll())
+	require.False(t, update.AllowsAll())
+
+	whereUpdate, err := update.WithWhere(query.Equal(id, query.Bind(1)))
+	require.NoError(t, err)
+	_, err = whereUpdate.AllowAll()
+	require.ErrorContains(t, err, "UPDATE AllowAll must not be combined")
+
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	require.False(t, deleteStatement.AllowsAll())
+	allowedDelete, err := deleteStatement.AllowAll()
+	require.NoError(t, err)
+	require.True(t, allowedDelete.AllowsAll())
+	require.False(t, deleteStatement.AllowsAll())
+
+	whereDelete, err := deleteStatement.WithWhere(query.Equal(id, query.Bind(1)))
+	require.NoError(t, err)
+	_, err = whereDelete.AllowAll()
+	require.ErrorContains(t, err, "DELETE AllowAll must not be combined")
+}
+
 func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	users, err := query.NewTable(usersTable())
 	require.NoError(t, err)

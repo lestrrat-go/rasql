@@ -134,6 +134,10 @@ func (b DeleteBuilder) statement() (query.Delete, error) {
 		return query.Delete{}, fmt.Errorf("rasql: build DELETE: %w", err)
 	}
 	if !hasPredicate {
+		statement, err = statement.AllowAll()
+		if err != nil {
+			return query.Delete{}, fmt.Errorf("rasql: build DELETE: %w", err)
+		}
 		return statement, nil
 	}
 	statement, err = statement.WithWhere(predicate)
