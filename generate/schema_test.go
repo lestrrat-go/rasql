@@ -459,6 +459,48 @@ func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
 }
 
+func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	memberships := schema.Table{
+		Name: "memberships",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "billing_user_id", Type: schema.IntegerType{}},
+			{Name: "shipping_user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+		Relationships: []schema.Relationship{{
+			Name:              "BillingUser",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"billing_user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := generate.Schema("generated", users, memberships)
+	require.NoError(t, err)
+	text := string(source)
+	for _, expected := range []string{
+		"func (t MembershipsTable) BillingUser() MembershipsTableBillingUserRelation",
+		"func (t MembershipsTable) ShippingUser() MembershipsTableShippingUserRelation",
+		"func (t UsersTable) Memberships() UsersTableMembershipsRelation",
+		"func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation",
+		"func (r MembershipsTableBillingUserRelation) Load(ctx context.Context, x rasql.Executor, children []MembershipsRow)",
+		"func (r MembershipsTableShippingUserRelation) Load(ctx context.Context, x rasql.Executor, children []MembershipsRow)",
+	} {
+		require.Contains(t, text, expected)
+	}
+}
+
 // TestSchemaGeneratesDecimalColumns pins the generator's decimal mapping in
 // isolation: a DecimalType column becomes a Go string field, and the
 // descriptor literal restates Precision and Scale in declaration order.

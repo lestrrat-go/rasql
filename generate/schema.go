@@ -130,9 +130,7 @@ func prepareSchema(packageName string, tables []schema.Table) ([]schema.Table, e
 			return nil, fmt.Errorf("generate: table at index %d: %w", i, err)
 		}
 		clones[i] = table.Clone()
-		if len(clones[i].Relationships) == 0 {
-			clones[i].Relationships = derivedRelationships(clones[i])
-		}
+		clones[i].Relationships = mergeRelationships(clones[i])
 	}
 	sort.Slice(clones, func(left, right int) bool {
 		return clones[left].Name < clones[right].Name
@@ -165,6 +163,48 @@ func derivedRelationships(table schema.Table) []schema.Relationship {
 		})
 	}
 	return relationships
+}
+
+func mergeRelationships(table schema.Table) []schema.Relationship {
+	relationships := make([]schema.Relationship, 0, len(table.ForeignKeys))
+	matched := make([]bool, len(table.ForeignKeys))
+	for _, relationship := range table.Relationships {
+		relationships = append(relationships, relationship)
+		for index, key := range table.ForeignKeys {
+			if matched[index] || !relationshipMatchesForeignKey(relationship, key) {
+				continue
+			}
+			matched[index] = true
+			break
+		}
+	}
+	for index, key := range table.ForeignKeys {
+		if matched[index] {
+			continue
+		}
+		derived := derivedRelationships(schema.Table{ForeignKeys: []schema.ForeignKey{key}})
+		relationships = append(relationships, derived...)
+	}
+	return relationships
+}
+
+func relationshipMatchesForeignKey(relationship schema.Relationship, key schema.ForeignKey) bool {
+	return relationship.ReferencedSchema == key.ReferencedSchema &&
+		relationship.ReferencedTable == key.ReferencedTable &&
+		stringSlicesEqual(relationship.Columns, key.Columns) &&
+		stringSlicesEqual(relationship.ReferencedColumns, key.ReferencedColumns)
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func validateVariableNames(tables []schema.Table) error {

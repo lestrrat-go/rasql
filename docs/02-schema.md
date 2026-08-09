@@ -62,7 +62,7 @@ Call `Validate` before using a descriptor. It reports a `*schema.ValidationError
 
 ## Relationships
 
-`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.Relationship` with kind `schema.RelationshipBelongsTo` from each foreign key when `Relationships` is empty. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
+`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.Relationship` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
 
 The generated API covers one bounded slice: a non-null single-column foreign key that targets a non-null single-column primary key with the same generated Go type. When both tables are generated in the package, the child table exposes a belongs-to method and the parent table exposes the inverse has-many method. Each relation exposes `Join` and `Load`; `Load` fetches all related rows with one secondary `IN` query and groups them by key. Callers must split very large parent slices themselves when they approach the database parameter limit.
 
