@@ -438,6 +438,9 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, tableName string) (sq
 	if err := rows.Err(); err != nil {
 		return sqliteTableOptions{}, fmt.Errorf("inspect: iterate SQLite table options: %w", err)
 	}
+	if !strings.EqualFold(kind, "table") {
+		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: table kind %q is unsupported", tableName, kind)
+	}
 	return sqliteTableOptions{name: name, withoutRowID: withoutRowID != 0, strict: strict != 0}, nil
 }
 
@@ -464,6 +467,9 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) 
 	if !definition.Valid || definition.String == "" {
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unavailable", tableName)
 	}
+	if sqliteDefinitionContainsVirtualTableKeyword(definition.String) {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE VIRTUAL TABLE definitions are unsupported", tableName)
+	}
 	if sqliteDefinitionContainsForeignKeyKeyword(definition.String) {
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: DEFERRABLE and INITIALLY foreign-key clauses are unsupported", tableName)
 	}
@@ -479,6 +485,19 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, tableName string) 
 		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
 	}
 	return createTable, nil
+}
+
+func sqliteDefinitionContainsVirtualTableKeyword(definition string) bool {
+	index, ok := sqliteMatchKeyword(definition, sqliteSkipSpaceAndComments(definition, 0), "CREATE")
+	if !ok {
+		return false
+	}
+	index, ok = sqliteMatchKeyword(definition, sqliteSkipSpaceAndComments(definition, index), "VIRTUAL")
+	if !ok {
+		return false
+	}
+	_, ok = sqliteMatchKeyword(definition, sqliteSkipSpaceAndComments(definition, index), "TABLE")
+	return ok
 }
 
 func sqliteNormalizeForeignKeyActions(definition string) string {

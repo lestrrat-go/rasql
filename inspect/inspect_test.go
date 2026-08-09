@@ -1241,6 +1241,7 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 		"CREATE TABLE autoincremented (id INTEGER PRIMARY KEY AUTOINCREMENT)",
 		"CREATE TABLE strict_table (id INTEGER PRIMARY KEY) STRICT",
 		"CREATE TABLE without_rowid (id INTEGER PRIMARY KEY) WITHOUT ROWID",
+		"CREATE VIRTUAL TABLE virtual_table USING rtree(id, minx, maxx, miny, maxy)",
 	} {
 		_, err = database.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
@@ -1256,12 +1257,39 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 		{table: "autoincremented", want: "AUTOINCREMENT"},
 		{table: "strict_table", want: "STRICT"},
 		{table: "without_rowid", want: "WITHOUT ROWID"},
+		{table: "virtual_table", want: `table kind "virtual" is unsupported`},
 	} {
 		t.Run(test.table, func(t *testing.T) {
 			_, err := inspector.Table(t.Context(), test.table)
 			require.ErrorContains(t, err, test.want)
 		})
 	}
+}
+
+func TestSQLiteInspectorRejectsVirtualTableDefinition(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery(`PRAGMA table_list("virtual_table")`).
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
+			AddRow("main", "virtual_table", "table", 5, 0, 0))
+	mock.ExpectQuery(`PRAGMA table_xinfo("virtual_table")`).
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
+			AddRow(0, "id", "INTEGER", 0, nil, 0, 0))
+	mock.ExpectQuery("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").
+		WithArgs("virtual_table").
+		WillReturnRows(sqlmock.NewRows([]string{"sql"}).
+			AddRow("CREATE VIRTUAL TABLE virtual_table USING rtree(id, minx, maxx, miny, maxy)"))
+
+	_, err = inspector.Table(t.Context(), "virtual_table")
+	require.ErrorContains(t, err, "CREATE VIRTUAL TABLE definitions are unsupported")
 }
 
 // nilPointerDialect is a stub dialect.Dialect implemented with pointer
