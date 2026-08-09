@@ -161,6 +161,39 @@ func Query(ctx context.Context, x Executor, statement query.Select) (iter.Seq2[r
 	return scanRendered(ctx, x, rendered), nil
 }
 
+// QueryRendered executes a precompiled SELECT and decodes each result row as
+// T. Use it for static templates or other trusted SQL that the query builder
+// does not model. The statement must already contain dialect-specific
+// placeholders and bound arguments.
+func QueryRendered[T any](ctx context.Context, x Executor, statement render.Statement) (iter.Seq2[T, error], error) {
+	if err := validateRenderedQuery(x, statement); err != nil {
+		return nil, err
+	}
+	return scanTypedRendered[T](ctx, x, statement), nil
+}
+
+// QueryRenderedAll executes a precompiled SELECT and collects every result as
+// T. It returns an error when any row cannot be decoded.
+func QueryRenderedAll[T any](ctx context.Context, x Executor, statement render.Statement) ([]T, error) {
+	rows, err := QueryRendered[T](ctx, x, statement)
+	if err != nil {
+		return nil, err
+	}
+	return collectAll(rows)
+}
+
+// QueryRenderedOne executes a precompiled SELECT and decodes exactly one
+// result as T. It returns [ErrNoRows] when no row is returned and
+// [ErrMultipleRows] when more than one row is returned.
+func QueryRenderedOne[T any](ctx context.Context, x Executor, statement render.Statement) (T, error) {
+	var zero T
+	rows, err := QueryRendered[T](ctx, x, statement)
+	if err != nil {
+		return zero, err
+	}
+	return exactlyOne(rows)
+}
+
 // QueryWrite renders a write statement and returns a rangeable sequence of the
 // rows its RETURNING clause produces. The statement must carry at least one
 // returning projection, and the dialect must support RETURNING, which MySQL
@@ -189,6 +222,16 @@ func renderQueryWrite(x Executor, statement query.WriteStatement) (render.Statem
 		return render.Statement{}, fmt.Errorf("rasql: render write statement: %w", err)
 	}
 	return rendered, nil
+}
+
+func validateRenderedQuery(x Executor, statement render.Statement) error {
+	if isNil(x) || isNil(x.Dialect()) {
+		return fmt.Errorf("rasql: executor must not be nil")
+	}
+	if statement.SQL() == "" {
+		return fmt.Errorf("rasql: statement SQL must not be empty")
+	}
+	return nil
 }
 
 // scanRendered defers running statement until the returned sequence is ranged
