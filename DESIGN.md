@@ -4,7 +4,7 @@
 
 `rasql` is a Go SQL toolkit that gives applications one model for schema definitions, dynamic queries, static queries, result decoding, database inspection, and forward-only DDL migrations. It produces parameterized SQL for PostgreSQL, MySQL, and SQLite without hiding dialect differences that affect correctness.
 
-The migration package applies ordered, forward-only native SQL migrations for PostgreSQL, MySQL, and SQLite. It keeps an ID and checksum history, preserves source order, and rejects a changed or skipped migration. Its optional desired-schema diff adapters parse and render dialect-specific SQL to generate reviewed migrations. The runner does not parse migration SQL, automatically repair a live schema, or synthesize migrations from a live schema difference.
+The migration package applies ordered, forward-only native SQL migrations for PostgreSQL, MySQL, and SQLite. It keeps an ID and checksum history, preserves source order, and rejects a changed or skipped migration. Its optional desired-schema diff adapters parse and render dialect-specific SQL to generate reviewed migrations, including an explicit one-table live baseline workflow. The runner does not parse migration SQL or automatically repair a live schema.
 
 ## Design decisions
 

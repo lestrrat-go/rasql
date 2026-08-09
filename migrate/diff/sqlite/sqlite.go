@@ -3,12 +3,12 @@ package sqlite
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"unicode"
 
 	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
+	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 )
 
@@ -219,10 +219,10 @@ func diffTable(baseline *sqlitequery.CreateTableStatement, target *sqlitequery.C
 	if baseline.Persistence != target.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.Name)))
 	}
-	if !reflect.DeepEqual(baseline.Options, target.Options) {
+	if !ast.Equal(baseline.Options, target.Options) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s options changed", displayName(target.Name)))
 	}
-	if !reflect.DeepEqual(baseline.Constraints, target.Constraints) {
+	if !ast.Equal(baseline.Constraints, target.Constraints) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.Name)))
 	}
 
@@ -260,7 +260,7 @@ func diffTable(baseline *sqlitequery.CreateTableStatement, target *sqlitequery.C
 			})
 			continue
 		}
-		if !reflect.DeepEqual(previous, column) {
+		if !ast.Equal(previous, column) {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.Name), column.Name.Name))
 		}
 	}
@@ -312,7 +312,7 @@ func sameIndex(left *sqlitequery.CreateIndexStatement, right *sqlitequery.Create
 	leftCopy.IfNotExists = false
 	rightCopy := *right
 	rightCopy.IfNotExists = false
-	return reflect.DeepEqual(leftCopy, rightCopy)
+	return ast.Equal(leftCopy, rightCopy)
 }
 
 func serialize(statement sqlitequery.Statement) (string, error) {

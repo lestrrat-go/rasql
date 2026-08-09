@@ -16,11 +16,14 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
+	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite"
 )
 
@@ -41,7 +44,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: rasqlmigrate <new|diff|plan|apply|status|verify> [flags]")
+		return errors.New("usage: rasqlmigrate <new|diff|diff-live|plan|apply|status|verify> [flags]")
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -51,6 +54,8 @@ func run(args []string) error {
 		return runNew(args[1:])
 	case "diff":
 		return runDiff(args[1:])
+	case "diff-live":
+		return runDiffLive(args[1:])
 	case "plan":
 		return runPlan(args[1:])
 	case "apply":
@@ -70,6 +75,7 @@ func printUsage(output io.Writer) {
 	_, _ = fmt.Fprintln(output, "Commands:")
 	_, _ = fmt.Fprintln(output, "  new      Create a directory for one migration")
 	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
+	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
 	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
 	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations")
 	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
@@ -104,6 +110,75 @@ func runDiff(args []string) error {
 		return fmt.Errorf("parse baseline desired schema: %w", err)
 	}
 	targetSources, err := diff.LoadSources(*toDirectory)
+	if err != nil {
+		return err
+	}
+	target, err := analyzer.Parse(targetSources)
+	if err != nil {
+		return fmt.Errorf("parse target desired schema: %w", err)
+	}
+	plan, err := analyzer.Diff(baseline, target)
+	if err != nil {
+		return err
+	}
+	if plan.Empty() {
+		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
+		return nil
+	}
+	if *outputDirectory == "" {
+		writeDiffPlan(commandOutput, plan)
+		return nil
+	}
+	if err := diff.WriteMigration(*outputDirectory, plan); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
+	return nil
+}
+
+func runDiffLive(args []string) error {
+	flags := newFlagSet("diff-live")
+	dialectName := flags.String("dialect", "", "database dialect; PostgreSQL, MySQL, and SQLite are currently supported")
+	dsn := flags.String("dsn", "", "database connection string")
+	tableName := flags.String("table", "", "one live table to inspect")
+	targetDirectory := flags.String("to", "", "desired-schema directory for the inspected table")
+	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *dialectName == "" || *dsn == "" || *tableName == "" || *targetDirectory == "" {
+		return errors.New("diff-live requires -dialect, -dsn, -table, and -to")
+	}
+	d, err := migrationDialect(*dialectName)
+	if err != nil {
+		return err
+	}
+	analyzer, err := schemaAnalyzer(*dialectName)
+	if err != nil {
+		return err
+	}
+	database, closeDatabase, err := openMigrationDatabase(context.Background(), d, *dsn)
+	if err != nil {
+		return err
+	}
+	defer closeDatabase()
+	inspector, err := inspect.New(database, d)
+	if err != nil {
+		return err
+	}
+	liveTable, err := inspector.Table(context.Background(), *tableName)
+	if err != nil {
+		return redactError(err, *dsn)
+	}
+	liveSources, err := schemaSources(liveTable, d)
+	if err != nil {
+		return err
+	}
+	baseline, err := analyzer.Parse(liveSources)
+	if err != nil {
+		return fmt.Errorf("parse inspected table %q: %w", *tableName, err)
+	}
+	targetSources, err := diff.LoadSources(*targetDirectory)
 	if err != nil {
 		return err
 	}
@@ -274,20 +349,9 @@ func openRunner(ctx context.Context, directory string, dialectName string, dsn s
 	if err != nil {
 		return migrate.Runner{}, nil, func() {}, err
 	}
-	driverName, err := driverForDialect(d.Name())
+	database, closeDatabase, err := openMigrationDatabase(ctx, d, dsn)
 	if err != nil {
 		return migrate.Runner{}, nil, func() {}, err
-	}
-	database, err := openDatabase(driverName, dsn)
-	if err != nil {
-		return migrate.Runner{}, nil, func() {}, fmt.Errorf("open database: %w", redactError(err, dsn))
-	}
-	closeDatabase := func() {
-		_ = database.Close()
-	}
-	if err := database.PingContext(ctx); err != nil {
-		closeDatabase()
-		return migrate.Runner{}, nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
 	}
 	var runner migrate.Runner
 	if historyTable == "" {
@@ -300,6 +364,44 @@ func openRunner(ctx context.Context, directory string, dialectName string, dsn s
 		return migrate.Runner{}, nil, func() {}, err
 	}
 	return runner, migrations, closeDatabase, nil
+}
+
+func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (*sql.DB, func(), error) {
+	driverName, err := driverForDialect(d.Name())
+	if err != nil {
+		return nil, func() {}, err
+	}
+	database, err := openDatabase(driverName, dsn)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("open database: %w", redactError(err, dsn))
+	}
+	closeDatabase := func() {
+		_ = database.Close()
+	}
+	if err := database.PingContext(ctx); err != nil {
+		closeDatabase()
+		return nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
+	}
+	return database, closeDatabase, nil
+}
+
+func schemaSources(table schema.Table, d dialect.Dialect) ([]diff.Source, error) {
+	created, err := render.CreateTable(d, table)
+	if err != nil {
+		return nil, fmt.Errorf("render inspected table %q: %w", table.QualifiedName(), err)
+	}
+	sources := []diff.Source{{Path: "live/" + table.Name + ".sql", SQL: created.SQL() + ";\n"}}
+	indexes, err := render.CreateIndexes(d, table)
+	if err != nil {
+		return nil, fmt.Errorf("render indexes for inspected table %q: %w", table.QualifiedName(), err)
+	}
+	for index, statement := range indexes {
+		sources = append(sources, diff.Source{
+			Path: fmt.Sprintf("live/index_%d.sql", index+1),
+			SQL:  statement.SQL() + ";\n",
+		})
+	}
+	return sources, nil
 }
 
 func migrationDialect(name string) (dialect.Dialect, error) {

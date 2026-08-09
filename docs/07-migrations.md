@@ -134,8 +134,24 @@ The first PostgreSQL, MySQL, and SQLite slices generate new tables, new nullable
 
 The generated files use the normal migration format. Review them, then apply them with `rasqlmigrate apply`. Do not edit a generated migration after it has been applied.
 
+## Compare one live table
+
+Use `rasqlmigrate diff-live` when the current database is the baseline and the desired schema for one table is checked in. The command inspects exactly the table named by `-table`, compares it with the desired-schema directory supplied by `-to`, and prints the same reviewed migration plan as `diff`:
+
+```sh
+rasqlmigrate diff-live \
+  -dialect sqlite \
+  -dsn ./db/application.db \
+  -table members \
+  -to db/schema/sqlite-members-v2
+```
+
+The `-to` directory must contain the desired schema for the selected table. The command does not discover or compare every table in the database. Pass `-output` to write the reviewed plan into a new migration directory.
+
+Inspection is read-only. The command never applies SQL, drops objects, renames objects, or infers destructive changes. Removed tables, columns, indexes, and changed definitions remain errors that require a hand-written migration. Review the printed SQL before applying it, and use a database role with enough metadata privileges for complete inspection; PostgreSQL reports incomplete column visibility instead of guessing.
+
 ## Go API
 
 `migrate.Runner` is available when an application needs to embed migration execution in a separate administrative program. Each `migrate.Statement` holds a source name and native SQL text. Supply the complete migration set to `Runner.Apply`; it orders migrations by ID and rejects duplicate IDs, missing recorded migrations, skipped migrations, and changed source checksums.
 
-The runner does not infer migrations from Go table descriptors, compare live schemas, or repair a database automatically. The PostgreSQL diff command compares checked-in desired-schema sources instead. `inspect` can still compare supported metadata outside the migration runner.
+The runner does not infer migrations from Go table descriptors or repair a database automatically. The desired-schema diff commands generate only the documented additive subset. `diff-live` provides an explicit, one-table live baseline through `inspect`; it still refuses destructive differences and requires review before application.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"flag"
 	"os"
@@ -76,6 +77,48 @@ func TestRunDiffPreviewsSQLiteMigration(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
+}
+
+func TestRunDiffLivePreviewsSQLiteMigration(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER NOT NULL, name TEXT NOT NULL, email TEXT, PRIMARY KEY (id));\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+}
+
+func TestRunDiffLiveRefusesDestructiveChange(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER NOT NULL, name TEXT NOT NULL, PRIMARY KEY (id));\n")
+	outputBuffer := setCommandOutput(t)
+	err = run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	})
+	require.ErrorContains(t, err, "column members.email was removed")
+	require.Empty(t, outputBuffer.String())
 }
 
 func TestRunPlanPrintsSQLSources(t *testing.T) {

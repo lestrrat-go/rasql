@@ -3,12 +3,12 @@ package mysql
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"unicode"
 
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
+	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 )
 
@@ -216,7 +216,7 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 	if baseline.Persistence != target.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.Name)))
 	}
-	if !reflect.DeepEqual(baseline.Constraints, target.Constraints) {
+	if !ast.Equal(baseline.Constraints, target.Constraints) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.Name)))
 	}
 
@@ -254,7 +254,7 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 			})
 			continue
 		}
-		if !reflect.DeepEqual(previous, column) {
+		if !ast.Equal(previous, column) {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.Name), column.Name.Name))
 		}
 	}
@@ -289,7 +289,7 @@ func sameIndex(left *mysqlquery.CreateIndexStatement, right *mysqlquery.CreateIn
 	leftCopy.IfNotExists = false
 	rightCopy := *right
 	rightCopy.IfNotExists = false
-	return reflect.DeepEqual(leftCopy, rightCopy)
+	return ast.Equal(leftCopy, rightCopy)
 }
 
 func serialize(statement mysqlquery.Statement) (string, error) {

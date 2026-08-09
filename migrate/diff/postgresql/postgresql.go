@@ -3,12 +3,12 @@ package postgresql
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"unicode"
 
 	pgquery "github.com/lestrrat-go/rasql-pg/query"
+	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 )
 
@@ -223,7 +223,7 @@ func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTab
 	if baseline.Persistence != target.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.Name)))
 	}
-	if !reflect.DeepEqual(baseline.Constraints, target.Constraints) {
+	if !ast.Equal(baseline.Constraints, target.Constraints) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.Name)))
 	}
 
@@ -261,7 +261,7 @@ func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTab
 			})
 			continue
 		}
-		if !reflect.DeepEqual(previous, column) {
+		if !ast.Equal(previous, column) {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.Name), column.Name.Name))
 		}
 	}
@@ -296,7 +296,7 @@ func sameIndex(left *pgquery.CreateIndexStatement, right *pgquery.CreateIndexSta
 	leftCopy.IfNotExists = false
 	rightCopy := *right
 	rightCopy.IfNotExists = false
-	return reflect.DeepEqual(leftCopy, rightCopy)
+	return ast.Equal(leftCopy, rightCopy)
 }
 
 func serialize(statement pgquery.Statement) (string, error) {
