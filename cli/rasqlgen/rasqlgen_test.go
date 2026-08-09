@@ -444,9 +444,18 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints JOIN information_schema\\.key_column_usage").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	mock.ExpectQuery("SELECT key_column_usage\\.constraint_name, key_column_usage\\.column_name, FALSE, FALSE").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "unsupported_index_metadata"}))
+	mock.ExpectQuery("SELECT check_constraints\\.constraint_name, check_constraints\\.check_clause, FALSE, TRUE").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "check_clause", "no_inherit", "validated", "enforced"}))
 	mock.ExpectQuery("SELECT index_name, 0, column_name FROM information_schema\\.statistics WHERE table_schema = DATABASE\\(\\) AND table_name = \\? AND index_name <> 'PRIMARY' AND non_unique = 1 ORDER BY index_name, seq_in_index").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"index_name", "0", "column_name"}))
+	mock.ExpectQuery("SELECT key_column_usage\\.constraint_name, key_column_usage\\.column_name, key_column_usage\\.referenced_table_name").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_in_current_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}))
 	mock.ExpectCommit()
 	mock.ExpectClose()
 
