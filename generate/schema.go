@@ -210,8 +210,11 @@ func validateVariableNames(tables []schema.Table) error {
 		})
 		for index, relationship := range table.Relationships {
 			method := goName(relationship.Name)
-			if !token.IsIdentifier(method) || reservedRelationshipMethod(method) {
-				continue
+			if !token.IsIdentifier(method) {
+				return fmt.Errorf("generate: relationship %q on table %q cannot become a Go method", relationship.Name, table.Name)
+			}
+			if reservedRelationshipMethod(method) {
+				return fmt.Errorf("generate: relationship %q on table %q uses reserved generated method %q", relationship.Name, table.Name, method)
 			}
 			if previous, exists := relationshipMethods[method]; exists {
 				return fmt.Errorf("generate: relationships[%d] %q and relationships[%d] %q on table %q duplicate generated method %q", previous.index, previous.name, index, relationship.Name, table.Name, method)
@@ -221,10 +224,24 @@ func validateVariableNames(tables []schema.Table) error {
 				name  string
 			}{index: index, name: relationship.Name}
 		}
+		for _, relationship := range table.Relationships {
+			method := goName(relationship.Name)
+			if _, exists := fields[method]; exists {
+				return fmt.Errorf("generate: relationship %q on table %q collides with generated field %q", relationship.Name, table.Name, method)
+			}
+		}
 		for _, relationship := range relationshipSpecs(table, tables) {
 			if _, exists := fields[relationship.method]; exists {
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated field %q", relationship.method, table.Name, relationship.method)
 			}
+		}
+	}
+	for _, table := range tables {
+		for _, relationship := range relationshipSpecs(table, tables) {
+			if _, exists := names[relationship.typeName]; exists {
+				return fmt.Errorf("generate: relationship %q on table %q duplicates generated name %q", relationship.method, table.Name, relationship.typeName)
+			}
+			names[relationship.typeName] = struct{}{}
 		}
 	}
 	return nil
@@ -576,11 +593,7 @@ func relationKeyType(column schema.Column) (string, bool) {
 }
 
 func reservedRelationshipMethod(name string) bool {
-	_, reserved := map[string]struct{}{
-		"As": {}, "Column": {}, "ColumnValue": {}, "DecodeRow": {},
-		"IsGeneratedRow": {}, "QueryTable": {}, "ScanDestinations": {},
-		"ScanRow": {}, "Table": {}, "tableRow": {},
-	}[name]
+	_, reserved := reservedFieldNames[name]
 	return reserved
 }
 

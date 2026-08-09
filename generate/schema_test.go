@@ -606,6 +606,67 @@ func TestSchemaRejectsCollidingGeneratedNames(t *testing.T) {
 	require.ErrorContains(t, err, "UsersTable")
 }
 
+func TestSchemaRejectsRelationshipTypeCollisions(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	collision := schema.Table{
+		Name:       "users_table_orders_relation",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := generate.Schema("generated", users, orders, collision)
+	require.ErrorContains(t, err, `relationship "Orders" on table "users"`)
+	require.ErrorContains(t, err, `UsersTableOrdersRelation`)
+}
+
+func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.Relationship{{
+			Name:              "as",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	err := generate.ValidateSchema("generated", users, orders)
+	require.ErrorContains(t, err, `relationship "as" on table "orders" uses reserved generated method "As"`)
+}
+
 func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
 	apiKeys := schema.Table{
 		Name: "api_keys",
