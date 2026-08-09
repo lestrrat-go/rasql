@@ -534,6 +534,48 @@ func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
 	}
 }
 
+func TestSchemaRejectsCollidingRelationshipMethodNames(t *testing.T) {
+	users := schema.Table{
+		Name:       "users",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.Table{
+		Name: "orders",
+		Columns: []schema.Column{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKey{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.Relationship{
+			{
+				Name:              "BillingUser",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+			{
+				Name:              "billing_user",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+		},
+	}
+
+	_, err := generate.Schema("generated", users, orders)
+	require.ErrorContains(t, err, `relationships[0] "BillingUser"`)
+	require.ErrorContains(t, err, `relationships[1] "billing_user"`)
+	require.ErrorContains(t, err, `duplicate generated method "BillingUser"`)
+}
+
 func TestSchemaAllowsScanColumns(t *testing.T) {
 	source, err := generate.Schema("generated", schema.Table{
 		Name: "users",

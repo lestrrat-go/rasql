@@ -204,6 +204,23 @@ func validateVariableNames(tables []schema.Table) error {
 			}
 			fields[field] = struct{}{}
 		}
+		relationshipMethods := make(map[string]struct {
+			index int
+			name  string
+		})
+		for index, relationship := range table.Relationships {
+			method := goName(relationship.Name)
+			if !token.IsIdentifier(method) || reservedRelationshipMethod(method) {
+				continue
+			}
+			if previous, exists := relationshipMethods[method]; exists {
+				return fmt.Errorf("generate: relationships[%d] %q and relationships[%d] %q on table %q duplicate generated method %q", previous.index, previous.name, index, relationship.Name, table.Name, method)
+			}
+			relationshipMethods[method] = struct {
+				index int
+				name  string
+			}{index: index, name: relationship.Name}
+		}
 		for _, relationship := range relationshipSpecs(table, tables) {
 			if _, exists := fields[relationship.method]; exists {
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated field %q", relationship.method, table.Name, relationship.method)
