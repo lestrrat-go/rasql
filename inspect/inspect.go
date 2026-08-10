@@ -32,6 +32,9 @@ import (
 // errors.As.
 var ErrTableNotFound = errors.New("inspect: table not found")
 
+// ErrAmbiguousTable is the sentinel wrapped by every [AmbiguousTableError].
+var ErrAmbiguousTable = errors.New("inspect: ambiguous table")
+
 // TableNotFoundError reports that a requested table has no metadata in the
 // inspected scope. It distinguishes a lookup miss (misspelled or wrong-schema
 // table name) from a malformed table descriptor.
@@ -50,6 +53,23 @@ func (e *TableNotFoundError) Error() string {
 // alongside errors.As against *TableNotFoundError.
 func (e *TableNotFoundError) Unwrap() error {
 	return ErrTableNotFound
+}
+
+// AmbiguousTableError reports that a SQLite table name exists in more than
+// one database attached to the connection.
+type AmbiguousTableError struct {
+	// Table is the requested table name.
+	Table string
+	// Databases lists the SQLite databases containing Table.
+	Databases []string
+}
+
+func (e *AmbiguousTableError) Error() string {
+	return fmt.Sprintf("inspect: table %q exists in multiple SQLite databases: %s", e.Table, strings.Join(e.Databases, ", "))
+}
+
+func (e *AmbiguousTableError) Unwrap() error {
+	return ErrAmbiguousTable
 }
 
 // ErrIncompleteMetadata is the sentinel wrapped by every
@@ -124,14 +144,32 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 // rows returned by table_xinfo. See the package doc for the MySQL limitation,
 // which this method cannot detect.
 func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, error) {
+	return i.table(ctx, "", tableName)
+}
+
+// TableIn reads a SQLite table from databaseName using a retained connection
+// or transaction. The returned descriptor preserves databaseName in Schema.
+func (i Inspector) TableIn(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
+	return i.table(ctx, databaseName, tableName)
+}
+
+func (i Inspector) table(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
 	if err := schema.ValidateIdentifier(tableName); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: invalid table name: %w", err)
+	}
+	if databaseName != "" {
+		if err := schema.ValidateIdentifier(databaseName); err != nil {
+			return schema.Table{}, fmt.Errorf("inspect: invalid SQLite database name: %w", err)
+		}
 	}
 	if isNil(i.queryer) || isNil(i.dialect) {
 		return schema.Table{}, fmt.Errorf("inspect: invalid inspector")
 	}
 	if i.dialect.Name() == "sqlite" {
-		return i.sqliteTable(ctx, tableName)
+		return i.sqliteTable(ctx, databaseName, tableName)
+	}
+	if databaseName != "" {
+		return schema.Table{}, fmt.Errorf("inspect: scoped table inspection is only supported for SQLite")
 	}
 	return i.informationSchemaTable(ctx, tableName)
 }
@@ -526,7 +564,10 @@ func mysqlCreateTablePartIsColumn(part string) bool {
 	}
 }
 
-func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
+func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
+	if databaseName != "" && databaseName != "main" && !sqliteRetainedQueryer(i.queryer) {
+		return schema.Table{}, sqliteRetainedHandleError()
+	}
 	queryer := i.queryer
 	if database, ok := queryer.(*sql.DB); ok {
 		connection, err := database.Conn(ctx)
@@ -536,12 +577,13 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 		defer func() { _ = connection.Close() }()
 		queryer = connection
 	}
-	i.queryer = queryer
-	return i.sqliteTableOnConnection(ctx, tableName)
+	inspector := i
+	inspector.queryer = queryer
+	return inspector.sqliteTableOnConnection(ctx, databaseName, tableName)
 }
 
-func (i Inspector) sqliteTableOnConnection(ctx context.Context, tableName string) (schema.Table, error) {
-	options, err := i.sqliteTableOptions(ctx, tableName)
+func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
+	options, err := i.sqliteTableOptions(ctx, databaseName, tableName)
 	if err != nil {
 		return schema.Table{}, err
 	}
@@ -669,6 +711,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, tableName string
 		return schema.Table{}, err
 	}
 	table := schema.Table{
+		Schema:            options.database,
 		Name:              tableName,
 		Columns:           columns,
 		PrimaryKey:        primaryKey,
@@ -683,18 +726,22 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, tableName string
 	return table, nil
 }
 
-func (i Inspector) sqliteRowIDAlias(ctx context.Context, queryer Queryer, tableName, columnName string, primaryKeyColumns int) (bool, error) {
+func (i Inspector) sqliteRowIDAlias(ctx context.Context, queryer Queryer, databaseName, tableName, columnName string, primaryKeyColumns int) (bool, error) {
 	if primaryKeyColumns != 1 {
 		return false, nil
 	}
-	declaration, err := i.sqliteTableDeclaration(ctx, queryer, tableName)
+	declaration, err := i.sqliteTableDeclaration(ctx, queryer, databaseName, tableName)
 	if err != nil {
 		return false, err
 	}
 	return sqliteDeclarationHasRowIDAlias(declaration, columnName), nil
 }
 
-func (i Inspector) sqliteTableDeclaration(ctx context.Context, queryer Queryer, tableName string) (string, error) {
+func (i Inspector) sqliteTableDeclaration(ctx context.Context, queryer Queryer, databaseName, tableName string) (string, error) {
+	if databaseName != "" {
+		declaration, _, err := i.sqliteCatalogDeclaration(ctx, queryer, databaseName, tableName)
+		return declaration, err
+	}
 	for _, schemaName := range []string{"temp", "main"} {
 		declaration, found, err := i.sqliteCatalogDeclaration(ctx, queryer, schemaName, tableName)
 		if err != nil {
@@ -816,8 +863,11 @@ type sqliteTableOptions struct {
 	strict       bool
 }
 
-func (i Inspector) sqliteTableOptions(ctx context.Context, tableName string) (sqliteTableOptions, error) {
+func (i Inspector) sqliteTableOptions(ctx context.Context, databaseName string, tableName string) (sqliteTableOptions, error) {
 	query := "PRAGMA table_list(\"" + sqlitePragmaIdentifier(tableName) + "\")"
+	if databaseName != "" {
+		query = "PRAGMA \"" + sqlitePragmaIdentifier(databaseName) + "\".table_list(\"" + sqlitePragmaIdentifier(tableName) + "\")"
+	}
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return sqliteTableOptions{}, fmt.Errorf("inspect: read SQLite table options: %w", err)
@@ -835,6 +885,9 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, tableName string) (sq
 		if !strings.EqualFold(option.name, tableName) {
 			continue
 		}
+		if databaseName != "" && !strings.EqualFold(option.database, databaseName) {
+			continue
+		}
 		option.withoutRowID = withoutRowID != 0
 		option.strict = strict != 0
 		if !strings.EqualFold(kind, "table") {
@@ -846,7 +899,21 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, tableName string) (sq
 		return sqliteTableOptions{}, fmt.Errorf("inspect: iterate SQLite table options: %w", err)
 	}
 	if len(options) == 0 {
-		return sqliteTableOptions{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
+		scope := "the connection's attached databases"
+		if databaseName != "" {
+			scope = fmt.Sprintf("SQLite database %q", databaseName)
+		}
+		return sqliteTableOptions{}, &TableNotFoundError{Table: tableName, Scope: scope}
+	}
+	if databaseName == "" && len(options) > 1 {
+		databases := make([]string, len(options))
+		for index, option := range options {
+			databases[index] = option.database
+		}
+		return sqliteTableOptions{}, &AmbiguousTableError{Table: tableName, Databases: databases}
+	}
+	if databaseName != "" {
+		return options[0], nil
 	}
 	for _, preferred := range []string{"temp", "main"} {
 		for _, option := range options {
@@ -856,6 +923,19 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, tableName string) (sq
 		}
 	}
 	return options[0], nil
+}
+
+func sqliteRetainedQueryer(queryer Queryer) bool {
+	switch queryer.(type) {
+	case *sql.Conn, *sql.Tx:
+		return true
+	default:
+		return false
+	}
+}
+
+func sqliteRetainedHandleError() error {
+	return fmt.Errorf("inspect: SQLite inspection requires a retained *sql.Conn or *sql.Tx for temporary or attached databases")
 }
 
 func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tableName string) (*sqlitequery.CreateTableStatement, error) {

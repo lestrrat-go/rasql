@@ -1071,6 +1071,9 @@ func canonicalizeIndex(statement *sqlitequery.CreateIndexStatement) {
 
 func canonicalizeQualifiedName(name sqlitequery.QualifiedName) sqlitequery.QualifiedName {
 	canonical := append(sqlitequery.QualifiedName(nil), name...)
+	if len(canonical) > 1 && sqliteIdentifierKey(canonical[0].Name) == "main" {
+		canonical = canonical[1:]
+	}
 	for index := range canonical {
 		canonical[index].Name = sqliteIdentifierKey(canonical[index].Name)
 	}
@@ -1187,7 +1190,11 @@ func manualMigrationError(diagnostics []string) error {
 
 func qualifiedNameKey(name sqlitequery.QualifiedName) string {
 	var key strings.Builder
-	for _, part := range name {
+	start := 0
+	if len(name) > 1 && sqliteIdentifierKey(name[0].Name) == "main" {
+		start = 1
+	}
+	for _, part := range name[start:] {
 		value := sqliteIdentifierKey(part.Name)
 		fmt.Fprintf(&key, "%d:%s", len(value), value)
 	}
@@ -1214,6 +1221,9 @@ func sqliteIdentifierKey(value string) string {
 }
 
 func displayName(name sqlitequery.QualifiedName) string {
+	if len(name) > 1 && sqliteIdentifierKey(name[0].Name) == "main" {
+		name = name[1:]
+	}
 	return name.String()
 }
 
