@@ -27,6 +27,51 @@ func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
 	require.Contains(t, sources[1].SQL, "email")
 }
 
+func TestDiffLiveMatchesInlinePrimaryKeyUnderMySQLIdentifierRules(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (ID bigint PRIMARY KEY);")
+	liveSources, err := analyzer.LiveSources(schema.Table{
+		Name:       "members",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	live, err := analyzer.Parse(liveSources)
+	require.NoError(t, err)
+
+	plan, err := analyzer.Diff(baseline, live)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffLiveMatchesMySQLQuotedIdentifiersToOrdinaryIdentifiers(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint); CREATE INDEX members_id_idx ON members (id);")
+	liveSources, err := analyzer.LiveSources(schema.Table{
+		Name:    "members",
+		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}, Nullable: true}},
+		Indexes: []schema.Index{{Name: "members_id_idx", Columns: []string{"id"}}},
+	})
+	require.NoError(t, err)
+	live, err := analyzer.Parse(liveSources)
+	require.NoError(t, err)
+
+	plan, err := analyzer.Diff(baseline, live)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+
+	differentCase, err := analyzer.LiveSources(schema.Table{
+		Name:    "Members",
+		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}, Nullable: true}},
+		Indexes: []schema.Index{{Name: "members_id_idx", Columns: []string{"id"}}},
+	})
+	require.NoError(t, err)
+	otherLive, err := analyzer.Parse(differentCase)
+	require.NoError(t, err)
+	_, err = analyzer.Diff(live, otherLive)
+	require.ErrorContains(t, err, "table members was removed")
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, `
