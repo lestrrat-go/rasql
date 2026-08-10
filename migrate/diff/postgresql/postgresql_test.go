@@ -149,13 +149,23 @@ func TestDiffRejectsRemovedColumns(t *testing.T) {
 	require.ErrorContains(t, err, "column members.email was removed")
 }
 
-func TestDiffDistinguishesQuotedIdentifiers(t *testing.T) {
+func TestDiffTreatsQuotedLowercaseIdentifiersAsEquivalent(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, `CREATE TABLE members ("members" text);`)
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (members text);")
 
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffDistinguishesMixedCaseIdentifiers(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, `CREATE TABLE members ("Members" text);`)
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (Members text);")
+
 	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "column members.members changed")
+	require.ErrorContains(t, err, "column members.Members was removed")
 }
 
 func TestParseRejectsUnsupportedDesiredSchemaStatement(t *testing.T) {

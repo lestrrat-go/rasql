@@ -1199,7 +1199,7 @@ func sqliteStatementHasRowIDAlias(statement *sqlitequery.CreateTableStatement, c
 			continue
 		}
 		for _, constraint := range column.Constraints {
-			if constraint.Kind == sqlitequery.ConstraintPrimaryKey && constraint.Conflict == sqlitequery.ConflictDefault && constraint.Direction != sqlitequery.SortDescending {
+			if constraint.Kind == sqlitequery.ConstraintPrimaryKey && !constraint.Autoincrement && constraint.Conflict == sqlitequery.ConflictDefault && constraint.Direction != sqlitequery.SortDescending {
 				return true
 			}
 		}
@@ -1229,8 +1229,8 @@ func validateSQLitePrimaryKey(statement *sqlitequery.CreateTableStatement, table
 			if constraint.Kind != sqlitequery.ConstraintPrimaryKey {
 				continue
 			}
-			if constraint.Conflict != sqlitequery.ConflictDefault {
-				return fmt.Errorf("inspect: SQLite table %q cannot be represented: primary-key conflict resolution is unsupported", tableName)
+			if constraint.Autoincrement || constraint.Conflict != sqlitequery.ConflictDefault {
+				return fmt.Errorf("inspect: SQLite table %q cannot be represented: AUTOINCREMENT and primary-key conflict resolution are unsupported", tableName)
 			}
 		}
 	}
@@ -1239,7 +1239,7 @@ func validateSQLitePrimaryKey(statement *sqlitequery.CreateTableStatement, table
 			continue
 		}
 		if constraint.Conflict != sqlitequery.ConflictDefault {
-			return fmt.Errorf("inspect: SQLite table %q cannot be represented: primary-key conflict resolution is unsupported", tableName)
+			return fmt.Errorf("inspect: SQLite table %q cannot be represented: AUTOINCREMENT and primary-key conflict resolution are unsupported", tableName)
 		}
 	}
 	return nil

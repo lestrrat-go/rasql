@@ -1528,26 +1528,6 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullableWithAttachedComments(
 	}
 }
 
-func TestSQLiteInspectorReadsAutoincrementIntegerPrimaryKey(t *testing.T) {
-	database, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	database.SetMaxOpenConns(1)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-
-	_, err = database.ExecContext(t.Context(), "CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, payload BLOB)")
-	require.NoError(t, err)
-
-	inspector, err := inspect.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	table, err := inspector.Table(t.Context(), "events")
-	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
-	}, table.Columns)
-	require.Equal(t, []string{"id"}, table.PrimaryKey)
-}
-
 func TestSQLiteInspectorReadsTempTable(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -1690,6 +1670,7 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 
 	for _, statement := range []string{
 		"CREATE TABLE generated (value INTEGER, doubled INTEGER GENERATED ALWAYS AS (value * 2) STORED)",
+		"CREATE TABLE autoincremented (id INTEGER PRIMARY KEY AUTOINCREMENT)",
 		"CREATE TABLE strict_table (id INTEGER PRIMARY KEY) STRICT",
 		"CREATE TABLE without_rowid (id INTEGER PRIMARY KEY) WITHOUT ROWID",
 		"CREATE VIRTUAL TABLE virtual_table USING rtree(id, minx, maxx, miny, maxy)",
@@ -1705,6 +1686,7 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 		want  string
 	}{
 		{table: "generated", want: "generated column"},
+		{table: "autoincremented", want: "AUTOINCREMENT"},
 		{table: "strict_table", want: "STRICT"},
 		{table: "without_rowid", want: "WITHOUT ROWID"},
 		{table: "virtual_table", want: `table kind "virtual" is unsupported`},

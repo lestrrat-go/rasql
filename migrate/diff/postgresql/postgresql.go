@@ -105,12 +105,8 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	comparison := diff.CompareSchemas(
 		diff.Schema[tableDefinition, indexDefinition]{Tables: baseline.tables, Indexes: baseline.indexes},
 		diff.Schema[tableDefinition, indexDefinition]{Tables: target.tables, Indexes: target.indexes},
-		func(left, right tableDefinition) bool {
-			return sameTable(left.statement, right.statement, shouldIgnoreQuoted(left.source, right.source))
-		},
-		func(left, right indexDefinition) bool {
-			return sameIndex(left.statement, right.statement, shouldIgnoreQuoted(left.source, right.source))
-		},
+		func(left, right tableDefinition) bool { return ast.Equal(left.statement, right.statement) },
+		func(left, right indexDefinition) bool { return sameIndex(left.statement, right.statement) },
 	)
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
@@ -145,7 +141,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		generated = append(generated, statement)
 	}
 	for _, pair := range comparison.Indexes.Matched {
-		if !sameIndex(pair.Baseline.statement, pair.Target.statement, shouldIgnoreQuoted(pair.Baseline.source, pair.Target.source)) {
+		if !sameIndex(pair.Baseline.statement, pair.Target.statement) {
 			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(*pair.Target.statement.Name)))
 		}
 	}
@@ -271,13 +267,12 @@ func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStateme
 func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
-	ignoreQuotes := shouldIgnoreQuoted(baseline.source, target.source)
-	normalizedBaseline := normalizedTable(baseline.statement, ignoreQuotes)
-	normalizedTarget := normalizedTable(target.statement, ignoreQuotes)
+	normalizedBaseline := normalizedTable(baseline.statement, false)
+	normalizedTarget := normalizedTable(target.statement, false)
 	if baseline.statement.Persistence != target.statement.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.statement.Name)))
 	}
-	if !ast.EqualWithQuoted(normalizedBaseline.Constraints, normalizedTarget.Constraints) {
+	if !ast.Equal(normalizedBaseline.Constraints, normalizedTarget.Constraints) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.statement.Name)))
 	}
 
@@ -316,7 +311,7 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 			})
 			continue
 		}
-		if !ast.EqualWithQuoted(previous, normalizedColumn) {
+		if !ast.Equal(previous, normalizedColumn) {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.statement.Name), column.Name.Name))
 		}
 	}
@@ -541,26 +536,12 @@ func columnRequiresBackfill(column pgquery.ColumnDefinition) bool {
 	return hasNotNull && (!hasDefault || defaultIsNull)
 }
 
-func sameIndex(left *pgquery.CreateIndexStatement, right *pgquery.CreateIndexStatement, ignoreQuotes bool) bool {
+func sameIndex(left *pgquery.CreateIndexStatement, right *pgquery.CreateIndexStatement) bool {
 	leftCopy := *left
 	leftCopy.IfNotExists = false
 	rightCopy := *right
 	rightCopy.IfNotExists = false
-	if ignoreQuotes {
-		return ast.Equal(leftCopy, rightCopy)
-	}
-	return ast.EqualWithQuoted(leftCopy, rightCopy)
-}
-
-func sameTable(left *pgquery.CreateTableStatement, right *pgquery.CreateTableStatement, ignoreQuotes bool) bool {
-	if ignoreQuotes {
-		return ast.Equal(left, right)
-	}
-	return ast.EqualWithQuoted(left, right)
-}
-
-func shouldIgnoreQuoted(leftSource, rightSource string) bool {
-	return strings.HasPrefix(leftSource, "live/") || strings.HasPrefix(rightSource, "live/")
+	return ast.Equal(leftCopy, rightCopy)
 }
 
 func serialize(statement pgquery.Statement) (string, error) {
