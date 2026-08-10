@@ -497,20 +497,21 @@ func mysqlCreateTablePartIsColumn(part string) bool {
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
-	if database, ok := i.queryer.(*sql.DB); ok {
+	queryer := i.queryer
+	if database, ok := queryer.(*sql.DB); ok {
 		connection, err := database.Conn(ctx)
 		if err != nil {
 			return schema.Table{}, fmt.Errorf("inspect: acquire SQLite connection: %w", err)
 		}
 		defer func() { _ = connection.Close() }()
-		i.queryer = connection
+		queryer = connection
 	}
-	return i.sqliteTableOnConnection(ctx, tableName)
+	return i.sqliteTableOnConnection(ctx, queryer, tableName)
 }
 
-func (i Inspector) sqliteTableOnConnection(ctx context.Context, tableName string) (schema.Table, error) {
+func (i Inspector) sqliteTableOnConnection(ctx context.Context, queryer Queryer, tableName string) (schema.Table, error) {
 	query := "PRAGMA table_info(\"" + tableName + "\")"
-	rows, err := i.queryer.QueryContext(ctx, query)
+	rows, err := queryer.QueryContext(ctx, query)
 	if err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: read SQLite columns: %w", err)
 	}
@@ -562,7 +563,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, tableName string
 		if column.primaryPosition == 0 || column.notNull != 0 || !strings.EqualFold(strings.TrimSpace(column.databaseType), "INTEGER") {
 			continue
 		}
-		rowIDAlias, err = i.sqliteRowIDAlias(ctx, tableName, column.name, len(primaryColumns))
+		rowIDAlias, err = i.sqliteRowIDAlias(ctx, queryer, tableName, column.name, len(primaryColumns))
 		if err != nil {
 			return schema.Table{}, err
 		}
@@ -600,20 +601,20 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, tableName string
 	return table, nil
 }
 
-func (i Inspector) sqliteRowIDAlias(ctx context.Context, tableName, columnName string, primaryKeyColumns int) (bool, error) {
+func (i Inspector) sqliteRowIDAlias(ctx context.Context, queryer Queryer, tableName, columnName string, primaryKeyColumns int) (bool, error) {
 	if primaryKeyColumns != 1 {
 		return false, nil
 	}
-	declaration, err := i.sqliteTableDeclaration(ctx, tableName)
+	declaration, err := i.sqliteTableDeclaration(ctx, queryer, tableName)
 	if err != nil {
 		return false, err
 	}
 	return sqliteDeclarationHasRowIDAlias(declaration, columnName), nil
 }
 
-func (i Inspector) sqliteTableDeclaration(ctx context.Context, tableName string) (string, error) {
+func (i Inspector) sqliteTableDeclaration(ctx context.Context, queryer Queryer, tableName string) (string, error) {
 	for _, schemaName := range []string{"temp", "main"} {
-		declaration, found, err := i.sqliteCatalogDeclaration(ctx, schemaName, tableName)
+		declaration, found, err := i.sqliteCatalogDeclaration(ctx, queryer, schemaName, tableName)
 		if err != nil {
 			return "", err
 		}
@@ -622,7 +623,7 @@ func (i Inspector) sqliteTableDeclaration(ctx context.Context, tableName string)
 		}
 	}
 
-	rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
+	rows, err := queryer.QueryContext(ctx, "PRAGMA database_list")
 	if err != nil {
 		return "", fmt.Errorf("inspect: read SQLite database list: %w", err)
 	}
@@ -645,7 +646,7 @@ func (i Inspector) sqliteTableDeclaration(ctx context.Context, tableName string)
 	}
 	_ = rows.Close()
 	for _, schemaName := range attachedSchemas {
-		declaration, found, err := i.sqliteCatalogDeclaration(ctx, schemaName, tableName)
+		declaration, found, err := i.sqliteCatalogDeclaration(ctx, queryer, schemaName, tableName)
 		if err != nil {
 			return "", err
 		}
@@ -656,9 +657,9 @@ func (i Inspector) sqliteTableDeclaration(ctx context.Context, tableName string)
 	return "", nil
 }
 
-func (i Inspector) sqliteCatalogDeclaration(ctx context.Context, schemaName, tableName string) (string, bool, error) {
+func (i Inspector) sqliteCatalogDeclaration(ctx context.Context, queryer Queryer, schemaName, tableName string) (string, bool, error) {
 	query := "SELECT sql FROM " + sqliteQuoteIdentifier(schemaName) + ".sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE"
-	rows, err := i.queryer.QueryContext(ctx, query, tableName)
+	rows, err := queryer.QueryContext(ctx, query, tableName)
 	if err != nil {
 		return "", false, fmt.Errorf("inspect: read SQLite %s table declaration: %w", schemaName, err)
 	}
