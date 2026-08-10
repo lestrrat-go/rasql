@@ -447,6 +447,13 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints JOIN information_schema\\.key_column_usage").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	mock.ExpectQuery("SHOW COLUMNS FROM information_schema.statistics LIKE 'EXPRESSION'").
+		WillReturnRows(sqlmock.NewRows([]string{"Field"}).AddRow("EXPRESSION"))
+	mock.ExpectQuery("SHOW COLUMNS FROM information_schema.statistics LIKE 'IS_VISIBLE'").
+		WillReturnRows(sqlmock.NewRows([]string{"Field"}).AddRow("IS_VISIBLE"))
+	mock.ExpectQuery("SELECT index_name, non_unique = 0, column_name, sub_part, expression, collation, index_type, is_visible FROM information_schema\\.statistics.*index_name <> 'PRIMARY'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}))
 	mock.ExpectCommit()
 	mock.ExpectClose()
 
