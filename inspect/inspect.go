@@ -184,7 +184,17 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 		}
 	}
 	if queries.indexes != "" {
-		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.argument(tableName))
+		if i.dialect.Name() == "mysql" {
+			hasExpression, err := i.mysqlStatisticsHasExpression(ctx)
+			if err != nil {
+				return schema.Table{}, err
+			}
+			queries.mysqlIndexHasExpression = hasExpression
+			if !hasExpression {
+				queries.indexes = "SELECT index_name, non_unique = 0, column_name, sub_part FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
+			}
+		}
+		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.argument(tableName), queries.mysqlIndexHasExpression)
 		if err != nil {
 			return schema.Table{}, err
 		}
@@ -210,6 +220,20 @@ func (i Inspector) informationSchemaQueries(ctx context.Context) (informationQue
 		return informationQueries{}, err
 	}
 	return postgreSQLInformationQueries(version), nil
+}
+
+func (i Inspector) mysqlStatisticsHasExpression(ctx context.Context) (bool, error) {
+	rows, err := i.queryer.QueryContext(ctx, "SHOW COLUMNS FROM information_schema.statistics LIKE 'EXPRESSION'")
+	if err != nil {
+		return false, fmt.Errorf("inspect: read MySQL statistics columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	hasExpression := rows.Next()
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("inspect: iterate MySQL statistics columns: %w", err)
+	}
+	return hasExpression, nil
 }
 
 func (i Inspector) postgreSQLServerVersion(ctx context.Context) (int, error) {
@@ -1073,7 +1097,7 @@ func (i Inspector) rejectUnsupportedExclusionConstraints(ctx context.Context, qu
 	return fmt.Errorf("inspect: exclusion constraint %q cannot be represented: rasql does not support exclusion constraints", name)
 }
 
-func (i Inspector) readIndexes(ctx context.Context, query string, argument any) ([]schema.Index, error) {
+func (i Inspector) readIndexes(ctx context.Context, query string, argument any, mysqlIndexHasExpression bool) ([]schema.Index, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read indexes: %w", err)
@@ -1089,7 +1113,11 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any) 
 			var nullableColumn sql.NullString
 			var prefixLength sql.NullInt64
 			var expression sql.NullString
-			if err := rows.Scan(&name, &unique, &nullableColumn, &prefixLength, &expression); err != nil {
+			scanArgs := []any{&name, &unique, &nullableColumn, &prefixLength}
+			if mysqlIndexHasExpression {
+				scanArgs = append(scanArgs, &expression)
+			}
+			if err := rows.Scan(scanArgs...); err != nil {
 				return nil, fmt.Errorf("inspect: scan index: %w", err)
 			}
 			if prefixLength.Valid {
@@ -1218,6 +1246,7 @@ type informationQueries struct {
 	unsupportedIndexes              string
 	indexes                         string
 	foreignKeys                     string
+	mysqlIndexHasExpression         bool
 }
 
 func (informationQueries) argument(tableName string) any {

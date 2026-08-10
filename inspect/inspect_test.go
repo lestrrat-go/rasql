@@ -724,10 +724,28 @@ func expectMySQLCreateTable(mock sqlmock.Sqlmock, tableName string, definition s
 		WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).AddRow(tableName, definition))
 }
 
+const mysqlStatisticsExpressionQuery = "SHOW COLUMNS FROM information_schema.statistics LIKE 'EXPRESSION'"
 const mysqlIndexesQuery = "SELECT index_name, non_unique = 0, column_name, sub_part, expression FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
+const mysqlIndexesQueryWithoutExpression = "SELECT index_name, non_unique = 0, column_name, sub_part FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
+
+func expectMySQLStatisticsExpression(mock sqlmock.Sqlmock, present bool) {
+	rows := sqlmock.NewRows([]string{"Field"})
+	if present {
+		rows.AddRow("EXPRESSION")
+	}
+	mock.ExpectQuery(mysqlStatisticsExpressionQuery).WillReturnRows(rows)
+}
 
 func expectMySQLIndexes(mock sqlmock.Sqlmock, tableName string, rows *sqlmock.Rows) {
+	expectMySQLStatisticsExpression(mock, true)
 	mock.ExpectQuery(mysqlIndexesQuery).
+		WithArgs(tableName).
+		WillReturnRows(rows)
+}
+
+func expectMySQLIndexesWithoutExpression(mock sqlmock.Sqlmock, tableName string, rows *sqlmock.Rows) {
+	expectMySQLStatisticsExpression(mock, false)
+	mock.ExpectQuery(mysqlIndexesQueryWithoutExpression).
 		WithArgs(tableName).
 		WillReturnRows(rows)
 }
@@ -765,6 +783,25 @@ func TestMySQLInspectorReadsUniqueIndex(t *testing.T) {
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
 	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}).AddRow("users_email_uidx", true, "email", nil, nil))
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Index{{Name: "users_email_uidx", Columns: []string{"email"}, Unique: true}}, table.Indexes)
+}
+
+func TestMySQLInspectorSupportsMySQL57StatisticsShape(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	expectMySQLColumnsAndPrimaryKey(mock, "users")
+	expectMySQLIndexesWithoutExpression(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part"}).AddRow("users_email_uidx", true, "email", nil))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
