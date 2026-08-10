@@ -441,6 +441,9 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
 			AddRow("id", "bigint", "NO", nil, nil, nil))
+	mock.ExpectQuery("SHOW CREATE TABLE `users`").
+		WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).
+			AddRow("users", "CREATE TABLE `users` (`id` bigint NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB"))
 	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints JOIN information_schema\\.key_column_usage").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))

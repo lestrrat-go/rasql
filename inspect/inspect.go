@@ -1,16 +1,14 @@
 // Package inspect reads live database metadata into schema descriptors.
 //
-// For PostgreSQL and SQLite, a table descriptor is either complete or an
-// error: this package never returns a schema.Table silently missing columns
-// or a primary key. PostgreSQL's information_schema is filtered per column
-// and per table by the inspecting role's privileges while pg_catalog is not;
+// For PostgreSQL, MySQL, and SQLite, a table descriptor is either complete or
+// an error: this package never returns a schema.Table silently missing columns.
+// PostgreSQL and SQLite also reject a silently missing primary key. PostgreSQL's
+// information_schema is filtered per column and per table by the inspecting
+// role's privileges while pg_catalog is not;
 // this package cross-checks the two and reports [IncompleteMetadataError] or
-// [TableNotFoundError] instead of guessing. MySQL has the same
-// information_schema privilege filtering but no unfiltered catalog
-// equivalent to cross-check against, so a MySQL inspection under a
-// restricted grant can silently under-report a table's columns or primary
-// key with no way for this package to detect it. SQLite has no such
-// filtering to begin with.
+// [TableNotFoundError] instead of guessing. MySQL's information_schema is
+// filtered too, so this package cross-checks its column count against the full
+// definition returned by SHOW CREATE TABLE. SQLite has no privilege filtering.
 package inspect
 
 import (
@@ -71,12 +69,18 @@ type IncompleteMetadataError struct {
 	// Visible is the column count information_schema exposed to the
 	// inspecting role.
 	Visible int
-	// Actual is the true column count reported by pg_catalog.
+	// Actual is the true column count reported by the database catalog.
 	Actual int
+	// Reason explains why the complete column count could not be verified when
+	// the catalog returned no count that can be compared.
+	Reason string
 }
 
 func (e *IncompleteMetadataError) Error() string {
-	return fmt.Sprintf("inspect: table %q column metadata could not be read: pg_catalog reports %d columns but information_schema.columns exposed %d, so the inspecting role holds insufficient column privileges on the table", e.Table, e.Actual, e.Visible)
+	if e.Reason != "" {
+		return fmt.Sprintf("inspect: table %q column metadata could not be verified: %s", e.Table, e.Reason)
+	}
+	return fmt.Sprintf("inspect: table %q column metadata could not be read: the complete metadata source reports %d columns but information_schema.columns exposed %d, so the inspecting role holds insufficient column privileges on the table", e.Table, e.Actual, e.Visible)
 }
 
 // Unwrap exposes ErrIncompleteMetadata so errors.Is(err, ErrIncompleteMetadata)
@@ -111,8 +115,7 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 // Table reads the supported schema metadata for tableName. For PostgreSQL it
 // returns [TableNotFoundError] when tableName does not exist and
 // [IncompleteMetadataError] when the inspecting role's privileges hide some
-// or all of the table's columns; see the package doc for the MySQL
-// limitation, which this method cannot detect.
+// or all of the table's columns.
 func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, error) {
 	if err := schema.ValidateIdentifier(tableName); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: invalid table name: %w", err)
@@ -137,6 +140,13 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 	}
 	if i.dialect.Name() == "postgresql" {
 		if err := i.postgreSQLCheckColumnVisibility(ctx, tableName, len(columns)); err != nil {
+			return schema.Table{}, err
+		}
+	} else if i.dialect.Name() == "mysql" {
+		if len(columns) == 0 {
+			return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
+		}
+		if err := i.mySQLCheckColumnVisibility(ctx, tableName, len(columns)); err != nil {
 			return schema.Table{}, err
 		}
 	} else if len(columns) == 0 {
@@ -297,6 +307,188 @@ func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName s
 		return false, 0, fmt.Errorf("inspect: iterate table %q catalog columns: %w", tableName, err)
 	}
 	return true, count, nil
+}
+
+// mySQLCheckColumnVisibility compares the information_schema column count
+// with the complete CREATE TABLE definition. MySQL filters information_schema
+// columns by the inspecting role's privileges, but SHOW CREATE TABLE returns
+// the full definition when the role has any privilege on the table.
+func (i Inspector) mySQLCheckColumnVisibility(ctx context.Context, tableName string, visible int) error {
+	query := "SHOW CREATE TABLE `" + strings.ReplaceAll(tableName, "`", "``") + "`"
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("inspect: read MySQL table %q definition: %w", tableName, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("inspect: iterate MySQL table %q definition: %w", tableName, err)
+		}
+		return &IncompleteMetadataError{
+			Table:   tableName,
+			Visible: visible,
+			Reason:  "SHOW CREATE TABLE returned no definition",
+		}
+	}
+	var returnedTable string
+	var definition string
+	if err := rows.Scan(&returnedTable, &definition); err != nil {
+		return &IncompleteMetadataError{
+			Table:   tableName,
+			Visible: visible,
+			Reason:  fmt.Sprintf("SHOW CREATE TABLE returned unreadable metadata: %v", err),
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect: iterate MySQL table %q definition: %w", tableName, err)
+	}
+	if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(definition)), "CREATE TABLE ") {
+		return nil
+	}
+	actual, err := mysqlCreateTableColumnCount(definition)
+	if err != nil {
+		return &IncompleteMetadataError{
+			Table:   tableName,
+			Visible: visible,
+			Reason:  fmt.Sprintf("SHOW CREATE TABLE could not prove completeness: %v", err),
+		}
+	}
+	if actual != visible {
+		return &IncompleteMetadataError{Table: tableName, Visible: visible, Actual: actual}
+	}
+	return nil
+}
+
+// mysqlCreateTableColumnCount counts column definitions in the parenthesized
+// portion of SHOW CREATE TABLE output. The server appends engine and other
+// table options after that portion, so only balanced parentheses outside SQL
+// quotes are considered. Views are left to the existing information_schema
+// path because SHOW CREATE TABLE returns a CREATE VIEW statement for them.
+func mysqlCreateTableColumnCount(definition string) (int, error) {
+	trimmed := strings.TrimSpace(definition)
+	if !strings.HasPrefix(strings.ToUpper(trimmed), "CREATE TABLE ") {
+		return 0, nil
+	}
+	open := strings.IndexByte(trimmed, '(')
+	if open < 0 {
+		return 0, fmt.Errorf("CREATE TABLE definition has no column list")
+	}
+	close, err := mysqlMatchingParenthesis(trimmed, open)
+	if err != nil {
+		return 0, err
+	}
+	body := trimmed[open+1 : close]
+	parts, err := mysqlTopLevelParts(body)
+	if err != nil {
+		return 0, err
+	}
+	columns := 0
+	for _, part := range parts {
+		if mysqlCreateTablePartIsColumn(part) {
+			columns++
+		}
+	}
+	return columns, nil
+}
+
+func mysqlMatchingParenthesis(input string, open int) (int, error) {
+	depth := 1
+	var quote byte
+	for index := open + 1; index < len(input); index++ {
+		character := input[index]
+		if quote != 0 {
+			if character == '\\' && quote != '`' {
+				index++
+				continue
+			}
+			if character == quote {
+				if index+1 < len(input) && input[index+1] == quote {
+					index++
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"', '`':
+			quote = character
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return index, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("CREATE TABLE definition has unbalanced parentheses")
+}
+
+func mysqlTopLevelParts(input string) ([]string, error) {
+	parts := make([]string, 0)
+	start := 0
+	depth := 0
+	var quote byte
+	for index := 0; index < len(input); index++ {
+		character := input[index]
+		if quote != 0 {
+			if character == '\\' && quote != '`' {
+				index++
+				continue
+			}
+			if character == quote {
+				if index+1 < len(input) && input[index+1] == quote {
+					index++
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"', '`':
+			quote = character
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return nil, fmt.Errorf("CREATE TABLE definition has unbalanced parentheses")
+			}
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, input[start:index])
+				start = index + 1
+			}
+		}
+	}
+	if quote != 0 || depth != 0 {
+		return nil, fmt.Errorf("CREATE TABLE definition has unterminated column metadata")
+	}
+	return append(parts, input[start:]), nil
+}
+
+func mysqlCreateTablePartIsColumn(part string) bool {
+	part = strings.TrimSpace(part)
+	if part == "" {
+		return false
+	}
+	if part[0] == '`' || part[0] == '"' {
+		return true
+	}
+	end := 0
+	for end < len(part) && ((part[end] >= 'a' && part[end] <= 'z') || (part[end] >= 'A' && part[end] <= 'Z') || (part[end] >= '0' && part[end] <= '9') || part[end] == '_') {
+		end++
+	}
+	word := strings.ToUpper(part[:end])
+	switch word {
+	case "CHECK", "CONSTRAINT", "FOREIGN", "FULLTEXT", "INDEX", "KEY", "PRIMARY", "SPATIAL", "UNIQUE":
+		return false
+	default:
+		return end > 0
+	}
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
@@ -679,14 +871,11 @@ func (informationQueries) argument(tableName string) any {
 	return tableName
 }
 
-// informationSchemaQueries returns the metadata queries for dialects that
-// have no unfiltered catalog to fall back on. MySQL's information_schema.columns
-// and information_schema.key_column_usage carry the same per-column privilege
-// filter PostgreSQL's do, but MySQL exposes no pg_catalog equivalent that is
-// both unfiltered and reveals the true column count. A role with a partial
-// column grant can therefore make MySQL inspection silently under-report a
-// table's columns or primary key, with no query this package can run to
-// detect it. This is a known limitation, not something planned here.
+// informationSchemaQueries returns the information_schema metadata queries
+// used by MySQL. MySQL's information_schema.columns and
+// information_schema.key_column_usage carry the same per-column privilege
+// filter PostgreSQL's do; mySQLCheckColumnVisibility supplies the separate
+// SHOW CREATE TABLE completeness check.
 func informationSchemaQueries(name string) (informationQueries, error) {
 	switch name {
 	case "mysql":
