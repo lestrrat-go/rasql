@@ -739,7 +739,17 @@ func sqliteDeclarationHasTablePrimaryKey(definition []sqliteDeclarationToken, co
 		return false
 	}
 	index++
+	if index < len(definition) && !definition[index].quoted && strings.EqualFold(definition[index].text, "COLLATE") {
+		index++
+		if index >= len(definition) || definition[index].text == ")" {
+			return false
+		}
+		index++
+	}
 	if index < len(definition) && !definition[index].quoted && (strings.EqualFold(definition[index].text, "ASC") || strings.EqualFold(definition[index].text, "DESC")) {
+		if strings.EqualFold(definition[index].text, "DESC") {
+			return false
+		}
 		index++
 	}
 	return index < len(definition) && definition[index].text == ")"
