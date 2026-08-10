@@ -283,6 +283,22 @@ func TestDiffRejectsChangedIndexes(t *testing.T) {
 	require.ErrorContains(t, err, "index members_email_idx changed")
 }
 
+func TestDiffTreatsUniqueIndexAsStable(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE members (id bigint PRIMARY KEY, email text);
+		CREATE UNIQUE INDEX members_email_uidx ON members (email);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE members (id bigint PRIMARY KEY, email text);
+		CREATE UNIQUE INDEX members_email_uidx ON members (email);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.True(t, plan.Empty())
+}
+
 func TestParseRejectsUnsupportedDesiredSchemaStatement(t *testing.T) {
 	analyzer := mysql.New()
 	_, err := analyzer.Parse([]diff.Source{{Path: "views.sql", SQL: "CREATE VIEW member_names AS SELECT name FROM members;"}})
