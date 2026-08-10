@@ -3,6 +3,7 @@ package examples_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -11,35 +12,58 @@ import (
 )
 
 func Example_inspect_sqlite_table() {
-	// This example reads an existing SQLite table into a normalized schema.Table.
+	// This example reads SQLite tables from main, temp, and an attached database.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
+	database.SetMaxOpenConns(1)
 	defer func() { _ = database.Close() }()
-	// Pretend this DDL already exists in an application-owned SQLite database.
-	if _, err := database.ExecContext(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, nickname TEXT)"); err != nil {
-		fmt.Printf("failed to create users table: %s\n", err)
+	// Pretend these tables already exist in an application-owned SQLite database.
+	if _, err := database.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS aux"); err != nil {
+		fmt.Printf("failed to attach aux database: %s\n", err)
 		return
 	}
+	for _, statement := range []string{
+		"CREATE TABLE main.users (id INTEGER PRIMARY KEY, main_value TEXT)",
+		"CREATE TABLE aux.users (id INTEGER PRIMARY KEY, aux_value TEXT)",
+		"CREATE TEMP TABLE users (id INTEGER PRIMARY KEY, temp_value TEXT)",
+	} {
+		if _, err := database.ExecContext(ctx, statement); err != nil {
+			fmt.Printf("failed to create users table: %s\n", err)
+			return
+		}
+	}
 
-	// The inspector uses the dialect to normalize native column metadata.
+	// An unscoped lookup does not guess when several databases contain users.
+	// The typed error exposes the conflicting database names to the caller.
 	inspector, err := inspect.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
 		return
 	}
-	table, err := inspector.Table(ctx, "users")
-	if err != nil {
-		fmt.Printf("failed to inspect users table: %s\n", err)
+	_, err = inspector.Table(ctx, "users")
+	var ambiguous *inspect.AmbiguousTableError
+	if !errors.As(err, &ambiguous) {
+		fmt.Printf("expected ambiguous users error, got %v\n", err)
 		return
 	}
-	fmt.Printf("%s: %s, %s, %s\n", table.Name, table.Columns[0].Type.Kind(), table.Columns[1].Type.Kind(), table.Columns[2].Type.Kind())
-	fmt.Println(table.PrimaryKey)
+	fmt.Printf("ambiguous %s: %d databases\n", ambiguous.Table, len(ambiguous.Databases))
+
+	for _, databaseName := range []string{"main", "temp", "aux"} {
+		table, err := inspector.TableIn(ctx, databaseName, "users")
+		if err != nil {
+			fmt.Printf("failed to inspect %s.users: %s\n", databaseName, err)
+			return
+		}
+		fmt.Printf("%s.%s: %s\n", table.Schema, table.Name, table.Columns[1].Name)
+	}
 
 	// Output:
-	// users: integer, text, text
-	// [id]
+	// ambiguous users: 3 databases
+	// main.users: main_value
+	// temp.users: temp_value
+	// aux.users: aux_value
 }
