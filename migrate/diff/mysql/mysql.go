@@ -75,6 +75,12 @@ func (a Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 			}
 		}
 	}
+	for _, key := range sortedIndexKeys(snapshot.indexes) {
+		index := snapshot.indexes[key]
+		if _, exists := snapshot.tables[tableNameKey(index.statement.Table, snapshot.lowerCaseTableNames)]; !exists {
+			return nil, fmt.Errorf("mysql schema source %q defines index %s on missing table %s", index.source, displayName(index.statement.Name), displayName(index.statement.Table))
+		}
+	}
 	if len(snapshot.tables) == 0 {
 		return nil, fmt.Errorf("mysql schema has no CREATE TABLE statements")
 	}
