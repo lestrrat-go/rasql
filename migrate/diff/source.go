@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -72,14 +73,16 @@ func LoadSources(directory string) ([]Source, error) {
 	return sources, nil
 }
 
-func readSource(path string) ([]byte, error) {
+func readSource(path string) (data []byte, err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
 
-	data, err := io.ReadAll(io.LimitReader(file, maxSourceFileBytes+1))
+	data, err = io.ReadAll(io.LimitReader(file, maxSourceFileBytes+1))
 	if err != nil {
 		return nil, err
 	}
