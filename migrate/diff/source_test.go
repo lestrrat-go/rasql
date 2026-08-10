@@ -28,6 +28,17 @@ func TestLoadSourcesRejectsExcessiveAggregateSize(t *testing.T) {
 	require.ErrorContains(t, err, "aggregate byte limit")
 }
 
+func TestReadSourceLimitsReadToRemainingAggregateBudget(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "candidate.sql")
+	writeSparseSource(t, path, maxSourceFileBytes)
+
+	data, err := readSource(path, 1)
+
+	require.NoError(t, err)
+	require.Len(t, data, 2)
+}
+
 func TestLoadSourcesRejectsExcessiveSourceCount(t *testing.T) {
 	directory := t.TempDir()
 	for index := 0; index <= maxSourceCount; index++ {

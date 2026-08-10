@@ -46,7 +46,8 @@ func LoadSources(directory string) ([]Source, error) {
 		if len(sources) >= maxSourceCount {
 			return fmt.Errorf("schema directory %q exceeds source count limit of %d", directory, maxSourceCount)
 		}
-		data, err := readSource(path)
+		remainingBytes := maxSourceBytes - totalBytes
+		data, err := readSource(path, remainingBytes)
 		if err != nil {
 			return fmt.Errorf("read schema source %q: %w", path, err)
 		}
@@ -73,7 +74,7 @@ func LoadSources(directory string) ([]Source, error) {
 	return sources, nil
 }
 
-func readSource(path string) (data []byte, err error) {
+func readSource(path string, remainingBytes int64) (data []byte, err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -82,7 +83,11 @@ func readSource(path string) (data []byte, err error) {
 		err = errors.Join(err, file.Close())
 	}()
 
-	data, err = io.ReadAll(io.LimitReader(file, maxSourceFileBytes+1))
+	readLimit := int64(maxSourceFileBytes)
+	if remainingBytes < readLimit {
+		readLimit = remainingBytes
+	}
+	data, err = io.ReadAll(io.LimitReader(file, readLimit+1))
 	if err != nil {
 		return nil, err
 	}
