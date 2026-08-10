@@ -401,18 +401,6 @@ func normalizedTable(table *mysqlquery.CreateTableStatement, tableNames LowerCas
 	return normalized
 }
 
-func sameColumn(left mysqlquery.ColumnDefinition, right mysqlquery.ColumnDefinition, tableNames LowerCaseTableNames) bool {
-	left = normalizedColumn(left, tableNames)
-	right = normalizedColumn(right, tableNames)
-	return reflect.DeepEqual(left, right)
-}
-
-func sameTableConstraints(left []mysqlquery.TableConstraint, right []mysqlquery.TableConstraint, tableNames LowerCaseTableNames) bool {
-	left = normalizedTableConstraints(left, tableNames)
-	right = normalizedTableConstraints(right, tableNames)
-	return reflect.DeepEqual(left, right)
-}
-
 func normalizedColumn(column mysqlquery.ColumnDefinition, tableNames LowerCaseTableNames) mysqlquery.ColumnDefinition {
 	column.Name = normalizedIdentifier(column.Name)
 	if column.Constraints == nil {
