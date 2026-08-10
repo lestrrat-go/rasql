@@ -449,9 +449,9 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
 	mock.ExpectQuery("SHOW COLUMNS FROM information_schema.statistics LIKE 'EXPRESSION'").
 		WillReturnRows(sqlmock.NewRows([]string{"Field"}).AddRow("EXPRESSION"))
-	mock.ExpectQuery("SELECT index_name, non_unique = 0, column_name, sub_part, expression FROM information_schema\\.statistics.*index_name <> 'PRIMARY'").
+	mock.ExpectQuery("SELECT index_name, non_unique = 0, column_name, sub_part, expression, collation FROM information_schema\\.statistics.*index_name <> 'PRIMARY'").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}))
+		WillReturnRows(sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation"}))
 	mock.ExpectCommit()
 	mock.ExpectClose()
 

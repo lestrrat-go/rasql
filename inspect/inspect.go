@@ -191,7 +191,7 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 			}
 			queries.mysqlIndexHasExpression = hasExpression
 			if !hasExpression {
-				queries.indexes = "SELECT index_name, non_unique = 0, column_name, sub_part FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
+				queries.indexes = "SELECT index_name, non_unique = 0, column_name, sub_part, collation FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
 			}
 		}
 		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.argument(tableName), queries.mysqlIndexHasExpression)
@@ -1113,12 +1113,17 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 			var nullableColumn sql.NullString
 			var prefixLength sql.NullInt64
 			var expression sql.NullString
+			var collation sql.NullString
 			scanArgs := []any{&name, &unique, &nullableColumn, &prefixLength}
 			if mysqlIndexHasExpression {
 				scanArgs = append(scanArgs, &expression)
 			}
+			scanArgs = append(scanArgs, &collation)
 			if err := rows.Scan(scanArgs...); err != nil {
 				return nil, fmt.Errorf("inspect: scan index: %w", err)
+			}
+			if unique && strings.EqualFold(collation.String, "D") {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL descending unique index parts", name)
 			}
 			if prefixLength.Valid {
 				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL prefix index parts", name)
@@ -1264,7 +1269,7 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 		return informationQueries{
 			columns:    "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
 			primaryKey: "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
-			indexes:    "SELECT index_name, non_unique = 0, column_name, sub_part, expression FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index",
+			indexes:    "SELECT index_name, non_unique = 0, column_name, sub_part, expression, collation FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index",
 		}, nil
 	default:
 		return informationQueries{}, fmt.Errorf("inspect: unsupported dialect %q", name)
