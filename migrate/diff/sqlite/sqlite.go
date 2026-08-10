@@ -651,16 +651,6 @@ func createIndexStatement(index *sqlitequery.CreateIndexStatement) (generatedSta
 func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedStatement, []string, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
-	if baseline.normalized.Persistence != target.normalized.Persistence {
-		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.normalized.Name)))
-	}
-	if !ast.Equal(baseline.normalized.Options, target.normalized.Options) {
-		diagnostics = append(diagnostics, fmt.Sprintf("table %s options changed", displayName(target.normalized.Name)))
-	}
-	if !sameTableConstraints(baseline, target) {
-		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.normalized.Name)))
-	}
-
 	baselineColumns := make(map[string]sqlitequery.ColumnDefinition, len(baseline.normalized.Columns))
 	for _, column := range baseline.normalized.Columns {
 		baselineColumns[sqliteIdentifierKey(column.Name.Name)] = column
@@ -669,6 +659,22 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 	for _, column := range target.normalized.Columns {
 		targetColumns[sqliteIdentifierKey(column.Name.Name)] = column
 	}
+	addedColumns := make(map[string]struct{})
+	for key := range targetColumns {
+		if _, exists := baselineColumns[key]; !exists {
+			addedColumns[key] = struct{}{}
+		}
+	}
+	if baseline.normalized.Persistence != target.normalized.Persistence {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.normalized.Name)))
+	}
+	if !ast.Equal(baseline.normalized.Options, target.normalized.Options) {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s options changed", displayName(target.normalized.Name)))
+	}
+	if !sameTableConstraintsForAdditions(baseline, target, addedColumns) {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.normalized.Name)))
+	}
+
 	for _, column := range target.normalized.Columns {
 		key := sqliteIdentifierKey(column.Name.Name)
 		previous, exists := baselineColumns[key]
@@ -677,11 +683,12 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 				diagnostics = append(diagnostics, fmt.Sprintf("new column %s.%s %s", displayName(target.normalized.Name), column.Name.Name, diagnostic))
 				continue
 			}
+			addedColumn := targetColumn(target, column.Name.Name)
 			statement := &sqlitequery.AlterTableStatement{
 				Name: target.normalized.Name,
 				Action: sqlitequery.AlterTableAction{
 					Kind:   sqlitequery.AlterTableAddColumn,
-					Column: &column,
+					Column: &addedColumn,
 				},
 			}
 			sql, err := serializeWithReferenceActions(statement, foreignKeyActionsForColumn(target, column.Name.Name))
@@ -758,8 +765,26 @@ type tableConstraint struct {
 }
 
 func sameTableConstraints(left, right tableDefinition) bool {
-	leftConstraints := canonicalTableConstraints(left)
+	return sameTableConstraintLists(canonicalTableConstraints(left), canonicalTableConstraints(right))
+}
+
+func sameTableConstraintsForAdditions(left, right tableDefinition, addedColumns map[string]struct{}) bool {
 	rightConstraints := canonicalTableConstraints(right)
+	inlineForeignKeys := addedInlineForeignKeyConstraints(right, addedColumns)
+	if len(inlineForeignKeys) > 0 {
+		filtered := make([]tableConstraint, 0, len(rightConstraints))
+		for _, constraint := range rightConstraints {
+			if constraint.constraint.Kind == sqlitequery.ConstraintForeignKey && containsTableConstraint(inlineForeignKeys, constraint.constraint) {
+				continue
+			}
+			filtered = append(filtered, constraint)
+		}
+		rightConstraints = filtered
+	}
+	return sameTableConstraintLists(canonicalTableConstraints(left), rightConstraints)
+}
+
+func sameTableConstraintLists(leftConstraints, rightConstraints []tableConstraint) bool {
 	if len(leftConstraints) != len(rightConstraints) {
 		return false
 	}
@@ -780,6 +805,38 @@ func sameTableConstraints(left, right tableDefinition) bool {
 		}
 	}
 	return true
+}
+
+func addedInlineForeignKeyConstraints(table tableDefinition, addedColumns map[string]struct{}) []sqlitequery.TableConstraint {
+	constraints := make([]sqlitequery.TableConstraint, 0)
+	for _, column := range table.statement.Columns {
+		if _, ok := addedColumns[sqliteIdentifierKey(column.Name.Name)]; !ok {
+			continue
+		}
+		for _, constraint := range column.Constraints {
+			if constraint.Kind != sqlitequery.ConstraintReferences {
+				continue
+			}
+			constraints = append(constraints, sqlitequery.TableConstraint{
+				Name: constraint.Name,
+				Kind: sqlitequery.ConstraintForeignKey,
+				Columns: []sqlitequery.IndexedColumn{{
+					Expression: &sqlitequery.IdentifierExpression{Name: sqlitequery.QualifiedName{column.Name}},
+				}},
+				References: constraint.References,
+			})
+		}
+	}
+	return constraints
+}
+
+func containsTableConstraint(constraints []sqlitequery.TableConstraint, target sqlitequery.TableConstraint) bool {
+	for _, constraint := range constraints {
+		if ast.Equal(canonicalizeTableConstraint(constraint), canonicalizeTableConstraint(target)) {
+			return true
+		}
+	}
+	return false
 }
 
 func canonicalTableConstraints(table tableDefinition) []tableConstraint {

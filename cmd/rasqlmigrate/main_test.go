@@ -104,6 +104,27 @@ func TestRunDiffLivePreviewsSQLiteMigration(t *testing.T) {
 	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
 }
 
+func TestRunDiffLiveAddsNullableSQLiteInlineForeignKeyColumn(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE parents (id INTEGER PRIMARY KEY); CREATE TABLE children (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/children.sql", "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id));\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "children",
+		"-to", target,
+	}))
+	require.Equal(t, "-- 001_add_column_children_parent_id.sql: add column children.parent_id\nALTER TABLE children ADD COLUMN parent_id integer REFERENCES parents (id);\n", outputBuffer.String())
+}
+
 func TestRunDiffLiveInspectsMixedCaseSQLiteTable(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "application.db")
 	database, err := sql.Open("sqlite", dsn)
