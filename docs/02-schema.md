@@ -368,7 +368,7 @@ Two methods remain for code that only learns a column name while it runs. `users
 
 ## Read a table out of a database
 
-`inspect` turns live database metadata back into a `schema.Table`, normalizing native column types into logical ones. `Inspector.Table` looks up an unscoped table name. On SQLite, it searches `main`, `temp`, and attached databases; if the name exists in more than one of them, it returns the typed `*inspect.AmbiguousTableError` (also detectable with `inspect.ErrAmbiguousTable`) instead of choosing one. Use `Inspector.TableIn(ctx, databaseName, tableName)` to select `main`, `temp`, or an attached database. The returned `schema.Table.Schema` preserves that SQLite database name, so rendering or executing the descriptor continues to address the inspected scope. `TableIn` is supported only for SQLite.
+`inspect` turns live database metadata back into a `schema.Table`, normalizing native column types into logical ones. `Inspector.Table` looks up an unscoped table name. On SQLite, it searches `main`, `temp`, and attached databases; if the name exists in more than one of them, it returns the typed `*inspect.AmbiguousTableError` (also detectable with `inspect.ErrAmbiguousTable`) instead of choosing one. Use `Inspector.TableIn(ctx, databaseName, tableName)` to select `main`, `temp`, or an attached database. The returned `schema.Table.Schema` preserves that SQLite database name, so rendering or executing the descriptor continues to address the inspected scope. SQLite inspection requires a retained `*sql.Conn` or `*sql.Tx`, and the same handle must execute descriptors that refer to `temp` or an attached database because those schemas belong to one connection rather than the `*sql.DB` pool. `inspect.New` rejects a SQLite `*sql.DB`; `TableIn` is supported only for SQLite. The inspector falls back to each database's `sqlite_master` catalog when `PRAGMA table_list` is unavailable on older SQLite engines.
 
 <!-- INCLUDE(examples/inspect_sqlite_table_example_test.go) -->
 ```go
@@ -393,10 +393,15 @@ func Example_inspect_sqlite_table() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	database.SetMaxOpenConns(1)
 	defer func() { _ = database.Close() }()
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		fmt.Printf("failed to retain SQLite connection: %s\n", err)
+		return
+	}
+	defer func() { _ = connection.Close() }()
 	// Pretend these tables already exist in an application-owned SQLite database.
-	if _, err := database.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS aux"); err != nil {
+	if _, err := connection.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS aux"); err != nil {
 		fmt.Printf("failed to attach aux database: %s\n", err)
 		return
 	}
@@ -405,7 +410,7 @@ func Example_inspect_sqlite_table() {
 		"CREATE TABLE aux.users (id INTEGER PRIMARY KEY, aux_value TEXT)",
 		"CREATE TEMP TABLE users (id INTEGER PRIMARY KEY, temp_value TEXT)",
 	} {
-		if _, err := database.ExecContext(ctx, statement); err != nil {
+		if _, err := connection.ExecContext(ctx, statement); err != nil {
 			fmt.Printf("failed to create users table: %s\n", err)
 			return
 		}
@@ -413,7 +418,9 @@ func Example_inspect_sqlite_table() {
 
 	// An unscoped lookup does not guess when several databases contain users.
 	// The typed error exposes the conflicting database names to the caller.
-	inspector, err := inspect.New(database, dialect.SQLite())
+	// SQLite inspection stays on the retained connection because temp and
+	// attached databases belong to that connection.
+	inspector, err := inspect.New(connection, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
 		return

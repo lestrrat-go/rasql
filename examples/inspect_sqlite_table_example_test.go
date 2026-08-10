@@ -19,10 +19,15 @@ func Example_inspect_sqlite_table() {
 		fmt.Printf("failed to open SQLite database: %s\n", err)
 		return
 	}
-	database.SetMaxOpenConns(1)
 	defer func() { _ = database.Close() }()
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		fmt.Printf("failed to retain SQLite connection: %s\n", err)
+		return
+	}
+	defer func() { _ = connection.Close() }()
 	// Pretend these tables already exist in an application-owned SQLite database.
-	if _, err := database.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS aux"); err != nil {
+	if _, err := connection.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS aux"); err != nil {
 		fmt.Printf("failed to attach aux database: %s\n", err)
 		return
 	}
@@ -31,7 +36,7 @@ func Example_inspect_sqlite_table() {
 		"CREATE TABLE aux.users (id INTEGER PRIMARY KEY, aux_value TEXT)",
 		"CREATE TEMP TABLE users (id INTEGER PRIMARY KEY, temp_value TEXT)",
 	} {
-		if _, err := database.ExecContext(ctx, statement); err != nil {
+		if _, err := connection.ExecContext(ctx, statement); err != nil {
 			fmt.Printf("failed to create users table: %s\n", err)
 			return
 		}
@@ -39,7 +44,9 @@ func Example_inspect_sqlite_table() {
 
 	// An unscoped lookup does not guess when several databases contain users.
 	// The typed error exposes the conflicting database names to the caller.
-	inspector, err := inspect.New(database, dialect.SQLite())
+	// SQLite inspection stays on the retained connection because temp and
+	// attached databases belong to that connection.
+	inspector, err := inspect.New(connection, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
 		return
