@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
+	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -67,15 +68,13 @@ func (e *AmbiguousTableError) Error() string {
 	return fmt.Sprintf("inspect: table %q exists in multiple SQLite databases: %s", e.Table, strings.Join(e.Databases, ", "))
 }
 
-// Unwrap exposes ErrAmbiguousTable so errors.Is(err, ErrAmbiguousTable) works
-// alongside errors.As against *AmbiguousTableError.
 func (e *AmbiguousTableError) Unwrap() error {
 	return ErrAmbiguousTable
 }
 
 // ErrIncompleteMetadata is the sentinel wrapped by every
-// [IncompleteMetadataError], so callers that only need to detect a privilege
-// problem can use errors.Is instead of errors.As.
+// [IncompleteMetadataError], so callers can use errors.Is instead of
+// errors.As when they only need to detect a metadata mismatch.
 var ErrIncompleteMetadata = errors.New("inspect: incomplete table metadata")
 
 // IncompleteMetadataError reports that the inspecting role sees fewer
@@ -91,8 +90,7 @@ var ErrIncompleteMetadata = errors.New("inspect: incomplete table metadata")
 type IncompleteMetadataError struct {
 	// Table is the requested table name.
 	Table string
-	// Visible is the column count information_schema exposed to the
-	// inspecting role.
+	// Visible is the column count the metadata query exposed.
 	Visible int
 	// Actual is the true column count reported by the database catalog.
 	Actual int
@@ -114,10 +112,7 @@ func (e *IncompleteMetadataError) Unwrap() error {
 	return ErrIncompleteMetadata
 }
 
-// Queryer is implemented by *sql.DB, *sql.Conn, and *sql.Tx. SQLite
-// inspectors accept *sql.DB for ordinary main-database tables, but a retained
-// *sql.Conn or *sql.Tx is required for attached and temporary schemas because
-// they belong to one connection, not to *sql.DB as a pool.
+// Queryer is implemented by *sql.DB and *sql.Tx.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -140,23 +135,20 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 	return Inspector{queryer: queryer, dialect: d}, nil
 }
 
-// Table reads the supported schema metadata for tableName. For SQLite, it
-// returns [AmbiguousTableError] when the name exists in more than one
-// attached database; use [Inspector.TableIn] to select one database. For PostgreSQL it
-// returns [TableNotFoundError] when tableName does not exist and
+// Table reads the supported schema metadata for tableName. It returns
+// [TableNotFoundError] when tableName does not exist and
 // [IncompleteMetadataError] when the inspecting role's privileges hide some
 // or all of the table's columns.
+// SQLite returns [TableNotFoundError] when the table is absent and
+// [IncompleteMetadataError] when its catalog column count disagrees with the
+// rows returned by table_xinfo. See the package doc for the MySQL limitation,
+// which this method cannot detect.
 func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, error) {
 	return i.table(ctx, "", tableName)
 }
 
-// TableIn reads a SQLite table from databaseName. A retained *sql.Conn or
-// *sql.Tx is required for temporary and attached databases, and callers must
-// keep that same handle for later execution because those databases belong to
-// one connection. The returned descriptor keeps databaseName in
-// schema.Table.Schema so callers that render or execute it continue to address
-// the inspected database. It returns [TableNotFoundError] when the table is
-// absent from that database.
+// TableIn reads a SQLite table from databaseName using a retained connection
+// or transaction. The returned descriptor preserves databaseName in Schema.
 func (i Inspector) TableIn(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
 	return i.table(ctx, databaseName, tableName)
 }
@@ -576,23 +568,29 @@ func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableNa
 	if databaseName != "" && databaseName != "main" && !sqliteRetainedQueryer(i.queryer) {
 		return schema.Table{}, sqliteRetainedHandleError()
 	}
-	queryer, release, err := i.sqliteQueryer(ctx)
-	if err != nil {
-		return schema.Table{}, err
+	queryer := i.queryer
+	if database, ok := queryer.(*sql.DB); ok {
+		connection, err := database.Conn(ctx)
+		if err != nil {
+			return schema.Table{}, fmt.Errorf("inspect: acquire SQLite connection: %w", err)
+		}
+		defer func() { _ = connection.Close() }()
+		queryer = connection
 	}
-	defer release()
+	inspector := i
+	inspector.queryer = queryer
+	return inspector.sqliteTableOnConnection(ctx, databaseName, tableName)
+}
 
-	options, err := i.sqliteTableOptions(queryer, ctx, databaseName, tableName)
+func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
+	options, err := i.sqliteTableOptions(ctx, databaseName, tableName)
 	if err != nil {
 		return schema.Table{}, err
-	}
-	if options.database != "main" && !sqliteRetainedQueryer(i.queryer) {
-		return schema.Table{}, sqliteRetainedHandleError()
 	}
 	tableName = options.name
 
-	query := sqliteQualifiedPragma(options.database, "table_info", tableName)
-	rows, err := queryer.QueryContext(ctx, query)
+	query := sqliteQualifiedPragma(options.database, "table_xinfo", tableName)
+	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: read SQLite columns: %w", err)
 	}
@@ -604,6 +602,7 @@ func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableNa
 		notNull         int64
 		defaultValue    any
 		primaryPosition int64
+		columnType      schema.ColumnType
 	}
 	type primaryColumn struct {
 		position int64
@@ -611,15 +610,25 @@ func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableNa
 	}
 	metadata := make([]sqliteColumn, 0)
 	primaryColumns := make([]primaryColumn, 0)
+	var metadataRows int64
 	for rows.Next() {
+		metadataRows++
 		var ordinal int64
 		var name string
 		var databaseType string
 		var notNull int64
 		var defaultValue any
 		var primaryPosition int64
-		if err := rows.Scan(&ordinal, &name, &databaseType, &notNull, &defaultValue, &primaryPosition); err != nil {
+		var hidden int64
+		if err := rows.Scan(&ordinal, &name, &databaseType, &notNull, &defaultValue, &primaryPosition, &hidden); err != nil {
 			return schema.Table{}, fmt.Errorf("inspect: scan SQLite column: %w", err)
+		}
+		if hidden != 0 {
+			return schema.Table{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: hidden or generated column %q is not supported", tableName, name)
+		}
+		columnType, err := normalizeType(i.dialect.Name(), databaseType)
+		if err != nil {
+			return schema.Table{}, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
 		metadata = append(metadata, sqliteColumn{
 			name:            name,
@@ -627,6 +636,7 @@ func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableNa
 			notNull:         notNull,
 			defaultValue:    defaultValue,
 			primaryPosition: primaryPosition,
+			columnType:      columnType,
 		})
 		if primaryPosition > 0 {
 			primaryColumns = append(primaryColumns, primaryColumn{position: primaryPosition, name: name})
@@ -635,19 +645,28 @@ func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableNa
 	if err := rows.Err(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: iterate SQLite columns: %w", err)
 	}
-	_ = rows.Close()
+	if options.columnCount >= 0 && metadataRows != options.columnCount {
+		return schema.Table{}, &IncompleteMetadataError{Table: tableName, Visible: int(metadataRows), Actual: int(options.columnCount)}
+	}
 	if len(metadata) == 0 {
 		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
+	}
+	if options.withoutRowID || options.strict {
+		return schema.Table{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: STRICT and WITHOUT ROWID table options are unsupported", tableName)
+	}
+	definition, err := i.sqliteTableDefinition(ctx, options.database, tableName)
+	if err != nil {
+		return schema.Table{}, err
+	}
+	if err := validateSQLitePrimaryKey(definition, tableName); err != nil {
+		return schema.Table{}, err
 	}
 	rowIDAlias := false
 	for _, column := range metadata {
 		if column.primaryPosition == 0 || column.notNull != 0 || !strings.EqualFold(strings.TrimSpace(column.databaseType), "INTEGER") {
 			continue
 		}
-		rowIDAlias, err = i.sqliteRowIDAlias(ctx, queryer, options.database, tableName, column.name, len(primaryColumns))
-		if err != nil {
-			return schema.Table{}, err
-		}
+		rowIDAlias = sqliteStatementHasRowIDAlias(definition, column.name, len(primaryColumns))
 		break
 	}
 	columns := make([]schema.Column, 0, len(metadata))
@@ -657,13 +676,9 @@ func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableNa
 		// signed 64-bit value however it was declared, so even a column
 		// declared UNSIGNED BIG INT is signed storage. The descriptor records
 		// that truth rather than the declaration.
-		columnType, err := normalizeType(i.dialect.Name(), column.databaseType)
-		if err != nil {
-			return schema.Table{}, fmt.Errorf("inspect: column %q: %w", column.name, err)
-		}
 		columns = append(columns, schema.Column{
 			Name:     column.name,
-			Type:     columnType,
+			Type:     column.columnType,
 			Nullable: column.notNull == 0 && (!rowIDAlias || len(primaryColumns) != 1 || column.primaryPosition <= 0),
 			Default:  text(column.defaultValue),
 		})
@@ -675,344 +690,63 @@ func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableNa
 	for index, column := range primaryColumns {
 		primaryKey[index] = column.name
 	}
-	table := schema.Table{Schema: options.database, Name: tableName, Columns: columns, PrimaryKey: primaryKey}
+	indexes, uniqueConstraints, err := i.sqliteIndexes(ctx, options.database, tableName)
+	if err != nil {
+		return schema.Table{}, err
+	}
+	if definition != nil {
+		uniqueConstraints, err = sqliteUniqueConstraints(definition, tableName)
+		if err != nil {
+			return schema.Table{}, err
+		}
+	} else if len(uniqueConstraints) > 0 {
+		return schema.Table{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: UNIQUE constraint definitions are unavailable", tableName)
+	}
+	checks, err := sqliteChecks(definition, tableName)
+	if err != nil {
+		return schema.Table{}, err
+	}
+	foreignKeys, err := i.sqliteForeignKeys(ctx, options.database, tableName)
+	if err != nil {
+		return schema.Table{}, err
+	}
+	table := schema.Table{
+		Schema:            options.database,
+		Name:              tableName,
+		Columns:           columns,
+		PrimaryKey:        primaryKey,
+		UniqueConstraints: uniqueConstraints,
+		Checks:            checks,
+		Indexes:           indexes,
+		ForeignKeys:       foreignKeys,
+	}
 	if err := table.Validate(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
 }
 
-func (i Inspector) sqliteRowIDAlias(ctx context.Context, queryer Queryer, databaseName, tableName, columnName string, primaryKeyColumns int) (bool, error) {
-	if primaryKeyColumns != 1 {
-		return false, nil
-	}
-	declaration, err := i.sqliteTableDeclaration(ctx, queryer, databaseName, tableName)
-	if err != nil {
-		return false, err
-	}
-	return sqliteDeclarationHasRowIDAlias(declaration, columnName), nil
-}
-
-func (i Inspector) sqliteTableDeclaration(ctx context.Context, queryer Queryer, databaseName, tableName string) (string, error) {
-	if databaseName != "" {
-		declaration, _, err := i.sqliteCatalogDeclaration(ctx, queryer, databaseName, tableName)
-		return declaration, err
-	}
-	for _, schemaName := range []string{"temp", "main"} {
-		declaration, found, err := i.sqliteCatalogDeclaration(ctx, queryer, schemaName, tableName)
-		if err != nil {
-			return "", err
-		}
-		if found {
-			return declaration, nil
-		}
-	}
-
-	rows, err := queryer.QueryContext(ctx, "PRAGMA database_list")
-	if err != nil {
-		return "", fmt.Errorf("inspect: read SQLite database list: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	attachedSchemas := make([]string, 0)
-	for rows.Next() {
-		var sequence int64
-		var schemaName string
-		var filename string
-		if err := rows.Scan(&sequence, &schemaName, &filename); err != nil {
-			return "", fmt.Errorf("inspect: scan SQLite database list: %w", err)
-		}
-		if schemaName == "temp" || schemaName == "main" {
-			continue
-		}
-		attachedSchemas = append(attachedSchemas, schemaName)
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("inspect: iterate SQLite database list: %w", err)
-	}
-	_ = rows.Close()
-	for _, schemaName := range attachedSchemas {
-		declaration, found, err := i.sqliteCatalogDeclaration(ctx, queryer, schemaName, tableName)
-		if err != nil {
-			return "", err
-		}
-		if found {
-			return declaration, nil
-		}
-	}
-	return "", nil
-}
-
-func (i Inspector) sqliteCatalogDeclaration(ctx context.Context, queryer Queryer, schemaName, tableName string) (string, bool, error) {
-	query := "SELECT sql FROM " + sqliteQuoteIdentifier(schemaName) + ".sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE"
-	rows, err := queryer.QueryContext(ctx, query, tableName)
-	if err != nil {
-		return "", false, fmt.Errorf("inspect: read SQLite %s table declaration: %w", schemaName, err)
-	}
-	defer func() { _ = rows.Close() }()
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return "", false, fmt.Errorf("inspect: iterate SQLite %s table declaration: %w", schemaName, err)
-		}
-		return "", false, nil
-	}
-	var declaration sql.NullString
-	if err := rows.Scan(&declaration); err != nil {
-		return "", false, fmt.Errorf("inspect: scan SQLite %s table declaration: %w", schemaName, err)
-	}
-	if err := rows.Err(); err != nil {
-		return "", false, fmt.Errorf("inspect: iterate SQLite %s table declaration: %w", schemaName, err)
-	}
-	return declaration.String, true, nil
-}
-
-func sqliteQuoteIdentifier(identifier string) string {
-	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
-}
-
-type sqliteDeclarationToken struct {
-	text   string
-	quoted bool
-}
-
-func sqliteDeclarationHasRowIDAlias(declaration, columnName string) bool {
-	tokens, bodyStart, bodyEnd, ok := sqliteDeclarationTokens(declaration)
-	if !ok || sqliteDeclarationHasWithoutRowID(tokens[bodyEnd+1:]) {
-		return false
-	}
-	for _, definition := range sqliteDeclarationDefinitions(tokens[bodyStart+1 : bodyEnd]) {
-		if sqliteDeclarationHasTablePrimaryKey(definition, columnName) {
-			return true
-		}
-		if len(definition) < 4 || !sqliteDeclarationIdentifierEqual(definition[0], columnName) {
-			continue
-		}
-		if !strings.EqualFold(definition[1].text, "INTEGER") || (len(definition) > 2 && !sqliteDeclarationConstraintStart(definition[2])) {
-			continue
-		}
-		depth := 0
-		for index := 2; index+1 < len(definition); index++ {
-			switch definition[index].text {
-			case "(":
-				depth++
-				continue
-			case ")":
-				depth--
-				continue
-			}
-			if depth != 0 {
-				continue
-			}
-			if definition[index].quoted || !strings.EqualFold(definition[index].text, "PRIMARY") || definition[index+1].quoted || !strings.EqualFold(definition[index+1].text, "KEY") {
-				continue
-			}
-			return index+2 >= len(definition) || definition[index+2].quoted || !strings.EqualFold(definition[index+2].text, "DESC")
-		}
-	}
-	return false
-}
-
-func sqliteDeclarationHasTablePrimaryKey(definition []sqliteDeclarationToken, columnName string) bool {
-	index := 0
-	if len(definition) > index && !definition[index].quoted && strings.EqualFold(definition[index].text, "CONSTRAINT") {
-		index += 2
-	}
-	if index+3 >= len(definition) || definition[index].quoted || !strings.EqualFold(definition[index].text, "PRIMARY") || definition[index+1].quoted || !strings.EqualFold(definition[index+1].text, "KEY") || definition[index+2].text != "(" {
-		return false
-	}
-	index += 3
-	if index >= len(definition) || !sqliteDeclarationIdentifierEqual(definition[index], columnName) {
-		return false
-	}
-	index++
-	if index < len(definition) && !definition[index].quoted && strings.EqualFold(definition[index].text, "COLLATE") {
-		index++
-		if index >= len(definition) || definition[index].text == ")" {
-			return false
-		}
-		index++
-	}
-	if index < len(definition) && !definition[index].quoted && (strings.EqualFold(definition[index].text, "ASC") || strings.EqualFold(definition[index].text, "DESC")) {
-		index++
-	}
-	return index < len(definition) && definition[index].text == ")"
-}
-
-func sqliteDeclarationConstraintStart(token sqliteDeclarationToken) bool {
-	if token.quoted {
-		return false
-	}
-	switch strings.ToUpper(token.text) {
-	case "CONSTRAINT", "NOT", "NULL", "DEFAULT", "PRIMARY", "UNIQUE", "CHECK", "REFERENCES", "COLLATE", "GENERATED", "ALWAYS", "AS":
-		return true
-	default:
-		return false
-	}
-}
-
-func sqliteDeclarationIdentifierEqual(token sqliteDeclarationToken, columnName string) bool {
-	return strings.EqualFold(token.text, columnName)
-}
-
-func sqliteDeclarationHasWithoutRowID(tokens []sqliteDeclarationToken) bool {
-	for index := 0; index+1 < len(tokens); index++ {
-		if !tokens[index].quoted && strings.EqualFold(tokens[index].text, "WITHOUT") && !tokens[index+1].quoted && strings.EqualFold(tokens[index+1].text, "ROWID") {
-			return true
-		}
-	}
-	return false
-}
-
-func sqliteDeclarationDefinitions(tokens []sqliteDeclarationToken) [][]sqliteDeclarationToken {
-	definitions := make([][]sqliteDeclarationToken, 0)
-	start := 0
-	depth := 0
-	for index, token := range tokens {
-		switch token.text {
-		case "(":
-			depth++
-		case ")":
-			depth--
-		case ",":
-			if depth == 0 {
-				definitions = append(definitions, tokens[start:index])
-				start = index + 1
-			}
-		}
-	}
-	return append(definitions, tokens[start:])
-}
-
-func sqliteDeclarationTokens(declaration string) ([]sqliteDeclarationToken, int, int, bool) {
-	tokens := make([]sqliteDeclarationToken, 0)
-	for index := 0; index < len(declaration); {
-		switch declaration[index] {
-		case ' ', '\t', '\n', '\r', '\f':
-			index++
-		case '-',
-			'/':
-			if index+1 < len(declaration) && declaration[index] == '-' {
-				index += 2
-				for index < len(declaration) && declaration[index] != '\n' {
-					index++
-				}
-				continue
-			}
-			if index+1 < len(declaration) && declaration[index] == '/' && declaration[index+1] == '*' {
-				index += 2
-				for index+1 < len(declaration) && (declaration[index] != '*' || declaration[index+1] != '/') {
-					index++
-				}
-				if index+1 >= len(declaration) {
-					return nil, 0, 0, false
-				}
-				index += 2
-				continue
-			}
-			fallthrough
-		case '(', ')', ',':
-			tokens = append(tokens, sqliteDeclarationToken{text: string(declaration[index])})
-			index++
-		case '\'', '"', '`', '[':
-			quote := declaration[index]
-			closeQuote := quote
-			if quote == '[' {
-				closeQuote = ']'
-			}
-			index++
-			var value strings.Builder
-			closed := false
-			for index < len(declaration) {
-				if declaration[index] == closeQuote {
-					if index+1 < len(declaration) && declaration[index+1] == closeQuote {
-						value.WriteByte(closeQuote)
-						index += 2
-						continue
-					}
-					index++
-					tokens = append(tokens, sqliteDeclarationToken{text: value.String(), quoted: quote != '\''})
-					closed = true
-					break
-				}
-				value.WriteByte(declaration[index])
-				index++
-			}
-			if !closed {
-				return nil, 0, 0, false
-			}
-		default:
-			start := index
-			for index < len(declaration) && !strings.ContainsRune(" \t\n\r\f(),", rune(declaration[index])) && declaration[index] != '\'' && declaration[index] != '"' && declaration[index] != '`' && declaration[index] != '[' {
-				if index+1 < len(declaration) && ((declaration[index] == '-' && declaration[index+1] == '-') || (declaration[index] == '/' && declaration[index+1] == '*')) {
-					break
-				}
-				index++
-			}
-			tokens = append(tokens, sqliteDeclarationToken{text: declaration[start:index]})
-		}
-	}
-	open := -1
-	depth := 0
-	close := -1
-	for index, token := range tokens {
-		if token.text == "(" {
-			if open < 0 {
-				open = index
-			}
-			depth++
-		}
-		if token.text == ")" {
-			depth--
-			if depth == 0 {
-				close = index
-				break
-			}
-		}
-	}
-	return tokens, open, close, open >= 0 && close > open
-}
-
-func (i Inspector) sqliteQueryer(ctx context.Context) (Queryer, func(), error) {
-	database, ok := i.queryer.(*sql.DB)
-	if !ok {
-		return i.queryer, func() {}, nil
-	}
-	connection, err := database.Conn(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("inspect: pin SQLite connection: %w", err)
-	}
-	return connection, func() { _ = connection.Close() }, nil
-}
-
-func sqliteRetainedQueryer(queryer Queryer) bool {
-	switch queryer.(type) {
-	case *sql.Conn, *sql.Tx:
-		return true
-	default:
-		return false
-	}
-}
-
-func sqliteRetainedHandleError() error {
-	return fmt.Errorf("inspect: SQLite inspection requires a retained *sql.Conn or *sql.Tx for temporary or attached databases")
-}
-
 type sqliteTableOptions struct {
-	database string
-	name     string
+	database     string
+	name         string
+	kind         string
+	columnCount  int64
+	withoutRowID bool
+	strict       bool
 }
 
-func (i Inspector) sqliteTableOptions(queryer Queryer, ctx context.Context, databaseName string, tableName string) (sqliteTableOptions, error) {
+func (i Inspector) sqliteTableOptions(ctx context.Context, databaseName string, tableName string) (sqliteTableOptions, error) {
 	query := `PRAGMA table_list("` + sqlitePragmaIdentifier(tableName) + `")`
 	if databaseName != "" {
 		query = `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".table_list("` + sqlitePragmaIdentifier(tableName) + `")`
 	}
-	matches, tableListErr := i.sqliteTableList(queryer, ctx, query)
+	matches, tableListErr := i.sqliteTableList(ctx, query)
 	if tableListErr == nil && len(matches) > 0 {
 		return resolveSQLiteTableOptions(databaseName, tableName, matches)
 	}
 
 	// PRAGMA table_list is unavailable before SQLite 3.37; sqlite_master keeps those engines supported.
-	legacyMatches, err := i.sqliteLegacyTableOptions(queryer, ctx, databaseName, tableName)
+	legacyMatches, err := i.sqliteLegacyTableOptions(ctx, databaseName, tableName)
 	if err != nil {
 		if tableListErr != nil {
 			return sqliteTableOptions{}, errors.Join(tableListErr, err)
@@ -1022,8 +756,8 @@ func (i Inspector) sqliteTableOptions(queryer Queryer, ctx context.Context, data
 	return resolveSQLiteTableOptions(databaseName, tableName, legacyMatches)
 }
 
-func (i Inspector) sqliteTableList(queryer Queryer, ctx context.Context, query string) ([]sqliteTableOptions, error) {
-	rows, err := queryer.QueryContext(ctx, query)
+func (i Inspector) sqliteTableList(ctx context.Context, query string) ([]sqliteTableOptions, error) {
+	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read SQLite table scope: %w", err)
 	}
@@ -1033,10 +767,13 @@ func (i Inspector) sqliteTableList(queryer Queryer, ctx context.Context, query s
 	for rows.Next() {
 		var candidate sqliteTableOptions
 		var kind string
-		var columnCount, withoutRowID, strict int64
-		if err := rows.Scan(&candidate.database, &candidate.name, &kind, &columnCount, &withoutRowID, &strict); err != nil {
+		var withoutRowID, strict int64
+		if err := rows.Scan(&candidate.database, &candidate.name, &kind, &candidate.columnCount, &withoutRowID, &strict); err != nil {
 			return nil, fmt.Errorf("inspect: scan SQLite table scope: %w", err)
 		}
+		candidate.kind = kind
+		candidate.withoutRowID = withoutRowID != 0
+		candidate.strict = strict != 0
 		matches = append(matches, candidate)
 	}
 	if err := rows.Err(); err != nil {
@@ -1045,10 +782,10 @@ func (i Inspector) sqliteTableList(queryer Queryer, ctx context.Context, query s
 	return matches, nil
 }
 
-func (i Inspector) sqliteLegacyTableOptions(queryer Queryer, ctx context.Context, databaseName string, tableName string) ([]sqliteTableOptions, error) {
+func (i Inspector) sqliteLegacyTableOptions(ctx context.Context, databaseName string, tableName string) ([]sqliteTableOptions, error) {
 	databases := []string{databaseName}
 	if databaseName == "" {
-		rows, err := queryer.QueryContext(ctx, "PRAGMA database_list")
+		rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
 		if err != nil {
 			return nil, fmt.Errorf("inspect: read SQLite databases: %w", err)
 		}
@@ -1074,7 +811,7 @@ func (i Inspector) sqliteLegacyTableOptions(queryer Queryer, ctx context.Context
 			return nil, fmt.Errorf("inspect: SQLite database %q cannot be represented: %w", database, err)
 		}
 		query := `SELECT name, type FROM "` + sqlitePragmaIdentifier(database) + `".sqlite_master WHERE name = ? COLLATE NOCASE AND type IN ('table', 'view')`
-		rows, err := queryer.QueryContext(ctx, query, tableName)
+		rows, err := i.queryer.QueryContext(ctx, query, tableName)
 		if err != nil {
 			return nil, fmt.Errorf("inspect: read SQLite database %q tables: %w", database, err)
 		}
@@ -1084,7 +821,7 @@ func (i Inspector) sqliteLegacyTableOptions(queryer Queryer, ctx context.Context
 				_ = rows.Close()
 				return nil, fmt.Errorf("inspect: scan SQLite database %q table: %w", database, err)
 			}
-			matches = append(matches, sqliteTableOptions{database: database, name: name})
+			matches = append(matches, sqliteTableOptions{database: database, name: name, kind: kind, columnCount: -1})
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
@@ -1112,6 +849,9 @@ func resolveSQLiteTableOptions(databaseName string, tableName string, matches []
 		}
 		return sqliteTableOptions{}, &AmbiguousTableError{Table: tableName, Databases: databases}
 	}
+	if !strings.EqualFold(matches[0].kind, "table") {
+		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: table kind %q is unsupported", tableName, matches[0].kind)
+	}
 	if err := schema.ValidateIdentifier(matches[0].database); err != nil {
 		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite database %q cannot be represented: %w", matches[0].database, err)
 	}
@@ -1121,11 +861,659 @@ func resolveSQLiteTableOptions(databaseName string, tableName string, matches []
 	return matches[0], nil
 }
 
+func sqliteRetainedQueryer(queryer Queryer) bool {
+	switch queryer.(type) {
+	case *sql.Conn, *sql.Tx:
+		return true
+	default:
+		return false
+	}
+}
+
+func sqliteRetainedHandleError() error {
+	return fmt.Errorf("inspect: SQLite inspection requires a retained *sql.Conn or *sql.Tx for temporary or attached databases")
+}
+
+func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tableName string) (*sqlitequery.CreateTableStatement, error) {
+	query := `SELECT sql FROM "` + sqlitePragmaIdentifier(databaseName) + `".sqlite_master WHERE type = 'table' AND name = ?`
+	rows, err := i.queryer.QueryContext(ctx, query, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read SQLite table definition: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
+		}
+		return nil, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
+	}
+	var definition sql.NullString
+	if err := rows.Scan(&definition); err != nil {
+		return nil, fmt.Errorf("inspect: scan SQLite table definition: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
+	}
+	if !definition.Valid || definition.String == "" {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unavailable", tableName)
+	}
+	if sqliteDefinitionContainsVirtualTableKeyword(definition.String) {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE VIRTUAL TABLE definitions are unsupported", tableName)
+	}
+	if sqliteDefinitionContainsForeignKeyKeyword(definition.String) {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: DEFERRABLE and INITIALLY foreign-key clauses are unsupported", tableName)
+	}
+	statement, err := sqlitequery.ParseStatement(sqliteNormalizeForeignKeyActions(definition.String))
+	if err != nil {
+		if strings.Contains(strings.ToUpper(definition.String), "CHECK") {
+			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition contains an unsupported CHECK form: %w", tableName, err)
+		}
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unsupported: %w", tableName, err)
+	}
+	createTable, ok := statement.(*sqlitequery.CreateTableStatement)
+	if !ok || !strings.EqualFold(createTable.Name.String(), tableName) {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
+	}
+	if createTable.As != nil {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE TABLE AS SELECT definitions are unsupported", tableName)
+	}
+	return createTable, nil
+}
+
+func sqliteDefinitionContainsVirtualTableKeyword(definition string) bool {
+	index, ok := sqliteMatchKeyword(definition, sqliteSkipSpaceAndComments(definition, 0), "CREATE")
+	if !ok {
+		return false
+	}
+	index, ok = sqliteMatchKeyword(definition, sqliteSkipSpaceAndComments(definition, index), "VIRTUAL")
+	if !ok {
+		return false
+	}
+	_, ok = sqliteMatchKeyword(definition, sqliteSkipSpaceAndComments(definition, index), "TABLE")
+	return ok
+}
+
+func sqliteNormalizeForeignKeyActions(definition string) string {
+	var normalized strings.Builder
+	normalized.Grow(len(definition))
+	references := false
+	parentheses := 0
+	copied := 0
+	for index := 0; index < len(definition); {
+		switch definition[index] {
+		case '\'', '"', '`':
+			index = skipSQLiteQuoted(definition, index, definition[index])
+			continue
+		case '[':
+			index++
+			for index < len(definition) {
+				if definition[index] == ']' {
+					index++
+					break
+				}
+				index++
+			}
+			continue
+		case '-':
+			if index+1 < len(definition) && definition[index+1] == '-' {
+				index += 2
+				for index < len(definition) && definition[index] != '\n' {
+					index++
+				}
+				continue
+			}
+		case '/':
+			if index+1 < len(definition) && definition[index+1] == '*' {
+				index += 2
+				for index+1 < len(definition) && (definition[index] != '*' || definition[index+1] != '/') {
+					index++
+				}
+				if index+1 < len(definition) {
+					index += 2
+				}
+				continue
+			}
+		case '(':
+			parentheses++
+			index++
+			continue
+		case ')':
+			if parentheses > 0 {
+				parentheses--
+			}
+			index++
+			continue
+		case ',':
+			if parentheses == 1 {
+				references = false
+			}
+			index++
+			continue
+		}
+		if !sqliteIdentifierStart(definition[index]) {
+			index++
+			continue
+		}
+		start := index
+		index++
+		for index < len(definition) && sqliteIdentifierPart(definition[index]) {
+			index++
+		}
+		token := definition[start:index]
+		if references && strings.EqualFold(token, "ON") {
+			if end, ok := sqliteForeignKeyActionEnd(definition, start); ok {
+				normalized.WriteString(definition[copied:start])
+				normalized.WriteByte(' ')
+				index = end
+				copied = index
+				continue
+			}
+		}
+		if strings.EqualFold(token, "REFERENCES") && parentheses == 1 {
+			references = true
+		}
+	}
+	normalized.WriteString(definition[copied:])
+	return normalized.String()
+}
+
+func sqliteForeignKeyActionEnd(definition string, index int) (int, bool) {
+	index, ok := sqliteMatchKeyword(definition, index, "ON")
+	if !ok {
+		return 0, false
+	}
+	action := index
+	index, ok = sqliteMatchKeyword(definition, action, "DELETE")
+	if !ok {
+		index, ok = sqliteMatchKeyword(definition, action, "UPDATE")
+		if !ok {
+			return 0, false
+		}
+	}
+	if next, ok := sqliteMatchKeyword(definition, index, "NO"); ok {
+		return sqliteMatchKeyword(definition, next, "ACTION")
+	}
+	if next, ok := sqliteMatchKeyword(definition, index, "SET"); ok {
+		if next, ok = sqliteMatchKeyword(definition, next, "NULL"); ok {
+			return next, true
+		}
+		return sqliteMatchKeyword(definition, next, "DEFAULT")
+	}
+	if next, ok := sqliteMatchKeyword(definition, index, "RESTRICT"); ok {
+		return next, true
+	}
+	return sqliteMatchKeyword(definition, index, "CASCADE")
+}
+
+func sqliteMatchKeyword(value string, index int, keyword string) (int, bool) {
+	index = sqliteSkipSpaceAndComments(value, index)
+	if index+len(keyword) > len(value) || !strings.EqualFold(value[index:index+len(keyword)], keyword) {
+		return 0, false
+	}
+	end := index + len(keyword)
+	if end < len(value) && sqliteIdentifierPart(value[end]) {
+		return 0, false
+	}
+	return end, true
+}
+
+func sqliteSkipSpaceAndComments(value string, index int) int {
+	for {
+		start := index
+		for index < len(value) {
+			switch value[index] {
+			case ' ', '\t', '\n', '\r', '\f':
+				index++
+			default:
+				goto comments
+			}
+		}
+	comments:
+		if index+1 < len(value) && value[index] == '-' && value[index+1] == '-' {
+			index += 2
+			for index < len(value) && value[index] != '\n' {
+				index++
+			}
+			continue
+		}
+		if index+1 < len(value) && value[index] == '/' && value[index+1] == '*' {
+			index += 2
+			for index+1 < len(value) && (value[index] != '*' || value[index+1] != '/') {
+				index++
+			}
+			if index+1 < len(value) {
+				index += 2
+			}
+			continue
+		}
+		if index == start {
+			return index
+		}
+	}
+}
+
+func sqliteDefinitionContainsForeignKeyKeyword(definition string) bool {
+	references := false
+	parentheses := 0
+	for index := 0; index < len(definition); {
+		switch definition[index] {
+		case '\'', '"', '`':
+			index = skipSQLiteQuoted(definition, index, definition[index])
+			continue
+		case '[':
+			index++
+			for index < len(definition) {
+				if definition[index] == ']' {
+					index++
+					break
+				}
+				index++
+			}
+			continue
+		case '-':
+			if index+1 < len(definition) && definition[index+1] == '-' {
+				index += 2
+				for index < len(definition) && definition[index] != '\n' {
+					index++
+				}
+				continue
+			}
+		case '/':
+			if index+1 < len(definition) && definition[index+1] == '*' {
+				index += 2
+				for index+1 < len(definition) && (definition[index] != '*' || definition[index+1] != '/') {
+					index++
+				}
+				if index+1 < len(definition) {
+					index += 2
+				}
+				continue
+			}
+		case '(':
+			parentheses++
+			index++
+			continue
+		case ')':
+			if parentheses > 0 {
+				parentheses--
+			}
+			index++
+			continue
+		case ',':
+			if parentheses == 1 {
+				references = false
+			}
+			index++
+			continue
+		}
+		if !sqliteIdentifierStart(definition[index]) {
+			index++
+			continue
+		}
+		start := index
+		index++
+		for index < len(definition) && sqliteIdentifierPart(definition[index]) {
+			index++
+		}
+		token := definition[start:index]
+		if strings.EqualFold(token, "REFERENCES") {
+			references = true
+		}
+		if references && (strings.EqualFold(token, "DEFERRABLE") || strings.EqualFold(token, "INITIALLY")) {
+			return true
+		}
+	}
+	return false
+}
+
+func skipSQLiteQuoted(value string, index int, quote byte) int {
+	index++
+	for index < len(value) {
+		if value[index] != quote {
+			index++
+			continue
+		}
+		if index+1 < len(value) && value[index+1] == quote {
+			index += 2
+			continue
+		}
+		return index + 1
+	}
+	return len(value)
+}
+
+func sqliteIdentifierStart(value byte) bool {
+	return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+}
+
+func sqliteIdentifierPart(value byte) bool {
+	return sqliteIdentifierStart(value) || value >= '0' && value <= '9' || value == '$'
+}
+
+func sqliteStatementHasRowIDAlias(statement *sqlitequery.CreateTableStatement, columnName string, primaryKeyColumns int) bool {
+	if statement == nil || primaryKeyColumns != 1 {
+		return false
+	}
+	for _, column := range statement.Columns {
+		if !strings.EqualFold(column.Name.Name, columnName) {
+			continue
+		}
+		for _, constraint := range column.Constraints {
+			if constraint.Kind == sqlitequery.ConstraintPrimaryKey && !constraint.Autoincrement && constraint.Conflict == sqlitequery.ConflictDefault && constraint.Direction != sqlitequery.SortDescending {
+				return true
+			}
+		}
+	}
+	for _, constraint := range statement.Constraints {
+		if constraint.Kind != sqlitequery.ConstraintPrimaryKey || len(constraint.Columns) != 1 {
+			continue
+		}
+		column := constraint.Columns[0]
+		expression, ok := column.Expression.(*sqlitequery.IdentifierExpression)
+		if !ok || expression == nil || len(expression.Name) != 1 || !strings.EqualFold(expression.Name[0].Name, columnName) {
+			continue
+		}
+		if column.Collation == nil && column.Direction != sqlitequery.SortDescending {
+			return true
+		}
+	}
+	return false
+}
+
+func validateSQLitePrimaryKey(statement *sqlitequery.CreateTableStatement, tableName string) error {
+	if statement == nil {
+		return nil
+	}
+	for _, column := range statement.Columns {
+		for _, constraint := range column.Constraints {
+			if constraint.Kind != sqlitequery.ConstraintPrimaryKey {
+				continue
+			}
+			if constraint.Autoincrement || constraint.Conflict != sqlitequery.ConflictDefault {
+				return fmt.Errorf("inspect: SQLite table %q cannot be represented: AUTOINCREMENT and primary-key conflict resolution are unsupported", tableName)
+			}
+		}
+	}
+	for _, constraint := range statement.Constraints {
+		if constraint.Kind != sqlitequery.ConstraintPrimaryKey {
+			continue
+		}
+		if constraint.Conflict != sqlitequery.ConflictDefault {
+			return fmt.Errorf("inspect: SQLite table %q cannot be represented: AUTOINCREMENT and primary-key conflict resolution are unsupported", tableName)
+		}
+	}
+	return nil
+}
+
+func sqliteUniqueConstraints(statement *sqlitequery.CreateTableStatement, tableName string) ([]schema.UniqueConstraint, error) {
+	if statement == nil {
+		return nil, nil
+	}
+	constraints := make([]schema.UniqueConstraint, 0)
+	for _, column := range statement.Columns {
+		for _, constraint := range column.Constraints {
+			if constraint.Kind != sqlitequery.ConstraintUnique {
+				continue
+			}
+			if constraint.Conflict != sqlitequery.ConflictDefault {
+				return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: UNIQUE conflict resolution is unsupported", tableName)
+			}
+			constraints = append(constraints, schema.UniqueConstraint{Name: sqliteIdentifierName(constraint.Name), Columns: []string{column.Name.Name}})
+		}
+	}
+	for _, constraint := range statement.Constraints {
+		if constraint.Kind != sqlitequery.ConstraintUnique {
+			continue
+		}
+		if constraint.Conflict != sqlitequery.ConflictDefault {
+			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: UNIQUE conflict resolution is unsupported", tableName)
+		}
+		columns := make([]string, len(constraint.Columns))
+		for index, column := range constraint.Columns {
+			expression, ok := column.Expression.(*sqlitequery.IdentifierExpression)
+			if !ok || expression == nil || len(expression.Name) != 1 || column.Collation != nil || column.Direction != sqlitequery.SortDefault {
+				return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: UNIQUE constraints with expressions, collations, or ordering are unsupported", tableName)
+			}
+			columns[index] = expression.Name[0].Name
+		}
+		constraints = append(constraints, schema.UniqueConstraint{Name: sqliteIdentifierName(constraint.Name), Columns: columns})
+	}
+	return constraints, nil
+}
+
+func sqliteChecks(statement *sqlitequery.CreateTableStatement, tableName string) ([]schema.CheckConstraint, error) {
+	if statement == nil {
+		return nil, nil
+	}
+	checks := make([]schema.CheckConstraint, 0)
+	for _, column := range statement.Columns {
+		for _, constraint := range column.Constraints {
+			if constraint.Kind != sqlitequery.ConstraintCheck {
+				continue
+			}
+			expression, err := sqliteExpressionSQL(constraint.Expression)
+			if err != nil {
+				return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: serialize CHECK constraint: %w", tableName, err)
+			}
+			checks = append(checks, schema.CheckConstraint{Name: sqliteIdentifierName(constraint.Name), Expression: expression})
+		}
+	}
+	for _, constraint := range statement.Constraints {
+		if constraint.Kind != sqlitequery.ConstraintCheck {
+			continue
+		}
+		expression, err := sqliteExpressionSQL(constraint.Expression)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: serialize CHECK constraint: %w", tableName, err)
+		}
+		checks = append(checks, schema.CheckConstraint{Name: sqliteIdentifierName(constraint.Name), Expression: expression})
+	}
+	return checks, nil
+}
+
+func sqliteExpressionSQL(expression sqlitequery.Expression) (string, error) {
+	statement := &sqlitequery.CreateTableStatement{
+		Name:        sqlitequery.QualifiedName{{Name: "rasql_check"}},
+		Columns:     []sqlitequery.ColumnDefinition{{Name: sqlitequery.Identifier{Name: "value"}}},
+		Constraints: []sqlitequery.TableConstraint{{Kind: sqlitequery.ConstraintCheck, Expression: expression}},
+	}
+	serialized, err := sqlitequery.SerializeStatement(statement)
+	if err != nil {
+		return "", err
+	}
+	const prefix = "CREATE TABLE rasql_check (value, CHECK ("
+	const suffix = "))"
+	if !strings.HasPrefix(serialized, prefix) || !strings.HasSuffix(serialized, suffix) {
+		return "", fmt.Errorf("unexpected serialized CHECK shape %q", serialized)
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(serialized, prefix), suffix), nil
+}
+
+func sqliteIdentifierName(identifier *sqlitequery.Identifier) string {
+	if identifier == nil {
+		return ""
+	}
+	return identifier.Name
+}
+
+func (i Inspector) sqliteForeignKeys(ctx context.Context, databaseName, tableName string) ([]schema.ForeignKey, error) {
+	query := sqliteQualifiedPragma(databaseName, "foreign_key_list", tableName)
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read SQLite foreign keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	type foreignKey struct {
+		id             int64
+		key            schema.ForeignKey
+		referencedRows int64
+	}
+	keys := make([]foreignKey, 0)
+	for rows.Next() {
+		var id, sequence int64
+		var referencedTable, column string
+		var referencedColumn sql.NullString
+		var onUpdate, onDelete, match string
+		if err := rows.Scan(&id, &sequence, &referencedTable, &column, &referencedColumn, &onUpdate, &onDelete, &match); err != nil {
+			return nil, fmt.Errorf("inspect: scan SQLite foreign key: %w", err)
+		}
+		if match != "" && !strings.EqualFold(match, "NONE") && !strings.EqualFold(match, "SIMPLE") {
+			return nil, fmt.Errorf("inspect: SQLite foreign key on table %q cannot be represented: MATCH %s is unsupported", tableName, match)
+		}
+		deleteAction, err := sqliteReferenceAction(onDelete)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: SQLite foreign key on table %q: %w", tableName, err)
+		}
+		updateAction, err := sqliteReferenceAction(onUpdate)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: SQLite foreign key on table %q: %w", tableName, err)
+		}
+		index := -1
+		for candidate := range keys {
+			if keys[candidate].id == id {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 {
+			keys = append(keys, foreignKey{
+				id: id,
+				key: schema.ForeignKey{
+					ReferencedTable: referencedTable,
+					OnDelete:        deleteAction,
+					OnUpdate:        updateAction,
+				},
+			})
+			index = len(keys) - 1
+		}
+		key := &keys[index].key
+		if key.ReferencedTable != referencedTable || key.OnDelete != deleteAction || key.OnUpdate != updateAction || sequence != keys[index].referencedRows {
+			return nil, fmt.Errorf("inspect: SQLite foreign key on table %q has inconsistent metadata", tableName)
+		}
+		key.Columns = append(key.Columns, column)
+		if !referencedColumn.Valid {
+			return nil, fmt.Errorf("inspect: SQLite foreign key on table %q cannot be represented: the referenced column is implicit", tableName)
+		}
+		key.ReferencedColumns = append(key.ReferencedColumns, referencedColumn.String)
+		keys[index].referencedRows++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate SQLite foreign keys: %w", err)
+	}
+	result := make([]schema.ForeignKey, len(keys))
+	for index := range keys {
+		result[index] = keys[index].key
+	}
+	return result, nil
+}
+
+func sqliteReferenceAction(action string) (schema.ReferenceAction, error) {
+	switch strings.ToUpper(action) {
+	case "", "NO ACTION":
+		return schema.ReferenceActionNoAction, nil
+	case "RESTRICT":
+		return schema.ReferenceActionRestrict, nil
+	case "CASCADE":
+		return schema.ReferenceActionCascade, nil
+	case "SET NULL":
+		return schema.ReferenceActionSetNull, nil
+	case "SET DEFAULT":
+		return schema.ReferenceActionSetDefault, nil
+	default:
+		return "", fmt.Errorf("unsupported reference action %q", action)
+	}
+}
+
+func (i Inspector) sqliteIndexes(ctx context.Context, databaseName, tableName string) ([]schema.Index, []schema.UniqueConstraint, error) {
+	query := sqliteQualifiedPragma(databaseName, "index_list", tableName)
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect: read SQLite indexes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	indexes := make([]schema.Index, 0)
+	uniqueConstraints := make([]schema.UniqueConstraint, 0)
+	for rows.Next() {
+		var sequence int64
+		var name string
+		var unique bool
+		var origin string
+		var partial bool
+		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			return nil, nil, fmt.Errorf("inspect: scan SQLite index: %w", err)
+		}
+		if origin != "c" && origin != "u" {
+			continue
+		}
+		if partial {
+			return nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: partial indexes are unsupported", name)
+		}
+		if origin == "c" {
+			if err := schema.ValidateIdentifier(name); err != nil {
+				return nil, nil, fmt.Errorf("inspect: SQLite index %q: %w", name, err)
+			}
+		}
+		if origin == "u" {
+			uniqueConstraints = append(uniqueConstraints, schema.UniqueConstraint{})
+			continue
+		}
+		columns, err := i.sqliteIndexColumns(ctx, databaseName, name)
+		if err != nil {
+			return nil, nil, err
+		}
+		indexes = append(indexes, schema.Index{Name: name, Columns: columns, Unique: unique})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("inspect: iterate SQLite indexes: %w", err)
+	}
+	return indexes, uniqueConstraints, nil
+}
+
+func (i Inspector) sqliteIndexColumns(ctx context.Context, databaseName, indexName string) ([]string, error) {
+	query := sqliteQualifiedPragma(databaseName, "index_xinfo", indexName)
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read SQLite index %q columns: %w", indexName, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	columns := make([]string, 0)
+	for rows.Next() {
+		var sequence, tableColumn, descending, keyColumn int64
+		var name sql.NullString
+		var collation string
+		if err := rows.Scan(&sequence, &tableColumn, &name, &descending, &collation, &keyColumn); err != nil {
+			return nil, fmt.Errorf("inspect: scan SQLite index %q column: %w", indexName, err)
+		}
+		if keyColumn == 0 {
+			continue
+		}
+		if !name.Valid {
+			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: expression indexes are unsupported", indexName)
+		}
+		if descending != 0 {
+			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: descending columns are unsupported", indexName)
+		}
+		if !strings.EqualFold(collation, "BINARY") {
+			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: nondefault collations are unsupported", indexName)
+		}
+		columns = append(columns, name.String)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate SQLite index %q columns: %w", indexName, err)
+	}
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("inspect: SQLite index %q has no columns", indexName)
+	}
+	return columns, nil
+}
+
 func sqlitePragmaIdentifier(value string) string {
 	return strings.ReplaceAll(value, `"`, `""`)
 }
 
-func sqliteQualifiedPragma(databaseName string, pragmaName string, identifier string) string {
+func sqliteQualifiedPragma(databaseName, pragmaName, identifier string) string {
 	return `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".` + pragmaName + `("` + sqlitePragmaIdentifier(identifier) + `")`
 }
 
@@ -1532,9 +1920,12 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 	switch name {
 	case "mysql":
 		return informationQueries{
-			columns:    "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
-			primaryKey: "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
-			indexes:    mysqlStatisticsIndexesQuery(true, true),
+			columns:           "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
+			primaryKey:        "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
+			uniqueConstraints: "SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
+			checks:            "SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name",
+			indexes:           "SELECT index_name, 0, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' AND non_unique = 1 ORDER BY index_name, seq_in_index",
+			foreignKeys:       "SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, key_column_usage.referenced_table_schema = DATABASE(), FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
 		}, nil
 	default:
 		return informationQueries{}, fmt.Errorf("inspect: unsupported dialect %q", name)

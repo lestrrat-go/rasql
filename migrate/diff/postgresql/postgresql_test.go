@@ -5,8 +5,25 @@ import (
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDiffLiveMatchesInlinePrimaryKey(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
+	liveSources, err := analyzer.LiveSources(schema.Table{
+		Name:       "members",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	live := parseSources(t, analyzer, liveSources)
+
+	plan, err := analyzer.Diff(baseline, live)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
 
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := postgresql.New()
@@ -169,6 +186,13 @@ func TestDiffRejectsConcurrentIndex(t *testing.T) {
 func parseSnapshot(t *testing.T, analyzer postgresql.Analyzer, source string) diff.Snapshot {
 	t.Helper()
 	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
+	require.NoError(t, err)
+	return snapshot
+}
+
+func parseSources(t *testing.T, analyzer postgresql.Analyzer, sources []diff.Source) diff.Snapshot {
+	t.Helper()
+	snapshot, err := analyzer.Parse(sources)
 	require.NoError(t, err)
 	return snapshot
 }

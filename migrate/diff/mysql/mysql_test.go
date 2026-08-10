@@ -9,8 +9,80 @@ import (
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
+	analyzer := mysql.New()
+	sources, err := analyzer.LiveSources(schema.Table{
+		Name:    "members",
+		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
+		Indexes: []schema.Index{{Name: "members_email_idx", Columns: []string{"email"}}},
+	})
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	require.Contains(t, sources[1].SQL, "CREATE INDEX")
+	require.Contains(t, sources[1].SQL, "members_email_idx")
+	require.Contains(t, sources[1].SQL, "email")
+}
+
+func TestDiffLiveMatchesInlinePrimaryKeyUnderMySQLIdentifierRules(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (ID bigint PRIMARY KEY);")
+	liveSources, err := analyzer.LiveSources(schema.Table{
+		Name:       "members",
+		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	live, err := analyzer.Parse(liveSources)
+	require.NoError(t, err)
+
+	plan, err := analyzer.Diff(baseline, live)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffLiveMatchesMySQLQuotedIdentifiersToOrdinaryIdentifiers(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint); CREATE INDEX members_id_idx ON members (id);")
+	liveSources, err := analyzer.LiveSources(schema.Table{
+		Name:    "members",
+		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}, Nullable: true}},
+		Indexes: []schema.Index{{Name: "members_id_idx", Columns: []string{"id"}}},
+	})
+	require.NoError(t, err)
+	live, err := analyzer.Parse(liveSources)
+	require.NoError(t, err)
+
+	plan, err := analyzer.Diff(baseline, live)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+
+	differentCase, err := analyzer.LiveSources(schema.Table{
+		Name:    "Members",
+		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}, Nullable: true}},
+		Indexes: []schema.Index{{Name: "members_id_idx", Columns: []string{"id"}}},
+	})
+	require.NoError(t, err)
+	otherLive, err := analyzer.Parse(differentCase)
+	require.NoError(t, err)
+	_, err = analyzer.Diff(live, otherLive)
+	require.ErrorContains(t, err, "table members was removed")
+}
+
+func TestValidateLivePlanUsesLowerCaseTableNames(t *testing.T) {
+	analyzer := mysql.NewWithLowerCaseTableNames(mysql.LowerCaseTableNamesLowercase)
+	err := analyzer.ValidateLivePlan(diff.Plan{
+		Dialect: "mysql",
+		Statements: []diff.Statement{{
+			Source: "create_table.sql",
+			SQL:    "CREATE TABLE Members (id bigint);",
+		}},
+	}, "members")
+	require.NoError(t, err)
+}
 
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := mysql.New()

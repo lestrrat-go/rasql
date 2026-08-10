@@ -12,10 +12,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
@@ -25,8 +27,9 @@ import (
 )
 
 var (
-	openDatabase            = sql.Open
-	commandOutput io.Writer = os.Stdout
+	openDatabase                    = sql.Open
+	commandOutput         io.Writer = os.Stdout
+	liveInspectionTimeout           = 30 * time.Second
 )
 
 func main() {
@@ -41,7 +44,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: rasqlmigrate <new|diff|plan|apply|status|verify> [flags]")
+		return errors.New("usage: rasqlmigrate <new|diff|diff-live|plan|apply|status|verify> [flags]")
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -51,6 +54,8 @@ func run(args []string) error {
 		return runNew(args[1:])
 	case "diff":
 		return runDiff(args[1:])
+	case "diff-live":
+		return runDiffLive(args[1:])
 	case "plan":
 		return runPlan(args[1:])
 	case "apply":
@@ -70,6 +75,7 @@ func printUsage(output io.Writer) {
 	_, _ = fmt.Fprintln(output, "Commands:")
 	_, _ = fmt.Fprintln(output, "  new      Create a directory for one migration")
 	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
+	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
 	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
 	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations")
 	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
@@ -128,6 +134,112 @@ func runDiff(args []string) error {
 	}
 	_, _ = fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
 	return nil
+}
+
+func runDiffLive(args []string) error {
+	flags := newFlagSet("diff-live")
+	dialectName := flags.String("dialect", "", "database dialect; PostgreSQL, MySQL, and SQLite are currently supported")
+	dsn := flags.String("dsn", "", "database connection string")
+	tableName := flags.String("table", "", "one live table to inspect")
+	targetDirectory := flags.String("to", "", "desired-schema directory for the inspected table")
+	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *dialectName == "" || *dsn == "" || *tableName == "" || *targetDirectory == "" {
+		return errors.New("diff-live requires -dialect, -dsn, -table, and -to")
+	}
+	d, err := migrationDialect(*dialectName)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveInspectionTimeout)
+	defer cancel()
+	database, closeDatabase, err := openMigrationDatabase(ctx, d, *dsn)
+	if err != nil {
+		return err
+	}
+	defer closeDatabase()
+	transaction, err := database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
+	if err != nil {
+		return redactError(fmt.Errorf("begin live inspection transaction: %w", err), *dsn)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	analyzer, err := liveSchemaAnalyzer(ctx, transaction, d.Name())
+	if err != nil {
+		return redactError(err, *dsn)
+	}
+	liveAnalyzer, ok := analyzer.(diff.LiveAnalyzer)
+	if !ok {
+		return fmt.Errorf("schema diff dialect %q does not support live inspection", *dialectName)
+	}
+	inspector, err := inspect.New(transaction, d)
+	if err != nil {
+		return err
+	}
+	liveTable, err := inspector.Table(ctx, *tableName)
+	if err != nil {
+		return redactError(err, *dsn)
+	}
+	liveSources, err := liveAnalyzer.LiveSources(liveTable)
+	if err != nil {
+		return err
+	}
+	baseline, err := analyzer.Parse(liveSources)
+	if err != nil {
+		return fmt.Errorf("parse inspected table %q: %w", *tableName, err)
+	}
+	targetSources, err := diff.LoadSources(*targetDirectory)
+	if err != nil {
+		return err
+	}
+	target, err := analyzer.Parse(targetSources)
+	if err != nil {
+		return fmt.Errorf("parse target desired schema: %w", err)
+	}
+	plan, err := analyzer.Diff(baseline, target)
+	if err != nil {
+		return err
+	}
+	if err := liveAnalyzer.ValidateLivePlan(plan, *tableName); err != nil {
+		return err
+	}
+	if plan.Empty() {
+		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
+		return nil
+	}
+	if *outputDirectory == "" {
+		writeDiffPlan(commandOutput, plan)
+		return nil
+	}
+	if err := diff.WriteMigration(*outputDirectory, plan); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
+	return nil
+}
+
+func liveSchemaAnalyzer(ctx context.Context, transaction *sql.Tx, dialectName string) (diff.Analyzer, error) {
+	if dialectName != "mysql" {
+		return schemaAnalyzer(dialectName)
+	}
+	var lowerCaseTableNames int64
+	if err := transaction.QueryRowContext(ctx, "SELECT @@lower_case_table_names").Scan(&lowerCaseTableNames); err != nil {
+		return nil, fmt.Errorf("read MySQL lower_case_table_names: %w", err)
+	}
+	if lowerCaseTableNames < 0 || lowerCaseTableNames > 2 {
+		return nil, fmt.Errorf("read MySQL lower_case_table_names: unsupported value %d", lowerCaseTableNames)
+	}
+	return mysql.NewWithLowerCaseTableNames(mysql.LowerCaseTableNames(lowerCaseTableNames)), nil
+}
+
+func liveInspectionTxOptions(dialectName string) *sql.TxOptions {
+	options := &sql.TxOptions{ReadOnly: true}
+	switch dialectName {
+	case "mysql", "postgresql":
+		options.Isolation = sql.LevelRepeatableRead
+	}
+	return options
 }
 
 func schemaAnalyzer(name string) (diff.Analyzer, error) {
@@ -274,20 +386,9 @@ func openRunner(ctx context.Context, directory string, dialectName string, dsn s
 	if err != nil {
 		return migrate.Runner{}, nil, func() {}, err
 	}
-	driverName, err := driverForDialect(d.Name())
+	database, closeDatabase, err := openMigrationDatabase(ctx, d, dsn)
 	if err != nil {
 		return migrate.Runner{}, nil, func() {}, err
-	}
-	database, err := openDatabase(driverName, dsn)
-	if err != nil {
-		return migrate.Runner{}, nil, func() {}, fmt.Errorf("open database: %w", redactError(err, dsn))
-	}
-	closeDatabase := func() {
-		_ = database.Close()
-	}
-	if err := database.PingContext(ctx); err != nil {
-		closeDatabase()
-		return migrate.Runner{}, nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
 	}
 	var runner migrate.Runner
 	if historyTable == "" {
@@ -300,6 +401,25 @@ func openRunner(ctx context.Context, directory string, dialectName string, dsn s
 		return migrate.Runner{}, nil, func() {}, err
 	}
 	return runner, migrations, closeDatabase, nil
+}
+
+func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (*sql.DB, func(), error) {
+	driverName, err := driverForDialect(d.Name())
+	if err != nil {
+		return nil, func() {}, err
+	}
+	database, err := openDatabase(driverName, dsn)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("open database: %w", redactError(err, dsn))
+	}
+	closeDatabase := func() {
+		_ = database.Close()
+	}
+	if err := database.PingContext(ctx); err != nil {
+		closeDatabase()
+		return nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
+	}
+	return database, closeDatabase, nil
 }
 
 func migrationDialect(name string) (dialect.Dialect, error) {
