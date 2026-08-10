@@ -141,6 +141,7 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 		switch queryer.(type) {
 		case *sql.Conn, *sql.Tx:
 		default:
+			// A pooled *sql.DB may choose another connection, so it cannot inspect temp or attached schemas; callers must retain *sql.Conn or *sql.Tx.
 			return Inspector{}, fmt.Errorf("inspect: SQLite inspection requires a retained *sql.Conn or *sql.Tx")
 		}
 	}
@@ -981,6 +982,7 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, databaseName string, 
 		return resolveSQLiteTableOptions(databaseName, tableName, matches)
 	}
 
+	// PRAGMA table_list is unavailable before SQLite 3.37; sqlite_master keeps those engines supported.
 	legacyMatches, err := i.sqliteLegacyTableOptions(ctx, databaseName, tableName)
 	if err != nil {
 		if tableListErr != nil {
