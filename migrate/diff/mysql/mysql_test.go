@@ -72,6 +72,18 @@ func TestDiffLiveMatchesMySQLQuotedIdentifiersToOrdinaryIdentifiers(t *testing.T
 	require.ErrorContains(t, err, "table members was removed")
 }
 
+func TestValidateLivePlanUsesLowerCaseTableNames(t *testing.T) {
+	analyzer := mysql.NewWithLowerCaseTableNames(mysql.LowerCaseTableNamesLowercase)
+	err := analyzer.ValidateLivePlan(diff.Plan{
+		Dialect: "mysql",
+		Statements: []diff.Statement{{
+			Source: "create_table.sql",
+			SQL:    "CREATE TABLE Members (id bigint);",
+		}},
+	}, "members")
+	require.NoError(t, err)
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, `

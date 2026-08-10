@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lestrrat-go/rasql/migrate/diff"
+	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -420,6 +423,42 @@ func TestLiveInspectionTxOptionsUseRepeatableReadWhereSupported(t *testing.T) {
 			options := liveInspectionTxOptions(test.dialect)
 			require.True(t, options.ReadOnly)
 			require.Equal(t, test.isolation, options.Isolation)
+		})
+	}
+}
+
+func TestLiveSchemaAnalyzerUsesMySQLTableNameMode(t *testing.T) {
+	for _, mode := range []mysql.LowerCaseTableNames{
+		mysql.LowerCaseTableNamesLowercase,
+		mysql.LowerCaseTableNamesPreserve,
+	} {
+		t.Run(fmt.Sprintf("lower_case_table_names=%d", mode), func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+			mock.ExpectBegin()
+			mock.ExpectQuery("SELECT @@lower_case_table_names").
+				WillReturnRows(sqlmock.NewRows([]string{"@@lower_case_table_names"}).AddRow(int64(mode)))
+			mock.ExpectRollback()
+			mock.ExpectClose()
+
+			transaction, err := database.Begin()
+			require.NoError(t, err)
+			analyzer, err := liveSchemaAnalyzer(t.Context(), transaction, "mysql")
+			require.NoError(t, err)
+			baseline, err := analyzer.Parse([]diff.Source{{Path: "baseline.sql", SQL: "CREATE TABLE members (id bigint);"}})
+			require.NoError(t, err)
+			target, err := analyzer.Parse([]diff.Source{{Path: "target.sql", SQL: "CREATE TABLE Members (id bigint, email text);"}})
+			require.NoError(t, err)
+			plan, err := analyzer.Diff(baseline, target)
+			require.NoError(t, err)
+			require.Len(t, plan.Statements, 1)
+			require.Contains(t, plan.Statements[0].SQL, "ADD COLUMN")
+
+			require.NoError(t, transaction.Rollback())
 		})
 	}
 }

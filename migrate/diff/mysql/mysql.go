@@ -57,7 +57,8 @@ func (Analyzer) LiveSources(table schema.Table) ([]diff.Source, error) {
 }
 
 // ValidateLivePlan ensures generated MySQL statements stay within the selected table.
-func (Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
+func (a Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
+	selectedTableKey := tableNameKey(mysqlquery.QualifiedName{{Name: tableName}}, a.lowerCaseTableNames)
 	for _, statement := range plan.Statements {
 		parsed, err := mysqlquery.ParseStatement(statement.SQL)
 		if err != nil {
@@ -65,11 +66,11 @@ func (Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
 		}
 		switch parsed := parsed.(type) {
 		case *mysqlquery.CreateTableStatement:
-			if parsed.Name.String() != tableName {
+			if tableNameKey(parsed.Name, a.lowerCaseTableNames) != selectedTableKey {
 				return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
 			}
 		case *mysqlquery.CreateIndexStatement:
-			if parsed.Table.String() != tableName {
+			if tableNameKey(parsed.Table, a.lowerCaseTableNames) != selectedTableKey {
 				return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
 			}
 		}

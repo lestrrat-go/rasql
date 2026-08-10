@@ -153,14 +153,6 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	analyzer, err := schemaAnalyzer(*dialectName)
-	if err != nil {
-		return err
-	}
-	liveAnalyzer, ok := analyzer.(diff.LiveAnalyzer)
-	if !ok {
-		return fmt.Errorf("schema diff dialect %q does not support live inspection", *dialectName)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), liveInspectionTimeout)
 	defer cancel()
 	database, closeDatabase, err := openMigrationDatabase(ctx, d, *dsn)
@@ -173,6 +165,14 @@ func runDiffLive(args []string) error {
 		return redactError(fmt.Errorf("begin live inspection transaction: %w", err), *dsn)
 	}
 	defer func() { _ = transaction.Rollback() }()
+	analyzer, err := liveSchemaAnalyzer(ctx, transaction, d.Name())
+	if err != nil {
+		return redactError(err, *dsn)
+	}
+	liveAnalyzer, ok := analyzer.(diff.LiveAnalyzer)
+	if !ok {
+		return fmt.Errorf("schema diff dialect %q does not support live inspection", *dialectName)
+	}
 	inspector, err := inspect.New(transaction, d)
 	if err != nil {
 		return err
@@ -217,6 +217,20 @@ func runDiffLive(args []string) error {
 	}
 	_, _ = fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
 	return nil
+}
+
+func liveSchemaAnalyzer(ctx context.Context, transaction *sql.Tx, dialectName string) (diff.Analyzer, error) {
+	if dialectName != "mysql" {
+		return schemaAnalyzer(dialectName)
+	}
+	var lowerCaseTableNames int64
+	if err := transaction.QueryRowContext(ctx, "SELECT @@lower_case_table_names").Scan(&lowerCaseTableNames); err != nil {
+		return nil, fmt.Errorf("read MySQL lower_case_table_names: %w", err)
+	}
+	if lowerCaseTableNames < 0 || lowerCaseTableNames > 2 {
+		return nil, fmt.Errorf("read MySQL lower_case_table_names: unsupported value %d", lowerCaseTableNames)
+	}
+	return mysql.NewWithLowerCaseTableNames(mysql.LowerCaseTableNames(lowerCaseTableNames)), nil
 }
 
 func liveInspectionTxOptions(dialectName string) *sql.TxOptions {
