@@ -1244,7 +1244,10 @@ func TestSQLiteInspectorRejectsDecimalColumn(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	mock.ExpectQuery("PRAGMA table_info(\"payments\")").
+	mock.ExpectQuery("PRAGMA table_list(\"payments\")").
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
+			AddRow("main", "payments", "table", 1, 0, 0))
+	mock.ExpectQuery("PRAGMA \"main\".table_info(\"payments\")").
 		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
 			AddRow(0, "amount", "DECIMAL(19,4)", 1, nil, 0))
 
@@ -1265,7 +1268,10 @@ func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	mock.ExpectQuery("PRAGMA table_info(\"events\")").
+	mock.ExpectQuery("PRAGMA table_list(\"events\")").
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
+			AddRow("main", "events", "table", 3, 0, 0))
+	mock.ExpectQuery("PRAGMA \"main\".table_info(\"events\")").
 		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
 			AddRow(0, "sequence", "INTEGER", 1, nil, 2).
 			AddRow(1, "stream_id", "TEXT", 1, nil, 1).
@@ -1274,8 +1280,59 @@ func TestSQLiteInspectorUsesPragmaAndPrimaryKeyOrder(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
 	require.Equal(t, []string{"stream_id", "sequence"}, table.PrimaryKey)
+	require.Equal(t, "main", table.Schema)
 	require.Equal(t, schema.BytesType{}, table.Columns[2].Type)
 	require.True(t, table.Columns[2].Nullable)
+}
+
+func TestSQLiteInspectorRejectsAmbiguousTableAndPreservesScope(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	ctx := t.Context()
+	_, err = database.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS aux")
+	require.NoError(t, err)
+	_, err = database.ExecContext(ctx, "CREATE TABLE main.users (id INTEGER PRIMARY KEY, main_value TEXT)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(ctx, "CREATE TABLE aux.users (id INTEGER PRIMARY KEY, aux_value TEXT)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(ctx, "CREATE TEMP TABLE users (id INTEGER PRIMARY KEY, temp_value TEXT)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+
+	table, err := inspector.Table(ctx, "users")
+	require.Equal(t, schema.Table{}, table)
+	require.ErrorIs(t, err, inspect.ErrAmbiguousTable)
+	var ambiguous *inspect.AmbiguousTableError
+	require.ErrorAs(t, err, &ambiguous)
+	require.Equal(t, "users", ambiguous.Table)
+	require.ElementsMatch(t, []string{"main", "aux", "temp"}, ambiguous.Databases)
+
+	for _, test := range []struct {
+		database string
+		column   string
+	}{
+		{database: "main", column: "main_value"},
+		{database: "aux", column: "aux_value"},
+		{database: "temp", column: "temp_value"},
+	} {
+		t.Run(test.database, func(t *testing.T) {
+			table, err := inspector.TableIn(ctx, test.database, "users")
+			require.NoError(t, err)
+			require.Equal(t, test.database, table.Schema)
+			require.Equal(t, "users", table.Name)
+			_, ok := table.Column(test.column)
+			require.True(t, ok)
+
+			statement, err := render.CreateTable(dialect.SQLite(), table)
+			require.NoError(t, err)
+			require.Contains(t, statement.SQL(), `CREATE TABLE "`+test.database+`"."users"`)
+		})
+	}
 }
 
 func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
@@ -1935,8 +1992,8 @@ func TestSQLiteInspectorReportsTableNotFound(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	mock.ExpectQuery("PRAGMA table_info(\"ghosts\")").
-		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}))
+	mock.ExpectQuery("PRAGMA table_list(\"ghosts\")").
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}))
 
 	_, err = inspector.Table(t.Context(), "ghosts")
 	require.Error(t, err)
