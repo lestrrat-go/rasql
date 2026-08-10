@@ -1614,9 +1614,12 @@ func TestSQLiteInspectorUsesSelectedTempSchemaCatalog(t *testing.T) {
 	_, err = database.ExecContext(t.Context(), "CREATE TEMP TABLE Events (id INTEGER PRIMARY KEY, payload BLOB)")
 	require.NoError(t, err)
 
-	inspector, err := inspect.New(database, dialect.SQLite())
+	connection, err := database.Conn(t.Context())
 	require.NoError(t, err)
-	table, err := inspector.Table(t.Context(), "events")
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	inspector, err := inspect.New(connection, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.TableIn(t.Context(), "temp", "events")
 	require.NoError(t, err)
 	require.Equal(t, schema.IntegerType{}, table.Columns[0].Type)
 	require.False(t, table.Columns[0].Nullable)
@@ -1635,9 +1638,12 @@ func TestSQLiteInspectorUsesSelectedAttachedSchemaCatalog(t *testing.T) {
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE tenant.Events (id INTEGER, payload BLOB, PRIMARY KEY (id DESC))")
 	require.NoError(t, err)
 
-	inspector, err := inspect.New(database, dialect.SQLite())
+	connection, err := database.Conn(t.Context())
 	require.NoError(t, err)
-	table, err := inspector.Table(t.Context(), "events")
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	inspector, err := inspect.New(connection, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.TableIn(t.Context(), "tenant", "events")
 	require.NoError(t, err)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 	require.False(t, table.Columns[0].Nullable)
@@ -1718,6 +1724,16 @@ func (c *sqliteAffinityConn) QueryContext(_ context.Context, query string, _ []d
 		if !c.hasTable {
 			return &sqliteAffinityRows{columns: []string{"cid", "name", "type", "notnull", "dflt_value", "pk"}}, nil
 		}
+		return &sqliteAffinityRows{
+			columns: []string{"cid", "name", "type", "notnull", "dflt_value", "pk"},
+			values:  [][]driver.Value{{int64(0), "id", "INTEGER", int64(1), nil, int64(1)}},
+		}, nil
+	case `PRAGMA table_list("events")`:
+		return &sqliteAffinityRows{
+			columns: []string{"schema", "name", "type", "ncol", "wr", "strict"},
+			values:  [][]driver.Value{{"main", "events", "table", int64(1), int64(0), int64(0)}},
+		}, nil
+	case `PRAGMA "main".table_info("events")`:
 		return &sqliteAffinityRows{
 			columns: []string{"cid", "name", "type", "notnull", "dflt_value", "pk"},
 			values:  [][]driver.Value{{int64(0), "id", "INTEGER", int64(1), nil, int64(1)}},
@@ -1866,7 +1882,32 @@ func TestNewRejectsTypedNilDependencies(t *testing.T) {
 	require.ErrorContains(t, err, "invalid inspector")
 }
 
-func TestSQLiteInspectorRejectsPooledDatabase(t *testing.T) {
+func TestSQLiteInspectorAcceptsPooledDatabaseForMainTable(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery(`PRAGMA table_list("events")`).
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
+			AddRow("main", "events", "table", 1, 0, 0))
+	mock.ExpectQuery(`PRAGMA "main".table_info("events")`).
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
+			AddRow(0, "id", "INTEGER", 1, nil, 1))
+
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, "main", table.Schema)
+	require.Equal(t, "events", table.Name)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
+func TestSQLiteInspectorRequiresRetainedHandleForScopedTables(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1875,7 +1916,32 @@ func TestSQLiteInspectorRejectsPooledDatabase(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	_, err = inspect.New(database, dialect.SQLite())
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	for _, databaseName := range []string{"temp", "aux"} {
+		t.Run(databaseName, func(t *testing.T) {
+			_, err := inspector.TableIn(t.Context(), databaseName, "events")
+			require.ErrorContains(t, err, "requires a retained *sql.Conn or *sql.Tx")
+		})
+	}
+}
+
+func TestSQLiteInspectorRequiresRetainedHandleForUnscopedAttachedTable(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery(`PRAGMA table_list("events")`).
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}).
+			AddRow("aux", "events", "table", 1, 0, 0))
+
+	_, err = inspector.Table(t.Context(), "events")
 	require.ErrorContains(t, err, "requires a retained *sql.Conn or *sql.Tx")
 }
 

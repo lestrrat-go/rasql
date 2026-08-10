@@ -115,9 +115,9 @@ func (e *IncompleteMetadataError) Unwrap() error {
 }
 
 // Queryer is implemented by *sql.DB, *sql.Conn, and *sql.Tx. SQLite
-// inspectors require a retained *sql.Conn or *sql.Tx; a SQLite database's
-// attached and temporary schemas belong to one connection, not to *sql.DB as
-// a pool.
+// inspectors accept *sql.DB for ordinary main-database tables, but a retained
+// *sql.Conn or *sql.Tx is required for attached and temporary schemas because
+// they belong to one connection, not to *sql.DB as a pool.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -137,14 +137,6 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 	if isNil(d) {
 		return Inspector{}, fmt.Errorf("inspect: dialect must not be nil")
 	}
-	if d.Name() == "sqlite" {
-		switch queryer.(type) {
-		case *sql.Conn, *sql.Tx:
-		default:
-			// A pooled *sql.DB may choose another connection, so it cannot inspect temp or attached schemas; callers must retain *sql.Conn or *sql.Tx.
-			return Inspector{}, fmt.Errorf("inspect: SQLite inspection requires a retained *sql.Conn or *sql.Tx")
-		}
-	}
 	return Inspector{queryer: queryer, dialect: d}, nil
 }
 
@@ -158,13 +150,13 @@ func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, e
 	return i.table(ctx, "", tableName)
 }
 
-// TableIn reads a SQLite table from databaseName. The Inspector must have
-// been created with a retained *sql.Conn or *sql.Tx, and callers must keep
-// that same handle for later execution because SQLite attached and temporary
-// databases belong to one connection. The returned descriptor keeps
-// databaseName in schema.Table.Schema so callers that render or execute it
-// continue to address the inspected database. It returns [TableNotFoundError]
-// when the table is absent from that database.
+// TableIn reads a SQLite table from databaseName. A retained *sql.Conn or
+// *sql.Tx is required for temporary and attached databases, and callers must
+// keep that same handle for later execution because those databases belong to
+// one connection. The returned descriptor keeps databaseName in
+// schema.Table.Schema so callers that render or execute it continue to address
+// the inspected database. It returns [TableNotFoundError] when the table is
+// absent from that database.
 func (i Inspector) TableIn(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
 	return i.table(ctx, databaseName, tableName)
 }
@@ -581,14 +573,26 @@ func mysqlCreateTablePartIsColumn(part string) bool {
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
-	options, err := i.sqliteTableOptions(ctx, databaseName, tableName)
+	if databaseName != "" && databaseName != "main" && !sqliteRetainedQueryer(i.queryer) {
+		return schema.Table{}, sqliteRetainedHandleError()
+	}
+	queryer, release, err := i.sqliteQueryer(ctx)
 	if err != nil {
 		return schema.Table{}, err
+	}
+	defer release()
+
+	options, err := i.sqliteTableOptions(queryer, ctx, databaseName, tableName)
+	if err != nil {
+		return schema.Table{}, err
+	}
+	if options.database != "main" && !sqliteRetainedQueryer(i.queryer) {
+		return schema.Table{}, sqliteRetainedHandleError()
 	}
 	tableName = options.name
 
 	query := sqliteQualifiedPragma(options.database, "table_info", tableName)
-	rows, err := i.queryer.QueryContext(ctx, query)
+	rows, err := queryer.QueryContext(ctx, query)
 	if err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: read SQLite columns: %w", err)
 	}
@@ -640,7 +644,7 @@ func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableNa
 		if column.primaryPosition == 0 || column.notNull != 0 || !strings.EqualFold(strings.TrimSpace(column.databaseType), "INTEGER") {
 			continue
 		}
-		rowIDAlias, err = i.sqliteRowIDAlias(ctx, i.queryer, options.database, tableName, column.name, len(primaryColumns))
+		rowIDAlias, err = i.sqliteRowIDAlias(ctx, queryer, options.database, tableName, column.name, len(primaryColumns))
 		if err != nil {
 			return schema.Table{}, err
 		}
@@ -967,23 +971,48 @@ func sqliteDeclarationTokens(declaration string) ([]sqliteDeclarationToken, int,
 	return tokens, open, close, open >= 0 && close > open
 }
 
+func (i Inspector) sqliteQueryer(ctx context.Context) (Queryer, func(), error) {
+	database, ok := i.queryer.(*sql.DB)
+	if !ok {
+		return i.queryer, func() {}, nil
+	}
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect: pin SQLite connection: %w", err)
+	}
+	return connection, func() { _ = connection.Close() }, nil
+}
+
+func sqliteRetainedQueryer(queryer Queryer) bool {
+	switch queryer.(type) {
+	case *sql.Conn, *sql.Tx:
+		return true
+	default:
+		return false
+	}
+}
+
+func sqliteRetainedHandleError() error {
+	return fmt.Errorf("inspect: SQLite inspection requires a retained *sql.Conn or *sql.Tx for temporary or attached databases")
+}
+
 type sqliteTableOptions struct {
 	database string
 	name     string
 }
 
-func (i Inspector) sqliteTableOptions(ctx context.Context, databaseName string, tableName string) (sqliteTableOptions, error) {
+func (i Inspector) sqliteTableOptions(queryer Queryer, ctx context.Context, databaseName string, tableName string) (sqliteTableOptions, error) {
 	query := `PRAGMA table_list("` + sqlitePragmaIdentifier(tableName) + `")`
 	if databaseName != "" {
 		query = `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".table_list("` + sqlitePragmaIdentifier(tableName) + `")`
 	}
-	matches, tableListErr := i.sqliteTableList(ctx, query)
+	matches, tableListErr := i.sqliteTableList(queryer, ctx, query)
 	if tableListErr == nil && len(matches) > 0 {
 		return resolveSQLiteTableOptions(databaseName, tableName, matches)
 	}
 
 	// PRAGMA table_list is unavailable before SQLite 3.37; sqlite_master keeps those engines supported.
-	legacyMatches, err := i.sqliteLegacyTableOptions(ctx, databaseName, tableName)
+	legacyMatches, err := i.sqliteLegacyTableOptions(queryer, ctx, databaseName, tableName)
 	if err != nil {
 		if tableListErr != nil {
 			return sqliteTableOptions{}, errors.Join(tableListErr, err)
@@ -993,8 +1022,8 @@ func (i Inspector) sqliteTableOptions(ctx context.Context, databaseName string, 
 	return resolveSQLiteTableOptions(databaseName, tableName, legacyMatches)
 }
 
-func (i Inspector) sqliteTableList(ctx context.Context, query string) ([]sqliteTableOptions, error) {
-	rows, err := i.queryer.QueryContext(ctx, query)
+func (i Inspector) sqliteTableList(queryer Queryer, ctx context.Context, query string) ([]sqliteTableOptions, error) {
+	rows, err := queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read SQLite table scope: %w", err)
 	}
@@ -1016,10 +1045,10 @@ func (i Inspector) sqliteTableList(ctx context.Context, query string) ([]sqliteT
 	return matches, nil
 }
 
-func (i Inspector) sqliteLegacyTableOptions(ctx context.Context, databaseName string, tableName string) ([]sqliteTableOptions, error) {
+func (i Inspector) sqliteLegacyTableOptions(queryer Queryer, ctx context.Context, databaseName string, tableName string) ([]sqliteTableOptions, error) {
 	databases := []string{databaseName}
 	if databaseName == "" {
-		rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
+		rows, err := queryer.QueryContext(ctx, "PRAGMA database_list")
 		if err != nil {
 			return nil, fmt.Errorf("inspect: read SQLite databases: %w", err)
 		}
@@ -1045,7 +1074,7 @@ func (i Inspector) sqliteLegacyTableOptions(ctx context.Context, databaseName st
 			return nil, fmt.Errorf("inspect: SQLite database %q cannot be represented: %w", database, err)
 		}
 		query := `SELECT name, type FROM "` + sqlitePragmaIdentifier(database) + `".sqlite_master WHERE name = ? COLLATE NOCASE AND type IN ('table', 'view')`
-		rows, err := i.queryer.QueryContext(ctx, query, tableName)
+		rows, err := queryer.QueryContext(ctx, query, tableName)
 		if err != nil {
 			return nil, fmt.Errorf("inspect: read SQLite database %q tables: %w", database, err)
 		}
