@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"sync/atomic"
@@ -699,7 +700,7 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	mock.ExpectQuery(primaryKeyQuery).
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name"}))
+	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -723,12 +724,24 @@ func expectMySQLCreateTable(mock sqlmock.Sqlmock, tableName string, definition s
 		WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).AddRow(tableName, definition))
 }
 
-const mysqlIndexesQuery = "SELECT index_name, non_unique = 0, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
+const mysqlIndexesQuery = "SELECT index_name, non_unique = 0, column_name, sub_part, expression FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
 
 func expectMySQLIndexes(mock sqlmock.Sqlmock, tableName string, rows *sqlmock.Rows) {
 	mock.ExpectQuery(mysqlIndexesQuery).
 		WithArgs(tableName).
 		WillReturnRows(rows)
+}
+
+func expectMySQLColumnsAndPrimaryKey(mock sqlmock.Sqlmock, tableName string) {
+	mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+		WithArgs(tableName).
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil).
+			AddRow("email", "varchar(255)", "NO", nil, nil, nil))
+	expectMySQLCreateTable(mock, tableName, "CREATE TABLE `"+tableName+"` (`id` bigint NOT NULL, `email` varchar(255) NOT NULL) ENGINE=InnoDB")
+	mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+		WithArgs(tableName).
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
 }
 
 func TestMySQLInspectorReadsUniqueIndex(t *testing.T) {
@@ -751,11 +764,47 @@ func TestMySQLInspectorReadsUniqueIndex(t *testing.T) {
 	mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name"}).AddRow("users_email_uidx", true, "email"))
+	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}).AddRow("users_email_uidx", true, "email", nil, nil))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Index{{Name: "users_email_uidx", Columns: []string{"email"}, Unique: true}}, table.Indexes)
+}
+
+func TestMySQLInspectorRejectsUnsupportedIndexParts(t *testing.T) {
+	tests := []struct {
+		name       string
+		indexName  string
+		column     any
+		prefix     any
+		expression any
+		reason     string
+	}{
+		{name: "prefix", indexName: "users_email_prefix_uidx", column: "email", prefix: int64(4), reason: "prefix index parts"},
+		{name: "functional", indexName: "users_email_functional_idx", expression: "lower(`email`)", reason: "functional index parts"},
+		{name: "non-column", indexName: "users_email_non_column_idx", reason: "non-column index parts"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			expectMySQLColumnsAndPrimaryKey(mock, "users")
+			expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}).
+				AddRow(test.indexName, true, test.column, test.prefix, test.expression))
+
+			_, err = inspector.Table(t.Context(), "users")
+			require.EqualError(t, err, fmt.Sprintf("inspect: index %q cannot be represented: rasql does not support MySQL %s", test.indexName, test.reason))
+		})
+	}
 }
 
 // TestMySQLInspectorRecordsUnsignedIntegerColumn follows one unsigned column
@@ -787,7 +836,7 @@ func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
 	mock.ExpectQuery(primaryKeyQuery).
 		WithArgs("events").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-	expectMySQLIndexes(mock, "events", sqlmock.NewRows([]string{"index_name", "unique", "column_name"}))
+	expectMySQLIndexes(mock, "events", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}))
 
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
@@ -901,7 +950,7 @@ func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
 			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
 				WithArgs("events").
 				WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-			expectMySQLIndexes(mock, "events", sqlmock.NewRows([]string{"index_name", "unique", "column_name"}))
+			expectMySQLIndexes(mock, "events", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}))
 
 			table, err := inspector.Table(t.Context(), "events")
 			require.NoError(t, err)
@@ -931,7 +980,7 @@ func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {
 	mock.ExpectQuery(primaryKeyQuery).
 		WithArgs("payments").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
-	expectMySQLIndexes(mock, "payments", sqlmock.NewRows([]string{"index_name", "unique", "column_name"}))
+	expectMySQLIndexes(mock, "payments", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}))
 
 	table, err := inspector.Table(t.Context(), "payments")
 	require.NoError(t, err)
@@ -1026,7 +1075,7 @@ func TestMySQLInspectorAcceptsDocumentedDecimalSpellings(t *testing.T) {
 			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
 				WithArgs("payments").
 				WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
-			expectMySQLIndexes(mock, "payments", sqlmock.NewRows([]string{"index_name", "unique", "column_name"}))
+			expectMySQLIndexes(mock, "payments", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression"}))
 
 			table, err := inspector.Table(t.Context(), "payments")
 			require.NoError(t, err)
