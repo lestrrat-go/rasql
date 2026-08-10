@@ -148,6 +148,12 @@ func TestParseRejectsIndexForMissingTable(t *testing.T) {
 	require.ErrorContains(t, err, "missing table missing")
 }
 
+func TestParseRejectsIndexOnlySourceForMissingTable(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.Parse([]diff.Source{{Path: "indexes.sql", SQL: "CREATE INDEX orphan_idx ON missing (id);"}})
+	require.EqualError(t, err, `postgresql schema source "indexes.sql" defines index orphan_idx on missing table missing`)
+}
+
 func TestDiffRejectsConcurrentIndex(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")

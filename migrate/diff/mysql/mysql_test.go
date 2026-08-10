@@ -299,6 +299,12 @@ func TestParseRejectsIndexForMissingTable(t *testing.T) {
 	require.ErrorContains(t, err, "missing table missing")
 }
 
+func TestParseRejectsIndexOnlySourceForMissingTable(t *testing.T) {
+	analyzer := mysql.New()
+	_, err := analyzer.Parse([]diff.Source{{Path: "indexes.sql", SQL: "CREATE INDEX orphan_idx ON missing (id);"}})
+	require.EqualError(t, err, `mysql schema source "indexes.sql" defines index orphan_idx on missing table missing`)
+}
+
 func parseSnapshot(t *testing.T, analyzer mysql.Analyzer, source string) diff.Snapshot {
 	t.Helper()
 	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
