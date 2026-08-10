@@ -1,9 +1,13 @@
 package inspect_test
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -1090,6 +1094,357 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*ID\s+int64$`, string(source))
 	require.NotContains(t, string(source), "ID *int64")
+}
+
+func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullableWithAttachedComments(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	tests := []struct {
+		name        string
+		tableName   string
+		declaration string
+	}{
+		{
+			name:        "line comment after INTEGER",
+			tableName:   "events_integer_line",
+			declaration: "CREATE TABLE events_integer_line (id INTEGER-- comment\nPRIMARY KEY, payload BLOB)",
+		},
+		{
+			name:        "block comment after INTEGER",
+			tableName:   "events_integer_block",
+			declaration: "CREATE TABLE events_integer_block (id INTEGER/* comment */PRIMARY KEY, payload BLOB)",
+		},
+		{
+			name:        "line comment after PRIMARY KEY",
+			tableName:   "events_primary_key_line",
+			declaration: "CREATE TABLE events_primary_key_line (id INTEGER PRIMARY KEY-- comment\n, payload BLOB)",
+		},
+		{
+			name:        "block comment after PRIMARY KEY",
+			tableName:   "events_primary_key_block",
+			declaration: "CREATE TABLE events_primary_key_block (id INTEGER PRIMARY KEY/* comment */, payload BLOB)",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := database.ExecContext(t.Context(), test.declaration)
+			require.NoError(t, err)
+
+			inspector, err := inspect.New(database, dialect.SQLite())
+			require.NoError(t, err)
+			table, err := inspector.Table(t.Context(), test.tableName)
+			require.NoError(t, err)
+			require.Equal(t, []string{"id"}, table.PrimaryKey)
+			require.False(t, table.Columns[0].Nullable)
+		})
+	}
+}
+
+func TestSQLiteInspectorMarksTableLevelIntegerPrimaryKeysAsNonNullable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events_asc (id INTEGER, payload BLOB, PRIMARY KEY (id ASC))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events_asc")
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorMarksTableLevelDescendingIntegerPrimaryKeyAsNonNullable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events (id INTEGER, payload BLOB, PRIMARY KEY (id DESC))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
+	}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
+func TestSQLiteInspectorMarksTableLevelCollatedIntegerPrimaryKeyAsNonNullable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events (id INTEGER, payload BLOB, PRIMARY KEY (id COLLATE NOCASE))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
+	}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
+func TestSQLiteInspectorAcceptsQuotedIntegerPrimaryKeyType(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE events (id "INTEGER" PRIMARY KEY, payload BLOB)`)
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorUsesSelectedTempSchemaCatalog(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE main.Events (id TEXT PRIMARY KEY, payload BLOB)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TEMP TABLE Events (id INTEGER PRIMARY KEY, payload BLOB)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, schema.IntegerType{}, table.Columns[0].Type)
+	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorUsesSelectedAttachedSchemaCatalog(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS tenant")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE tenant.Events (id INTEGER, payload BLOB, PRIMARY KEY (id DESC))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorMatchesMainTableNamesCaseInsensitively(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE Events (id INTEGER PRIMARY KEY, payload BLOB)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorKeepsDeclarationLookupOnOneConnection(t *testing.T) {
+	driverInstance := &sqliteAffinityDriver{}
+	driverName := "rasql-inspect-connection-affinity-" + strconv.FormatInt(sqliteAffinityDriverNames.Add(1), 10)
+	sql.Register(driverName, driverInstance)
+
+	database, err := sql.Open(driverName, "")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.False(t, table.Columns[0].Nullable)
+	require.Equal(t, int64(1), driverInstance.connections.Load())
+}
+
+var sqliteAffinityDriverNames atomic.Int64
+
+type sqliteAffinityDriver struct {
+	connections atomic.Int64
+}
+
+func (d *sqliteAffinityDriver) Open(string) (driver.Conn, error) {
+	return &sqliteAffinityConn{hasTable: d.connections.Add(1) == 1}, nil
+}
+
+type sqliteAffinityConn struct {
+	hasTable bool
+	queries  atomic.Int64
+}
+
+func (c *sqliteAffinityConn) Prepare(string) (driver.Stmt, error) {
+	return nil, driver.ErrSkip
+}
+
+func (c *sqliteAffinityConn) Close() error {
+	return nil
+}
+
+func (c *sqliteAffinityConn) Begin() (driver.Tx, error) {
+	return nil, driver.ErrSkip
+}
+
+func (c *sqliteAffinityConn) IsValid() bool {
+	return c.queries.Load() == 0
+}
+
+func (c *sqliteAffinityConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	c.queries.Add(1)
+	switch query {
+	case `PRAGMA table_info("events")`:
+		if !c.hasTable {
+			return &sqliteAffinityRows{columns: []string{"cid", "name", "type", "notnull", "dflt_value", "pk"}}, nil
+		}
+		return &sqliteAffinityRows{
+			columns: []string{"cid", "name", "type", "notnull", "dflt_value", "pk"},
+			values:  [][]driver.Value{{int64(0), "id", "INTEGER", int64(1), nil, int64(1)}},
+		}, nil
+	case `SELECT sql FROM "temp".sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE`:
+		return &sqliteAffinityRows{columns: []string{"sql"}}, nil
+	case `SELECT sql FROM "main".sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE`:
+		if !c.hasTable {
+			return &sqliteAffinityRows{columns: []string{"sql"}}, nil
+		}
+		return &sqliteAffinityRows{
+			columns: []string{"sql"},
+			values:  [][]driver.Value{{`CREATE TABLE Events (id INTEGER PRIMARY KEY, payload BLOB)`}},
+		}, nil
+	case "PRAGMA database_list":
+		return &sqliteAffinityRows{columns: []string{"seq", "name", "file"}}, nil
+	default:
+		return nil, errors.New("unexpected SQLite affinity query: " + query)
+	}
+}
+
+type sqliteAffinityRows struct {
+	columns  []string
+	values   [][]driver.Value
+	position int
+}
+
+func (r *sqliteAffinityRows) Columns() []string {
+	return r.columns
+}
+
+func (r *sqliteAffinityRows) Close() error {
+	return nil
+}
+
+func (r *sqliteAffinityRows) Next(values []driver.Value) error {
+	if r.position == len(r.values) {
+		return io.EOF
+	}
+	copy(values, r.values[r.position])
+	r.position++
+	return nil
+}
+
+func TestSQLiteInspectorPreservesNullableCompositeIntegerPrimaryKey(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events (id INTEGER, sequence INTEGER, payload BLOB, PRIMARY KEY (id, sequence))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
+		{Name: "sequence", Type: schema.IntegerType{}, Nullable: true},
+		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
+	}, table.Columns)
+	require.Equal(t, []string{"id", "sequence"}, table.PrimaryKey)
+}
+
+func TestSQLiteInspectorPreservesNullableDescendingIntegerPrimaryKey(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events (id INTEGER PRIMARY KEY DESC, payload BLOB)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
+		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
+	}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
+func TestSQLiteInspectorPreservesNullableTextPrimaryKey(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events (id TEXT PRIMARY KEY, payload BLOB)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.TextType{}, Nullable: true},
+		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
+	}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
 }
 
 // nilPointerDialect is a stub dialect.Dialect implemented with pointer
