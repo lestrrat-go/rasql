@@ -1165,6 +1165,7 @@ func (v *mysqlIndexVisibility) Scan(value any) error {
 	switch value := value.(type) {
 	case bool:
 		*v = mysqlIndexVisibility(value)
+	// database/sql drivers return MySQL visibility as int64; the 0/1 path is covered by TestMySQLInspectorSupportsMySQL57StatisticsShape.
 	case int64:
 		switch value {
 		case 0:
