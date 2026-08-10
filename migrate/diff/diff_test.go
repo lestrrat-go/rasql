@@ -47,3 +47,15 @@ func TestWriteMigrationCreatesNewDirectory(t *testing.T) {
 	require.Equal(t, "CREATE TABLE users (id bigint);\n", string(contents))
 	require.Error(t, diff.WriteMigration(directory, plan))
 }
+
+func TestPlanValidateReportsBothConflictingObjects(t *testing.T) {
+	plan := diff.Plan{
+		Dialect: "sqlite",
+		Statements: []diff.Statement{
+			{Source: "001_create_table_foo_bar.sql", SQL: "CREATE TABLE foo-bar;", Summary: "create table foo-bar"},
+			{Source: "001_create_table_foo_bar.sql", SQL: "CREATE TABLE foo_bar;", Summary: "create table foo_bar"},
+		},
+	}
+
+	require.EqualError(t, plan.Validate(), `migrate diff: duplicate generated SQL source "001_create_table_foo_bar.sql" for "create table foo-bar" and "create table foo_bar"`)
+}
