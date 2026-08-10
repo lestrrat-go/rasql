@@ -1,9 +1,13 @@
 package inspect_test
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -1142,9 +1146,9 @@ func TestSQLiteInspectorUsesSelectedTempSchemaCatalog(t *testing.T) {
 		require.NoError(t, database.Close())
 	})
 
-	_, err = database.ExecContext(t.Context(), "CREATE TABLE main.events (id TEXT PRIMARY KEY, payload BLOB)")
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE main.Events (id TEXT PRIMARY KEY, payload BLOB)")
 	require.NoError(t, err)
-	_, err = database.ExecContext(t.Context(), "CREATE TEMP TABLE events (id INTEGER PRIMARY KEY, payload BLOB)")
+	_, err = database.ExecContext(t.Context(), "CREATE TEMP TABLE Events (id INTEGER PRIMARY KEY, payload BLOB)")
 	require.NoError(t, err)
 
 	inspector, err := inspect.New(database, dialect.SQLite())
@@ -1165,7 +1169,7 @@ func TestSQLiteInspectorUsesSelectedAttachedSchemaCatalog(t *testing.T) {
 
 	_, err = database.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS tenant")
 	require.NoError(t, err)
-	_, err = database.ExecContext(t.Context(), "CREATE TABLE tenant.events (id INTEGER, payload BLOB, PRIMARY KEY (id DESC))")
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE tenant.Events (id INTEGER, payload BLOB, PRIMARY KEY (id DESC))")
 	require.NoError(t, err)
 
 	inspector, err := inspect.New(database, dialect.SQLite())
@@ -1174,6 +1178,125 @@ func TestSQLiteInspectorUsesSelectedAttachedSchemaCatalog(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorMatchesMainTableNamesCaseInsensitively(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE Events (id INTEGER PRIMARY KEY, payload BLOB)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorKeepsDeclarationLookupOnOneConnection(t *testing.T) {
+	driverInstance := &sqliteAffinityDriver{}
+	driverName := "rasql-inspect-connection-affinity-" + strconv.FormatInt(sqliteAffinityDriverNames.Add(1), 10)
+	sql.Register(driverName, driverInstance)
+
+	database, err := sql.Open(driverName, "")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.False(t, table.Columns[0].Nullable)
+	require.Equal(t, int64(1), driverInstance.connections.Load())
+}
+
+var sqliteAffinityDriverNames atomic.Int64
+
+type sqliteAffinityDriver struct {
+	connections atomic.Int64
+}
+
+func (d *sqliteAffinityDriver) Open(string) (driver.Conn, error) {
+	return &sqliteAffinityConn{hasTable: d.connections.Add(1) == 1}, nil
+}
+
+type sqliteAffinityConn struct {
+	hasTable bool
+	queries  atomic.Int64
+}
+
+func (c *sqliteAffinityConn) Prepare(string) (driver.Stmt, error) {
+	return nil, driver.ErrSkip
+}
+
+func (c *sqliteAffinityConn) Close() error {
+	return nil
+}
+
+func (c *sqliteAffinityConn) Begin() (driver.Tx, error) {
+	return nil, driver.ErrSkip
+}
+
+func (c *sqliteAffinityConn) IsValid() bool {
+	return c.queries.Load() == 0
+}
+
+func (c *sqliteAffinityConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	c.queries.Add(1)
+	switch query {
+	case `PRAGMA table_info("events")`:
+		if !c.hasTable {
+			return &sqliteAffinityRows{columns: []string{"cid", "name", "type", "notnull", "dflt_value", "pk"}}, nil
+		}
+		return &sqliteAffinityRows{
+			columns: []string{"cid", "name", "type", "notnull", "dflt_value", "pk"},
+			values:  [][]driver.Value{{int64(0), "id", "INTEGER", int64(1), nil, int64(1)}},
+		}, nil
+	case `SELECT sql FROM "temp".sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE`:
+		return &sqliteAffinityRows{columns: []string{"sql"}}, nil
+	case `SELECT sql FROM "main".sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE`:
+		if !c.hasTable {
+			return &sqliteAffinityRows{columns: []string{"sql"}}, nil
+		}
+		return &sqliteAffinityRows{
+			columns: []string{"sql"},
+			values:  [][]driver.Value{{`CREATE TABLE Events (id INTEGER PRIMARY KEY, payload BLOB)`}},
+		}, nil
+	case "PRAGMA database_list":
+		return &sqliteAffinityRows{columns: []string{"seq", "name", "file"}}, nil
+	default:
+		return nil, errors.New("unexpected SQLite affinity query: " + query)
+	}
+}
+
+type sqliteAffinityRows struct {
+	columns  []string
+	values   [][]driver.Value
+	position int
+}
+
+func (r *sqliteAffinityRows) Columns() []string {
+	return r.columns
+}
+
+func (r *sqliteAffinityRows) Close() error {
+	return nil
+}
+
+func (r *sqliteAffinityRows) Next(values []driver.Value) error {
+	if r.position == len(r.values) {
+		return io.EOF
+	}
+	copy(values, r.values[r.position])
+	r.position++
+	return nil
 }
 
 func TestSQLiteInspectorPreservesNullableCompositeIntegerPrimaryKey(t *testing.T) {

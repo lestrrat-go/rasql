@@ -497,6 +497,18 @@ func mysqlCreateTablePartIsColumn(part string) bool {
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
+	if database, ok := i.queryer.(*sql.DB); ok {
+		connection, err := database.Conn(ctx)
+		if err != nil {
+			return schema.Table{}, fmt.Errorf("inspect: acquire SQLite connection: %w", err)
+		}
+		defer func() { _ = connection.Close() }()
+		i.queryer = connection
+	}
+	return i.sqliteTableOnConnection(ctx, tableName)
+}
+
+func (i Inspector) sqliteTableOnConnection(ctx context.Context, tableName string) (schema.Table, error) {
 	query := "PRAGMA table_info(\"" + tableName + "\")"
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
@@ -645,7 +657,7 @@ func (i Inspector) sqliteTableDeclaration(ctx context.Context, tableName string)
 }
 
 func (i Inspector) sqliteCatalogDeclaration(ctx context.Context, schemaName, tableName string) (string, bool, error) {
-	query := "SELECT sql FROM " + sqliteQuoteIdentifier(schemaName) + ".sqlite_master WHERE type = 'table' AND name = ?"
+	query := "SELECT sql FROM " + sqliteQuoteIdentifier(schemaName) + ".sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE"
 	rows, err := i.queryer.QueryContext(ctx, query, tableName)
 	if err != nil {
 		return "", false, fmt.Errorf("inspect: read SQLite %s table declaration: %w", schemaName, err)
