@@ -107,6 +107,117 @@ func TestDiffRejectsCollidingGeneratedStatementNames(t *testing.T) {
 	require.NotContains(t, err.Error(), "001_")
 }
 
+func TestDiffPreservesSQLiteForeignKeyActions(t *testing.T) {
+	analyzer := sqlite.New()
+	schema := `
+		CREATE TABLE parents (id integer PRIMARY KEY);
+		CREATE TABLE children (
+			parent_id integer REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE
+		);
+	`
+	baseline := parseSnapshot(t, analyzer, schema)
+	target := parseSnapshot(t, analyzer, schema)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffIgnoresSQLiteForeignKeyConstraintOrder(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE parent_a (id integer PRIMARY KEY);
+		CREATE TABLE parent_b (id integer PRIMARY KEY);
+		CREATE TABLE multi (
+			b_id integer REFERENCES parent_b(id) ON UPDATE CASCADE,
+			a_id integer REFERENCES parent_a(id) ON DELETE CASCADE
+		);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE parent_a (id integer PRIMARY KEY);
+		CREATE TABLE parent_b (id integer PRIMARY KEY);
+		CREATE TABLE multi (
+			a_id integer REFERENCES parent_a(id) ON DELETE CASCADE,
+			b_id integer REFERENCES parent_b(id) ON UPDATE CASCADE
+		);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffUsesSQLiteCaseInsensitiveIdentifiers(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE Members (ID integer PRIMARY KEY, Email text);
+		CREATE INDEX Members_Email_IDX ON Members (Email);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT);
+		CREATE INDEX members_email_idx ON members (email);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffCanonicalizesMixedCaseTablesAndUnorderedForeignKeys(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE "ParentA" ("ID" integer PRIMARY KEY);
+		CREATE TABLE "ParentB" ("ID" integer PRIMARY KEY);
+		CREATE TABLE "MixedCase" (
+			"B_ID" integer REFERENCES "ParentB"("ID") ON UPDATE CASCADE,
+			"A_ID" integer REFERENCES "ParentA"("ID") ON DELETE CASCADE
+		);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE "parenta" ("id" INTEGER PRIMARY KEY);
+		CREATE TABLE "parentb" ("id" INTEGER PRIMARY KEY);
+		CREATE TABLE "mixedcase" (
+			"a_id" INTEGER REFERENCES "parenta"("id") ON DELETE CASCADE,
+			"b_id" INTEGER REFERENCES "parentb"("id") ON UPDATE CASCADE
+		);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffDetectsChangedSQLiteForeignKeyAction(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE parent_a (id integer PRIMARY KEY);
+		CREATE TABLE multi (a_id integer REFERENCES parent_a(id) ON DELETE CASCADE);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE parent_a (id integer PRIMARY KEY);
+		CREATE TABLE multi (a_id integer REFERENCES parent_a(id) ON DELETE SET NULL);
+	`)
+
+	_, err := analyzer.Diff(baseline, target)
+	require.ErrorContains(t, err, "table multi constraints changed")
+}
+
+func TestDiffGeneratesNewTableWithSQLiteForeignKeyActions(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE parents (id integer PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE parents (id integer PRIMARY KEY);
+		CREATE TABLE children (
+			parent_id integer,
+			FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE
+		);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, "CREATE TABLE children (parent_id integer, FOREIGN KEY (parent_id) REFERENCES parents (id) ON DELETE CASCADE ON UPDATE CASCADE);\n", plan.Statements[0].SQL)
+}
+
 func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {
 	analyzer := sqlite.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY);")
@@ -150,6 +261,24 @@ func TestDiffRejectsChangedOptions(t *testing.T) {
 
 	_, err := analyzer.Diff(baseline, target)
 	require.ErrorContains(t, err, "table members options changed")
+}
+
+func TestDiffDoesNotNormalizeAwaySQLitePrimaryKeyMetadata(t *testing.T) {
+	analyzer := sqlite.New()
+	for _, test := range []struct {
+		name   string
+		target string
+	}{
+		{name: "autoincrement", target: "CREATE TABLE members (id integer PRIMARY KEY AUTOINCREMENT);"},
+		{name: "conflict resolution", target: "CREATE TABLE members (id integer PRIMARY KEY ON CONFLICT REPLACE);"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY);")
+			target := parseSnapshot(t, analyzer, test.target)
+			_, err := analyzer.Diff(baseline, target)
+			require.ErrorContains(t, err, "table members constraints changed")
+		})
+	}
 }
 
 func TestParseRejectsCreateTableAsSelect(t *testing.T) {

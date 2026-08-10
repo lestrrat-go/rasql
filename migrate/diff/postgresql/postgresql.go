@@ -3,13 +3,15 @@ package postgresql
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"unicode"
 
 	pgquery "github.com/lestrrat-go/rasql-pg/query"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // Analyzer compares the supported PostgreSQL desired-schema subset.
@@ -23,6 +25,32 @@ func New() Analyzer {
 // Dialect identifies PostgreSQL schema sources.
 func (Analyzer) Dialect() string {
 	return "postgresql"
+}
+
+// LiveSources converts one inspected PostgreSQL table into desired-schema sources.
+func (Analyzer) LiveSources(table schema.Table) ([]diff.Source, error) {
+	return diff.SourcesFromTable(dialect.PostgreSQL(), table)
+}
+
+// ValidateLivePlan ensures generated PostgreSQL statements stay within the selected table.
+func (Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
+	for _, statement := range plan.Statements {
+		parsed, err := pgquery.ParseStatement(statement.SQL)
+		if err != nil {
+			return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
+		}
+		switch parsed := parsed.(type) {
+		case *pgquery.CreateTableStatement:
+			if parsed.Name.String() != tableName {
+				return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
+			}
+		case *pgquery.CreateIndexStatement:
+			if parsed.Table.String() != tableName {
+				return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
+			}
+		}
+	}
+	return nil
 }
 
 // Parse reads CREATE TABLE and named CREATE INDEX statements from sources.
@@ -74,55 +102,51 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		return diff.Plan{}, fmt.Errorf("postgresql schema diff requires a PostgreSQL target snapshot")
 	}
 
+	comparison := diff.CompareSchemas(
+		diff.Schema[tableDefinition, indexDefinition]{Tables: baseline.tables, Indexes: baseline.indexes},
+		diff.Schema[tableDefinition, indexDefinition]{Tables: target.tables, Indexes: target.indexes},
+		func(left, right tableDefinition) bool { return ast.Equal(left.statement, right.statement) },
+		func(left, right indexDefinition) bool { return sameIndex(left.statement, right.statement) },
+	)
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
-	for _, key := range sortedTableKeys(target.tables) {
-		targetTable := target.tables[key]
-		baselineTable, exists := baseline.tables[key]
-		if !exists {
-			statement, err := createTableStatement(targetTable.statement)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
-			continue
+	for _, entry := range comparison.Tables.Added {
+		statement, err := createTableStatement(entry.Value.statement)
+		if err != nil {
+			return diff.Plan{}, err
 		}
-		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement)
+		generated = append(generated, statement)
+	}
+	for _, pair := range comparison.Tables.Matched {
+		statements, tableDiagnostics, err := diffTable(pair.Baseline.statement, pair.Target.statement)
 		if err != nil {
 			return diff.Plan{}, err
 		}
 		generated = append(generated, statements...)
 		diagnostics = append(diagnostics, tableDiagnostics...)
 	}
-	for _, key := range sortedTableKeys(baseline.tables) {
-		if _, exists := target.tables[key]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(baseline.tables[key].statement.Name)))
-		}
+	for _, entry := range comparison.Tables.Removed {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(entry.Value.statement.Name)))
 	}
 
-	for _, key := range sortedIndexKeys(target.indexes) {
-		targetIndex := target.indexes[key]
-		baselineIndex, exists := baseline.indexes[key]
-		if !exists {
-			if targetIndex.statement.Concurrently {
-				diagnostics = append(diagnostics, fmt.Sprintf("index %s uses CONCURRENTLY, which needs non-transactional migration support", displayName(*targetIndex.statement.Name)))
-				continue
-			}
-			statement, err := createIndexStatement(targetIndex.statement)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
+	for _, entry := range comparison.Indexes.Added {
+		if entry.Value.statement.Concurrently {
+			diagnostics = append(diagnostics, fmt.Sprintf("index %s uses CONCURRENTLY, which needs non-transactional migration support", displayName(*entry.Value.statement.Name)))
 			continue
 		}
-		if !sameIndex(baselineIndex.statement, targetIndex.statement) {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(*targetIndex.statement.Name)))
+		statement, err := createIndexStatement(entry.Value.statement)
+		if err != nil {
+			return diff.Plan{}, err
+		}
+		generated = append(generated, statement)
+	}
+	for _, pair := range comparison.Indexes.Matched {
+		if !pair.Equal {
+			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(*pair.Target.statement.Name)))
 		}
 	}
-	for _, key := range sortedIndexKeys(baseline.indexes) {
-		if _, exists := target.indexes[key]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(*baseline.indexes[key].statement.Name)))
-		}
+	for _, entry := range comparison.Indexes.Removed {
+		diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(*entry.Value.statement.Name)))
 	}
 	if len(diagnostics) > 0 {
 		return diff.Plan{}, manualMigrationError(diagnostics)
@@ -195,6 +219,15 @@ func (s *schemaSnapshot) addIndex(source string, statement *pgquery.CreateIndexS
 	return nil
 }
 
+func sortedIndexKeys(indexes map[string]indexDefinition) []string {
+	keys := make([]string, 0, len(indexes))
+	for key := range indexes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 type generatedStatement struct {
 	name    string
 	sql     string
@@ -234,23 +267,26 @@ func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStateme
 func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTableStatement) ([]generatedStatement, []string, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	normalizedBaseline := normalizedTable(baseline)
+	normalizedTarget := normalizedTable(target)
 	if baseline.Persistence != target.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.Name)))
 	}
-	if !reflect.DeepEqual(baseline.Constraints, target.Constraints) {
+	if !ast.Equal(normalizedBaseline.Constraints, normalizedTarget.Constraints) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.Name)))
 	}
 
 	baselineColumns := make(map[string]pgquery.ColumnDefinition, len(baseline.Columns))
-	for _, column := range baseline.Columns {
+	for _, column := range normalizedBaseline.Columns {
 		baselineColumns[column.Name.Name] = column
 	}
 	targetColumns := make(map[string]pgquery.ColumnDefinition, len(target.Columns))
-	for _, column := range target.Columns {
+	for _, column := range normalizedTarget.Columns {
 		targetColumns[column.Name.Name] = column
 	}
-	for _, column := range target.Columns {
-		previous, exists := baselineColumns[column.Name.Name]
+	for index, column := range target.Columns {
+		normalizedColumn := normalizedTarget.Columns[index]
+		previous, exists := baselineColumns[normalizedColumn.Name.Name]
 		if !exists {
 			if columnRequiresBackfill(column) {
 				diagnostics = append(diagnostics, fmt.Sprintf("new required column %s.%s needs an application-specific backfill", displayName(target.Name), column.Name.Name))
@@ -275,16 +311,203 @@ func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTab
 			})
 			continue
 		}
-		if !reflect.DeepEqual(previous, column) {
+		if !ast.Equal(previous, normalizedColumn) {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.Name), column.Name.Name))
 		}
 	}
-	for _, column := range baseline.Columns {
-		if _, exists := targetColumns[column.Name.Name]; !exists {
+	for index, column := range baseline.Columns {
+		normalizedColumn := normalizedBaseline.Columns[index]
+		if _, exists := targetColumns[normalizedColumn.Name.Name]; !exists {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.Name), column.Name.Name))
 		}
 	}
 	return generated, diagnostics, nil
+}
+
+// normalizedTable converts syntax variants that describe the same PostgreSQL
+// table into one comparison form. PostgreSQL primary keys imply NOT NULL, and
+// the live renderer writes them as table constraints with quoted identifiers.
+func normalizedTable(table *pgquery.CreateTableStatement) pgquery.CreateTableStatement {
+	normalized := *table
+	normalized.Constraints = normalizedTableConstraints(table.Constraints)
+	normalized.Columns = make([]pgquery.ColumnDefinition, len(table.Columns))
+	inlinePrimaryKeys := make([]pgquery.TableConstraint, 0)
+	for index, column := range table.Columns {
+		normalizedColumn := normalizedColumn(column)
+		constraints := make([]pgquery.ColumnConstraint, 0, len(normalizedColumn.Constraints))
+		for _, constraint := range normalizedColumn.Constraints {
+			if constraint.Kind == pgquery.ConstraintPrimaryKey {
+				inlinePrimaryKeys = append(inlinePrimaryKeys, pgquery.TableConstraint{
+					Name: constraint.Name,
+					Kind: pgquery.ConstraintPrimaryKey,
+					Columns: []pgquery.Identifier{{
+						Name: normalizedColumn.Name.Name,
+					}},
+				})
+				continue
+			}
+			constraints = append(constraints, constraint)
+		}
+		normalizedColumn.Constraints = constraints
+		normalized.Columns[index] = normalizedColumn
+	}
+	normalized.Constraints = append(inlinePrimaryKeys, normalized.Constraints...)
+	primaryKeyColumns := make(map[string]struct{})
+	for _, constraint := range normalized.Constraints {
+		if constraint.Kind != pgquery.ConstraintPrimaryKey {
+			continue
+		}
+		for _, column := range constraint.Columns {
+			primaryKeyColumns[column.Name] = struct{}{}
+		}
+	}
+	for index := range normalized.Columns {
+		column := &normalized.Columns[index]
+		if _, ok := primaryKeyColumns[column.Name.Name]; !ok || hasColumnConstraint(column.Constraints, pgquery.ConstraintNotNull) {
+			continue
+		}
+		column.Constraints = append(column.Constraints, pgquery.ColumnConstraint{Kind: pgquery.ConstraintNotNull})
+	}
+	return normalized
+}
+
+func normalizedColumn(column pgquery.ColumnDefinition) pgquery.ColumnDefinition {
+	normalized := column
+	normalized.Name = normalizedIdentifier(column.Name)
+	if column.Constraints == nil {
+		return normalized
+	}
+	normalized.Constraints = make([]pgquery.ColumnConstraint, len(column.Constraints))
+	for index, constraint := range column.Constraints {
+		normalized.Constraints[index] = normalizedColumnConstraint(constraint)
+	}
+	return normalized
+}
+
+func normalizedColumnConstraint(constraint pgquery.ColumnConstraint) pgquery.ColumnConstraint {
+	normalized := constraint
+	normalized.Name = normalizedIdentifierPtr(constraint.Name)
+	normalized.Expression = normalizedExpression(constraint.Expression)
+	normalized.References = normalizedReference(constraint.References)
+	return normalized
+}
+
+func normalizedTableConstraints(constraints []pgquery.TableConstraint) []pgquery.TableConstraint {
+	if constraints == nil {
+		return nil
+	}
+	normalized := make([]pgquery.TableConstraint, len(constraints))
+	for index, constraint := range constraints {
+		normalized[index] = constraint
+		normalized[index].Name = normalizedIdentifierPtr(constraint.Name)
+		normalized[index].Columns = normalizedIdentifiers(constraint.Columns)
+		normalized[index].Expression = normalizedExpression(constraint.Expression)
+		normalized[index].References = normalizedReference(constraint.References)
+	}
+	return normalized
+}
+
+func normalizedReference(reference *pgquery.Reference) *pgquery.Reference {
+	if reference == nil {
+		return nil
+	}
+	normalized := *reference
+	normalized.Table = normalizedQualifiedName(reference.Table)
+	normalized.Columns = normalizedIdentifiers(reference.Columns)
+	return &normalized
+}
+
+func normalizedExpression(expression pgquery.Expression) pgquery.Expression {
+	switch expression := expression.(type) {
+	case *pgquery.IdentifierExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Name = normalizedQualifiedName(expression.Name)
+		return &normalized
+	case *pgquery.StarExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Qualifier = normalizedQualifiedName(expression.Qualifier)
+		return &normalized
+	case *pgquery.UnaryExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Expression = normalizedExpression(expression.Expression)
+		return &normalized
+	case *pgquery.BinaryExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Left = normalizedExpression(expression.Left)
+		normalized.Right = normalizedExpression(expression.Right)
+		return &normalized
+	case *pgquery.CallExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Function = normalizedQualifiedName(expression.Function)
+		if expression.Arguments != nil {
+			normalized.Arguments = make([]pgquery.Expression, len(expression.Arguments))
+			for index, argument := range expression.Arguments {
+				normalized.Arguments[index] = normalizedExpression(argument)
+			}
+		}
+		return &normalized
+	default:
+		return expression
+	}
+}
+
+func normalizedIdentifiers(identifiers []pgquery.Identifier) []pgquery.Identifier {
+	if identifiers == nil {
+		return nil
+	}
+	normalized := make([]pgquery.Identifier, len(identifiers))
+	for index, identifier := range identifiers {
+		normalized[index] = normalizedIdentifier(identifier)
+	}
+	return normalized
+}
+
+func normalizedIdentifierPtr(identifier *pgquery.Identifier) *pgquery.Identifier {
+	if identifier == nil {
+		return nil
+	}
+	normalized := normalizedIdentifier(*identifier)
+	return &normalized
+}
+
+func normalizedIdentifier(identifier pgquery.Identifier) pgquery.Identifier {
+	identifier.Quoted = false
+	return identifier
+}
+
+func normalizedQualifiedName(name pgquery.QualifiedName) pgquery.QualifiedName {
+	if name == nil {
+		return nil
+	}
+	normalized := make(pgquery.QualifiedName, len(name))
+	for index, identifier := range name {
+		normalized[index] = normalizedIdentifier(identifier)
+	}
+	return normalized
+}
+
+func hasColumnConstraint(constraints []pgquery.ColumnConstraint, kind pgquery.ConstraintKind) bool {
+	for _, constraint := range constraints {
+		if constraint.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func columnRequiresBackfill(column pgquery.ColumnDefinition) bool {
@@ -315,7 +538,7 @@ func sameIndex(left *pgquery.CreateIndexStatement, right *pgquery.CreateIndexSta
 	leftCopy.IfNotExists = false
 	rightCopy := *right
 	rightCopy.IfNotExists = false
-	return reflect.DeepEqual(leftCopy, rightCopy)
+	return ast.Equal(leftCopy, rightCopy)
 }
 
 func serialize(statement pgquery.Statement) (string, error) {
@@ -333,24 +556,6 @@ func manualMigrationError(diagnostics []string) error {
 		lines[index] = "- " + diagnostic
 	}
 	return fmt.Errorf("postgresql schema diff requires manual migration:\n%s", strings.Join(lines, "\n"))
-}
-
-func sortedTableKeys(tables map[string]tableDefinition) []string {
-	keys := make([]string, 0, len(tables))
-	for key := range tables {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedIndexKeys(indexes map[string]indexDefinition) []string {
-	keys := make([]string, 0, len(indexes))
-	for key := range indexes {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func qualifiedNameKey(name pgquery.QualifiedName) string {
