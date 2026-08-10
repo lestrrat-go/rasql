@@ -160,12 +160,22 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer closeDatabase()
-	transaction, err := database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
+	defer func() {
+		if ctx.Err() == nil {
+			closeDatabase()
+		}
+	}()
+	transaction, err := runWithHardDeadline(ctx, func() (*sql.Tx, error) {
+		return database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
+	})
 	if err != nil {
 		return redactError(fmt.Errorf("begin live inspection transaction: %w", err), *dsn)
 	}
-	defer func() { _ = transaction.Rollback() }()
+	defer func() {
+		if ctx.Err() == nil {
+			_ = transaction.Rollback()
+		}
+	}()
 	analyzer, err := liveSchemaAnalyzer(ctx, transaction, d.Name())
 	if err != nil {
 		return redactError(err, *dsn)
@@ -226,8 +236,14 @@ func liveSchemaAnalyzer(ctx context.Context, transaction *sql.Tx, dialectName st
 	if dialectName != "mysql" {
 		return schemaAnalyzer(dialectName)
 	}
-	var lowerCaseTableNames int64
-	if err := transaction.QueryRowContext(ctx, "SELECT @@lower_case_table_names").Scan(&lowerCaseTableNames); err != nil {
+	lowerCaseTableNames, err := runWithHardDeadline(ctx, func() (int64, error) {
+		var value int64
+		if err := transaction.QueryRowContext(ctx, "SELECT @@lower_case_table_names").Scan(&value); err != nil {
+			return 0, err
+		}
+		return value, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("read MySQL lower_case_table_names: %w", err)
 	}
 	if lowerCaseTableNames < 0 || lowerCaseTableNames > 2 {
@@ -421,7 +437,9 @@ func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (
 	if _, err := runWithHardDeadline(ctx, func() (struct{}, error) {
 		return struct{}{}, database.PingContext(ctx)
 	}); err != nil {
-		closeDatabase()
+		if ctx.Err() == nil {
+			closeDatabase()
+		}
 		return nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
 	}
 	return database, closeDatabase, nil
