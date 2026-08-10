@@ -328,7 +328,7 @@ func TestRunDiffLiveRejectsSQLiteIndexForExtraTargetTable(t *testing.T) {
 		"-table", "members",
 		"-to", target,
 	})
-	require.ErrorContains(t, err, `diff-live target contains an index for table "audit"`)
+	require.ErrorContains(t, err, `parse target desired schema: sqlite schema source "indexes/audit_name.sql" defines index audit_name_idx on missing table audit`)
 	require.Empty(t, outputBuffer.String())
 }
 
