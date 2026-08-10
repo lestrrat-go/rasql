@@ -541,6 +541,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	if err := rows.Err(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: iterate SQLite columns: %w", err)
 	}
+	_ = rows.Close()
 	if len(metadata) == 0 {
 		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
@@ -591,28 +592,83 @@ func (i Inspector) sqliteRowIDAlias(ctx context.Context, tableName, columnName s
 	if primaryKeyColumns != 1 {
 		return false, nil
 	}
-	rows, err := i.queryer.QueryContext(ctx, "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?", tableName)
+	declaration, err := i.sqliteTableDeclaration(ctx, tableName)
 	if err != nil {
-		return false, fmt.Errorf("inspect: read SQLite table declaration: %w", err)
+		return false, err
+	}
+	return sqliteDeclarationHasRowIDAlias(declaration, columnName), nil
+}
+
+func (i Inspector) sqliteTableDeclaration(ctx context.Context, tableName string) (string, error) {
+	for _, schemaName := range []string{"temp", "main"} {
+		declaration, found, err := i.sqliteCatalogDeclaration(ctx, schemaName, tableName)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return declaration, nil
+		}
+	}
+
+	rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
+	if err != nil {
+		return "", fmt.Errorf("inspect: read SQLite database list: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	attachedSchemas := make([]string, 0)
+	for rows.Next() {
+		var sequence int64
+		var schemaName string
+		var filename string
+		if err := rows.Scan(&sequence, &schemaName, &filename); err != nil {
+			return "", fmt.Errorf("inspect: scan SQLite database list: %w", err)
+		}
+		if schemaName == "temp" || schemaName == "main" {
+			continue
+		}
+		attachedSchemas = append(attachedSchemas, schemaName)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("inspect: iterate SQLite database list: %w", err)
+	}
+	_ = rows.Close()
+	for _, schemaName := range attachedSchemas {
+		declaration, found, err := i.sqliteCatalogDeclaration(ctx, schemaName, tableName)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return declaration, nil
+		}
+	}
+	return "", nil
+}
+
+func (i Inspector) sqliteCatalogDeclaration(ctx context.Context, schemaName, tableName string) (string, bool, error) {
+	query := "SELECT sql FROM " + sqliteQuoteIdentifier(schemaName) + ".sqlite_master WHERE type = 'table' AND name = ?"
+	rows, err := i.queryer.QueryContext(ctx, query, tableName)
+	if err != nil {
+		return "", false, fmt.Errorf("inspect: read SQLite %s table declaration: %w", schemaName, err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return false, fmt.Errorf("inspect: iterate SQLite table declaration: %w", err)
+			return "", false, fmt.Errorf("inspect: iterate SQLite %s table declaration: %w", schemaName, err)
 		}
-		return false, nil
+		return "", false, nil
 	}
 	var declaration sql.NullString
 	if err := rows.Scan(&declaration); err != nil {
-		return false, fmt.Errorf("inspect: scan SQLite table declaration: %w", err)
+		return "", false, fmt.Errorf("inspect: scan SQLite %s table declaration: %w", schemaName, err)
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("inspect: iterate SQLite table declaration: %w", err)
+		return "", false, fmt.Errorf("inspect: iterate SQLite %s table declaration: %w", schemaName, err)
 	}
-	if !declaration.Valid {
-		return false, nil
-	}
-	return sqliteDeclarationHasRowIDAlias(declaration.String, columnName), nil
+	return declaration.String, true, nil
+}
+
+func sqliteQuoteIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
 type sqliteDeclarationToken struct {
@@ -626,10 +682,13 @@ func sqliteDeclarationHasRowIDAlias(declaration, columnName string) bool {
 		return false
 	}
 	for _, definition := range sqliteDeclarationDefinitions(tokens[bodyStart+1 : bodyEnd]) {
+		if sqliteDeclarationHasTablePrimaryKey(definition, columnName) {
+			return true
+		}
 		if len(definition) < 4 || !sqliteDeclarationIdentifierEqual(definition[0], columnName) {
 			continue
 		}
-		if definition[1].quoted || !strings.EqualFold(definition[1].text, "INTEGER") || (len(definition) > 2 && !sqliteDeclarationConstraintStart(definition[2])) {
+		if !strings.EqualFold(definition[1].text, "INTEGER") || (len(definition) > 2 && !sqliteDeclarationConstraintStart(definition[2])) {
 			continue
 		}
 		depth := 0
@@ -652,6 +711,25 @@ func sqliteDeclarationHasRowIDAlias(declaration, columnName string) bool {
 		}
 	}
 	return false
+}
+
+func sqliteDeclarationHasTablePrimaryKey(definition []sqliteDeclarationToken, columnName string) bool {
+	index := 0
+	if len(definition) > index && !definition[index].quoted && strings.EqualFold(definition[index].text, "CONSTRAINT") {
+		index += 2
+	}
+	if index+3 >= len(definition) || definition[index].quoted || !strings.EqualFold(definition[index].text, "PRIMARY") || definition[index+1].quoted || !strings.EqualFold(definition[index+1].text, "KEY") || definition[index+2].text != "(" {
+		return false
+	}
+	index += 3
+	if index >= len(definition) || !sqliteDeclarationIdentifierEqual(definition[index], columnName) {
+		return false
+	}
+	index++
+	if index < len(definition) && !definition[index].quoted && (strings.EqualFold(definition[index].text, "ASC") || strings.EqualFold(definition[index].text, "DESC")) {
+		index++
+	}
+	return index < len(definition) && definition[index].text == ")"
 }
 
 func sqliteDeclarationConstraintStart(token sqliteDeclarationToken) bool {

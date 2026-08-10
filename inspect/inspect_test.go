@@ -1092,6 +1092,90 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	require.NotContains(t, string(source), "ID *int64")
 }
 
+func TestSQLiteInspectorMarksTableLevelIntegerPrimaryKeysAsNonNullable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events_asc (id INTEGER, payload BLOB, PRIMARY KEY (id ASC))")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events_desc (id INTEGER, payload BLOB, PRIMARY KEY (id DESC))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	for _, tableName := range []string{"events_asc", "events_desc"} {
+		t.Run(tableName, func(t *testing.T) {
+			table, err := inspector.Table(t.Context(), tableName)
+			require.NoError(t, err)
+			require.Equal(t, []string{"id"}, table.PrimaryKey)
+			require.False(t, table.Columns[0].Nullable)
+		})
+	}
+}
+
+func TestSQLiteInspectorAcceptsQuotedIntegerPrimaryKeyType(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE events (id "INTEGER" PRIMARY KEY, payload BLOB)`)
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorUsesSelectedTempSchemaCatalog(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE main.events (id TEXT PRIMARY KEY, payload BLOB)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TEMP TABLE events (id INTEGER PRIMARY KEY, payload BLOB)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, schema.IntegerType{}, table.Columns[0].Type)
+	require.False(t, table.Columns[0].Nullable)
+}
+
+func TestSQLiteInspectorUsesSelectedAttachedSchemaCatalog(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS tenant")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE tenant.events (id INTEGER, payload BLOB, PRIMARY KEY (id DESC))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+	require.False(t, table.Columns[0].Nullable)
+}
+
 func TestSQLiteInspectorPreservesNullableCompositeIntegerPrimaryKey(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
