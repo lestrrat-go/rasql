@@ -389,6 +389,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{")
+	require.NotContains(t, string(source), "Schema:")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 }
 
@@ -412,6 +413,7 @@ func TestRunSchemaInspectsSQLite(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "type UsersRow struct {")
+	require.Contains(t, string(source), "Schema: \"main\",")
 	require.Contains(t, string(source), "ID   int64")
 	require.Contains(t, string(source), "Name string")
 }
@@ -462,6 +464,7 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "type UsersRow struct {")
+	require.NotContains(t, string(source), "Schema:")
 	require.Contains(t, string(source), "ID int64")
 }
 
