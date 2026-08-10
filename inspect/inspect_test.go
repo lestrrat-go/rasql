@@ -2321,6 +2321,11 @@ func TestSQLiteInspectorReportsTableNotFound(t *testing.T) {
 	require.NoError(t, err)
 	mock.ExpectQuery("PRAGMA table_list(\"ghosts\")").
 		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}))
+	mock.ExpectQuery("PRAGMA database_list").
+		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "file"}).AddRow(0, "main", ""))
+	mock.ExpectQuery(`SELECT name, type FROM "main".sqlite_master WHERE name = ? COLLATE NOCASE AND type IN ('table', 'view')`).
+		WithArgs("ghosts").
+		WillReturnRows(sqlmock.NewRows([]string{"name", "type"}))
 
 	_, err = inspector.Table(t.Context(), "ghosts")
 	require.Error(t, err)
@@ -2330,4 +2335,39 @@ func TestSQLiteInspectorReportsTableNotFound(t *testing.T) {
 	require.Equal(t, "ghosts", notFound.Table)
 	require.Contains(t, err.Error(), `"ghosts"`)
 	require.NotContains(t, err.Error(), "normalize table")
+}
+
+func TestSQLiteInspectorFallsBackWhenTableListIsUnavailable(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery("PRAGMA table_list(\"events\")").
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}))
+	mock.ExpectQuery("PRAGMA database_list").
+		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "file"}).AddRow(0, "main", ""))
+	mock.ExpectQuery(`SELECT name, type FROM "main".sqlite_master WHERE name = ? COLLATE NOCASE AND type IN ('table', 'view')`).
+		WithArgs("events").
+		WillReturnRows(sqlmock.NewRows([]string{"name", "type"}).AddRow("Events", "table"))
+	mock.ExpectQuery("PRAGMA \"main\".table_xinfo(\"Events\")").
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"}).
+			AddRow(0, "id", "INTEGER", 1, nil, 1, 0))
+	mock.ExpectQuery("SELECT sql FROM \"main\".sqlite_master WHERE type = 'table' AND name = ?").
+		WithArgs("Events").
+		WillReturnRows(sqlmock.NewRows([]string{"sql"}).AddRow("CREATE TABLE Events (id INTEGER PRIMARY KEY)"))
+	mock.ExpectQuery(`PRAGMA "main".index_list("Events")`).
+		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "unique", "origin", "partial"}))
+	mock.ExpectQuery(`PRAGMA "main".foreign_key_list("Events")`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "seq", "table", "from", "to", "on_update", "on_delete", "match"}))
+
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, "Events", table.Name)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
 }

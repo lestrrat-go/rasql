@@ -645,7 +645,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 	if err := rows.Err(); err != nil {
 		return schema.Table{}, fmt.Errorf("inspect: iterate SQLite columns: %w", err)
 	}
-	if metadataRows != options.columnCount {
+	if options.columnCount >= 0 && metadataRows != options.columnCount {
 		return schema.Table{}, &IncompleteMetadataError{Table: tableName, Visible: int(metadataRows), Actual: int(options.columnCount)}
 	}
 	if len(metadata) == 0 {
@@ -729,71 +729,136 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 type sqliteTableOptions struct {
 	database     string
 	name         string
+	kind         string
 	columnCount  int64
 	withoutRowID bool
 	strict       bool
 }
 
 func (i Inspector) sqliteTableOptions(ctx context.Context, databaseName string, tableName string) (sqliteTableOptions, error) {
-	query := "PRAGMA table_list(\"" + sqlitePragmaIdentifier(tableName) + "\")"
+	query := `PRAGMA table_list("` + sqlitePragmaIdentifier(tableName) + `")`
 	if databaseName != "" {
-		query = "PRAGMA \"" + sqlitePragmaIdentifier(databaseName) + "\".table_list(\"" + sqlitePragmaIdentifier(tableName) + "\")"
+		query = `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".table_list("` + sqlitePragmaIdentifier(tableName) + `")`
 	}
+	matches, tableListErr := i.sqliteTableList(ctx, query)
+	if tableListErr == nil && len(matches) > 0 {
+		return resolveSQLiteTableOptions(databaseName, tableName, matches)
+	}
+
+	// PRAGMA table_list is unavailable before SQLite 3.37; sqlite_master keeps those engines supported.
+	legacyMatches, err := i.sqliteLegacyTableOptions(ctx, databaseName, tableName)
+	if err != nil {
+		if tableListErr != nil {
+			return sqliteTableOptions{}, errors.Join(tableListErr, err)
+		}
+		return sqliteTableOptions{}, err
+	}
+	return resolveSQLiteTableOptions(databaseName, tableName, legacyMatches)
+}
+
+func (i Inspector) sqliteTableList(ctx context.Context, query string) ([]sqliteTableOptions, error) {
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
-		return sqliteTableOptions{}, fmt.Errorf("inspect: read SQLite table options: %w", err)
+		return nil, fmt.Errorf("inspect: read SQLite table scope: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	options := make([]sqliteTableOptions, 0, 2)
+
+	var matches []sqliteTableOptions
 	for rows.Next() {
-		var option sqliteTableOptions
+		var candidate sqliteTableOptions
 		var kind string
-		var withoutRowID int64
-		var strict int64
-		if err := rows.Scan(&option.database, &option.name, &kind, &option.columnCount, &withoutRowID, &strict); err != nil {
-			return sqliteTableOptions{}, fmt.Errorf("inspect: scan SQLite table options: %w", err)
+		var withoutRowID, strict int64
+		if err := rows.Scan(&candidate.database, &candidate.name, &kind, &candidate.columnCount, &withoutRowID, &strict); err != nil {
+			return nil, fmt.Errorf("inspect: scan SQLite table scope: %w", err)
 		}
-		if !strings.EqualFold(option.name, tableName) {
-			continue
-		}
-		if databaseName != "" && !strings.EqualFold(option.database, databaseName) {
-			continue
-		}
-		option.withoutRowID = withoutRowID != 0
-		option.strict = strict != 0
-		if !strings.EqualFold(kind, "table") {
-			return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: table kind %q is unsupported", tableName, kind)
-		}
-		options = append(options, option)
+		candidate.kind = kind
+		candidate.withoutRowID = withoutRowID != 0
+		candidate.strict = strict != 0
+		matches = append(matches, candidate)
 	}
 	if err := rows.Err(); err != nil {
-		return sqliteTableOptions{}, fmt.Errorf("inspect: iterate SQLite table options: %w", err)
+		return nil, fmt.Errorf("inspect: iterate SQLite table scope: %w", err)
 	}
-	if len(options) == 0 {
+	return matches, nil
+}
+
+func (i Inspector) sqliteLegacyTableOptions(ctx context.Context, databaseName string, tableName string) ([]sqliteTableOptions, error) {
+	databases := []string{databaseName}
+	if databaseName == "" {
+		rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
+		if err != nil {
+			return nil, fmt.Errorf("inspect: read SQLite databases: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+
+		databases = nil
+		for rows.Next() {
+			var sequence int64
+			var name, file string
+			if err := rows.Scan(&sequence, &name, &file); err != nil {
+				return nil, fmt.Errorf("inspect: scan SQLite database: %w", err)
+			}
+			databases = append(databases, name)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("inspect: iterate SQLite databases: %w", err)
+		}
+	}
+
+	var matches []sqliteTableOptions
+	for _, database := range databases {
+		if err := schema.ValidateIdentifier(database); err != nil {
+			return nil, fmt.Errorf("inspect: SQLite database %q cannot be represented: %w", database, err)
+		}
+		query := `SELECT name, type FROM "` + sqlitePragmaIdentifier(database) + `".sqlite_master WHERE name = ? COLLATE NOCASE AND type IN ('table', 'view')`
+		rows, err := i.queryer.QueryContext(ctx, query, tableName)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: read SQLite database %q tables: %w", database, err)
+		}
+		for rows.Next() {
+			var name, kind string
+			if err := rows.Scan(&name, &kind); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("inspect: scan SQLite database %q table: %w", database, err)
+			}
+			matches = append(matches, sqliteTableOptions{database: database, name: name, kind: kind, columnCount: -1})
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("inspect: iterate SQLite database %q tables: %w", database, err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("inspect: close SQLite database %q tables: %w", database, err)
+		}
+	}
+	return matches, nil
+}
+
+func resolveSQLiteTableOptions(databaseName string, tableName string, matches []sqliteTableOptions) (sqliteTableOptions, error) {
+	if len(matches) == 0 {
 		scope := "the connection's attached databases"
 		if databaseName != "" {
 			scope = fmt.Sprintf("SQLite database %q", databaseName)
 		}
 		return sqliteTableOptions{}, &TableNotFoundError{Table: tableName, Scope: scope}
 	}
-	if databaseName == "" && len(options) > 1 {
-		databases := make([]string, len(options))
-		for index, option := range options {
-			databases[index] = option.database
+	if databaseName == "" && len(matches) > 1 {
+		databases := make([]string, len(matches))
+		for index, match := range matches {
+			databases[index] = match.database
 		}
 		return sqliteTableOptions{}, &AmbiguousTableError{Table: tableName, Databases: databases}
 	}
-	if databaseName != "" {
-		return options[0], nil
+	if !strings.EqualFold(matches[0].kind, "table") {
+		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: table kind %q is unsupported", tableName, matches[0].kind)
 	}
-	for _, preferred := range []string{"temp", "main"} {
-		for _, option := range options {
-			if option.database == preferred {
-				return option, nil
-			}
-		}
+	if err := schema.ValidateIdentifier(matches[0].database); err != nil {
+		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite database %q cannot be represented: %w", matches[0].database, err)
 	}
-	return options[0], nil
+	if err := schema.ValidateIdentifier(matches[0].name); err != nil {
+		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: %w", matches[0].name, err)
+	}
+	return matches[0], nil
 }
 
 func sqliteRetainedQueryer(queryer Queryer) bool {
