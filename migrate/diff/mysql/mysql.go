@@ -553,10 +553,6 @@ func tableNameKey(name mysqlquery.QualifiedName, tableNames LowerCaseTableNames)
 	return qualifiedNameKey(name, tableNames != LowerCaseTableNamesCaseSensitive)
 }
 
-func indexNameKey(name mysqlquery.QualifiedName) string {
-	return qualifiedNameKey(name, true)
-}
-
 func columnNameKey(name string) string {
 	return strings.ToLower(name)
 }

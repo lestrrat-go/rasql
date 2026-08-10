@@ -92,6 +92,29 @@ func TestDiffMatchesCaseInsensitiveColumnsAndIndexes(t *testing.T) {
 	require.Empty(t, plan.Statements)
 }
 
+func TestDiffAllowsSameNamedIndexesOnDifferentTables(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE members (id bigint PRIMARY KEY, email text);
+		CREATE TABLE projects (id bigint PRIMARY KEY, name text);
+		CREATE INDEX shared_idx ON members (email);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE members (id bigint PRIMARY KEY, email text);
+		CREATE TABLE projects (id bigint PRIMARY KEY, name text);
+		CREATE INDEX shared_idx ON members (email);
+		CREATE INDEX shared_idx ON projects (name);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, []diff.Statement{{
+		Source:  "001_create_index_projects_shared_idx.sql",
+		SQL:     "CREATE INDEX shared_idx ON projects (name);\n",
+		Summary: "create index shared_idx",
+	}}, plan.Statements)
+}
+
 func TestDiffGeneratedSQLRetainsTargetIdentifierSpelling(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE `Members` (`ID` bigint PRIMARY KEY);")
