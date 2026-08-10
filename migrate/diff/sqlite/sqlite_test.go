@@ -180,6 +180,19 @@ func TestParseRejectsIndexOnlySourceForMissingTable(t *testing.T) {
 	require.EqualError(t, err, `sqlite schema source "indexes.sql" defines index orphan_idx on missing table missing`)
 }
 
+func TestParseAcceptsQualifiedIndexOwner(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.Parse([]diff.Source{{Path: "indexes.sql", SQL: `
+		CREATE TABLE members (id integer PRIMARY KEY);
+		CREATE INDEX members_id_idx ON members (id);
+		CREATE TABLE "audit"."events" (id integer PRIMARY KEY, user_id integer);
+		CREATE INDEX "audit"."events_user_id_idx" ON "events" (user_id);
+		CREATE TABLE "archive"."events" (id integer PRIMARY KEY, user_id integer);
+		CREATE INDEX "archive"."events_user_id_idx" ON "archive"."events" (user_id);
+	`}})
+	require.NoError(t, err)
+}
+
 func parseSnapshot(t *testing.T, analyzer sqlite.Analyzer, source string) diff.Snapshot {
 	t.Helper()
 	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
