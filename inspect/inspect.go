@@ -1165,6 +1165,15 @@ func (v *mysqlIndexVisibility) Scan(value any) error {
 	switch value := value.(type) {
 	case bool:
 		*v = mysqlIndexVisibility(value)
+	case int64:
+		switch value {
+		case 0:
+			*v = false
+		case 1:
+			*v = true
+		default:
+			return fmt.Errorf("inspect: MySQL index visibility %d must be 0 or 1", value)
+		}
 	case string:
 		return v.scanText(value)
 	case []byte:

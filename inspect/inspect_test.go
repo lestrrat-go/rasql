@@ -812,7 +812,7 @@ func TestMySQLInspectorSupportsMySQL57StatisticsShape(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	expectMySQLColumnsAndPrimaryKey(mock, "users")
-	expectMySQLIndexesWithoutExpression(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "collation", "index_type", "is_visible"}).AddRow("users_email_uidx", true, "email", nil, "A", "BTREE", true))
+	expectMySQLIndexesWithoutExpression(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "collation", "index_type", "is_visible"}).AddRow("users_email_uidx", true, "email", nil, "A", "BTREE", int64(1)))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
