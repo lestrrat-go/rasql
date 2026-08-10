@@ -47,6 +47,7 @@ func Example_rasql_returning() {
 		return
 	}
 
+	// SQL: INSERT INTO default_users (email) VALUES (?) RETURNING id, email, status (argument: "ada@example.com")
 	user, err := rasql.QueryWriteOne[defaultUserRow](ctx, client, statement)
 	if err != nil {
 		fmt.Printf("failed to query inserted user: %s\n", err)

@@ -43,11 +43,13 @@ func Example_rasql_update() {
 	}
 
 	// Update matches the row's primary key and writes its non-key fields.
+	// SQL: UPDATE users SET email = ? WHERE id = ? (arguments: "grace@example.com", 42)
 	if _, err := rasql.Update(ctx, client, users, UserRow{ID: 42, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}
 
+	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
 	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)

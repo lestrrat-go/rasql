@@ -54,11 +54,13 @@ func Example_schema_decimal_column() {
 	})
 	// SQLite has no exact decimal storage class, so the dialect declares this
 	// column TEXT rather than NUMERIC(19,4), which would round through REAL.
+	// SQL: CREATE TABLE invoices (id INTEGER NOT NULL, amount TEXT NOT NULL, PRIMARY KEY (id))
 	if err := rasql.Create(ctx, client, invoices); err != nil {
 		fmt.Printf("failed to create invoices table: %s\n", err)
 		return
 	}
 
+	// SQL: INSERT INTO invoices (id, amount) VALUES (?, ?) (arguments: 1, "19.99")
 	if _, err := rasql.Insert(ctx, client, invoices, invoiceRow{ID: 1, Amount: "19.99"}); err != nil {
 		fmt.Printf("failed to insert invoice: %s\n", err)
 		return
@@ -69,6 +71,7 @@ func Example_schema_decimal_column() {
 		fmt.Printf("failed to reference id column: %s\n", err)
 		return
 	}
+	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
 	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoiceID, int64(1)).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)

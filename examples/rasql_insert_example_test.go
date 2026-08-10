@@ -38,6 +38,7 @@ func Example_rasql_insert() {
 	}
 
 	// Insert uses the tagged fields in UserRow as values for the users table.
+	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 42, "ada@example.com")
 	result, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)

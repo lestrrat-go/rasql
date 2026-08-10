@@ -76,6 +76,7 @@ func Example_rasql_distinct() {
 	// Distinct is meaningful here because Project narrows the result to
 	// user_id alone; SelectFrom would already select the orders primary key,
 	// which makes every row unique before DISTINCT runs.
+	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
 	rows, err := rasql.DecodeFrom[orderingUser](orders).
 		Project(query.Project(orderUserID).As("user_id")).
 		Distinct().
