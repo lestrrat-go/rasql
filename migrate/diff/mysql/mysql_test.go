@@ -38,9 +38,41 @@ func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 				Summary: "add column members.email",
 			},
 			{
-				Source:  "002_create_index_members_email_idx.sql",
+				Source:  "002_create_index_members_members_email_idx.sql",
 				SQL:     "CREATE INDEX members_email_idx ON members (email);\n",
 				Summary: "create index members_email_idx",
+			},
+		},
+	}, plan)
+}
+
+func TestDiffKeepsSameNamedIndexesDistinctByTable(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, `
+		CREATE TABLE members (id bigint PRIMARY KEY, email text);
+		CREATE TABLE projects (id bigint PRIMARY KEY, name text);
+	`)
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE members (id bigint PRIMARY KEY, email text);
+		CREATE TABLE projects (id bigint PRIMARY KEY, name text);
+		CREATE INDEX common_idx ON members (email);
+		CREATE INDEX common_idx ON projects (name);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, diff.Plan{
+		Dialect: "mysql",
+		Statements: []diff.Statement{
+			{
+				Source:  "001_create_index_members_common_idx.sql",
+				SQL:     "CREATE INDEX common_idx ON members (email);\n",
+				Summary: "create index common_idx",
+			},
+			{
+				Source:  "002_create_index_projects_common_idx.sql",
+				SQL:     "CREATE INDEX common_idx ON projects (name);\n",
+				Summary: "create index common_idx",
 			},
 		},
 	}, plan)

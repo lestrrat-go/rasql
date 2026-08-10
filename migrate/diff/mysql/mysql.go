@@ -29,7 +29,7 @@ func (Analyzer) Dialect() string {
 func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 	snapshot := &schemaSnapshot{
 		tables:  make(map[string]tableDefinition),
-		indexes: make(map[string]indexDefinition),
+		indexes: make(map[indexKey]indexDefinition),
 	}
 	for _, source := range sources {
 		parsed, err := mysqlquery.Parse(source.SQL)
@@ -131,7 +131,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 
 type schemaSnapshot struct {
 	tables  map[string]tableDefinition
-	indexes map[string]indexDefinition
+	indexes map[indexKey]indexDefinition
 }
 
 // Dialect identifies MySQL snapshots.
@@ -165,8 +165,16 @@ type indexDefinition struct {
 	statement *mysqlquery.CreateIndexStatement
 }
 
+type indexKey struct {
+	owner string
+	name  string
+}
+
 func (s *schemaSnapshot) addIndex(source string, statement *mysqlquery.CreateIndexStatement) error {
-	key := qualifiedNameKey(statement.Name)
+	key := indexKey{
+		owner: qualifiedNameKey(statement.Table),
+		name:  qualifiedNameKey(statement.Name),
+	}
 	if previous, exists := s.indexes[key]; exists {
 		return fmt.Errorf("mysql schema source %q defines index %s already defined by %q", source, displayName(statement.Name), previous.source)
 	}
@@ -204,7 +212,7 @@ func createIndexStatement(index *mysqlquery.CreateIndexStatement) (generatedStat
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(name),
+		name:    "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name),
 		sql:     sql,
 		summary: "create index " + name,
 	}, nil
@@ -323,12 +331,17 @@ func sortedTableKeys(tables map[string]tableDefinition) []string {
 	return keys
 }
 
-func sortedIndexKeys(indexes map[string]indexDefinition) []string {
-	keys := make([]string, 0, len(indexes))
+func sortedIndexKeys(indexes map[indexKey]indexDefinition) []indexKey {
+	keys := make([]indexKey, 0, len(indexes))
 	for key := range indexes {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].owner != keys[right].owner {
+			return keys[left].owner < keys[right].owner
+		}
+		return keys[left].name < keys[right].name
+	})
 	return keys
 }
 
