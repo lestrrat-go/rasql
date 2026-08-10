@@ -154,9 +154,11 @@ type Table struct {
 	// never creates, drops or connects to the namespace itself: an
 	// application that needs "audit" to exist creates it with a reviewed
 	// native migration, the same way every other piece of DDL this library
-	// does not synthesize gets created. inspect never reports a Schema, so a
-	// qualified table returned by inspection is re-read through a hand-written
-	// descriptor.
+	// does not synthesize gets created. SQLite inspection preserves the
+	// selected database name in Schema, so a qualified table returned by
+	// inspection remains qualified when it is rendered. SQLite inspection
+	// requires a retained connection when the descriptor addresses temp or
+	// attached data.
 	Schema            string
 	Name              string
 	Columns           []Column
