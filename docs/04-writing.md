@@ -66,6 +66,7 @@ func Example_rasql_insert() {
 	}
 
 	// Insert uses the tagged fields in UserRow as values for the users table.
+	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 42, "ada@example.com")
 	result, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
@@ -188,11 +189,13 @@ func Example_rasql_insert_defaults() {
 	}
 
 	// Name each database-assigned column. Email remains an explicit empty string.
+	// SQL: INSERT INTO default_users (email) VALUES (?) (argument: "")
 	if _, err := rasql.InsertWithOptions(ctx, client, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
 		fmt.Printf("failed to insert default user: %s\n", err)
 		return
 	}
 
+	// SQL: SELECT default_users.id, default_users.email, default_users.status FROM default_users WHERE default_users.id = ? (argument: 1)
 	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query default user: %s\n", err)
@@ -258,11 +261,13 @@ func Example_rasql_update() {
 	}
 
 	// Update matches the row's primary key and writes its non-key fields.
+	// SQL: UPDATE users SET email = ? WHERE id = ? (arguments: "grace@example.com", 42)
 	if _, err := rasql.Update(ctx, client, users, UserRow{ID: 42, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}
 
+	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
 	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
@@ -338,6 +343,7 @@ func Example_rasql_delete() {
 	}
 
 	// WhereEqual takes a column of the target table and binds the value.
+	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
 	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
@@ -351,6 +357,7 @@ func Example_rasql_delete() {
 	fmt.Printf("%d user deleted by id\n", deleted)
 
 	// Where takes any predicate built through the query package.
+	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
 	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
@@ -370,6 +377,7 @@ func Example_rasql_delete() {
 	}
 
 	// AllowAll states the full-table delete. Build renders it without executing it.
+	// SQL: DELETE FROM users
 	statement, err := rasql.DeleteFrom(users).AllowAll().Build(client.Dialect())
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
@@ -480,6 +488,7 @@ func Example_rasql_returning() {
 		return
 	}
 
+	// SQL: INSERT INTO default_users (email) VALUES (?) RETURNING id, email, status (argument: "ada@example.com")
 	user, err := rasql.QueryWriteOne[defaultUserRow](ctx, client, statement)
 	if err != nil {
 		fmt.Printf("failed to query inserted user: %s\n", err)
@@ -609,10 +618,12 @@ func Example_rasql_transaction() {
 	// makes this bare defer correct rather than an error every caller discards.
 	defer func() { _ = tx.Rollback() }()
 
+	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 1, "ada@example.com")
 	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
+	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 2, "grace@example.com")
 	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 2, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -620,6 +631,7 @@ func Example_rasql_transaction() {
 
 	// The same builder shape that runs against client also runs against tx: it
 	// reads the two rows written above, before they are committed.
+	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
 	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, tx)
 	if err != nil {
 		fmt.Printf("failed to query users in transaction: %s\n", err)
@@ -636,6 +648,7 @@ func Example_rasql_transaction() {
 	// example's own constraint, not rasql's: SetMaxOpenConns(1) gives it one
 	// connection, and the transaction holds it until Commit or Rollback
 	// releases it back to the pool.
+	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
 	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query users after commit: %s\n", err)

@@ -49,10 +49,12 @@ func Example_rasql_transaction() {
 	// makes this bare defer correct rather than an error every caller discards.
 	defer func() { _ = tx.Rollback() }()
 
+	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 1, "ada@example.com")
 	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
+	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 2, "grace@example.com")
 	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 2, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -60,6 +62,7 @@ func Example_rasql_transaction() {
 
 	// The same builder shape that runs against client also runs against tx: it
 	// reads the two rows written above, before they are committed.
+	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
 	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, tx)
 	if err != nil {
 		fmt.Printf("failed to query users in transaction: %s\n", err)
@@ -76,6 +79,7 @@ func Example_rasql_transaction() {
 	// example's own constraint, not rasql's: SetMaxOpenConns(1) gives it one
 	// connection, and the transaction holds it until Commit or Rollback
 	// releases it back to the pool.
+	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
 	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query users after commit: %s\n", err)

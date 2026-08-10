@@ -142,6 +142,7 @@ func Example_rasql_sqlite_query() {
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
 	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
