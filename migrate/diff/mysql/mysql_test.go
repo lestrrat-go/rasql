@@ -1,6 +1,10 @@
 package mysql_test
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
@@ -93,6 +97,29 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 		SQL:     "CREATE TABLE projects (id bigint PRIMARY KEY, owner_id bigint NOT NULL);\n",
 		Summary: "create table projects",
 	}}, plan.Statements)
+}
+
+func TestDiffWritesMigrationForMaximumLengthMultibyteIdentifiers(t *testing.T) {
+	tableName := strings.Repeat("表", 64)
+	indexName := strings.Repeat("索", 63) + "A"
+	otherIndexName := strings.Repeat("索", 63) + "B"
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, fmt.Sprintf("CREATE TABLE `%s` (id bigint);", tableName))
+	target := parseSnapshot(t, analyzer, fmt.Sprintf("CREATE TABLE `%s` (id bigint); CREATE INDEX `%s` ON `%s` (id); CREATE INDEX `%s` ON `%s` (id);", tableName, indexName, tableName, otherIndexName, tableName))
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Len(t, plan.Statements, 2)
+	require.NotEqual(t, plan.Statements[0].Source, plan.Statements[1].Source)
+	for _, statement := range plan.Statements {
+		require.LessOrEqual(t, len(statement.Source), 255)
+	}
+
+	directory := filepath.Join(t.TempDir(), "001_add_index")
+	require.NoError(t, diff.WriteMigration(directory, plan))
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
 }
 
 func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {

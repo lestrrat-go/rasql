@@ -2,11 +2,13 @@
 package mysql
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
 	"github.com/lestrrat-go/rasql/migrate/diff"
@@ -187,6 +189,11 @@ type generatedStatement struct {
 	sql     string
 	summary string
 }
+
+const (
+	maxFilenamePartBytes = 100
+	filenamePartHashSize = 12
+)
 
 func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStatement, error) {
 	copy := *table
@@ -375,5 +382,21 @@ func filenamePart(value string) string {
 	if name == "" {
 		return "object"
 	}
-	return name
+	if len(name) <= maxFilenamePartBytes {
+		return name
+	}
+	hash := sha256.Sum256([]byte(value))
+	suffix := fmt.Sprintf("_%x", hash[:filenamePartHashSize])
+	return truncateFilenamePart(name, maxFilenamePartBytes-len(suffix)) + suffix
+}
+
+func truncateFilenamePart(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	value = value[:maxBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
