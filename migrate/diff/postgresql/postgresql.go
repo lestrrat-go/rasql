@@ -125,7 +125,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	plan := diff.Plan{Dialect: "postgresql", Statements: make([]diff.Statement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.Statement{
-			Source:  fmt.Sprintf("%03d_%s.sql", index+1, statement.name),
+			Source:  statement.name + ".sql",
 			SQL:     statement.sql,
 			Summary: statement.summary,
 		}
@@ -133,6 +133,9 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	if len(plan.Statements) > 0 {
 		if err := plan.Validate(); err != nil {
 			return diff.Plan{}, err
+		}
+		for index := range plan.Statements {
+			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
 		}
 	}
 	return plan, nil

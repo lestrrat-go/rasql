@@ -63,6 +63,18 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 	}}, plan.Statements)
 }
 
+func TestDiffRejectsCollidingGeneratedStatementNames(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, `CREATE TABLE members (id bigint PRIMARY KEY); CREATE TABLE "foo-bar" (id bigint PRIMARY KEY); CREATE TABLE foo_bar (id bigint PRIMARY KEY);`)
+
+	_, err := analyzer.Diff(baseline, target)
+	require.ErrorContains(t, err, `duplicate generated SQL source "create_table_foo_bar.sql"`)
+	require.ErrorContains(t, err, "create table foo-bar")
+	require.ErrorContains(t, err, "create table foo_bar")
+	require.NotContains(t, err.Error(), "001_")
+}
+
 func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
