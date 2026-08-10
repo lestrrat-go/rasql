@@ -203,6 +203,8 @@ func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStat
 		return generatedStatement{}, err
 	}
 	name := displayName(copy.Name)
+	// WriteMigration prefixes each generated statement with its sequence position, so equal normalized
+	// components remain distinct in the public migration output; this is covered by its ordered plan.
 	return generatedStatement{
 		name:    "create_table_" + filenamePart(name),
 		sql:     sql,
