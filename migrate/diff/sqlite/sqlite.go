@@ -51,6 +51,13 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 			}
 		}
 	}
+	for _, key := range sortedIndexKeys(snapshot.indexes) {
+		index := snapshot.indexes[key]
+		table := indexTableName(index.statement)
+		if _, exists := snapshot.tables[qualifiedNameKey(table)]; !exists {
+			return nil, fmt.Errorf("sqlite schema source %q defines index %s on missing table %s", index.source, displayName(index.statement.Name), displayName(table))
+		}
+	}
 	if len(snapshot.tables) == 0 {
 		return nil, fmt.Errorf("sqlite schema has no CREATE TABLE statements")
 	}
@@ -364,6 +371,15 @@ func qualifiedNameKey(name sqlitequery.QualifiedName) string {
 		fmt.Fprintf(&key, "%d:%s", len(part.Name), part.Name)
 	}
 	return key.String()
+}
+
+func indexTableName(index *sqlitequery.CreateIndexStatement) sqlitequery.QualifiedName {
+	if len(index.Table) != 1 || len(index.Name) < 2 {
+		return index.Table
+	}
+	table := make(sqlitequery.QualifiedName, 0, len(index.Name))
+	table = append(table, index.Name[:len(index.Name)-1]...)
+	return append(table, index.Table...)
 }
 
 func displayName(name sqlitequery.QualifiedName) string {
