@@ -77,7 +77,7 @@ func (a Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 	}
 	for _, key := range sortedIndexKeys(snapshot.indexes) {
 		index := snapshot.indexes[key]
-		if _, exists := snapshot.tables[qualifiedNameKey(index.statement.Table)]; !exists {
+		if _, exists := snapshot.tables[tableNameKey(index.statement.Table, snapshot.lowerCaseTableNames)]; !exists {
 			return nil, fmt.Errorf("mysql schema source %q defines index %s on missing table %s", index.source, displayName(index.statement.Name), displayName(index.statement.Table))
 		}
 	}

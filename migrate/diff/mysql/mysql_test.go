@@ -305,6 +305,25 @@ func TestParseRejectsIndexOnlySourceForMissingTable(t *testing.T) {
 	require.EqualError(t, err, `mysql schema source "indexes.sql" defines index orphan_idx on missing table missing`)
 }
 
+func TestParseMatchesIndexOwnerAccordingToLowerCaseTableNames(t *testing.T) {
+	source := "CREATE TABLE `Members` (id bigint PRIMARY KEY);\nCREATE INDEX member_idx ON members (id);"
+
+	caseSensitive := mysql.New()
+	_, err := caseSensitive.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
+	require.ErrorContains(t, err, "missing table members")
+
+	for _, tableNames := range []mysql.LowerCaseTableNames{
+		mysql.LowerCaseTableNamesLowercase,
+		mysql.LowerCaseTableNamesPreserve,
+	} {
+		t.Run(fmt.Sprintf("lower_case_table_names=%d", tableNames), func(t *testing.T) {
+			analyzer := mysql.NewWithLowerCaseTableNames(tableNames)
+			_, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
+			require.NoError(t, err)
+		})
+	}
+}
+
 func parseSnapshot(t *testing.T, analyzer mysql.Analyzer, source string) diff.Snapshot {
 	t.Helper()
 	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
