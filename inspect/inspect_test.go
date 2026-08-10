@@ -1114,7 +1114,7 @@ func TestSQLiteInspectorMarksTableLevelIntegerPrimaryKeysAsNonNullable(t *testin
 	require.False(t, table.Columns[0].Nullable)
 }
 
-func TestSQLiteInspectorPreservesNullableTableLevelDescendingIntegerPrimaryKey(t *testing.T) {
+func TestSQLiteInspectorMarksTableLevelDescendingIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1129,7 +1129,7 @@ func TestSQLiteInspectorPreservesNullableTableLevelDescendingIntegerPrimaryKey(t
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
 	require.Equal(t, []schema.Column{
-		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
+		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
@@ -1213,7 +1213,7 @@ func TestSQLiteInspectorUsesSelectedAttachedSchemaCatalog(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
-	require.True(t, table.Columns[0].Nullable)
+	require.False(t, table.Columns[0].Nullable)
 }
 
 func TestSQLiteInspectorMatchesMainTableNamesCaseInsensitively(t *testing.T) {
