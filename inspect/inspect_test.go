@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/go-sql-driver/mysql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
@@ -616,6 +617,59 @@ func TestMySQLInspectorRejectsPartialColumnMetadata(t *testing.T) {
 	require.Equal(t, "users", incomplete.Table)
 	require.Equal(t, 2, incomplete.Visible)
 	require.Equal(t, 3, incomplete.Actual)
+}
+
+func TestMySQLInspectorRejectsZeroVisibleColumnMetadata(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	mock.ExpectQuery(columnsQuery).
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}))
+	expectMySQLCreateTable(mock, "users", "CREATE TABLE `users` (`id` bigint NOT NULL, `secret` text NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB")
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.Equal(t, schema.Table{}, table)
+	require.ErrorIs(t, err, inspect.ErrIncompleteMetadata)
+	var incomplete *inspect.IncompleteMetadataError
+	require.ErrorAs(t, err, &incomplete)
+	require.Equal(t, "users", incomplete.Table)
+	require.Equal(t, 0, incomplete.Visible)
+	require.Equal(t, 2, incomplete.Actual)
+}
+
+func TestMySQLInspectorReportsTableNotFoundWhenSHOWCreateProvesAbsence(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+	mock.ExpectQuery(columnsQuery).
+		WithArgs("ghosts").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}))
+	mock.ExpectQuery("SHOW CREATE TABLE `ghosts`").
+		WillReturnError(&mysql.MySQLError{Number: 1146, Message: "Table 'test.ghosts' doesn't exist"})
+
+	table, err := inspector.Table(t.Context(), "ghosts")
+	require.Equal(t, schema.Table{}, table)
+	require.ErrorIs(t, err, inspect.ErrTableNotFound)
+	var notFound *inspect.TableNotFoundError
+	require.ErrorAs(t, err, &notFound)
+	require.Equal(t, "ghosts", notFound.Table)
 }
 
 func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {

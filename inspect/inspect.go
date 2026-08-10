@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -59,10 +60,12 @@ var ErrIncompleteMetadata = errors.New("inspect: incomplete table metadata")
 // columns of Table than actually exist. PostgreSQL's information_schema.columns
 // filters each row by has_column_privilege, so a role granted SELECT on only
 // some columns, or none, gets a short or empty result with no error of its
-// own; pg_catalog carries no such filter and reports the true count. Visible
-// and Actual let a caller distinguish this from a schema rasql genuinely
-// cannot represent: a privilege gap is fixed with GRANT, a representability
-// gap needs a schema change, and only one of those is this error.
+// own; pg_catalog carries no such filter and reports the true count. MySQL
+// applies the same column filter, and SHOW CREATE TABLE supplies the complete
+// count for the comparison. Visible and Actual let a caller distinguish this
+// from a schema rasql genuinely cannot represent: a privilege gap is fixed
+// with GRANT, a representability gap needs a schema change, and only one of
+// those is this error.
 type IncompleteMetadataError struct {
 	// Table is the requested table name.
 	Table string
@@ -112,8 +115,8 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 	return Inspector{queryer: queryer, dialect: d}, nil
 }
 
-// Table reads the supported schema metadata for tableName. For PostgreSQL it
-// returns [TableNotFoundError] when tableName does not exist and
+// Table reads the supported schema metadata for tableName. It returns
+// [TableNotFoundError] when tableName does not exist and
 // [IncompleteMetadataError] when the inspecting role's privileges hide some
 // or all of the table's columns.
 func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, error) {
@@ -143,11 +146,12 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 			return schema.Table{}, err
 		}
 	} else if i.dialect.Name() == "mysql" {
-		if len(columns) == 0 {
-			return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
-		}
-		if err := i.mySQLCheckColumnVisibility(ctx, tableName, len(columns)); err != nil {
+		exists, err := i.mySQLCheckColumnVisibility(ctx, tableName, len(columns))
+		if err != nil {
 			return schema.Table{}, err
+		}
+		if !exists {
+			return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
 		}
 	} else if len(columns) == 0 {
 		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
@@ -312,52 +316,53 @@ func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName s
 // mySQLCheckColumnVisibility compares the information_schema column count
 // with the complete CREATE TABLE definition. MySQL filters information_schema
 // columns by the inspecting role's privileges, but SHOW CREATE TABLE returns
-// the full definition when the role has any privilege on the table.
-func (i Inspector) mySQLCheckColumnVisibility(ctx context.Context, tableName string, visible int) error {
+// the full definition when the role has any privilege on the table. The bool
+// reports whether SHOW CREATE TABLE proved that the table exists.
+func (i Inspector) mySQLCheckColumnVisibility(ctx context.Context, tableName string, visible int) (bool, error) {
 	query := "SHOW CREATE TABLE `" + strings.ReplaceAll(tableName, "`", "``") + "`"
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("inspect: read MySQL table %q definition: %w", tableName, err)
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1146 {
+			return false, nil
+		}
+		return true, fmt.Errorf("inspect: read MySQL table %q definition: %w", tableName, err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return fmt.Errorf("inspect: iterate MySQL table %q definition: %w", tableName, err)
+			return true, fmt.Errorf("inspect: iterate MySQL table %q definition: %w", tableName, err)
 		}
-		return &IncompleteMetadataError{
-			Table:   tableName,
-			Visible: visible,
-			Reason:  "SHOW CREATE TABLE returned no definition",
-		}
+		return false, nil
 	}
 	var returnedTable string
 	var definition string
 	if err := rows.Scan(&returnedTable, &definition); err != nil {
-		return &IncompleteMetadataError{
+		return true, &IncompleteMetadataError{
 			Table:   tableName,
 			Visible: visible,
 			Reason:  fmt.Sprintf("SHOW CREATE TABLE returned unreadable metadata: %v", err),
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("inspect: iterate MySQL table %q definition: %w", tableName, err)
+		return true, fmt.Errorf("inspect: iterate MySQL table %q definition: %w", tableName, err)
 	}
 	if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(definition)), "CREATE TABLE ") {
-		return nil
+		return true, nil
 	}
 	actual, err := mysqlCreateTableColumnCount(definition)
 	if err != nil {
-		return &IncompleteMetadataError{
+		return true, &IncompleteMetadataError{
 			Table:   tableName,
 			Visible: visible,
 			Reason:  fmt.Sprintf("SHOW CREATE TABLE could not prove completeness: %v", err),
 		}
 	}
 	if actual != visible {
-		return &IncompleteMetadataError{Table: tableName, Visible: visible, Actual: actual}
+		return true, &IncompleteMetadataError{Table: tableName, Visible: visible, Actual: actual}
 	}
-	return nil
+	return true, nil
 }
 
 // mysqlCreateTableColumnCount counts column definitions in the parenthesized
