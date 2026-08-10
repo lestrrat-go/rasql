@@ -2,11 +2,13 @@
 package mysql
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
 	"github.com/lestrrat-go/rasql/migrate/diff"
@@ -29,7 +31,7 @@ func (Analyzer) Dialect() string {
 func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 	snapshot := &schemaSnapshot{
 		tables:  make(map[string]tableDefinition),
-		indexes: make(map[string]indexDefinition),
+		indexes: make(map[indexKey]indexDefinition),
 	}
 	for _, source := range sources {
 		parsed, err := mysqlquery.Parse(source.SQL)
@@ -131,7 +133,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 
 type schemaSnapshot struct {
 	tables  map[string]tableDefinition
-	indexes map[string]indexDefinition
+	indexes map[indexKey]indexDefinition
 }
 
 // Dialect identifies MySQL snapshots.
@@ -165,8 +167,16 @@ type indexDefinition struct {
 	statement *mysqlquery.CreateIndexStatement
 }
 
+type indexKey struct {
+	owner string
+	name  string
+}
+
 func (s *schemaSnapshot) addIndex(source string, statement *mysqlquery.CreateIndexStatement) error {
-	key := qualifiedNameKey(statement.Name)
+	key := indexKey{
+		owner: qualifiedNameKey(statement.Table),
+		name:  qualifiedNameKey(statement.Name),
+	}
 	if previous, exists := s.indexes[key]; exists {
 		return fmt.Errorf("mysql schema source %q defines index %s already defined by %q", source, displayName(statement.Name), previous.source)
 	}
@@ -180,6 +190,11 @@ type generatedStatement struct {
 	summary string
 }
 
+const (
+	maxFilenamePartBytes = 100
+	filenamePartHashSize = 12
+)
+
 func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStatement, error) {
 	copy := *table
 	copy.IfNotExists = false
@@ -188,6 +203,8 @@ func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStat
 		return generatedStatement{}, err
 	}
 	name := displayName(copy.Name)
+	// WriteMigration prefixes each generated statement with its sequence position, so equal normalized
+	// components remain distinct in the public migration output; this is covered by its ordered plan.
 	return generatedStatement{
 		name:    "create_table_" + filenamePart(name),
 		sql:     sql,
@@ -204,7 +221,7 @@ func createIndexStatement(index *mysqlquery.CreateIndexStatement) (generatedStat
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(name),
+		name:    "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name),
 		sql:     sql,
 		summary: "create index " + name,
 	}, nil
@@ -323,12 +340,17 @@ func sortedTableKeys(tables map[string]tableDefinition) []string {
 	return keys
 }
 
-func sortedIndexKeys(indexes map[string]indexDefinition) []string {
-	keys := make([]string, 0, len(indexes))
+func sortedIndexKeys(indexes map[indexKey]indexDefinition) []indexKey {
+	keys := make([]indexKey, 0, len(indexes))
 	for key := range indexes {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].owner != keys[right].owner {
+			return keys[left].owner < keys[right].owner
+		}
+		return keys[left].name < keys[right].name
+	})
 	return keys
 }
 
@@ -362,5 +384,21 @@ func filenamePart(value string) string {
 	if name == "" {
 		return "object"
 	}
-	return name
+	if len(name) <= maxFilenamePartBytes {
+		return name
+	}
+	hash := sha256.Sum256([]byte(value))
+	suffix := fmt.Sprintf("_%x", hash[:filenamePartHashSize])
+	return truncateFilenamePart(name, maxFilenamePartBytes-len(suffix)) + suffix
+}
+
+func truncateFilenamePart(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	value = value[:maxBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
