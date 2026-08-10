@@ -11,6 +11,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -382,6 +384,43 @@ func TestRunDiffLiveHonorsInspectionTimeout(t *testing.T) {
 	require.Less(t, time.Since(started), time.Second)
 }
 
+func TestRunDiffLiveSkipsBlockingCleanupAfterTimeout(t *testing.T) {
+	previousOpenDatabase := openDatabase
+	previousTimeout := liveInspectionTimeout
+	state := &nonCooperativeInspectionState{release: make(chan struct{}), queryStarted: make(chan struct{}), queryFinished: make(chan struct{})}
+	nonCooperativeInspectionStateForTest = state
+	t.Cleanup(func() {
+		state.releaseOperation()
+		nonCooperativeInspectionStateForTest = nil
+		openDatabase = previousOpenDatabase
+		liveInspectionTimeout = previousTimeout
+	})
+	openDatabase = func(string, string) (*sql.DB, error) {
+		return sql.Open(nonCooperativeInspectionDriverName, "")
+	}
+	liveInspectionTimeout = time.Second
+
+	started := time.Now()
+	err := run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", "blocked",
+		"-table", "members",
+		"-to", t.TempDir(),
+	})
+
+	require.ErrorContains(t, err, "context deadline exceeded")
+	require.Less(t, time.Since(started), 2*time.Second)
+	require.Zero(t, state.rollback.Load())
+	require.Zero(t, state.closed.Load())
+	state.releaseOperation()
+	select {
+	case <-state.queryFinished:
+	case <-time.After(time.Second):
+		t.Fatal("non-cooperative query did not finish after release")
+	}
+}
+
 func TestRunDiffLiveInspectsWithinOneTransaction(t *testing.T) {
 	previousOpenDatabase := openDatabase
 	state := &snapshotInspectionState{}
@@ -461,6 +500,43 @@ func TestLiveSchemaAnalyzerUsesMySQLTableNameMode(t *testing.T) {
 			require.NoError(t, transaction.Rollback())
 		})
 	}
+}
+
+func TestLiveSchemaAnalyzerHonorsMySQLModeTimeout(t *testing.T) {
+	state := &nonCooperativeInspectionState{release: make(chan struct{}), queryStarted: make(chan struct{}), queryFinished: make(chan struct{})}
+	nonCooperativeInspectionStateForTest = state
+	database, err := sql.Open(nonCooperativeInspectionDriverName, "")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		state.releaseOperation()
+		nonCooperativeInspectionStateForTest = nil
+		require.NoError(t, database.Close())
+	})
+	transaction, err := database.Begin()
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err = liveSchemaAnalyzer(ctx, transaction, "mysql")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	state.releaseOperation()
+	select {
+	case <-state.queryFinished:
+	case <-time.After(time.Second):
+		t.Fatal("non-cooperative MySQL metadata query did not finish after release")
+	}
+	require.NoError(t, transaction.Rollback())
+}
+
+func TestRunWithHardDeadlineReturnsContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := runWithHardDeadline(ctx, func() (struct{}, error) {
+		<-ctx.Done()
+		return struct{}{}, ctx.Err()
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestRunPlanPrintsSQLSources(t *testing.T) {
@@ -596,6 +672,93 @@ var _ driver.Conn = blockingInspectionConn{}
 var _ driver.ConnBeginTx = blockingInspectionConn{}
 var _ driver.Pinger = blockingInspectionConn{}
 var _ driver.QueryerContext = blockingInspectionConn{}
+
+const nonCooperativeInspectionDriverName = "rasqlmigrate-non-cooperative-inspection"
+
+var nonCooperativeInspectionStateForTest *nonCooperativeInspectionState
+
+func init() {
+	sql.Register(nonCooperativeInspectionDriverName, nonCooperativeInspectionDriver{})
+}
+
+type nonCooperativeInspectionDriver struct{}
+
+func (nonCooperativeInspectionDriver) Open(string) (driver.Conn, error) {
+	return &nonCooperativeInspectionConn{state: nonCooperativeInspectionStateForTest}, nil
+}
+
+type nonCooperativeInspectionConn struct {
+	state *nonCooperativeInspectionState
+}
+
+func (nonCooperativeInspectionConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("non-cooperative inspection driver does not prepare statements")
+}
+
+func (c *nonCooperativeInspectionConn) Close() error {
+	c.state.closed.Add(1)
+	return nil
+}
+
+func (c *nonCooperativeInspectionConn) Begin() (driver.Tx, error) {
+	return c.begin(), nil
+}
+
+func (c *nonCooperativeInspectionConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return c.begin(), nil
+}
+
+func (c *nonCooperativeInspectionConn) begin() driver.Tx {
+	return nonCooperativeInspectionTx{state: c.state}
+}
+
+func (nonCooperativeInspectionConn) Ping(context.Context) error {
+	return nil
+}
+
+func (c *nonCooperativeInspectionConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	select {
+	case <-c.state.queryStarted:
+	default:
+		close(c.state.queryStarted)
+	}
+	<-c.state.release
+	close(c.state.queryFinished)
+	return nil, errors.New("non-cooperative inspection query released")
+}
+
+type nonCooperativeInspectionTx struct {
+	state *nonCooperativeInspectionState
+}
+
+func (tx nonCooperativeInspectionTx) Commit() error {
+	return nil
+}
+
+func (tx nonCooperativeInspectionTx) Rollback() error {
+	tx.state.rollback.Add(1)
+	return nil
+}
+
+type nonCooperativeInspectionState struct {
+	closed        atomic.Int32
+	rollback      atomic.Int32
+	release       chan struct{}
+	queryStarted  chan struct{}
+	queryFinished chan struct{}
+	releaseOnce   sync.Once
+}
+
+func (s *nonCooperativeInspectionState) releaseOperation() {
+	s.releaseOnce.Do(func() { close(s.release) })
+}
+
+var _ driver.Driver = nonCooperativeInspectionDriver{}
+var _ driver.Conn = (*nonCooperativeInspectionConn)(nil)
+var _ driver.ConnBeginTx = (*nonCooperativeInspectionConn)(nil)
+var _ driver.Pinger = (*nonCooperativeInspectionConn)(nil)
+var _ driver.QueryerContext = (*nonCooperativeInspectionConn)(nil)
+var _ driver.Tx = nonCooperativeInspectionTx{}
 
 const snapshotInspectionDriverName = "rasqlmigrate-snapshot-inspection"
 

@@ -118,7 +118,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		generated = append(generated, statement)
 	}
 	for _, pair := range comparison.Tables.Matched {
-		statements, tableDiagnostics, err := diffTable(pair.Baseline.statement, pair.Target.statement)
+		statements, tableDiagnostics, err := diffTable(pair.Baseline, pair.Target)
 		if err != nil {
 			return diff.Plan{}, err
 		}
@@ -141,7 +141,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		generated = append(generated, statement)
 	}
 	for _, pair := range comparison.Indexes.Matched {
-		if !pair.Equal {
+		if !sameIndex(pair.Baseline.statement, pair.Target.statement) {
 			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(*pair.Target.statement.Name)))
 		}
 	}
@@ -264,36 +264,36 @@ func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStateme
 	}, nil
 }
 
-func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTableStatement) ([]generatedStatement, []string, error) {
+func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
-	normalizedBaseline := normalizedTable(baseline)
-	normalizedTarget := normalizedTable(target)
-	if baseline.Persistence != target.Persistence {
-		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.Name)))
+	normalizedBaseline := normalizedTable(baseline.statement, false)
+	normalizedTarget := normalizedTable(target.statement, false)
+	if baseline.statement.Persistence != target.statement.Persistence {
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.statement.Name)))
 	}
 	if !ast.Equal(normalizedBaseline.Constraints, normalizedTarget.Constraints) {
-		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.Name)))
+		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.statement.Name)))
 	}
 
-	baselineColumns := make(map[string]pgquery.ColumnDefinition, len(baseline.Columns))
+	baselineColumns := make(map[string]pgquery.ColumnDefinition, len(baseline.statement.Columns))
 	for _, column := range normalizedBaseline.Columns {
 		baselineColumns[column.Name.Name] = column
 	}
-	targetColumns := make(map[string]pgquery.ColumnDefinition, len(target.Columns))
+	targetColumns := make(map[string]pgquery.ColumnDefinition, len(target.statement.Columns))
 	for _, column := range normalizedTarget.Columns {
 		targetColumns[column.Name.Name] = column
 	}
-	for index, column := range target.Columns {
+	for index, column := range target.statement.Columns {
 		normalizedColumn := normalizedTarget.Columns[index]
 		previous, exists := baselineColumns[normalizedColumn.Name.Name]
 		if !exists {
 			if columnRequiresBackfill(column) {
-				diagnostics = append(diagnostics, fmt.Sprintf("new required column %s.%s needs an application-specific backfill", displayName(target.Name), column.Name.Name))
+				diagnostics = append(diagnostics, fmt.Sprintf("new required column %s.%s needs an application-specific backfill", displayName(target.statement.Name), column.Name.Name))
 				continue
 			}
 			statement := &pgquery.AlterTableStatement{
-				Name: target.Name,
+				Name: target.statement.Name,
 				Actions: []pgquery.AlterTableAction{{
 					Kind:   pgquery.AlterTableAddColumn,
 					Column: &column,
@@ -303,7 +303,7 @@ func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTab
 			if err != nil {
 				return nil, nil, err
 			}
-			name := displayName(target.Name)
+			name := displayName(target.statement.Name)
 			generated = append(generated, generatedStatement{
 				name:    "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name),
 				sql:     sql,
@@ -312,13 +312,13 @@ func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTab
 			continue
 		}
 		if !ast.Equal(previous, normalizedColumn) {
-			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.Name), column.Name.Name))
+			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.statement.Name), column.Name.Name))
 		}
 	}
-	for index, column := range baseline.Columns {
+	for index, column := range baseline.statement.Columns {
 		normalizedColumn := normalizedBaseline.Columns[index]
 		if _, exists := targetColumns[normalizedColumn.Name.Name]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.Name), column.Name.Name))
+			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.statement.Name), column.Name.Name))
 		}
 	}
 	return generated, diagnostics, nil
@@ -327,13 +327,13 @@ func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTab
 // normalizedTable converts syntax variants that describe the same PostgreSQL
 // table into one comparison form. PostgreSQL primary keys imply NOT NULL, and
 // the live renderer writes them as table constraints with quoted identifiers.
-func normalizedTable(table *pgquery.CreateTableStatement) pgquery.CreateTableStatement {
+func normalizedTable(table *pgquery.CreateTableStatement, ignoreQuotes bool) pgquery.CreateTableStatement {
 	normalized := *table
-	normalized.Constraints = normalizedTableConstraints(table.Constraints)
+	normalized.Constraints = normalizedTableConstraints(table.Constraints, ignoreQuotes)
 	normalized.Columns = make([]pgquery.ColumnDefinition, len(table.Columns))
 	inlinePrimaryKeys := make([]pgquery.TableConstraint, 0)
 	for index, column := range table.Columns {
-		normalizedColumn := normalizedColumn(column)
+		normalizedColumn := normalizedColumn(column, ignoreQuotes)
 		constraints := make([]pgquery.ColumnConstraint, 0, len(normalizedColumn.Constraints))
 		for _, constraint := range normalizedColumn.Constraints {
 			if constraint.Kind == pgquery.ConstraintPrimaryKey {
@@ -341,7 +341,8 @@ func normalizedTable(table *pgquery.CreateTableStatement) pgquery.CreateTableSta
 					Name: constraint.Name,
 					Kind: pgquery.ConstraintPrimaryKey,
 					Columns: []pgquery.Identifier{{
-						Name: normalizedColumn.Name.Name,
+						Name:   normalizedColumn.Name.Name,
+						Quoted: normalizedColumn.Name.Quoted,
 					}},
 				})
 				continue
@@ -371,93 +372,93 @@ func normalizedTable(table *pgquery.CreateTableStatement) pgquery.CreateTableSta
 	return normalized
 }
 
-func normalizedColumn(column pgquery.ColumnDefinition) pgquery.ColumnDefinition {
+func normalizedColumn(column pgquery.ColumnDefinition, ignoreQuotes bool) pgquery.ColumnDefinition {
 	normalized := column
-	normalized.Name = normalizedIdentifier(column.Name)
+	normalized.Name = normalizedIdentifier(column.Name, ignoreQuotes)
 	if column.Constraints == nil {
 		return normalized
 	}
 	normalized.Constraints = make([]pgquery.ColumnConstraint, len(column.Constraints))
 	for index, constraint := range column.Constraints {
-		normalized.Constraints[index] = normalizedColumnConstraint(constraint)
+		normalized.Constraints[index] = normalizedColumnConstraint(constraint, ignoreQuotes)
 	}
 	return normalized
 }
 
-func normalizedColumnConstraint(constraint pgquery.ColumnConstraint) pgquery.ColumnConstraint {
+func normalizedColumnConstraint(constraint pgquery.ColumnConstraint, ignoreQuotes bool) pgquery.ColumnConstraint {
 	normalized := constraint
-	normalized.Name = normalizedIdentifierPtr(constraint.Name)
-	normalized.Expression = normalizedExpression(constraint.Expression)
-	normalized.References = normalizedReference(constraint.References)
+	normalized.Name = normalizedIdentifierPtr(constraint.Name, ignoreQuotes)
+	normalized.Expression = normalizedExpression(constraint.Expression, ignoreQuotes)
+	normalized.References = normalizedReference(constraint.References, ignoreQuotes)
 	return normalized
 }
 
-func normalizedTableConstraints(constraints []pgquery.TableConstraint) []pgquery.TableConstraint {
+func normalizedTableConstraints(constraints []pgquery.TableConstraint, ignoreQuotes bool) []pgquery.TableConstraint {
 	if constraints == nil {
 		return nil
 	}
 	normalized := make([]pgquery.TableConstraint, len(constraints))
 	for index, constraint := range constraints {
 		normalized[index] = constraint
-		normalized[index].Name = normalizedIdentifierPtr(constraint.Name)
-		normalized[index].Columns = normalizedIdentifiers(constraint.Columns)
-		normalized[index].Expression = normalizedExpression(constraint.Expression)
-		normalized[index].References = normalizedReference(constraint.References)
+		normalized[index].Name = normalizedIdentifierPtr(constraint.Name, ignoreQuotes)
+		normalized[index].Columns = normalizedIdentifiers(constraint.Columns, ignoreQuotes)
+		normalized[index].Expression = normalizedExpression(constraint.Expression, ignoreQuotes)
+		normalized[index].References = normalizedReference(constraint.References, ignoreQuotes)
 	}
 	return normalized
 }
 
-func normalizedReference(reference *pgquery.Reference) *pgquery.Reference {
+func normalizedReference(reference *pgquery.Reference, ignoreQuotes bool) *pgquery.Reference {
 	if reference == nil {
 		return nil
 	}
 	normalized := *reference
-	normalized.Table = normalizedQualifiedName(reference.Table)
-	normalized.Columns = normalizedIdentifiers(reference.Columns)
+	normalized.Table = normalizedQualifiedName(reference.Table, ignoreQuotes)
+	normalized.Columns = normalizedIdentifiers(reference.Columns, ignoreQuotes)
 	return &normalized
 }
 
-func normalizedExpression(expression pgquery.Expression) pgquery.Expression {
+func normalizedExpression(expression pgquery.Expression, ignoreQuotes bool) pgquery.Expression {
 	switch expression := expression.(type) {
 	case *pgquery.IdentifierExpression:
 		if expression == nil {
 			return nil
 		}
 		normalized := *expression
-		normalized.Name = normalizedQualifiedName(expression.Name)
+		normalized.Name = normalizedQualifiedName(expression.Name, ignoreQuotes)
 		return &normalized
 	case *pgquery.StarExpression:
 		if expression == nil {
 			return nil
 		}
 		normalized := *expression
-		normalized.Qualifier = normalizedQualifiedName(expression.Qualifier)
+		normalized.Qualifier = normalizedQualifiedName(expression.Qualifier, ignoreQuotes)
 		return &normalized
 	case *pgquery.UnaryExpression:
 		if expression == nil {
 			return nil
 		}
 		normalized := *expression
-		normalized.Expression = normalizedExpression(expression.Expression)
+		normalized.Expression = normalizedExpression(expression.Expression, ignoreQuotes)
 		return &normalized
 	case *pgquery.BinaryExpression:
 		if expression == nil {
 			return nil
 		}
 		normalized := *expression
-		normalized.Left = normalizedExpression(expression.Left)
-		normalized.Right = normalizedExpression(expression.Right)
+		normalized.Left = normalizedExpression(expression.Left, ignoreQuotes)
+		normalized.Right = normalizedExpression(expression.Right, ignoreQuotes)
 		return &normalized
 	case *pgquery.CallExpression:
 		if expression == nil {
 			return nil
 		}
 		normalized := *expression
-		normalized.Function = normalizedQualifiedName(expression.Function)
+		normalized.Function = normalizedQualifiedName(expression.Function, ignoreQuotes)
 		if expression.Arguments != nil {
 			normalized.Arguments = make([]pgquery.Expression, len(expression.Arguments))
 			for index, argument := range expression.Arguments {
-				normalized.Arguments[index] = normalizedExpression(argument)
+				normalized.Arguments[index] = normalizedExpression(argument, ignoreQuotes)
 			}
 		}
 		return &normalized
@@ -466,37 +467,39 @@ func normalizedExpression(expression pgquery.Expression) pgquery.Expression {
 	}
 }
 
-func normalizedIdentifiers(identifiers []pgquery.Identifier) []pgquery.Identifier {
+func normalizedIdentifiers(identifiers []pgquery.Identifier, ignoreQuotes bool) []pgquery.Identifier {
 	if identifiers == nil {
 		return nil
 	}
 	normalized := make([]pgquery.Identifier, len(identifiers))
 	for index, identifier := range identifiers {
-		normalized[index] = normalizedIdentifier(identifier)
+		normalized[index] = normalizedIdentifier(identifier, ignoreQuotes)
 	}
 	return normalized
 }
 
-func normalizedIdentifierPtr(identifier *pgquery.Identifier) *pgquery.Identifier {
+func normalizedIdentifierPtr(identifier *pgquery.Identifier, ignoreQuotes bool) *pgquery.Identifier {
 	if identifier == nil {
 		return nil
 	}
-	normalized := normalizedIdentifier(*identifier)
+	normalized := normalizedIdentifier(*identifier, ignoreQuotes)
 	return &normalized
 }
 
-func normalizedIdentifier(identifier pgquery.Identifier) pgquery.Identifier {
-	identifier.Quoted = false
+func normalizedIdentifier(identifier pgquery.Identifier, ignoreQuotes bool) pgquery.Identifier {
+	if ignoreQuotes {
+		identifier.Quoted = false
+	}
 	return identifier
 }
 
-func normalizedQualifiedName(name pgquery.QualifiedName) pgquery.QualifiedName {
+func normalizedQualifiedName(name pgquery.QualifiedName, ignoreQuotes bool) pgquery.QualifiedName {
 	if name == nil {
 		return nil
 	}
 	normalized := make(pgquery.QualifiedName, len(name))
 	for index, identifier := range name {
-		normalized[index] = normalizedIdentifier(identifier)
+		normalized[index] = normalizedIdentifier(identifier, ignoreQuotes)
 	}
 	return normalized
 }

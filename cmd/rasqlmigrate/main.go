@@ -23,6 +23,7 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
+	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite"
 )
 
@@ -159,12 +160,22 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer closeDatabase()
-	transaction, err := database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
+	defer func() {
+		if ctx.Err() == nil {
+			closeDatabase()
+		}
+	}()
+	transaction, err := runWithHardDeadline(ctx, func() (*sql.Tx, error) {
+		return database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
+	})
 	if err != nil {
 		return redactError(fmt.Errorf("begin live inspection transaction: %w", err), *dsn)
 	}
-	defer func() { _ = transaction.Rollback() }()
+	defer func() {
+		if ctx.Err() == nil {
+			_ = transaction.Rollback()
+		}
+	}()
 	analyzer, err := liveSchemaAnalyzer(ctx, transaction, d.Name())
 	if err != nil {
 		return redactError(err, *dsn)
@@ -177,7 +188,9 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	liveTable, err := inspector.Table(ctx, *tableName)
+	liveTable, err := runWithHardDeadline(ctx, func() (schema.Table, error) {
+		return inspector.Table(ctx, *tableName)
+	})
 	if err != nil {
 		return redactError(err, *dsn)
 	}
@@ -223,8 +236,14 @@ func liveSchemaAnalyzer(ctx context.Context, transaction *sql.Tx, dialectName st
 	if dialectName != "mysql" {
 		return schemaAnalyzer(dialectName)
 	}
-	var lowerCaseTableNames int64
-	if err := transaction.QueryRowContext(ctx, "SELECT @@lower_case_table_names").Scan(&lowerCaseTableNames); err != nil {
+	lowerCaseTableNames, err := runWithHardDeadline(ctx, func() (int64, error) {
+		var value int64
+		if err := transaction.QueryRowContext(ctx, "SELECT @@lower_case_table_names").Scan(&value); err != nil {
+			return 0, err
+		}
+		return value, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("read MySQL lower_case_table_names: %w", err)
 	}
 	if lowerCaseTableNames < 0 || lowerCaseTableNames > 2 {
@@ -415,11 +434,38 @@ func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (
 	closeDatabase := func() {
 		_ = database.Close()
 	}
-	if err := database.PingContext(ctx); err != nil {
-		closeDatabase()
+	if _, err := runWithHardDeadline(ctx, func() (struct{}, error) {
+		return struct{}{}, database.PingContext(ctx)
+	}); err != nil {
+		if ctx.Err() == nil {
+			closeDatabase()
+		}
 		return nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
 	}
 	return database, closeDatabase, nil
+}
+
+func runWithHardDeadline[T any](ctx context.Context, operation func() (T, error)) (T, error) {
+	type result struct {
+		value T
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, err := operation()
+		done <- result{value: value, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	case completed := <-done:
+		if err := ctx.Err(); err != nil {
+			var zero T
+			return zero, err
+		}
+		return completed.value, completed.err
+	}
 }
 
 func migrationDialect(name string) (dialect.Dialect, error) {
@@ -547,5 +593,21 @@ func redactError(err error, dsn string) error {
 	if err == nil || dsn == "" {
 		return err
 	}
-	return errors.New(strings.ReplaceAll(err.Error(), dsn, "[redacted]"))
+	return redactedError{
+		message: strings.ReplaceAll(err.Error(), dsn, "[redacted]"),
+		cause:   err,
+	}
+}
+
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (e redactedError) Error() string {
+	return e.message
+}
+
+func (e redactedError) Unwrap() error {
+	return e.cause
 }
