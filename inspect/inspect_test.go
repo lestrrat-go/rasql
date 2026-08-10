@@ -793,7 +793,7 @@ func TestMySQLInspectorReadsUniqueIndex(t *testing.T) {
 	mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}).AddRow("users_email_uidx", true, "email", nil, nil, "A", "BTREE", true))
+	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}).AddRow("users_email_uidx", true, "email", nil, nil, "A", "BTREE", "YES"))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -878,11 +878,11 @@ func TestMySQLInspectorRejectsUnsupportedUniqueIndexMetadata(t *testing.T) {
 	tests := []struct {
 		name      string
 		indexType string
-		visible   bool
+		visible   string
 		reason    string
 	}{
-		{name: "non-BTREE method", indexType: "HASH", visible: true, reason: "rasql does not support MySQL HASH index methods"},
-		{name: "invisible index", indexType: "BTREE", reason: "rasql does not support invisible MySQL unique indexes"},
+		{name: "non-BTREE method", indexType: "HASH", visible: "YES", reason: "rasql does not support MySQL HASH index methods"},
+		{name: "invisible index", indexType: "BTREE", visible: "NO", reason: "rasql does not support invisible MySQL unique indexes"},
 	}
 
 	for _, test := range tests {
@@ -905,6 +905,25 @@ func TestMySQLInspectorRejectsUnsupportedUniqueIndexMetadata(t *testing.T) {
 			require.EqualError(t, err, fmt.Sprintf(`inspect: index "users_email_uidx" cannot be represented: %s`, test.reason))
 		})
 	}
+}
+
+func TestMySQLInspectorRejectsUnknownIndexVisibility(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	expectMySQLColumnsAndPrimaryKey(mock, "users")
+	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}).
+		AddRow("users_email_uidx", true, "email", nil, nil, "A", "BTREE", "MAYBE"))
+
+	_, err = inspector.Table(t.Context(), "users")
+	require.EqualError(t, err, `inspect: scan index: sql: Scan error on column index 7, name "is_visible": inspect: MySQL index visibility "MAYBE" must be YES or NO`)
 }
 
 // TestMySQLInspectorRecordsUnsignedIntegerColumn follows one unsigned column

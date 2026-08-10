@@ -1117,7 +1117,7 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 			var expression sql.NullString
 			var collation sql.NullString
 			var indexType string
-			var visible bool
+			var visible mysqlIndexVisibility
 			scanArgs := []any{&name, &unique, &nullableColumn, &prefixLength}
 			if mysqlIndexHasExpression {
 				scanArgs = append(scanArgs, &expression)
@@ -1129,7 +1129,7 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 			if !strings.EqualFold(indexType, "BTREE") {
 				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL %s index methods", name, strings.ToUpper(indexType))
 			}
-			if unique && !visible {
+			if unique && !bool(visible) {
 				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support invisible MySQL unique indexes", name)
 			}
 			if unique && strings.EqualFold(collation.String, "D") {
@@ -1157,6 +1157,34 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 		return nil, fmt.Errorf("inspect: iterate indexes: %w", err)
 	}
 	return indexes, nil
+}
+
+type mysqlIndexVisibility bool
+
+func (v *mysqlIndexVisibility) Scan(value any) error {
+	switch value := value.(type) {
+	case bool:
+		*v = mysqlIndexVisibility(value)
+	case string:
+		return v.scanText(value)
+	case []byte:
+		return v.scanText(string(value))
+	default:
+		return fmt.Errorf("inspect: MySQL index visibility has unsupported value %v (%T)", value, value)
+	}
+	return nil
+}
+
+func (v *mysqlIndexVisibility) scanText(value string) error {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "YES":
+		*v = true
+	case "NO":
+		*v = false
+	default:
+		return fmt.Errorf("inspect: MySQL index visibility %q must be YES or NO", value)
+	}
+	return nil
 }
 
 func (i Inspector) readForeignKeys(ctx context.Context, query string, argument any) ([]schema.ForeignKey, error) {
