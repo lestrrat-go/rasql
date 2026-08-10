@@ -63,6 +63,7 @@ func Example_rasql_static_template() {
 		return
 	}
 
+	// SQL: SELECT id, email FROM users WHERE email = ? (argument: "ada@example.com")
 	// QueryRendered runs the template statement; row.Scan turns its rows into a rangeable sequence.
 	sqlRows, err := client.QueryRendered(ctx, statement)
 	if err != nil {

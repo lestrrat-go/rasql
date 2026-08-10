@@ -50,6 +50,7 @@ func Example_rasql_where_in() {
 	// WhereIn binds one placeholder per value and skips the users whose id is
 	// not in the list. The list must hold at least one value: an empty one makes
 	// Query return an error instead of rendering IN (), which is not valid SQL.
+	// SQL: SELECT users.id, users.email FROM users WHERE users.id IN (?, ?) ORDER BY users.id ASC (arguments: 1, 3)
 	rows, err := rasql.SelectFrom(users).
 		WhereIn(users.ID, 1, 3).
 		OrderAsc(users.ID).
