@@ -184,7 +184,19 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 		}
 	}
 	if queries.indexes != "" {
-		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.argument(tableName))
+		if i.dialect.Name() == "mysql" {
+			hasExpression, err := i.mysqlStatisticsHasColumn(ctx, "EXPRESSION")
+			if err != nil {
+				return schema.Table{}, err
+			}
+			hasVisibility, err := i.mysqlStatisticsHasColumn(ctx, "IS_VISIBLE")
+			if err != nil {
+				return schema.Table{}, err
+			}
+			queries.mysqlIndexHasExpression = hasExpression
+			queries.indexes = mysqlStatisticsIndexesQuery(hasExpression, hasVisibility)
+		}
+		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.argument(tableName), queries.mysqlIndexHasExpression)
 		if err != nil {
 			return schema.Table{}, err
 		}
@@ -210,6 +222,20 @@ func (i Inspector) informationSchemaQueries(ctx context.Context) (informationQue
 		return informationQueries{}, err
 	}
 	return postgreSQLInformationQueries(version), nil
+}
+
+func (i Inspector) mysqlStatisticsHasColumn(ctx context.Context, column string) (bool, error) {
+	rows, err := i.queryer.QueryContext(ctx, "SHOW COLUMNS FROM information_schema.statistics LIKE '"+column+"'")
+	if err != nil {
+		return false, fmt.Errorf("inspect: read MySQL statistics columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	hasExpression := rows.Next()
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("inspect: iterate MySQL statistics columns: %w", err)
+	}
+	return hasExpression, nil
 }
 
 func (i Inspector) postgreSQLServerVersion(ctx context.Context) (int, error) {
@@ -1073,7 +1099,7 @@ func (i Inspector) rejectUnsupportedExclusionConstraints(ctx context.Context, qu
 	return fmt.Errorf("inspect: exclusion constraint %q cannot be represented: rasql does not support exclusion constraints", name)
 }
 
-func (i Inspector) readIndexes(ctx context.Context, query string, argument any) ([]schema.Index, error) {
+func (i Inspector) readIndexes(ctx context.Context, query string, argument any, mysqlIndexHasExpression bool) ([]schema.Index, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read indexes: %w", err)
@@ -1085,7 +1111,41 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any) 
 		var name string
 		var unique bool
 		var column string
-		if err := rows.Scan(&name, &unique, &column); err != nil {
+		if i.dialect.Name() == "mysql" {
+			var nullableColumn sql.NullString
+			var prefixLength sql.NullInt64
+			var expression sql.NullString
+			var collation sql.NullString
+			var indexType string
+			var visible mysqlIndexVisibility
+			scanArgs := []any{&name, &unique, &nullableColumn, &prefixLength}
+			if mysqlIndexHasExpression {
+				scanArgs = append(scanArgs, &expression)
+			}
+			scanArgs = append(scanArgs, &collation, &indexType, &visible)
+			if err := rows.Scan(scanArgs...); err != nil {
+				return nil, fmt.Errorf("inspect: scan index: %w", err)
+			}
+			if !strings.EqualFold(indexType, "BTREE") {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL %s index methods", name, strings.ToUpper(indexType))
+			}
+			if unique && !bool(visible) {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support invisible MySQL unique indexes", name)
+			}
+			if unique && strings.EqualFold(collation.String, "D") {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL descending unique index parts", name)
+			}
+			if prefixLength.Valid {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL prefix index parts", name)
+			}
+			if expression.Valid {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL functional index parts", name)
+			}
+			if !nullableColumn.Valid {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL non-column index parts", name)
+			}
+			column = nullableColumn.String
+		} else if err := rows.Scan(&name, &unique, &column); err != nil {
 			return nil, fmt.Errorf("inspect: scan index: %w", err)
 		}
 		if len(indexes) == 0 || indexes[len(indexes)-1].Name != name {
@@ -1097,6 +1157,44 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any) 
 		return nil, fmt.Errorf("inspect: iterate indexes: %w", err)
 	}
 	return indexes, nil
+}
+
+type mysqlIndexVisibility bool
+
+func (v *mysqlIndexVisibility) Scan(value any) error {
+	switch value := value.(type) {
+	case bool:
+		*v = mysqlIndexVisibility(value)
+	// database/sql drivers return MySQL visibility as int64; the 0/1 path is covered by TestMySQLInspectorSupportsMySQL57StatisticsShape.
+	case int64:
+		switch value {
+		case 0:
+			*v = false
+		case 1:
+			*v = true
+		default:
+			return fmt.Errorf("inspect: MySQL index visibility %d must be 0 or 1", value)
+		}
+	case string:
+		return v.scanText(value)
+	case []byte:
+		return v.scanText(string(value))
+	default:
+		return fmt.Errorf("inspect: MySQL index visibility has unsupported value %v (%T)", value, value)
+	}
+	return nil
+}
+
+func (v *mysqlIndexVisibility) scanText(value string) error {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "YES":
+		*v = true
+	case "NO":
+		*v = false
+	default:
+		return fmt.Errorf("inspect: MySQL index visibility %q must be YES or NO", value)
+	}
+	return nil
 }
 
 func (i Inspector) readForeignKeys(ctx context.Context, query string, argument any) ([]schema.ForeignKey, error) {
@@ -1201,6 +1299,7 @@ type informationQueries struct {
 	unsupportedIndexes              string
 	indexes                         string
 	foreignKeys                     string
+	mysqlIndexHasExpression         bool
 }
 
 func (informationQueries) argument(tableName string) any {
@@ -1218,10 +1317,25 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 		return informationQueries{
 			columns:    "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
 			primaryKey: "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
+			indexes:    mysqlStatisticsIndexesQuery(true, true),
 		}, nil
 	default:
 		return informationQueries{}, fmt.Errorf("inspect: unsupported dialect %q", name)
 	}
+}
+
+func mysqlStatisticsIndexesQuery(hasExpression bool, hasVisibility bool) string {
+	columns := "index_name, non_unique = 0, column_name, sub_part"
+	if hasExpression {
+		columns += ", expression"
+	}
+	columns += ", collation, index_type"
+	if hasVisibility {
+		columns += ", is_visible"
+	} else {
+		columns += ", TRUE"
+	}
+	return "SELECT " + columns + " FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
 }
 
 const (
