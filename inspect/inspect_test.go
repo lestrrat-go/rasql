@@ -1092,6 +1092,49 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	require.NotContains(t, string(source), "ID *int64")
 }
 
+func TestSQLiteInspectorPreservesNullableCompositeIntegerPrimaryKey(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events (id INTEGER, sequence INTEGER, payload BLOB, PRIMARY KEY (id, sequence))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
+		{Name: "sequence", Type: schema.IntegerType{}, Nullable: true},
+		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
+	}, table.Columns)
+	require.Equal(t, []string{"id", "sequence"}, table.PrimaryKey)
+}
+
+func TestSQLiteInspectorPreservesNullableDescendingIntegerPrimaryKey(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE events (id INTEGER PRIMARY KEY DESC, payload BLOB)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, []schema.Column{
+		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
+		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
+	}, table.Columns)
+	require.Equal(t, []string{"id"}, table.PrimaryKey)
+}
+
 func TestSQLiteInspectorPreservesNullableTextPrimaryKey(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
