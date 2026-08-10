@@ -82,6 +82,60 @@ func TestDiffKeepsSameNamedIndexesDistinctByTable(t *testing.T) {
 	}, plan)
 }
 
+func TestDiffMatchesCaseInsensitiveColumnsAndIndexes(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE `Members` (`ID` bigint PRIMARY KEY, `Email` text);\nCREATE INDEX `Members_Email_IDX` ON `Members` (`Email`);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE `Members` (`id` bigint PRIMARY KEY, `email` text);\nCREATE INDEX `members_email_idx` ON `Members` (`email`);")
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+func TestDiffGeneratedSQLRetainsTargetIdentifierSpelling(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE `Members` (`ID` bigint PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE `Members` (`ID` bigint PRIMARY KEY, `Email` text);\nCREATE INDEX `Members_Email_IDX` ON `Members` (`Email`);")
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, []diff.Statement{
+		{
+			Source:  "001_add_column_members_email.sql",
+			SQL:     "ALTER TABLE `Members` ADD COLUMN `Email` text;\n",
+			Summary: "add column Members.Email",
+		},
+		{
+			Source:  "002_create_index_members_members_email_idx.sql",
+			SQL:     "CREATE INDEX `Members_Email_IDX` ON `Members` (`Email`);\n",
+			Summary: "create index Members_Email_IDX",
+		},
+	}, plan.Statements)
+}
+
+func TestDiffMatchesTablesAccordingToLowerCaseTableNames(t *testing.T) {
+	baselineSource := "CREATE TABLE `Members` (`ID` bigint PRIMARY KEY);"
+	targetSource := "CREATE TABLE `members` (`id` bigint PRIMARY KEY);"
+
+	caseSensitive := mysql.New()
+	baseline := parseSnapshot(t, caseSensitive, baselineSource)
+	target := parseSnapshot(t, caseSensitive, targetSource)
+	_, err := caseSensitive.Diff(baseline, target)
+	require.ErrorContains(t, err, "table Members was removed")
+
+	for _, tableNames := range []mysql.LowerCaseTableNames{
+		mysql.LowerCaseTableNamesLowercase,
+		mysql.LowerCaseTableNamesPreserve,
+	} {
+		analyzer := mysql.NewWithLowerCaseTableNames(tableNames)
+		baseline := parseSnapshot(t, analyzer, baselineSource)
+		target := parseSnapshot(t, analyzer, targetSource)
+		plan, err := analyzer.Diff(baseline, target)
+		require.NoError(t, err)
+		require.Empty(t, plan.Statements)
+	}
+}
+
 func TestDiffGeneratesNewTable(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
