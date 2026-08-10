@@ -268,20 +268,22 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 
 func columnRequiresBackfill(column mysqlquery.ColumnDefinition) bool {
 	hasDefault := false
+	hasNotNull := false
+	hasPrimaryKey := false
 	for _, constraint := range column.Constraints {
-		if constraint.Kind == mysqlquery.ConstraintDefault {
+		switch constraint.Kind {
+		case mysqlquery.ConstraintDefault:
 			hasDefault = true
+		case mysqlquery.ConstraintNotNull:
+			hasNotNull = true
+		case mysqlquery.ConstraintPrimaryKey:
+			hasPrimaryKey = true
 		}
 	}
-	for _, constraint := range column.Constraints {
-		if constraint.Kind == mysqlquery.ConstraintPrimaryKey {
-			return true
-		}
-		if constraint.Kind == mysqlquery.ConstraintNotNull {
-			return !hasDefault
-		}
+	if hasPrimaryKey {
+		return true
 	}
-	return false
+	return hasNotNull && !hasDefault
 }
 
 func sameIndex(left *mysqlquery.CreateIndexStatement, right *mysqlquery.CreateIndexStatement) bool {

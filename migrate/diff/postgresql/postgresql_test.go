@@ -86,6 +86,15 @@ func TestDiffGeneratesNewRequiredColumnWithDefault(t *testing.T) {
 	}}, plan.Statements)
 }
 
+func TestDiffRejectsNewRequiredPrimaryKeyColumnWithDefaultWhenPrimaryKeyFollowsNotNull(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, active integer NOT NULL DEFAULT 1 PRIMARY KEY);")
+
+	_, err := analyzer.Diff(baseline, target)
+	require.ErrorContains(t, err, "new required column members.active needs an application-specific backfill")
+}
+
 func TestDiffRejectsRemovedColumns(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, email text);")
