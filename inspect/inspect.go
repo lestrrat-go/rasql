@@ -583,7 +583,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, queryer Queryer,
 		columns = append(columns, schema.Column{
 			Name:     column.name,
 			Type:     columnType,
-			Nullable: column.notNull == 0 && !(rowIDAlias && len(primaryColumns) == 1 && column.primaryPosition > 0),
+			Nullable: column.notNull == 0 && (!rowIDAlias || len(primaryColumns) != 1 || column.primaryPosition <= 0),
 			Default:  text(column.defaultValue),
 		})
 	}
@@ -807,7 +807,7 @@ func sqliteDeclarationTokens(declaration string) ([]sqliteDeclarationToken, int,
 			}
 			if index+1 < len(declaration) && declaration[index] == '/' && declaration[index+1] == '*' {
 				index += 2
-				for index+1 < len(declaration) && !(declaration[index] == '*' && declaration[index+1] == '/') {
+				for index+1 < len(declaration) && (declaration[index] != '*' || declaration[index+1] != '/') {
 					index++
 				}
 				if index+1 >= len(declaration) {
