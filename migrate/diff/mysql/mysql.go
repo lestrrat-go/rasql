@@ -11,7 +11,10 @@ import (
 	"unicode/utf8"
 
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // LowerCaseTableNames controls MySQL table-name matching.
@@ -46,6 +49,32 @@ func NewWithLowerCaseTableNames(value LowerCaseTableNames) Analyzer {
 // Dialect identifies MySQL schema sources.
 func (Analyzer) Dialect() string {
 	return "mysql"
+}
+
+// LiveSources converts one inspected MySQL table into desired-schema sources.
+func (Analyzer) LiveSources(table schema.Table) ([]diff.Source, error) {
+	return diff.SourcesFromTable(dialect.MySQL(), table)
+}
+
+// ValidateLivePlan ensures generated MySQL statements stay within the selected table.
+func (Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
+	for _, statement := range plan.Statements {
+		parsed, err := mysqlquery.ParseStatement(statement.SQL)
+		if err != nil {
+			return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
+		}
+		switch parsed := parsed.(type) {
+		case *mysqlquery.CreateTableStatement:
+			if parsed.Name.String() != tableName {
+				return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
+			}
+		case *mysqlquery.CreateIndexStatement:
+			if parsed.Table.String() != tableName {
+				return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
+			}
+		}
+	}
+	return nil
 }
 
 // Parse reads CREATE TABLE and named CREATE INDEX statements from sources.
@@ -512,7 +541,7 @@ func sameIndex(left *mysqlquery.CreateIndexStatement, right *mysqlquery.CreateIn
 	rightCopy := normalizedIndex(right, tableNames)
 	leftCopy.IfNotExists = false
 	rightCopy.IfNotExists = false
-	return reflect.DeepEqual(leftCopy, rightCopy)
+	return ast.Equal(leftCopy, rightCopy)
 }
 
 func serialize(statement mysqlquery.Statement) (string, error) {

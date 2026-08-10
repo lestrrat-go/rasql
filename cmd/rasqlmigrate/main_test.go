@@ -2,11 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -76,6 +82,325 @@ func TestRunDiffPreviewsSQLiteMigration(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
+}
+
+func TestRunDiffLivePreviewsSQLiteMigration(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+}
+
+func TestRunDiffLiveInspectsMixedCaseSQLiteTable(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE Members (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE \"Members\" (id INTEGER PRIMARY KEY);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "Members",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
+func TestRunDiffLiveMatchesMixedCaseSQLiteTableWhenSelectedLowercase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE Members (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+}
+
+func TestRunDiffLivePreservesSQLiteForeignKeys(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE parents (id INTEGER PRIMARY KEY); CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/children.sql", "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "children",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
+func TestRunDiffLivePreservesMultipleSQLiteForeignKeys(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `
+		CREATE TABLE parent_a (id INTEGER PRIMARY KEY);
+		CREATE TABLE parent_b (id INTEGER PRIMARY KEY);
+		CREATE TABLE multi (
+			a_id INTEGER REFERENCES parent_a(id) ON DELETE CASCADE,
+			b_id INTEGER REFERENCES parent_b(id) ON UPDATE CASCADE
+		);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/multi.sql", `
+		CREATE TABLE multi (
+			a_id INTEGER REFERENCES parent_a(id) ON DELETE CASCADE,
+			b_id INTEGER REFERENCES parent_b(id) ON UPDATE CASCADE
+		);
+	`)
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "multi",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
+func TestRunDiffLivePreservesSQLiteIndexes(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL); CREATE INDEX members_name_idx ON members (name)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n")
+	writeTestSchema(t, target, "indexes/members_name.sql", "CREATE INDEX members_name_idx ON members (name);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
+func TestRunDiffLiveNormalizesSQLiteInlineConstraints(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT UNIQUE CHECK (length(email) > 0))`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT CHECK (length(email) > 0) UNIQUE);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
+func TestRunDiffLiveMatchesSQLiteIndexNameCase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT); CREATE INDEX Members_Name_IDX ON members (name)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT);\n")
+	writeTestSchema(t, target, "indexes/members_name.sql", "CREATE INDEX members_name_idx ON members (name);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+}
+
+func TestRunDiffLiveRejectsExtraSQLiteTargetTable(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY);\n")
+	writeTestSchema(t, target, "tables/audit.sql", "CREATE TABLE audit (id INTEGER PRIMARY KEY);\n")
+	outputBuffer := setCommandOutput(t)
+	err = run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	})
+	require.ErrorContains(t, err, `diff-live target contains table "audit"`)
+	require.Empty(t, outputBuffer.String())
+}
+
+func TestRunDiffLiveRejectsSQLiteIndexForExtraTargetTable(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY);\n")
+	writeTestSchema(t, target, "indexes/audit_name.sql", "CREATE INDEX audit_name_idx ON audit (name);\n")
+	outputBuffer := setCommandOutput(t)
+	err = run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	})
+	require.ErrorContains(t, err, `diff-live target contains an index for table "audit"`)
+	require.Empty(t, outputBuffer.String())
+}
+
+func TestRunDiffLiveRefusesDestructiveChange(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER NOT NULL, name TEXT NOT NULL, PRIMARY KEY (id));\n")
+	outputBuffer := setCommandOutput(t)
+	err = run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", dsn,
+		"-table", "members",
+		"-to", target,
+	})
+	require.ErrorContains(t, err, "column members.email was removed")
+	require.Empty(t, outputBuffer.String())
+}
+
+func TestRunDiffLiveHonorsInspectionTimeout(t *testing.T) {
+	previousOpenDatabase := openDatabase
+	previousTimeout := liveInspectionTimeout
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+		liveInspectionTimeout = previousTimeout
+	})
+	openDatabase = func(string, string) (*sql.DB, error) {
+		return sql.Open(blockingInspectionDriverName, "")
+	}
+	liveInspectionTimeout = 20 * time.Millisecond
+
+	started := time.Now()
+	err := run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", "blocked",
+		"-table", "members",
+		"-to", t.TempDir(),
+	})
+
+	require.ErrorContains(t, err, "context deadline exceeded")
+	require.Less(t, time.Since(started), time.Second)
+}
+
+func TestRunDiffLiveInspectsWithinOneTransaction(t *testing.T) {
+	previousOpenDatabase := openDatabase
+	state := &snapshotInspectionState{}
+	snapshotInspectionStateForTest = state
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+		snapshotInspectionStateForTest = nil
+	})
+	openDatabase = func(string, string) (*sql.DB, error) {
+		return sql.Open(snapshotInspectionDriverName, "")
+	}
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY);\n")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{
+		"diff-live",
+		"-dialect", "sqlite",
+		"-dsn", "snapshot",
+		"-table", "members",
+		"-to", target,
+	}))
+	require.Equal(t, "no schema changes\n", outputBuffer.String())
+	require.Equal(t, 0, state.queriesOutsideTransaction)
+	require.True(t, state.transactionStarted)
+	require.True(t, state.transactionReadOnly)
+}
+
+func TestLiveInspectionTxOptionsUseRepeatableReadWhereSupported(t *testing.T) {
+	for _, test := range []struct {
+		dialect   string
+		isolation sql.IsolationLevel
+	}{
+		{dialect: "postgresql", isolation: sql.LevelRepeatableRead},
+		{dialect: "mysql", isolation: sql.LevelRepeatableRead},
+		{dialect: "sqlite", isolation: sql.LevelDefault},
+	} {
+		t.Run(test.dialect, func(t *testing.T) {
+			options := liveInspectionTxOptions(test.dialect)
+			require.True(t, options.ReadOnly)
+			require.Equal(t, test.isolation, options.Isolation)
+		})
+	}
 }
 
 func TestRunPlanPrintsSQLSources(t *testing.T) {
@@ -165,3 +490,183 @@ func writeTestSchema(t *testing.T, directory string, filename string, source str
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
 }
+
+const blockingInspectionDriverName = "rasqlmigrate-blocking-inspection"
+
+func init() {
+	sql.Register(blockingInspectionDriverName, blockingInspectionDriver{})
+}
+
+type blockingInspectionDriver struct{}
+
+func (blockingInspectionDriver) Open(string) (driver.Conn, error) {
+	return blockingInspectionConn{}, nil
+}
+
+type blockingInspectionConn struct{}
+
+func (blockingInspectionConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("blocking inspection driver does not prepare statements")
+}
+
+func (blockingInspectionConn) Close() error {
+	return nil
+}
+
+func (blockingInspectionConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("blocking inspection driver does not begin transactions")
+}
+
+func (blockingInspectionConn) BeginTx(ctx context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (blockingInspectionConn) Ping(context.Context) error {
+	return nil
+}
+
+func (blockingInspectionConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+var _ driver.Driver = blockingInspectionDriver{}
+var _ driver.Conn = blockingInspectionConn{}
+var _ driver.ConnBeginTx = blockingInspectionConn{}
+var _ driver.Pinger = blockingInspectionConn{}
+var _ driver.QueryerContext = blockingInspectionConn{}
+
+const snapshotInspectionDriverName = "rasqlmigrate-snapshot-inspection"
+
+var snapshotInspectionStateForTest *snapshotInspectionState
+
+func init() {
+	sql.Register(snapshotInspectionDriverName, snapshotInspectionDriver{})
+}
+
+type snapshotInspectionState struct {
+	queriesOutsideTransaction int
+	transactionStarted        bool
+	transactionReadOnly       bool
+}
+
+type snapshotInspectionDriver struct{}
+
+func (snapshotInspectionDriver) Open(string) (driver.Conn, error) {
+	return &snapshotInspectionConn{state: snapshotInspectionStateForTest}, nil
+}
+
+type snapshotInspectionConn struct {
+	state *snapshotInspectionState
+	inTx  bool
+}
+
+func (*snapshotInspectionConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("snapshot inspection driver does not prepare statements")
+}
+
+func (*snapshotInspectionConn) Close() error {
+	return nil
+}
+
+func (c *snapshotInspectionConn) Begin() (driver.Tx, error) {
+	return c.begin(driver.TxOptions{})
+}
+
+func (c *snapshotInspectionConn) BeginTx(_ context.Context, options driver.TxOptions) (driver.Tx, error) {
+	return c.begin(options)
+}
+
+func (c *snapshotInspectionConn) begin(options driver.TxOptions) (driver.Tx, error) {
+	c.inTx = true
+	c.state.transactionStarted = true
+	c.state.transactionReadOnly = options.ReadOnly
+	return snapshotInspectionTx{conn: c}, nil
+}
+
+func (*snapshotInspectionConn) Ping(context.Context) error {
+	return nil
+}
+
+func (c *snapshotInspectionConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if !c.inTx {
+		c.state.queriesOutsideTransaction++
+		if c.state.queriesOutsideTransaction > 1 {
+			return nil, errors.New("snapshot inspection metadata changed between pooled connections")
+		}
+	}
+	return snapshotInspectionRows(query)
+}
+
+type snapshotInspectionTx struct {
+	conn *snapshotInspectionConn
+}
+
+func (tx snapshotInspectionTx) Commit() error {
+	tx.conn.inTx = false
+	return nil
+}
+
+func (tx snapshotInspectionTx) Rollback() error {
+	tx.conn.inTx = false
+	return nil
+}
+
+func snapshotInspectionRows(query string) (driver.Rows, error) {
+	switch query {
+	case `PRAGMA table_list("members")`:
+		return newSnapshotInspectionRows(
+			[]string{"schema", "name", "type", "ncol", "wr", "strict"},
+			[]driver.Value{"main", "members", "table", int64(1), int64(0), int64(0)},
+		), nil
+	case `PRAGMA "main".table_xinfo("members")`:
+		return newSnapshotInspectionRows(
+			[]string{"cid", "name", "type", "notnull", "dflt_value", "pk", "hidden"},
+			[]driver.Value{int64(0), "id", "INTEGER", int64(0), nil, int64(1), int64(0)},
+		), nil
+	case `SELECT sql FROM "main".sqlite_master WHERE type = 'table' AND name = ?`:
+		return newSnapshotInspectionRows([]string{"sql"}, []driver.Value{"CREATE TABLE members (id INTEGER PRIMARY KEY)"}), nil
+	case `PRAGMA "main".index_list("members")`:
+		return newSnapshotInspectionRows([]string{"seq", "name", "unique", "origin", "partial"}), nil
+	case `PRAGMA "main".foreign_key_list("members")`:
+		return newSnapshotInspectionRows([]string{"id", "seq", "table", "from", "to", "on_update", "on_delete", "match"}), nil
+	default:
+		return nil, fmt.Errorf("snapshot inspection driver received unexpected query %q", query)
+	}
+}
+
+type snapshotInspectionResultRows struct {
+	columns []string
+	values  [][]driver.Value
+	index   int
+}
+
+func newSnapshotInspectionRows(columns []string, rows ...[]driver.Value) *snapshotInspectionResultRows {
+	return &snapshotInspectionResultRows{columns: columns, values: rows}
+}
+
+func (r *snapshotInspectionResultRows) Columns() []string {
+	return r.columns
+}
+
+func (*snapshotInspectionResultRows) Close() error {
+	return nil
+}
+
+func (r *snapshotInspectionResultRows) Next(destination []driver.Value) error {
+	if r.index == len(r.values) {
+		return io.EOF
+	}
+	copy(destination, r.values[r.index])
+	r.index++
+	return nil
+}
+
+var _ driver.Driver = snapshotInspectionDriver{}
+var _ driver.Conn = (*snapshotInspectionConn)(nil)
+var _ driver.ConnBeginTx = (*snapshotInspectionConn)(nil)
+var _ driver.Pinger = (*snapshotInspectionConn)(nil)
+var _ driver.QueryerContext = (*snapshotInspectionConn)(nil)
+var _ driver.Tx = snapshotInspectionTx{}
+var _ driver.Rows = (*snapshotInspectionResultRows)(nil)

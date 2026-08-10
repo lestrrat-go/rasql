@@ -9,6 +9,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 const (
@@ -16,6 +20,28 @@ const (
 	maxSourceBytes     = 64 << 20
 	maxSourceCount     = 1024
 )
+
+// SourcesFromTable renders one inspected table as desired-schema sources.
+// The dialect package selects the dialect; this shared helper only preserves
+// the source layout used by diff-live.
+func SourcesFromTable(d dialect.Dialect, table schema.Table) ([]Source, error) {
+	created, err := render.CreateTable(d, table)
+	if err != nil {
+		return nil, fmt.Errorf("render inspected table %q: %w", table.QualifiedName(), err)
+	}
+	sources := []Source{{Path: "live/" + table.Name + ".sql", SQL: created.SQL() + ";\n"}}
+	indexes, err := render.CreateIndexes(d, table)
+	if err != nil {
+		return nil, fmt.Errorf("render indexes for inspected table %q: %w", table.QualifiedName(), err)
+	}
+	for index, statement := range indexes {
+		sources = append(sources, Source{
+			Path: fmt.Sprintf("live/index_%d.sql", index+1),
+			SQL:  statement.SQL() + ";\n",
+		})
+	}
+	return sources, nil
+}
 
 // LoadSources reads every SQL file in directory and its non-hidden children.
 func LoadSources(directory string) ([]Source, error) {

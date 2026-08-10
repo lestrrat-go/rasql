@@ -9,8 +9,23 @@ import (
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
+	analyzer := mysql.New()
+	sources, err := analyzer.LiveSources(schema.Table{
+		Name:    "members",
+		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
+		Indexes: []schema.Index{{Name: "members_email_idx", Columns: []string{"email"}}},
+	})
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	require.Contains(t, sources[1].SQL, "CREATE INDEX")
+	require.Contains(t, sources[1].SQL, "members_email_idx")
+	require.Contains(t, sources[1].SQL, "email")
+}
 
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := mysql.New()
