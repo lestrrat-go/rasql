@@ -114,7 +114,7 @@ func (e *IncompleteMetadataError) Unwrap() error {
 	return ErrIncompleteMetadata
 }
 
-// Queryer is implemented by *sql.DB and *sql.Tx.
+// Queryer is implemented by *sql.DB, *sql.Conn, and *sql.Tx.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -567,19 +567,11 @@ func mysqlCreateTablePartIsColumn(part string) bool {
 }
 
 func (i Inspector) sqliteTable(ctx context.Context, databaseName string, tableName string) (schema.Table, error) {
-	queryer := i.queryer
-	if database, ok := queryer.(*sql.DB); ok {
-		connection, err := database.Conn(ctx)
-		if err != nil {
-			return schema.Table{}, fmt.Errorf("inspect: acquire SQLite connection: %w", err)
-		}
-		defer func() { _ = connection.Close() }()
-		queryer = connection
+	queryer, release, err := i.sqliteQueryer(ctx)
+	if err != nil {
+		return schema.Table{}, err
 	}
-	return i.sqliteTableOnConnection(ctx, queryer, databaseName, tableName)
-}
-
-func (i Inspector) sqliteTableOnConnection(ctx context.Context, queryer Queryer, databaseName string, tableName string) (schema.Table, error) {
+	defer release()
 	options, err := i.sqliteTableOptions(queryer, ctx, databaseName, tableName)
 	if err != nil {
 		return schema.Table{}, err
@@ -964,6 +956,18 @@ func sqliteDeclarationTokens(declaration string) ([]sqliteDeclarationToken, int,
 		}
 	}
 	return tokens, open, close, open >= 0 && close > open
+}
+
+func (i Inspector) sqliteQueryer(ctx context.Context) (Queryer, func(), error) {
+	database, ok := i.queryer.(*sql.DB)
+	if !ok {
+		return i.queryer, func() {}, nil
+	}
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect: pin SQLite connection: %w", err)
+	}
+	return connection, func() { _ = connection.Close() }, nil
 }
 
 type sqliteTableOptions struct {

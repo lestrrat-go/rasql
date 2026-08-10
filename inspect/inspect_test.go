@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -19,8 +20,10 @@ import (
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
+	moderncsqlite "modernc.org/sqlite"
 )
+
+var sqlitePinnedDriverNumber atomic.Uint64
 
 func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 	database, mock, err := sqlmock.New()
@@ -1332,6 +1335,80 @@ func TestSQLiteInspectorRejectsAmbiguousTableAndPreservesScope(t *testing.T) {
 			require.NoError(t, err)
 			require.Contains(t, statement.SQL(), `CREATE TABLE "`+test.database+`"."users"`)
 		})
+	}
+}
+
+func TestSQLiteInspectorPinsConnectionWithPooledTraffic(t *testing.T) {
+	var connectionNumber atomic.Uint64
+	testContext := t.Context()
+	testDriver := &moderncsqlite.Driver{}
+	testDriver.RegisterConnectionHook(func(conn moderncsqlite.ExecQuerierContext, _ string) error {
+		databaseName := fmt.Sprintf("aux%d", connectionNumber.Add(1))
+		if _, err := conn.ExecContext(testContext, `ATTACH DATABASE ':memory:' AS "`+databaseName+`"`, nil); err != nil {
+			return err
+		}
+		_, err := conn.ExecContext(testContext, `CREATE TABLE "`+databaseName+`"."users" (id INTEGER PRIMARY KEY, value TEXT)`, nil)
+		return err
+	})
+	driverName := fmt.Sprintf("rasql_inspect_pinned_sqlite_test_%d", sqlitePinnedDriverNumber.Add(1))
+	sql.Register(driverName, testDriver)
+
+	database, err := sql.Open(driverName, ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(4)
+	database.SetMaxIdleConns(0)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	trafficContext, cancelTraffic := context.WithCancel(t.Context())
+	trafficReady := make(chan struct{})
+	trafficErrors := make(chan error, 2)
+	var trafficOnce sync.Once
+	var trafficWaitGroup sync.WaitGroup
+	t.Cleanup(func() {
+		cancelTraffic()
+		trafficWaitGroup.Wait()
+	})
+	for range 2 {
+		trafficWaitGroup.Add(1)
+		go func() {
+			defer trafficWaitGroup.Done()
+			for {
+				if _, err := database.ExecContext(trafficContext, "SELECT 1"); err != nil {
+					if trafficContext.Err() == nil {
+						trafficErrors <- err
+					}
+					return
+				}
+				trafficOnce.Do(func() { close(trafficReady) })
+				select {
+				case <-trafficContext.Done():
+					return
+				default:
+				}
+			}
+		}()
+	}
+	select {
+	case <-trafficReady:
+	case err := <-trafficErrors:
+		require.NoError(t, err)
+	}
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Regexp(t, `^aux[0-9]+$`, table.Schema)
+	require.Equal(t, "users", table.Name)
+	_, ok := table.Column("value")
+	require.True(t, ok)
+
+	cancelTraffic()
+	trafficWaitGroup.Wait()
+	select {
+	case err := <-trafficErrors:
+		require.NoError(t, err)
+	default:
 	}
 }
 
