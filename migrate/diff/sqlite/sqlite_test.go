@@ -164,6 +164,16 @@ func TestParseRejectsUnsupportedDesiredSchemaStatement(t *testing.T) {
 	require.ErrorContains(t, err, "must be CREATE TABLE or named CREATE INDEX")
 }
 
+func TestParseRejectsIndexForMissingTable(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.Parse([]diff.Source{{Path: "indexes.sql", SQL: `
+		CREATE TABLE members (id integer PRIMARY KEY);
+		CREATE INDEX orphan_idx ON missing (id);
+	`}})
+	require.ErrorContains(t, err, `sqlite schema source "indexes.sql"`)
+	require.ErrorContains(t, err, "missing table missing")
+}
+
 func parseSnapshot(t *testing.T, analyzer sqlite.Analyzer, source string) diff.Snapshot {
 	t.Helper()
 	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})

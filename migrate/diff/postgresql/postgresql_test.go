@@ -138,6 +138,16 @@ func TestParseRejectsUnsupportedDesiredSchemaStatement(t *testing.T) {
 	require.ErrorContains(t, err, "must be CREATE TABLE or named CREATE INDEX")
 }
 
+func TestParseRejectsIndexForMissingTable(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.Parse([]diff.Source{{Path: "indexes.sql", SQL: `
+		CREATE TABLE members (id bigint PRIMARY KEY);
+		CREATE INDEX orphan_idx ON missing (id);
+	`}})
+	require.ErrorContains(t, err, `postgresql schema source "indexes.sql"`)
+	require.ErrorContains(t, err, "missing table missing")
+}
+
 func TestDiffRejectsConcurrentIndex(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
