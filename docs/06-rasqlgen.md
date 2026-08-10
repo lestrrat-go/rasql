@@ -41,6 +41,8 @@ When selected tables contain supported foreign keys, `rasqlgen` also emits typed
 
 `-dsn` reads every requested table in one transaction and commits it after the last read, so a migration that commits partway through cannot split the generated descriptor across two schema versions. It requests repeatable-read and read-only modes where the driver supports them. `-timeout` bounds that whole transaction, from opening it through the last metadata query; a server that accepts the connection but never answers cancels the command instead of hanging it indefinitely.
 
+Live MySQL inspection requires metadata privileges that expose every column in the selected table. MySQL filters `information_schema.columns` by column privileges, so a partial grant can otherwise produce an incomplete baseline; the inspector cross-checks the count against `SHOW CREATE TABLE` and returns `inspect.ErrIncompleteMetadata` instead. Grant table- or database-level `SELECT` (or equivalent full column visibility) before using MySQL live inspection or `diff-live`.
+
 `-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.Table` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, whether with `-input` or `-dsn`, is rejected as a flag-parsing error rather than silently collapsed to one table. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
 
 ### What it generates

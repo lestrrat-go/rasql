@@ -134,6 +134,8 @@ The first PostgreSQL, MySQL, and SQLite slices generate new tables, new nullable
 
 The generated files use the normal migration format. Review them, then apply them with `rasqlmigrate apply`. Do not edit a generated migration after it has been applied.
 
+Any live-schema comparison that uses `inspect` requires complete metadata privileges. MySQL filters `information_schema.columns` by column privileges, so a partial grant can create a false baseline; use table- or database-level `SELECT` (or equivalent full column visibility) before running `diff-live`. The inspector returns `inspect.ErrIncompleteMetadata` when the visible column count does not match the full `SHOW CREATE TABLE` definition.
+
 ## Go API
 
 `migrate.Runner` is available when an application needs to embed migration execution in a separate administrative program. Each `migrate.Statement` holds a source name and native SQL text. Supply the complete migration set to `Runner.Apply`; it orders migrations by ID and rejects duplicate IDs, missing recorded migrations, skipped migrations, and changed source checksums.
