@@ -23,6 +23,7 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
+	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite"
 )
 
@@ -177,7 +178,9 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	liveTable, err := inspector.Table(ctx, *tableName)
+	liveTable, err := runWithHardDeadline(ctx, func() (schema.Table, error) {
+		return inspector.Table(ctx, *tableName)
+	})
 	if err != nil {
 		return redactError(err, *dsn)
 	}
@@ -415,11 +418,36 @@ func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (
 	closeDatabase := func() {
 		_ = database.Close()
 	}
-	if err := database.PingContext(ctx); err != nil {
+	if _, err := runWithHardDeadline(ctx, func() (struct{}, error) {
+		return struct{}{}, database.PingContext(ctx)
+	}); err != nil {
 		closeDatabase()
 		return nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
 	}
 	return database, closeDatabase, nil
+}
+
+func runWithHardDeadline[T any](ctx context.Context, operation func() (T, error)) (T, error) {
+	type result struct {
+		value T
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, err := operation()
+		done <- result{value: value, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	case completed := <-done:
+		if err := ctx.Err(); err != nil {
+			var zero T
+			return zero, err
+		}
+		return completed.value, completed.err
+	}
 }
 
 func migrationDialect(name string) (dialect.Dialect, error) {
@@ -547,5 +575,21 @@ func redactError(err error, dsn string) error {
 	if err == nil || dsn == "" {
 		return err
 	}
-	return errors.New(strings.ReplaceAll(err.Error(), dsn, "[redacted]"))
+	return redactedError{
+		message: strings.ReplaceAll(err.Error(), dsn, "[redacted]"),
+		cause:   err,
+	}
+}
+
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (e redactedError) Error() string {
+	return e.message
+}
+
+func (e redactedError) Unwrap() error {
+	return e.cause
 }

@@ -463,6 +463,17 @@ func TestLiveSchemaAnalyzerUsesMySQLTableNameMode(t *testing.T) {
 	}
 }
 
+func TestRunWithHardDeadlineReturnsContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := runWithHardDeadline(ctx, func() (struct{}, error) {
+		<-ctx.Done()
+		return struct{}{}, ctx.Err()
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 func TestRunPlanPrintsSQLSources(t *testing.T) {
 	directory := newTestDirectory(t)
 	writeTestSQL(t, directory, "001_create_users", "001_create_users.sql", "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n")
