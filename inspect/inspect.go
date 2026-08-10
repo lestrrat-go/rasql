@@ -857,6 +857,9 @@ func sqliteDeclarationTokens(declaration string) ([]sqliteDeclarationToken, int,
 		default:
 			start := index
 			for index < len(declaration) && !strings.ContainsRune(" \t\n\r\f(),", rune(declaration[index])) && declaration[index] != '\'' && declaration[index] != '"' && declaration[index] != '`' && declaration[index] != '[' {
+				if index+1 < len(declaration) && ((declaration[index] == '-' && declaration[index+1] == '-') || (declaration[index] == '/' && declaration[index+1] == '*')) {
+					break
+				}
 				index++
 			}
 			tokens = append(tokens, sqliteDeclarationToken{text: declaration[start:index]})

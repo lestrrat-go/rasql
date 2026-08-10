@@ -1096,6 +1096,54 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	require.NotContains(t, string(source), "ID *int64")
 }
 
+func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullableWithAttachedComments(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	tests := []struct {
+		name        string
+		tableName   string
+		declaration string
+	}{
+		{
+			name:        "line comment after INTEGER",
+			tableName:   "events_integer_line",
+			declaration: "CREATE TABLE events_integer_line (id INTEGER-- comment\nPRIMARY KEY, payload BLOB)",
+		},
+		{
+			name:        "block comment after INTEGER",
+			tableName:   "events_integer_block",
+			declaration: "CREATE TABLE events_integer_block (id INTEGER/* comment */PRIMARY KEY, payload BLOB)",
+		},
+		{
+			name:        "line comment after PRIMARY KEY",
+			tableName:   "events_primary_key_line",
+			declaration: "CREATE TABLE events_primary_key_line (id INTEGER PRIMARY KEY-- comment\n, payload BLOB)",
+		},
+		{
+			name:        "block comment after PRIMARY KEY",
+			tableName:   "events_primary_key_block",
+			declaration: "CREATE TABLE events_primary_key_block (id INTEGER PRIMARY KEY/* comment */, payload BLOB)",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := database.ExecContext(t.Context(), test.declaration)
+			require.NoError(t, err)
+
+			inspector, err := inspect.New(database, dialect.SQLite())
+			require.NoError(t, err)
+			table, err := inspector.Table(t.Context(), test.tableName)
+			require.NoError(t, err)
+			require.Equal(t, []string{"id"}, table.PrimaryKey)
+			require.False(t, table.Columns[0].Nullable)
+		})
+	}
+}
+
 func TestSQLiteInspectorMarksTableLevelIntegerPrimaryKeysAsNonNullable(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
