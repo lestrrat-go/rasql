@@ -95,6 +95,22 @@ func TestDiffRejectsNewRequiredPrimaryKeyColumnWithDefaultWhenPrimaryKeyFollowsN
 	require.ErrorContains(t, err, "new required column members.active needs an application-specific backfill")
 }
 
+func TestDiffRejectsNewRequiredColumnWithNullDefault(t *testing.T) {
+	for _, columnDefinition := range []string{
+		"email text DEFAULT NULL NOT NULL",
+		"email text NOT NULL DEFAULT NULL",
+	} {
+		t.Run(columnDefinition, func(t *testing.T) {
+			analyzer := mysql.New()
+			baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
+			target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, "+columnDefinition+");")
+
+			_, err := analyzer.Diff(baseline, target)
+			require.ErrorContains(t, err, "new required column members.email needs an application-specific backfill")
+		})
+	}
+}
+
 func TestDiffRejectsRemovedColumns(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, email text);")
