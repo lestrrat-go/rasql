@@ -275,20 +275,22 @@ func diffTable(baseline *pgquery.CreateTableStatement, target *pgquery.CreateTab
 
 func columnRequiresBackfill(column pgquery.ColumnDefinition) bool {
 	hasDefault := false
+	hasNotNull := false
+	hasPrimaryKey := false
 	for _, constraint := range column.Constraints {
-		if constraint.Kind == pgquery.ConstraintDefault {
+		switch constraint.Kind {
+		case pgquery.ConstraintDefault:
 			hasDefault = true
+		case pgquery.ConstraintNotNull:
+			hasNotNull = true
+		case pgquery.ConstraintPrimaryKey:
+			hasPrimaryKey = true
 		}
 	}
-	for _, constraint := range column.Constraints {
-		if constraint.Kind == pgquery.ConstraintPrimaryKey {
-			return true
-		}
-		if constraint.Kind == pgquery.ConstraintNotNull {
-			return !hasDefault
-		}
+	if hasPrimaryKey {
+		return true
 	}
-	return false
+	return hasNotNull && !hasDefault
 }
 
 func sameIndex(left *pgquery.CreateIndexStatement, right *pgquery.CreateIndexStatement) bool {
