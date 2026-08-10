@@ -128,6 +128,11 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			Summary: statement.summary,
 		}
 	}
+	if len(plan.Statements) > 0 {
+		if err := plan.Validate(); err != nil {
+			return diff.Plan{}, err
+		}
+	}
 	return plan, nil
 }
 

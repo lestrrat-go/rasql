@@ -52,7 +52,7 @@ func (p Plan) Validate() error {
 	if len(p.Statements) == 0 {
 		return fmt.Errorf("migrate diff: plan has no SQL sources")
 	}
-	sources := make(map[string]struct{}, len(p.Statements))
+	sources := make(map[string]int, len(p.Statements))
 	for index, statement := range p.Statements {
 		if statement.Source == "" || filepath.Base(statement.Source) != statement.Source || strings.HasPrefix(statement.Source, ".") || filepath.Ext(statement.Source) != ".sql" {
 			return fmt.Errorf("migrate diff: generated SQL source %d is invalid", index+1)
@@ -60,10 +60,10 @@ func (p Plan) Validate() error {
 		if strings.TrimSpace(statement.SQL) == "" {
 			return fmt.Errorf("migrate diff: generated SQL source %q is empty", statement.Source)
 		}
-		if _, exists := sources[statement.Source]; exists {
-			return fmt.Errorf("migrate diff: duplicate generated SQL source %q", statement.Source)
+		if previous, exists := sources[statement.Source]; exists {
+			return fmt.Errorf("migrate diff: duplicate generated SQL source %q for %q and %q", statement.Source, p.Statements[previous].Summary, statement.Summary)
 		}
-		sources[statement.Source] = struct{}{}
+		sources[statement.Source] = index
 	}
 	return nil
 }
