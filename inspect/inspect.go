@@ -185,14 +185,16 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 	}
 	if queries.indexes != "" {
 		if i.dialect.Name() == "mysql" {
-			hasExpression, err := i.mysqlStatisticsHasExpression(ctx)
+			hasExpression, err := i.mysqlStatisticsHasColumn(ctx, "EXPRESSION")
+			if err != nil {
+				return schema.Table{}, err
+			}
+			hasVisibility, err := i.mysqlStatisticsHasColumn(ctx, "IS_VISIBLE")
 			if err != nil {
 				return schema.Table{}, err
 			}
 			queries.mysqlIndexHasExpression = hasExpression
-			if !hasExpression {
-				queries.indexes = "SELECT index_name, non_unique = 0, column_name, sub_part, collation FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
-			}
+			queries.indexes = mysqlStatisticsIndexesQuery(hasExpression, hasVisibility)
 		}
 		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.argument(tableName), queries.mysqlIndexHasExpression)
 		if err != nil {
@@ -222,8 +224,8 @@ func (i Inspector) informationSchemaQueries(ctx context.Context) (informationQue
 	return postgreSQLInformationQueries(version), nil
 }
 
-func (i Inspector) mysqlStatisticsHasExpression(ctx context.Context) (bool, error) {
-	rows, err := i.queryer.QueryContext(ctx, "SHOW COLUMNS FROM information_schema.statistics LIKE 'EXPRESSION'")
+func (i Inspector) mysqlStatisticsHasColumn(ctx context.Context, column string) (bool, error) {
+	rows, err := i.queryer.QueryContext(ctx, "SHOW COLUMNS FROM information_schema.statistics LIKE '"+column+"'")
 	if err != nil {
 		return false, fmt.Errorf("inspect: read MySQL statistics columns: %w", err)
 	}
@@ -1114,13 +1116,21 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 			var prefixLength sql.NullInt64
 			var expression sql.NullString
 			var collation sql.NullString
+			var indexType string
+			var visible bool
 			scanArgs := []any{&name, &unique, &nullableColumn, &prefixLength}
 			if mysqlIndexHasExpression {
 				scanArgs = append(scanArgs, &expression)
 			}
-			scanArgs = append(scanArgs, &collation)
+			scanArgs = append(scanArgs, &collation, &indexType, &visible)
 			if err := rows.Scan(scanArgs...); err != nil {
 				return nil, fmt.Errorf("inspect: scan index: %w", err)
+			}
+			if !strings.EqualFold(indexType, "BTREE") {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL %s index methods", name, strings.ToUpper(indexType))
+			}
+			if unique && !visible {
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support invisible MySQL unique indexes", name)
 			}
 			if unique && strings.EqualFold(collation.String, "D") {
 				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL descending unique index parts", name)
@@ -1269,11 +1279,25 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 		return informationQueries{
 			columns:    "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
 			primaryKey: "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
-			indexes:    "SELECT index_name, non_unique = 0, column_name, sub_part, expression, collation FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index",
+			indexes:    mysqlStatisticsIndexesQuery(true, true),
 		}, nil
 	default:
 		return informationQueries{}, fmt.Errorf("inspect: unsupported dialect %q", name)
 	}
+}
+
+func mysqlStatisticsIndexesQuery(hasExpression bool, hasVisibility bool) string {
+	columns := "index_name, non_unique = 0, column_name, sub_part"
+	if hasExpression {
+		columns += ", expression"
+	}
+	columns += ", collation, index_type"
+	if hasVisibility {
+		columns += ", is_visible"
+	} else {
+		columns += ", TRUE"
+	}
+	return "SELECT " + columns + " FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' ORDER BY index_name, seq_in_index"
 }
 
 const (
