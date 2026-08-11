@@ -2,22 +2,48 @@
 package mysql
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	"github.com/lestrrat-go/rasql/schema"
+)
+
+// LowerCaseTableNames controls MySQL table-name matching.
+//
+// The values match MySQL's lower_case_table_names system variable: zero keeps
+// table names case-sensitive, one lowercases stored names, and two preserves
+// stored spelling while comparing names case-insensitively.
+type LowerCaseTableNames uint8
+
+const (
+	LowerCaseTableNamesCaseSensitive LowerCaseTableNames = iota
+	LowerCaseTableNamesLowercase
+	LowerCaseTableNamesPreserve
 )
 
 // Analyzer compares the supported MySQL desired-schema subset.
-type Analyzer struct{}
+type Analyzer struct {
+	lowerCaseTableNames LowerCaseTableNames
+}
 
 // New creates a MySQL desired-schema analyzer.
 func New() Analyzer {
 	return Analyzer{}
+}
+
+// NewWithLowerCaseTableNames creates a MySQL analyzer using the supplied
+// lower_case_table_names behavior for table matching.
+func NewWithLowerCaseTableNames(value LowerCaseTableNames) Analyzer {
+	return Analyzer{lowerCaseTableNames: value}
 }
 
 // Dialect identifies MySQL schema sources.
@@ -25,11 +51,39 @@ func (Analyzer) Dialect() string {
 	return "mysql"
 }
 
+// LiveSources converts one inspected MySQL table into desired-schema sources.
+func (Analyzer) LiveSources(table schema.TableDef) ([]diff.Source, error) {
+	return diff.SourcesFromTable(dialect.MySQL(), table)
+}
+
+// ValidateLivePlan ensures generated MySQL statements stay within the selected table.
+func (a Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
+	selectedTableKey := tableNameKey(mysqlquery.QualifiedName{{Name: tableName}}, a.lowerCaseTableNames)
+	for _, statement := range plan.Statements {
+		parsed, err := mysqlquery.ParseStatement(statement.SQL)
+		if err != nil {
+			return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
+		}
+		switch parsed := parsed.(type) {
+		case *mysqlquery.CreateTableStatement:
+			if tableNameKey(parsed.Name, a.lowerCaseTableNames) != selectedTableKey {
+				return fmt.Errorf("diff-live target contains table %q, but -table selects %q", parsed.Name.String(), tableName)
+			}
+		case *mysqlquery.CreateIndexStatement:
+			if tableNameKey(parsed.Table, a.lowerCaseTableNames) != selectedTableKey {
+				return fmt.Errorf("diff-live target contains an index for table %q, but -table selects %q", parsed.Table.String(), tableName)
+			}
+		}
+	}
+	return nil
+}
+
 // Parse reads CREATE TABLE and named CREATE INDEX statements from sources.
-func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
+func (a Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 	snapshot := &schemaSnapshot{
-		tables:  make(map[string]tableDefinition),
-		indexes: make(map[string]indexDefinition),
+		tables:              make(map[string]tableDefinition),
+		indexes:             make(map[indexKey]indexDefinition),
+		lowerCaseTableNames: a.lowerCaseTableNames,
 	}
 	for _, source := range sources {
 		parsed, err := mysqlquery.Parse(source.SQL)
@@ -51,6 +105,12 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 			}
 		}
 	}
+	for _, key := range sortedIndexKeys(snapshot.indexes) {
+		index := snapshot.indexes[key]
+		if _, exists := snapshot.tables[tableNameKey(index.statement.Table, snapshot.lowerCaseTableNames)]; !exists {
+			return nil, fmt.Errorf("mysql schema source %q defines index %s on missing table %s", index.source, displayName(index.statement.Name), displayName(index.statement.Table))
+		}
+	}
 	if len(snapshot.tables) == 0 {
 		return nil, fmt.Errorf("mysql schema has no CREATE TABLE statements")
 	}
@@ -58,7 +118,7 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 }
 
 // Diff returns safe, additive changes from from to to.
-func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
+func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	baseline, ok := from.(*schemaSnapshot)
 	if !ok || baseline == nil || from.Dialect() != "mysql" {
 		return diff.Plan{}, fmt.Errorf("mysql schema diff requires a MySQL baseline snapshot")
@@ -81,7 +141,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			generated = append(generated, statement)
 			continue
 		}
-		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement)
+		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement, a.lowerCaseTableNames)
 		if err != nil {
 			return diff.Plan{}, err
 		}
@@ -105,7 +165,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			generated = append(generated, statement)
 			continue
 		}
-		if !sameIndex(baselineIndex.statement, targetIndex.statement) {
+		if !sameIndex(baselineIndex.statement, targetIndex.statement, a.lowerCaseTableNames) {
 			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(targetIndex.statement.Name)))
 		}
 	}
@@ -121,17 +181,26 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	plan := diff.Plan{Dialect: "mysql", Statements: make([]diff.Statement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.Statement{
-			Source:  fmt.Sprintf("%03d_%s.sql", index+1, statement.name),
+			Source:  statement.name + ".sql",
 			SQL:     statement.sql,
 			Summary: statement.summary,
+		}
+	}
+	if len(plan.Statements) > 0 {
+		if err := plan.Validate(); err != nil {
+			return diff.Plan{}, err
+		}
+		for index := range plan.Statements {
+			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
 		}
 	}
 	return plan, nil
 }
 
 type schemaSnapshot struct {
-	tables  map[string]tableDefinition
-	indexes map[string]indexDefinition
+	tables              map[string]tableDefinition
+	indexes             map[indexKey]indexDefinition
+	lowerCaseTableNames LowerCaseTableNames
 }
 
 // Dialect identifies MySQL snapshots.
@@ -145,16 +214,17 @@ type tableDefinition struct {
 }
 
 func (s *schemaSnapshot) addTable(source string, statement *mysqlquery.CreateTableStatement) error {
-	key := qualifiedNameKey(statement.Name)
+	key := tableNameKey(statement.Name, s.lowerCaseTableNames)
 	if previous, exists := s.tables[key]; exists {
 		return fmt.Errorf("mysql schema source %q defines table %s already defined by %q", source, displayName(statement.Name), previous.source)
 	}
 	columns := make(map[string]struct{}, len(statement.Columns))
 	for _, column := range statement.Columns {
-		if _, exists := columns[column.Name.Name]; exists {
+		key := columnNameKey(column.Name.Name)
+		if _, exists := columns[key]; exists {
 			return fmt.Errorf("mysql schema source %q defines duplicate column %q in table %s", source, column.Name.Name, displayName(statement.Name))
 		}
-		columns[column.Name.Name] = struct{}{}
+		columns[key] = struct{}{}
 	}
 	s.tables[key] = tableDefinition{source: source, statement: statement}
 	return nil
@@ -165,8 +235,16 @@ type indexDefinition struct {
 	statement *mysqlquery.CreateIndexStatement
 }
 
+type indexKey struct {
+	owner string
+	name  string
+}
+
 func (s *schemaSnapshot) addIndex(source string, statement *mysqlquery.CreateIndexStatement) error {
-	key := qualifiedNameKey(statement.Name)
+	key := indexKey{
+		owner: qualifiedNameKey(statement.Table, s.lowerCaseTableNames != LowerCaseTableNamesCaseSensitive),
+		name:  qualifiedNameKey(statement.Name, true),
+	}
 	if previous, exists := s.indexes[key]; exists {
 		return fmt.Errorf("mysql schema source %q defines index %s already defined by %q", source, displayName(statement.Name), previous.source)
 	}
@@ -180,6 +258,11 @@ type generatedStatement struct {
 	summary string
 }
 
+const (
+	maxFilenamePartBytes = 100
+	filenamePartHashSize = 12
+)
+
 func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStatement, error) {
 	copy := *table
 	copy.IfNotExists = false
@@ -188,6 +271,8 @@ func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStat
 		return generatedStatement{}, err
 	}
 	name := displayName(copy.Name)
+	// WriteMigration prefixes each generated statement with its sequence position, so equal normalized
+	// components remain distinct in the public migration output; this is covered by its ordered plan.
 	return generatedStatement{
 		name:    "create_table_" + filenamePart(name),
 		sql:     sql,
@@ -204,32 +289,35 @@ func createIndexStatement(index *mysqlquery.CreateIndexStatement) (generatedStat
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(name),
+		name:    "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name),
 		sql:     sql,
 		summary: "create index " + name,
 	}, nil
 }
 
-func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.CreateTableStatement) ([]generatedStatement, []string, error) {
+func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.CreateTableStatement, tableNames LowerCaseTableNames) ([]generatedStatement, []string, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	normalizedBaseline := normalizedTable(baseline, tableNames)
+	normalizedTarget := normalizedTable(target, tableNames)
 	if baseline.Persistence != target.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.Name)))
 	}
-	if !reflect.DeepEqual(baseline.Constraints, target.Constraints) {
+	if !reflect.DeepEqual(normalizedBaseline.Constraints, normalizedTarget.Constraints) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.Name)))
 	}
 
 	baselineColumns := make(map[string]mysqlquery.ColumnDefinition, len(baseline.Columns))
-	for _, column := range baseline.Columns {
-		baselineColumns[column.Name.Name] = column
+	for _, column := range normalizedBaseline.Columns {
+		baselineColumns[columnNameKey(column.Name.Name)] = column
 	}
 	targetColumns := make(map[string]mysqlquery.ColumnDefinition, len(target.Columns))
-	for _, column := range target.Columns {
-		targetColumns[column.Name.Name] = column
+	for _, column := range normalizedTarget.Columns {
+		targetColumns[columnNameKey(column.Name.Name)] = column
 	}
-	for _, column := range target.Columns {
-		previous, exists := baselineColumns[column.Name.Name]
+	for index, column := range target.Columns {
+		normalizedColumn := normalizedTarget.Columns[index]
+		previous, exists := baselineColumns[columnNameKey(normalizedColumn.Name.Name)]
 		if !exists {
 			if columnRequiresBackfill(column) {
 				diagnostics = append(diagnostics, fmt.Sprintf("new required column %s.%s needs an application-specific backfill", displayName(target.Name), column.Name.Name))
@@ -254,42 +342,257 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 			})
 			continue
 		}
-		if !reflect.DeepEqual(previous, column) {
+		if !reflect.DeepEqual(previous, normalizedColumn) {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.Name), column.Name.Name))
 		}
 	}
-	for _, column := range baseline.Columns {
-		if _, exists := targetColumns[column.Name.Name]; !exists {
+	for index, column := range baseline.Columns {
+		normalizedColumn := normalizedBaseline.Columns[index]
+		if _, exists := targetColumns[columnNameKey(normalizedColumn.Name.Name)]; !exists {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.Name), column.Name.Name))
 		}
 	}
 	return generated, diagnostics, nil
 }
 
-func columnRequiresBackfill(column mysqlquery.ColumnDefinition) bool {
-	hasDefault := false
-	for _, constraint := range column.Constraints {
-		if constraint.Kind == mysqlquery.ConstraintDefault {
-			hasDefault = true
+// normalizedTable converts syntax variants that describe the same MySQL table
+// into one comparison form. MySQL primary keys imply NOT NULL, and the live
+// renderer writes them as table constraints with quoted identifiers.
+func normalizedTable(table *mysqlquery.CreateTableStatement, tableNames LowerCaseTableNames) mysqlquery.CreateTableStatement {
+	normalized := *table
+	normalized.Constraints = normalizedTableConstraints(table.Constraints, tableNames)
+	normalized.Columns = make([]mysqlquery.ColumnDefinition, len(table.Columns))
+	inlinePrimaryKeys := make([]mysqlquery.TableConstraint, 0)
+	for index, column := range table.Columns {
+		normalizedColumn := normalizedColumn(column, tableNames)
+		constraints := make([]mysqlquery.ColumnConstraint, 0, len(normalizedColumn.Constraints))
+		for _, constraint := range normalizedColumn.Constraints {
+			if constraint.Kind == mysqlquery.ConstraintPrimaryKey {
+				inlinePrimaryKeys = append(inlinePrimaryKeys, mysqlquery.TableConstraint{
+					Name: constraint.Name,
+					Kind: mysqlquery.ConstraintPrimaryKey,
+					Columns: []mysqlquery.Identifier{{
+						Name: normalizedColumn.Name.Name,
+					}},
+				})
+				continue
+			}
+			constraints = append(constraints, constraint)
+		}
+		normalizedColumn.Constraints = constraints
+		normalized.Columns[index] = normalizedColumn
+	}
+	normalized.Constraints = append(inlinePrimaryKeys, normalized.Constraints...)
+	primaryKeyColumns := make(map[string]struct{})
+	for _, constraint := range normalized.Constraints {
+		if constraint.Kind != mysqlquery.ConstraintPrimaryKey {
+			continue
+		}
+		for _, column := range constraint.Columns {
+			primaryKeyColumns[columnNameKey(column.Name)] = struct{}{}
 		}
 	}
-	for _, constraint := range column.Constraints {
-		if constraint.Kind == mysqlquery.ConstraintPrimaryKey {
-			return true
+	for index := range normalized.Columns {
+		column := &normalized.Columns[index]
+		if _, ok := primaryKeyColumns[columnNameKey(column.Name.Name)]; !ok || hasColumnConstraint(column.Constraints, mysqlquery.ConstraintNotNull) {
+			continue
 		}
-		if constraint.Kind == mysqlquery.ConstraintNotNull {
-			return !hasDefault
+		column.Constraints = append(column.Constraints, mysqlquery.ColumnConstraint{Kind: mysqlquery.ConstraintNotNull})
+	}
+	return normalized
+}
+
+func normalizedColumn(column mysqlquery.ColumnDefinition, tableNames LowerCaseTableNames) mysqlquery.ColumnDefinition {
+	column.Name = normalizedIdentifier(column.Name)
+	if column.Constraints == nil {
+		return column
+	}
+	constraints := make([]mysqlquery.ColumnConstraint, len(column.Constraints))
+	for index, constraint := range column.Constraints {
+		constraints[index] = normalizedColumnConstraint(constraint, tableNames)
+	}
+	column.Constraints = constraints
+	return column
+}
+
+func normalizedColumnConstraint(constraint mysqlquery.ColumnConstraint, tableNames LowerCaseTableNames) mysqlquery.ColumnConstraint {
+	if constraint.Name != nil {
+		name := normalizedIdentifier(*constraint.Name)
+		constraint.Name = &name
+	}
+	constraint.Expression = normalizedExpression(constraint.Expression)
+	constraint.References = normalizedReference(constraint.References, tableNames)
+	return constraint
+}
+
+func normalizedTableConstraints(constraints []mysqlquery.TableConstraint, tableNames LowerCaseTableNames) []mysqlquery.TableConstraint {
+	if constraints == nil {
+		return nil
+	}
+	normalized := make([]mysqlquery.TableConstraint, len(constraints))
+	for index, constraint := range constraints {
+		normalized[index] = constraint
+		if constraint.Name != nil {
+			name := normalizedIdentifier(*constraint.Name)
+			normalized[index].Name = &name
+		}
+		if constraint.Columns != nil {
+			normalized[index].Columns = normalizedIdentifiers(constraint.Columns)
+		}
+		normalized[index].Expression = normalizedExpression(constraint.Expression)
+		normalized[index].References = normalizedReference(constraint.References, tableNames)
+	}
+	return normalized
+}
+
+func normalizedReference(reference *mysqlquery.Reference, tableNames LowerCaseTableNames) *mysqlquery.Reference {
+	if reference == nil {
+		return nil
+	}
+	normalized := *reference
+	normalized.Table = normalizedQualifiedName(reference.Table, tableNames != LowerCaseTableNamesCaseSensitive)
+	if reference.Columns != nil {
+		normalized.Columns = normalizedIdentifiers(reference.Columns)
+	}
+	return &normalized
+}
+
+func normalizedIndex(index *mysqlquery.CreateIndexStatement, tableNames LowerCaseTableNames) mysqlquery.CreateIndexStatement {
+	normalized := *index
+	normalized.IfNotExists = false
+	normalized.Name = normalizedQualifiedName(index.Name, true)
+	normalized.Table = normalizedQualifiedName(index.Table, tableNames != LowerCaseTableNamesCaseSensitive)
+	if index.Method != nil {
+		method := normalizedIdentifier(*index.Method)
+		normalized.Method = &method
+	}
+	if index.Elements != nil {
+		normalized.Elements = make([]mysqlquery.IndexElement, len(index.Elements))
+		for elementIndex, element := range index.Elements {
+			normalized.Elements[elementIndex] = element
+			normalized.Elements[elementIndex].Expression = normalizedExpression(element.Expression)
+		}
+	}
+	return normalized
+}
+
+func normalizedExpression(expression mysqlquery.Expression) mysqlquery.Expression {
+	switch expression := expression.(type) {
+	case *mysqlquery.IdentifierExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Name = normalizedQualifiedName(expression.Name, true)
+		return &normalized
+	case *mysqlquery.StarExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Qualifier = normalizedQualifiedName(expression.Qualifier, true)
+		return &normalized
+	case *mysqlquery.UnaryExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Expression = normalizedExpression(expression.Expression)
+		return &normalized
+	case *mysqlquery.BinaryExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Left = normalizedExpression(expression.Left)
+		normalized.Right = normalizedExpression(expression.Right)
+		return &normalized
+	case *mysqlquery.CallExpression:
+		if expression == nil {
+			return nil
+		}
+		normalized := *expression
+		normalized.Function = normalizedQualifiedName(expression.Function, true)
+		if expression.Arguments != nil {
+			normalized.Arguments = make([]mysqlquery.Expression, len(expression.Arguments))
+			for index, argument := range expression.Arguments {
+				normalized.Arguments[index] = normalizedExpression(argument)
+			}
+		}
+		return &normalized
+	default:
+		return expression
+	}
+}
+
+func normalizedIdentifiers(identifiers []mysqlquery.Identifier) []mysqlquery.Identifier {
+	normalized := make([]mysqlquery.Identifier, len(identifiers))
+	for index, identifier := range identifiers {
+		normalized[index] = normalizedIdentifier(identifier)
+	}
+	return normalized
+}
+
+func normalizedIdentifier(identifier mysqlquery.Identifier) mysqlquery.Identifier {
+	identifier.Name = strings.ToLower(identifier.Name)
+	identifier.Quoted = false
+	return identifier
+}
+
+func normalizedQualifiedName(name mysqlquery.QualifiedName, caseInsensitive bool) mysqlquery.QualifiedName {
+	if name == nil {
+		return nil
+	}
+	normalized := make(mysqlquery.QualifiedName, len(name))
+	for index, identifier := range name {
+		if caseInsensitive {
+			normalized[index] = normalizedIdentifier(identifier)
+			continue
+		}
+		identifier.Quoted = false
+		normalized[index] = identifier
+	}
+	return normalized
+}
+
+func hasColumnConstraint(constraints []mysqlquery.ColumnConstraint, kind mysqlquery.ConstraintKind) bool {
+	for _, constraint := range constraints {
+		if constraint.Kind == kind {
+			return true
 		}
 	}
 	return false
 }
 
-func sameIndex(left *mysqlquery.CreateIndexStatement, right *mysqlquery.CreateIndexStatement) bool {
-	leftCopy := *left
+func columnRequiresBackfill(column mysqlquery.ColumnDefinition) bool {
+	hasDefault := false
+	defaultIsNull := false
+	hasNotNull := false
+	hasPrimaryKey := false
+	for _, constraint := range column.Constraints {
+		switch constraint.Kind {
+		case mysqlquery.ConstraintDefault:
+			hasDefault = true
+			literal, ok := constraint.Expression.(*mysqlquery.Literal)
+			defaultIsNull = ok && literal.Kind == mysqlquery.NullLiteral
+		case mysqlquery.ConstraintNotNull:
+			hasNotNull = true
+		case mysqlquery.ConstraintPrimaryKey:
+			hasPrimaryKey = true
+		}
+	}
+	if hasPrimaryKey {
+		return true
+	}
+	return hasNotNull && (!hasDefault || defaultIsNull)
+}
+
+func sameIndex(left *mysqlquery.CreateIndexStatement, right *mysqlquery.CreateIndexStatement, tableNames LowerCaseTableNames) bool {
+	leftCopy := normalizedIndex(left, tableNames)
+	rightCopy := normalizedIndex(right, tableNames)
 	leftCopy.IfNotExists = false
-	rightCopy := *right
 	rightCopy.IfNotExists = false
-	return reflect.DeepEqual(leftCopy, rightCopy)
+	return ast.Equal(leftCopy, rightCopy)
 }
 
 func serialize(statement mysqlquery.Statement) (string, error) {
@@ -318,19 +621,36 @@ func sortedTableKeys(tables map[string]tableDefinition) []string {
 	return keys
 }
 
-func sortedIndexKeys(indexes map[string]indexDefinition) []string {
-	keys := make([]string, 0, len(indexes))
+func sortedIndexKeys(indexes map[indexKey]indexDefinition) []indexKey {
+	keys := make([]indexKey, 0, len(indexes))
 	for key := range indexes {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].owner != keys[right].owner {
+			return keys[left].owner < keys[right].owner
+		}
+		return keys[left].name < keys[right].name
+	})
 	return keys
 }
 
-func qualifiedNameKey(name mysqlquery.QualifiedName) string {
+func tableNameKey(name mysqlquery.QualifiedName, tableNames LowerCaseTableNames) string {
+	return qualifiedNameKey(name, tableNames != LowerCaseTableNamesCaseSensitive)
+}
+
+func columnNameKey(name string) string {
+	return strings.ToLower(name)
+}
+
+func qualifiedNameKey(name mysqlquery.QualifiedName, caseInsensitive bool) string {
 	var key strings.Builder
 	for _, part := range name {
-		fmt.Fprintf(&key, "%d:%s", len(part.Name), part.Name)
+		value := part.Name
+		if caseInsensitive {
+			value = strings.ToLower(value)
+		}
+		fmt.Fprintf(&key, "%d:%s", len(value), value)
 	}
 	return key.String()
 }
@@ -357,5 +677,21 @@ func filenamePart(value string) string {
 	if name == "" {
 		return "object"
 	}
-	return name
+	if len(name) <= maxFilenamePartBytes {
+		return name
+	}
+	hash := sha256.Sum256([]byte(value))
+	suffix := fmt.Sprintf("_%x", hash[:filenamePartHashSize])
+	return truncateFilenamePart(name, maxFilenamePartBytes-len(suffix)) + suffix
+}
+
+func truncateFilenamePart(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	value = value[:maxBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }

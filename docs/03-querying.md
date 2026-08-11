@@ -274,6 +274,7 @@ func Example_rasql_scalar_function() {
 
 	// LOWER(email) matches "Ada@Example.com" against the lower-case literal a
 	// caller would type, regardless of how the stored value was cased.
+	// SQL: SELECT members.id, COALESCE(members.nickname, members.email) AS name FROM members WHERE LOWER(members.email) = ? (argument: "ada@example.com")
 	byEmail, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
@@ -292,6 +293,7 @@ func Example_rasql_scalar_function() {
 
 	// COALESCE(nickname, email) reads every member's display name, falling
 	// back to the email once nickname is NULL.
+	// SQL: SELECT members.id, COALESCE(members.nickname, members.email) AS name FROM members ORDER BY members.id ASC
 	names, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		OrderAsc(id).
@@ -433,6 +435,7 @@ func Example_rasql_typed_query() {
 
 	// SelectFrom knows the UsersRow result type from users. Query yields decoded
 	// rows directly, so the loop does not need manual scanning or conversion.
+	// SQL: SELECT users.id, users.email FROM users ORDER BY users.email ASC LIMIT 2 OFFSET 1
 	rows, err := rasql.SelectFrom(users).
 		OrderAsc(users.Email).
 		Offset(1).
@@ -531,6 +534,7 @@ func Example_rasql_where_in() {
 	// WhereIn binds one placeholder per value and skips the users whose id is
 	// not in the list. The list must hold at least one value: an empty one makes
 	// Query return an error instead of rendering IN (), which is not valid SQL.
+	// SQL: SELECT users.id, users.email FROM users WHERE users.id IN (?, ?) ORDER BY users.id ASC (arguments: 1, 3)
 	rows, err := rasql.SelectFrom(users).
 		WhereIn(users.ID, 1, 3).
 		OrderAsc(users.ID).
@@ -709,6 +713,7 @@ func Example_rasql_subquery() {
 	// InSelect keeps orders placed by a domain user without costing one
 	// argument per candidate id, and Scalar compares amount against the
 	// average of every order.
+	// SQL: SELECT orders.user_id, orders.amount FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.amount >= (SELECT AVG(all_orders.amount) FROM orders AS all_orders) ORDER BY orders.amount ASC (argument: "%@example.com")
 	rows, err := rasql.DecodeFrom[orderSummary](orders).
 		Project(query.Project(orderUserID).As("user_id"), query.Project(amount)).
 		Where(query.InSelect(orderUserID, domainUsers)).
@@ -793,6 +798,7 @@ func Example_rasql_count() {
 	// Count runs COUNT(*) over the builder's WHERE and joins, without decoding
 	// any row into a UserRow. It rejects a builder with Limit or Offset set,
 	// since a count of a paged statement is not the count the caller asked for.
+	// SQL: SELECT COUNT(*) FROM users
 	total, err := rasql.SelectFrom(users).Count(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to count users: %s\n", err)
@@ -800,6 +806,7 @@ func Example_rasql_count() {
 	}
 	fmt.Println("total:", total)
 
+	// SQL: SELECT COUNT(*) FROM users WHERE users.id = ? (argument: 2)
 	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID, 2).Count(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
@@ -902,6 +909,7 @@ func Example_rasql_group_by() {
 	// bare column beside COUNT(*) is refused without one. Having filters
 	// groups after aggregation, so it may call an aggregate a WHERE clause
 	// could not.
+	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
 		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
 		GroupBy(status).
@@ -1013,6 +1021,7 @@ func Example_rasql_distinct() {
 	// Distinct is meaningful here because Project narrows the result to
 	// user_id alone; SelectFrom would already select the orders primary key,
 	// which makes every row unique before DISTINCT runs.
+	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
 	rows, err := rasql.DecodeFrom[orderingUser](orders).
 		Project(query.Project(orderUserID).As("user_id")).
 		Distinct().
@@ -1173,6 +1182,7 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
+	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
 		Join(rasql.InnerJoin(orders, query.Equal(users.ID, orderUserID))).
 		Project(query.Project(users.ID).As("user_id"), query.Project(users.Email)).

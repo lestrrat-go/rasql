@@ -131,6 +131,7 @@ func Example_rasql_static_template() {
 		return
 	}
 
+	// SQL: SELECT id, email FROM users WHERE email = ? (argument: "ada@example.com")
 	// QueryRendered runs the template statement; row.Scan turns its rows into a rangeable sequence.
 	sqlRows, err := client.QueryRendered(ctx, statement)
 	if err != nil {
@@ -231,6 +232,7 @@ func Example_rasql_typed_static_template() {
 		fmt.Printf("failed to bind template: %s\n", err)
 		return
 	}
+	// SQL: WITH ranked_users AS (SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank FROM users) SELECT id, email, rank FROM ranked_users WHERE id >= ? ORDER BY rank (argument: 2)
 	rows, err := rasql.QueryRenderedAll[rankedUser](ctx, client, statement)
 	if err != nil {
 		fmt.Printf("failed to query ranked users: %s\n", err)

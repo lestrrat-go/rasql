@@ -389,6 +389,9 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable(\"users\",")
+	// inspect never reports a namespace, so the generated descriptor must not
+	// qualify the table with one.
+	require.NotContains(t, string(source), "schema.InSchema(")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 }
 
@@ -412,6 +415,7 @@ func TestRunSchemaInspectsSQLite(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "type UsersRow struct {")
+	require.Contains(t, string(source), "schema.InSchema(\"main\")")
 	require.Contains(t, string(source), "ID   int64")
 	require.Contains(t, string(source), "Name string")
 }
@@ -441,9 +445,28 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
 			AddRow("id", "bigint", "NO", nil, nil, nil))
+	mock.ExpectQuery("SHOW CREATE TABLE `users`").
+		WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).
+			AddRow("users", "CREATE TABLE `users` (`id` bigint NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB"))
 	mock.ExpectQuery("SELECT key_column_usage\\.column_name FROM information_schema\\.table_constraints JOIN information_schema\\.key_column_usage").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	mock.ExpectQuery("SELECT key_column_usage\\.constraint_name, key_column_usage\\.column_name, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE FROM information_schema\\.table_constraints JOIN information_schema\\.key_column_usage.*constraint_type = 'UNIQUE'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "unsupported_index_metadata"}))
+	mock.ExpectQuery("SELECT check_constraints\\.constraint_name, check_constraints\\.check_clause, FALSE, TRUE, table_constraints\\.enforced = 'YES' FROM information_schema\\.check_constraints JOIN information_schema\\.table_constraints.*constraint_type = 'CHECK'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "check_clause", "no_inherit", "validated", "enforced"}))
+	mock.ExpectQuery("SHOW COLUMNS FROM information_schema.statistics LIKE 'EXPRESSION'").
+		WillReturnRows(sqlmock.NewRows([]string{"Field"}).AddRow("EXPRESSION"))
+	mock.ExpectQuery("SHOW COLUMNS FROM information_schema.statistics LIKE 'IS_VISIBLE'").
+		WillReturnRows(sqlmock.NewRows([]string{"Field"}).AddRow("IS_VISIBLE"))
+	mock.ExpectQuery("SELECT index_name, non_unique = 0, column_name, sub_part, expression, collation, index_type, is_visible FROM information_schema\\.statistics.*index_name <> 'PRIMARY'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}))
+	mock.ExpectQuery("SELECT key_column_usage\\.constraint_name, key_column_usage\\.column_name, key_column_usage\\.referenced_table_name, key_column_usage\\.referenced_column_name, CASE referential_constraints\\.delete_rule.*referenced_table_name IS NOT NULL").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_in_current_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}))
 	mock.ExpectCommit()
 	mock.ExpectClose()
 
@@ -452,6 +475,7 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "type UsersRow struct {")
+	require.NotContains(t, string(source), "Schema:")
 	require.Contains(t, string(source), "ID int64")
 }
 

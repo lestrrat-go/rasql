@@ -148,7 +148,7 @@ Composite keys, nullable foreign keys, nullable or non-primary target columns, m
 
 `Schema` is optional and names the namespace holding the table: a PostgreSQL schema, a MySQL database, or a SQLite attached-database name. rasql takes no position on what a namespace means to a server: it validates `Schema` as a simple identifier exactly like `Name`, quotes it as a separate identifier in the SQL that reads the field, and never creates, drops, or connects to a namespace itself. An application that needs `audit.events` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created. An empty `Schema` leaves the table unqualified, which resolves through the connection's own default and is what every descriptor written before this field existed still does.
 
-Qualification reaches DML, column references, and DDL. A `SELECT`, `INSERT`, `UPDATE`, or `DELETE` built from a qualified descriptor renders `"audit"."events"` as its target, a column reached through the unaliased table renders `"audit"."events"."id"`, and `render.CreateTable`, `render.CreateIndexes`, and `rasql.Create` render `CREATE TABLE "audit"."events"` and its indexes into the named namespace on every dialect that can express it. rasql never creates, drops, or connects to the namespace itself: an application that needs `audit` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created, and `rasql.Create` then fails with the server's own error if that namespace does not exist. `inspect` never fills `Schema` in, and [`rasqlgen`](06-rasqlgen.md) never emits one; qualified inspection and generation are not supported yet, so a qualified table is re-read through a hand-written descriptor.
+Qualification reaches DML, column references, and DDL. A `SELECT`, `INSERT`, `UPDATE`, or `DELETE` built from a qualified descriptor renders `"audit"."events"` as its target, a column reached through the unaliased table renders `"audit"."events"."id"`, and `render.CreateTable`, `render.CreateIndexes`, and `rasql.Create` render `CREATE TABLE "audit"."events"` and its indexes into the named namespace on every dialect that can express it. rasql never creates, drops, or connects to the namespace itself: an application that needs `audit` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created, and `rasql.Create` then fails with the server's own error if that namespace does not exist. SQLite inspection preserves the database name in `Schema`, including when a lookup is scoped with `TableIn`, and [`rasqlgen`](06-rasqlgen.md) emits that non-empty `Schema` value in generated descriptors. PostgreSQL and MySQL inspection leave `Schema` empty, so `rasqlgen` emits no `Schema` field for those dialects. Qualified PostgreSQL and MySQL inspection and generation are not supported yet, so a qualified table on those dialects is re-read through a hand-written descriptor.
 
 A foreign key that references a table in another schema names it with `ForeignKeyDef.ReferencedSchema`, validated the same way as `Table.Schema` and left empty for the server to resolve, exactly like an empty `Table.Schema`. PostgreSQL and MySQL render a stated `ReferencedSchema` as a second qualified identifier in the `REFERENCES` clause. SQLite cannot: it rejects a schema-qualified `REFERENCES` outright, even when the reference names the referencing table's own schema, so rasql drops a same-schema qualifier there rather than refuse a reference that means the same thing either way, and refuses to render a genuinely cross-schema reference instead of silently pointing it at the wrong table. An unqualified table's foreign keys are unaffected either way: qualifying `Table.Schema` alone, without also stating `ForeignKeyDef.ReferencedSchema`, would let PostgreSQL resolve an unqualified `REFERENCES` through the connection's `search_path` rather than the table's own schema, which is why the two fields ship together.
 
@@ -212,11 +212,13 @@ func Example_schema_qualified_table() {
 		schema.PrimaryKey("id"),
 	))
 
+	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
 	if err := rasql.Create(ctx, client, events); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}
 
+	// SQL: INSERT INTO audit.events (id, action) VALUES (?, ?) (arguments: 1, "created")
 	if _, err := rasql.Insert(ctx, client, events, eventRow{ID: 1, Action: "created"}); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
 		return
@@ -227,6 +229,7 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to reference id column: %s\n", err)
 		return
 	}
+	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
 	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)
@@ -320,11 +323,13 @@ func Example_schema_decimal_column() {
 	))
 	// SQLite has no exact decimal storage class, so the dialect declares this
 	// column TEXT rather than NUMERIC(19,4), which would round through REAL.
+	// SQL: CREATE TABLE invoices (id INTEGER NOT NULL, amount TEXT NOT NULL, PRIMARY KEY (id))
 	if err := rasql.Create(ctx, client, invoices); err != nil {
 		fmt.Printf("failed to create invoices table: %s\n", err)
 		return
 	}
 
+	// SQL: INSERT INTO invoices (id, amount) VALUES (?, ?) (arguments: 1, "19.99")
 	if _, err := rasql.Insert(ctx, client, invoices, invoiceRow{ID: 1, Amount: "19.99"}); err != nil {
 		fmt.Printf("failed to insert invoice: %s\n", err)
 		return
@@ -335,6 +340,7 @@ func Example_schema_decimal_column() {
 		fmt.Printf("failed to reference id column: %s\n", err)
 		return
 	}
+	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
 	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoiceID, int64(1)).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)
@@ -432,7 +438,7 @@ Two methods remain for code that only learns a column name while it runs. `users
 
 ## Read a table out of a database
 
-`inspect` turns live database metadata back into a `schema.TableDef`, normalizing native column types into logical ones.
+`inspect` turns live database metadata back into a `schema.TableDef`, normalizing native column types into logical ones. `Inspector.Table` looks up an unscoped table name. On SQLite, it searches `main`, `temp`, and attached databases; if the name exists in more than one of them, it returns the typed `*inspect.AmbiguousTableError` (also detectable with `inspect.ErrAmbiguousTable`) instead of choosing one. Use `Inspector.TableIn(ctx, databaseName, tableName)` to select `main`, `temp`, or an attached database. The returned `schema.TableDef.Schema` preserves that SQLite database name, so rendering or executing the descriptor continues to address the inspected scope. `inspect.New` accepts a SQLite `*sql.DB` for ordinary `main` tables. A retained `*sql.Conn` or `*sql.Tx` is required for `temp` or an attached database, and the same handle must execute descriptors that refer to those scopes because they belong to one connection rather than the `*sql.DB` pool. `TableIn` is supported only for SQLite. The inspector falls back to each database's `sqlite_master` catalog when `PRAGMA table_list` is unavailable on older SQLite engines.
 
 <!-- INCLUDE(examples/inspect_sqlite_table_example_test.go) -->
 ```go
@@ -441,6 +447,7 @@ package examples_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -449,7 +456,7 @@ import (
 )
 
 func Example_inspect_sqlite_table() {
-	// This example reads an existing SQLite table into a normalized schema.TableDef.
+	// This example reads SQLite tables from main, temp, and an attached database.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -457,39 +464,69 @@ func Example_inspect_sqlite_table() {
 		return
 	}
 	defer func() { _ = database.Close() }()
-	// Pretend this DDL already exists in an application-owned SQLite database.
-	if _, err := database.ExecContext(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, nickname TEXT)"); err != nil {
-		fmt.Printf("failed to create users table: %s\n", err)
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		fmt.Printf("failed to retain SQLite connection: %s\n", err)
 		return
 	}
+	defer func() { _ = connection.Close() }()
+	// Pretend these tables already exist in an application-owned SQLite database.
+	if _, err := connection.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS aux"); err != nil {
+		fmt.Printf("failed to attach aux database: %s\n", err)
+		return
+	}
+	for _, statement := range []string{
+		"CREATE TABLE main.users (id INTEGER PRIMARY KEY, main_value TEXT)",
+		"CREATE TABLE aux.users (id INTEGER PRIMARY KEY, aux_value TEXT)",
+		"CREATE TEMP TABLE users (id INTEGER PRIMARY KEY, temp_value TEXT)",
+	} {
+		if _, err := connection.ExecContext(ctx, statement); err != nil {
+			fmt.Printf("failed to create users table: %s\n", err)
+			return
+		}
+	}
 
-	// The inspector uses the dialect to normalize native column metadata.
-	inspector, err := inspect.New(database, dialect.SQLite())
+	// An unscoped lookup does not guess when several databases contain users.
+	// The typed error exposes the conflicting database names to the caller.
+	// SQLite inspection stays on the retained connection because temp and
+	// attached databases belong to that connection.
+	inspector, err := inspect.New(connection, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
 		return
 	}
-	table, err := inspector.Table(ctx, "users")
-	if err != nil {
-		fmt.Printf("failed to inspect users table: %s\n", err)
+	_, err = inspector.Table(ctx, "users")
+	var ambiguous *inspect.AmbiguousTableError
+	if !errors.As(err, &ambiguous) {
+		fmt.Printf("expected ambiguous users error, got %v\n", err)
 		return
 	}
-	fmt.Printf("%s: %s, %s, %s\n", table.Name, table.Columns[0].Type.Kind(), table.Columns[1].Type.Kind(), table.Columns[2].Type.Kind())
-	fmt.Println(table.PrimaryKey)
+	fmt.Printf("ambiguous %s: %d databases\n", ambiguous.Table, len(ambiguous.Databases))
+
+	for _, databaseName := range []string{"main", "temp", "aux"} {
+		table, err := inspector.TableIn(ctx, databaseName, "users")
+		if err != nil {
+			fmt.Printf("failed to inspect %s.users: %s\n", databaseName, err)
+			return
+		}
+		fmt.Printf("%s.%s: %s\n", table.Schema, table.Name, table.Columns[1].Name)
+	}
 
 	// Output:
-	// users: integer, text, text
-	// [id]
+	// ambiguous users: 3 databases
+	// main.users: main_value
+	// temp.users: temp_value
+	// aux.users: aux_value
 }
 ```
 source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_example_test.go)
 <!-- END INCLUDE -->
 
-`inspect.New` takes the same kind of handle as `rasql.New` plus the dialect that describes the database being read. `Table` looks up one table by name. The result is an ordinary descriptor, so it can be validated, compared against a checked-in definition, or handed to the generator. A PostgreSQL `NUMERIC(p,s)` or MySQL `DECIMAL(p,s)` column normalizes to `schema.DecimalType` with `Precision` and `Scale` filled in from the catalog. Catalog metadata comes from whichever server the application points at, so a decimal is recognized only from a type declaration matched in full, never from a substring of one: on MySQL, `COLUMN_TYPE` must read exactly `DECIMAL` or `NUMERIC`, optionally followed by `(precision)` or `(precision, scale)`, and catalog text such as `FOODECIMALBAR` is an unsupported type rather than a decimal. Four decimal shapes return an error rather than a descriptor: a PostgreSQL column declared as bare, unconstrained `numeric` has no precision the catalog can report, so `Table` refuses it rather than guess one; a decimal column whose catalog row reports no scale is refused for the same reason, since recording the missing scale as 0 would drop the column's fractional digits; a MySQL `DECIMAL`/`NUMERIC` declaration carrying `UNSIGNED`, `ZEROFILL` or any other modifier is refused, because `DecimalType` cannot record the modifier and re-rendering the column without it would change the values the column permits; and any SQLite `DECIMAL`/`NUMERIC` column is refused outright, since such a column actually holds `REAL` values in SQLite (see [Logical column types](#logical-column-types) above) and `schema.DecimalType` would claim an exactness the stored data does not have. A SQLite column that rasql itself created as `DecimalType` was declared `TEXT`, and inspects back as `schema.TextType`, not `schema.DecimalType`: SQLite's catalog does not record enough to recover the original logical type.
+`inspect.New` takes the same kind of handle as `rasql.New` plus the dialect that describes the database being read. The result is an ordinary descriptor, so it can be validated, compared against a checked-in definition, or handed to the generator. A PostgreSQL `NUMERIC(p,s)` or MySQL `DECIMAL(p,s)` column normalizes to `schema.DecimalType` with `Precision` and `Scale` filled in from the catalog. Catalog metadata comes from whichever server the application points at, so a decimal is recognized only from a type declaration matched in full, never from a substring of one: on MySQL, `COLUMN_TYPE` must read exactly `DECIMAL` or `NUMERIC`, optionally followed by `(precision)` or `(precision, scale)`, and catalog text such as `FOODECIMALBAR` is an unsupported type rather than a decimal. Four decimal shapes return an error rather than a descriptor: a PostgreSQL column declared as bare, unconstrained `numeric` has no precision the catalog can report, so `Table` refuses it rather than guess one; a decimal column whose catalog row reports no scale is refused for the same reason, since recording the missing scale as 0 would drop the column's fractional digits; a MySQL `DECIMAL`/`NUMERIC` declaration carrying `UNSIGNED`, `ZEROFILL` or any other modifier is refused, because `DecimalType` cannot record the modifier and re-rendering the column without it would change the values the column permits; and any SQLite `DECIMAL`/`NUMERIC` column is refused outright, since such a column actually holds `REAL` values in SQLite (see [Logical column types](#logical-column-types) above) and `schema.DecimalType` would claim an exactness the stored data does not have. A SQLite column that rasql itself created as `DecimalType` was declared `TEXT`, and inspects back as `schema.TextType`, not `schema.DecimalType`: SQLite's catalog does not record enough to recover the original logical type.
 
 Integer declarations are matched the same way, and for the same reason. On MySQL, `COLUMN_TYPE` must read exactly `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `INTEGER` or `BIGINT`, optionally followed by a display width and then by `UNSIGNED`; a declaration carrying `UNSIGNED` sets `IntegerType.Unsigned`, and one carrying `ZEROFILL` or any other modifier is refused, since the concrete type cannot record it. Matching the whole declaration is what makes the `UNSIGNED` visible at all: a substring test on `INT` cannot see what follows the type, which is how a `bigint(20) unsigned` column used to inspect as a plain signed integer and re-render as `BIGINT`, losing every value above 9223372036854775807. It also accepted MySQL's `POINT`, which is not an integer at all and is now an unsupported type. PostgreSQL has no unsigned integer type and SQLite stores a signed 64-bit value whatever a column is declared, so neither ever reports an unsigned column; a SQLite column declared `UNSIGNED BIG INT` inspects as the signed integer column it really is.
 
-For PostgreSQL and SQLite, `Table` never returns a descriptor silently missing columns or a primary key. PostgreSQL's `information_schema` views are filtered by the inspecting role's privileges, while `pg_catalog` is not, so `inspect` reads the true column count and the primary key from `pg_catalog` rather than trusting `information_schema` alone. A role whose grants hide some or all of a table's columns gets `inspect.IncompleteMetadataError`, and a name that does not exist gets `inspect.TableNotFoundError`. A plain read-only role gets its primary key from `pg_catalog` too, so it sees a complete descriptor with no error. MySQL has the same `information_schema` filtering but no unfiltered catalog to cross-check against, so a restricted MySQL grant can make inspection silently under-report a table's columns or primary key, with no way for this package to detect it.
+For PostgreSQL and SQLite, `Table` never returns a descriptor silently missing columns or a primary key. PostgreSQL's `information_schema` views are filtered by the inspecting role's privileges, while `pg_catalog` is not, so `inspect` reads the true column count and the primary key from `pg_catalog` rather than trusting `information_schema` alone. A role whose grants hide some or all of a table's columns gets `inspect.IncompleteMetadataError`, and a name that does not exist gets `inspect.TableNotFoundError`. A plain read-only role gets its primary key from `pg_catalog` too, so it sees a complete descriptor with no error. MySQL filters `information_schema.columns` by column privileges, so `inspect` cross-checks the visible column count against the full `SHOW CREATE TABLE` definition and returns `inspect.ErrIncompleteMetadata` when a restricted grant hides columns. SQLite has no privilege filtering.
 
 ## Next
 

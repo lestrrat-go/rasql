@@ -132,6 +132,7 @@ func Example_rasql_subquery() {
 	// InSelect keeps orders placed by a domain user without costing one
 	// argument per candidate id, and Scalar compares amount against the
 	// average of every order.
+	// SQL: SELECT orders.user_id, orders.amount FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.amount >= (SELECT AVG(all_orders.amount) FROM orders AS all_orders) ORDER BY orders.amount ASC (argument: "%@example.com")
 	rows, err := rasql.DecodeFrom[orderSummary](orders).
 		Project(query.Project(orderUserID).As("user_id"), query.Project(amount)).
 		Where(query.InSelect(orderUserID, domainUsers)).

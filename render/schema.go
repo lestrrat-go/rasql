@@ -238,10 +238,10 @@ func (r *renderer) foreignKeyDefinition(table schema.TableDef, key schema.Foreig
 		}
 		definition = "CONSTRAINT " + name + " " + definition
 	}
-	if key.OnDelete != "" {
+	if key.OnDelete != "" && (key.OnDelete != schema.NoAction || r.dialect.Name() != "sqlite") {
 		definition += " ON DELETE " + string(key.OnDelete)
 	}
-	if key.OnUpdate != "" {
+	if key.OnUpdate != "" && (key.OnUpdate != schema.NoAction || r.dialect.Name() != "sqlite") {
 		definition += " ON UPDATE " + string(key.OnUpdate)
 	}
 	return definition, nil

@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // Source is one SQL file in a desired schema tree.
@@ -24,6 +27,97 @@ type Analyzer interface {
 	Dialect() string
 	Parse([]Source) (Snapshot, error)
 	Diff(Snapshot, Snapshot) (Plan, error)
+}
+
+// LiveAnalyzer supplies the dialect-specific boundary used by diff-live.
+// LiveSources converts one inspected table into desired-schema sources, and
+// ValidateLivePlan checks that generated statements stay within that table.
+type LiveAnalyzer interface {
+	Analyzer
+	LiveSources(schema.TableDef) ([]Source, error)
+	ValidateLivePlan(Plan, string) error
+}
+
+// Schema groups the tables and indexes in one parsed schema. The map keys are
+// canonicalized by the dialect package that parsed the schema.
+type Schema[Table, Index any] struct {
+	Tables  map[string]Table
+	Indexes map[string]Index
+}
+
+// SchemaEntry identifies one schema object by its dialect-canonical key.
+type SchemaEntry[T any] struct {
+	Key   string
+	Value T
+}
+
+// SchemaPair contains the baseline and target versions of one schema object.
+type SchemaPair[T any] struct {
+	Key      string
+	Baseline T
+	Target   T
+	Equal    bool
+}
+
+// SchemaChanges describes added, removed, and matched objects in one category.
+type SchemaChanges[T any] struct {
+	Added   []SchemaEntry[T]
+	Removed []SchemaEntry[T]
+	Matched []SchemaPair[T]
+}
+
+// SchemaComparison is the canonical comparison of two parsed schemas.
+type SchemaComparison[Table, Index any] struct {
+	Tables  SchemaChanges[Table]
+	Indexes SchemaChanges[Index]
+}
+
+// CompareSchemas compares schema objects by their dialect-canonical keys.
+// Dialects supply equality functions because identifier folding and metadata
+// normalization are database rules, not shared migration rules.
+func CompareSchemas[Table, Index any](baseline, target Schema[Table, Index], tableEqual func(Table, Table) bool, indexEqual func(Index, Index) bool) SchemaComparison[Table, Index] {
+	return SchemaComparison[Table, Index]{
+		Tables:  compareSchemaObjects(baseline.Tables, target.Tables, tableEqual),
+		Indexes: compareSchemaObjects(baseline.Indexes, target.Indexes, indexEqual),
+	}
+}
+
+func compareSchemaObjects[T any](baseline, target map[string]T, equal func(T, T) bool) SchemaChanges[T] {
+	changes := SchemaChanges[T]{
+		Added:   make([]SchemaEntry[T], 0),
+		Removed: make([]SchemaEntry[T], 0),
+		Matched: make([]SchemaPair[T], 0),
+	}
+	keys := make([]string, 0, len(target))
+	for key := range target {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		targetValue := target[key]
+		baselineValue, exists := baseline[key]
+		if !exists {
+			changes.Added = append(changes.Added, SchemaEntry[T]{Key: key, Value: targetValue})
+			continue
+		}
+		changes.Matched = append(changes.Matched, SchemaPair[T]{
+			Key:      key,
+			Baseline: baselineValue,
+			Target:   targetValue,
+			Equal:    equal == nil || equal(baselineValue, targetValue),
+		})
+	}
+	keys = keys[:0]
+	for key := range baseline {
+		if _, exists := target[key]; !exists {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		changes.Removed = append(changes.Removed, SchemaEntry[T]{Key: key, Value: baseline[key]})
+	}
+	return changes
 }
 
 // Plan is a reviewed set of SQL sources generated for one migration.
@@ -52,7 +146,7 @@ func (p Plan) Validate() error {
 	if len(p.Statements) == 0 {
 		return fmt.Errorf("migrate diff: plan has no SQL sources")
 	}
-	sources := make(map[string]struct{}, len(p.Statements))
+	sources := make(map[string]int, len(p.Statements))
 	for index, statement := range p.Statements {
 		if statement.Source == "" || filepath.Base(statement.Source) != statement.Source || strings.HasPrefix(statement.Source, ".") || filepath.Ext(statement.Source) != ".sql" {
 			return fmt.Errorf("migrate diff: generated SQL source %d is invalid", index+1)
@@ -60,10 +154,10 @@ func (p Plan) Validate() error {
 		if strings.TrimSpace(statement.SQL) == "" {
 			return fmt.Errorf("migrate diff: generated SQL source %q is empty", statement.Source)
 		}
-		if _, exists := sources[statement.Source]; exists {
-			return fmt.Errorf("migrate diff: duplicate generated SQL source %q", statement.Source)
+		if previous, exists := sources[statement.Source]; exists {
+			return fmt.Errorf("migrate diff: duplicate generated SQL source %q for %q and %q", statement.Source, p.Statements[previous].Summary, statement.Summary)
 		}
-		sources[statement.Source] = struct{}{}
+		sources[statement.Source] = index
 	}
 	return nil
 }

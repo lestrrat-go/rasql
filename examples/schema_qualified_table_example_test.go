@@ -54,11 +54,13 @@ func Example_schema_qualified_table() {
 		schema.PrimaryKey("id"),
 	))
 
+	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
 	if err := rasql.Create(ctx, client, events); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}
 
+	// SQL: INSERT INTO audit.events (id, action) VALUES (?, ?) (arguments: 1, "created")
 	if _, err := rasql.Insert(ctx, client, events, eventRow{ID: 1, Action: "created"}); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
 		return
@@ -69,6 +71,7 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to reference id column: %s\n", err)
 		return
 	}
+	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
 	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(ctx, client)
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)

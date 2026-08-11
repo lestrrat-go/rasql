@@ -77,6 +77,7 @@ func Example_rasql_group_by() {
 	// bare column beside COUNT(*) is refused without one. Having filters
 	// groups after aggregation, so it may call an aggregate a WHERE clause
 	// could not.
+	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
 		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
 		GroupBy(status).
