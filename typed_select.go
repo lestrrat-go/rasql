@@ -14,16 +14,16 @@ import (
 // It selects every table column by default so All and One can decode T.
 func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 	if isNilTable(table) {
-		return TypedSelectBuilder[T]{builder: SelectQueryFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))}
+		return TypedSelectBuilder[T]{builder: SelectFromRef(query.TableRef{}).withError(fmt.Errorf("rasql: table must not be nil"))}
 	}
-	reference := table.QueryTable()
+	reference := table.Ref()
 	definition := reference.Definition()
 	columns := make([]string, len(definition.Columns))
 	for index, column := range definition.Columns {
 		columns[index] = column.Name
 	}
 	return TypedSelectBuilder[T]{
-		builder:    SelectQueryFrom(reference).Select(columns...),
+		builder:    SelectFromRef(reference).Select(columns...),
 		staticScan: true,
 	}
 }
@@ -34,16 +34,16 @@ func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 // snake-cased exported field names otherwise.
 func DecodeFrom[R any, T any](table Table[T]) TypedSelectBuilder[R] {
 	if isNilTable(table) {
-		return TypedSelectBuilder[R]{builder: SelectQueryFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))}
+		return TypedSelectBuilder[R]{builder: SelectFromRef(query.TableRef{}).withError(fmt.Errorf("rasql: table must not be nil"))}
 	}
-	return TypedSelectBuilder[R]{builder: SelectQueryFrom(table.QueryTable())}
+	return TypedSelectBuilder[R]{builder: SelectFromRef(table.Ref())}
 }
 
-// DecodeQueryFrom starts a typed fluent SELECT builder for a table with no Go row type.
+// DecodeFromRef starts a typed fluent SELECT builder for a table with no Go row type.
 // R is mapped by its DecodeRow method when it has one, and projected column names
 // map to R's rasql tags or snake-cased exported field names otherwise.
-func DecodeQueryFrom[R any](table query.Table) TypedSelectBuilder[R] {
-	return TypedSelectBuilder[R]{builder: SelectQueryFrom(table)}
+func DecodeFromRef[R any](table query.TableRef) TypedSelectBuilder[R] {
+	return TypedSelectBuilder[R]{builder: SelectFromRef(table)}
 }
 
 // InnerJoin returns an INNER JOIN on table with on as its condition.
@@ -51,9 +51,9 @@ func DecodeQueryFrom[R any](table query.Table) TypedSelectBuilder[R] {
 // import this package.
 func InnerJoin[T any](table Table[T], on query.Expression) query.Join {
 	if isNilTable(table) {
-		return query.InnerJoin(query.Table{}, on)
+		return query.InnerJoin(query.TableRef{}, on)
 	}
-	return query.InnerJoin(table.QueryTable(), on)
+	return query.InnerJoin(table.Ref(), on)
 }
 
 // LeftJoin returns a LEFT JOIN on table with on as its condition.
@@ -61,9 +61,9 @@ func InnerJoin[T any](table Table[T], on query.Expression) query.Join {
 // import this package.
 func LeftJoin[T any](table Table[T], on query.Expression) query.Join {
 	if isNilTable(table) {
-		return query.LeftJoin(query.Table{}, on)
+		return query.LeftJoin(query.TableRef{}, on)
 	}
-	return query.LeftJoin(table.QueryTable(), on)
+	return query.LeftJoin(table.Ref(), on)
 }
 
 // TypedSelectBuilder builds a SELECT that decodes rows as T.
@@ -98,7 +98,7 @@ func (b TypedSelectBuilder[T]) Where(expression query.Expression) TypedSelectBui
 // WhereEqual adds an equality predicate for column and binds value.
 // Repeated calls combine with AND in the order they were made, including calls to Where.
 // Build and Query reject a column whose table is not part of the statement.
-func (b TypedSelectBuilder[T]) WhereEqual(column query.Column, value any) TypedSelectBuilder[T] {
+func (b TypedSelectBuilder[T]) WhereEqual(column query.ColumnRef, value any) TypedSelectBuilder[T] {
 	b.builder = b.builder.Where(query.Equal(column, query.Bind(value)))
 	return b
 }
@@ -107,7 +107,7 @@ func (b TypedSelectBuilder[T]) WhereEqual(column query.Column, value any) TypedS
 // Repeated calls combine with AND in the order they were made, including calls to
 // Where and WhereEqual. Build, Query, All, and One reject an empty value list,
 // and reject a column whose table is not part of the statement.
-func (b TypedSelectBuilder[T]) WhereIn(column query.Column, values ...any) TypedSelectBuilder[T] {
+func (b TypedSelectBuilder[T]) WhereIn(column query.ColumnRef, values ...any) TypedSelectBuilder[T] {
 	if len(values) == 0 {
 		b.builder = b.builder.withError(fmt.Errorf("rasql: IN requires at least one value"))
 		return b
@@ -142,13 +142,13 @@ func (b TypedSelectBuilder[T]) Order(orders ...query.Order) TypedSelectBuilder[T
 }
 
 // OrderAsc adds ascending ordering for column.
-func (b TypedSelectBuilder[T]) OrderAsc(column query.Column) TypedSelectBuilder[T] {
+func (b TypedSelectBuilder[T]) OrderAsc(column query.ColumnRef) TypedSelectBuilder[T] {
 	b.builder = b.builder.Order(query.Asc(column))
 	return b
 }
 
 // OrderDesc adds descending ordering for column.
-func (b TypedSelectBuilder[T]) OrderDesc(column query.Column) TypedSelectBuilder[T] {
+func (b TypedSelectBuilder[T]) OrderDesc(column query.ColumnRef) TypedSelectBuilder[T] {
 	b.builder = b.builder.Order(query.Desc(column))
 	return b
 }

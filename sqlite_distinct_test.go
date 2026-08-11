@@ -18,7 +18,7 @@ import (
 // page shape a caller uses for a value list.
 func TestSQLiteRunsDistinctStatements(t *testing.T) {
 	database, definition := distinctFixture(t)
-	table, err := query.NewTable(definition)
+	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
 	city, err := table.Column("city")
 	require.NoError(t, err)
@@ -124,7 +124,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	table, err := query.NewTable(definition)
+	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
 	city, err := table.Column("city")
 	require.NoError(t, err)
@@ -173,7 +173,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 // error 3065.
 func TestSQLiteAnswersUnprojectedDistinctOrderArbitrarily(t *testing.T) {
 	database, definition := distinctFixture(t)
-	table, err := query.NewTable(definition)
+	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
 	city, err := table.Column("city")
 	require.NoError(t, err)

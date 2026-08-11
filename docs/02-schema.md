@@ -21,7 +21,7 @@ func Example_schema_table_definition() {
 	// schema.TableOption, so they may appear in any order: PrimaryKey names
 	// "id" below before Integer declares it, and the assembled descriptor is
 	// the same either way. The same descriptor can later supply a reusable
-	// query.Table or generate DDL.
+	// query.TableRef or generate DDL.
 	users := schema.MustTable("users",
 		schema.Integer("id"),
 		schema.Text("email"),
@@ -152,7 +152,7 @@ Qualification reaches DML, column references, and DDL. A `SELECT`, `INSERT`, `UP
 
 A foreign key that references a table in another schema names it with `ForeignKeyDef.ReferencedSchema`, validated the same way as `Table.Schema` and left empty for the server to resolve, exactly like an empty `Table.Schema`. PostgreSQL and MySQL render a stated `ReferencedSchema` as a second qualified identifier in the `REFERENCES` clause. SQLite cannot: it rejects a schema-qualified `REFERENCES` outright, even when the reference names the referencing table's own schema, so rasql drops a same-schema qualifier there rather than refuse a reference that means the same thing either way, and refuses to render a genuinely cross-schema reference instead of silently pointing it at the wrong table. An unqualified table's foreign keys are unaffected either way: qualifying `Table.Schema` alone, without also stating `ForeignKeyDef.ReferencedSchema`, would let PostgreSQL resolve an unqualified `REFERENCES` through the connection's `search_path` rather than the table's own schema, which is why the two fields ship together.
 
-`schema.TableDef` and `query.Table` each answer two questions about qualification. `Qualified` reports whether a schema is named at all, and `QualifiedName` returns `schema.name` for display, falling back to `name` for an unqualified table. Neither is a SQL identifier: a renderer quotes `Schema` and `Name` as two identifiers, and `dialect.QuoteIdentifier` rejects the dotted string `QualifiedName` returns. On `query.Table` the two describe the table rather than the reference: `Qualified` stays true once the table is aliased, while `QualifiedName` returns the alias, because that is what an error message about an aliased table has to name. `query.Table.QualifierSchema` reports what actually qualifies a rendered column, which is nothing at all once an alias replaces the table's whole name.
+`schema.TableDef` and `query.TableRef` each answer two questions about qualification. `Qualified` reports whether a schema is named at all, and `QualifiedName` returns `schema.name` for display, falling back to `name` for an unqualified table. Neither is a SQL identifier: a renderer quotes `Schema` and `Name` as two identifiers, and `dialect.QuoteIdentifier` rejects the dotted string `QualifiedName` returns. On `query.TableRef` the two describe the table rather than the reference: `Qualified` stays true once the table is aliased, while `QualifiedName` returns the alias, because that is what an error message about an aliased table has to name. `query.TableRef.QualifierSchema` reports what actually qualifies a rendered column, which is nothing at all once an alias replaces the table's whole name.
 
 <!-- INCLUDE(examples/schema_qualified_table_example_test.go) -->
 ```go
@@ -238,7 +238,7 @@ func Example_schema_qualified_table() {
 
 	// QualifiedName is for display only, never a SQL identifier: the renderer
 	// quotes Schema and Name as two separate identifiers.
-	fmt.Printf("%s: %s\n", events.QueryTable().QualifiedName(), event.Action)
+	fmt.Printf("%s: %s\n", events.Ref().QualifiedName(), event.Action)
 
 	// Output:
 	// audit.events: created
@@ -432,9 +432,9 @@ users := rasql.MustTableOf[UserRow](definition)
 
 Each field's `rasql` tag names the column it holds. `rasql.MustTableOf` panics on an invalid descriptor and suits generated or otherwise constant tables; `rasql.TableOf` returns the error instead, for descriptors assembled at runtime.
 
-A `rasql.Table[T]` is half of a table value rather than the whole of it. Wrap it in a type holding one `query.Column` field per column, so that `users.ID` is the column reference the builders take. That is the shape [`rasqlgen`](06-rasqlgen.md) emits, the shape every example on these pages uses, and the shape a hand-written table should have too. [Getting started](01-getting-started.md#the-table-used-throughout-the-documentation) shows the full wrapper for the `users` table, and [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows what the fields are worth.
+A `rasql.Table[T]` is half of a table value rather than the whole of it. Wrap it in a type holding one `query.ColumnRef` field per column, so that `users.ID` is the column reference the builders take. That is the shape [`rasqlgen`](06-rasqlgen.md) emits, the shape every example on these pages uses, and the shape a hand-written table should have too. [Getting started](01-getting-started.md#the-table-used-throughout-the-documentation) shows the full wrapper for the `users` table, and [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows what the fields are worth.
 
-Two methods remain for code that only learns a column name while it runs. `users.Column(name)` looks a column up and returns a `query.Column` with an error, and `users.QueryTable()` returns the underlying `query.Table` that the lower-level `query` package works in terms of, which [Querying](03-querying.md) uses for joins and projections.
+Two methods remain for code that only learns a column name while it runs. `users.Column(name)` looks a column up and returns a `query.ColumnRef` with an error, and `users.Ref()` returns the underlying `query.TableRef` that the lower-level `query` package works in terms of, which [Querying](03-querying.md) uses for joins and projections.
 
 ## Read a table out of a database
 

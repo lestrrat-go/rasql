@@ -20,10 +20,10 @@ type SelectBuilder struct {
 	err     error
 }
 
-// SelectQueryFrom starts a fluent SELECT builder using table as its primary
-// table. It is the untyped counterpart of SelectFrom, for a query.Table with no
+// SelectFromRef starts a fluent SELECT builder using table as its primary
+// table. It is the untyped counterpart of SelectFrom, for a query.TableRef with no
 // Go row type, and its terminals yield row.Dynamic rather than a decoded type.
-func SelectQueryFrom(table query.Table) SelectBuilder {
+func SelectFromRef(table query.TableRef) SelectBuilder {
 	return SelectBuilder{builder: render.SelectFrom(nil, table)}
 }
 
@@ -76,7 +76,7 @@ func (b SelectBuilder) GroupBy(expressions ...query.Expression) SelectBuilder {
 }
 
 // GroupByColumns adds primary-table columns to the grouping by name.
-// It is the untyped counterpart of passing a generated query.Column to GroupBy.
+// It is the untyped counterpart of passing a generated query.ColumnRef to GroupBy.
 func (b SelectBuilder) GroupByColumns(names ...string) SelectBuilder {
 	b.builder = b.builder.GroupByColumns(names...)
 	return b

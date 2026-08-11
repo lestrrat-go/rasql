@@ -60,7 +60,7 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -73,7 +73,7 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
 
-	sequence, err := rasql.SelectQueryFrom(users).
+	sequence, err := rasql.SelectFromRef(users).
 		Select("id", "email").
 		WhereEqual("id", 42).
 		Query(t.Context(), client)
@@ -83,7 +83,7 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 }
 
 func TestSelectBuilderWhereInMatchesRenderSelectFrom(t *testing.T) {
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -101,7 +101,7 @@ func TestSelectBuilderWhereInMatchesRenderSelectFrom(t *testing.T) {
 
 	client, err := rasql.New(&debugQueryer{}, dialect.PostgreSQL())
 	require.NoError(t, err)
-	fromClient, err := rasql.SelectQueryFrom(users).
+	fromClient, err := rasql.SelectFromRef(users).
 		Select("id", "email").
 		WhereIn("id", 1, 2).
 		Build(client.Dialect())
@@ -139,7 +139,7 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	email, err := users.Column("email")
 	require.NoError(t, err)
 
-	orders, err := query.NewTable(schema.TableDef{
+	orders, err := query.NewTableRef(schema.TableDef{
 		Name: "orders",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -219,7 +219,7 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
+func TestDecodeFromRefDecodesProjectedRows(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -229,7 +229,7 @@ func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -250,7 +250,7 @@ func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
 		UserID int64
 		Email  string
 	}
-	rows, err := rasql.DecodeQueryFrom[summary](users).
+	rows, err := rasql.DecodeFromRef[summary](users).
 		Project(query.Project(id).As("user_id"), query.Project(email)).
 		Where(query.Equal(id, query.Bind(42))).
 		Query(t.Context(), client)
@@ -381,7 +381,7 @@ func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -394,7 +394,7 @@ func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
 
-	count, err := rasql.SelectQueryFrom(users).WhereEqual("id", 42).Count(t.Context(), client)
+	count, err := rasql.SelectFromRef(users).WhereEqual("id", 42).Count(t.Context(), client)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), count)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -448,7 +448,7 @@ func TestSelectBuilderCountRejectsWrongRowCount(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -463,10 +463,10 @@ func TestSelectBuilderCountRejectsWrongRowCount(t *testing.T) {
 	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\"").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)).AddRow(int64(2)))
 
-	_, err = rasql.SelectQueryFrom(users).Count(t.Context(), client)
+	_, err = rasql.SelectFromRef(users).Count(t.Context(), client)
 	require.ErrorIs(t, err, rasql.ErrNoRows)
 
-	_, err = rasql.SelectQueryFrom(users).Count(t.Context(), client)
+	_, err = rasql.SelectFromRef(users).Count(t.Context(), client)
 	require.ErrorIs(t, err, rasql.ErrMultipleRows)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -509,7 +509,7 @@ func TestClientExecExecutesParameterizedInsert(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -522,7 +522,7 @@ func TestClientExecExecutesParameterizedInsert(t *testing.T) {
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	statement, err := query.NewInsert(users, []query.Column{id, email}, []query.Expression{query.Bind(42), query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(42), query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
 		WithArgs(42, "ada@example.com").
@@ -699,7 +699,7 @@ func TestClientQueryWriteRejectsStatementWithoutReturning(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	statement, err := query.NewInsert(usersWriteTable(t), []query.Column{usersEmailColumn(t)}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(usersWriteTable(t), []query.ColumnRef{usersEmailColumn(t)}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 
 	_, err = rasql.QueryWrite(t.Context(), client, statement)
@@ -770,7 +770,7 @@ func TestClientExecStillAcceptsStatementWithoutReturning(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	statement, err := query.NewInsert(usersWriteTable(t), []query.Column{usersEmailColumn(t)}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(usersWriteTable(t), []query.ColumnRef{usersEmailColumn(t)}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES ($1)").
 		WithArgs("ada@example.com").
@@ -907,9 +907,9 @@ func TestClientDialectReturnsConfiguredDialect(t *testing.T) {
 }
 
 // usersWriteTable returns the write target the returning-related tests share.
-func usersWriteTable(t *testing.T) query.Table {
+func usersWriteTable(t *testing.T) query.TableRef {
 	t.Helper()
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -921,7 +921,7 @@ func usersWriteTable(t *testing.T) query.Table {
 	return users
 }
 
-func usersEmailColumn(t *testing.T) query.Column {
+func usersEmailColumn(t *testing.T) query.ColumnRef {
 	t.Helper()
 	email, err := usersWriteTable(t).Column("email")
 	require.NoError(t, err)
@@ -937,7 +937,7 @@ func insertReturningStatement(t *testing.T) query.Insert {
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	statement, err := query.NewInsert(users, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
 	require.NoError(t, err)
@@ -946,7 +946,7 @@ func insertReturningStatement(t *testing.T) query.Insert {
 
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},

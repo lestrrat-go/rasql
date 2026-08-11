@@ -377,7 +377,7 @@ func TestTypedSelectDistinct(t *testing.T) {
 func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
 	users := deleteUsersTable(t)
 	orders := selectOrdersTable(t)
-	id, err := users.QueryTable().Column("id")
+	id, err := users.Ref().Column("id")
 	require.NoError(t, err)
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)

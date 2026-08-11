@@ -294,7 +294,7 @@ func (r *renderer) writeReturning(projections []query.Projection) error {
 }
 
 func (r *renderer) writeReturningProjection(projection query.Projection) error {
-	column, ok := projection.Expression().(query.Column)
+	column, ok := projection.Expression().(query.ColumnRef)
 	if !ok {
 		return r.writeProjection(projection)
 	}

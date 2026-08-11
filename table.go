@@ -15,26 +15,26 @@ import (
 //
 // Some values satisfy Table[T] with no typed table behind them, such as a nil
 // interface or a zero wrapper whose embedded Table[T] is nil. Every function
-// taking a Table[T] rejects a value whose QueryTable cannot reach a table, as an
+// taking a Table[T] rejects a value whose Ref cannot reach a table, as an
 // error from the call, as an error from the Build of the statement the call
 // feeds, or as a panic where the name says it panics.
 type Table[T any] interface {
-	// QueryTable returns the dialect-neutral table backing the descriptor.
-	QueryTable() query.Table
+	// Ref returns the dialect-neutral table backing the descriptor.
+	Ref() query.TableRef
 	// Column returns a reference to a named column of the table.
-	Column(name string) (query.Column, error)
+	Column(name string) (query.ColumnRef, error)
 	// tableRow keeps T inferable and stops implementations outside this package.
 	tableRow() T
 }
 
 // typedTable is the only implementation of Table.
 type typedTable[T any] struct {
-	source query.Table
+	source query.TableRef
 }
 
 // TableOf creates a typed table from a validated schema definition.
 func TableOf[T any](definition schema.TableDef) (Table[T], error) {
-	source, err := query.NewTable(definition)
+	source, err := query.NewTableRef(definition)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table definition: %w", err)
 	}
@@ -58,7 +58,7 @@ func As[T any](table Table[T], alias string) (Table[T], error) {
 	if isNilTable(table) {
 		return nil, fmt.Errorf("rasql: table alias: %w", fmt.Errorf("table must not be nil"))
 	}
-	aliased, err := table.QueryTable().As(alias)
+	aliased, err := table.Ref().As(alias)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table alias: %w", err)
 	}
@@ -67,7 +67,7 @@ func As[T any](table Table[T], alias string) (Table[T], error) {
 
 // MustColumn looks up name on table and panics when it is absent.
 // It exists for generated code, where the name comes from the descriptor itself.
-func MustColumn[T any](table Table[T], name string) query.Column {
+func MustColumn[T any](table Table[T], name string) query.ColumnRef {
 	if isNilTable(table) {
 		panic("rasql: table column: table must not be nil")
 	}
@@ -78,13 +78,13 @@ func MustColumn[T any](table Table[T], name string) query.Column {
 	return column
 }
 
-// QueryTable returns the dialect-neutral table backing the descriptor.
-func (t typedTable[T]) QueryTable() query.Table {
+// Ref returns the dialect-neutral table backing the descriptor.
+func (t typedTable[T]) Ref() query.TableRef {
 	return t.source
 }
 
 // Column returns a reference to a named column of the table.
-func (t typedTable[T]) Column(name string) (query.Column, error) {
+func (t typedTable[T]) Column(name string) (query.ColumnRef, error) {
 	return t.source.Column(name)
 }
 
@@ -106,35 +106,35 @@ func (t typedTable[T]) tableRow() T {
 // Table, and a generated As returns a zero wrapper along with its error.
 //
 // The nil field is not what makes such a value unusable, and the fields cannot
-// decide the question either way. A type can supply its own QueryTable and
+// decide the question either way. A type can supply its own Ref and
 // Column and keep a nil embedded Table[T] only for the unexported tableRow
 // method: that value works, yet it has the same fields as a zero wrapper. A
 // struct can also embed two fields that satisfy Table[T], where Go promotes the
 // methods from the shallower one while an inspection of the fields sees only two
 // candidates. So the rule asks a promoted method instead of inspecting fields.
 //
-// It probes the unexported tableRow method first rather than QueryTable, because
+// It probes the unexported tableRow method first rather than Ref, because
 // tableRow cannot be intercepted: it is unexported to this package, so a type
 // defined outside this package can never declare its own tableRow, and always
 // reaches the one promoted from its embedded Table[T]. A nil pointer dereference
 // from that call proves the embedded table is missing, with no caller code
-// having run. Probing QueryTable first would not have that property: a caller
-// type can declare its own QueryTable, and a nil dereference inside that
+// having run. Probing Ref first would not have that property: a caller
+// type can declare its own Ref, and a nil dereference inside that
 // caller's own method looks identical to one reached through a nil embedded
 // field, wrongly relabelling the caller's own bug as a missing table.
 //
 // When tableRow does reach a real table, the value works and the probe stops
-// there without calling QueryTable at all, so a panic from a caller's own
-// QueryTable propagates out of the entry point unchanged instead of being
+// there without calling Ref at all, so a panic from a caller's own
+// Ref propagates out of the entry point unchanged instead of being
 // caught by this guard.
 //
 // When tableRow nil-dereferences, the embedded table may still be genuinely
 // missing, or the value may be the self-method shape: a type that supplies its
-// own working QueryTable and Column and keeps the embedded Table[T] nil only to
-// satisfy tableRow. QueryTable is probed next to tell those apart. This still
+// own working Ref and Column and keeps the embedded Table[T] nil only to
+// satisfy tableRow. Ref is probed next to tell those apart. This still
 // cannot tell a genuinely missing table apart from a self-method table whose own
-// QueryTable happens to nil-dereference for an unrelated reason: both look like
-// a nil-dereferencing QueryTable behind a nil-dereferencing tableRow, and Go
+// Ref happens to nil-dereference for an unrelated reason: both look like
+// a nil-dereferencing Ref behind a nil-dereferencing tableRow, and Go
 // gives no way to attribute a recovered nil dereference to the frame that raised
 // it. That one shape is outside what this guard can promise.
 func isNilTable[T any](table Table[T]) bool {
@@ -144,7 +144,7 @@ func isNilTable[T any](table Table[T]) bool {
 	if !dereferencesNil(func() { table.tableRow() }) {
 		return false
 	}
-	return dereferencesNil(func() { table.QueryTable() })
+	return dereferencesNil(func() { table.Ref() })
 }
 
 // dereferencesNil calls call and reports whether that call dereferenced a nil
@@ -183,7 +183,7 @@ const nilDereferenceMessage = "invalid memory address or nil pointer dereference
 // Matching the runtime.Error interface and the message text is not enough on
 // its own: runtime.Error is a public interface, so a caller can declare its
 // own type that implements it, return exactly nilDereferenceMessage from its
-// Error method, and panic with that value from its own QueryTable. Without a
+// Error method, and panic with that value from its own Ref. Without a
 // further check, that fabricated value would be indistinguishable from a real
 // nil dereference and would be swallowed as "table must not be nil" instead
 // of propagating as the caller's own panic.

@@ -41,8 +41,8 @@ func TestSQLiteRefusesAmbiguousSources(t *testing.T) {
 
 	t.Run("validation refuses to render them", func(t *testing.T) {
 		tests := map[string]struct {
-			from   query.Table
-			joined query.Table
+			from   query.TableRef
+			joined query.TableRef
 		}{
 			"two qualified tables share an alias": {
 				from:   ambiguousSourceAlias(t, ambiguousSourceUsers("tenant_a"), "u"),
@@ -53,12 +53,12 @@ func TestSQLiteRefusesAmbiguousSources(t *testing.T) {
 				joined: ambiguousSourceAlias(t, ambiguousSourceOrders(), "u"),
 			},
 			"unqualified table joined to a qualified one of the same name": {
-				from:   query.MustNewTable(ambiguousSourceUsers("")),
-				joined: query.MustNewTable(ambiguousSourceUsers("tenant_a")),
+				from:   query.MustTableRef(ambiguousSourceUsers("")),
+				joined: query.MustTableRef(ambiguousSourceUsers("tenant_a")),
 			},
 			"qualified table joined to an unqualified one of the same name": {
-				from:   query.MustNewTable(ambiguousSourceUsers("tenant_a")),
-				joined: query.MustNewTable(ambiguousSourceUsers("")),
+				from:   query.MustTableRef(ambiguousSourceUsers("tenant_a")),
+				joined: query.MustTableRef(ambiguousSourceUsers("")),
 			},
 		}
 		for name, testCase := range tests {
@@ -73,23 +73,23 @@ func TestSQLiteRefusesAmbiguousSources(t *testing.T) {
 
 	t.Run("sqlite runs the shapes validation still accepts", func(t *testing.T) {
 		tests := map[string]struct {
-			from   query.Table
-			joined query.Table
+			from   query.TableRef
+			joined query.TableRef
 		}{
 			"same name in two schemas, both unaliased": {
-				from:   query.MustNewTable(ambiguousSourceUsers("tenant_a")),
-				joined: query.MustNewTable(ambiguousSourceUsers("tenant_b")),
+				from:   query.MustTableRef(ambiguousSourceUsers("tenant_a")),
+				joined: query.MustTableRef(ambiguousSourceUsers("tenant_b")),
 			},
 			"same name in two schemas under distinct aliases": {
 				from:   ambiguousSourceAlias(t, ambiguousSourceUsers("tenant_a"), "a"),
 				joined: ambiguousSourceAlias(t, ambiguousSourceUsers("tenant_b"), "b"),
 			},
 			"one table joined to itself under a distinct alias": {
-				from:   query.MustNewTable(ambiguousSourceUsers("")),
+				from:   query.MustTableRef(ambiguousSourceUsers("")),
 				joined: ambiguousSourceAlias(t, ambiguousSourceUsers(""), "manager"),
 			},
 			"an alias separates the two sources the rule refused unaliased": {
-				from:   query.MustNewTable(ambiguousSourceUsers("")),
+				from:   query.MustTableRef(ambiguousSourceUsers("")),
 				joined: ambiguousSourceAlias(t, ambiguousSourceUsers("tenant_a"), "tenant"),
 			},
 		}
@@ -126,9 +126,9 @@ func ambiguousSourceOrders() schema.TableDef {
 	}
 }
 
-func ambiguousSourceAlias(t *testing.T, definition schema.TableDef, alias string) query.Table {
+func ambiguousSourceAlias(t *testing.T, definition schema.TableDef, alias string) query.TableRef {
 	t.Helper()
-	table, err := query.MustNewTable(definition).As(alias)
+	table, err := query.MustTableRef(definition).As(alias)
 	require.NoError(t, err)
 	return table
 }
@@ -136,7 +136,7 @@ func ambiguousSourceAlias(t *testing.T, definition schema.TableDef, alias string
 // ambiguousSourceJoin renders an inner join of from and joined on their id
 // columns, and returns whatever render.Select produced so a caller can require
 // that a refused statement carries no SQL.
-func ambiguousSourceJoin(t *testing.T, from query.Table, joined query.Table) (render.Statement, error) {
+func ambiguousSourceJoin(t *testing.T, from query.TableRef, joined query.TableRef) (render.Statement, error) {
 	t.Helper()
 	fromID, err := from.Column("id")
 	require.NoError(t, err)

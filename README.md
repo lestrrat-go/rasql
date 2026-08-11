@@ -73,8 +73,8 @@ func (r UsersRow) ColumnValue(name string) (any, bool) {
 // UsersTable is the generated table type for the "users" table.
 type UsersTable struct {
 	rasql.Table[UsersRow]
-	ID    query.Column
-	Email query.Column
+	ID    query.ColumnRef
+	Email query.ColumnRef
 }
 
 var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable("users" /* … */)))

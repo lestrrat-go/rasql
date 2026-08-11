@@ -143,9 +143,9 @@ func (r defaultUserRow) ColumnValue(name string) (any, bool) {
 
 type defaultUsersTable struct {
 	rasql.Table[defaultUserRow]
-	ID     query.Column
-	Email  query.Column
-	Status query.Column
+	ID     query.ColumnRef
+	Email  query.ColumnRef
+	Status query.ColumnRef
 }
 
 func newDefaultUsersTable(table rasql.Table[defaultUserRow]) defaultUsersTable {
@@ -289,7 +289,7 @@ Use `rasql.UpdateMany` when the operation is intentionally bulk. It requires `Up
 
 ## Delete rows
 
-`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` and `WhereIn` take a `query.Column` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly. `WhereIn` needs at least one value; `Build` and `Exec` return an error for an empty list rather than rendering `IN ()`, which is not valid SQL in any supported dialect. Call `Returning` to read deleted rows on dialects that support `RETURNING`.
+`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` and `WhereIn` take a `query.ColumnRef` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly. `WhereIn` needs at least one value; `Build` and `Exec` return an error for an empty list rather than rendering `IN ()`, which is not valid SQL in any supported dialect. Call `Returning` to read deleted rows on dialects that support `RETURNING`.
 
 <!-- INCLUDE(examples/rasql_delete_example_test.go) -->
 ```go
@@ -403,7 +403,7 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 `NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through a `rasql.Tx` from `rasql.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
 ```go
-statement, err := query.NewUpdate(users.QueryTable(), query.Set(users.Email, query.Bind("ada@example.com")))
+statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email, query.Bind("ada@example.com")))
 if err != nil {
 	return err
 }
@@ -474,7 +474,7 @@ func Example_rasql_returning() {
 
 	// id is assigned by the database and status by its column default, so both
 	// are named in the RETURNING clause alongside the column that was set.
-	statement, err := query.NewInsert(defaultUsers.QueryTable(), []query.Column{defaultUsers.Email}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(defaultUsers.Ref(), []query.ColumnRef{defaultUsers.Email}, []query.Expression{query.Bind("ada@example.com")})
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
