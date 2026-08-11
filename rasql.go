@@ -1,7 +1,8 @@
 // Package rasql provides typed SQL queries and execution for Go.
 //
-// Use New to pair a database/sql handle with a SQL dialect, or Begin to pair a
-// new transaction with one. Both produce an Executor. Generated table
+// Use New to pair a database/sql handle with a SQL dialect, or NewDB to pair
+// one that can also start transactions with DB.Begin. Both produce an
+// Executor, and so does the Tx that DB.Begin returns. Generated table
 // descriptors use MustTableDef, then SelectFrom, Insert, Update, DeleteFrom, and
 // CreateTable execute typed database operations: the builders take the Executor at
 // their terminal call, so one builder runs against a Client and a Tx alike.

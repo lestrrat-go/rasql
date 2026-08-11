@@ -179,7 +179,9 @@ func TestTxHooksRunInsideExplicitTransaction(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	tx, err := rasql.Begin(t.Context(), database, dialect.SQLite(), nil)
+	db, err := rasql.NewDB(database, dialect.SQLite())
+	require.NoError(t, err)
+	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	tx, err = tx.WithHooks(hook)
 	require.NoError(t, err)

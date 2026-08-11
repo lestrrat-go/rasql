@@ -12,7 +12,7 @@ import (
 
 func Example_rasql_transaction() {
 	// This example writes two rows and reads them back inside one transaction,
-	// then reads them again through the plain client after it commits.
+	// then reads them again through the plain db after it commits.
 	// users and UserRow are declared in query_example_tables_test.go with the
 	// shape rasqlgen emits; an application that generated into package store
 	// would write store.Users() and store.UsersRow instead.
@@ -26,21 +26,21 @@ func Example_rasql_transaction() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL, and
+	// can also start transactions on that same handle.
+	db, err := rasql.NewDB(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table before any transaction starts.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
-	// Begin takes the *sql.DB, not the client: a Tx renders its own statements
-	// and does not go through client at all.
-	tx, err := rasql.Begin(ctx, database, dialect.SQLite(), nil)
+	// db.Begin starts a transaction on the same handle db was built from.
+	tx, err := db.Begin(ctx, nil)
 	if err != nil {
 		fmt.Printf("failed to begin transaction: %s\n", err)
 		return
@@ -60,7 +60,7 @@ func Example_rasql_transaction() {
 		return
 	}
 
-	// The same builder shape that runs against client also runs against tx: it
+	// The same builder shape that runs against db also runs against tx: it
 	// reads the two rows written above, before they are committed.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
 	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, tx)
@@ -75,12 +75,12 @@ func Example_rasql_transaction() {
 		return
 	}
 
-	// Nothing touches client between Begin and Commit above. That is this
+	// Nothing touches db between Begin and Commit above. That is this
 	// example's own constraint, not rasql's: SetMaxOpenConns(1) gives it one
 	// connection, and the transaction holds it until Commit or Rollback
 	// releases it back to the pool.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, client)
+	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users after commit: %s\n", err)
 		return
