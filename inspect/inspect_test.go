@@ -1187,6 +1187,107 @@ func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
 	}
 }
 
+// TestMySQLInspectorNormalizesTextWidth covers schema.TextType.Width
+// preservation: CHAR(n) and VARCHAR(n) round-trip their stated width, while
+// TEXT, ENUM and SET normalize to an unstated width exactly as they did
+// before TextType had one. MySQL never reports TEXT as TEXT(n), and ENUM/SET
+// carry a value list this package does not otherwise preserve, so none of
+// the three has a plain numeric length to record.
+func TestMySQLInspectorNormalizesTextWidth(t *testing.T) {
+	tests := map[string]struct {
+		columnType string
+		want       schema.ColumnType
+	}{
+		"varchar with width": {columnType: "varchar(255)", want: schema.TextType{Width: schema.NewTextWidth(255)}},
+		"char with width":    {columnType: "char(36)", want: schema.TextType{Width: schema.NewTextWidth(36)}},
+		"varchar zero width": {columnType: "varchar(0)", want: schema.TextType{Width: schema.NewTextWidth(0)}},
+		"bare text":          {columnType: "text", want: schema.TextType{}},
+		"enum has no width":  {columnType: "enum('a','b')", want: schema.TextType{}},
+		"set has no width":   {columnType: "set('a','b')", want: schema.TextType{}},
+		"mediumtext":         {columnType: "mediumtext", want: schema.TextType{}},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("events").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("value", test.columnType, "NO", nil, nil, nil))
+			expectMySQLCreateTable(mock, "events", "CREATE TABLE `events` (`value` "+test.columnType+" NOT NULL) ENGINE=InnoDB")
+			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+				WithArgs("events").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+			expectMySQLIndexes(mock, "events", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}))
+
+			table, err := inspector.Table(t.Context(), "events")
+			require.NoError(t, err)
+			require.Equal(t, []schema.ColumnDef{{Name: "value", Type: test.want}}, table.Columns)
+		})
+	}
+}
+
+// TestMySQLInspectorMatchesTextColumnTypeExactly covers the two ways a
+// CHAR or VARCHAR declaration can fail to state a plain numeric width: a
+// missing width entirely and a modifier such as BINARY trailing it, which
+// this package cannot record and would otherwise be dropped silently.
+func TestMySQLInspectorMatchesTextColumnTypeExactly(t *testing.T) {
+	tests := map[string]struct {
+		columnType string
+		wantErr    string
+	}{
+		"varchar without width": {
+			columnType: "varchar",
+			wantErr:    "a VARCHAR column must be declared VARCHAR(width)",
+		},
+		"malformed width": {
+			columnType: "varchar(twenty)",
+			wantErr:    "a VARCHAR column must be declared VARCHAR(width)",
+		},
+		"zerofill modifier": {
+			// "binary" is deliberately not used here: MySQL's own COLUMN_TYPE
+			// would spell that CHAR(36) BINARY, which normalizeMySQLType's
+			// earlier BLOB/BINARY match claims first, matching a wholly
+			// different (and, for CHAR, undocumented) declaration, so it
+			// never reaches mysqlTextWidth at all.
+			columnType: "varchar(255) zerofill",
+			wantErr:    "must carry no ZEROFILL modifier",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("events").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("id", test.columnType, "NO", nil, nil, nil))
+
+			_, err = inspector.Table(t.Context(), "events")
+			require.ErrorContains(t, err, test.wantErr)
+			require.ErrorContains(t, err, `"id"`)
+		})
+	}
+}
+
 func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)

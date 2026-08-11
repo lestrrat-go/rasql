@@ -61,6 +61,22 @@ func TestDecimalScale(t *testing.T) {
 	require.Equal(t, 4, value)
 }
 
+// TestTextWidth covers the distinction the type exists for: a stated width
+// of zero must not read back the same as a width nobody stated.
+func TestTextWidth(t *testing.T) {
+	var unstated schema.TextWidth
+	_, stated := unstated.Value()
+	require.False(t, stated)
+
+	value, stated := schema.NewTextWidth(0).Value()
+	require.True(t, stated)
+	require.Equal(t, 0, value)
+
+	value, stated = schema.NewTextWidth(255).Value()
+	require.True(t, stated)
+	require.Equal(t, 255, value)
+}
+
 func TestColumnTypeKinds(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -119,6 +135,47 @@ func TestDecimalScaleJSON(t *testing.T) {
 	require.False(t, stated)
 
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"amount","Type":{"Kind":"decimal","Precision":19,"Scale":"four"}}`), &decoded))
+}
+
+// TestTextWidthJSON covers the JSON round-trip of both TextType forms: a
+// stated width is a plain JSON number and an unstated one is null rather
+// than a number that would decode back as a stated width of zero, the same
+// distinction TestDecimalScaleJSON pins for DecimalType.Scale.
+func TestTextWidthJSON(t *testing.T) {
+	encoded, err := json.Marshal(schema.ColumnDef{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}})
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"Type":{"Kind":"text","Width":255}`)
+
+	encoded, err = json.Marshal(schema.ColumnDef{Name: "bio", Type: schema.TextType{}})
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"Type":{"Kind":"text","Width":null}`)
+
+	var decoded schema.ColumnDef
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"email","Type":{"Kind":"text","Width":255}}`), &decoded))
+	text, ok := decoded.Type.(schema.TextType)
+	require.True(t, ok)
+	width, stated := text.Width.Value()
+	require.True(t, stated)
+	require.Equal(t, 255, width)
+
+	decoded = schema.ColumnDef{}
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"bio","Type":{"Kind":"text","Width":null}}`), &decoded))
+	text, ok = decoded.Type.(schema.TextType)
+	require.True(t, ok)
+	_, stated = text.Width.Value()
+	require.False(t, stated)
+
+	// A snapshot written before TextType had a width omits it entirely,
+	// which decodes as unstated rather than an error, exactly like the
+	// existing decimal snapshots this package still reads.
+	decoded = schema.ColumnDef{}
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"bio","Type":{"Kind":"text"}}`), &decoded))
+	text, ok = decoded.Type.(schema.TextType)
+	require.True(t, ok)
+	_, stated = text.Width.Value()
+	require.False(t, stated)
+
+	require.Error(t, json.Unmarshal([]byte(`{"Name":"email","Type":{"Kind":"text","Width":"wide"}}`), &decoded))
 }
 
 func TestTableColumn(t *testing.T) {
@@ -235,6 +292,10 @@ func TestTableValidate(t *testing.T) {
 			Name:    "payments",
 			Columns: []schema.ColumnDef{{Name: "amount", Type: schema.DecimalType{Precision: 19}}},
 		},
+		"text column with negative width": {
+			Name:    "users",
+			Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(-1)}}},
+		},
 	}
 
 	for name, table := range tests {
@@ -314,6 +375,25 @@ func TestTableValidateUnsignedColumn(t *testing.T) {
 	}
 	require.NoError(t, table.Validate())
 
+}
+
+// TestTableValidateAcceptsTextWidth is the positive counterpart to "text
+// column with negative width" in TestTableValidate: a stated width of zero
+// and an ordinary positive one both validate cleanly, and so does a column
+// that never states one at all.
+func TestTableValidateAcceptsTextWidth(t *testing.T) {
+	table := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}},
+			{Name: "flag", Type: schema.TextType{Width: schema.NewTextWidth(0)}},
+			{Name: "bio", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	require.NoError(t, table.Validate())
 }
 
 // TestColumnUnsignedJSON pins the snapshot form rasqlgen's -input reads. A

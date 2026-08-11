@@ -134,3 +134,26 @@ func (unsignedColumnOption) applyColumn(c *ColumnDef) error {
 	c.Type = integer
 	return nil
 }
+
+// widthColumnOption states a text column's maximum number of characters.
+type widthColumnOption int
+
+// Width states the maximum number of characters a text column may store,
+// including a width of 0. Applying it to any other column type is rejected:
+// only TextType carries this option. A text column that never states a
+// width stays unbounded, which some dialects refuse to index, use as a
+// primary key, or use in a unique constraint; see
+// dialect.Dialect.TypeName and render.CreateTable.
+func Width(n int) ColumnOption {
+	return widthColumnOption(n)
+}
+
+func (o widthColumnOption) applyColumn(c *ColumnDef) error {
+	text, ok := c.Type.(TextType)
+	if !ok {
+		return validationError("columns", "column %q: Width only applies to text columns", c.Name)
+	}
+	text.Width = NewTextWidth(int(o))
+	c.Type = text
+	return nil
+}

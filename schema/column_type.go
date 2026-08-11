@@ -48,8 +48,16 @@ type FloatType struct{}
 func (FloatType) Kind() TypeKind { return KindFloat }
 func (FloatType) columnType()    {}
 
-// TextType describes a text column.
-type TextType struct{}
+// TextType describes a text column. Width is the maximum number of
+// characters it may store; its zero value means no width was stated, which
+// is the same unbounded column TextType always described before Width
+// existed. A dialect that cannot index, or build a primary key or unique
+// constraint over, an unbounded text column refuses to render one used that
+// way rather than send the database a statement it will reject; see
+// dialect.Dialect.TypeName and render.CreateTable.
+type TextType struct {
+	Width TextWidth
+}
 
 func (TextType) Kind() TypeKind { return KindText }
 func (TextType) columnType()    {}
@@ -105,6 +113,13 @@ func marshalColumnType(columnType ColumnType) ([]byte, error) {
 	switch typed := columnType.(type) {
 	case IntegerType:
 		fields["Unsigned"] = typed.Unsigned
+	case TextType:
+		width, stated := typed.Width.Value()
+		if stated {
+			fields["Width"] = width
+		} else {
+			fields["Width"] = nil
+		}
 	case DecimalType:
 		fields["Precision"] = typed.Precision
 		scale, stated := typed.Scale.Value()
@@ -168,10 +183,16 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 		}
 		return FloatType{}, nil
 	case KindText:
-		if err := allow(); err != nil {
+		if err := allow("Width"); err != nil {
 			return nil, err
 		}
-		return TextType{}, nil
+		var width TextWidth
+		if value, ok := fields["Width"]; ok {
+			if err := json.Unmarshal(value, &width); err != nil {
+				return nil, fmt.Errorf("schema: decode text width: %w", err)
+			}
+		}
+		return TextType{Width: width}, nil
 	case KindBytes:
 		if err := allow(); err != nil {
 			return nil, err
