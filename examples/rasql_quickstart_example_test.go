@@ -25,28 +25,28 @@ func Example_rasql_quickstart() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// A real application creates its tables through migrations instead.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
 	// Insert writes the tagged fields of UserRow as bound values.
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 1, "ada@example.com")
-	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 	// One returns a single decoded row and fails when the result holds any other count.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 1)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, client)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
@@ -55,14 +55,14 @@ func Example_rasql_quickstart() {
 
 	// Update matches the row's primary key and writes its remaining fields.
 	// SQL: UPDATE users SET email = ? WHERE id = ? (arguments: "grace@example.com", 1)
-	if _, err := rasql.Update(ctx, client, users, UserRow{ID: 1, Email: "grace@example.com"}); err != nil {
+	if _, err := rasql.Update(ctx, db, users, UserRow{ID: 1, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}
 
 	// All collects every result row instead of ranging over them.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	found, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, client)
+	found, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -71,7 +71,7 @@ func Example_rasql_quickstart() {
 
 	// DeleteFrom builds the predicate from generated columns, like the select builder.
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, client)
+	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return

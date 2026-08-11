@@ -12,9 +12,9 @@ import (
 )
 
 // SelectBuilder builds a SELECT statement through an immutable fluent API and
-// executes it against an Executor at its terminal call. It carries no handle and
-// no dialect, so one builder can be assembled once and run against a Client and
-// a Tx alike.
+// executes it against a DB at its terminal call. It carries no handle and no
+// dialect, so one builder can be assembled once and run against a DB and a
+// transaction started from it alike.
 type SelectBuilder struct {
 	builder render.SelectBuilder
 	err     error
@@ -134,21 +134,21 @@ func (b SelectBuilder) Build(d dialect.Dialect) (render.Statement, error) {
 	return b.builder.WithDialect(d).Build()
 }
 
-// Query renders the statement for x's dialect and returns a rangeable sequence
-// of rows. It reports validation and rendering errors before iteration starts
-// and yields an execution error instead of a row once iteration begins.
+// Query renders the statement for db's dialect and returns a rangeable
+// sequence of rows. It reports validation and rendering errors before iteration
+// starts and yields an execution error instead of a row once iteration begins.
 // The statement runs when the sequence is first ranged over, not when Query
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
-func (b SelectBuilder) Query(ctx context.Context, x Executor) (iter.Seq2[row.Dynamic, error], error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func (b SelectBuilder) Query(ctx context.Context, db DB) (iter.Seq2[row.Dynamic, error], error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
-	statement, err := b.Build(x.Dialect())
+	statement, err := b.Build(db.Dialect())
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	return scanRendered(ctx, x, statement), nil
+	return scanRendered(ctx, db, statement), nil
 }
 
 // Count executes COUNT(*) over the rows the statement matches.
@@ -157,21 +157,21 @@ func (b SelectBuilder) Query(ctx context.Context, x Executor) (iter.Seq2[row.Dyn
 // A COUNT(*) statement returns exactly one row, so Count reports the same
 // [ErrNoRows] and [ErrMultipleRows] as every other single-row read when the
 // database returns anything else.
-func (b SelectBuilder) Count(ctx context.Context, x Executor) (int64, error) {
-	if isNil(x) {
-		return 0, fmt.Errorf("rasql: executor must not be nil")
+func (b SelectBuilder) Count(ctx context.Context, db DB) (int64, error) {
+	if err := db.valid(); err != nil {
+		return 0, err
 	}
 	if b.err != nil {
 		return 0, b.err
 	}
-	statement, err := b.builder.WithDialect(x.Dialect()).BuildCount()
+	statement, err := b.builder.WithDialect(db.Dialect()).BuildCount()
 	if err != nil {
 		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
 	// Count consumes the sequence itself, so the statement runs before Count
 	// returns either way. It goes through scanRendered so that no call site
 	// outside that one closure holds a *sql.Rows.
-	return exactlyOne(countValues(scanRendered(ctx, x, statement)))
+	return exactlyOne(countValues(scanRendered(ctx, db, statement)))
 }
 
 // countValues adapts a sequence of result rows into the int64 held by each

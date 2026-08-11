@@ -103,9 +103,9 @@ func appendHooks(current []Hook, additions []Hook) ([]Hook, error) {
 	return hooks, nil
 }
 
-func (c Client) beforeHooks(ctx context.Context, operation Operation) ([]Hook, error) {
-	entered := make([]Hook, 0, len(c.hooks))
-	for _, hook := range c.hooks {
+func (db DB) beforeHooks(ctx context.Context, operation Operation) ([]Hook, error) {
+	entered := make([]Hook, 0, len(db.hooks))
+	for _, hook := range db.hooks {
 		if err := hook.Before(ctx, operation); err != nil {
 			return entered, fmt.Errorf("rasql: hook before %s: %w", operation.Kind(), err)
 		}

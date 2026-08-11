@@ -276,7 +276,7 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	// An in-memory SQLite database is per connection, so keep the test on one.
 	database.SetMaxOpenConns(1)
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	type user struct {
 		ID    int64  `rasql:"id"`
@@ -284,13 +284,13 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	}
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 	for _, fixture := range []user{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		_, err = rasql.Insert(t.Context(), client, users, fixture)
+		_, err = rasql.Insert(t.Context(), db, users, fixture)
 		require.NoError(t, err)
 	}
 	return database, definition

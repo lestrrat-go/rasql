@@ -4,7 +4,7 @@
 
 Columns come from the generated table value, so `users.ID` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial` is a compile error rather than a failed query, which [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) demonstrates along with the cases that still fail at run time.
 
-Generated relationship methods provide a typed join and eager-loading path for the supported relationship slice described in [Relationships](02-schema.md#relationships). A child relation such as `orders.User()` exposes `Join()` for a fluent query and `Load(ctx, executor, children)` for one batched lookup that returns related rows grouped by foreign-key value. The inverse parent relation such as `users.Orders()` returns children grouped by parent key. Use the ordinary `Join` API for unsupported relationship shapes.
+Generated relationship methods provide a typed join and eager-loading path for the supported relationship slice described in [Relationships](02-schema.md#relationships). A child relation such as `orders.User()` exposes `Join()` for a fluent query and `Load(ctx, db, children)` for one batched lookup that returns related rows grouped by foreign-key value. The inverse parent relation such as `users.Orders()` returns children grouped by parent key. Use the ordinary `Join` API for unsupported relationship shapes.
 
 Every builder is immutable. Each call returns a new builder, so a partly built query can be shared or reused without one caller's `Limit` leaking into another's.
 
@@ -20,22 +20,22 @@ The tables in this section enumerate every operation the public API offers. The 
 | `SELECT` decoded as a custom type | `rasql.DecodeFrom[R](table)` | `TypedSelectBuilder[R]` |
 | `SELECT` decoded from a table with no row type | `rasql.DecodeFromRef[R](queryTable)` | `TypedSelectBuilder[R]` |
 | `SELECT` without decoding | `rasql.SelectFromRef(table.Ref())` | `SelectBuilder`, yielding `row.Dynamic` |
-| Typed static SQL | `rasql.QueryRendered[T](ctx, executor, statement)` | `iter.Seq2[T, error]` |
-| `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
-| `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, client, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
-| `INSERT` of several typed rows | `rasql.InsertMany(ctx, client, table, values)` | `sql.Result` |
-| `INSERT` of several typed rows with defaults | `rasql.InsertManyWithOptions(ctx, client, table, values, rasql.DefaultColumns(...))` | `sql.Result` |
-| `INSERT` of expression rows | `query.NewInsertRows(table.Ref(), columns, rows)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
-| `UPDATE` of one typed row by primary key | `rasql.Update(ctx, client, table, value)` | `sql.Result` |
-| `UPDATE` selected typed fields | `rasql.UpdateWithOptions(ctx, client, table, value, rasql.UpdateColumns(...))` | `sql.Result` |
-| `UPDATE` many rows by predicate | `rasql.UpdateMany(ctx, client, table, value, rasql.UpdateColumns(...), rasql.UpdateWhere(...))` | `sql.Result` |
-| `UPDATE` with arbitrary expressions | `query.NewUpdate(table.Ref(), assignments…)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
+| Typed static SQL | `rasql.QueryRendered[T](ctx, db, statement)` | `iter.Seq2[T, error]` |
+| `INSERT` of one typed row | `rasql.Insert(ctx, db, table, value)` | `sql.Result` |
+| `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, db, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
+| `INSERT` of several typed rows | `rasql.InsertMany(ctx, db, table, values)` | `sql.Result` |
+| `INSERT` of several typed rows with defaults | `rasql.InsertManyWithOptions(ctx, db, table, values, rasql.DefaultColumns(...))` | `sql.Result` |
+| `INSERT` of expression rows | `query.NewInsertRows(table.Ref(), columns, rows)` then `rasql.Exec(ctx, db, statement)` | `sql.Result` |
+| `UPDATE` of one typed row by primary key | `rasql.Update(ctx, db, table, value)` | `sql.Result` |
+| `UPDATE` selected typed fields | `rasql.UpdateWithOptions(ctx, db, table, value, rasql.UpdateColumns(...))` | `sql.Result` |
+| `UPDATE` many rows by predicate | `rasql.UpdateMany(ctx, db, table, value, rasql.UpdateColumns(...), rasql.UpdateWhere(...))` | `sql.Result` |
+| `UPDATE` with arbitrary expressions | `query.NewUpdate(table.Ref(), assignments…)` then `rasql.Exec(ctx, db, statement)` | `sql.Result` |
 | `DELETE` by predicate | `rasql.DeleteFrom(table)` | `DeleteBuilder` |
 | `DELETE` with `RETURNING` | `rasql.DeleteFrom(table).Returning(...)` | `DeleteReturningBuilder` |
-| `CREATE TABLE` plus its indexes | `rasql.CreateTable(ctx, client, table)` | `error` |
-| Upsert | `query.New…` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
-| Write with `RETURNING` | `query.New….WithReturning(...)` then `rasql.QueryWrite(ctx, client, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Dynamic` or `[]T` / `T` |
-| Compiled [static template](05-templates.md) | `client.ExecRendered(ctx, statement)` | `sql.Result` |
+| `CREATE TABLE` plus its indexes | `rasql.CreateTable(ctx, db, table)` | `error` |
+| Upsert | `query.New…` then `rasql.Exec(ctx, db, statement)` | `sql.Result` |
+| Write with `RETURNING` | `query.New….WithReturning(...)` then `rasql.QueryWrite(ctx, db, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Dynamic` or `[]T` / `T` |
+| Compiled [static template](05-templates.md) | `db.ExecRendered(ctx, statement)` | `sql.Result` |
 
 Writes are covered in [Writing rows](04-writing.md); the rest of this page covers reads.
 
@@ -64,10 +64,10 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. | | ✓ |
 | `Limit(n)`, `Offset(n)` | Pages the result. | ✓ | ✓ |
 | `Build(d)` | Renders `render.Statement` for a `dialect.Dialect` without executing. | ✓ | ✓ |
-| `Query(ctx, executor)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. | ✓ | ✓ |
-| `All(ctx, executor)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
-| `One(ctx, executor)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
-| `Count(ctx, executor)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. | ✓ | ✓ |
+| `Query(ctx, db)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. | ✓ | ✓ |
+| `All(ctx, db)` | Executes and collects `[]T`; use it when the whole result fits in memory. | ✓ | |
+| `One(ctx, db)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. | ✓ | |
+| `Count(ctx, db)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. | ✓ | ✓ |
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
 `AND` in the order they were made, which is what a conditionally built filter
@@ -86,9 +86,9 @@ which is not valid SQL in any supported dialect.
 | `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.ColumnRef` of the target table, one placeholder per value. |
 | `Returning(projections…)` | Adds a `RETURNING` clause and returns `DeleteReturningBuilder`; MySQL does not support it. |
 | `Build(d)` | Renders `render.Statement` for a `dialect.Dialect` without executing. |
-| `Exec(ctx, executor)` | Executes and returns `sql.Result`. |
+| `Exec(ctx, db)` | Executes and returns `sql.Result`. |
 
-`DeleteReturningBuilder.Query(ctx, executor)` returns dynamic rows. Pass the
+`DeleteReturningBuilder.Query(ctx, db)` returns dynamic rows. Pass the
 builder to `rasql.QueryDeleteAll[T]` or `rasql.QueryDeleteOne[T]` to decode typed
 rows.
 
@@ -213,10 +213,10 @@ func Example_rasql_scalar_function() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// A typed descriptor makes members usable with rasql.Insert. Nickname is
@@ -237,7 +237,7 @@ func Example_rasql_scalar_function() {
 		schema.Text("nickname", schema.Nullable()),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.CreateTable(ctx, client, members); err != nil {
+	if err := rasql.CreateTable(ctx, db, members); err != nil {
 		fmt.Printf("failed to create members table: %s\n", err)
 		return
 	}
@@ -266,7 +266,7 @@ func Example_rasql_scalar_function() {
 		{ID: 1, Email: "Ada@Example.com", Nickname: &nick},
 		{ID: 2, Email: "bob@example.com", Nickname: nil},
 	} {
-		if _, err := rasql.Insert(ctx, client, members, member); err != nil {
+		if _, err := rasql.Insert(ctx, db, members, member); err != nil {
 			fmt.Printf("failed to insert member: %s\n", err)
 			return
 		}
@@ -278,7 +278,7 @@ func Example_rasql_scalar_function() {
 	byEmail, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query member by email: %s\n", err)
 		return
@@ -297,7 +297,7 @@ func Example_rasql_scalar_function() {
 	names, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		OrderAsc(id).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query member names: %s\n", err)
 		return
@@ -345,7 +345,7 @@ rows, err := rasql.DecodeFrom[taskSummary](tasks).
 	Where(query.InSelect(tasks.ProjectID, owned)).
 	Where(query.GreaterThanOrEqual(tasks.Priority, query.Scalar(average))).
 	OrderAsc(tasks.ID).
-	All(ctx, client)
+	All(ctx, db)
 ```
 
 `query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit; the arguments a subquery binds join the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an `OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject; PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`.
@@ -363,7 +363,7 @@ rows, err := rasql.DecodeFrom[taskSummary](tasks).
 
 ### Statement constructors
 
-The builders cover the common statements. These constructors build the same statements directly. `rasql.Query(ctx, executor, statement)` runs a `Select`, and `rasql.Exec(ctx, executor, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over an `Executor`, so the same statement runs against a `Client` or a `Tx`. A write refined with `WithReturning` reads its rows back through `rasql.QueryWrite`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
+The builders cover the common statements. These constructors build the same statements directly. `rasql.Query(ctx, db, statement)` runs a `Select`, and `rasql.Exec(ctx, db, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over a `rasql.DB`, so the same statement runs against a plain `DB` or a transaction, which is a `DB` too. A write refined with `WithReturning` reads its rows back through `rasql.QueryWrite`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
 
 | Constructor | Statement |
 | --- | --- |
@@ -410,14 +410,14 @@ func Example_rasql_typed_query() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -427,7 +427,7 @@ func Example_rasql_typed_query() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -440,7 +440,7 @@ func Example_rasql_typed_query() {
 		OrderAsc(users.Email).
 		Offset(1).
 		Limit(2).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -466,13 +466,13 @@ source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat
 `One` also reports the result's row count: it returns `rasql.ErrNoRows` when the statement matched no rows and `rasql.ErrMultipleRows` when it matched more than one. `rasql.ErrNoRows` wraps `sql.ErrNoRows`, so `errors.Is(err, sql.ErrNoRows)` holds too, and code already written against `database/sql` keeps working:
 
 ```go
-user, err := rasql.SelectFrom(users).WhereEqual(users.ID, id).One(ctx, client)
+user, err := rasql.SelectFrom(users).WhereEqual(users.ID, id).One(ctx, db)
 if errors.Is(err, rasql.ErrNoRows) {
 	// no such user
 }
 ```
 
-`Build(d)` skips execution and returns the rendered `render.Statement`, which carries the SQL text and its ordered arguments. It takes a `dialect.Dialect` rather than an `Executor`, because rendering needs the dialect and nothing else. It is the direct way to log or test a statement.
+`Build(d)` skips execution and returns the rendered `render.Statement`, which carries the SQL text and its ordered arguments. It takes a `dialect.Dialect` rather than a `rasql.DB`, because rendering needs the dialect and nothing else. It is the direct way to log or test a statement.
 
 ## Filter, order, and page
 
@@ -509,14 +509,14 @@ func Example_rasql_where_in() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -525,7 +525,7 @@ func Example_rasql_where_in() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -538,7 +538,7 @@ func Example_rasql_where_in() {
 	rows, err := rasql.SelectFrom(users).
 		WhereIn(users.ID, 1, 3).
 		OrderAsc(users.ID).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -568,7 +568,7 @@ rows, err := rasql.SelectFrom(users).
 		query.IsNotNull(users.ID),
 	)).
 	Order(query.Desc(users.ID)).
-	Query(ctx, client)
+	Query(ctx, db)
 ```
 
 A generated field cannot name a column the table does not have, because the field would not exist. A table built at run time has no such fields, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column; a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
@@ -609,10 +609,10 @@ func Example_rasql_subquery() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// A typed descriptor makes orders usable with rasql.Insert as well.
@@ -634,11 +634,11 @@ func Example_rasql_subquery() {
 		schema.PrimaryKey("id"),
 	))
 	// Create both descriptors before querying orders against the users subquery.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, db, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -661,7 +661,7 @@ func Example_rasql_subquery() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@other.example"},
 	} {
-		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -671,7 +671,7 @@ func Example_rasql_subquery() {
 		{ID: 2, UserID: 2, Amount: 20},
 		{ID: 3, UserID: 3, Amount: 100},
 	} {
-		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
+		if _, err := rasql.Insert(ctx, db, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -719,7 +719,7 @@ func Example_rasql_subquery() {
 		Where(query.InSelect(orderUserID, domainUsers)).
 		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
 		Order(query.Asc(amount)).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
 		return
@@ -772,14 +772,14 @@ func Example_rasql_count() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -789,7 +789,7 @@ func Example_rasql_count() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -799,7 +799,7 @@ func Example_rasql_count() {
 	// any row into a UserRow. It rejects a builder with Limit or Offset set,
 	// since a count of a paged statement is not the count the caller asked for.
 	// SQL: SELECT COUNT(*) FROM users
-	total, err := rasql.SelectFrom(users).Count(ctx, client)
+	total, err := rasql.SelectFrom(users).Count(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to count users: %s\n", err)
 		return
@@ -807,7 +807,7 @@ func Example_rasql_count() {
 	fmt.Println("total:", total)
 
 	// SQL: SELECT COUNT(*) FROM users WHERE users.id = ? (argument: 2)
-	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID, 2).Count(ctx, client)
+	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID, 2).Count(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
 		return
@@ -857,10 +857,10 @@ func Example_rasql_group_by() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 
@@ -879,7 +879,7 @@ func Example_rasql_group_by() {
 		schema.Text("status"),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.CreateTable(ctx, client, tasks); err != nil {
+	if err := rasql.CreateTable(ctx, db, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
@@ -890,7 +890,7 @@ func Example_rasql_group_by() {
 		{ID: 4, Status: "done"},
 		{ID: 5, Status: "done"},
 	} {
-		if _, err := rasql.Insert(ctx, client, tasks, task); err != nil {
+		if _, err := rasql.Insert(ctx, db, tasks, task); err != nil {
 			fmt.Printf("failed to insert task: %s\n", err)
 			return
 		}
@@ -915,7 +915,7 @@ func Example_rasql_group_by() {
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Order(query.Asc(status)).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)
 		return
@@ -973,10 +973,10 @@ func Example_rasql_distinct() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 
@@ -994,7 +994,7 @@ func Example_rasql_distinct() {
 		schema.Integer("user_id"),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.CreateTable(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, db, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -1003,7 +1003,7 @@ func Example_rasql_distinct() {
 		{ID: 2, UserID: 2},
 		{ID: 3, UserID: 1},
 	} {
-		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
+		if _, err := rasql.Insert(ctx, db, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -1026,7 +1026,7 @@ func Example_rasql_distinct() {
 		Project(query.Project(orderUserID).As("user_id")).
 		Distinct().
 		Order(query.Asc(orderUserID)).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)
 		return
@@ -1063,7 +1063,7 @@ if err != nil {
 }
 rows, err := rasql.SelectFrom(employees).
 	Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
-	Query(ctx, client)
+	Query(ctx, db)
 ```
 
 `employees.ID` still renders as `"employees"."id"`, while `manager.ID` renders as `"manager"."id"`. `As` fails when the alias is not a valid identifier.
@@ -1121,10 +1121,10 @@ func Example_rasql_dynamic_projection() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// A typed descriptor makes orders usable with rasql.Insert as well.
@@ -1145,11 +1145,11 @@ func Example_rasql_dynamic_projection() {
 		schema.PrimaryKey("id"),
 	))
 	// Create both descriptors before querying their joined rows.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, db, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -1167,7 +1167,7 @@ func Example_rasql_dynamic_projection() {
 		return
 	}
 	// Populate both tables through the typed rasql API.
-	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -1175,7 +1175,7 @@ func Example_rasql_dynamic_projection() {
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {
-		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
+		if _, err := rasql.Insert(ctx, db, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -1188,7 +1188,7 @@ func Example_rasql_dynamic_projection() {
 		Project(query.Project(users.ID).As("user_id"), query.Project(users.Email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to build order totals query: %s\n", err)
 		return
@@ -1247,16 +1247,16 @@ func Example_rasql_debug_query() {
 	// This example prints the SQL for a typed query without opening a database.
 	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Handle. This
 	// debug Handle lets the example show the generated statement without a database.
-	client, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
+	db, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 
 	// users is declared in query_example_tables_test.go with the shape rasqlgen
 	// emits; an application would write store.Users() instead.
 	count := 0
-	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Query(context.Background(), client)
+	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Query(context.Background(), db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -1280,7 +1280,7 @@ func Example_rasql_debug_query() {
 source: [examples/rasql_debug_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_debug_query_example_test.go)
 <!-- END INCLUDE -->
 
-A debug `Handle` may return `nil` rows after logging; `row.Scan` treats that as an empty result rather than an error. When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `Executor`.
+A debug `Handle` may return `nil` rows after logging; `row.Scan` treats that as an empty result rather than an error. When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `rasql.DB` needed.
 
 ## Next
 

@@ -1,12 +1,14 @@
 package rasql
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"runtime"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -91,6 +93,38 @@ func (t typedTable[T]) Column(name string) (query.ColumnRef, error) {
 func (t typedTable[T]) tableRow() T {
 	var zero T
 	return zero
+}
+
+// CreateTable renders and executes table's definition followed by its indexes.
+// Callers that require atomic DDL pass a DB from Begin.
+func CreateTable[T any](ctx context.Context, db DB, table Table[T]) error {
+	if isNilTable(table) {
+		return fmt.Errorf("rasql: table must not be nil")
+	}
+	return createTableDef(ctx, db, table.Ref().Definition())
+}
+
+func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
+	if err := db.valid(); err != nil {
+		return err
+	}
+	statement, err := render.CreateTable(db.Dialect(), table)
+	if err != nil {
+		return fmt.Errorf("rasql: render CREATE TABLE: %w", err)
+	}
+	if _, err := db.ExecRendered(ctx, statement); err != nil {
+		return fmt.Errorf("rasql: execute CREATE TABLE: %w", err)
+	}
+	indexes, err := render.CreateIndexes(db.Dialect(), table)
+	if err != nil {
+		return fmt.Errorf("rasql: render CREATE INDEX: %w", err)
+	}
+	for _, index := range indexes {
+		if _, err := db.ExecRendered(ctx, index); err != nil {
+			return fmt.Errorf("rasql: execute CREATE INDEX: %w", err)
+		}
+	}
+	return nil
 }
 
 // isNilTable reports whether table has no typed table behind it, so every entry

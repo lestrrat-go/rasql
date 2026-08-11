@@ -28,10 +28,10 @@ func Example_rasql_subquery() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// A typed descriptor makes orders usable with rasql.Insert as well.
@@ -53,11 +53,11 @@ func Example_rasql_subquery() {
 		schema.PrimaryKey("id"),
 	))
 	// Create both descriptors before querying orders against the users subquery.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, db, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -80,7 +80,7 @@ func Example_rasql_subquery() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@other.example"},
 	} {
-		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -90,7 +90,7 @@ func Example_rasql_subquery() {
 		{ID: 2, UserID: 2, Amount: 20},
 		{ID: 3, UserID: 3, Amount: 100},
 	} {
-		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
+		if _, err := rasql.Insert(ctx, db, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -138,7 +138,7 @@ func Example_rasql_subquery() {
 		Where(query.InSelect(orderUserID, domainUsers)).
 		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
 		Order(query.Asc(amount)).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
 		return

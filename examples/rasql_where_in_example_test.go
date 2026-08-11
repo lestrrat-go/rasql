@@ -25,14 +25,14 @@ func Example_rasql_where_in() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -41,7 +41,7 @@ func Example_rasql_where_in() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -54,7 +54,7 @@ func Example_rasql_where_in() {
 	rows, err := rasql.SelectFrom(users).
 		WhereIn(users.ID, 1, 3).
 		OrderAsc(users.ID).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

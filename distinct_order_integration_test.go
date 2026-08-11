@@ -43,7 +43,7 @@ func TestDistinctOrderAgainstLiveDatabases(t *testing.T) {
 }
 
 func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
-	client, err := rasql.New(database, test.dialect)
+	db, err := rasql.New(database, test.dialect)
 	require.NoError(t, err)
 	type record struct {
 		ID   int64  `rasql:"id"`
@@ -71,13 +71,13 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.CreateTable(t.Context(), client, records))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 	for _, fixture := range []record{
 		{ID: 1, City: "tokyo", Age: 30},
 		{ID: 2, City: "osaka", Age: 20},
 		{ID: 3, City: "tokyo", Age: 10},
 	} {
-		_, err = rasql.Insert(t.Context(), client, records, fixture)
+		_, err = rasql.Insert(t.Context(), db, records, fixture)
 		require.NoError(t, err)
 	}
 

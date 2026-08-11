@@ -21,7 +21,7 @@ import (
 
 type insertCompatibilityUser struct{}
 
-var _ func(context.Context, rasql.Executor, rasql.Table[insertCompatibilityUser], insertCompatibilityUser) (sql.Result, error) = rasql.Insert[insertCompatibilityUser]
+var _ func(context.Context, rasql.DB, rasql.Table[insertCompatibilityUser], insertCompatibilityUser) (sql.Result, error) = rasql.Insert[insertCompatibilityUser]
 
 func TestInsertExecutesTypedRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -32,7 +32,7 @@ func TestInsertExecutesTypedRow(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	table := schema.TableDef{
 		Name: "users",
@@ -52,7 +52,7 @@ func TestInsertExecutesTypedRow(t *testing.T) {
 		WithArgs(int64(42), "ada@example.com").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	result, err := rasql.Insert(t.Context(), client, users, user{ID: 42, Email: "ada@example.com"})
+	result, err := rasql.Insert(t.Context(), db, users, user{ID: 42, Email: "ada@example.com"})
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -68,7 +68,7 @@ func TestInsertManyExecutesOneParameterizedStatement(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	type user struct {
 		ID    int64  `rasql:"id"`
@@ -87,7 +87,7 @@ func TestInsertManyExecutesOneParameterizedStatement(t *testing.T) {
 		WithArgs(int64(1), "ada@example.com", int64(2), "grace@example.com").
 		WillReturnResult(sqlmock.NewResult(1, 2))
 
-	result, err := rasql.InsertMany(t.Context(), client, users, []user{
+	result, err := rasql.InsertMany(t.Context(), db, users, []user{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "grace@example.com"},
 	})
@@ -106,7 +106,7 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryRow(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	type user struct {
 		ID     int64  `rasql:"id"`
@@ -129,7 +129,7 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryRow(t *testing.T) {
 
 	_, err = rasql.InsertManyWithOptions(
 		t.Context(),
-		client,
+		db,
 		users,
 		[]user{{Email: "ada@example.com"}, {Email: "grace@example.com"}},
 		rasql.DefaultColumns("id"),
@@ -170,7 +170,7 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testin
 				require.NoError(t, mock.ExpectationsWereMet())
 			})
 
-			client, err := rasql.New(database, test.dialect)
+			db, err := rasql.New(database, test.dialect)
 			require.NoError(t, err)
 			users, err := rasql.TableOf[user](schema.TableDef{
 				Name: "users",
@@ -186,7 +186,7 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testin
 
 			result, err := rasql.InsertManyWithOptions(
 				t.Context(),
-				client,
+				db,
 				users,
 				[]user{{}, {}},
 				rasql.DefaultColumns("id", "status"),
@@ -216,7 +216,7 @@ func TestInsertManyWithOptionsValidatesAllDefaultRows(t *testing.T) {
 
 	_, err = rasql.InsertManyWithOptions(
 		t.Context(),
-		rasql.Client{},
+		buildOnlyDB(t),
 		users,
 		[]*user{&user{}, nil},
 		rasql.DefaultColumns("id", "status"),
@@ -235,7 +235,7 @@ func TestInsertManyRejectsEmptyRows(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = rasql.InsertMany(t.Context(), rasql.Client{}, users, []user{})
+	_, err = rasql.InsertMany(t.Context(), buildOnlyDB(t), users, []user{})
 	require.ErrorContains(t, err, "rows must not be empty")
 }
 
@@ -268,7 +268,7 @@ func TestInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users, err := rasql.TableOf[generatedDefaultUser](schema.TableDef{
 		Name: "users",
@@ -289,7 +289,7 @@ func TestInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
 
 	_, err = rasql.InsertWithOptions(
 		t.Context(),
-		client,
+		db,
 		users,
 		generatedDefaultUser{Email: ""},
 		rasql.DefaultColumns("id", "status"),
@@ -313,7 +313,7 @@ func TestInsertRejectsUnknownDefaultColumn(t *testing.T) {
 	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 
-	_, err = rasql.InsertWithOptions(t.Context(), rasql.Client{}, users, user{}, rasql.DefaultColumns("missing"))
+	_, err = rasql.InsertWithOptions(t.Context(), buildOnlyDB(t), users, user{}, rasql.DefaultColumns("missing"))
 	require.ErrorContains(t, err, "has no column \"missing\" selected for a database default")
 }
 
@@ -326,7 +326,7 @@ func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	type user struct {
 		ID    int64  `rasql:"id"`
@@ -344,7 +344,7 @@ func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
 	mock.ExpectExec("INSERT INTO \"users\" DEFAULT VALUES").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	_, err = rasql.InsertWithOptions(t.Context(), client, users, user{}, rasql.DefaultColumns("id", "email"))
+	_, err = rasql.InsertWithOptions(t.Context(), db, users, user{}, rasql.DefaultColumns("id", "email"))
 	require.NoError(t, err)
 }
 
@@ -357,7 +357,7 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
@@ -383,7 +383,7 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
-	rows, err := rasql.QueryWriteAll[user](t.Context(), client, statement)
+	rows, err := rasql.QueryWriteAll[user](t.Context(), db, statement)
 	require.NoError(t, err)
 	require.Equal(t, []user{{ID: 1}, {ID: 2}}, rows)
 }
@@ -397,7 +397,7 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
@@ -424,7 +424,7 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	result, err := rasql.QueryWriteOne[user](t.Context(), client, statement)
+	result, err := rasql.QueryWriteOne[user](t.Context(), db, statement)
 	require.NoError(t, err)
 	require.Equal(t, user{ID: 1, Email: "ada@example.com"}, result)
 }
@@ -443,7 +443,7 @@ func TestQueryWriteOneRejectsZeroOrMultipleRows(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		statement := deleteReturningStatement(t)
 		mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
@@ -451,7 +451,7 @@ func TestQueryWriteOneRejectsZeroOrMultipleRows(t *testing.T) {
 
 		// QueryWriteOne shares exactlyOne with TypedSelectBuilder.One, so an empty
 		// RETURNING result reports the same sentinels.
-		_, err = rasql.QueryWriteOne[user](t.Context(), client, statement)
+		_, err = rasql.QueryWriteOne[user](t.Context(), db, statement)
 		require.EqualError(t, err, "rasql: expected one row, got none")
 		require.ErrorIs(t, err, rasql.ErrNoRows)
 		require.ErrorIs(t, err, sql.ErrNoRows)
@@ -467,13 +467,13 @@ func TestQueryWriteOneRejectsZeroOrMultipleRows(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		statement := deleteReturningStatement(t)
 		mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)).AddRow(int64(2)))
 
-		_, err = rasql.QueryWriteOne[user](t.Context(), client, statement)
+		_, err = rasql.QueryWriteOne[user](t.Context(), db, statement)
 		require.EqualError(t, err, "rasql: expected one row, got more than one")
 		require.ErrorIs(t, err, rasql.ErrMultipleRows)
 		require.NotErrorIs(t, err, rasql.ErrNoRows)
@@ -490,7 +490,7 @@ func TestQueryWriteOneReportsDecodeError(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	statement := deleteReturningStatement(t)
 	mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
@@ -502,7 +502,7 @@ func TestQueryWriteOneReportsDecodeError(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	_, err = rasql.QueryWriteOne[user](t.Context(), client, statement)
+	_, err = rasql.QueryWriteOne[user](t.Context(), db, statement)
 	require.ErrorContains(t, err, "rasql: decode row 0: row: column \"email\" is not present")
 }
 
@@ -552,7 +552,7 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
@@ -575,7 +575,7 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 		WithArgs("ada@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(1), "ada@example.com"))
 
-	result, err := rasql.QueryWriteOne[generatedReturningUser](t.Context(), client, statement)
+	result, err := rasql.QueryWriteOne[generatedReturningUser](t.Context(), db, statement)
 	require.NoError(t, err)
 	require.Equal(t, generatedReturningUser{ID: 1, Email: "ada@example.com"}, result)
 }
@@ -589,7 +589,7 @@ func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
@@ -614,7 +614,7 @@ func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 			AddRow(int64(1), "ada@example.com").
 			AddRow(int64(2), "bob@example.com"))
 
-	rows, err := rasql.QueryWriteAll[generatedReturningUser](t.Context(), client, statement)
+	rows, err := rasql.QueryWriteAll[generatedReturningUser](t.Context(), db, statement)
 	require.NoError(t, err)
 	require.Equal(t, []generatedReturningUser{
 		{ID: 1, Email: "ada@example.com"},
@@ -631,14 +631,14 @@ func TestQueryWriteRejectsIncompleteGeneratedReturning(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	statement := deleteReturningStatement(t)
 
-	_, err = rasql.QueryWriteOne[generatedReturningUser](t.Context(), client, statement)
+	_, err = rasql.QueryWriteOne[generatedReturningUser](t.Context(), db, statement)
 	require.EqualError(t, err, `rasql: RETURNING projections omit generated row column "email"`)
 
-	_, err = rasql.QueryWriteAll[generatedReturningUser](t.Context(), client, statement)
+	_, err = rasql.QueryWriteAll[generatedReturningUser](t.Context(), db, statement)
 	require.EqualError(t, err, `rasql: RETURNING projections omit generated row column "email"`)
 }
 
@@ -669,13 +669,13 @@ func TestQueryWriteAllowsIncompleteCustomReturning(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	statement := deleteReturningStatement(t)
 	mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
-	result, err := rasql.QueryWriteOne[partialReturningUser](t.Context(), client, statement)
+	result, err := rasql.QueryWriteOne[partialReturningUser](t.Context(), db, statement)
 	require.NoError(t, err)
 	require.Equal(t, partialReturningUser{ID: 1}, result)
 }
@@ -713,7 +713,7 @@ func TestUpdateExecutesTypedRow(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	table := schema.TableDef{
 		Name: "users",
@@ -733,7 +733,7 @@ func TestUpdateExecutesTypedRow(t *testing.T) {
 		WithArgs("grace@example.com", int64(42)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	result, err := rasql.Update(t.Context(), client, users, user{ID: 42, Email: "grace@example.com"})
+	result, err := rasql.Update(t.Context(), db, users, user{ID: 42, Email: "grace@example.com"})
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -749,7 +749,7 @@ func TestUpdateWithOptionsUpdatesSelectedFieldsByPrimaryKey(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	type patch struct {
 		ID    int64  `rasql:"id"`
@@ -771,7 +771,7 @@ func TestUpdateWithOptionsUpdatesSelectedFieldsByPrimaryKey(t *testing.T) {
 
 	_, err = rasql.UpdateWithOptions(
 		t.Context(),
-		client,
+		db,
 		users,
 		patch{ID: 42, Email: "grace@example.com"},
 		rasql.UpdateColumns("email"),
@@ -788,7 +788,7 @@ func TestUpdateManyBulkUpdatesPartialRowByPredicate(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	type patch struct {
 		Email string `rasql:"email"`
@@ -811,7 +811,7 @@ func TestUpdateManyBulkUpdatesPartialRowByPredicate(t *testing.T) {
 
 	_, err = rasql.UpdateMany(
 		t.Context(),
-		client,
+		db,
 		users,
 		patch{Email: "review@example.com"},
 		rasql.UpdateColumns("email"),
@@ -834,13 +834,13 @@ func TestUpdateWithOptionsRejectsInvalidConfiguration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = rasql.UpdateWithOptions(t.Context(), rasql.Client{}, users, patch{}, rasql.UpdateColumns("missing"))
+	_, err = rasql.UpdateWithOptions(t.Context(), buildOnlyDB(t), users, patch{}, rasql.UpdateColumns("missing"))
 	require.ErrorContains(t, err, `has no column "missing" selected for update`)
-	_, err = rasql.UpdateWithOptions(t.Context(), rasql.Client{}, users, patch{}, rasql.UpdateWhere(nil))
+	_, err = rasql.UpdateWithOptions(t.Context(), buildOnlyDB(t), users, patch{}, rasql.UpdateWhere(nil))
 	require.ErrorContains(t, err, "update predicate must not be nil")
-	_, err = rasql.UpdateWithOptions(t.Context(), rasql.Client{}, users, patch{Email: "x"}, rasql.UpdateColumns("email"))
+	_, err = rasql.UpdateWithOptions(t.Context(), buildOnlyDB(t), users, patch{Email: "x"}, rasql.UpdateColumns("email"))
 	require.ErrorContains(t, err, `row value has no field tagged for column "id"`)
-	_, err = rasql.UpdateMany(t.Context(), rasql.Client{}, users, patch{Email: "x"}, rasql.UpdateColumns("email"))
+	_, err = rasql.UpdateMany(t.Context(), buildOnlyDB(t), users, patch{Email: "x"}, rasql.UpdateColumns("email"))
 	require.ErrorContains(t, err, "bulk update requires an explicit UpdateWhere predicate")
 }
 
@@ -859,7 +859,7 @@ func TestUpdateRejectsTableWithoutPrimaryKey(t *testing.T) {
 	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 
-	_, err = rasql.Update(t.Context(), rasql.Client{}, users, user{ID: 42, Email: "grace@example.com"})
+	_, err = rasql.Update(t.Context(), buildOnlyDB(t), users, user{ID: 42, Email: "grace@example.com"})
 	require.ErrorContains(t, err, "has no primary key")
 }
 
@@ -887,7 +887,7 @@ func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	_, err = rasql.InsertWithOptions(t.Context(), rasql.Client{}, keyed, user{}, rasql.DefaultColumns("missing"))
+	_, err = rasql.InsertWithOptions(t.Context(), buildOnlyDB(t), keyed, user{}, rasql.DefaultColumns("missing"))
 	require.ErrorContains(t, err, `table "tenant.users" has no column "missing" selected for a database default`)
 
 	unkeyed, err := rasql.TableOf[user](schema.TableDef{
@@ -896,7 +896,7 @@ func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 		Columns: columns,
 	})
 	require.NoError(t, err)
-	_, err = rasql.Update(t.Context(), rasql.Client{}, unkeyed, user{ID: 42})
+	_, err = rasql.Update(t.Context(), buildOnlyDB(t), unkeyed, user{ID: 42})
 	require.ErrorContains(t, err, `table "tenant.users" has no primary key`)
 
 	allKey, err := rasql.TableOf[key](schema.TableDef{
@@ -906,7 +906,7 @@ func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	_, err = rasql.Update(t.Context(), rasql.Client{}, allKey, key{ID: 42})
+	_, err = rasql.Update(t.Context(), buildOnlyDB(t), allKey, key{ID: 42})
 	require.ErrorContains(t, err, `table "tenant.users" has no non-primary-key columns`)
 }
 
@@ -919,7 +919,7 @@ func TestUpdateMatchesCompositePrimaryKey(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	table := schema.TableDef{
 		Name: "memberships",
@@ -941,7 +941,7 @@ func TestUpdateMatchesCompositePrimaryKey(t *testing.T) {
 		WithArgs("admin", int64(10), int64(42)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	_, err = rasql.Update(t.Context(), client, memberships, membership{AccountID: 10, UserID: 42, Role: "admin"})
+	_, err = rasql.Update(t.Context(), db, memberships, membership{AccountID: 10, UserID: 42, Role: "admin"})
 	require.NoError(t, err)
 }
 
@@ -1144,7 +1144,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[mappedUser](table)
 		require.NoError(t, err)
@@ -1153,7 +1153,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 			WithArgs(int64(42), "ada@example.com").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		_, err = rasql.Insert(t.Context(), client, users, mappedUser{ID: 42, Email: "ada@example.com"})
+		_, err = rasql.Insert(t.Context(), db, users, mappedUser{ID: 42, Email: "ada@example.com"})
 		require.NoError(t, err)
 	})
 
@@ -1166,7 +1166,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[mappedUser](table)
 		require.NoError(t, err)
@@ -1174,7 +1174,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 			WithArgs("grace@example.com", int64(42)).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		_, err = rasql.Update(t.Context(), client, users, mappedUser{ID: 42, Email: "grace@example.com"})
+		_, err = rasql.Update(t.Context(), db, users, mappedUser{ID: 42, Email: "grace@example.com"})
 		require.NoError(t, err)
 	})
 
@@ -1187,7 +1187,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[wrappedUser](table)
 		require.NoError(t, err)
@@ -1197,7 +1197,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 			WithArgs(int64(42), "ada@example.com").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		_, err = rasql.Insert(t.Context(), client, users, wrappedUser{mappedUser{ID: 42, Email: "ada@example.com"}})
+		_, err = rasql.Insert(t.Context(), db, users, wrappedUser{mappedUser{ID: 42, Email: "ada@example.com"}})
 		require.NoError(t, err)
 	})
 
@@ -1205,7 +1205,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 		users, err := rasql.TableOf[partiallyMappedUser](table)
 		require.NoError(t, err)
 
-		_, err = rasql.Insert(t.Context(), rasql.Client{}, users, partiallyMappedUser{ID: 42})
+		_, err = rasql.Insert(t.Context(), buildOnlyDB(t), users, partiallyMappedUser{ID: 42})
 		require.ErrorContains(t, err, "supplies no value for column \"email\"")
 	})
 }
@@ -1236,7 +1236,7 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[taggedWrapperUser](table)
 		require.NoError(t, err)
@@ -1244,7 +1244,7 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 			WithArgs(int64(42), "ada@example.com").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		_, err = rasql.Insert(t.Context(), client, users, value)
+		_, err = rasql.Insert(t.Context(), db, users, value)
 		require.NoError(t, err)
 	})
 
@@ -1257,7 +1257,7 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[taggedWrapperUser](table)
 		require.NoError(t, err)
@@ -1265,7 +1265,7 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 			WithArgs("ada@example.com", int64(42)).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		_, err = rasql.Update(t.Context(), client, users, value)
+		_, err = rasql.Update(t.Context(), db, users, value)
 		require.NoError(t, err)
 	})
 }
@@ -1313,7 +1313,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[declaringWrapperUser](table)
 		require.NoError(t, err)
@@ -1321,7 +1321,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 			WithArgs(int64(42), "method@example.com").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		_, err = rasql.Insert(t.Context(), client, users, value)
+		_, err = rasql.Insert(t.Context(), db, users, value)
 		require.NoError(t, err)
 	})
 
@@ -1334,7 +1334,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[declaringWrapperUser](table)
 		require.NoError(t, err)
@@ -1342,7 +1342,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 			WithArgs("method@example.com", int64(42)).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		_, err = rasql.Update(t.Context(), client, users, value)
+		_, err = rasql.Update(t.Context(), db, users, value)
 		require.NoError(t, err)
 	})
 
@@ -1355,7 +1355,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[pointerDeclaringWrapperUser](table)
 		require.NoError(t, err)
@@ -1363,7 +1363,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 			WithArgs(int64(42), "method@example.com").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		_, err = rasql.Insert(t.Context(), client, users, pointerValue)
+		_, err = rasql.Insert(t.Context(), db, users, pointerValue)
 		require.NoError(t, err)
 	})
 
@@ -1376,7 +1376,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[pointerDeclaringWrapperUser](table)
 		require.NoError(t, err)
@@ -1384,7 +1384,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 			WithArgs("method@example.com", int64(42)).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		_, err = rasql.Update(t.Context(), client, users, pointerValue)
+		_, err = rasql.Update(t.Context(), db, users, pointerValue)
 		require.NoError(t, err)
 	})
 }
@@ -1413,7 +1413,7 @@ func requireInsertBinds[T any](t *testing.T, value T, id int64, email string) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users, err := rasql.TableOf[T](usersTable())
 	require.NoError(t, err)
@@ -1421,7 +1421,7 @@ func requireInsertBinds[T any](t *testing.T, value T, id int64, email string) {
 		WithArgs(id, email).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	_, err = rasql.Insert(t.Context(), client, users, value)
+	_, err = rasql.Insert(t.Context(), db, users, value)
 	require.NoError(t, err)
 }
 
@@ -1436,7 +1436,7 @@ func requireUpdateBinds[T any](t *testing.T, value T, id int64, email string) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users, err := rasql.TableOf[T](usersTable())
 	require.NoError(t, err)
@@ -1444,7 +1444,7 @@ func requireUpdateBinds[T any](t *testing.T, value T, id int64, email string) {
 		WithArgs(email, id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	_, err = rasql.Update(t.Context(), client, users, value)
+	_, err = rasql.Update(t.Context(), db, users, value)
 	require.NoError(t, err)
 }
 
@@ -1705,6 +1705,6 @@ func TestInsertRejectsMissingTaggedColumn(t *testing.T) {
 	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 
-	_, err = rasql.Insert(t.Context(), rasql.Client{}, users, user{ID: 42})
+	_, err = rasql.Insert(t.Context(), buildOnlyDB(t), users, user{ID: 42})
 	require.ErrorContains(t, err, "no field tagged for column \"email\"")
 }
