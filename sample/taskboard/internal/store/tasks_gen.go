@@ -120,12 +120,12 @@ func (r TasksRow) ColumnValue(name string) (any, bool) {
 // TasksTable is the generated table type for the "tasks" table.
 type TasksTable struct {
 	rasql.Table[TasksRow]
-	ID         query.Column
-	ProjectID  query.Column
-	AssigneeID query.Column
-	Title      query.Column
-	Status     query.Column
-	Priority   query.Column
+	ID         query.ColumnRef
+	ProjectID  query.ColumnRef
+	AssigneeID query.ColumnRef
+	Title      query.ColumnRef
+	Status     query.ColumnRef
+	Priority   query.ColumnRef
 }
 
 func newTasksTable(table rasql.Table[TasksRow]) TasksTable {

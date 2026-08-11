@@ -13,7 +13,7 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("repeated WhereEqual combines with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		client := clientForBuild(t)
-		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
+		statement, err := rasql.SelectFromRef(users.Ref()).
 			Select("id", "email").
 			WhereEqual("id", 42).
 			WhereEqual("email", "ada@example.com").
@@ -30,7 +30,7 @@ func TestSelectBuilder(t *testing.T) {
 		client := clientForBuild(t)
 		email, err := users.Column("email")
 		require.NoError(t, err)
-		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
+		statement, err := rasql.SelectFromRef(users.Ref()).
 			Select("id", "email").
 			WhereEqual("id", 42).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
@@ -45,7 +45,7 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("a lone Where is unchanged", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		client := clientForBuild(t)
-		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
+		statement, err := rasql.SelectFromRef(users.Ref()).
 			Select("id", "email").
 			WhereEqual("id", 42).
 			Build(client.Dialect())
@@ -59,14 +59,14 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("Distinct de-duplicates result rows", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		client := clientForBuild(t)
-		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
+		statement, err := rasql.SelectFromRef(users.Ref()).
 			Select("email").
 			Distinct().
 			Build(client.Dialect())
 		require.NoError(t, err)
 		require.Equal(t, `SELECT DISTINCT "users"."email" FROM "users"`, statement.SQL())
 
-		_, err = rasql.SelectQueryFrom(users.QueryTable()).
+		_, err = rasql.SelectFromRef(users.Ref()).
 			Select("email").
 			Distinct().
 			Count(t.Context(), client)
@@ -80,12 +80,12 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("GroupBy accepts a joined table's column", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		orders := selectOrdersTable(t)
-		id, err := users.QueryTable().Column("id")
+		id, err := users.Ref().Column("id")
 		require.NoError(t, err)
 		orderUserID, err := orders.Column("user_id")
 		require.NoError(t, err)
 
-		statement, err := rasql.SelectQueryFrom(users.QueryTable()).
+		statement, err := rasql.SelectFromRef(users.Ref()).
 			Project(query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
 			Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
 			GroupBy(orderUserID).
@@ -98,10 +98,10 @@ func TestSelectBuilder(t *testing.T) {
 }
 
 // selectOrdersTable returns a table to join deleteUsersTable against.
-func selectOrdersTable(t *testing.T) query.Table {
+func selectOrdersTable(t *testing.T) query.TableRef {
 	t.Helper()
 
-	orders, err := query.NewTable(schema.TableDef{
+	orders, err := query.NewTableRef(schema.TableDef{
 		Name: "orders",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},

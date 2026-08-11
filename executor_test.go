@@ -205,9 +205,9 @@ func leakTestClient(t *testing.T) (rasql.Client, sqlmock.Sqlmock) {
 func TestQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 	client, mock := leakTestClient(t)
 	users := deleteUsersTable(t)
-	id, err := users.QueryTable().Column("id")
+	id, err := users.Ref().Column("id")
 	require.NoError(t, err)
-	statement, err := query.NewSelect(users.QueryTable(), query.Project(id))
+	statement, err := query.NewSelect(users.Ref(), query.Project(id))
 	require.NoError(t, err)
 
 	requireLazyRowSequence(t, mock,
@@ -224,11 +224,11 @@ func TestQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 func TestQueryWriteRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 	client, mock := leakTestClient(t)
 	users := deleteUsersTable(t)
-	id, err := users.QueryTable().Column("id")
+	id, err := users.Ref().Column("id")
 	require.NoError(t, err)
-	email, err := users.QueryTable().Column("email")
+	email, err := users.Ref().Column("email")
 	require.NoError(t, err)
-	insert, err := query.NewInsert(users.QueryTable(), []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(users.Ref(), []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err := insert.WithReturning(query.Project(id))
 	require.NoError(t, err)
@@ -256,7 +256,7 @@ func TestSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 				RowsWillBeClosed()
 		},
 		func() (iter.Seq2[row.Dynamic, error], error) {
-			return rasql.SelectQueryFrom(users.QueryTable()).Select("id").Query(t.Context(), client)
+			return rasql.SelectFromRef(users.Ref()).Select("id").Query(t.Context(), client)
 		})
 }
 

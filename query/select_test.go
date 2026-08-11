@@ -10,11 +10,11 @@ import (
 )
 
 func TestSelectBuildsImmutableStatement(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	users, err = users.As("u")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orders, err = orders.As("o")
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestSelectBuildsImmutableStatement(t *testing.T) {
 // leaves the receiver untouched, the same immutability
 // TestSelectBuildsImmutableStatement pins for the other With… methods.
 func TestSelectAcceptsDistinctStatements(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
@@ -82,7 +82,7 @@ func TestSelectAcceptsDistinctStatements(t *testing.T) {
 // TestSelectRendersDistinctStatement and distinct_order_integration_test.go
 // prove the rendering and the server-side behavior this decision relies on.
 func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
 // and that combining it with CountAll's star is refused, since
 // COUNT(DISTINCT *) is not legal SQL.
 func TestFunctionAcceptsDistinctArgument(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -171,7 +171,7 @@ func TestFunctionAcceptsDistinctArgument(t *testing.T) {
 // rows, and Func carries it through unchecked because rasql does not know
 // whether the named function aggregates.
 func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -215,7 +215,7 @@ func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
 }
 
 func TestFunctionConstructorsCarryTheirCall(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -261,7 +261,7 @@ func TestFunctionConstructorsCarryTheirCall(t *testing.T) {
 }
 
 func TestSelectRejectsInvalidStatements(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -278,7 +278,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	_, err = statement.WithLimit(-1)
 	requireQueryValidationError(t, err)
 
-	other, err := query.NewTable(ordersTable())
+	other, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	otherID, err := other.Column("id")
 	require.NoError(t, err)
@@ -347,7 +347,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 }
 
 func TestSelectAcceptsMembershipPredicate(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -369,11 +369,11 @@ func TestSelectAcceptsMembershipPredicate(t *testing.T) {
 // in: as the right-hand side of an InSelect/NotInSelect membership test, and as
 // a Scalar operand of a comparison, including one nested two levels deep.
 func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orderID, err := orders.Column("id")
 	require.NoError(t, err)
@@ -426,11 +426,11 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 // database refuses or answers meaninglessly; TestSQLiteRefusesMisplacedAggregates
 // in the root package runs the SQLite half against a real database.
 func TestSelectRejectsMisplacedAggregates(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
@@ -544,13 +544,13 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 // TestSelectAcceptsWellPlacedAggregates pins the statements the placement rules
 // must keep accepting, so the rules reject a shape rather than the feature.
 func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
@@ -598,13 +598,13 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 // WHERE clause, a JOIN ON condition, a GROUP BY clause, an ORDER BY clause,
 // and a HAVING clause of a statement that groups.
 func TestSelectAcceptsScalarFunctions(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
@@ -654,7 +654,7 @@ func TestSelectAcceptsScalarFunctions(t *testing.T) {
 // scalar call has to pass, and pins that a star call is refused for a scalar
 // name just as it is for a non-COUNT aggregate.
 func TestSelectRejectsInvalidScalarCalls(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -700,11 +700,11 @@ func TestSelectRejectsInvalidScalarCalls(t *testing.T) {
 // call: an aggregate nested inside one is judged exactly as if it sat in the
 // scalar call's place directly.
 func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
@@ -760,7 +760,7 @@ func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
 // name reuses a curated aggregate name such as SUM, because Func never routes
 // through the aggregate placement rules.
 func TestFuncValidatesEscapeHatchName(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -793,7 +793,7 @@ func TestFuncValidatesEscapeHatchName(t *testing.T) {
 // WithGroupBy refines an already-valid ungrouped statement, and WithHaving sets
 // and then replaces the grouped predicate.
 func TestSelectGroupsAndFilters(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -833,11 +833,11 @@ func TestSelectGroupsAndFilters(t *testing.T) {
 // same statement, because validation refuses the grouping before the join is
 // attached.
 func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
@@ -878,11 +878,11 @@ func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
 // TestSelectRejectsInvalidGrouping covers the rules a GROUP BY expression has to
 // follow: no aggregate, no table outside the statement, and no bare bound value.
 func TestSelectRejectsInvalidGrouping(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
@@ -922,13 +922,13 @@ func TestSelectRejectsInvalidGrouping(t *testing.T) {
 // projection set that aggregates and reads no column outside an aggregate, and
 // follows the same aggregate-placement rules as every other clause.
 func TestSelectRejectsInvalidHaving(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
@@ -964,7 +964,7 @@ func TestSelectRejectsInvalidHaving(t *testing.T) {
 // TestSelectAcceptsGroupedStatements pins what must keep validating once a
 // statement groups, the counterpart to TestSelectAcceptsWellPlacedAggregates.
 func TestSelectAcceptsGroupedStatements(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
@@ -1012,7 +1012,7 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 // aggregateClauseContext, and both of those permit a subquery, which keeps the
 // clause list in the misplaced-subquery message honest.
 func TestSelectAcceptsSubqueriesInGroupedClauses(t *testing.T) {
-	orders, err := query.NewTable(ordersTable())
+	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
 	amount, err := orders.Column("amount")
 	require.NoError(t, err)
@@ -1043,7 +1043,7 @@ func TestSelectAcceptsSubqueriesInGroupedClauses(t *testing.T) {
 // that governs the clause the test sits in, exactly as the same operand would be
 // outside an IN.
 func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -1140,17 +1140,17 @@ func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
 	}
 }
 
-func TestTableRejectsUnknownColumn(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+func TestTableRefRejectsUnknownColumn(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 
 	_, err = users.Column("missing")
 	require.Error(t, err)
 }
 
-func TestTableCopiesDescriptor(t *testing.T) {
+func TestTableRefCopiesDescriptor(t *testing.T) {
 	descriptor := usersTable()
-	users, err := query.NewTable(descriptor)
+	users, err := query.NewTableRef(descriptor)
 	require.NoError(t, err)
 
 	descriptor.Columns[0].Name = "changed"
@@ -1161,29 +1161,29 @@ func TestTableCopiesDescriptor(t *testing.T) {
 	require.Equal(t, []string{"id"}, users.Definition().PrimaryKey)
 }
 
-func TestMustNewTable(t *testing.T) {
-	users := query.MustNewTable(usersTable())
+func TestMustTableRef(t *testing.T) {
+	users := query.MustTableRef(usersTable())
 	_, err := users.Column("id")
 	require.NoError(t, err)
 
 	require.Panics(t, func() {
-		query.MustNewTable(schema.TableDef{})
+		query.MustTableRef(schema.TableDef{})
 	})
 }
 
-// TestTableReportsItsSchema pins Schema, QualifierSchema and Qualifier for
+// TestTableRefReportsItsSchema pins Schema, QualifierSchema and Qualifier for
 // an unqualified table, a qualified unaliased table and a qualified aliased
 // table: an alias replaces the whole qualified name, so QualifierSchema
 // returns "" once a table is aliased even though Schema still reports it.
-func TestTableReportsItsSchema(t *testing.T) {
-	unqualified := query.MustNewTable(usersTable())
+func TestTableRefReportsItsSchema(t *testing.T) {
+	unqualified := query.MustTableRef(usersTable())
 	require.Equal(t, "", unqualified.Schema())
 	require.Equal(t, "", unqualified.QualifierSchema())
 	require.Equal(t, "users", unqualified.Qualifier())
 
 	descriptor := usersTable()
 	descriptor.Schema = "audit"
-	qualified := query.MustNewTable(descriptor)
+	qualified := query.MustTableRef(descriptor)
 	require.Equal(t, "audit", qualified.Schema())
 	require.Equal(t, "audit", qualified.QualifierSchema())
 	require.Equal(t, "users", qualified.Qualifier())
@@ -1204,12 +1204,12 @@ func TestTableReportsItsSchema(t *testing.T) {
 func TestSelectJoinsSameNameTablesFromDifferentSchemas(t *testing.T) {
 	tenantADescriptor := usersTable()
 	tenantADescriptor.Schema = "tenant_a"
-	tenantA, err := query.NewTable(tenantADescriptor)
+	tenantA, err := query.NewTableRef(tenantADescriptor)
 	require.NoError(t, err)
 
 	tenantBDescriptor := usersTable()
 	tenantBDescriptor.Schema = "tenant_b"
-	tenantB, err := query.NewTable(tenantBDescriptor)
+	tenantB, err := query.NewTableRef(tenantBDescriptor)
 	require.NoError(t, err)
 
 	tenantAID, err := tenantA.Column("id")
@@ -1228,9 +1228,9 @@ func TestSelectJoinsSameNameTablesFromDifferentSchemas(t *testing.T) {
 func TestSelectNamesQualifiedTableInDuplicateSourceError(t *testing.T) {
 	descriptor := usersTable()
 	descriptor.Schema = "audit"
-	from, err := query.NewTable(descriptor)
+	from, err := query.NewTableRef(descriptor)
 	require.NoError(t, err)
-	other, err := query.NewTable(descriptor)
+	other, err := query.NewTableRef(descriptor)
 	require.NoError(t, err)
 
 	fromID, err := from.Column("id")
@@ -1243,16 +1243,16 @@ func TestSelectNamesQualifiedTableInDuplicateSourceError(t *testing.T) {
 	require.ErrorContains(t, err, `duplicates table reference "audit.users"`)
 }
 
-// TestTableReportsWhetherItIsQualified pins Qualified on query.Table against
+// TestTableRefReportsWhetherItIsQualified pins Qualified on query.TableRef against
 // the same method on the descriptor it wraps. Qualified describes the table,
 // so an alias leaves it alone even though the alias empties QualifierSchema.
-func TestTableReportsWhetherItIsQualified(t *testing.T) {
-	unqualified := query.MustNewTable(usersTable())
+func TestTableRefReportsWhetherItIsQualified(t *testing.T) {
+	unqualified := query.MustTableRef(usersTable())
 	require.False(t, unqualified.Qualified())
 
 	descriptor := usersTable()
 	descriptor.Schema = "audit"
-	qualified := query.MustNewTable(descriptor)
+	qualified := query.MustTableRef(descriptor)
 	require.True(t, qualified.Qualified())
 
 	aliased, err := qualified.As("u")
@@ -1261,13 +1261,13 @@ func TestTableReportsWhetherItIsQualified(t *testing.T) {
 	require.Equal(t, "", aliased.QualifierSchema())
 }
 
-// TestTableNamesQualifiedTableInUnknownColumnError pins the fifth
-// table-naming message: Table.Column names the qualified table, and the alias
+// TestTableRefNamesQualifiedTableInUnknownColumnError pins the fifth
+// table-naming message: TableRef.Column names the qualified table, and the alias
 // once the table is aliased, exactly as every other message does.
-func TestTableNamesQualifiedTableInUnknownColumnError(t *testing.T) {
+func TestTableRefNamesQualifiedTableInUnknownColumnError(t *testing.T) {
 	descriptor := usersTable()
 	descriptor.Schema = "tenant"
-	qualified := query.MustNewTable(descriptor)
+	qualified := query.MustTableRef(descriptor)
 
 	_, err := qualified.Column("missing")
 	require.ErrorContains(t, err, `table "tenant.users" has no column "missing"`)
@@ -1290,49 +1290,49 @@ func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
 		descriptor.Schema = schemaName
 		return descriptor
 	}
-	aliasOf := func(t *testing.T, descriptor schema.TableDef, alias string) query.Table {
+	aliasOf := func(t *testing.T, descriptor schema.TableDef, alias string) query.TableRef {
 		t.Helper()
-		table, err := query.MustNewTable(descriptor).As(alias)
+		table, err := query.MustTableRef(descriptor).As(alias)
 		require.NoError(t, err)
 		return table
 	}
 
 	rejected := map[string]struct {
-		from    func(*testing.T) query.Table
-		joined  func(*testing.T) query.Table
+		from    func(*testing.T) query.TableRef
+		joined  func(*testing.T) query.TableRef
 		message string
 	}{
 		// The finding this PR introduced: two different qualified tables under
 		// one alias.
 		"two qualified tables share an alias": {
-			from:    func(t *testing.T) query.Table { return aliasOf(t, qualifiedUsers("tenant_a"), "u") },
-			joined:  func(t *testing.T) query.Table { return aliasOf(t, qualifiedUsers("tenant_b"), "u") },
+			from:    func(t *testing.T) query.TableRef { return aliasOf(t, qualifiedUsers("tenant_a"), "u") },
+			joined:  func(t *testing.T) query.TableRef { return aliasOf(t, qualifiedUsers("tenant_b"), "u") },
 			message: `table "tenant_b.users" is referred to as "u", which already refers to table "tenant_a.users"`,
 		},
 		// The hole that predates this PR: the key never caught an alias clash
 		// between two tables that differed in any other way.
 		"two unrelated tables share an alias": {
-			from:    func(t *testing.T) query.Table { return aliasOf(t, usersTable(), "u") },
-			joined:  func(t *testing.T) query.Table { return aliasOf(t, ordersTable(), "u") },
+			from:    func(t *testing.T) query.TableRef { return aliasOf(t, usersTable(), "u") },
+			joined:  func(t *testing.T) query.TableRef { return aliasOf(t, ordersTable(), "u") },
 			message: `table "orders" is referred to as "u", which already refers to table "users"`,
 		},
 		// The regression this PR introduced: a bare "users" names the
 		// unqualified table and the qualified one equally, in either order.
 		"unqualified table joined to a qualified one of the same name": {
-			from:    func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
-			joined:  func(t *testing.T) query.Table { return query.MustNewTable(qualifiedUsers("tenant_a")) },
+			from:    func(t *testing.T) query.TableRef { return query.MustTableRef(usersTable()) },
+			joined:  func(t *testing.T) query.TableRef { return query.MustTableRef(qualifiedUsers("tenant_a")) },
 			message: `table "tenant_a.users" is referred to as "users", which already refers to table "users"`,
 		},
 		"qualified table joined to an unqualified one of the same name": {
-			from:    func(t *testing.T) query.Table { return query.MustNewTable(qualifiedUsers("tenant_a")) },
-			joined:  func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
+			from:    func(t *testing.T) query.TableRef { return query.MustTableRef(qualifiedUsers("tenant_a")) },
+			joined:  func(t *testing.T) query.TableRef { return query.MustTableRef(usersTable()) },
 			message: `table "users" is referred to as "users", which already refers to table "tenant_a.users"`,
 		},
 		// An alias that repeats an unaliased source's own name is the same
 		// clash reached from the other side.
 		"an alias repeats an unaliased source's name": {
-			from:    func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
-			joined:  func(t *testing.T) query.Table { return aliasOf(t, ordersTable(), "users") },
+			from:    func(t *testing.T) query.TableRef { return query.MustTableRef(usersTable()) },
+			joined:  func(t *testing.T) query.TableRef { return aliasOf(t, ordersTable(), "users") },
 			message: `table "orders" is referred to as "users", which already refers to table "users"`,
 		},
 	}
@@ -1343,7 +1343,7 @@ func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
 			// The table key is schema, name and alias together, so a pair that
 			// differs in any of the three holds two distinct keys and the key
 			// cannot be what refuses it.
-			tableKey := func(table query.Table) string {
+			tableKey := func(table query.TableRef) string {
 				return table.Definition().QualifiedName() + "\x00" + table.Alias()
 			}
 			require.NotEqual(t, tableKey(from), tableKey(joined),
@@ -1362,26 +1362,26 @@ func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
 	}
 
 	accepted := map[string]struct {
-		from   func(*testing.T) query.Table
-		joined func(*testing.T) query.Table
+		from   func(*testing.T) query.TableRef
+		joined func(*testing.T) query.TableRef
 	}{
 		// Each source renders its columns under its own "schema"."table"
 		// prefix, so nothing is ambiguous.
 		"same name in two schemas, both unaliased": {
-			from:   func(t *testing.T) query.Table { return query.MustNewTable(qualifiedUsers("tenant_a")) },
-			joined: func(t *testing.T) query.Table { return query.MustNewTable(qualifiedUsers("tenant_b")) },
+			from:   func(t *testing.T) query.TableRef { return query.MustTableRef(qualifiedUsers("tenant_a")) },
+			joined: func(t *testing.T) query.TableRef { return query.MustTableRef(qualifiedUsers("tenant_b")) },
 		},
 		"same name in two schemas under distinct aliases": {
-			from:   func(t *testing.T) query.Table { return aliasOf(t, qualifiedUsers("tenant_a"), "a") },
-			joined: func(t *testing.T) query.Table { return aliasOf(t, qualifiedUsers("tenant_b"), "b") },
+			from:   func(t *testing.T) query.TableRef { return aliasOf(t, qualifiedUsers("tenant_a"), "a") },
+			joined: func(t *testing.T) query.TableRef { return aliasOf(t, qualifiedUsers("tenant_b"), "b") },
 		},
 		"one table joined to itself under a distinct alias": {
-			from:   func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
-			joined: func(t *testing.T) query.Table { return aliasOf(t, usersTable(), "manager") },
+			from:   func(t *testing.T) query.TableRef { return query.MustTableRef(usersTable()) },
+			joined: func(t *testing.T) query.TableRef { return aliasOf(t, usersTable(), "manager") },
 		},
 		"two differently named tables": {
-			from:   func(t *testing.T) query.Table { return query.MustNewTable(usersTable()) },
-			joined: func(t *testing.T) query.Table { return query.MustNewTable(ordersTable()) },
+			from:   func(t *testing.T) query.TableRef { return query.MustTableRef(usersTable()) },
+			joined: func(t *testing.T) query.TableRef { return query.MustTableRef(ordersTable()) },
 		},
 	}
 	for name, testCase := range accepted {
@@ -1404,10 +1404,10 @@ func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
 // TestSelectRejectsSharedNameAddedByWithJoin pins that the check runs on every
 // path that adds a source, not only on the constructor.
 func TestSelectRejectsSharedNameAddedByWithJoin(t *testing.T) {
-	users := query.MustNewTable(usersTable())
+	users := query.MustTableRef(usersTable())
 	descriptor := usersTable()
 	descriptor.Schema = "tenant_a"
-	tenantUsers := query.MustNewTable(descriptor)
+	tenantUsers := query.MustTableRef(descriptor)
 
 	usersID, err := users.Column("id")
 	require.NoError(t, err)

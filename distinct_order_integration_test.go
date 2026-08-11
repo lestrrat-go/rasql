@@ -81,7 +81,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 		require.NoError(t, err)
 	}
 
-	table, err := query.NewTable(definition)
+	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
 	city, err := table.Column("city")
 	require.NoError(t, err)

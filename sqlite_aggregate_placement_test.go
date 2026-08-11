@@ -50,7 +50,7 @@ func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
 	})
 
 	t.Run("validation refuses to render them", func(t *testing.T) {
-		table, err := query.NewTable(definition)
+		table, err := query.NewTableRef(definition)
 		require.NoError(t, err)
 		id, err := table.Column("id")
 		require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
 func TestSQLiteOrdersAnAggregateStatement(t *testing.T) {
 	database, definition := aggregatePlacementFixture(t)
 
-	table, err := query.NewTable(definition)
+	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
 	id, err := table.Column("id")
 	require.NoError(t, err)
@@ -154,7 +154,7 @@ func TestSQLiteOrdersAnAggregateStatement(t *testing.T) {
 // one shape still refused ungrouped, the same shape run grouped.
 func TestSQLiteRunsGroupedStatements(t *testing.T) {
 	database, definition := aggregatePlacementFixture(t)
-	table, err := query.NewTable(definition)
+	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
 	id, err := table.Column("id")
 	require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 // (TestSQLiteRefusesMisplacedAggregates) and accepted in a projection for.
 func TestSQLiteRunsScalarFunctionsBesideAggregates(t *testing.T) {
 	database, definition := aggregatePlacementFixture(t)
-	table, err := query.NewTable(definition)
+	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
 	id, err := table.Column("id")
 	require.NoError(t, err)

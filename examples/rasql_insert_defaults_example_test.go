@@ -45,9 +45,9 @@ func (r defaultUserRow) ColumnValue(name string) (any, bool) {
 
 type defaultUsersTable struct {
 	rasql.Table[defaultUserRow]
-	ID     query.Column
-	Email  query.Column
-	Status query.Column
+	ID     query.ColumnRef
+	Email  query.ColumnRef
+	Status query.ColumnRef
 }
 
 func newDefaultUsersTable(table rasql.Table[defaultUserRow]) defaultUsersTable {

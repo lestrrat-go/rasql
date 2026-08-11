@@ -43,7 +43,7 @@ func validateAlias(alias string) error {
 // and rasql cannot tell which of the two sources any already-written column
 // reference meant. Refusing names both tables and leaves the caller to pick an
 // alias with As, which is the one repair that keeps the statement theirs.
-func validateSourceReference(references []sourceReference, source Table, path string) error {
+func validateSourceReference(references []sourceReference, source TableRef, path string) error {
 	candidate := source.reference()
 	for _, existing := range references {
 		if !existing.conflicts(candidate) {
@@ -143,7 +143,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 	}
 
 	switch expression := expression.(type) {
-	case Column:
+	case ColumnRef:
 		if err := expression.source.validate(); err != nil {
 			return expressionUsage{}, validationError(path, "%s", err)
 		}

@@ -13,7 +13,7 @@ func Example_schema_table_definition() {
 	// schema.TableOption, so they may appear in any order: PrimaryKey names
 	// "id" below before Integer declares it, and the assembled descriptor is
 	// the same either way. The same descriptor can later supply a reusable
-	// query.Table or generate DDL.
+	// query.TableRef or generate DDL.
 	users := schema.MustTable("users",
 		schema.Integer("id"),
 		schema.Text("email"),

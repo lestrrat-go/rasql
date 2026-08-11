@@ -39,8 +39,8 @@ type UserRow struct {
 // mistyped column name fails to compile instead of failing at run time.
 type UsersTable struct {
 	rasql.Table[UserRow]
-	ID    query.Column
-	Email query.Column
+	ID    query.ColumnRef
+	Email query.ColumnRef
 }
 
 func newUsersTable(table rasql.Table[UserRow]) UsersTable {
@@ -72,7 +72,7 @@ source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/r
 
 Three things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. The embedded `rasql.Table[UserRow]` binds that row type to a validated table description, so the compiler knows what a query against `users` returns. The `ID` and `Email` fields are the column references the query builders take.
 
-Those fields are the reason a filter never spells a column as a string. `WhereEqual(users.ID, 42)` builds, while `WhereEqual(users.Emial, 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.Column` and not a name. [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows what that covers and the three cases it does not.
+Those fields are the reason a filter never spells a column as a string. `WhereEqual(users.ID, 42)` builds, while `WhereEqual(users.Emial, 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows what that covers and the three cases it does not.
 
 [Schemas](02-schema.md) covers how to write these tables by hand, and [`rasqlgen`](06-rasqlgen.md) covers how to generate them.
 

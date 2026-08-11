@@ -5,38 +5,38 @@ type Expression interface {
 	expression()
 }
 
-// Column is a typed reference to a table column.
-type Column struct {
-	source Table
+// ColumnRef is a typed reference to a table column.
+type ColumnRef struct {
+	source TableRef
 	name   string
 }
 
-func (Column) expression() {}
+func (ColumnRef) expression() {}
 
 // Name returns the column name.
-func (c Column) Name() string {
+func (c ColumnRef) Name() string {
 	return c.name
 }
 
 // Source returns the table that owns the column.
-func (c Column) Source() Table {
+func (c ColumnRef) Source() TableRef {
 	return c.source
 }
 
 // ExcludedColumn references the incoming value of a column during an upsert.
 type ExcludedColumn struct {
-	column Column
+	column ColumnRef
 }
 
 func (ExcludedColumn) expression() {}
 
 // Excluded references the incoming value for column in an upsert assignment.
-func Excluded(column Column) ExcludedColumn {
+func Excluded(column ColumnRef) ExcludedColumn {
 	return ExcludedColumn{column: column}
 }
 
 // Column returns the incoming column.
-func (c ExcludedColumn) Column() Column {
+func (c ExcludedColumn) Column() ColumnRef {
 	return c.column
 }
 

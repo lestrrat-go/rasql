@@ -10,7 +10,7 @@ import (
 // SelectBuilder builds parameterized SQL through an immutable fluent API.
 type SelectBuilder struct {
 	dialect          dialect.Dialect
-	from             query.Table
+	from             query.TableRef
 	projections      []query.Projection
 	joins            []query.Join
 	predicates       []query.Expression
@@ -26,7 +26,7 @@ type SelectBuilder struct {
 }
 
 // SelectFrom starts a fluent SELECT builder for d using from as its primary table.
-func SelectFrom(d dialect.Dialect, from query.Table) SelectBuilder {
+func SelectFrom(d dialect.Dialect, from query.TableRef) SelectBuilder {
 	return SelectBuilder{dialect: d, from: from}
 }
 
@@ -142,7 +142,7 @@ func (b SelectBuilder) GroupBy(expressions ...query.Expression) SelectBuilder {
 }
 
 // GroupByColumns adds primary-table columns to the grouping by name.
-// It is the untyped counterpart of passing a generated query.Column to GroupBy.
+// It is the untyped counterpart of passing a generated query.ColumnRef to GroupBy.
 func (b SelectBuilder) GroupByColumns(names ...string) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
