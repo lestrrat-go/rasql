@@ -2086,9 +2086,46 @@ func normalizeMySQLType(typeName string, databaseType string) (schema.ColumnType
 	case strings.Contains(typeName, "DATE") || strings.Contains(typeName, "TIME"):
 		return schema.TimeType{}, nil
 	case strings.Contains(typeName, "CHAR") || strings.Contains(typeName, "TEXT") || strings.Contains(typeName, "ENUM") || strings.Contains(typeName, "SET"):
-		return schema.TextType{}, nil
+		width, err := mysqlTextWidth(typeName, databaseType)
+		if err != nil {
+			return nil, err
+		}
+		return schema.TextType{Width: width}, nil
 	}
 	return nil, fmt.Errorf("unsupported mysql type %q", databaseType)
+}
+
+// mysqlTextWidth reports the schema.TextWidth a MySQL CHAR or VARCHAR
+// declaration states, matched as a whole declaration for the same reason
+// mysqlIntegerDeclaration and mysqlDecimalDeclaration are: a substring test
+// cannot see what follows the type. TEXT, ENUM and SET all reach this
+// function too, from the same catalog-text match that reaches CHAR and
+// VARCHAR, but none of them carries a plain numeric length in COLUMN_TYPE —
+// MySQL never reports TEXT as TEXT(n), and ENUM/SET carry a value list this
+// package does not otherwise preserve — so all three return an unstated
+// width unchanged, exactly as they did before schema.TextType had one.
+func mysqlTextWidth(typeName string, databaseType string) (schema.TextWidth, error) {
+	base, rest := splitMySQLDeclaration(typeName)
+	if base != "CHAR" && base != "VARCHAR" {
+		return schema.TextWidth{}, nil
+	}
+
+	if !strings.HasPrefix(rest, "(") {
+		return schema.TextWidth{}, fmt.Errorf("unsupported mysql type %q: a %s column must be declared %s(width)", databaseType, base, base)
+	}
+	end := strings.Index(rest, ")")
+	if end < 0 || !validDigitRun(rest[1:end]) {
+		return schema.TextWidth{}, fmt.Errorf("unsupported mysql type %q: a %s column must be declared %s(width)", databaseType, base, base)
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(rest[1:end]))
+	if err != nil {
+		return schema.TextWidth{}, fmt.Errorf("unsupported mysql type %q: %w", databaseType, err)
+	}
+	rest = strings.TrimSpace(rest[end+1:])
+	if rest != "" {
+		return schema.TextWidth{}, fmt.Errorf("mysql type %q cannot be represented: a text column must carry no %s modifier, because rasql cannot record one", databaseType, rest)
+	}
+	return schema.NewTextWidth(width), nil
 }
 
 // mysqlDecimalDeclaration reports whether typeName, an upper-cased MySQL

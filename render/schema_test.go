@@ -119,6 +119,152 @@ func TestCreateTableRendersUnsignedIntegerColumns(t *testing.T) {
 	}
 }
 
+// TestCreateTableRendersTextWidthColumns is the DDL half of the text-width
+// fix: MySQL renders a stated width as VARCHAR(width), where it used to
+// render every schema.TextType column TEXT regardless, which MySQL refuses
+// to index without a key length (error 1170). PostgreSQL enforces
+// VARCHAR(n) exactly like MySQL, so it renders the same way; SQLite renders
+// plain TEXT regardless of a stated width, since it assigns column storage
+// by affinity rather than by declared type and would not enforce the bound
+// either way.
+func TestCreateTableRendersTextWidthColumns(t *testing.T) {
+	table := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}},
+			{Name: "bio", Type: schema.TextType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     `CREATE TABLE "users" ("id" BIGINT NOT NULL, "email" VARCHAR(255) NOT NULL, "bio" TEXT, PRIMARY KEY ("id"))`,
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "CREATE TABLE `users` (`id` BIGINT NOT NULL, `email` VARCHAR(255) NOT NULL, `bio` TEXT, PRIMARY KEY (`id`))",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     `CREATE TABLE "users" ("id" INTEGER NOT NULL, "email" TEXT NOT NULL, "bio" TEXT, PRIMARY KEY ("id"))`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.CreateTable(test.dialect, table)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+		})
+	}
+}
+
+// TestCreateTableRejectsUnboundedMySQLTextInPrimaryKeyOrUnique covers the
+// render-time refusal this change adds for MySQL: an unbounded (no stated
+// width) TextType column used as a primary key or a unique constraint would
+// otherwise render CREATE TABLE SQL MySQL itself rejects with error 1170
+// ("BLOB/TEXT column used in key specification without a key length"). The
+// error names the column and points at schema.Width instead of surfacing
+// that opaque server error.
+func TestCreateTableRejectsUnboundedMySQLTextInPrimaryKeyOrUnique(t *testing.T) {
+	t.Run("primary key", func(t *testing.T) {
+		table := schema.TableDef{
+			Name:       "slugs",
+			Columns:    []schema.ColumnDef{{Name: "slug", Type: schema.TextType{}}},
+			PrimaryKey: []string{"slug"},
+		}
+		_, err := render.CreateTable(dialect.MySQL(), table)
+		require.ErrorContains(t, err, `column "slug" has no stated width`)
+		require.ErrorContains(t, err, "schema.Width")
+		require.ErrorContains(t, err, "a primary key")
+	})
+
+	t.Run("unique constraint", func(t *testing.T) {
+		table := schema.TableDef{
+			Name: "slugs",
+			Columns: []schema.ColumnDef{
+				{Name: "id", Type: schema.IntegerType{}},
+				{Name: "alt", Type: schema.TextType{}},
+			},
+			PrimaryKey:        []string{"id"},
+			UniqueConstraints: []schema.UniqueDef{{Columns: []string{"alt"}}},
+		}
+		_, err := render.CreateTable(dialect.MySQL(), table)
+		require.ErrorContains(t, err, `column "alt" has no stated width`)
+		require.ErrorContains(t, err, "schema.Width")
+		require.ErrorContains(t, err, "a unique constraint")
+	})
+
+	t.Run("a stated width renders instead of refusing", func(t *testing.T) {
+		table := schema.TableDef{
+			Name:       "slugs",
+			Columns:    []schema.ColumnDef{{Name: "slug", Type: schema.TextType{Width: schema.NewTextWidth(255)}}},
+			PrimaryKey: []string{"slug"},
+		}
+		rendered, err := render.CreateTable(dialect.MySQL(), table)
+		require.NoError(t, err)
+		require.Equal(t, "CREATE TABLE `slugs` (`slug` VARCHAR(255) NOT NULL, PRIMARY KEY (`slug`))", rendered.SQL())
+	})
+
+	t.Run("postgresql and sqlite index an unbounded text primary key natively", func(t *testing.T) {
+		table := schema.TableDef{
+			Name:       "slugs",
+			Columns:    []schema.ColumnDef{{Name: "slug", Type: schema.TextType{}}},
+			PrimaryKey: []string{"slug"},
+		}
+		for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.SQLite()} {
+			t.Run(d.Name(), func(t *testing.T) {
+				_, err := render.CreateTable(d, table)
+				require.NoError(t, err)
+			})
+		}
+	})
+}
+
+// TestCreateIndexRejectsUnboundedMySQLText is the CREATE INDEX counterpart
+// to TestCreateTableRejectsUnboundedMySQLTextInPrimaryKeyOrUnique: MySQL
+// refuses a secondary index over an unbounded text column with the same
+// error 1170, and render.CreateIndexes now refuses it first with a message
+// naming the column and schema.Width.
+func TestCreateIndexRejectsUnboundedMySQLText(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "title", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes:    []schema.IndexDef{{Name: "idx_documents_title", Columns: []string{"title"}}},
+	}
+
+	_, err := render.CreateIndexes(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `column "title" has no stated width`)
+	require.ErrorContains(t, err, "schema.Width")
+	require.ErrorContains(t, err, "an index")
+
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.SQLite()} {
+		t.Run(d.Name(), func(t *testing.T) {
+			_, err := render.CreateIndexes(d, table)
+			require.NoError(t, err)
+		})
+	}
+
+	widened := table
+	widened.Columns = []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "title", Type: schema.TextType{Width: schema.NewTextWidth(255)}},
+	}
+	indexes, err := render.CreateIndexes(dialect.MySQL(), widened)
+	require.NoError(t, err)
+	require.Equal(t, []string{"CREATE INDEX `idx_documents_title` ON `documents` (`title`)"}, sqls(indexes))
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",

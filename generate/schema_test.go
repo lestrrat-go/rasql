@@ -755,6 +755,33 @@ func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
 	require.Contains(t, string(source), `schema.Integer("parent_id", schema.Unsigned(), schema.Nullable()),`)
 }
 
+// TestSchemaGeneratesTextWidthColumns pins the generator's text-width
+// mapping. A stated width restates schema.Width(n) in the generated
+// schema.Text call, so regenerating from the generated source produces the
+// same column rather than an unbounded one; an unstated width emits no
+// option at all, exactly as it did before TextType had one.
+func TestSchemaGeneratesTextWidthColumns(t *testing.T) {
+	users := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}},
+			{Name: "bio", Type: schema.TextType{}, Nullable: true},
+			{Name: "flag", Type: schema.TextType{Width: schema.NewTextWidth(0)}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := generate.PackageSource("generated", users)
+	require.NoError(t, err)
+	require.Contains(t, string(source), `schema.Text("email", schema.Width(255)),`)
+	require.Contains(t, string(source), `schema.Text("bio", schema.Nullable()),`)
+	// A stated width of zero must survive generation the same way a stated
+	// decimal scale of zero does: emitting nothing would leave the
+	// regenerated descriptor stating no width at all.
+	require.Contains(t, string(source), `schema.Text("flag", schema.Width(0)),`)
+}
+
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {
 	_, err := generate.PackageSource("not-valid")
 	require.Error(t, err)

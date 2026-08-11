@@ -70,6 +70,10 @@ func PostgreSQL() Dialect {
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
+		// PostgreSQL's VARCHAR(n) enforces the length exactly like MySQL's, so
+		// a stated schema.TextType.Width renders VARCHAR(n) here too rather
+		// than being dropped: see builtin.textTypeName.
+		varcharText: true,
 		types: map[schema.TypeKind]string{
 			schema.KindBoolean: "BOOLEAN",
 			schema.KindInteger: "BIGINT",
@@ -97,6 +101,13 @@ func MySQL() Dialect {
 		// MySQL is the only supported engine with unsigned integer types, so it
 		// is the only builtin that states one here.
 		unsignedInteger: "BIGINT UNSIGNED",
+		// A stated schema.TextType.Width renders VARCHAR(n): see
+		// builtin.textTypeName. This is also what lets a text column carry a
+		// key length short enough for a MySQL index, primary key, or unique
+		// constraint; render.CreateTable and render.CreateIndexes refuse an
+		// unbounded one used that way instead of forwarding MySQL's opaque
+		// error 1170.
+		varcharText: true,
 		types: map[schema.TypeKind]string{
 			schema.KindBoolean: "BOOLEAN",
 			schema.KindInteger: "BIGINT",
@@ -119,6 +130,16 @@ func SQLite() Dialect {
 		upsert:       UpsertOnConflict,
 		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityQualifiedIndexName,
 		decimalName:  "TEXT",
+		// varcharText is left false: SQLite already drops schema.DecimalType's
+		// Precision and Scale for the same reason (see decimalTypeName below),
+		// and a stated schema.TextType.Width gets the same treatment here, for
+		// the same reason. SQLite assigns column type by affinity rather than
+		// by declared type, so a VARCHAR(n) column is stored exactly like a
+		// bare TEXT one and enforces no maximum length; rendering VARCHAR(n)
+		// syntax there would claim an enforcement SQLite does not perform.
+		// SQLite also never hits the problem Width exists to solve: unlike
+		// MySQL, it indexes, and builds a primary key or unique constraint
+		// over, an unbounded TEXT column natively.
 		types: map[schema.TypeKind]string{
 			schema.KindBoolean: "INTEGER",
 			schema.KindInteger: "INTEGER",
@@ -145,6 +166,11 @@ type builtin struct {
 	// unsignedInteger is the DDL type for an unsigned schema.IntegerType
 	// column, and is empty on a dialect that has no unsigned integer type.
 	unsignedInteger string
+	// varcharText reports whether a stated schema.TextType.Width renders as
+	// VARCHAR(width) on this dialect. It is false on a dialect that cannot
+	// enforce a maximum length, which renders its plain unbounded text type
+	// instead of claiming an enforcement it will not perform.
+	varcharText bool
 }
 
 func (d builtin) Name() string {
@@ -176,7 +202,9 @@ func (d builtin) TypeName(column schema.ColumnDef) (string, error) {
 		}
 	case schema.DecimalType:
 		return d.decimalTypeName(column, typed)
-	case schema.BooleanType, schema.FloatType, schema.TextType, schema.BytesType, schema.TimeType, schema.JSONType, schema.UUIDType:
+	case schema.TextType:
+		return d.textTypeName(typed), nil
+	case schema.BooleanType, schema.FloatType, schema.BytesType, schema.TimeType, schema.JSONType, schema.UUIDType:
 	default:
 		return "", fmt.Errorf("dialect %s: unsupported column type %T", d.name, column.Type)
 	}
@@ -199,6 +227,21 @@ func (d builtin) unsignedTypeName(column schema.ColumnDef) (string, error) {
 		return "", fmt.Errorf("dialect %s: unsigned integer column %q cannot be represented: this dialect has no unsigned integer type, and rendering the column signed would narrow the values it permits", d.name, column.Name)
 	}
 	return d.unsignedInteger, nil
+}
+
+// textTypeName renders the DDL type for a TextType column. An unstated width
+// (the zero value of schema.TextType.Width) always renders this dialect's
+// plain, unbounded text type. A stated width renders VARCHAR(width) on a
+// dialect that enforces it (see the varcharText field on each builtin
+// above); on one that does not, the width is dropped and the plain text
+// type renders instead, the same way decimalTypeName below drops SQLite's
+// decimal precision and scale rather than pretend to enforce them.
+func (d builtin) textTypeName(text schema.TextType) string {
+	width, stated := text.Width.Value()
+	if !stated || !d.varcharText {
+		return d.types[schema.KindText]
+	}
+	return fmt.Sprintf("VARCHAR(%d)", width)
 }
 
 // decimalTypeName renders the DDL type for a DecimalType column. Every dialect
