@@ -1246,7 +1246,7 @@ func (statementPrinter) ExecContext(_ context.Context, query string, arguments .
 func Example_rasql_debug_query() {
 	// This example prints the SQL for a typed query without opening a database.
 	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Handle. This
-	// debug Queryer lets the example show the generated statement without a database.
+	// debug Handle lets the example show the generated statement without a database.
 	client, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
 	if err != nil {
 		fmt.Printf("failed to create rasql client: %s\n", err)
@@ -1280,7 +1280,7 @@ func Example_rasql_debug_query() {
 source: [examples/rasql_debug_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_debug_query_example_test.go)
 <!-- END INCLUDE -->
 
-A debug `Queryer` may return `nil` rows after logging; `row.Scan` treats that as an empty result rather than an error. When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `Executor`.
+A debug `Handle` may return `nil` rows after logging; `row.Scan` treats that as an empty result rather than an error. When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `Executor`.
 
 ## Next
 
