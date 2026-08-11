@@ -24,12 +24,12 @@ func Example_rasql_returning() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, defaultUsers); err != nil {
+	if err := rasql.CreateTable(ctx, db, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
 	}
@@ -48,7 +48,7 @@ func Example_rasql_returning() {
 	}
 
 	// SQL: INSERT INTO default_users (email) VALUES (?) RETURNING id, email, status (argument: "ada@example.com")
-	user, err := rasql.QueryWriteOne[defaultUserRow](ctx, client, statement)
+	user, err := rasql.QueryWriteOne[defaultUserRow](ctx, db, statement)
 	if err != nil {
 		fmt.Printf("failed to query inserted user: %s\n", err)
 		return

@@ -97,7 +97,7 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 }
 
 func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderingCase) {
-	client, err := rasql.New(database, test.dialect)
+	db, err := rasql.New(database, test.dialect)
 	require.NoError(t, err)
 	type record struct {
 		ID    int64  `rasql:"id"`
@@ -123,12 +123,12 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.CreateTable(t.Context(), client, records))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 	for _, fixture := range []record{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "grace@example.com"},
 	} {
-		_, err = rasql.Insert(t.Context(), client, records, fixture)
+		_, err = rasql.Insert(t.Context(), db, records, fixture)
 		require.NoError(t, err)
 	}
 

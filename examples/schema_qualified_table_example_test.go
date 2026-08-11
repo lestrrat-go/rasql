@@ -40,9 +40,9 @@ func Example_schema_qualified_table() {
 		return
 	}
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 
@@ -55,13 +55,13 @@ func Example_schema_qualified_table() {
 	))
 
 	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.CreateTable(ctx, client, events); err != nil {
+	if err := rasql.CreateTable(ctx, db, events); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}
 
 	// SQL: INSERT INTO audit.events (id, action) VALUES (?, ?) (arguments: 1, "created")
-	if _, err := rasql.Insert(ctx, client, events, eventRow{ID: 1, Action: "created"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, events, eventRow{ID: 1, Action: "created"}); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
 		return
 	}
@@ -72,7 +72,7 @@ func Example_schema_qualified_table() {
 		return
 	}
 	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
-	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(ctx, client)
+	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)
 		return

@@ -27,20 +27,20 @@ func Example_rasql_no_rows() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the users table, but never insert into it, so One matches no row.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 1)
-	_, err = rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, client)
+	_, err = rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, db)
 	if errors.Is(err, rasql.ErrNoRows) {
 		fmt.Println("no such user")
 	}

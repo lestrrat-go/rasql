@@ -76,19 +76,19 @@ Those fields are the reason a filter never spells a column as a string. `WhereEq
 
 [Schemas](02-schema.md) covers how to write these tables by hand, and [`rasqlgen`](06-rasqlgen.md) covers how to generate them.
 
-## Create a client
+## Create a DB
 
-A `rasql.Client` pairs a database handle with the dialect used to render SQL:
+A `rasql.DB` pairs a database handle with the dialect used to render SQL:
 
 ```go
-client, err := rasql.New(database, dialect.SQLite())
+db, err := rasql.New(database, dialect.SQLite())
 ```
 
-`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Querying](03-querying.md) shows. To start a transaction, use `rasql.NewDB` instead, which the [Transactions](04-writing.md#transactions) section covers.
+`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Querying](03-querying.md) shows. To start a transaction, call `Begin` on the resulting `DB` instead, which the [Transactions](04-writing.md#transactions) section covers.
 
 Pick the dialect that matches the database: `dialect.PostgreSQL()`, `dialect.MySQL()`, or `dialect.SQLite()`. The dialect decides how identifiers are quoted, how placeholders are numbered, how logical column types become DDL, and which syntax the renderer may use.
 
-A `Client` is a value, not a handle to close. It is safe for concurrent use whenever the `Handle` inside it is, so `*sql.DB` based clients can be shared across goroutines.
+A `DB` is a value, not a handle to close. It is safe for concurrent use whenever the `Handle` inside it is, so a `*sql.DB` based `DB` can be shared across goroutines.
 
 ## Run the first query
 
@@ -121,26 +121,26 @@ func Example_rasql_sqlite_query() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the schema described by the generated table descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert encodes UserRow's tagged fields as bound values.
-	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, client)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -169,7 +169,7 @@ The `database.SetMaxOpenConns(1)` call is a SQLite detail, not a `rasql` require
 Query methods return the construction error before iteration begins, so an invalid statement fails at the call rather than midway through a loop. When ranging over results, the sequence yields rows first and at most one error after them, which is why every example checks the error inside the loop:
 
 ```go
-rows, err := rasql.SelectFrom(users).Query(ctx, client)
+rows, err := rasql.SelectFrom(users).Query(ctx, db)
 if err != nil {
 	// The statement could not be validated or rendered.
 }

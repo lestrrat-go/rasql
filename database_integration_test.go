@@ -55,7 +55,7 @@ func TestDatabaseIntegration(t *testing.T) {
 }
 
 func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, coalesced coalescedAmounts) {
-	client, err := rasql.New(database, d)
+	db, err := rasql.New(database, d)
 	require.NoError(t, err)
 	type record struct {
 		ID     int64  `rasql:"id"`
@@ -83,17 +83,17 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.CreateTable(t.Context(), client, records))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
 	first := record{ID: 1, Active: true, Email: "ada@example.com", Amount: "19.99"}
 	second := record{ID: 2, Active: false, Email: "grace@example.com", Amount: "5.00"}
-	_, err = rasql.Insert(t.Context(), client, records, first)
+	_, err = rasql.Insert(t.Context(), db, records, first)
 	require.NoError(t, err)
-	_, err = rasql.Insert(t.Context(), client, records, second)
+	_, err = rasql.Insert(t.Context(), db, records, second)
 	require.NoError(t, err)
 
 	first.Email = "ada.lovelace@example.com"
-	_, err = rasql.Update(t.Context(), client, records, first)
+	_, err = rasql.Update(t.Context(), db, records, first)
 	require.NoError(t, err)
 
 	// PostgreSQL and MySQL both return an exact decimal in the scale its
@@ -114,11 +114,11 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	secondStored := second
 	secondStored.Amount = "5.0000"
 
-	actual, err := rasql.SelectFrom(records).WhereEqual(recordID, first.ID).One(t.Context(), client)
+	actual, err := rasql.SelectFrom(records).WhereEqual(recordID, first.ID).One(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, firstStored, actual)
 
-	all, err := rasql.SelectFrom(records).OrderAsc(recordID).All(t.Context(), client)
+	all, err := rasql.SelectFrom(records).OrderAsc(recordID).All(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, []record{firstStored, secondStored}, all)
 
@@ -137,7 +137,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	viaSubquery, err := rasql.SelectFrom(records).
 		Where(query.InSelect(recordID, activeIDs)).
 		OrderAsc(recordID).
-		All(t.Context(), client)
+		All(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, []record{firstStored}, viaSubquery)
 
@@ -153,7 +153,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	require.NoError(t, err)
 	viaLower, err := rasql.SelectFrom(records).
 		Where(query.Equal(query.Lower(scalarEmail), query.Bind(firstStored.Email))).
-		All(t.Context(), client)
+		All(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, []record{firstStored}, viaLower)
 
@@ -176,7 +176,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	viaCoalesce, err := rasql.DecodeFrom[amountRow](records).
 		Project(query.Project(recordID), query.Project(query.Coalesce(scalarAmount, query.Bind("0.0000"))).As("amount")).
 		OrderAsc(recordID).
-		All(t.Context(), client)
+		All(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, []amountRow{
 		{ID: first.ID, Amount: coalesced.first},
@@ -203,14 +203,14 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	viaNullIf, err := rasql.DecodeFrom[amountRow](records).
 		Project(query.Project(recordID), query.Project(query.Func("NULLIF", scalarAmount, query.Bind("0.0000"))).As("amount")).
 		OrderAsc(recordID).
-		All(t.Context(), client)
+		All(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, []amountRow{
 		{ID: first.ID, Amount: firstStored.Amount},
 		{ID: second.ID, Amount: secondStored.Amount},
 	}, viaNullIf)
 
-	total, err := rasql.SelectFrom(records).Count(t.Context(), client)
+	total, err := rasql.SelectFrom(records).Count(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)
 
@@ -236,11 +236,11 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	insert, err = insert.WithReturning(query.Project(recordID), query.Project(recordActive), query.Project(recordEmail), query.Project(recordAmount))
 	require.NoError(t, err)
 	if d.Supports(dialect.CapabilityReturning) {
-		inserted, err := rasql.QueryWriteOne[record](t.Context(), client, insert)
+		inserted, err := rasql.QueryWriteOne[record](t.Context(), db, insert)
 		require.NoError(t, err)
 		require.Equal(t, thirdStored, inserted)
 	} else {
-		_, err := rasql.QueryWrite(t.Context(), client, insert)
+		_, err := rasql.QueryWrite(t.Context(), db, insert)
 		require.ErrorContains(t, err, "RETURNING is not supported")
 	}
 
@@ -300,7 +300,7 @@ func TestQualifiedDDLIntegration(t *testing.T) {
 // REFERENCES "public"."..." itself renders and executes.
 func testQualifiedDDLPostgreSQL(t *testing.T) {
 	database := dbtest.PostgreSQLDB(t)
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 
 	type customerRow struct {
@@ -321,7 +321,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	// which rasql.CreateTable never states explicitly: an unqualified Schema
 	// resolves through the connection's own default, the same as before
 	// this change.
-	require.NoError(t, rasql.CreateTable(t.Context(), client, customers))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, customers))
 	defer func() {
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+customersName)
 		require.NoError(t, err)
@@ -361,16 +361,16 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), client, orders))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
 
-	_, err = rasql.Insert(t.Context(), client, customers, customerRow{ID: 1, Name: "ada"})
+	_, err = rasql.Insert(t.Context(), db, customers, customerRow{ID: 1, Name: "ada"})
 	require.NoError(t, err)
-	_, err = rasql.Insert(t.Context(), client, orders, orderRow{ID: 1, CustomerID: 1})
+	_, err = rasql.Insert(t.Context(), db, orders, orderRow{ID: 1, CustomerID: 1})
 	require.NoError(t, err)
 
 	ordersID, err := orders.Column("id")
 	require.NoError(t, err)
-	order, err := rasql.SelectFrom(orders).WhereEqual(ordersID, int64(1)).One(t.Context(), client)
+	order, err := rasql.SelectFrom(orders).WhereEqual(ordersID, int64(1)).One(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, orderRow{ID: 1, CustomerID: 1}, order)
 }
@@ -383,7 +383,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 // test only touches objects it created.
 func testQualifiedDDLMySQL(t *testing.T) {
 	database := dbtest.MySQLDB(t)
-	client, err := rasql.New(database, dialect.MySQL())
+	db, err := rasql.New(database, dialect.MySQL())
 	require.NoError(t, err)
 
 	schemaName := dbtest.UniqueName(t, "rasql_qualified_schema")
@@ -422,7 +422,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), client, events))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, events))
 
 	// Both objects must live in schemaName rather than in the connection's
 	// own default database, which is what the qualified DDL is for. The
@@ -437,12 +437,12 @@ func testQualifiedDDLMySQL(t *testing.T) {
 	require.Equal(t, schemaName, indexSchema)
 	require.Equal(t, eventsName, indexTable)
 
-	_, err = rasql.Insert(t.Context(), client, events, eventRow{ID: 1, ActorID: 7, Action: "created"})
+	_, err = rasql.Insert(t.Context(), db, events, eventRow{ID: 1, ActorID: 7, Action: "created"})
 	require.NoError(t, err)
 
 	eventID, err := events.Column("id")
 	require.NoError(t, err)
-	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(t.Context(), client)
+	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, eventRow{ID: 1, ActorID: 7, Action: "created"}, event)
 }

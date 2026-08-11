@@ -26,10 +26,10 @@ func Example_rasql_scalar_function() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// A typed descriptor makes members usable with rasql.Insert. Nickname is
@@ -50,7 +50,7 @@ func Example_rasql_scalar_function() {
 		schema.Text("nickname", schema.Nullable()),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.CreateTable(ctx, client, members); err != nil {
+	if err := rasql.CreateTable(ctx, db, members); err != nil {
 		fmt.Printf("failed to create members table: %s\n", err)
 		return
 	}
@@ -79,7 +79,7 @@ func Example_rasql_scalar_function() {
 		{ID: 1, Email: "Ada@Example.com", Nickname: &nick},
 		{ID: 2, Email: "bob@example.com", Nickname: nil},
 	} {
-		if _, err := rasql.Insert(ctx, client, members, member); err != nil {
+		if _, err := rasql.Insert(ctx, db, members, member); err != nil {
 			fmt.Printf("failed to insert member: %s\n", err)
 			return
 		}
@@ -91,7 +91,7 @@ func Example_rasql_scalar_function() {
 	byEmail, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query member by email: %s\n", err)
 		return
@@ -110,7 +110,7 @@ func Example_rasql_scalar_function() {
 	names, err := rasql.DecodeFrom[memberName](members).
 		Project(query.Project(id), query.Project(query.Coalesce(nickname, email)).As("name")).
 		OrderAsc(id).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query member names: %s\n", err)
 		return

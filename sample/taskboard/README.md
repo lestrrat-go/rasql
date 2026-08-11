@@ -2,7 +2,7 @@
 
 This standalone module runs a small SQLite Taskboard web application. The application only opens and queries its database. Run its checked-in SQLite SQL migrations with `rasqlmigrate` before starting it.
 
-- `cmd/taskboard` opens the SQLite database, then wires the rasql client and HTTP server.
+- `cmd/taskboard` opens the SQLite database, then wires the rasql db and HTTP server.
 - `migrations` holds the ordered schema changes applied before the application starts.
 - `internal/store` owns schema descriptors and persistence through rasql.
 - `internal/taskboard` owns the taskboard view model.

@@ -264,7 +264,7 @@ func TestAs(t *testing.T) {
 		statement, err := rasql.SelectFrom(employees).
 			Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
 			OrderAsc(manager.Email).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(
 			t,
@@ -282,7 +282,7 @@ func TestAs(t *testing.T) {
 
 		statement, err := rasql.SelectFrom(employees).
 			Join(rasql.LeftJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, statement.SQL(), `LEFT JOIN "staff" AS "manager" ON ("staff"."manager_id" = "manager"."id")`)
 	})
@@ -292,7 +292,7 @@ func TestTypedSelectBuilderRejectsForeignColumn(t *testing.T) {
 	contractorID, err := contractors(t).Column("id")
 	require.NoError(t, err)
 
-	_, err = rasql.SelectFrom(staff(t)).WhereEqual(contractorID, 1).Build(clientForBuild(t).Dialect())
+	_, err = rasql.SelectFrom(staff(t)).WhereEqual(contractorID, 1).Build(dbForBuild(t).Dialect())
 	require.ErrorContains(t, err, "contractors")
 }
 
@@ -318,7 +318,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			name:          "SelectFrom",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.SelectFrom[staffRow](table).Build(clientForBuild(t).Dialect())
+				_, err := rasql.SelectFrom[staffRow](table).Build(dbForBuild(t).Dialect())
 				return err
 			},
 		},
@@ -326,7 +326,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			name:          "DecodeFrom",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.DecodeFrom[staffRow, staffRow](table).Build(clientForBuild(t).Dialect())
+				_, err := rasql.DecodeFrom[staffRow, staffRow](table).Build(dbForBuild(t).Dialect())
 				return err
 			},
 		},
@@ -334,7 +334,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			name:          "DeleteFrom",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.DeleteFrom[staffRow](table).Build(clientForBuild(t).Dialect())
+				_, err := rasql.DeleteFrom[staffRow](table).Build(dbForBuild(t).Dialect())
 				return err
 			},
 		},
@@ -342,7 +342,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			name:          "Insert",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.Insert[staffRow](t.Context(), clientForBuild(t), table, staffRow{})
+				_, err := rasql.Insert[staffRow](t.Context(), dbForBuild(t), table, staffRow{})
 				return err
 			},
 		},
@@ -350,7 +350,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			name:          "InsertWithOptions",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.InsertWithOptions[staffRow](t.Context(), clientForBuild(t), table, staffRow{})
+				_, err := rasql.InsertWithOptions[staffRow](t.Context(), dbForBuild(t), table, staffRow{})
 				return err
 			},
 		},
@@ -358,7 +358,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			name:          "Update",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.Update[staffRow](t.Context(), clientForBuild(t), table, staffRow{})
+				_, err := rasql.Update[staffRow](t.Context(), dbForBuild(t), table, staffRow{})
 				return err
 			},
 		},
@@ -366,7 +366,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			name:          "Create",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				return rasql.CreateTable[staffRow](t.Context(), clientForBuild(t), table)
+				return rasql.CreateTable[staffRow](t.Context(), dbForBuild(t), table)
 			},
 		},
 		{
@@ -384,7 +384,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 				employees := staff(t)
 				_, err := rasql.SelectFrom(employees).
 					Join(rasql.InnerJoin[staffRow](table, query.Equal(employees.ID, query.Bind(1)))).
-					Build(clientForBuild(t).Dialect())
+					Build(dbForBuild(t).Dialect())
 				return err
 			},
 		},
@@ -395,7 +395,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 				employees := staff(t)
 				_, err := rasql.SelectFrom(employees).
 					Join(rasql.LeftJoin[staffRow](table, query.Equal(employees.ID, query.Bind(1)))).
-					Build(clientForBuild(t).Dialect())
+					Build(dbForBuild(t).Dialect())
 				return err
 			},
 		},
@@ -434,18 +434,18 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 	t.Helper()
 
 	t.Run(name, func(t *testing.T) {
-		selected, err := rasql.SelectFrom[staffRow](table).Build(clientForBuild(t).Dialect())
+		selected, err := rasql.SelectFrom[staffRow](table).Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, selected.SQL(), `FROM "staff"`)
 
 		// DecodeFrom projects nothing by default, so this one names a column.
 		email, err := table.Column("email")
 		require.NoError(t, err)
-		decoded, err := rasql.DecodeFrom[staffRow, staffRow](table).Project(query.Project(email)).Build(clientForBuild(t).Dialect())
+		decoded, err := rasql.DecodeFrom[staffRow, staffRow](table).Project(query.Project(email)).Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, decoded.SQL(), `FROM "staff"`)
 
-		deleted, err := rasql.DeleteFrom[staffRow](table).AllowAll().Build(clientForBuild(t).Dialect())
+		deleted, err := rasql.DeleteFrom[staffRow](table).AllowAll().Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, deleted.SQL(), `DELETE FROM "staff"`)
 
@@ -461,13 +461,13 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 
 		joined, err := rasql.SelectFrom(others).
 			Join(rasql.InnerJoin[staffRow](table, query.Equal(othersID, query.Bind(1)))).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, joined.SQL(), `INNER JOIN "staff"`)
 
 		left, err := rasql.SelectFrom(others).
 			Join(rasql.LeftJoin[staffRow](table, query.Equal(othersID, query.Bind(1)))).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, left.SQL(), `LEFT JOIN "staff"`)
 	})
@@ -524,7 +524,7 @@ func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
 		_, _ = rasql.As[staffRow](buggy, "alias")
 	})
 	require.PanicsWithValue(t, staffTableBug, func() {
-		_, _ = rasql.SelectFrom[staffRow](buggy).Build(clientForBuild(t).Dialect())
+		_, _ = rasql.SelectFrom[staffRow](buggy).Build(dbForBuild(t).Dialect())
 	})
 
 	// The nil-dereference subclass needs its own coverage: a string panic and a
@@ -540,7 +540,7 @@ func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
 		_, _ = rasql.As[staffRow](buggyNilDeref, "alias")
 	})
 	requirePanicsWithNilDereference(t, func() {
-		_, _ = rasql.SelectFrom[staffRow](buggyNilDeref).Build(clientForBuild(t).Dialect())
+		_, _ = rasql.SelectFrom[staffRow](buggyNilDeref).Build(dbForBuild(t).Dialect())
 	})
 }
 
@@ -558,7 +558,7 @@ func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
 
 	t.Run("SelectFrom", func(t *testing.T) {
 		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.SelectFrom[staffRow](buggy).Build(clientForBuild(t).Dialect())
+			_, _ = rasql.SelectFrom[staffRow](buggy).Build(dbForBuild(t).Dialect())
 		})
 	})
 
@@ -570,7 +570,7 @@ func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
 
 	t.Run("DecodeFrom", func(t *testing.T) {
 		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.DecodeFrom[staffRow, staffRow](buggy).Build(clientForBuild(t).Dialect())
+			_, _ = rasql.DecodeFrom[staffRow, staffRow](buggy).Build(dbForBuild(t).Dialect())
 		})
 	})
 }
@@ -601,7 +601,7 @@ func TestTableGuardDoesNotRelabelAFabricatedNilDereference(t *testing.T) {
 
 	t.Run("SelectFrom", func(t *testing.T) {
 		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
-			_, _ = rasql.SelectFrom[staffRow](buggy).Build(clientForBuild(t).Dialect())
+			_, _ = rasql.SelectFrom[staffRow](buggy).Build(dbForBuild(t).Dialect())
 		})
 	})
 }

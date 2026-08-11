@@ -26,19 +26,19 @@ func Example_rasql_delete() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	for id, email := range map[int64]string{1: "ada@example.com", 2: "grace@example.com", 3: "edsger@example.com"} {
-		if _, err := rasql.Insert(ctx, client, users, UserRow{ID: id, Email: email}); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, UserRow{ID: id, Email: email}); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -46,7 +46,7 @@ func Example_rasql_delete() {
 
 	// WhereEqual takes a column of the target table and binds the value.
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, client)
+	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -60,7 +60,7 @@ func Example_rasql_delete() {
 
 	// Where takes any predicate built through the query package.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx, client)
+	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return
@@ -74,13 +74,13 @@ func Example_rasql_delete() {
 
 	// A builder with no predicate is rejected, so a dropped Where cannot become
 	// a full-table delete by accident.
-	if _, err := rasql.DeleteFrom(users).Build(client.Dialect()); err != nil {
+	if _, err := rasql.DeleteFrom(users).Build(db.Dialect()); err != nil {
 		fmt.Println(err)
 	}
 
 	// AllowAll states the full-table delete. Build renders it without executing it.
 	// SQL: DELETE FROM users
-	statement, err := rasql.DeleteFrom(users).AllowAll().Build(client.Dialect())
+	statement, err := rasql.DeleteFrom(users).AllowAll().Build(db.Dialect())
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return

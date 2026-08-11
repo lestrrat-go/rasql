@@ -201,10 +201,10 @@ import (
 	"github.com/lestrrat-go/rasql"
 )
 
-func Rejected(ctx context.Context, client rasql.Client) {
+func Rejected(ctx context.Context, db rasql.DB) {
 	users := generated.Users()
-	_, _ = rasql.SelectFrom(users).WhereEqual(users.Emial, 42).One(ctx, client)
-	_, _ = rasql.SelectFrom(users).WhereEqual("id", 42).One(ctx, client)
+	_, _ = rasql.SelectFrom(users).WhereEqual(users.Emial, 42).One(ctx, db)
+	_, _ = rasql.SelectFrom(users).WhereEqual("id", 42).One(ctx, db)
 }
 `
 
@@ -352,27 +352,37 @@ import (
 	"testing"
 
 	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/render"
 	"github.com/stretchr/testify/require"
 )
 
-type recordingExecutor struct {
-	statement render.Statement
+// recordingHandle is a rasql.Handle that keeps the SQL it was asked to run and
+// refuses to run it, so a generated Load can be checked against the statement
+// it renders without a database behind it.
+type recordingHandle struct {
+	query string
 }
 
-func (e *recordingExecutor) Dialect() dialect.Dialect {
-	return dialect.PostgreSQL()
-}
-
-func (e *recordingExecutor) QueryRendered(_ context.Context, statement render.Statement) (*sql.Rows, error) {
-	e.statement = statement
+func (h *recordingHandle) QueryContext(_ context.Context, statement string, _ ...any) (*sql.Rows, error) {
+	h.query = statement
 	return nil, errors.New("query recorded")
 }
 
-func (e *recordingExecutor) ExecRendered(_ context.Context, _ render.Statement) (sql.Result, error) {
+func (h *recordingHandle) ExecContext(_ context.Context, _ string, _ ...any) (sql.Result, error) {
 	return nil, errors.New("exec not supported")
+}
+
+// recordingDB pairs a recordingHandle with the dialect the generated fixtures
+// are rendered for.
+func recordingDB(t *testing.T) (rasql.DB, *recordingHandle) {
+	t.Helper()
+
+	handle := &recordingHandle{}
+	db, err := rasql.New(handle, dialect.PostgreSQL())
+	require.NoError(t, err)
+	return db, handle
 }
 
 func TestGeneratedRelationships(t *testing.T) {
@@ -389,10 +399,10 @@ func TestGeneratedRelationships(t *testing.T) {
 	require.Equal(t, query.JoinInner, belongsTo.Join().Type())
 	require.Equal(t, "tenant", belongsTo.Join().Source().Schema())
 
-	belongsToExecutor := &recordingExecutor{}
-	_, err := belongsTo.Load(t.Context(), belongsToExecutor, []generated.OrdersRow{{UserID: 7}})
-	require.EqualError(t, err, "query recorded")
-	require.Equal(t, "SELECT \"tenant\".\"users\".\"id\" FROM \"tenant\".\"users\" WHERE (\"tenant\".\"users\".\"id\" IN ($1))", belongsToExecutor.statement.SQL())
+	belongsToDB, belongsToHandle := recordingDB(t)
+	_, err := belongsTo.Load(t.Context(), belongsToDB, []generated.OrdersRow{{UserID: 7}})
+	require.ErrorContains(t, err, "query recorded")
+	require.Equal(t, "SELECT \"tenant\".\"users\".\"id\" FROM \"tenant\".\"users\" WHERE (\"tenant\".\"users\".\"id\" IN ($1))", belongsToHandle.query)
 
 	hasMany := users.Orders()
 	require.Equal(t, "id", hasMany.ParentKey.Name())
@@ -400,10 +410,10 @@ func TestGeneratedRelationships(t *testing.T) {
 	require.Equal(t, query.JoinInner, hasMany.Join().Type())
 	require.Equal(t, "tenant", hasMany.Join().Source().Schema())
 
-	hasManyExecutor := &recordingExecutor{}
-	_, err = hasMany.Load(t.Context(), hasManyExecutor, []generated.UsersRow{{ID: 7}})
-	require.EqualError(t, err, "query recorded")
-	require.Equal(t, "SELECT \"tenant\".\"orders\".\"id\", \"tenant\".\"orders\".\"user_id\" FROM \"tenant\".\"orders\" WHERE (\"tenant\".\"orders\".\"user_id\" IN ($1))", hasManyExecutor.statement.SQL())
+	hasManyDB, hasManyHandle := recordingDB(t)
+	_, err = hasMany.Load(t.Context(), hasManyDB, []generated.UsersRow{{ID: 7}})
+	require.ErrorContains(t, err, "query recorded")
+	require.Equal(t, "SELECT \"tenant\".\"orders\".\"id\", \"tenant\".\"orders\".\"user_id\" FROM \"tenant\".\"orders\" WHERE (\"tenant\".\"orders\".\"user_id\" IN ($1))", hasManyHandle.query)
 
 	aliasedUsers, err := users.As("u")
 	require.NoError(t, err)
@@ -521,9 +531,9 @@ func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
 	require.Contains(t, text, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
 	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Join() query.Join")
-	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
 	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Join() query.Join")
-	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
 }
 
 func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
@@ -583,7 +593,7 @@ func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
 	text := string(source)
 	require.Contains(t, text, "func (t EmployeesTable) Manager() EmployeesTableManagerRelation")
 	require.Contains(t, text, "func (t EmployeesTable) Employees() EmployeesTableEmployeesRelation")
-	require.Contains(t, text, "func (r EmployeesTableEmployeesRelation) Load(ctx context.Context, x rasql.Executor, parents []EmployeesRow)")
+	require.Contains(t, text, "func (r EmployeesTableEmployeesRelation) Load(ctx context.Context, db rasql.DB, parents []EmployeesRow)")
 }
 
 func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
@@ -645,7 +655,7 @@ func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
 	require.NoError(t, err)
 	text := string(source)
 	require.Contains(t, text, "func (t UsersTable) UserAs() UsersTableUserAsRelation")
-	require.Contains(t, text, "func (r UsersTableUserAsRelation) Load(ctx context.Context, x rasql.Executor, parents []UsersRow)")
+	require.Contains(t, text, "func (r UsersTableUserAsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
 }
 
 func generatedMethodBlock(t *testing.T, source, signature string) string {
@@ -695,8 +705,8 @@ func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
 		"func (t MembershipsTable) ShippingUser() MembershipsTableShippingUserRelation",
 		"func (t UsersTable) Memberships() UsersTableMembershipsRelation",
 		"func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation",
-		"func (r MembershipsTableBillingUserRelation) Load(ctx context.Context, x rasql.Executor, children []MembershipsRow)",
-		"func (r MembershipsTableShippingUserRelation) Load(ctx context.Context, x rasql.Executor, children []MembershipsRow)",
+		"func (r MembershipsTableBillingUserRelation) Load(ctx context.Context, db rasql.DB, children []MembershipsRow)",
+		"func (r MembershipsTableShippingUserRelation) Load(ctx context.Context, db rasql.DB, children []MembershipsRow)",
 	} {
 		require.Contains(t, text, expected)
 	}

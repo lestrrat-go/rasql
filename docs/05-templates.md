@@ -34,7 +34,7 @@ func Example_query_static() {
 		return
 	}
 	// Bind requires each named value exactly once and returns a precompiled,
-	// parameterized statement that rasql.Client can execute directly.
+	// parameterized statement that rasql.DB can execute directly.
 	statement, err := compiled.Bind(map[string]any{"email": "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to bind template: %s\n", err)
@@ -62,7 +62,7 @@ The three steps are separate because each one has a different lifetime.
 
 ## Execute a bound statement
 
-A bound statement is the same `render.Statement` the builders produce, so the same client runs it.
+A bound statement is the same `render.Statement` the builders produce, so the same `DB` runs it.
 
 <!-- INCLUDE(examples/rasql_static_template_example_test.go) -->
 ```go
@@ -81,7 +81,7 @@ import (
 )
 
 func Example_rasql_static_template() {
-	// This example binds a static template and executes it through rasql.Client.
+	// This example binds a static template and executes it through rasql.DB.
 	// users and UserRow are declared in query_example_tables_test.go with the
 	// shape rasqlgen emits; an application that generated into package store
 	// would write store.Users() and store.UsersRow instead.
@@ -95,19 +95,19 @@ func Example_rasql_static_template() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert a row that the bound template will find.
-	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -133,7 +133,7 @@ func Example_rasql_static_template() {
 
 	// SQL: SELECT id, email FROM users WHERE email = ? (argument: "ada@example.com")
 	// QueryRendered runs the template statement; row.Scan turns its rows into a rangeable sequence.
-	sqlRows, err := client.QueryRendered(ctx, statement)
+	sqlRows, err := db.QueryRendered(ctx, statement)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
@@ -193,12 +193,12 @@ func Example_rasql_typed_static_template() {
 	defer func() { _ = database.Close() }()
 	database.SetMaxOpenConns(1)
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -207,7 +207,7 @@ func Example_rasql_typed_static_template() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -233,7 +233,7 @@ func Example_rasql_typed_static_template() {
 		return
 	}
 	// SQL: WITH ranked_users AS (SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank FROM users) SELECT id, email, rank FROM ranked_users WHERE id >= ? ORDER BY rank (argument: 2)
-	rows, err := rasql.QueryRenderedAll[rankedUser](ctx, client, statement)
+	rows, err := rasql.QueryRenderedAll[rankedUser](ctx, db, statement)
 	if err != nil {
 		fmt.Printf("failed to query ranked users: %s\n", err)
 		return

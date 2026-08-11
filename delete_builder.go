@@ -13,7 +13,7 @@ import (
 )
 
 // DeleteBuilder builds a DELETE statement through an immutable fluent API and
-// executes it against an Executor at its terminal call.
+// executes it against a DB at its terminal call.
 // Build and Exec reject a builder that carries no predicate, so a dropped Where cannot
 // become a full-table delete. AllowAll states the full-table delete when that is the intent.
 type DeleteBuilder struct {
@@ -123,15 +123,15 @@ func (b DeleteBuilder) Build(d dialect.Dialect) (render.Statement, error) {
 }
 
 // Exec builds the statement and executes it.
-func (b DeleteBuilder) Exec(ctx context.Context, x Executor) (sql.Result, error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func (b DeleteBuilder) Exec(ctx context.Context, db DB) (sql.Result, error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
 	statement, err := b.statement()
 	if err != nil {
 		return nil, err
 	}
-	return Exec(ctx, x, statement)
+	return Exec(ctx, db, statement)
 }
 
 // Returning adds projections to an existing delete RETURNING builder.
@@ -158,36 +158,36 @@ func (b DeleteReturningBuilder) Build(d dialect.Dialect) (render.Statement, erro
 
 // Query runs the delete and returns its RETURNING rows as a rangeable sequence
 // of dynamic rows. The statement runs when the sequence is first ranged.
-func (b DeleteReturningBuilder) Query(ctx context.Context, x Executor) (iter.Seq2[row.Dynamic, error], error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func (b DeleteReturningBuilder) Query(ctx context.Context, db DB) (iter.Seq2[row.Dynamic, error], error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
 	statement, err := b.statement()
 	if err != nil {
 		return nil, err
 	}
-	return QueryWrite(ctx, x, statement)
+	return QueryWrite(ctx, db, statement)
 }
 
 // QueryDeleteAll runs a fluent delete with RETURNING and decodes every returned
 // row as T.
-func QueryDeleteAll[T any](ctx context.Context, x Executor, b DeleteReturningBuilder) ([]T, error) {
+func QueryDeleteAll[T any](ctx context.Context, db DB, b DeleteReturningBuilder) ([]T, error) {
 	statement, err := b.statement()
 	if err != nil {
 		return nil, err
 	}
-	return QueryWriteAll[T](ctx, x, statement)
+	return QueryWriteAll[T](ctx, db, statement)
 }
 
 // QueryDeleteOne runs a fluent delete with RETURNING and decodes exactly one
 // returned row as T.
-func QueryDeleteOne[T any](ctx context.Context, x Executor, b DeleteReturningBuilder) (T, error) {
+func QueryDeleteOne[T any](ctx context.Context, db DB, b DeleteReturningBuilder) (T, error) {
 	var zero T
 	statement, err := b.statement()
 	if err != nil {
 		return zero, err
 	}
-	return QueryWriteOne[T](ctx, x, statement)
+	return QueryWriteOne[T](ctx, db, statement)
 }
 
 func (b DeleteReturningBuilder) statement() (query.Delete, error) {

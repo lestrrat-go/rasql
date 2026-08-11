@@ -25,10 +25,10 @@ func Example_rasql_group_by() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 
@@ -47,7 +47,7 @@ func Example_rasql_group_by() {
 		schema.Text("status"),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.CreateTable(ctx, client, tasks); err != nil {
+	if err := rasql.CreateTable(ctx, db, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
@@ -58,7 +58,7 @@ func Example_rasql_group_by() {
 		{ID: 4, Status: "done"},
 		{ID: 5, Status: "done"},
 	} {
-		if _, err := rasql.Insert(ctx, client, tasks, task); err != nil {
+		if _, err := rasql.Insert(ctx, db, tasks, task); err != nil {
 			fmt.Printf("failed to insert task: %s\n", err)
 			return
 		}
@@ -83,7 +83,7 @@ func Example_rasql_group_by() {
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Order(query.Asc(status)).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)
 		return

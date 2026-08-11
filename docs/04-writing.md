@@ -9,12 +9,12 @@ Every write operation, predicate, and statement constructor is listed in the [op
 `rasql.CreateTable` renders a table descriptor as DDL and executes it, then creates its indexes.
 
 ```go
-if err := rasql.CreateTable(ctx, client, users); err != nil {
+if err := rasql.CreateTable(ctx, db, users); err != nil {
 	return err
 }
 ```
 
-Each statement runs on its own. To create several tables atomically, run `CreateTable` through a `rasql.Tx` from `DB.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
+Each statement runs on its own. To create several tables atomically, run `CreateTable` through the `rasql.DB` returned by `DB.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
 
 A descriptor that names a [`Schema`](02-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.CreateTable` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `CreateTable` fails with the server's own error.
 
@@ -53,21 +53,21 @@ func Example_rasql_insert() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
 	// Insert uses the tagged fields in UserRow as values for the users table.
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 42, "ada@example.com")
-	result, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"})
+	result, err := rasql.Insert(ctx, db, users, UserRow{ID: 42, Email: "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -175,25 +175,25 @@ func Example_rasql_insert_defaults() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, defaultUsers); err != nil {
+	if err := rasql.CreateTable(ctx, db, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
 	}
 
 	// Name each database-assigned column. Email remains an explicit empty string.
 	// SQL: INSERT INTO default_users (email) VALUES (?) (argument: "")
-	if _, err := rasql.InsertWithOptions(ctx, client, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
+	if _, err := rasql.InsertWithOptions(ctx, db, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
 		fmt.Printf("failed to insert default user: %s\n", err)
 		return
 	}
 
 	// SQL: SELECT default_users.id, default_users.email, default_users.status FROM default_users WHERE default_users.id = ? (argument: 1)
-	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx, client)
+	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query default user: %s\n", err)
 		return
@@ -240,32 +240,32 @@ func Example_rasql_update() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert one row so the update has a persistent target.
-	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 	// Update matches the row's primary key and writes its non-key fields.
 	// SQL: UPDATE users SET email = ? WHERE id = ? (arguments: "grace@example.com", 42)
-	if _, err := rasql.Update(ctx, client, users, UserRow{ID: 42, Email: "grace@example.com"}); err != nil {
+	if _, err := rasql.Update(ctx, db, users, UserRow{ID: 42, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}
 
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, client)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
@@ -321,19 +321,19 @@ func Example_rasql_delete() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	for id, email := range map[int64]string{1: "ada@example.com", 2: "grace@example.com", 3: "edsger@example.com"} {
-		if _, err := rasql.Insert(ctx, client, users, UserRow{ID: id, Email: email}); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, UserRow{ID: id, Email: email}); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -341,7 +341,7 @@ func Example_rasql_delete() {
 
 	// WhereEqual takes a column of the target table and binds the value.
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, client)
+	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -355,7 +355,7 @@ func Example_rasql_delete() {
 
 	// Where takes any predicate built through the query package.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx, client)
+	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return
@@ -369,13 +369,13 @@ func Example_rasql_delete() {
 
 	// A builder with no predicate is rejected, so a dropped Where cannot become
 	// a full-table delete by accident.
-	if _, err := rasql.DeleteFrom(users).Build(client.Dialect()); err != nil {
+	if _, err := rasql.DeleteFrom(users).Build(db.Dialect()); err != nil {
 		fmt.Println(err)
 	}
 
 	// AllowAll states the full-table delete. Build renders it without executing it.
 	// SQL: DELETE FROM users
-	statement, err := rasql.DeleteFrom(users).AllowAll().Build(client.Dialect())
+	statement, err := rasql.DeleteFrom(users).AllowAll().Build(db.Dialect())
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -400,7 +400,7 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 
 `NewUpdate` and `NewDelete` accept a missing predicate while a statement is being assembled, but rendering and execution reject that shape unless the intent is explicit. Call `statement.AllowAll()` and use the returned statement when every row should be changed. A predicate and `AllowAll` cannot be combined.
 
-`NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through a `rasql.Tx` from `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
+`NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
 ```go
 statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email, query.Bind("ada@example.com")))
@@ -411,7 +411,7 @@ statement, err = statement.WithWhere(query.LessThan(users.ID, query.Bind(100)))
 if err != nil {
 	return err
 }
-result, err := rasql.Exec(ctx, client, statement)
+result, err := rasql.Exec(ctx, db, statement)
 ```
 
 Each `With…` method returns a new validated statement rather than changing the one it was called on, matching the immutable style of the select builders. `NewUpsert` accepts an explicit conflict target the same way; check `dialect.CapabilityConflictTarget` before relying on it, since MySQL lacks it and rejects a statement that sets one.
@@ -462,12 +462,12 @@ func Example_rasql_returning() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, defaultUsers); err != nil {
+	if err := rasql.CreateTable(ctx, db, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
 	}
@@ -486,7 +486,7 @@ func Example_rasql_returning() {
 	}
 
 	// SQL: INSERT INTO default_users (email) VALUES (?) RETURNING id, email, status (argument: "ada@example.com")
-	user, err := rasql.QueryWriteOne[defaultUserRow](ctx, client, statement)
+	user, err := rasql.QueryWriteOne[defaultUserRow](ctx, db, statement)
 	if err != nil {
 		fmt.Printf("failed to query inserted user: %s\n", err)
 		return
@@ -509,7 +509,7 @@ builder := rasql.DeleteFrom(users).
 	WhereEqual(users.ID, 42).
 	Returning(query.Project(users.ID), query.Project(users.Email))
 
-rows, err := builder.Query(ctx, client)
+rows, err := builder.Query(ctx, db)
 ```
 
 `Query` returns `row.Dynamic` values. `QueryDeleteAll[T]` and `QueryDeleteOne[T]`
@@ -521,12 +521,12 @@ builder := rasql.DeleteFrom(users).
 	WhereEqual(users.ID, 42).
 	Returning(query.Project(users.ID), query.Project(users.Email))
 
-deleted, err := rasql.QueryDeleteOne[UserRow](ctx, client, builder)
+deleted, err := rasql.QueryDeleteOne[UserRow](ctx, db, builder)
 ```
 
 A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result.LastInsertId()` from `Exec` instead.
 
-`Client.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](05-templates.md) is executed.
+`DB.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](05-templates.md) is executed.
 
 ## Operational hooks
 
@@ -544,23 +544,23 @@ policy := rasql.HookFunc{
 	},
 }
 
-client, err = client.WithHooks(policy)
+db, err = db.WithHooks(policy)
 if err != nil {
 	// Handle invalid hook configuration.
 }
 ```
 
-Pass hooks to `rasql.New` or `rasql.NewDB`, or add them with `Client.WithHooks` or `DB.WithHooks`. A transaction started by `DB.Begin` inherits every hook already registered on that `DB`, then appends any hooks passed to `Begin` itself. A policy hook registered on a `DB` therefore also runs for operations inside transactions started from it, not just for calls made directly through the `DB`. Add hooks scoped to only the transaction with `Tx.WithHooks`. These methods return the same concrete `Client`, `DB`, or `Tx` value, so transaction ownership and explicit `Commit` or `Rollback` remain visible.
+Pass hooks to `rasql.New`, or add them with `DB.WithHooks`. A transaction started by `DB.Begin` inherits every hook already registered on that `DB`, then appends any hooks passed to `Begin` itself. A policy hook registered on a `DB` therefore also runs for operations inside transactions started from it, not just for calls made directly through the `DB`. Add hooks scoped to only the transaction by passing them to `Begin`, or by calling `WithHooks` on the `DB` it returns. `WithHooks` returns the same concrete `DB` value, so transaction ownership and explicit `Commit` or `Rollback` remain visible.
 
-Hooks cover calls through `Client` and `Tx`, including the high-level builders and static rendered statements. They do not wrap `Begin`, `Commit`, `Rollback`, direct `database/sql` calls, or the migration and inspection packages, which use their own database handles. Hooks are synchronous and do not add retries, tracing spans, tenant filters, or automatic redaction; applications must implement those policies in their hooks or at their database boundary.
+Hooks cover calls through `DB`, including transactions, the high-level builders, and static rendered statements. They do not wrap `Begin`, `Commit`, `Rollback`, direct `database/sql` calls, or the migration and inspection packages, which use their own database handles. Hooks are synchronous and do not add retries, tracing spans, tenant filters, or automatic redaction; applications must implement those policies in their hooks or at their database boundary.
 
 ## Transactions
 
-`rasql.NewDB` takes a `rasql.Beginner` — anything that is also a `rasql.Handle` and can start a transaction, which `*sql.DB` and `*sql.Conn` both satisfy — and a dialect, and returns a `rasql.DB`. `DB.Begin` takes `*sql.TxOptions` and optional hooks, which may be omitted, and starts a transaction on the same handle and dialect the `DB` was built from. It returns a `rasql.Tx`, which is an `Executor` like `Client` and `DB`, so every builder terminal and every free function that takes an `Executor` — `rasql.Insert`, `rasql.Update`, `rasql.CreateTable`, and the rest — accepts it in place of `client`.
+A transaction is not a separate type. `DB.Begin` takes `*sql.TxOptions` and optional hooks, which may be omitted, starts a transaction on the same handle and dialect the `DB` was built from, and returns another `rasql.DB` bound to it. That returned `DB` is a transaction, so every builder terminal and every free function that takes a `rasql.DB` — `rasql.Insert`, `rasql.Update`, `rasql.CreateTable`, and the rest — accepts it exactly as it accepts `db`, because both values share the one `rasql.DB` type.
 
-The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation.
+The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation. Calling `Commit` or `Rollback` on a `DB` that is not a transaction returns an error rather than being a compile-time mistake, since one concrete type now covers both cases.
 
-A transaction still cannot be nested. Neither `Tx` nor `Client` has a `Begin` method, and `*sql.Tx` has no `BeginTx`, so a `Tx` does not satisfy `rasql.Beginner` and cannot be passed to `rasql.NewDB` in the first place.
+A transaction still cannot be nested: calling `Begin` on a `DB` that is already a transaction returns an error instead of opening a savepoint. An application that already holds a native `*sql.Tx` can hand it straight to `rasql.New` instead of calling `Begin`; the resulting `DB` is a transaction the same way one returned by `Begin` is.
 
 <!-- INCLUDE(examples/rasql_transaction_example_test.go) -->
 ```go
@@ -592,9 +592,8 @@ func Example_rasql_transaction() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A DB couples a database handle with the dialect used to render SQL, and
-	// can also start transactions on that same handle.
-	db, err := rasql.NewDB(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
@@ -605,7 +604,9 @@ func Example_rasql_transaction() {
 		return
 	}
 
-	// db.Begin starts a transaction on the same handle db was built from.
+	// db.Begin starts a transaction on the same handle and returns another DB
+	// bound to it. There is no separate transaction type to carry around: tx is
+	// a DB, so everything below takes it exactly as it takes db.
 	tx, err := db.Begin(ctx, nil)
 	if err != nil {
 		fmt.Printf("failed to begin transaction: %s\n", err)
