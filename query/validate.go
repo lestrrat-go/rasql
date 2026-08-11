@@ -69,11 +69,28 @@ type expressionContext struct {
 	allowsSubquery bool
 	// aggregateDepth counts the aggregate calls the walk is currently inside.
 	aggregateDepth int
+	// rowValue reports whether the expression sits in a VALUES row of an
+	// INSERT statement. Such a row is evaluated before any row exists to read
+	// from, so a ColumnRef naming a source this context already carries (the
+	// INSERT's own target table) is refused with a message of its own rather
+	// than the generic "outside the statement" one, which would otherwise stay
+	// silent about the real problem: PostgreSQL and SQLite refuse the
+	// reference outright, and MySQL accepts it but resolves it to whatever row
+	// already exists, silently writing the wrong data.
+	rowValue bool
 }
 
 // clauseContext returns a context for a clause that must not call an aggregate.
 func clauseContext(sources map[string]struct{}, clause string) expressionContext {
 	return expressionContext{sources: sources, clause: clause}
+}
+
+// rowValueContext returns a context for a VALUES row of an INSERT statement.
+// sources still carries the target table so a reference to another table
+// keeps reporting the "outside the statement" error, but a reference to the
+// target table itself is refused with rowValue's dedicated message instead.
+func rowValueContext(sources map[string]struct{}, clause string) expressionContext {
+	return expressionContext{sources: sources, clause: clause, rowValue: true}
 }
 
 // aggregateClauseContext returns a context for a clause that may call an
@@ -137,6 +154,15 @@ func validateSelectClauseExpression(expression Expression, sources map[string]st
 	return err
 }
 
+// validateRowValueExpression validates an expression that belongs to a VALUES
+// row of an INSERT statement: it must not call an aggregate, must not run a
+// subquery, and must not read a column of the row's own target table, because
+// no row exists yet for such a read to resolve against.
+func validateRowValueExpression(expression Expression, sources map[string]struct{}, clause string, path string) error {
+	_, err := validateExpression(expression, rowValueContext(sources, clause), path)
+	return err
+}
+
 func validateExpression(expression Expression, ctx expressionContext, path string) (expressionUsage, error) {
 	if expression == nil || (reflect.ValueOf(expression).Kind() == reflect.Pointer && reflect.ValueOf(expression).IsNil()) {
 		return expressionUsage{}, validationError(path, "must not be nil")
@@ -147,7 +173,11 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if err := expression.source.validate(); err != nil {
 			return expressionUsage{}, validationError(path, "%s", err)
 		}
-		if _, exists := ctx.sources[expression.source.key()]; !exists {
+		_, inSources := ctx.sources[expression.source.key()]
+		if ctx.rowValue && inSources {
+			return expressionUsage{}, validationError(path, "references column %q of the target table, but an INSERT VALUES row cannot read the target table's columns", expression.name)
+		}
+		if !inSources {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.source.QualifiedName())
 		}
 		if _, exists := expression.source.definition.Column(expression.name); !exists {

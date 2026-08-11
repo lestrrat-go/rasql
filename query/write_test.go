@@ -275,6 +275,47 @@ func TestInsertValidatesEveryRowExpression(t *testing.T) {
 	require.ErrorContains(t, err, "rows[2].values[0]")
 }
 
+// TestInsertRowValueRejectsTargetTableColumn pins the fix for a VALUES row
+// that reads a column of its own INSERT's target table. No row exists yet for
+// such a read to resolve against: PostgreSQL and SQLite refuse it outright,
+// and MySQL silently accepts it and writes the wrong data, so validation must
+// refuse it on every dialect rather than let it through to the renderer.
+func TestInsertRowValueRejectsTargetTableColumn(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	t.Run("bare column", func(t *testing.T) {
+		_, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), email})
+		requireQueryValidationError(t, err)
+		require.ErrorContains(t, err, `references column "email" of the target table`)
+		require.ErrorContains(t, err, "an INSERT VALUES row cannot read the target table's columns")
+		require.ErrorContains(t, err, "rows[0].values[1]")
+	})
+
+	t.Run("nested in function call", func(t *testing.T) {
+		_, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Lower(email)})
+		requireQueryValidationError(t, err)
+		require.ErrorContains(t, err, `references column "email" of the target table`)
+		require.ErrorContains(t, err, "an INSERT VALUES row cannot read the target table's columns")
+		require.ErrorContains(t, err, "rows[0].values[1].arguments[0]")
+	})
+
+	t.Run("NewInsertRows form", func(t *testing.T) {
+		_, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]query.Expression{
+			{query.Bind(1), query.Bind("ada@example.com")},
+			{query.Bind(2), email},
+		})
+		requireQueryValidationError(t, err)
+		require.ErrorContains(t, err, `references column "email" of the target table`)
+		require.ErrorContains(t, err, "an INSERT VALUES row cannot read the target table's columns")
+		require.ErrorContains(t, err, "rows[1].values[1]")
+	})
+}
+
 // TestWriteStatementsRejectAggregates covers the placement rule for write
 // statements: no clause of a write statement may call an aggregate, because
 // only a SELECT projection may.
