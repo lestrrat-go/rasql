@@ -149,7 +149,7 @@ type TableDef struct {
 	// INSERT, UPDATE or DELETE built from this descriptor renders
 	// "audit"."events" as its target, a column reached through the unaliased
 	// table renders "audit"."events"."id", and render.CreateTable,
-	// render.CreateIndexes and rasql.Create render the table and its indexes
+	// render.CreateIndexes and rasql.CreateTable render the table and its indexes
 	// into the named namespace on every dialect that can express it. rasql
 	// never creates, drops or connects to the namespace itself: an
 	// application that needs "audit" to exist creates it with a reviewed

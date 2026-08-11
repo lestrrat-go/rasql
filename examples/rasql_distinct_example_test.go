@@ -46,7 +46,7 @@ func Example_rasql_distinct() {
 		schema.Integer("user_id"),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.Create(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}

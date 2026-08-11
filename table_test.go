@@ -366,7 +366,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			name:          "Create",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				return rasql.Create[staffRow](t.Context(), clientForBuild(t), table)
+				return rasql.CreateTable[staffRow](t.Context(), clientForBuild(t), table)
 			},
 		},
 		{

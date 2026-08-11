@@ -83,7 +83,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.Create(t.Context(), client, records))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, records))
 
 	first := record{ID: 1, Active: true, Email: "ada@example.com", Amount: "19.99"}
 	second := record{ID: 2, Active: false, Email: "grace@example.com", Amount: "5.00"}
@@ -282,7 +282,7 @@ func integrationTable(name string) schema.TableDef {
 // each subtest creates its own second namespace the way an application would
 // -- a native CREATE SCHEMA on PostgreSQL, a second CREATE DATABASE on MySQL
 // -- rather than relying on anything rasql itself creates, since creating a
-// namespace stays out of scope for rasql.Create. SQLite has no server and no
+// namespace stays out of scope for rasql.CreateTable. SQLite has no server and no
 // DDL statement for a namespace at all (its namespace comes from ATTACH), so
 // its coverage lives in render/schema_test.go's TestSQLiteExecutesQualifiedDDL
 // and sqlite_typed_roundtrip_test.go's TestSQLiteQualifiedTableRoundTrip
@@ -293,7 +293,7 @@ func TestQualifiedDDLIntegration(t *testing.T) {
 }
 
 // testQualifiedDDLPostgreSQL creates a table in a fresh PostgreSQL schema
-// through rasql.Create, with a foreign key that reaches back into the
+// through rasql.CreateTable, with a foreign key that reaches back into the
 // connection's default "public" schema via ForeignKey.ReferencedSchema. The
 // test never touches search_path: the whole point is that fully qualified
 // DDL does not depend on it, and the cross-schema foreign key is what proves
@@ -318,10 +318,10 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// customersName lives in the connection's default schema, "public",
-	// which rasql.Create never states explicitly: an unqualified Schema
+	// which rasql.CreateTable never states explicitly: an unqualified Schema
 	// resolves through the connection's own default, the same as before
 	// this change.
-	require.NoError(t, rasql.Create(t.Context(), client, customers))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, customers))
 	defer func() {
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+customersName)
 		require.NoError(t, err)
@@ -361,7 +361,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, orders))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, orders))
 
 	_, err = rasql.Insert(t.Context(), client, customers, customerRow{ID: 1, Name: "ada"})
 	require.NoError(t, err)
@@ -376,7 +376,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 }
 
 // testQualifiedDDLMySQL creates a table in a second MySQL database through
-// rasql.Create. A "schema" is a second database on MySQL, so this test
+// rasql.CreateTable. A "schema" is a second database on MySQL, so this test
 // creates one directly: dbtest.MySQLDB already grants the CREATE/DROP
 // privilege CONTRIBUTING.md requires of a live MySQL test DSN, and a
 // per-run-unique name keeps this inside the containment rule that a live
@@ -422,7 +422,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, events))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, events))
 
 	// Both objects must live in schemaName rather than in the connection's
 	// own default database, which is what the qualified DDL is for. The

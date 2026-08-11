@@ -53,11 +53,11 @@ func Example_rasql_subquery() {
 		schema.PrimaryKey("id"),
 	))
 	// Create both descriptors before querying orders against the users subquery.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.Create(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}

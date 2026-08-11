@@ -41,7 +41,7 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 	require.NoError(t, err)
 	eventID, err := events.Column("id")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, events))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, events))
 
 	expected := event{
 		ID:        42,
@@ -85,7 +85,7 @@ func TestSQLiteTypedSelectWhereInFiltersRows(t *testing.T) {
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
 
 	inserted := []user{
 		{ID: 1, Email: "ada@example.com"},
@@ -135,7 +135,7 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	require.NoError(t, err)
 	userEmail, err := users.Column("email")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
 
 	type orderRow struct {
 		ID     int64 `rasql:"id"`
@@ -156,7 +156,7 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	require.NoError(t, err)
 	amount, err := orders.Column("amount")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, orders))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, orders))
 
 	insertedUsers := []user{
 		{ID: 1, Email: "ada@example.com"},
@@ -238,7 +238,7 @@ func TestSQLiteTypedSelectScalarFunctionsFilterRows(t *testing.T) {
 	require.NoError(t, err)
 	score, err := users.Column("score")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
 
 	ten := int64(10)
 	inserted := []user{
@@ -306,7 +306,7 @@ func TestSQLiteTypedSelectCountsRows(t *testing.T) {
 	require.NoError(t, err)
 	eventID, err := events.Column("id")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, events))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, events))
 
 	for _, row := range []event{
 		{ID: 1, Active: true},
@@ -394,7 +394,7 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	eventID, err := events.Column("id")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, events))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, events))
 
 	note := "first"
 	expected := generatedEventRow{
@@ -455,7 +455,7 @@ func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
 	require.NoError(t, err)
 	invoiceID, err := invoices.Column("id")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, invoices))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, invoices))
 
 	expected := invoice{ID: 1, Amount: "1234.5678901234567890"}
 	_, err = rasql.Insert(t.Context(), client, invoices, expected)
@@ -470,7 +470,7 @@ func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
 // multi-row insert, update and delete against a schema-qualified table over
 // a real SQLite database with a second database attached, pinning the
 // rendered text against a real parser rather than a golden string. The
-// qualified table is created through rasql.Create itself, which now renders
+// qualified table is created through rasql.CreateTable itself, which now renders
 // CREATE TABLE into the named database rather than dropping the qualifier;
 // only the attached database's existence stands in for a reviewed native
 // migration, the same way a native migration creates a PostgreSQL schema or
@@ -505,7 +505,7 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, events))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, events))
 	queryEvents := events.Ref()
 	id, err := queryEvents.Column("id")
 	require.NoError(t, err)
@@ -630,7 +630,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	status, err := queryUsers.Column("status")
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
 
 	insert, err := query.NewInsert(queryUsers, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)

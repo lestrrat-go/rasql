@@ -6,19 +6,19 @@ Every write operation, predicate, and statement constructor is listed in the [op
 
 ## Create a table
 
-`rasql.Create` renders a table descriptor as DDL and executes it, then creates its indexes.
+`rasql.CreateTable` renders a table descriptor as DDL and executes it, then creates its indexes.
 
 ```go
-if err := rasql.Create(ctx, client, users); err != nil {
+if err := rasql.CreateTable(ctx, client, users); err != nil {
 	return err
 }
 ```
 
-Each statement runs on its own. To create several tables atomically, run `Create` through a `rasql.Tx` from `rasql.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
+Each statement runs on its own. To create several tables atomically, run `CreateTable` through a `rasql.Tx` from `rasql.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
 
-A descriptor that names a [`Schema`](02-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.Create` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `Create` fails with the server's own error.
+A descriptor that names a [`Schema`](02-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.CreateTable` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `CreateTable` fails with the server's own error.
 
-Most applications manage schema changes with [`migrate`](07-migrations.md). `Create` remains useful for tests, examples, and one-shot setup.
+Most applications manage schema changes with [`migrate`](07-migrations.md). `CreateTable` remains useful for tests, examples, and one-shot setup.
 
 ## Insert a row
 
@@ -60,7 +60,7 @@ func Example_rasql_insert() {
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -180,7 +180,7 @@ func Example_rasql_insert_defaults() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	if err := rasql.Create(ctx, client, defaultUsers); err != nil {
+	if err := rasql.CreateTable(ctx, client, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
 	}
@@ -247,7 +247,7 @@ func Example_rasql_update() {
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -328,7 +328,7 @@ func Example_rasql_delete() {
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -467,7 +467,7 @@ func Example_rasql_returning() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	if err := rasql.Create(ctx, client, defaultUsers); err != nil {
+	if err := rasql.CreateTable(ctx, client, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
 	}
@@ -556,7 +556,7 @@ Hooks cover calls through `Client` and `Tx`, including the high-level builders a
 
 ## Transactions
 
-`rasql.Begin` takes a `*sql.DB` (anything implementing `rasql.Beginner`), a dialect, `*sql.TxOptions`, and optional hooks, which may be omitted. It returns a `rasql.Tx`, which is an `Executor` like `Client`, so every builder terminal and every free function that takes an `Executor` — `rasql.Insert`, `rasql.Update`, `rasql.Create`, and the rest — accepts it in place of `client`.
+`rasql.Begin` takes a `*sql.DB` (anything implementing `rasql.Beginner`), a dialect, `*sql.TxOptions`, and optional hooks, which may be omitted. It returns a `rasql.Tx`, which is an `Executor` like `Client`, so every builder terminal and every free function that takes an `Executor` — `rasql.Insert`, `rasql.Update`, `rasql.CreateTable`, and the rest — accepts it in place of `client`.
 
 The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation.
 
@@ -599,7 +599,7 @@ func Example_rasql_transaction() {
 		return
 	}
 	// Create the table before any transaction starts.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

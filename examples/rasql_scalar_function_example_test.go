@@ -50,7 +50,7 @@ func Example_rasql_scalar_function() {
 		schema.Text("nickname", schema.Nullable()),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.Create(ctx, client, members); err != nil {
+	if err := rasql.CreateTable(ctx, client, members); err != nil {
 		fmt.Printf("failed to create members table: %s\n", err)
 		return
 	}

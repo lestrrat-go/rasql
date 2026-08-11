@@ -129,7 +129,7 @@ func Example_rasql_quickstart() {
 		return
 	}
 	// A real application creates its tables through migrations instead.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -193,7 +193,7 @@ source: [examples/rasql_quickstart_example_test.go](https://github.com/lestrrat-
 
 Inserts, updates, deletes, and typed selects have dedicated helpers. Fluent deletes can read deleted rows through `Returning`, `Query`, `QueryDeleteAll`, or `QueryDeleteOne`. Upserts and anything else beyond them are built through the `query` package and run with `rasql.Exec`, except a statement with a `RETURNING` clause, which reads its rows back through `rasql.QueryWrite` instead.
 
-The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since an in-memory database belongs to one connection. A real application also creates its tables through migrations rather than `rasql.Create`.
+The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since an in-memory database belongs to one connection. A real application also creates its tables through migrations rather than `rasql.CreateTable`.
 
 ## Sample application
 

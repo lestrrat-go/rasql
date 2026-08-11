@@ -33,7 +33,7 @@ func Example_rasql_transaction() {
 		return
 	}
 	// Create the table before any transaction starts.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

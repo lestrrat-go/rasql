@@ -123,7 +123,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.Create(t.Context(), client, records))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, records))
 	for _, fixture := range []record{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "grace@example.com"},
