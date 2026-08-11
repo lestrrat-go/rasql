@@ -626,7 +626,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		if hidden != 0 {
 			return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: hidden or generated column %q is not supported", tableName, name)
 		}
-		columnType, err := normalizeType(i.dialect.Name(), databaseType)
+		columnType, err := normalizeType(i.dialect.Name(), databaseType, sql.NullInt64{})
 		if err != nil {
 			return schema.TableDef{}, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
@@ -1517,12 +1517,24 @@ func sqliteQualifiedPragma(databaseName, pragmaName, identifier string) string {
 	return `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".` + pragmaName + `("` + sqlitePragmaIdentifier(identifier) + `")`
 }
 
+// readColumns is shared by MySQL and PostgreSQL, whose queries both select
+// column_name, is_nullable, column_default, numeric_precision and
+// numeric_scale in that shape. Only the PostgreSQL query additionally
+// selects character_maximum_length, the sole source of a stated
+// CHARACTER VARYING/CHARACTER width: unlike MySQL's column_type,
+// PostgreSQL's data_type never carries a length. Scanning is therefore
+// dialect-conditional rather than widened for both: MySQL's
+// character_maximum_length reports 65535 for an unbounded TEXT column, so
+// reading it there would turn MySQL's already-correct unstated widths into
+// wrongly stated ones.
 func (i Inspector) readColumns(ctx context.Context, query string, argument any) ([]schema.ColumnDef, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read columns: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+
+	postgreSQL := i.dialect.Name() == "postgresql"
 
 	columns := make([]schema.ColumnDef, 0)
 	for rows.Next() {
@@ -1532,10 +1544,17 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		var defaultValue any
 		var numericPrecision sql.NullInt64
 		var numericScale sql.NullInt64
-		if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale); err != nil {
-			return nil, fmt.Errorf("inspect: scan column: %w", err)
+		var characterMaximumLength sql.NullInt64
+		if postgreSQL {
+			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale, &characterMaximumLength); err != nil {
+				return nil, fmt.Errorf("inspect: scan column: %w", err)
+			}
+		} else {
+			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale); err != nil {
+				return nil, fmt.Errorf("inspect: scan column: %w", err)
+			}
 		}
-		columnType, err := normalizeType(i.dialect.Name(), databaseType)
+		columnType, err := normalizeType(i.dialect.Name(), databaseType, characterMaximumLength)
 		if err != nil {
 			return nil, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
@@ -1979,7 +1998,7 @@ func postgreSQLInformationQueries(version int) informationQueries {
 	temporal := postgreSQLCatalogBoolean(version, postgreSQL18Version, "constraint_data.conperiod")
 
 	return informationQueries{
-		columns:                         "SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
+		columns:                         "SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale, character_maximum_length FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
 		primaryKey:                      "SELECT attribute.attname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'p' ORDER BY key_column.ordinal_position",
 		uniqueConstraints:               "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", index_metadata.indnkeyatts <> index_metadata.indnatts, " + temporal + ", index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR index_metadata.indisreplident OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
 		checks:                          "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",
@@ -2000,7 +2019,11 @@ func postgreSQLCatalogBoolean(version int, introducedVersion int, column string)
 // normalizeType maps one native column type to a concrete schema column type.
 // Only MySQL can report an unsigned column. PostgreSQL has no unsigned integer
 // type, and SQLite stores a signed 64-bit value whatever a column is declared.
-func normalizeType(dialectName string, databaseType string) (schema.ColumnType, error) {
+// characterMaximumLength is PostgreSQL's information_schema.columns.character_
+// maximum_length; it is meaningful only in the postgresql case below (see
+// postgreSQLTextWidth) and is ignored for every other dialect, including a
+// zero-value argument SQLite's caller always passes.
+func normalizeType(dialectName string, databaseType string, characterMaximumLength sql.NullInt64) (schema.ColumnType, error) {
 	typeName := strings.ToUpper(strings.TrimSpace(databaseType))
 	switch dialectName {
 	case "postgresql":
@@ -2013,8 +2036,10 @@ func normalizeType(dialectName string, databaseType string) (schema.ColumnType, 
 			return schema.FloatType{}, nil
 		case "NUMERIC", "DECIMAL":
 			return schema.DecimalType{}, nil
-		case "TEXT", "CHARACTER VARYING", "CHARACTER", "VARCHAR", "CHAR":
+		case "TEXT":
 			return schema.TextType{}, nil
+		case "CHARACTER VARYING", "CHARACTER", "VARCHAR", "CHAR":
+			return schema.TextType{Width: postgreSQLTextWidth(characterMaximumLength)}, nil
 		case "BYTEA":
 			return schema.BytesType{}, nil
 		case "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE", "DATE", "TIME WITH TIME ZONE", "TIME WITHOUT TIME ZONE":
@@ -2049,6 +2074,27 @@ func normalizeType(dialectName string, databaseType string) (schema.ColumnType, 
 		}
 	}
 	return nil, fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
+}
+
+// postgreSQLTextWidth reports the schema.TextWidth a PostgreSQL
+// CHARACTER VARYING or CHARACTER column states, from
+// information_schema.columns.character_maximum_length. That column is NULL
+// for an unbounded CHARACTER VARYING and always non-NULL for CHARACTER,
+// since bare CHARACTER means CHARACTER(1) and the catalog reports 1 for it;
+// a NULL therefore maps to an unstated width rather than to a stated width
+// of 0, which schema.NewTextWidth(0) represents as something else entirely.
+//
+// schema.TextType has no fixed-versus-variable flag, so CHARACTER(n) cannot
+// round-trip faithfully: textTypeName renders every stated width as
+// VARCHAR(n), the same as CHARACTER VARYING(n). A CHARACTER(n) column is
+// mapped to a stated width anyway, matching mysqlTextWidth's treatment of
+// MySQL's CHAR, rather than refused outright, because refusing it would
+// regress inspection of a schema that already has such a column.
+func postgreSQLTextWidth(characterMaximumLength sql.NullInt64) schema.TextWidth {
+	if !characterMaximumLength.Valid {
+		return schema.TextWidth{}
+	}
+	return schema.NewTextWidth(int(characterMaximumLength.Int64))
 }
 
 // normalizeMySQLType maps one MySQL COLUMN_TYPE, already upper-cased as
