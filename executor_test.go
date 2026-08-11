@@ -27,7 +27,9 @@ func TestBeginReturnsTxBoundToDialect(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 
-	tx, err := rasql.Begin(t.Context(), database, dialect.PostgreSQL(), nil)
+	db, err := rasql.NewDB(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, "postgresql", tx.Dialect().Name())
 	require.NoError(t, tx.Rollback())
@@ -47,7 +49,9 @@ func TestTxWriteReachesTransactionAndCommits(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectCommit()
 
-	tx, err := rasql.Begin(t.Context(), database, dialect.SQLite(), nil)
+	db, err := rasql.NewDB(database, dialect.SQLite())
+	require.NoError(t, err)
+	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
@@ -73,7 +77,9 @@ func TestTxRollbackAfterCommitReportsNoError(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
-	tx, err := rasql.Begin(t.Context(), database, dialect.SQLite(), nil)
+	db, err := rasql.NewDB(database, dialect.SQLite())
+	require.NoError(t, err)
+	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 
@@ -93,7 +99,9 @@ func TestTxRollbackTwiceReportsNoErrorEitherTime(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 
-	tx, err := rasql.Begin(t.Context(), database, dialect.SQLite(), nil)
+	db, err := rasql.NewDB(database, dialect.SQLite())
+	require.NoError(t, err)
+	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	require.NoError(t, tx.Rollback())
 	require.NoError(t, tx.Rollback())
@@ -110,12 +118,18 @@ func TestBeginPropagatesBeginTxError(t *testing.T) {
 	expected := errors.New("connection refused")
 	mock.ExpectBegin().WillReturnError(expected)
 
-	_, err = rasql.Begin(t.Context(), database, dialect.SQLite(), nil)
+	db, err := rasql.NewDB(database, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = db.Begin(t.Context(), nil)
 	require.ErrorContains(t, err, "rasql: begin transaction")
 	require.ErrorIs(t, err, expected)
 }
 
-func TestBeginRejectsNilDialectWithoutCallingBeginTx(t *testing.T) {
+// The nil-dialect check now happens in NewDB, since Begin no longer takes a
+// dialect: a DB always carries the one it was constructed with. There is no
+// Begin-time equivalent of this test anymore, because a DB with a nil
+// dialect cannot exist.
+func TestNewDBRejectsNilDialectWithoutCallingBeginTx(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -125,7 +139,7 @@ func TestBeginRejectsNilDialectWithoutCallingBeginTx(t *testing.T) {
 	})
 	// No ExpectBegin(): a call to BeginTx would fail ExpectationsWereMet.
 
-	_, err = rasql.Begin(t.Context(), database, nil, nil)
+	_, err = rasql.NewDB(database, nil)
 	require.ErrorContains(t, err, "rasql: dialect must not be nil")
 }
 
@@ -140,6 +154,14 @@ func TestZeroTxRejectsCommitAndRollback(t *testing.T) {
 // a test double, a logging wrapper, or a debug wrapper, and one of those can.
 type nilTransactionBeginner struct{}
 
+func (nilTransactionBeginner) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	return nil, nil
+}
+
+func (nilTransactionBeginner) ExecContext(context.Context, string, ...any) (sql.Result, error) {
+	return nil, nil
+}
+
 func (nilTransactionBeginner) BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error) {
 	return nil, nil
 }
@@ -147,7 +169,9 @@ func (nilTransactionBeginner) BeginTx(context.Context, *sql.TxOptions) (*sql.Tx,
 func TestBeginRejectsNilTransactionFromBeginner(t *testing.T) {
 	// Begin used to hand the nil transaction to New, which rejected it, and
 	// then call Rollback on it while cleaning up, which panicked.
-	tx, err := rasql.Begin(t.Context(), nilTransactionBeginner{}, dialect.SQLite(), nil)
+	db, err := rasql.NewDB(nilTransactionBeginner{}, dialect.SQLite())
+	require.NoError(t, err)
+	tx, err := db.Begin(t.Context(), nil)
 	require.ErrorContains(t, err, "rasql: beginner returned a nil transaction")
 	require.Equal(t, rasql.Tx{}, tx)
 }

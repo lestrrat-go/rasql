@@ -14,7 +14,7 @@ if err := rasql.CreateTable(ctx, client, users); err != nil {
 }
 ```
 
-Each statement runs on its own. To create several tables atomically, run `CreateTable` through a `rasql.Tx` from `rasql.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
+Each statement runs on its own. To create several tables atomically, run `CreateTable` through a `rasql.Tx` from `DB.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
 
 A descriptor that names a [`Schema`](02-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.CreateTable` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `CreateTable` fails with the server's own error.
 
@@ -400,7 +400,7 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 
 `NewUpdate` and `NewDelete` accept a missing predicate while a statement is being assembled, but rendering and execution reject that shape unless the intent is explicit. Call `statement.AllowAll()` and use the returned statement when every row should be changed. A predicate and `AllowAll` cannot be combined.
 
-`NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through a `rasql.Tx` from `rasql.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
+`NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through a `rasql.Tx` from `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
 ```go
 statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email, query.Bind("ada@example.com")))
@@ -550,17 +550,17 @@ if err != nil {
 }
 ```
 
-Pass hooks to `rasql.New`, or add them with `Client.WithHooks`. Pass them to `rasql.Begin` or add them with `Tx.WithHooks` when the operation runs inside a transaction. These methods return the same concrete `Client` or `Tx` value, so transaction ownership and explicit `Commit` or `Rollback` remain visible.
+Pass hooks to `rasql.New` or `rasql.NewDB`, or add them with `Client.WithHooks` or `DB.WithHooks`. A transaction started by `DB.Begin` inherits every hook already registered on that `DB`, then appends any hooks passed to `Begin` itself. A policy hook registered on a `DB` therefore also runs for operations inside transactions started from it, not just for calls made directly through the `DB`. Add hooks scoped to only the transaction with `Tx.WithHooks`. These methods return the same concrete `Client`, `DB`, or `Tx` value, so transaction ownership and explicit `Commit` or `Rollback` remain visible.
 
 Hooks cover calls through `Client` and `Tx`, including the high-level builders and static rendered statements. They do not wrap `Begin`, `Commit`, `Rollback`, direct `database/sql` calls, or the migration and inspection packages, which use their own database handles. Hooks are synchronous and do not add retries, tracing spans, tenant filters, or automatic redaction; applications must implement those policies in their hooks or at their database boundary.
 
 ## Transactions
 
-`rasql.Begin` takes a `*sql.DB` (anything implementing `rasql.Beginner`), a dialect, `*sql.TxOptions`, and optional hooks, which may be omitted. It returns a `rasql.Tx`, which is an `Executor` like `Client`, so every builder terminal and every free function that takes an `Executor` — `rasql.Insert`, `rasql.Update`, `rasql.CreateTable`, and the rest — accepts it in place of `client`.
+`rasql.NewDB` takes a `rasql.Beginner` — anything that is also a `rasql.Handle` and can start a transaction, which `*sql.DB` and `*sql.Conn` both satisfy — and a dialect, and returns a `rasql.DB`. `DB.Begin` takes `*sql.TxOptions` and optional hooks, which may be omitted, and starts a transaction on the same handle and dialect the `DB` was built from. It returns a `rasql.Tx`, which is an `Executor` like `Client` and `DB`, so every builder terminal and every free function that takes an `Executor` — `rasql.Insert`, `rasql.Update`, `rasql.CreateTable`, and the rest — accepts it in place of `client`.
 
 The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation.
 
-A transaction cannot be nested: `Tx` does not implement `Beginner`, so passing one to `Begin` does not compile.
+A transaction still cannot be nested. Neither `Tx` nor `Client` has a `Begin` method, and `*sql.Tx` has no `BeginTx`, so a `Tx` does not satisfy `rasql.Beginner` and cannot be passed to `rasql.NewDB` in the first place.
 
 <!-- INCLUDE(examples/rasql_transaction_example_test.go) -->
 ```go
@@ -578,7 +578,7 @@ import (
 
 func Example_rasql_transaction() {
 	// This example writes two rows and reads them back inside one transaction,
-	// then reads them again through the plain client after it commits.
+	// then reads them again through the plain db after it commits.
 	// users and UserRow are declared in query_example_tables_test.go with the
 	// shape rasqlgen emits; an application that generated into package store
 	// would write store.Users() and store.UsersRow instead.
@@ -592,21 +592,21 @@ func Example_rasql_transaction() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL, and
+	// can also start transactions on that same handle.
+	db, err := rasql.NewDB(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// Create the table before any transaction starts.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
-	// Begin takes the *sql.DB, not the client: a Tx renders its own statements
-	// and does not go through client at all.
-	tx, err := rasql.Begin(ctx, database, dialect.SQLite(), nil)
+	// db.Begin starts a transaction on the same handle db was built from.
+	tx, err := db.Begin(ctx, nil)
 	if err != nil {
 		fmt.Printf("failed to begin transaction: %s\n", err)
 		return
@@ -626,7 +626,7 @@ func Example_rasql_transaction() {
 		return
 	}
 
-	// The same builder shape that runs against client also runs against tx: it
+	// The same builder shape that runs against db also runs against tx: it
 	// reads the two rows written above, before they are committed.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
 	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, tx)
@@ -641,12 +641,12 @@ func Example_rasql_transaction() {
 		return
 	}
 
-	// Nothing touches client between Begin and Commit above. That is this
+	// Nothing touches db between Begin and Commit above. That is this
 	// example's own constraint, not rasql's: SetMaxOpenConns(1) gives it one
 	// connection, and the transaction holds it until Commit or Rollback
 	// releases it back to the pool.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, client)
+	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users after commit: %s\n", err)
 		return

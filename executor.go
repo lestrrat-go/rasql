@@ -28,57 +28,14 @@ type Executor interface {
 	ExecRendered(context.Context, render.Statement) (sql.Result, error)
 }
 
-// Beginner starts a database transaction. *sql.DB implements it.
-// Tx does not, and neither does *sql.Tx, so a transaction cannot be nested
-// through Begin: the attempt fails to compile rather than opening a savepoint
-// or failing at run time.
-type Beginner interface {
-	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
-}
-
 // Tx executes statements inside one database transaction.
 // The caller owns the transaction: every path out of the function that called
-// Begin must reach Commit or Rollback. A bare defer of Rollback right after
+// DB.Begin must reach Commit or Rollback. A bare defer of Rollback right after
 // Begin is the intended shape, because Rollback reports no error once the
 // transaction is finished.
 type Tx struct {
 	client Client
 	tx     *sql.Tx
-}
-
-// Begin starts a transaction on db and returns a Tx that renders for d.
-// opts may be nil, which leaves the isolation level and read-only mode to the
-// driver. Begin does not roll back on ctx cancellation by itself; that is
-// database/sql's own behavior for the transaction it returns.
-// A Beginner that reports success while returning a nil transaction is
-// rejected with an error rather than wrapped, so a hand-written one cannot
-// produce a Tx that panics on its first use.
-func Begin(ctx context.Context, db Beginner, d dialect.Dialect, opts *sql.TxOptions, hooks ...Hook) (Tx, error) {
-	if isNil(db) {
-		return Tx{}, fmt.Errorf("rasql: beginner must not be nil")
-	}
-	if isNil(d) {
-		return Tx{}, fmt.Errorf("rasql: dialect must not be nil")
-	}
-	transaction, err := db.BeginTx(ctx, opts)
-	if err != nil {
-		return Tx{}, fmt.Errorf("rasql: begin transaction: %w", err)
-	}
-	if transaction == nil {
-		// *sql.DB never does this: its BeginTx returns a transaction or an
-		// error. A hand-written Beginner can, and the nil would otherwise reach
-		// Rollback below as a nil receiver.
-		return Tx{}, fmt.Errorf("rasql: beginner returned a nil transaction without an error")
-	}
-	client, err := New(transaction, d, hooks...)
-	if err != nil {
-		// The transaction is already open, so it is rolled back rather than
-		// leaked. Its own error cannot reach the caller, who never received
-		// the handle, and it would hide the reason Begin is failing.
-		_ = transaction.Rollback()
-		return Tx{}, err
-	}
-	return Tx{client: client, tx: transaction}, nil
 }
 
 // WithHooks returns a copy of t that runs hooks around statements executed in
