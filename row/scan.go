@@ -71,7 +71,7 @@ func Scan(rows *sql.Rows) iter.Seq2[Dynamic, error] {
 				yield(Dynamic{}, fmt.Errorf("row: scan result row: %w", err))
 				return
 			}
-			decoded, err := New(names, values)
+			decoded, err := NewDynamic(names, values)
 			if err != nil {
 				yield(Dynamic{}, fmt.Errorf("row: create result row: %w", err))
 				return

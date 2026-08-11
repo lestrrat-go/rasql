@@ -45,7 +45,7 @@ func Example_schema_decimal_column() {
 	// either: stating both here makes an incomplete decimal column impossible
 	// to construct in the first place instead of merely rejected once
 	// assembled.
-	invoices := rasql.MustTableOf[invoiceRow](schema.MustTable("invoices",
+	invoices := rasql.MustTableOf[invoiceRow](schema.MustTableDef("invoices",
 		schema.Integer("id"),
 		schema.Decimal("amount", 19, 4),
 		schema.PrimaryKey("id"),

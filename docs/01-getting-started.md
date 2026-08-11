@@ -52,7 +52,7 @@ func newUsersTable(table rasql.Table[UserRow]) UsersTable {
 }
 
 // users keeps the generated row type and its column references together.
-var users = newUsersTable(rasql.MustTableOf[UserRow](schema.MustTable("users",
+var users = newUsersTable(rasql.MustTableOf[UserRow](schema.MustTableDef("users",
 	schema.Integer("id"),
 	schema.Text("email"),
 	schema.PrimaryKey("id"),

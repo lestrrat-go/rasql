@@ -16,13 +16,13 @@ import (
 
 func Example_schema_table_definition() {
 	// This example defines two reusable table descriptors in Go code, built
-	// with schema.MustTable. A column constructor such as schema.Integer and
+	// with schema.MustTableDef. A column constructor such as schema.Integer and
 	// a constraint constructor such as schema.PrimaryKey each return a
 	// schema.TableOption, so they may appear in any order: PrimaryKey names
 	// "id" below before Integer declares it, and the assembled descriptor is
 	// the same either way. The same descriptor can later supply a reusable
 	// query.TableRef or generate DDL.
-	users := schema.MustTable("users",
+	users := schema.MustTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
 		schema.Text("nickname", schema.Nullable()),
@@ -35,11 +35,11 @@ func Example_schema_table_definition() {
 	)
 
 	// A foreign key's Named, References, and OnDelete options configure the
-	// constraint itself. As additionally derives the belongs-to
+	// constraint itself. RelationshipNamed additionally derives the belongs-to
 	// schema.RelationshipDef that rasqlgen would otherwise name on its own
 	// from the local column, letting the generated method read
 	// orders.Buyer() rather than orders.Customer().
-	orders := schema.MustTable("orders",
+	orders := schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
 		schema.PrimaryKey("id"),
@@ -47,7 +47,7 @@ func Example_schema_table_definition() {
 			schema.Named("orders_customer_fkey"),
 			schema.References("customers", "id"),
 			schema.OnDelete(schema.Cascade),
-			schema.As("buyer")),
+			schema.RelationshipNamed("buyer")),
 	)
 
 	fmt.Printf("%s: %d columns, primary key %v\n", users.Name, len(users.Columns), users.PrimaryKey)
@@ -62,9 +62,9 @@ func Example_schema_table_definition() {
 source: [examples/schema_table_definition_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_example_test.go)
 <!-- END INCLUDE -->
 
-`schema.MustTable` panics on an invalid descriptor and suits a table declared
-once at package initialization, exactly like `rasql.MustTableOf[T]`;
-`schema.NewTable` returns the error instead, for a descriptor assembled at
+`schema.MustTableDef` panics on an invalid descriptor and suits a table
+declared once at package initialization, exactly like `rasql.MustTableOf[T]`;
+`schema.NewTableDef` returns the error instead, for a descriptor assembled at
 runtime. Both collect the columns and constraints each `schema.TableOption`
 declares and assemble them into a `schema.TableDef` afterward, which is what
 makes the order harmless: `schema.PrimaryKey("id")` may appear before
@@ -96,16 +96,17 @@ takes a `[]string` of them for a composite key; both take the same list of
 does the same for a target qualified by schema, `schema.OnDelete` and
 `schema.OnUpdate` state the reference actions (`schema.Cascade`,
 `schema.Restrict`, `schema.SetNull`, `schema.SetDefault`, and
-`schema.NoAction`), and `schema.As` derives a belongs-to `RelationshipDef`
-alongside it. Together these constructors cover every shape a struct literal
-can express: a composite foreign key, a named unique constraint or check, and
-a unique index all have an option-form constructor, with no need to fall back
+`schema.NoAction`), and `schema.RelationshipNamed` derives a belongs-to
+`RelationshipDef` alongside it. Together these constructors cover every shape
+a struct literal can express: a composite foreign key, a named unique
+constraint or check, and a unique index all have an option-form constructor,
+with no need to fall back
 to a struct literal for any of them.
 
 ## The struct literal
 
-`schema.TableDef` is the descriptor itself; `schema.NewTable` and
-`schema.MustTable` are one way to build one. Its fields are exactly what a
+`schema.TableDef` is the descriptor itself; `schema.NewTableDef` and
+`schema.MustTableDef` are one way to build one. Its fields are exactly what a
 `schema.TableOption` assembles behind the scenes, and they are also what
 `inspect` returns from a live database and what `migrate`'s diff compares
 between two descriptors, so reading a descriptor back, whether from
@@ -126,19 +127,21 @@ rather than a list of options:
 
 A struct literal remains a fully supported way to build a `schema.TableDef`
 directly, and every field takes a keyed composite literal such as
-`schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{...}, ...}`.
-Call `Validate` before using a descriptor built this way. It reports a
+`schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{...}, ...}`. An
+unkeyed literal is not supported: it matches fields by position and must list
+every one of them, so it is not a way to build a descriptor. Call `Validate`
+before using a descriptor built this way. It reports a
 `*schema.ValidationError` naming the part that is wrong, such as a primary
 key that lists a column the table does not declare. Non-empty names given to
 `UniqueConstraints`, `Checks`, and `ForeignKeys` must be unique across all
 three, since a dialect renders them together into one `CREATE TABLE`
-constraint list. `MustTable` and `NewTable` validate as well, so a separate
-`Validate` call is only needed for a descriptor built at runtime that is not
-immediately turned into a table.
+constraint list. `MustTableDef` and `NewTableDef` validate as well, so a
+separate `Validate` call is only needed for a descriptor built at runtime
+that is not immediately turned into a table.
 
 ## Relationships
 
-`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`; the `schema.As` foreign-key option states one explicitly, in the option form, instead. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
+`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`; the `schema.RelationshipNamed` foreign-key option states one explicitly, in the option form, instead. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
 
 The generated API covers one bounded slice: a non-null single-column foreign key that targets a non-null single-column primary key with the same generated Go type. When both tables are generated in the package, the child table exposes a belongs-to method and the parent table exposes the inverse has-many method. Each relation exposes `Join` and `Load`; `Load` fetches all related rows with one secondary `IN` query and groups them by key. Callers must split very large parent slices themselves when they approach the database parameter limit.
 
@@ -205,7 +208,7 @@ func Example_schema_qualified_table() {
 	}
 
 	// InSchema qualifies the table without changing how any other option works.
-	events := rasql.MustTableOf[eventRow](schema.MustTable("events",
+	events := rasql.MustTableOf[eventRow](schema.MustTableDef("events",
 		schema.InSchema("audit"),
 		schema.Integer("id"),
 		schema.Text("action"),
@@ -316,7 +319,7 @@ func Example_schema_decimal_column() {
 	// either: stating both here makes an incomplete decimal column impossible
 	// to construct in the first place instead of merely rejected once
 	// assembled.
-	invoices := rasql.MustTableOf[invoiceRow](schema.MustTable("invoices",
+	invoices := rasql.MustTableOf[invoiceRow](schema.MustTableDef("invoices",
 		schema.Integer("id"),
 		schema.Decimal("amount", 19, 4),
 		schema.PrimaryKey("id"),
@@ -382,7 +385,7 @@ func Example_schema_unsigned_column() {
 	// This example declares an unsigned integer column and renders its DDL for
 	// each dialect. MySQL is the only supported engine with an unsigned
 	// integer type, so it is the only one that renders the table.
-	events := schema.MustTable("events",
+	events := schema.MustTableDef("events",
 		// An unsigned column reaches 18446744073709551615, where a signed one
 		// stops at 9223372036854775807. rasqlgen generates a uint64 field for
 		// it rather than an int64 one.

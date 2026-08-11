@@ -140,7 +140,7 @@ func newTasksTable(table rasql.Table[TasksRow]) TasksTable {
 	}
 }
 
-var tasksTable = newTasksTable(rasql.MustTableOf[TasksRow](schema.MustTable("tasks",
+var tasksTable = newTasksTable(rasql.MustTableOf[TasksRow](schema.MustTableDef("tasks",
 	schema.InSchema("main"),
 	schema.Integer("id"),
 	schema.Integer("project_id"),
@@ -151,8 +151,8 @@ var tasksTable = newTasksTable(rasql.MustTableOf[TasksRow](schema.MustTable("tas
 	schema.PrimaryKey("id"),
 	schema.Check("status IN ('todo', 'in_progress', 'done')"),
 	schema.Index("tasks_open_by_project", "project_id", "status", "priority"),
-	schema.ForeignKey("assignee_id", schema.References("members", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.As("Assignee")),
-	schema.ForeignKey("project_id", schema.References("projects", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.As("Project")),
+	schema.ForeignKey("assignee_id", schema.References("members", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.RelationshipNamed("Assignee")),
+	schema.ForeignKey("project_id", schema.References("projects", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.RelationshipNamed("Project")),
 )))
 
 // Tasks returns the descriptor for the "tasks" table.

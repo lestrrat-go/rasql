@@ -44,7 +44,7 @@ func Example_rasql_dynamic_projection() {
 		UserID int64
 		Email  string
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("user_id"),
 		schema.Integer("total"),

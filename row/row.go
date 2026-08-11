@@ -12,8 +12,8 @@ type Dynamic struct {
 	values map[string]any
 }
 
-// New validates column names and values and returns an independent row value.
-func New(names []string, values []any) (Dynamic, error) {
+// NewDynamic validates column names and values and returns an independent row value.
+func NewDynamic(names []string, values []any) (Dynamic, error) {
 	if len(names) != len(values) {
 		return Dynamic{}, fmt.Errorf("row: %d column names for %d values", len(names), len(values))
 	}

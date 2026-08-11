@@ -1,11 +1,12 @@
 package schema
 
-// TableOption configures NewTable and MustTable. A column constructor such
-// as Integer or Text and a constraint constructor such as PrimaryKey, Unique,
-// Check, Index, or ForeignKey each return a TableOption, so every argument to
-// NewTable shares this one type regardless of what it declares.
+// TableOption configures NewTableDef and MustTableDef. A column constructor
+// such as Integer or Text and a constraint constructor such as PrimaryKey,
+// Unique, Check, Index, or ForeignKey each return a TableOption, so every
+// argument to NewTableDef shares this one type regardless of what it
+// declares.
 //
-// NewTable applies every option to a tableBuilder before assembling the
+// NewTableDef applies every option to a tableBuilder before assembling the
 // descriptor, collecting columns and constraints into separate lists rather
 // than building the TableDef incrementally. That separation is what lets
 // PrimaryKey("id") appear before Integer("id"): order among TableOptions
@@ -14,7 +15,7 @@ type TableOption interface {
 	applyTable(*tableBuilder) error
 }
 
-// tableBuilder accumulates the pieces of a TableDef while NewTable applies
+// tableBuilder accumulates the pieces of a TableDef while NewTableDef applies
 // options, so they can be assembled into the descriptor once every option
 // has run.
 type tableBuilder struct {
@@ -29,15 +30,15 @@ type tableBuilder struct {
 	relationships     []RelationshipDef
 }
 
-// NewTable assembles a TableDef named name from opts. It collects the columns
-// and constraints each option declares, in the order NewTable receives them
-// rather than the order in which they configure the descriptor, so the
-// options themselves may appear in any order. The assembled descriptor is
-// then validated exactly as TableDef.Validate would validate a hand-built
-// struct literal, and the first error encountered, from an option or from
-// validation, is returned wrapped in no additional context: every error
-// NewTable can return is already a *ValidationError.
-func NewTable(name string, opts ...TableOption) (TableDef, error) {
+// NewTableDef assembles a TableDef named name from opts. It collects the
+// columns and constraints each option declares, in the order NewTableDef
+// receives them rather than the order in which they configure the
+// descriptor, so the options themselves may appear in any order. The
+// assembled descriptor is then validated exactly as TableDef.Validate would
+// validate a hand-built struct literal, and the first error encountered,
+// from an option or from validation, is returned wrapped in no additional
+// context: every error NewTableDef can return is already a *ValidationError.
+func NewTableDef(name string, opts ...TableOption) (TableDef, error) {
 	var builder tableBuilder
 	for _, opt := range opts {
 		if opt == nil {
@@ -65,12 +66,13 @@ func NewTable(name string, opts ...TableOption) (TableDef, error) {
 	return table, nil
 }
 
-// MustTable is NewTable but panics instead of returning an error. It suits a
-// table built once, at package initialization, from a fixed set of options,
-// where a caller has no path to recover from a mistake in the descriptor and
-// would otherwise have to check an error that can only mean a bug.
-func MustTable(name string, opts ...TableOption) TableDef {
-	table, err := NewTable(name, opts...)
+// MustTableDef is NewTableDef but panics instead of returning an error. It
+// suits a table built once, at package initialization, from a fixed set of
+// options, where a caller has no path to recover from a mistake in the
+// descriptor and would otherwise have to check an error that can only mean a
+// bug.
+func MustTableDef(name string, opts ...TableOption) TableDef {
+	table, err := NewTableDef(name, opts...)
 	if err != nil {
 		panic(err)
 	}
@@ -80,7 +82,7 @@ func MustTable(name string, opts ...TableOption) TableDef {
 // schemaTableOption sets the namespace a table is qualified with.
 type schemaTableOption string
 
-// InSchema qualifies a table built by NewTable or MustTable with a
+// InSchema qualifies a table built by NewTableDef or MustTableDef with a
 // namespace, exactly like setting TableDef.Schema on a struct literal: a
 // PostgreSQL schema, a MySQL database, or a SQLite attached-database name.
 func InSchema(name string) TableOption {

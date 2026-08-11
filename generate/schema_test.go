@@ -35,7 +35,7 @@ var _ row.GeneratedRow = (*generated.UsersRow)(nil)
 
 func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"id", "email", "created_at"},
 		[]any{int64(7), "ada@example.com", createdAt},
 	)
@@ -50,7 +50,7 @@ func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
 	require.Equal(t, createdAt, decoded.CreatedAt)
 
 	// A nullable column decodes into a nil pointer rather than failing.
-	nullEmail, err := row.New(
+	nullEmail, err := row.NewDynamic(
 		[]string{"id", "email", "created_at"},
 		[]any{int64(7), nil, createdAt},
 	)
@@ -60,7 +60,7 @@ func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
 	require.Nil(t, decoded.Email)
 
 	// A missing column is reported by the generated DecodeRow.
-	partial, err := row.New([]string{"id"}, []any{int64(7)})
+	partial, err := row.NewDynamic([]string{"id"}, []any{int64(7)})
 	require.NoError(t, err)
 	_, err = row.Decode[generated.UsersRow](partial)
 	require.ErrorContains(t, err, ` + "`" + `column "email" is not present` + "`" + `)
@@ -277,8 +277,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "\tCreatedAt query.ColumnRef\n")
 	require.Contains(t, string(source), "func newUsersTable(table rasql.Table[UsersRow]) UsersTable {")
 	require.Contains(t, string(source), "CreatedAt: rasql.MustColumn(table, \"created_at\"),")
-	require.Contains(t, string(source), "var ordersTable = newOrdersTable(rasql.MustTableOf[OrdersRow](schema.MustTable(\"orders\",")
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable(\"users\",")
+	require.Contains(t, string(source), "var ordersTable = newOrdersTable(rasql.MustTableOf[OrdersRow](schema.MustTableDef(\"orders\",")
+	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef(\"users\",")
 	require.Contains(t, string(source), "func Orders() OrdersTable {")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 	require.Contains(t, string(source), "type OrdersTableUserRelation struct {")
@@ -472,7 +472,7 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 	require.Contains(t, string(source), "func (t OrdersTable) User() OrdersTableUserRelation")
 	require.Contains(t, string(source), "func (t UsersTable) Orders() UsersTableOrdersRelation")
 	require.Contains(t, string(source), "func (r UsersTableOrdersRelation) Load")
-	require.Contains(t, string(source), `schema.As("User")`)
+	require.Contains(t, string(source), `schema.RelationshipNamed("User")`)
 	require.Contains(t, string(usersSource), "func (t UsersTable) Orders() UsersTableOrdersRelation")
 	require.Contains(t, string(ordersSource), "func (t OrdersTable) User() OrdersTableUserRelation")
 

@@ -998,7 +998,7 @@ func timeScannerTypeName(tableName string) string {
 func writeTimeScannerLiteral(source *bytes.Buffer, tableName string, column schema.ColumnDef, destination string) {
 	source.WriteString(timeScannerTypeName(tableName))
 	source.WriteString("(func(value any) error {\n")
-	source.WriteString("\t\tdecoded, err := row.New([]string{")
+	source.WriteString("\t\tdecoded, err := row.NewDynamic([]string{")
 	source.WriteString(quote(column.Name))
 	source.WriteString("}, []any{value})\n")
 	source.WriteString("\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
@@ -1066,13 +1066,13 @@ func rowFieldType(column schema.ColumnDef) string {
 	}
 }
 
-// writeTable emits table as a schema.MustTable call built from the option
+// writeTable emits table as a schema.MustTableDef call built from the option
 // constructors: a column constructor per column, PrimaryKey, Unique or
 // UniqueNamed, Check or CheckNamed, Index or UniqueIndex, ForeignKey or
-// ForeignKeyOn with As for a matching relationship, and InSchema when table
-// names a schema.
+// ForeignKeyOn with RelationshipNamed for a matching relationship, and
+// InSchema when table names a schema.
 func writeTable(source *bytes.Buffer, table schema.TableDef) {
-	source.WriteString("schema.MustTable(")
+	source.WriteString("schema.MustTableDef(")
 	source.WriteString(quote(table.Name))
 	source.WriteString(",\n")
 	if table.Schema != "" {
@@ -1202,7 +1202,7 @@ func writeIndexOptions(source *bytes.Buffer, indexes []schema.IndexDef) {
 
 // writeForeignKeyOptions emits ForeignKey for a single-column key and
 // ForeignKeyOn for a composite one, followed by Named, References or
-// ReferencesIn, OnDelete, OnUpdate, and As for the relationship, if any,
+// ReferencesIn, OnDelete, OnUpdate, and RelationshipNamed for the relationship, if any,
 // that relationshipMatchesForeignKey matches to key. relationships is
 // table.Relationships after prepareSchema's merge, so every foreign key that
 // rasqlgen would derive an unnamed relationship for already carries one.
@@ -1246,7 +1246,7 @@ func writeForeignKeyOptions(source *bytes.Buffer, keys []schema.ForeignKeyDef, r
 			source.WriteString(")")
 		}
 		if name, ok := matchingRelationshipName(key, relationships); ok {
-			source.WriteString(", schema.As(")
+			source.WriteString(", schema.RelationshipNamed(")
 			source.WriteString(quote(name))
 			source.WriteString(")")
 		}

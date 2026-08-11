@@ -42,7 +42,7 @@ func Example_rasql_group_by() {
 		Status string
 		Total  int64
 	}
-	tasks := rasql.MustTableOf[taskRow](schema.MustTable("tasks",
+	tasks := rasql.MustTableOf[taskRow](schema.MustTableDef("tasks",
 		schema.Integer("id"),
 		schema.Text("status"),
 		schema.PrimaryKey("id"),

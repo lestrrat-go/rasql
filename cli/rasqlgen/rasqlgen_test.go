@@ -38,7 +38,7 @@ func TestRunSchemaGeneratesSource(t *testing.T) {
 	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable(\"users\",")
+	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef(\"users\",")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 }
 
@@ -388,7 +388,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable(\"users\",")
+	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef(\"users\",")
 	// inspect never reports a namespace, so the generated descriptor must not
 	// qualify the table with one.
 	require.NotContains(t, string(source), "schema.InSchema(")

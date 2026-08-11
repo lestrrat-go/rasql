@@ -47,7 +47,7 @@ func Example_schema_qualified_table() {
 	}
 
 	// InSchema qualifies the table without changing how any other option works.
-	events := rasql.MustTableOf[eventRow](schema.MustTable("events",
+	events := rasql.MustTableOf[eventRow](schema.MustTableDef("events",
 		schema.InSchema("audit"),
 		schema.Integer("id"),
 		schema.Text("action"),

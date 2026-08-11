@@ -12,7 +12,7 @@ import (
 func TestTypedColumnsDecodeValues(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
 	inputBytes := []byte("payload")
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"active", "id", "ratio", "name", "payload", "created_at"},
 		[]any{true, int64(42), 1.5, []byte("Ada"), inputBytes, createdAt},
 	)
@@ -56,7 +56,7 @@ func TestTypedColumnsDecodeValues(t *testing.T) {
 
 func TestTypedColumnsDecodeSQLiteValues(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"active", "created_at"},
 		[]any{int64(1), createdAt.String()},
 	)
@@ -76,7 +76,7 @@ func TestTypedColumnsDecodeSQLiteValues(t *testing.T) {
 }
 
 func TestNullableDecoderPreservesNull(t *testing.T) {
-	result, err := row.New([]string{"name"}, []any{nil})
+	result, err := row.NewDynamic([]string{"name"}, []any{nil})
 	require.NoError(t, err)
 	name, err := row.NewColumn("name", row.Nullable(row.ColumnDecoderFunc[string](func(value any) (string, error) {
 		return value.(string), nil
@@ -89,7 +89,7 @@ func TestNullableDecoderPreservesNull(t *testing.T) {
 }
 
 func TestNullableDecoderPreservesNullWithNilDecoder(t *testing.T) {
-	result, err := row.New([]string{"name"}, []any{nil})
+	result, err := row.NewDynamic([]string{"name"}, []any{nil})
 	require.NoError(t, err)
 	var decoder row.ColumnDecoder[string]
 	name, err := row.NewColumn("name", row.Nullable(decoder))
@@ -101,7 +101,7 @@ func TestNullableDecoderPreservesNullWithNilDecoder(t *testing.T) {
 }
 
 func TestNullableDecoderRejectsNilDecoder(t *testing.T) {
-	result, err := row.New([]string{"name"}, []any{"Ada"})
+	result, err := row.NewDynamic([]string{"name"}, []any{"Ada"})
 	require.NoError(t, err)
 	var typedNil row.ColumnDecoderFunc[string]
 
@@ -129,7 +129,7 @@ func TestNewColumnRejectsTypedNilDecoder(t *testing.T) {
 }
 
 func TestTypedColumnsRejectWrongType(t *testing.T) {
-	result, err := row.New([]string{"id"}, []any{"42"})
+	result, err := row.NewDynamic([]string{"id"}, []any{"42"})
 	require.NoError(t, err)
 	id, err := row.Int64("id")
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestTypedColumnsRejectWrongType(t *testing.T) {
 }
 
 func TestGetAndDecodePopulateTypedValues(t *testing.T) {
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"id", "email", "nickname"},
 		[]any{int64(42), []byte("ada@example.com"), nil},
 	)
@@ -169,7 +169,7 @@ func TestGetAndDecodePopulateTypedValues(t *testing.T) {
 }
 
 func TestDecodeRejectsMissingColumnsAndUnsupportedDestinations(t *testing.T) {
-	result, err := row.New([]string{"id"}, []any{int64(42)})
+	result, err := row.NewDynamic([]string{"id"}, []any{int64(42)})
 	require.NoError(t, err)
 
 	type user struct {
@@ -182,7 +182,7 @@ func TestDecodeRejectsMissingColumnsAndUnsupportedDestinations(t *testing.T) {
 }
 
 func TestAssignDecodesIntoDestination(t *testing.T) {
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"id", "email", "nickname"},
 		[]any{int64(42), []byte("ada@example.com"), nil},
 	)
@@ -226,7 +226,7 @@ func TestAssignDecodesIntoDestination(t *testing.T) {
 // driver protocols deliver int64 for a tiny field, and unsigned driver values
 // must be covered too.
 func TestAssignDecodesBoolFromAnyNonzeroInteger(t *testing.T) {
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"zero", "two", "unsigned_two", "negative_one", "not_an_integer"},
 		[]any{int64(0), int64(2), uint64(2), int64(-1), "true"},
 	)
@@ -260,7 +260,7 @@ func TestAssignDecodesBoolFromAnyNonzeroInteger(t *testing.T) {
 // int64 for a narrower unsigned one, so a uint64 field has to accept both. A
 // value that does not fit the destination is an error, never a wrap.
 func TestAssignDecodesIntegersAcrossSignedness(t *testing.T) {
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"big_unsigned", "narrow_unsigned", "negative", "small_unsigned"},
 		[]any{uint64(18446744073709551615), int64(42), int64(-1), uint64(7)},
 	)
@@ -306,7 +306,7 @@ func TestAssignDecodesIntegersAcrossSignedness(t *testing.T) {
 // destination accepts neither, so the generated field could never decode it.
 func TestAssignRejectsExactDecimalSourcesForFloat64(t *testing.T) {
 	t.Run("string source", func(t *testing.T) {
-		result, err := row.New([]string{"pg_numeric"}, []any{"12.50"})
+		result, err := row.NewDynamic([]string{"pg_numeric"}, []any{"12.50"})
 		require.NoError(t, err)
 
 		var destination float64
@@ -315,7 +315,7 @@ func TestAssignRejectsExactDecimalSourcesForFloat64(t *testing.T) {
 	})
 
 	t.Run("byte slice source", func(t *testing.T) {
-		result, err := row.New([]string{"mysql_decimal"}, []any{[]byte("12.50")})
+		result, err := row.NewDynamic([]string{"mysql_decimal"}, []any{[]byte("12.50")})
 		require.NoError(t, err)
 
 		var destination float64
@@ -331,7 +331,7 @@ func TestAssignRejectsExactDecimalSourcesForFloat64(t *testing.T) {
 // this test exists to pin the behavior that design depends on.
 func TestAssignDecodesExactDecimalIntoString(t *testing.T) {
 	t.Run("string source", func(t *testing.T) {
-		result, err := row.New([]string{"pg_numeric"}, []any{"1234.5678901234567890"})
+		result, err := row.NewDynamic([]string{"pg_numeric"}, []any{"1234.5678901234567890"})
 		require.NoError(t, err)
 
 		var destination string
@@ -340,7 +340,7 @@ func TestAssignDecodesExactDecimalIntoString(t *testing.T) {
 	})
 
 	t.Run("byte slice source", func(t *testing.T) {
-		result, err := row.New([]string{"mysql_decimal"}, []any{[]byte("1234.5678901234567890")})
+		result, err := row.NewDynamic([]string{"mysql_decimal"}, []any{[]byte("1234.5678901234567890")})
 		require.NoError(t, err)
 
 		var destination string
@@ -383,7 +383,7 @@ func (c *selfDecodedCount) DecodeRow(r row.Dynamic) error {
 }
 
 func TestDecodePrefersRowDecoder(t *testing.T) {
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"id", "email", "nickname"},
 		[]any{int64(42), []byte("ada@example.com"), int64(7)},
 	)
@@ -531,7 +531,7 @@ func (u *pointerDecodingWrapper) DecodeRow(r row.Dynamic) error {
 }
 
 func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"id", "email", "nickname", "label"},
 		[]any{int64(42), []byte("ada@example.com"), int64(7), []byte("ada")},
 	)
@@ -604,7 +604,7 @@ func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
 }
 
 func TestDecodeFollowsDeclaredRowDecoder(t *testing.T) {
-	result, err := row.New(
+	result, err := row.NewDynamic(
 		[]string{"id", "email", "nickname"},
 		[]any{int64(42), []byte("ada@example.com"), int64(7)},
 	)
@@ -626,9 +626,9 @@ func TestDecodeFollowsDeclaredRowDecoder(t *testing.T) {
 }
 
 func TestNewRejectsInvalidShape(t *testing.T) {
-	_, err := row.New([]string{"id"}, nil)
+	_, err := row.NewDynamic([]string{"id"}, nil)
 	require.Error(t, err)
 
-	_, err = row.New([]string{"id", "id"}, []any{int64(1), int64(2)})
+	_, err = row.NewDynamic([]string{"id", "id"}, []any{int64(1), int64(2)})
 	require.Error(t, err)
 }

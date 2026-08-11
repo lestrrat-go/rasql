@@ -5,8 +5,8 @@ type ForeignKeyOption interface {
 	applyForeignKey(*foreignKeyBuilder) error
 }
 
-// foreignKeyBuilder accumulates a ForeignKeyDef and, when As names one, the
-// belongs-to Relationship derived from it. The relationship is kept apart
+// foreignKeyBuilder accumulates a ForeignKeyDef and, when RelationshipNamed
+// names one, the belongs-to Relationship derived from it. The relationship is kept apart
 // from ForeignKeyDef itself: it is a distinct descriptor, appended to the
 // table's own Relationships rather than carried on the foreign key.
 type foreignKeyBuilder struct {
@@ -32,7 +32,7 @@ func (o foreignKeyTableOption) applyTable(b *tableBuilder) error {
 		return nil
 	}
 	if o.builder.relationshipName == "" {
-		return validationError("foreign_keys", "As name must not be empty")
+		return validationError("foreign_keys", "RelationshipNamed name must not be empty")
 	}
 	b.relationships = append(b.relationships, RelationshipDef{
 		Name:              o.builder.relationshipName,
@@ -137,12 +137,12 @@ func (o onUpdateForeignKeyOption) applyForeignKey(b *foreignKeyBuilder) error {
 // foreign key.
 type asForeignKeyOption string
 
-// As derives a schema.RelationshipDef of kind RelationshipBelongsTo from the
-// foreign key, named name, exactly as schema.TableDef{Relationships: ...}
-// would state one by hand. Set it when the generated method name should
-// differ from the one rasqlgen would otherwise derive from the local column
-// name.
-func As(name string) ForeignKeyOption {
+// RelationshipNamed derives a schema.RelationshipDef of kind
+// RelationshipBelongsTo from the foreign key, named name, exactly as
+// schema.TableDef{Relationships: ...} would state one by hand. Set it when
+// the generated method name should differ from the one rasqlgen would
+// otherwise derive from the local column name.
+func RelationshipNamed(name string) ForeignKeyOption {
 	return asForeignKeyOption(name)
 }
 
