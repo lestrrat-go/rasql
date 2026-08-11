@@ -80,7 +80,7 @@ func Example_schema_qualified_table() {
 
 	// QualifiedName is for display only, never a SQL identifier: the renderer
 	// quotes Schema and Name as two separate identifiers.
-	fmt.Printf("%s: %s\n", events.QueryTable().QualifiedName(), event.Action)
+	fmt.Printf("%s: %s\n", events.Ref().QualifiedName(), event.Action)
 
 	// Output:
 	// audit.events: created

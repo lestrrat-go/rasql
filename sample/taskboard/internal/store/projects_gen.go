@@ -96,10 +96,10 @@ func (r ProjectsRow) ColumnValue(name string) (any, bool) {
 // ProjectsTable is the generated table type for the "projects" table.
 type ProjectsTable struct {
 	rasql.Table[ProjectsRow]
-	ID       query.Column
-	OwnerID  query.Column
-	Name     query.Column
-	Archived query.Column
+	ID       query.ColumnRef
+	OwnerID  query.ColumnRef
+	Name     query.ColumnRef
+	Archived query.ColumnRef
 }
 
 func newProjectsTable(table rasql.Table[ProjectsRow]) ProjectsTable {

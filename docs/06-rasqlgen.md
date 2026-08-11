@@ -81,8 +81,8 @@ func (r UsersRow) ColumnValue(name string) (any, bool) {
 // UsersTable is the generated table type for the "users" table.
 type UsersTable struct {
 	rasql.Table[UsersRow]
-	ID    query.Column
-	Email query.Column
+	ID    query.ColumnRef
+	Email query.ColumnRef
 }
 
 func newUsersTable(table rasql.Table[UsersRow]) UsersTable {
@@ -110,7 +110,7 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 }
 ```
 
-`store.Users()` returns a `store.UsersTable`, ready for `rasql.SelectFrom`, `rasql.Insert`, and `rasql.Update` because it embeds `rasql.Table[store.UsersRow]`. Its column fields are what the typed builders take: `store.Users().ID` is a `query.Column`, so `WhereEqual(users.ID, 1)` cannot name a column the table does not have. `store.Users().QueryTable()` gives the `query.Table` the lower-level API takes.
+`store.Users()` returns a `store.UsersTable`, ready for `rasql.SelectFrom`, `rasql.Insert`, and `rasql.Update` because it embeds `rasql.Table[store.UsersRow]`. Its column fields are what the typed builders take: `store.Users().ID` is a `query.ColumnRef`, so `WhereEqual(users.ID, 1)` cannot name a column the table does not have. `store.Users().Ref()` gives the `query.TableRef` the lower-level API takes.
 
 ### Generated relationships
 
@@ -197,13 +197,13 @@ Which fields put a wrapper on the field path is where the two directions still d
 A column named by a string is checked when the query runs, so these two lines are indistinguishable until then:
 
 ```go
-rasql.SelectQueryFrom(store.Users().QueryTable()).WhereEqual("id", 42)
-rasql.SelectQueryFrom(store.Users().QueryTable()).WhereEqual("emial", 42)
+rasql.SelectFromRef(store.Users().Ref()).WhereEqual("id", 42)
+rasql.SelectFromRef(store.Users().Ref()).WhereEqual("emial", 42)
 ```
 
 The second one fails on execution with `rasql: render SELECT: query column: table "users" has no column "emial"`, wherever the query first runs.
 
-The typed builder takes a `query.Column` instead, so the same typo stops at the compiler:
+The typed builder takes a `query.ColumnRef` instead, so the same typo stops at the compiler:
 
 ```go
 users := store.Users()
@@ -218,15 +218,15 @@ users.Emial undefined (type UsersTable has no field or method Emial)
 Passing a name instead of a field does not compile either:
 
 ```
-cannot use "id" (untyped string constant) as query.Column value in argument to
+cannot use "id" (untyped string constant) as query.ColumnRef value in argument to
 rasql.SelectFrom(users).WhereEqual
 ```
 
-Three things make that work. The generator derives each field from the same descriptor it renders SQL from, so the field list and the table cannot drift apart. The builders accept a `query.Column` rather than a name, so there is no string left to misspell. Each field is bound to its table once, when the table value is built, which is why `As` rebuilds them and an aliased table qualifies its columns correctly.
+Three things make that work. The generator derives each field from the same descriptor it renders SQL from, so the field list and the table cannot drift apart. The builders accept a `query.ColumnRef` rather than a name, so there is no string left to misspell. Each field is bound to its table once, when the table value is built, which is why `As` rebuilds them and an aliased table qualifies its columns correctly.
 
 The payoff arrives at the next migration. Drop or rename a column, regenerate, and every use of the old field stops compiling, instead of failing one query at a time in production.
 
-Three mistakes still reach run time. A column of another table is a valid `query.Column`, so it compiles and fails when the statement is built:
+Three mistakes still reach run time. A column of another table is a valid `query.ColumnRef`, so it compiles and fails when the statement is built:
 
 ```
 query: where.left: references table "orders" outside the statement
@@ -257,7 +257,7 @@ A `boolean` column decodes from any integer value, not just 0 and 1: zero decode
 
 An `integer` column that sets `Unsigned` generates a `uint64` field rather than an `int64` one, because it reaches 18446744073709551615 and `int64` stops at 9223372036854775807. The generated descriptor restates `schema.Unsigned()`, so regenerating from the emitted source produces the same column instead of a signed one, and a `schema.TableDef` read through `-input` keeps it too, since it is a plain JSON boolean. See [Unsigned integer columns](02-schema.md#unsigned-integer-columns) for which engines can render such a column.
 
-The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `QueryTable`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `DecodeRow` or `ColumnValue`, because those belong to the row type's own mapping methods.
+The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `DecodeRow` or `ColumnValue`, because those belong to the row type's own mapping methods.
 
 ## `rasqlgen query`
 

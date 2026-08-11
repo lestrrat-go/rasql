@@ -17,8 +17,8 @@ type UserRow struct {
 // mistyped column name fails to compile instead of failing at run time.
 type UsersTable struct {
 	rasql.Table[UserRow]
-	ID    query.Column
-	Email query.Column
+	ID    query.ColumnRef
+	Email query.ColumnRef
 }
 
 func newUsersTable(table rasql.Table[UserRow]) UsersTable {

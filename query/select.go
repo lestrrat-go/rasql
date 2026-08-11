@@ -40,17 +40,17 @@ const (
 // Join adds a joined table to a SELECT statement.
 type Join struct {
 	kind   JoinType
-	source Table
+	source TableRef
 	on     Expression
 }
 
 // InnerJoin returns an INNER JOIN.
-func InnerJoin(source Table, on Expression) Join {
+func InnerJoin(source TableRef, on Expression) Join {
 	return Join{kind: JoinInner, source: source, on: on}
 }
 
 // LeftJoin returns a LEFT JOIN.
-func LeftJoin(source Table, on Expression) Join {
+func LeftJoin(source TableRef, on Expression) Join {
 	return Join{kind: JoinLeft, source: source, on: on}
 }
 
@@ -60,7 +60,7 @@ func (j Join) Type() JoinType {
 }
 
 // Source returns the joined table.
-func (j Join) Source() Table {
+func (j Join) Source() TableRef {
 	return j.source
 }
 
@@ -98,7 +98,7 @@ func (o Order) Descending() bool {
 // Select is an immutable SELECT statement.
 type Select struct {
 	projections []Projection
-	from        Table
+	from        TableRef
 	joins       []Join
 	where       Expression
 	groupBy     []Expression
@@ -112,7 +112,7 @@ type Select struct {
 }
 
 // NewSelect creates a validated SELECT statement.
-func NewSelect(from Table, projections ...Projection) (Select, error) {
+func NewSelect(from TableRef, projections ...Projection) (Select, error) {
 	return NewJoinedSelect(from, nil, nil, projections...)
 }
 
@@ -123,7 +123,7 @@ func NewSelect(from Table, projections ...Projection) (Select, error) {
 // NewSelect would refuse the projection set before WithGroupBy could make it
 // legal. A grouping expression must not call an aggregate function and must not
 // be a bare bound value.
-func NewGroupedSelect(from Table, groupBy []Expression, projections ...Projection) (Select, error) {
+func NewGroupedSelect(from TableRef, groupBy []Expression, projections ...Projection) (Select, error) {
 	return NewJoinedSelect(from, nil, groupBy, projections...)
 }
 
@@ -137,7 +137,7 @@ func NewGroupedSelect(from Table, groupBy []Expression, projections ...Projectio
 // reads the joined table, because validation has already refused it. Supply the
 // joins here whenever any projection or grouping expression reads a joined
 // table's column. Pass a nil groupBy for a statement that does not group.
-func NewJoinedSelect(from Table, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
+func NewJoinedSelect(from TableRef, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
 	statement := Select{
 		from:        from,
 		joins:       append([]Join(nil), joins...),
@@ -259,7 +259,7 @@ func (s Select) Projections() []Projection {
 }
 
 // From returns the statement's primary table.
-func (s Select) From() Table {
+func (s Select) From() TableRef {
 	return s.from
 }
 

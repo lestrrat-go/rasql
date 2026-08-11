@@ -14,7 +14,7 @@ type WriteStatement interface {
 // Upsert is an immutable INSERT statement with conflict handling.
 type Upsert struct {
 	insert      Insert
-	conflict    []Column
+	conflict    []ColumnRef
 	assignments []Assignment
 	returning   []Projection
 }
@@ -26,10 +26,10 @@ func (Upsert) writeStatement() {}
 // target columns when a conflict occurs. Rendering a non-empty conflict target
 // requires dialect.CapabilityConflictTarget; dialects that lack it (for example
 // MySQL) reject the statement rather than silently drop the target.
-func NewUpsert(insert Insert, conflict []Column, assignments []Assignment) (Upsert, error) {
+func NewUpsert(insert Insert, conflict []ColumnRef, assignments []Assignment) (Upsert, error) {
 	statement := Upsert{
 		insert:      insert.clone(),
-		conflict:    append([]Column(nil), conflict...),
+		conflict:    append([]ColumnRef(nil), conflict...),
 		assignments: append([]Assignment(nil), assignments...),
 	}
 	if err := statement.Validate(); err != nil {
@@ -54,8 +54,8 @@ func (s Upsert) Insert() Insert {
 }
 
 // ConflictColumns returns a copy of the explicit conflict target.
-func (s Upsert) ConflictColumns() []Column {
-	return append([]Column(nil), s.conflict...)
+func (s Upsert) ConflictColumns() []ColumnRef {
+	return append([]ColumnRef(nil), s.conflict...)
 }
 
 // Assignments returns a copy of conflict-update assignments.
@@ -114,7 +114,7 @@ func (s Upsert) Validate() error {
 func (s Upsert) clone() Upsert {
 	copy := s
 	copy.insert = s.insert.clone()
-	copy.conflict = append([]Column(nil), s.conflict...)
+	copy.conflict = append([]ColumnRef(nil), s.conflict...)
 	copy.assignments = append([]Assignment(nil), s.assignments...)
 	copy.returning = append([]Projection(nil), s.returning...)
 	return copy
@@ -122,17 +122,17 @@ func (s Upsert) clone() Upsert {
 
 // Assignment sets column to expression in an UPDATE statement.
 type Assignment struct {
-	column Column
+	column ColumnRef
 	value  Expression
 }
 
 // Set assigns value to column.
-func Set(column Column, value Expression) Assignment {
+func Set(column ColumnRef, value Expression) Assignment {
 	return Assignment{column: column, value: value}
 }
 
 // Column returns the assigned column.
-func (a Assignment) Column() Column {
+func (a Assignment) Column() ColumnRef {
 	return a.column
 }
 
@@ -144,8 +144,8 @@ func (a Assignment) Value() Expression {
 // Insert is an immutable INSERT statement. It inserts one or more rows, or the
 // database defaults for every column.
 type Insert struct {
-	into          Table
-	columns       []Column
+	into          TableRef
+	columns       []ColumnRef
 	rows          [][]Expression
 	defaultValues bool
 	returning     []Projection
@@ -155,7 +155,7 @@ func (Insert) writeStatement() {}
 
 // NewInsert creates a validated INSERT statement for one row. It is the one-row
 // form of NewInsertRows.
-func NewInsert(into Table, columns []Column, values []Expression) (Insert, error) {
+func NewInsert(into TableRef, columns []ColumnRef, values []Expression) (Insert, error) {
 	return NewInsertRows(into, columns, [][]Expression{values})
 }
 
@@ -176,10 +176,10 @@ func NewInsert(into Table, columns []Column, values []Expression) (Insert, error
 // however many [Bind] values are nested inside it. See the Parameter limits
 // section of the package documentation for the caps and for how to stay under
 // them.
-func NewInsertRows(into Table, columns []Column, rows [][]Expression) (Insert, error) {
+func NewInsertRows(into TableRef, columns []ColumnRef, rows [][]Expression) (Insert, error) {
 	statement := Insert{
 		into:    into,
-		columns: append([]Column(nil), columns...),
+		columns: append([]ColumnRef(nil), columns...),
 		rows:    cloneRows(rows),
 	}
 	if err := statement.Validate(); err != nil {
@@ -212,7 +212,7 @@ func cloneRows(rows [][]Expression) [][]Expression {
 
 // NewDefaultInsert creates a validated INSERT statement that uses the database
 // defaults for every column.
-func NewDefaultInsert(into Table) (Insert, error) {
+func NewDefaultInsert(into TableRef) (Insert, error) {
 	statement := Insert{into: into, defaultValues: true}
 	if err := statement.Validate(); err != nil {
 		return Insert{}, err
@@ -231,13 +231,13 @@ func (s Insert) WithReturning(projections ...Projection) (Insert, error) {
 }
 
 // Into returns the target table.
-func (s Insert) Into() Table {
+func (s Insert) Into() TableRef {
 	return s.into
 }
 
 // Columns returns a copy of the inserted columns.
-func (s Insert) Columns() []Column {
-	return append([]Column(nil), s.columns...)
+func (s Insert) Columns() []ColumnRef {
+	return append([]ColumnRef(nil), s.columns...)
 }
 
 // Rows returns a copy of the inserted rows, one slice of expressions per row, in
@@ -304,7 +304,7 @@ func (s Insert) Validate() error {
 
 func (s Insert) clone() Insert {
 	copy := s
-	copy.columns = append([]Column(nil), s.columns...)
+	copy.columns = append([]ColumnRef(nil), s.columns...)
 	copy.rows = cloneRows(s.rows)
 	copy.returning = append([]Projection(nil), s.returning...)
 	return copy
@@ -312,7 +312,7 @@ func (s Insert) clone() Insert {
 
 // Update is an immutable UPDATE statement.
 type Update struct {
-	table     Table
+	table     TableRef
 	sets      []Assignment
 	where     Expression
 	returning []Projection
@@ -323,7 +323,7 @@ func (Update) writeStatement() {}
 
 // NewUpdate creates a validated UPDATE statement. A statement with no
 // predicate requires AllowAll before it can be rendered or executed.
-func NewUpdate(table Table, assignments ...Assignment) (Update, error) {
+func NewUpdate(table TableRef, assignments ...Assignment) (Update, error) {
 	statement := Update{table: table, sets: append([]Assignment(nil), assignments...)}
 	if err := statement.Validate(); err != nil {
 		return Update{}, err
@@ -369,7 +369,7 @@ func (s Update) WithReturning(projections ...Projection) (Update, error) {
 }
 
 // Table returns the target table.
-func (s Update) Table() Table {
+func (s Update) Table() TableRef {
 	return s.table
 }
 
@@ -436,7 +436,7 @@ func (s Update) clone() Update {
 
 // Delete is an immutable DELETE statement.
 type Delete struct {
-	from      Table
+	from      TableRef
 	where     Expression
 	returning []Projection
 	allowAll  bool
@@ -446,7 +446,7 @@ func (Delete) writeStatement() {}
 
 // NewDelete creates a validated DELETE statement.
 // A statement with no predicate requires AllowAll before it can be rendered or executed.
-func NewDelete(from Table) (Delete, error) {
+func NewDelete(from TableRef) (Delete, error) {
 	statement := Delete{from: from}
 	if err := statement.Validate(); err != nil {
 		return Delete{}, err
@@ -493,7 +493,7 @@ func (s Delete) WithReturning(projections ...Projection) (Delete, error) {
 }
 
 // From returns the target table.
-func (s Delete) From() Table {
+func (s Delete) From() TableRef {
 	return s.from
 }
 
@@ -529,7 +529,7 @@ func (s Delete) Validate() error {
 	return validateProjections(s.returning, sources, "returning")
 }
 
-func validateWriteTarget(table Table, path string) (map[string]struct{}, error) {
+func validateWriteTarget(table TableRef, path string) (map[string]struct{}, error) {
 	if err := table.validate(); err != nil {
 		return nil, validationError(path, "%s", err)
 	}
@@ -539,7 +539,7 @@ func validateWriteTarget(table Table, path string) (map[string]struct{}, error) 
 	return map[string]struct{}{table.key(): {}}, nil
 }
 
-func validateTargetColumn(column Column, table Table, path string) error {
+func validateTargetColumn(column ColumnRef, table TableRef, path string) error {
 	if err := column.source.validate(); err != nil {
 		return validationError(path, "%s", err)
 	}

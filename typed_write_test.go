@@ -359,7 +359,7 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -399,7 +399,7 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -412,7 +412,7 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	statement, err := query.NewInsert(users, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
 	require.NoError(t, err)
@@ -554,7 +554,7 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -567,7 +567,7 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	statement, err := query.NewInsert(users, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
 	require.NoError(t, err)
@@ -591,7 +591,7 @@ func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -604,7 +604,7 @@ func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	statement, err := query.NewInsert(users, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
 	require.NoError(t, err)
@@ -684,7 +684,7 @@ func TestQueryWriteAllowsIncompleteCustomReturning(t *testing.T) {
 // QueryWriteOne error-path tests share.
 func deleteReturningStatement(t *testing.T) query.Delete {
 	t.Helper()
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},

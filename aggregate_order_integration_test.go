@@ -132,7 +132,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		require.NoError(t, err)
 	}
 
-	table, err := query.NewTable(definition)
+	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
 	id, err := table.Column("id")
 	require.NoError(t, err)

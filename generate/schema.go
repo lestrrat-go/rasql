@@ -24,7 +24,7 @@ var reservedFieldNames = map[string]struct{}{
 	"ColumnValue":      {},
 	"DecodeRow":        {},
 	"IsGeneratedRow":   {},
-	"QueryTable":       {},
+	"Ref":              {},
 	"ScanDestinations": {},
 	"ScanRow":          {},
 	"Table":            {},
@@ -418,7 +418,7 @@ func containsTime(tables []schema.TableDef) bool {
 }
 
 // writeTableType writes the exported wrapper type: the typed table plus one
-// query.Column field per column, so a mistyped column name fails to compile.
+// query.ColumnRef field per column, so a mistyped column name fails to compile.
 func writeTableType(source *bytes.Buffer, table schema.TableDef) {
 	typeName := tableTypeName(table.Name)
 	source.WriteString("// ")
@@ -434,7 +434,7 @@ func writeTableType(source *bytes.Buffer, table schema.TableDef) {
 	for _, column := range table.Columns {
 		source.WriteString("\t")
 		source.WriteString(goName(column.Name))
-		source.WriteString(" query.Column\n")
+		source.WriteString(" query.ColumnRef\n")
 	}
 	source.WriteString("}\n")
 }
@@ -727,7 +727,7 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 		source.WriteString(tableTypeName(relationship.parent.Name))
 		source.WriteString("\n\tChild ")
 		source.WriteString(tableTypeName(relationship.child.Name))
-		source.WriteString("\n\tParentKey query.Column\n\tChildKey query.Column\n}\n\n")
+		source.WriteString("\n\tParentKey query.ColumnRef\n\tChildKey query.ColumnRef\n}\n\n")
 
 		source.WriteString("// ")
 		source.WriteString(relationship.method)

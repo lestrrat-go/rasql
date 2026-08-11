@@ -176,7 +176,7 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	highSpenders, err := query.NewSelect(orders.QueryTable(), query.Project(orderUserID))
+	highSpenders, err := query.NewSelect(orders.Ref(), query.Project(orderUserID))
 	require.NoError(t, err)
 	highSpenders, err = highSpenders.WithWhere(query.GreaterThan(amount, query.Bind(50)))
 	require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []user{insertedUsers[0], insertedUsers[2]}, viaInSelect)
 
-	average, err := query.NewSelect(orders.QueryTable(), query.Project(query.Avg(amount)))
+	average, err := query.NewSelect(orders.Ref(), query.Project(query.Avg(amount)))
 	require.NoError(t, err)
 
 	viaScalar, err := rasql.DecodeFrom[user](users).
@@ -506,7 +506,7 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, rasql.Create(t.Context(), client, events))
-	queryEvents := events.QueryTable()
+	queryEvents := events.Ref()
 	id, err := queryEvents.Column("id")
 	require.NoError(t, err)
 	userID, err := queryEvents.Column("user_id")
@@ -515,7 +515,7 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multi-row INSERT into the qualified table.
-	insertRows, err := query.NewInsertRows(queryEvents, []query.Column{id, userID, action}, [][]query.Expression{
+	insertRows, err := query.NewInsertRows(queryEvents, []query.ColumnRef{id, userID, action}, [][]query.Expression{
 		{query.Bind(int64(1)), query.Bind(int64(10)), query.Bind("created")},
 		{query.Bind(int64(2)), query.Bind(int64(10)), query.Bind("updated")},
 		{query.Bind(int64(3)), query.Bind(int64(11)), query.Bind("created")},
@@ -623,7 +623,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	}
 	users, err := rasql.TableOf[returningUser](table)
 	require.NoError(t, err)
-	queryUsers := users.QueryTable()
+	queryUsers := users.Ref()
 	id, err := queryUsers.Column("id")
 	require.NoError(t, err)
 	email, err := queryUsers.Column("email")
@@ -632,7 +632,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, rasql.Create(t.Context(), client, users))
 
-	insert, err := query.NewInsert(queryUsers, []query.Column{email}, []query.Expression{query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(queryUsers, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	insert, err = insert.WithReturning(query.Project(id), query.Project(email), query.Project(status))
 	require.NoError(t, err)

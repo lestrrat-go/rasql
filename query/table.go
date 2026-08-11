@@ -31,24 +31,24 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Table identifies a table used by a statement.
-type Table struct {
+// TableRef identifies a table used by a statement.
+type TableRef struct {
 	definition schema.TableDef
 	alias      string
 }
 
-// NewTable validates definition and returns a table for it.
-func NewTable(definition schema.TableDef) (Table, error) {
+// NewTableRef validates definition and returns a table for it.
+func NewTableRef(definition schema.TableDef) (TableRef, error) {
 	if err := definition.Validate(); err != nil {
-		return Table{}, fmt.Errorf("query table: %w", err)
+		return TableRef{}, fmt.Errorf("query table: %w", err)
 	}
-	return Table{definition: definition.Clone()}, nil
+	return TableRef{definition: definition.Clone()}, nil
 }
 
-// MustNewTable returns a table for definition or panics when definition is invalid.
+// MustTableRef returns a table for definition or panics when definition is invalid.
 // It is intended for generated or otherwise static schema descriptors.
-func MustNewTable(definition schema.TableDef) Table {
-	table, err := NewTable(definition)
+func MustTableRef(definition schema.TableDef) TableRef {
+	table, err := NewTableRef(definition)
 	if err != nil {
 		panic(fmt.Sprintf("query table: %s", err))
 	}
@@ -56,12 +56,12 @@ func MustNewTable(definition schema.TableDef) Table {
 }
 
 // As returns a copy of t with alias as its SQL alias.
-func (t Table) As(alias string) (Table, error) {
+func (t TableRef) As(alias string) (TableRef, error) {
 	if err := t.validate(); err != nil {
-		return Table{}, err
+		return TableRef{}, err
 	}
 	if err := schema.ValidateIdentifier(alias); err != nil {
-		return Table{}, fmt.Errorf("query table alias: %w", err)
+		return TableRef{}, fmt.Errorf("query table alias: %w", err)
 	}
 	aliased := t
 	aliased.alias = alias
@@ -69,17 +69,17 @@ func (t Table) As(alias string) (Table, error) {
 }
 
 // Name returns the underlying table name.
-func (t Table) Name() string {
+func (t TableRef) Name() string {
 	return t.definition.Name
 }
 
 // Alias returns the SQL alias, or an empty string when the table is unaliased.
-func (t Table) Alias() string {
+func (t TableRef) Alias() string {
 	return t.alias
 }
 
 // Qualifier returns the identifier used to qualify a column.
-func (t Table) Qualifier() string {
+func (t TableRef) Qualifier() string {
 	if t.alias != "" {
 		return t.alias
 	}
@@ -88,7 +88,7 @@ func (t Table) Qualifier() string {
 
 // Schema returns the schema qualifying the table, or an empty string when the
 // table is unqualified.
-func (t Table) Schema() string {
+func (t TableRef) Schema() string {
 	return t.definition.Schema
 }
 
@@ -97,7 +97,7 @@ func (t Table) Schema() string {
 // qualified table is still qualified even though its columns render under the
 // alias alone. Read QualifierSchema instead to learn what, if anything,
 // qualifies a rendered column reference.
-func (t Table) Qualified() bool {
+func (t TableRef) Qualified() bool {
 	return t.definition.Qualified()
 }
 
@@ -105,7 +105,7 @@ func (t Table) Qualified() bool {
 // string when the table is aliased or unqualified. An alias replaces a
 // table's whole qualified name, so an aliased table's columns are never
 // schema-qualified.
-func (t Table) QualifierSchema() string {
+func (t TableRef) QualifierSchema() string {
 	if t.alias != "" {
 		return ""
 	}
@@ -115,7 +115,7 @@ func (t Table) QualifierSchema() string {
 // QualifiedName returns the table's name for an error message: the alias
 // when the table is aliased, "schema.name" when it is qualified, and "name"
 // otherwise. It is never a SQL identifier.
-func (t Table) QualifiedName() string {
+func (t TableRef) QualifiedName() string {
 	if t.alias != "" {
 		return t.alias
 	}
@@ -123,22 +123,22 @@ func (t Table) QualifiedName() string {
 }
 
 // Definition returns a copy of the underlying schema descriptor.
-func (t Table) Definition() schema.TableDef {
+func (t TableRef) Definition() schema.TableDef {
 	return t.definition.Clone()
 }
 
 // Column returns a reference to a named column in t.
-func (t Table) Column(name string) (Column, error) {
+func (t TableRef) Column(name string) (ColumnRef, error) {
 	if err := t.validate(); err != nil {
-		return Column{}, err
+		return ColumnRef{}, err
 	}
 	if _, ok := t.definition.Column(name); !ok {
-		return Column{}, fmt.Errorf("query column: table %q has no column %q", t.QualifiedName(), name)
+		return ColumnRef{}, fmt.Errorf("query column: table %q has no column %q", t.QualifiedName(), name)
 	}
-	return Column{source: t, name: name}, nil
+	return ColumnRef{source: t, name: name}, nil
 }
 
-func (t Table) validate() error {
+func (t TableRef) validate() error {
 	if err := t.definition.Validate(); err != nil {
 		return fmt.Errorf("query table: %w", err)
 	}
@@ -151,7 +151,7 @@ func (t Table) validate() error {
 	return nil
 }
 
-func (t Table) key() string {
+func (t TableRef) key() string {
 	return t.definition.Schema + "\x00" + t.definition.Name + "\x00" + t.alias
 }
 
@@ -173,7 +173,7 @@ type sourceReference struct {
 	descriptor string
 }
 
-func (t Table) reference() sourceReference {
+func (t TableRef) reference() sourceReference {
 	return sourceReference{
 		qualifier:  t.Qualifier(),
 		schema:     t.QualifierSchema(),

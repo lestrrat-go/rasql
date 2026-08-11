@@ -130,7 +130,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// two expectations above do -- expect firstStored, never first.
 	recordActive, err := records.Column("active")
 	require.NoError(t, err)
-	activeIDs, err := query.NewSelect(records.QueryTable(), query.Project(recordID))
+	activeIDs, err := query.NewSelect(records.Ref(), query.Project(recordID))
 	require.NoError(t, err)
 	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActive, query.Bind(true)))
 	require.NoError(t, err)
@@ -228,8 +228,8 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	thirdStored := third
 	thirdStored.Amount = "42.5000"
 	insert, err := query.NewInsert(
-		records.QueryTable(),
-		[]query.Column{recordID, recordActive, recordEmail, recordAmount},
+		records.Ref(),
+		[]query.ColumnRef{recordID, recordActive, recordEmail, recordAmount},
 		[]query.Expression{query.Bind(third.ID), query.Bind(third.Active), query.Bind(third.Email), query.Bind(third.Amount)},
 	)
 	require.NoError(t, err)

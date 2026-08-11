@@ -142,14 +142,14 @@ func TestGeneratedColumnFields(t *testing.T) {
 	require.Equal(t, "email", users.Email.Name())
 	require.Equal(t, "created_at", users.CreatedAt.Name())
 	require.Equal(t, "users", users.ID.Source().Qualifier())
-	require.Equal(t, "users", users.QueryTable().Name())
+	require.Equal(t, "users", users.Ref().Name())
 }
 
 func TestGeneratedAsRebindsColumns(t *testing.T) {
 	users := generated.Users()
 	manager, err := users.As("manager")
 	require.NoError(t, err)
-	require.Equal(t, "manager", manager.QueryTable().Qualifier())
+	require.Equal(t, "manager", manager.Ref().Qualifier())
 	require.Equal(t, "manager", manager.ID.Source().Qualifier())
 	require.Equal(t, "manager", manager.Email.Source().Qualifier())
 
@@ -162,7 +162,7 @@ func TestGeneratedSelfJoinRendersAlias(t *testing.T) {
 	manager, err := users.As("manager")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users.QueryTable(), query.Project(users.ID))
+	statement, err := query.NewSelect(users.Ref(), query.Project(users.ID))
 	require.NoError(t, err)
 	statement, err = statement.WithJoin(rasql.InnerJoin(manager, query.Equal(users.ID, manager.ID)))
 	require.NoError(t, err)
@@ -179,19 +179,19 @@ func TestGeneratedSelfJoinRendersAlias(t *testing.T) {
 func TestGeneratedRelationships(t *testing.T) {
 	orders := generated.Orders()
 	belongsTo := orders.User()
-	require.Equal(t, "users", belongsTo.Parent.QueryTable().Name())
-	require.Equal(t, "orders", belongsTo.Child.QueryTable().Name())
+	require.Equal(t, "users", belongsTo.Parent.Ref().Name())
+	require.Equal(t, "orders", belongsTo.Child.Ref().Name())
 	require.Equal(t, "id", belongsTo.ParentKey.Name())
 	require.Equal(t, "user_id", belongsTo.ChildKey.Name())
 
 	hasMany := generated.Users().Orders()
-	require.Equal(t, "users", hasMany.Parent.QueryTable().Name())
-	require.Equal(t, "orders", hasMany.Child.QueryTable().Name())
+	require.Equal(t, "users", hasMany.Parent.Ref().Name())
+	require.Equal(t, "orders", hasMany.Child.Ref().Name())
 }
 `
 
 // rejectedUsageSource must not compile. It names a column field that does not
-// exist and passes a column name where a query.Column is required.
+// exist and passes a column name where a query.ColumnRef is required.
 const rejectedUsageSource = `package rejected
 
 import (
@@ -274,7 +274,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
 	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/row\"")
 	require.Contains(t, string(source), "type UsersTable struct {\n\trasql.Table[UsersRow]\n")
-	require.Contains(t, string(source), "\tCreatedAt query.Column\n")
+	require.Contains(t, string(source), "\tCreatedAt query.ColumnRef\n")
 	require.Contains(t, string(source), "func newUsersTable(table rasql.Table[UsersRow]) UsersTable {")
 	require.Contains(t, string(source), "CreatedAt: rasql.MustColumn(table, \"created_at\"),")
 	require.Contains(t, string(source), "var ordersTable = newOrdersTable(rasql.MustTableOf[OrdersRow](schema.MustTable(\"orders\",")
@@ -324,7 +324,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	output, err = command.CombinedOutput()
 	require.Errorf(t, err, "misspelled column field compiled:\n%s", output)
 	require.Contains(t, string(output), "users.Emial undefined")
-	require.Contains(t, string(output), "as query.Column value")
+	require.Contains(t, string(output), "as query.ColumnRef value")
 }
 
 func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
@@ -378,12 +378,12 @@ func (e *recordingExecutor) ExecRendered(_ context.Context, _ render.Statement) 
 func TestGeneratedRelationships(t *testing.T) {
 	users := generated.Users()
 	orders := generated.Orders()
-	require.Equal(t, "tenant", users.QueryTable().Schema())
-	require.Equal(t, "tenant", orders.QueryTable().Schema())
+	require.Equal(t, "tenant", users.Ref().Schema())
+	require.Equal(t, "tenant", orders.Ref().Schema())
 
 	belongsTo := orders.User()
-	require.Equal(t, "tenant", belongsTo.Parent.QueryTable().Schema())
-	require.Equal(t, "tenant", belongsTo.Child.QueryTable().Schema())
+	require.Equal(t, "tenant", belongsTo.Parent.Ref().Schema())
+	require.Equal(t, "tenant", belongsTo.Child.Ref().Schema())
 	require.Equal(t, "id", belongsTo.ParentKey.Name())
 	require.Equal(t, "user_id", belongsTo.ChildKey.Name())
 	require.Equal(t, query.JoinInner, belongsTo.Join().Type())
@@ -761,7 +761,7 @@ func TestSchemaRejectsInvalidPackageName(t *testing.T) {
 }
 
 func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
-	for _, columnName := range []string{"table", "as", "query_table", "column", "decode_row", "column_value"} {
+	for _, columnName := range []string{"table", "as", "ref", "column", "decode_row", "column_value"} {
 		t.Run(columnName, func(t *testing.T) {
 			_, err := generate.Schema("generated", schema.TableDef{
 				Name: "users",

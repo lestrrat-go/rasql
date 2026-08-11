@@ -48,9 +48,9 @@ func TestDeleteRejectsNilPredicate(t *testing.T) {
 			},
 		},
 		{
-			name: "DeleteQueryFrom",
+			name: "DeleteFromRef",
 			build: func(expression query.Expression) error {
-				_, err := rasql.DeleteQueryFrom(users.QueryTable()).Where(expression).Build(d)
+				_, err := rasql.DeleteFromRef(users.Ref()).Where(expression).Build(d)
 				return err
 			},
 		},
@@ -351,18 +351,18 @@ func TestDeleteFrom(t *testing.T) {
 		require.ErrorContains(t, err, "archived_users")
 	})
 
-	t.Run("DeleteQueryFrom builds the same statement", func(t *testing.T) {
+	t.Run("DeleteFromRef builds the same statement", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		id, err := users.Column("id")
 		require.NoError(t, err)
 		d := clientForBuild(t).Dialect()
-		fromQuery, err := rasql.DeleteQueryFrom(users.QueryTable()).WhereEqual(id, 42).Build(d)
+		fromQuery, err := rasql.DeleteFromRef(users.Ref()).WhereEqual(id, 42).Build(d)
 		require.NoError(t, err)
 		typed, err := rasql.DeleteFrom(users).WhereEqual(id, 42).Build(d)
 		require.NoError(t, err)
 		require.Equal(t, typed.SQL(), fromQuery.SQL())
 
-		fromQueryAllowAll, err := rasql.DeleteQueryFrom(users.QueryTable()).AllowAll().Build(d)
+		fromQueryAllowAll, err := rasql.DeleteFromRef(users.Ref()).AllowAll().Build(d)
 		require.NoError(t, err)
 		typedAllowAll, err := rasql.DeleteFrom(users).AllowAll().Build(d)
 		require.NoError(t, err)

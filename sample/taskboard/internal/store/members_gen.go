@@ -84,9 +84,9 @@ func (r MembersRow) ColumnValue(name string) (any, bool) {
 // MembersTable is the generated table type for the "members" table.
 type MembersTable struct {
 	rasql.Table[MembersRow]
-	ID    query.Column
-	Name  query.Column
-	Email query.Column
+	ID    query.ColumnRef
+	Name  query.ColumnRef
+	Email query.ColumnRef
 }
 
 func newMembersTable(table rasql.Table[MembersRow]) MembersTable {

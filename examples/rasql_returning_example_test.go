@@ -36,7 +36,7 @@ func Example_rasql_returning() {
 
 	// id is assigned by the database and status by its column default, so both
 	// are named in the RETURNING clause alongside the column that was set.
-	statement, err := query.NewInsert(defaultUsers.QueryTable(), []query.Column{defaultUsers.Email}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(defaultUsers.Ref(), []query.ColumnRef{defaultUsers.Email}, []query.Expression{query.Bind("ada@example.com")})
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return

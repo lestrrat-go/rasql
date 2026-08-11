@@ -99,7 +99,7 @@ func Example_rasql_subquery() {
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
 	// renders as its own SELECT.
-	domainUsers, err := query.NewSelect(users.QueryTable(), query.Project(users.ID))
+	domainUsers, err := query.NewSelect(users.Ref(), query.Project(users.ID))
 	if err != nil {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
@@ -123,7 +123,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to find all_orders.amount: %s\n", err)
 		return
 	}
-	average, err := query.NewSelect(allOrders.QueryTable(), query.Project(query.Avg(allOrdersAmount)))
+	average, err := query.NewSelect(allOrders.Ref(), query.Project(query.Avg(allOrdersAmount)))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
 		return

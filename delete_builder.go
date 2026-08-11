@@ -17,7 +17,7 @@ import (
 // Build and Exec reject a builder that carries no predicate, so a dropped Where cannot
 // become a full-table delete. AllowAll states the full-table delete when that is the intent.
 type DeleteBuilder struct {
-	from       query.Table
+	from       query.TableRef
 	predicates []query.Expression
 	allowAll   bool
 	err        error
@@ -37,16 +37,16 @@ type DeleteReturningBuilder struct {
 // Call AllowAll to delete every row of the target table.
 func DeleteFrom[T any](table Table[T]) DeleteBuilder {
 	if isNilTable(table) {
-		return DeleteQueryFrom(query.Table{}).withError(fmt.Errorf("rasql: table must not be nil"))
+		return DeleteFromRef(query.TableRef{}).withError(fmt.Errorf("rasql: table must not be nil"))
 	}
-	return DeleteQueryFrom(table.QueryTable())
+	return DeleteFromRef(table.Ref())
 }
 
-// DeleteQueryFrom starts a fluent DELETE builder using table as its target.
-// It is the untyped counterpart of DeleteFrom, for a query.Table with no Go row type.
+// DeleteFromRef starts a fluent DELETE builder using table as its target.
+// It is the untyped counterpart of DeleteFrom, for a query.TableRef with no Go row type.
 // Build and Exec report an error when the builder carries no predicate.
 // Call AllowAll to delete every row of the target table.
-func DeleteQueryFrom(table query.Table) DeleteBuilder {
+func DeleteFromRef(table query.TableRef) DeleteBuilder {
 	return DeleteBuilder{from: table}
 }
 
@@ -68,7 +68,7 @@ func (b DeleteBuilder) Where(expression query.Expression) DeleteBuilder {
 // WhereEqual adds an equality predicate for column and binds value.
 // Repeated calls combine with AND in the order they were made, including calls to Where.
 // Build and Exec reject a column whose table is not the delete target.
-func (b DeleteBuilder) WhereEqual(column query.Column, value any) DeleteBuilder {
+func (b DeleteBuilder) WhereEqual(column query.ColumnRef, value any) DeleteBuilder {
 	if b.err != nil {
 		return b
 	}
@@ -80,7 +80,7 @@ func (b DeleteBuilder) WhereEqual(column query.Column, value any) DeleteBuilder 
 // Where and WhereEqual, and each call counts as the predicate that Build and Exec
 // require. Build and Exec reject an empty value list, and reject a column whose
 // table is not the delete target.
-func (b DeleteBuilder) WhereIn(column query.Column, values ...any) DeleteBuilder {
+func (b DeleteBuilder) WhereIn(column query.ColumnRef, values ...any) DeleteBuilder {
 	if b.err != nil {
 		return b
 	}

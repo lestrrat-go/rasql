@@ -2,7 +2,7 @@
 
 `rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
 
-Columns come from the generated table value, so `users.ID` is a `query.Column` already bound to the `users` table. A misspelled `users.Emial` is a compile error rather than a failed query, which [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) demonstrates along with the cases that still fail at run time.
+Columns come from the generated table value, so `users.ID` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial` is a compile error rather than a failed query, which [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) demonstrates along with the cases that still fail at run time.
 
 Generated relationship methods provide a typed join and eager-loading path for the supported relationship slice described in [Relationships](02-schema.md#relationships). A child relation such as `orders.User()` exposes `Join()` for a fluent query and `Load(ctx, executor, children)` for one batched lookup that returns related rows grouped by foreign-key value. The inverse parent relation such as `users.Orders()` returns children grouped by parent key. Use the ordinary `Join` API for unsupported relationship shapes.
 
@@ -18,18 +18,18 @@ The tables in this section enumerate every operation the public API offers. The 
 | --- | --- | --- |
 | `SELECT` decoded as a table's row type | `rasql.SelectFrom(table)` | `TypedSelectBuilder[T]` |
 | `SELECT` decoded as a custom type | `rasql.DecodeFrom[R](table)` | `TypedSelectBuilder[R]` |
-| `SELECT` decoded from a table with no row type | `rasql.DecodeQueryFrom[R](queryTable)` | `TypedSelectBuilder[R]` |
-| `SELECT` without decoding | `rasql.SelectQueryFrom(table.QueryTable())` | `SelectBuilder`, yielding `row.Dynamic` |
+| `SELECT` decoded from a table with no row type | `rasql.DecodeFromRef[R](queryTable)` | `TypedSelectBuilder[R]` |
+| `SELECT` without decoding | `rasql.SelectFromRef(table.Ref())` | `SelectBuilder`, yielding `row.Dynamic` |
 | Typed static SQL | `rasql.QueryRendered[T](ctx, executor, statement)` | `iter.Seq2[T, error]` |
 | `INSERT` of one typed row | `rasql.Insert(ctx, client, table, value)` | `sql.Result` |
 | `INSERT` with database defaults | `rasql.InsertWithOptions(ctx, client, table, value, rasql.DefaultColumns(...))` | `sql.Result` |
 | `INSERT` of several typed rows | `rasql.InsertMany(ctx, client, table, values)` | `sql.Result` |
 | `INSERT` of several typed rows with defaults | `rasql.InsertManyWithOptions(ctx, client, table, values, rasql.DefaultColumns(...))` | `sql.Result` |
-| `INSERT` of expression rows | `query.NewInsertRows(table.QueryTable(), columns, rows)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
+| `INSERT` of expression rows | `query.NewInsertRows(table.Ref(), columns, rows)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | `UPDATE` of one typed row by primary key | `rasql.Update(ctx, client, table, value)` | `sql.Result` |
 | `UPDATE` selected typed fields | `rasql.UpdateWithOptions(ctx, client, table, value, rasql.UpdateColumns(...))` | `sql.Result` |
 | `UPDATE` many rows by predicate | `rasql.UpdateMany(ctx, client, table, value, rasql.UpdateColumns(...), rasql.UpdateWhere(...))` | `sql.Result` |
-| `UPDATE` with arbitrary expressions | `query.NewUpdate(table.QueryTable(), assignments…)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
+| `UPDATE` with arbitrary expressions | `query.NewUpdate(table.Ref(), assignments…)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | `DELETE` by predicate | `rasql.DeleteFrom(table)` | `DeleteBuilder` |
 | `DELETE` with `RETURNING` | `rasql.DeleteFrom(table).Returning(...)` | `DeleteReturningBuilder` |
 | `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |
@@ -41,9 +41,9 @@ Writes are covered in [Writing rows](04-writing.md); the rest of this page cover
 
 ### Select builder methods
 
-`✓` marks the builders that carry the method. The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeQueryFrom`; the untyped one from `rasql.SelectQueryFrom`.
+`✓` marks the builders that carry the method. The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef`; the untyped one from `rasql.SelectFromRef`.
 
-The two builders differ in how they name a column. The typed builder takes a `query.Column`, usually a generated field such as `users.ID`, so a wrong name does not compile and a join can order by a column of any table in the statement. The untyped builder has exactly one table and no generated columns, so it keeps plain names.
+The two builders differ in how they name a column. The typed builder takes a `query.ColumnRef`, usually a generated field such as `users.ID`, so a wrong name does not compile and a join can order by a column of any table in the statement. The untyped builder has exactly one table and no generated columns, so it keeps plain names.
 
 | Method | Effect | Typed | Untyped |
 | --- | --- | --- | --- |
@@ -52,15 +52,15 @@ The two builders differ in how they name a column. The typed builder takes a `qu
 | `Distinct()` | De-duplicates result rows. | ✓ | ✓ |
 | `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. | ✓ | ✓ |
 | `Where(expression)` | Adds a predicate from a `query` expression. | ✓ | ✓ |
-| `WhereEqual(column, value)` | Adds `column = value` for a `query.Column`. | ✓ | |
+| `WhereEqual(column, value)` | Adds `column = value` for a `query.ColumnRef`. | ✓ | |
 | `WhereEqual(name, value)` | Adds `column = value` for a primary-table column. | | ✓ |
-| `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.Column`, one placeholder per value. | ✓ | |
+| `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.ColumnRef`, one placeholder per value. | ✓ | |
 | `WhereIn(name, values…)` | Adds `column IN (values…)` for a primary-table column, one placeholder per value. | | ✓ |
 | `GroupBy(expressions…)` | Adds grouping built with the basic query API. | ✓ | ✓ |
 | `GroupByColumns(names…)` | Adds primary-table columns to the grouping by name. | | ✓ |
 | `Having(expression)` | Adds a grouped predicate from a `query` expression; combines with `AND` like `Where`. | ✓ | ✓ |
 | `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. | ✓ | ✓ |
-| `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.Column`. | ✓ | |
+| `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.ColumnRef`. | ✓ | |
 | `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. | | ✓ |
 | `Limit(n)`, `Offset(n)` | Pages the result. | ✓ | ✓ |
 | `Build(d)` | Renders `render.Statement` for a `dialect.Dialect` without executing. | ✓ | ✓ |
@@ -82,8 +82,8 @@ which is not valid SQL in any supported dialect.
 | Method | Effect |
 | --- | --- |
 | `Where(expression)` | Adds a predicate from a `query` expression. |
-| `WhereEqual(column, value)` | Adds `column = value` for a `query.Column` of the target table. |
-| `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.Column` of the target table, one placeholder per value. |
+| `WhereEqual(column, value)` | Adds `column = value` for a `query.ColumnRef` of the target table. |
+| `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.ColumnRef` of the target table, one placeholder per value. |
 | `Returning(projections…)` | Adds a `RETURNING` clause and returns `DeleteReturningBuilder`; MySQL does not support it. |
 | `Build(d)` | Renders `render.Statement` for a `dialect.Dialect` without executing. |
 | `Exec(ctx, executor)` | Executes and returns `sql.Result`. |
@@ -334,11 +334,11 @@ source: [examples/rasql_scalar_function_example_test.go](https://github.com/lest
 A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `GROUP BY` clause, `HAVING` clause, and `ORDER BY` clause of a `SELECT` statement, and nowhere else: every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — refuses one, the same way those clauses refuse an aggregate. A subquery reads no table of the statement that encloses it: every column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a correlation. A subquery may nest inside another subquery to any depth.
 
 ```go
-owned, err := query.NewSelect(projects.QueryTable(), query.Project(projects.ID))
+owned, err := query.NewSelect(projects.Ref(), query.Project(projects.ID))
 owned, err = owned.WithWhere(query.Equal(projects.OwnerID, query.Bind(7)))
 
 allTasks, err := tasks.As("all_tasks")
-average, err := query.NewSelect(allTasks.QueryTable(), query.Project(query.Avg(allTasks.Priority)))
+average, err := query.NewSelect(allTasks.Ref(), query.Project(query.Avg(allTasks.Priority)))
 
 rows, err := rasql.DecodeFrom[taskSummary](tasks).
 	Project(query.Project(tasks.ID), query.Project(tasks.Title)).
@@ -358,7 +358,7 @@ rows, err := rasql.DecodeFrom[taskSummary](tasks).
 | `query.Project(expression).As(alias)` | The same projection under a result name. |
 | `rasql.InnerJoin(table, on)` | An inner join on a typed table with its condition. |
 | `rasql.LeftJoin(table, on)` | A left outer join on a typed table with its condition. |
-| `query.InnerJoin(queryTable, on)`, `query.LeftJoin(queryTable, on)` | The same joins on a `query.Table`, for dynamic code. |
+| `query.InnerJoin(queryTable, on)`, `query.LeftJoin(queryTable, on)` | The same joins on a `query.TableRef`, for dynamic code. |
 | `query.Asc(expression)`, `query.Desc(expression)` | Ordering for `Order`. |
 
 ### Statement constructors
@@ -476,7 +476,7 @@ if errors.Is(err, rasql.ErrNoRows) {
 
 ## Filter, order, and page
 
-`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.Column` and cover the common cases without importing the `query` package. Generated tables expose one field per column, so `users.ID` is the whole reference. `Limit` and `Offset` page the result. The untyped builder from `rasql.SelectQueryFrom` also has `Select`, which narrows the projection to named columns.
+`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.ColumnRef` and cover the common cases without importing the `query` package. Generated tables expose one field per column, so `users.ID` is the whole reference. `Limit` and `Offset` page the result. The untyped builder from `rasql.SelectFromRef` also has `Select`, which narrows the projection to named columns.
 
 `WhereIn` covers a membership test the same way. It needs at least one value: an empty list makes `Build`, `Query`, `All`, and `One` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect. A non-empty list binds each value as its own placeholder:
 
@@ -680,7 +680,7 @@ func Example_rasql_subquery() {
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
 	// renders as its own SELECT.
-	domainUsers, err := query.NewSelect(users.QueryTable(), query.Project(users.ID))
+	domainUsers, err := query.NewSelect(users.Ref(), query.Project(users.ID))
 	if err != nil {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
@@ -704,7 +704,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to find all_orders.amount: %s\n", err)
 		return
 	}
-	average, err := query.NewSelect(allOrders.QueryTable(), query.Project(query.Avg(allOrdersAmount)))
+	average, err := query.NewSelect(allOrders.Ref(), query.Project(query.Avg(allOrdersAmount)))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
 		return
@@ -1088,7 +1088,7 @@ This check is new, and it is a behaviour change: two sources sharing one rendere
 
 ## Decode a custom shape
 
-A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise. A result type with a `DecodeRow` method maps itself instead, which [the two mapping methods](06-rasqlgen.md#the-two-mapping-methods) covers. Use `DecodeQueryFrom` when the primary table is a bare `query.Table` with no Go row type.
+A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise. A result type with a `DecodeRow` method maps itself instead, which [the two mapping methods](06-rasqlgen.md#the-two-mapping-methods) covers. Use `DecodeFromRef` when the primary table is a bare `query.TableRef` with no Go row type.
 
 <!-- INCLUDE(examples/rasql_dynamic_projection_example_test.go) -->
 ```go
@@ -1208,7 +1208,7 @@ func Example_rasql_dynamic_projection() {
 source: [examples/rasql_dynamic_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_dynamic_projection_example_test.go)
 <!-- END INCLUDE -->
 
-`Join` takes `rasql.InnerJoin` or `rasql.LeftJoin` with the join condition; the `query` versions take a `query.Table` for dynamic code. `Project` selects expressions rather than plain column names, and `As` renames one so it lines up with a field of the result type. Because the projection is explicit here, the result type only needs fields for the columns actually selected.
+`Join` takes `rasql.InnerJoin` or `rasql.LeftJoin` with the join condition; the `query` versions take a `query.TableRef` for dynamic code. `Project` selects expressions rather than plain column names, and `As` renames one so it lines up with a field of the result type. Because the projection is explicit here, the result type only needs fields for the columns actually selected.
 
 ## See the SQL without a database
 

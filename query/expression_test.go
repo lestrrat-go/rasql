@@ -8,7 +8,7 @@ import (
 )
 
 func TestMembershipKeepsOperands(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	id, err := users.Column("id")
 	require.NoError(t, err)
@@ -35,7 +35,7 @@ func TestMembershipKeepsOperands(t *testing.T) {
 }
 
 func TestSubqueryKeepsItsStatement(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestSubqueryKeepsItsStatement(t *testing.T) {
 }
 
 func TestMembershipReportsItsSubqueryForm(t *testing.T) {
-	users, err := query.NewTable(usersTable())
+	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)

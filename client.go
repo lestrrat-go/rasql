@@ -157,7 +157,7 @@ func Create[T any](ctx context.Context, x Executor, table Table[T]) error {
 	if isNilTable(table) {
 		return fmt.Errorf("rasql: table must not be nil")
 	}
-	return createTable(ctx, x, table.QueryTable().Definition())
+	return createTable(ctx, x, table.Ref().Definition())
 }
 
 func isNil(value any) bool {

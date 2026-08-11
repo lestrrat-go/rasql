@@ -106,7 +106,7 @@ func TestSelectBuilderWithDialectDoesNotMutateReceiver(t *testing.T) {
 
 func TestSelectBuilderBuildsCountStatement(t *testing.T) {
 	users := fluentUsers(t)
-	orders, err := query.NewTable(schema.TableDef{
+	orders, err := query.NewTableRef(schema.TableDef{
 		Name: "orders",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -224,7 +224,7 @@ func TestSelectBuilderBuildsGroupedStatement(t *testing.T) {
 // validation judged did not yet select from the joined table.
 func TestSelectBuilderGroupsByJoinedColumn(t *testing.T) {
 	users := fluentUsers(t)
-	orders, err := query.NewTable(schema.TableDef{
+	orders, err := query.NewTableRef(schema.TableDef{
 		Name: "orders",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -555,9 +555,9 @@ func TestSelectBuilderPredicatesDoNotAlias(t *testing.T) {
 	require.NotContains(t, secondStatement.Args(), "ada@example.com")
 }
 
-func fluentUsers(t *testing.T) query.Table {
+func fluentUsers(t *testing.T) query.TableRef {
 	t.Helper()
-	users, err := query.NewTable(schema.TableDef{
+	users, err := query.NewTableRef(schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},

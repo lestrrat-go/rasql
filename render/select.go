@@ -166,7 +166,7 @@ func (r *renderer) writeSelect(statement query.Select) error {
 	return nil
 }
 
-func (r *renderer) writeTable(table query.Table) error {
+func (r *renderer) writeTable(table query.TableRef) error {
 	name, err := r.quoteQualified(table.Schema(), table.Name())
 	if err != nil {
 		return err
@@ -202,7 +202,7 @@ func (r *renderer) writeProjection(projection query.Projection) error {
 
 func (r *renderer) writeExpression(expression query.Expression) error {
 	switch expression := expression.(type) {
-	case query.Column:
+	case query.ColumnRef:
 		qualifier, err := r.quoteQualified(expression.Source().QualifierSchema(), expression.Source().Qualifier())
 		if err != nil {
 			return err
