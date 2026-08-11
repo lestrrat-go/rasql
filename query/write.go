@@ -294,7 +294,7 @@ func (s Insert) Validate() error {
 			return validationError(fmt.Sprintf("rows[%d]", i), "has %d values for %d columns", len(row), len(s.columns))
 		}
 		for j, value := range row {
-			if err := validateClauseExpression(value, sources, "an INSERT value", fmt.Sprintf("rows[%d].values[%d]", i, j)); err != nil {
+			if err := validateRowValueExpression(value, sources, "an INSERT value", fmt.Sprintf("rows[%d].values[%d]", i, j)); err != nil {
 				return err
 			}
 		}
