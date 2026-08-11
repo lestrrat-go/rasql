@@ -1108,6 +1108,13 @@ func writeColumnOption(source *bytes.Buffer, column schema.ColumnDef) {
 	if integer, ok := column.Type.(schema.IntegerType); ok && integer.Unsigned {
 		source.WriteString(", schema.Unsigned()")
 	}
+	if text, ok := column.Type.(schema.TextType); ok {
+		if width, stated := text.Width.Value(); stated {
+			source.WriteString(", schema.Width(")
+			source.WriteString(strconv.Itoa(width))
+			source.WriteString(")")
+		}
+	}
 	if column.Nullable {
 		source.WriteString(", schema.Nullable()")
 	}

@@ -219,6 +219,40 @@ func TestUnsignedMarksIntegerColumn(t *testing.T) {
 	require.Equal(t, schema.IntegerType{Unsigned: true}, table.Columns[0].Type)
 }
 
+// TestWidthRejectsNonTextColumn covers Width's type check: it applies only
+// to TextType, the same shape as TestUnsignedRejectsNonIntegerColumn.
+func TestWidthRejectsNonTextColumn(t *testing.T) {
+	_, err := schema.NewTableDef("events", schema.Integer("id", schema.Width(255)))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Width only applies to text columns")
+}
+
+func TestWidthMarksTextColumn(t *testing.T) {
+	table, err := schema.NewTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email", schema.Width(255)),
+		schema.PrimaryKey("id"),
+	)
+	require.NoError(t, err)
+	width, stated := table.Columns[1].Type.(schema.TextType).Width.Value()
+	require.True(t, stated)
+	require.Equal(t, 255, width)
+}
+
+// TestWidthAcceptsZero covers the reason schema.TextWidth exists rather than
+// a plain int: a stated width of 0 (VARCHAR(0), unusual but legitimate on
+// dialects that accept it) must read back as stated, not as the unstated
+// zero value a bare int field could not tell apart from it.
+func TestWidthAcceptsZero(t *testing.T) {
+	table, err := schema.NewTableDef("flags",
+		schema.Text("value", schema.Width(0)),
+	)
+	require.NoError(t, err)
+	width, stated := table.Columns[0].Type.(schema.TextType).Width.Value()
+	require.True(t, stated)
+	require.Equal(t, 0, width)
+}
+
 func TestNullableAndDefaultColumnOptions(t *testing.T) {
 	table, err := schema.NewTableDef("users",
 		schema.Integer("id"),

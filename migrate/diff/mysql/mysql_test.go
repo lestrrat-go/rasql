@@ -15,9 +15,12 @@ import (
 
 func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
 	analyzer := mysql.New()
+	// The indexed column states a width: MySQL refuses to build a key over an
+	// unbounded TEXT column (error 1170), so render.CreateIndexes now rejects
+	// one here before this test's assertions on the rendered SQL even run.
 	sources, err := analyzer.LiveSources(schema.TableDef{
 		Name:    "members",
-		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}}},
 		Indexes: []schema.IndexDef{{Name: "members_email_idx", Columns: []string{"email"}}},
 	})
 	require.NoError(t, err)

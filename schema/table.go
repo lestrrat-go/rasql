@@ -53,6 +53,55 @@ func (s *DecimalScale) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// TextWidth is the maximum number of characters a TextType column may store.
+// Its zero value states no width at all, which is a different thing from a
+// stated width of zero: VARCHAR(0), while unusual, is a legitimate column in
+// the dialects that accept it, and a descriptor that simply never called
+// Width is not the same as one that asked for zero characters. Use
+// NewTextWidth, or the Width ColumnOption, to state one, including a width
+// of 0.
+type TextWidth struct {
+	value int
+	set   bool
+}
+
+// NewTextWidth returns a TextWidth that states value.
+func NewTextWidth(value int) TextWidth {
+	return TextWidth{value: value, set: true}
+}
+
+// Value returns the stated width and reports whether a width was stated at
+// all. The returned width is meaningless when the second result is false.
+func (w TextWidth) Value() (int, bool) {
+	return w.value, w.set
+}
+
+// MarshalJSON encodes a stated width as a JSON number and an unstated one as
+// null, so that a snapshot of a schema.TableDef keeps the plain-number form a
+// tool such as rasqlgen reads back.
+func (w TextWidth) MarshalJSON() ([]byte, error) {
+	if !w.set {
+		return []byte("null"), nil
+	}
+	return json.Marshal(w.value)
+}
+
+// UnmarshalJSON decodes a JSON number as a stated width and null as an
+// unstated one. A snapshot written before a column had a width therefore
+// decodes as unstated rather than as a width of 0.
+func (w *TextWidth) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*w = TextWidth{}
+		return nil
+	}
+	var value int
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("schema: decode text width: %w", err)
+	}
+	*w = NewTextWidth(value)
+	return nil
+}
+
 // ColumnDef describes a table column.
 type ColumnDef struct {
 	Name     string
@@ -263,6 +312,10 @@ func (t TableDef) Validate() error {
 			}
 			if scale > typed.Precision {
 				return validationError(path+".type.scale", "decimal scale %d exceeds precision %d", scale, typed.Precision)
+			}
+		case TextType:
+			if width, stated := typed.Width.Value(); stated && width < 0 {
+				return validationError(path+".type.width", "text width must not be negative")
 			}
 		}
 		if _, exists := columns[column.Name]; exists {

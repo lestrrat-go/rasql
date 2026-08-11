@@ -60,6 +60,9 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		definitions = append(definitions, definition)
 	}
 	if len(table.PrimaryKey) > 0 {
+		if err := r.rejectUnboundedMySQLText(table, table.PrimaryKey, "a primary key"); err != nil {
+			return err
+		}
 		columns, err := r.quotedNames(table.PrimaryKey)
 		if err != nil {
 			return err
@@ -67,6 +70,9 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		definitions = append(definitions, "PRIMARY KEY ("+strings.Join(columns, ", ")+")")
 	}
 	for _, constraint := range table.UniqueConstraints {
+		if err := r.rejectUnboundedMySQLText(table, constraint.Columns, "a unique constraint"); err != nil {
+			return err
+		}
 		columns, err := r.quotedNames(constraint.Columns)
 		if err != nil {
 			return err
@@ -105,6 +111,9 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 }
 
 func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef) error {
+	if err := r.rejectUnboundedMySQLText(table, index.Columns, "an index"); err != nil {
+		return err
+	}
 	indexName, tableName, err := r.qualifiedIndexNames(table, index)
 	if err != nil {
 		return err
@@ -173,6 +182,41 @@ func (r *renderer) qualifiedIndexNames(table schema.TableDef, index schema.Index
 	default:
 		return "", "", fmt.Errorf("dialect %s: cannot create an index on table %q in schema %q: this dialect lacks both dialect.CapabilityQualifiedIndexTarget and dialect.CapabilityQualifiedIndexName", r.dialect.Name(), table.Name, table.Schema)
 	}
+}
+
+// rejectUnboundedMySQLText returns an error if names includes an unbounded
+// schema.TextType column and the renderer's dialect is MySQL. MySQL raises
+// error 1170 ("BLOB/TEXT column used in key specification without a key
+// length") when it is asked to build a key over a TEXT column with no
+// stated key length, and rasql has no way to state one on a PRIMARY KEY or
+// UNIQUE clause the way MySQL's own DDL can with col(255): schema.IndexDef,
+// schema.TableDef.PrimaryKey and schema.UniqueDef all name columns, not
+// key-length-qualified expressions. schema.TextType.Width closes the gap
+// instead, by letting the column itself state a bound that MySQL's key
+// length requirement is then already satisfied by; a caller who hits this
+// error states one with schema.Width and the column renders VARCHAR(width)
+// rather than TEXT. PostgreSQL and SQLite index, and build a primary key or
+// unique constraint over, an unbounded text column natively, so this check
+// runs on MySQL only.
+func (r *renderer) rejectUnboundedMySQLText(table schema.TableDef, names []string, context string) error {
+	if r.dialect.Name() != "mysql" {
+		return nil
+	}
+	for _, name := range names {
+		column, ok := table.Column(name)
+		if !ok {
+			continue
+		}
+		text, ok := column.Type.(schema.TextType)
+		if !ok {
+			continue
+		}
+		if _, stated := text.Width.Value(); stated {
+			continue
+		}
+		return fmt.Errorf("dialect %s: column %q has no stated width: state one with schema.Width to use it in %s, since MySQL cannot build a key over an unbounded text column", r.dialect.Name(), name, context)
+	}
+	return nil
 }
 
 func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {

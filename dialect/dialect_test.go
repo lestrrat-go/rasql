@@ -180,6 +180,64 @@ func TestBuiltinsRenderUnsignedIntegerTypeNames(t *testing.T) {
 	}
 }
 
+// TestBuiltinsRenderTextTypeNames pins how each dialect renders
+// schema.TextType.Width. An unstated width always renders the dialect's
+// plain unbounded text type. A stated width renders VARCHAR(width) on
+// PostgreSQL and MySQL, both of which enforce it exactly; SQLite renders
+// plain TEXT regardless; it assigns column type by affinity rather than by
+// declared type, so a VARCHAR(n) column there would store and enforce
+// exactly like TEXT, and rendering VARCHAR(n) syntax would claim an
+// enforcement that never happens, the same reason it already drops
+// DecimalType's precision and scale (TestBuiltinsRejectUnrepresentableDecimals).
+func TestBuiltinsRenderTextTypeNames(t *testing.T) {
+	tests := map[string]struct {
+		dialect          dialect.Dialect
+		unstatedTypeName string
+		statedTypeName   string
+	}{
+		"postgresql": {
+			dialect:          dialect.PostgreSQL(),
+			unstatedTypeName: "TEXT",
+			statedTypeName:   "VARCHAR(255)",
+		},
+		"mysql": {
+			dialect:          dialect.MySQL(),
+			unstatedTypeName: "TEXT",
+			statedTypeName:   "VARCHAR(255)",
+		},
+		"sqlite": {
+			dialect:          dialect.SQLite(),
+			unstatedTypeName: "TEXT",
+			statedTypeName:   "TEXT",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			unstated, err := test.dialect.TypeName(schema.ColumnDef{Type: schema.TextType{}})
+			require.NoError(t, err)
+			require.Equal(t, test.unstatedTypeName, unstated)
+
+			stated, err := test.dialect.TypeName(schema.ColumnDef{Type: schema.TextType{Width: schema.NewTextWidth(255)}})
+			require.NoError(t, err)
+			require.Equal(t, test.statedTypeName, stated)
+		})
+	}
+}
+
+// TestBuiltinsRenderTextWidthZero pins that a stated width of 0 renders
+// VARCHAR(0), not the dialect's plain unbounded text type: schema.TextWidth
+// exists precisely so a stated 0 is distinguishable from no width at all.
+func TestBuiltinsRenderTextWidthZero(t *testing.T) {
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL()} {
+		t.Run(d.Name(), func(t *testing.T) {
+			typeName, err := d.TypeName(schema.ColumnDef{Type: schema.TextType{Width: schema.NewTextWidth(0)}})
+			require.NoError(t, err)
+			require.Equal(t, "VARCHAR(0)", typeName)
+		})
+	}
+}
+
 func TestBuiltinsRejectNilColumnType(t *testing.T) {
 	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
 		t.Run(d.Name(), func(t *testing.T) {
