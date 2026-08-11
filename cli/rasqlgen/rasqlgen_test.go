@@ -38,7 +38,7 @@ func TestRunSchemaGeneratesSource(t *testing.T) {
 	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable(\"users\",")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 }
 
@@ -62,7 +62,7 @@ func TestRunSchemaKeepsUnsignedColumnsFromInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
 	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
-	require.Contains(t, string(source), `{Name: "id", Type: schema.IntegerType{Unsigned: true}},`)
+	require.Contains(t, string(source), `schema.Integer("id", schema.Unsigned()),`)
 }
 
 func TestRunSchemaFiltersInputTables(t *testing.T) {
@@ -388,7 +388,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable(\"users\",")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 }
 

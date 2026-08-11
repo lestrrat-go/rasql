@@ -11,7 +11,7 @@ import (
 )
 
 func Example_inspect_sqlite_table() {
-	// This example reads an existing SQLite table into a normalized schema.Table.
+	// This example reads an existing SQLite table into a normalized schema.TableDef.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

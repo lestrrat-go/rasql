@@ -29,19 +29,19 @@ func TestNewTableMatchesStructLiteral(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	literal := schema.Table{
+	literal := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "customer_id", Type: schema.IntegerType{}},
 			{Name: "status", Type: schema.TextType{}, Default: "'new'"},
 			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 		},
 		PrimaryKey: []string{"id"},
-		UniqueConstraints: []schema.UniqueConstraint{{
+		UniqueConstraints: []schema.UniqueDef{{
 			Columns: []string{"customer_id", "status"},
 		}},
-		Checks: []schema.CheckConstraint{{
+		Checks: []schema.CheckDef{{
 			Expression: "status <> ''",
 		}},
 		Indexes: []schema.IndexDef{{
@@ -110,7 +110,7 @@ func TestNewTableAssemblesForeignKeyAndRelationship(t *testing.T) {
 		OnUpdate:          schema.Restrict,
 	}}, table.ForeignKeys)
 
-	require.Equal(t, []schema.Relationship{{
+	require.Equal(t, []schema.RelationshipDef{{
 		Name:              "buyer",
 		Kind:              schema.RelationshipBelongsTo,
 		Columns:           []string{"customer_id"},
@@ -263,9 +263,9 @@ func TestForeignKeyAsRejectsEmptyName(t *testing.T) {
 // this exact shape back, so a snapshot captured before this refactor must
 // still decode.
 func TestIndexDefAndForeignKeyDefJSONUnchanged(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -296,7 +296,182 @@ func TestIndexDefAndForeignKeyDefJSONUnchanged(t *testing.T) {
 	// pins the wire format, since round-tripping through the new types alone
 	// would not catch a field that had quietly been renamed too.
 	const snapshot = `{"Schema":"","Name":"orders","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false},"Nullable":false,"Default":""}],"PrimaryKey":["id"],"UniqueConstraints":null,"Checks":null,"Indexes":[{"Name":"orders_id_idx","Columns":["id"],"Unique":true}],"ForeignKeys":[{"Name":"orders_customer_fk","Columns":["id"],"ReferencedSchema":"tenant","ReferencedTable":"customers","ReferencedColumns":["id"],"OnDelete":"CASCADE","OnUpdate":"RESTRICT"}],"Relationships":null}`
-	var decoded schema.Table
+	var decoded schema.TableDef
 	require.NoError(t, json.Unmarshal([]byte(snapshot), &decoded))
 	require.Equal(t, table, decoded)
+}
+
+func TestUniqueNamedDeclaresNamedConstraint(t *testing.T) {
+	table, err := schema.NewTable("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.UniqueNamed("uq_users_email", "email"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []schema.UniqueDef{{
+		Name:    "uq_users_email",
+		Columns: []string{"email"},
+	}}, table.UniqueConstraints)
+}
+
+func TestCheckNamedDeclaresNamedConstraint(t *testing.T) {
+	table, err := schema.NewTable("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.CheckNamed("chk_users_email", "email <> ''"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []schema.CheckDef{{
+		Name:       "chk_users_email",
+		Expression: "email <> ''",
+	}}, table.Checks)
+}
+
+func TestUniqueIndexDeclaresUniqueIndex(t *testing.T) {
+	table, err := schema.NewTable("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.UniqueIndex("users_email_idx", "email"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{{
+		Name:    "users_email_idx",
+		Columns: []string{"email"},
+		Unique:  true,
+	}}, table.Indexes)
+}
+
+// TestForeignKeyOnDeclaresCompositeForeignKey covers ForeignKeyOn, the
+// composite counterpart to ForeignKey, sharing ForeignKey's option set
+// including the new ReferencesIn for a schema-qualified target.
+func TestForeignKeyOnDeclaresCompositeForeignKey(t *testing.T) {
+	table, err := schema.NewTable("order_items",
+		schema.Integer("order_id"),
+		schema.Integer("tenant_id"),
+		schema.PrimaryKey("order_id", "tenant_id"),
+		schema.ForeignKeyOn([]string{"order_id", "tenant_id"},
+			schema.Named("order_items_order_fkey"),
+			schema.ReferencesIn("billing", "orders", "id", "tenant_id"),
+			schema.OnDelete(schema.Cascade)),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []schema.ForeignKeyDef{{
+		Name:              "order_items_order_fkey",
+		Columns:           []string{"order_id", "tenant_id"},
+		ReferencedSchema:  "billing",
+		ReferencedTable:   "orders",
+		ReferencedColumns: []string{"id", "tenant_id"},
+		OnDelete:          schema.Cascade,
+	}}, table.ForeignKeys)
+}
+
+func TestReferencesInQualifiesSingleColumnForeignKey(t *testing.T) {
+	table, err := schema.NewTable("orders",
+		schema.Integer("id"),
+		schema.Integer("customer_id"),
+		schema.PrimaryKey("id"),
+		schema.ForeignKey("customer_id",
+			schema.ReferencesIn("tenant", "customers", "id")),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []schema.ForeignKeyDef{{
+		Columns:           []string{"customer_id"},
+		ReferencedSchema:  "tenant",
+		ReferencedTable:   "customers",
+		ReferencedColumns: []string{"id"},
+	}}, table.ForeignKeys)
+}
+
+// TestNewTableMatchesStructLiteralEveryFeature is the equivalence test the
+// first round of option-based construction omitted: it exercises every
+// TableOption and ForeignKeyOption together, including the ones piece C
+// added, and requires the option form and the equivalent hand-written,
+// fully-keyed struct literal to describe exactly the same table.
+func TestNewTableMatchesStructLiteralEveryFeature(t *testing.T) {
+	built, err := schema.NewTable("orders",
+		schema.InSchema("billing"),
+		schema.Integer("id"),
+		schema.Integer("customer_id"),
+		schema.Integer("tenant_id"),
+		schema.Text("status", schema.Default("'new'")),
+		schema.Text("note", schema.Nullable()),
+		schema.Decimal("amount", 19, 4),
+		schema.PrimaryKey("id"),
+		schema.Unique("customer_id", "status"),
+		schema.UniqueNamed("uq_orders_tenant_id", "tenant_id", "id"),
+		schema.Check("amount >= 0"),
+		schema.CheckNamed("chk_orders_status", "status <> ''"),
+		schema.Index("orders_customer_idx", "customer_id"),
+		schema.UniqueIndex("orders_tenant_status_idx", "tenant_id", "status"),
+		schema.ForeignKey("customer_id",
+			schema.Named("orders_customer_fkey"),
+			schema.References("customers", "id"),
+			schema.OnDelete(schema.Cascade),
+			schema.OnUpdate(schema.Restrict),
+			schema.As("customer")),
+		schema.ForeignKeyOn([]string{"tenant_id", "customer_id"},
+			schema.Named("orders_tenant_customer_fkey"),
+			schema.ReferencesIn("crm", "tenant_customers", "tenant_id", "customer_id"),
+			schema.OnDelete(schema.SetNull)),
+	)
+	require.NoError(t, err)
+
+	literal := schema.TableDef{
+		Schema: "billing",
+		Name:   "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+			{Name: "tenant_id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}, Default: "'new'"},
+			{Name: "note", Type: schema.TextType{}, Nullable: true},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{
+			{Columns: []string{"customer_id", "status"}},
+			{Name: "uq_orders_tenant_id", Columns: []string{"tenant_id", "id"}},
+		},
+		Checks: []schema.CheckDef{
+			{Expression: "amount >= 0"},
+			{Name: "chk_orders_status", Expression: "status <> ''"},
+		},
+		Indexes: []schema.IndexDef{
+			{Name: "orders_customer_idx", Columns: []string{"customer_id"}},
+			{Name: "orders_tenant_status_idx", Columns: []string{"tenant_id", "status"}, Unique: true},
+		},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{
+				Name:              "orders_customer_fkey",
+				Columns:           []string{"customer_id"},
+				ReferencedTable:   "customers",
+				ReferencedColumns: []string{"id"},
+				OnDelete:          schema.Cascade,
+				OnUpdate:          schema.Restrict,
+			},
+			{
+				Name:              "orders_tenant_customer_fkey",
+				Columns:           []string{"tenant_id", "customer_id"},
+				ReferencedSchema:  "crm",
+				ReferencedTable:   "tenant_customers",
+				ReferencedColumns: []string{"tenant_id", "customer_id"},
+				OnDelete:          schema.SetNull,
+			},
+		},
+		Relationships: []schema.RelationshipDef{
+			{
+				Name:              "customer",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"customer_id"},
+				ReferencedTable:   "customers",
+				ReferencedColumns: []string{"id"},
+			},
+		},
+	}
+
+	require.Equal(t, literal, built)
+	require.NoError(t, literal.Validate())
 }

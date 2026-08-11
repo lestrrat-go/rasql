@@ -1167,7 +1167,7 @@ func TestMustNewTable(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Panics(t, func() {
-		query.MustNewTable(schema.Table{})
+		query.MustNewTable(schema.TableDef{})
 	})
 }
 
@@ -1285,12 +1285,12 @@ func TestTableNamesQualifiedTableInUnknownColumnError(t *testing.T) {
 // name". TestSQLiteRefusesAmbiguousSources runs both sets against a real
 // database.
 func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
-	qualifiedUsers := func(schemaName string) schema.Table {
+	qualifiedUsers := func(schemaName string) schema.TableDef {
 		descriptor := usersTable()
 		descriptor.Schema = schemaName
 		return descriptor
 	}
-	aliasOf := func(t *testing.T, descriptor schema.Table, alias string) query.Table {
+	aliasOf := func(t *testing.T, descriptor schema.TableDef, alias string) query.Table {
 		t.Helper()
 		table, err := query.MustNewTable(descriptor).As(alias)
 		require.NoError(t, err)
@@ -1428,10 +1428,10 @@ func requireQueryValidationError(t *testing.T, err error) {
 	require.True(t, errors.As(err, &validationErr))
 }
 
-func usersTable() schema.Table {
-	return schema.Table{
+func usersTable() schema.TableDef {
+	return schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -1439,10 +1439,10 @@ func usersTable() schema.Table {
 	}
 }
 
-func ordersTable() schema.Table {
-	return schema.Table{
+func ordersTable() schema.TableDef {
+	return schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.FloatType{}},

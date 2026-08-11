@@ -32,8 +32,8 @@ type typedTable[T any] struct {
 	source query.Table
 }
 
-// NewTable creates a typed table from a validated schema definition.
-func NewTable[T any](definition schema.Table) (Table[T], error) {
+// TableOf creates a typed table from a validated schema definition.
+func TableOf[T any](definition schema.TableDef) (Table[T], error) {
 	source, err := query.NewTable(definition)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table definition: %w", err)
@@ -41,10 +41,10 @@ func NewTable[T any](definition schema.Table) (Table[T], error) {
 	return typedTable[T]{source: source}, nil
 }
 
-// MustTable creates a typed table or panics when definition is invalid.
+// MustTableOf creates a typed table or panics when definition is invalid.
 // It is intended for generated or otherwise static schema descriptors.
-func MustTable[T any](definition schema.Table) Table[T] {
-	table, err := NewTable[T](definition)
+func MustTableOf[T any](definition schema.TableDef) Table[T] {
+	table, err := TableOf[T](definition)
 	if err != nil {
 		panic(err)
 	}

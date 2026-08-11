@@ -117,7 +117,7 @@ func TestPostgreSQLInspectorReadsPrimaryKeyThroughTableLevelSelect(t *testing.T)
 	table, err := inspector.Table(ctx, tableName)
 	require.NoError(t, err)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "email", Type: schema.TextType{}},
 	}, table.Columns)

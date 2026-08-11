@@ -60,9 +60,9 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -83,9 +83,9 @@ func TestClientSelectFromBuildsAndExecutesQuery(t *testing.T) {
 }
 
 func TestSelectBuilderWhereInMatchesRenderSelectFrom(t *testing.T) {
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -125,9 +125,9 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](schema.Table{
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -139,9 +139,9 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	email, err := users.Column("email")
 	require.NoError(t, err)
 
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "status", Type: schema.IntegerType{}},
@@ -188,9 +188,9 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -200,7 +200,7 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](table)
+	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 	id, err := users.Column("id")
 	require.NoError(t, err)
@@ -229,9 +229,9 @@ func TestDecodeQueryFromDecodesProjectedRows(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -281,9 +281,9 @@ func TestDecodeFromDecodesGroupedRows(t *testing.T) {
 		ID     int64  `rasql:"id"`
 		Status string `rasql:"status"`
 	}
-	tasks, err := rasql.NewTable[task](schema.Table{
+	tasks, err := rasql.TableOf[task](schema.TableDef{
 		Name: "tasks",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "status", Type: schema.TextType{}},
 		},
@@ -336,9 +336,9 @@ func TestDecodeFromDecodesDistinctRows(t *testing.T) {
 		ID     int64  `rasql:"id"`
 		Status string `rasql:"status"`
 	}
-	tasks, err := rasql.NewTable[task](schema.Table{
+	tasks, err := rasql.TableOf[task](schema.TableDef{
 		Name: "tasks",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "status", Type: schema.TextType{}},
 		},
@@ -381,9 +381,9 @@ func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -410,9 +410,9 @@ func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -422,7 +422,7 @@ func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](table)
+	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 	id, err := users.Column("id")
 	require.NoError(t, err)
@@ -448,9 +448,9 @@ func TestSelectBuilderCountRejectsWrongRowCount(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -509,9 +509,9 @@ func TestClientExecExecutesParameterizedInsert(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -628,9 +628,9 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 	})
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -644,7 +644,7 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](table)
+	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 	mock.ExpectExec("CREATE TABLE \"users\" (\"id\" BIGINT NOT NULL, \"email\" TEXT NOT NULL, PRIMARY KEY (\"id\"))").
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -909,9 +909,9 @@ func TestClientDialectReturnsConfiguredDialect(t *testing.T) {
 // usersWriteTable returns the write target the returning-related tests share.
 func usersWriteTable(t *testing.T) query.Table {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -946,9 +946,9 @@ func insertReturningStatement(t *testing.T) query.Insert {
 
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},

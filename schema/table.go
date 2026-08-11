@@ -28,7 +28,7 @@ func (s DecimalScale) Value() (int, bool) {
 }
 
 // MarshalJSON encodes a stated scale as a JSON number and an unstated one as
-// null, so that a snapshot of a schema.Table keeps the plain-number form a
+// null, so that a snapshot of a schema.TableDef keeps the plain-number form a
 // tool such as rasqlgen reads back.
 func (s DecimalScale) MarshalJSON() ([]byte, error) {
 	if !s.set {
@@ -53,8 +53,8 @@ func (s *DecimalScale) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Column describes a table column.
-type Column struct {
+// ColumnDef describes a table column.
+type ColumnDef struct {
 	Name     string
 	Type     ColumnType
 	Nullable bool
@@ -63,7 +63,7 @@ type Column struct {
 
 // MarshalJSON encodes a column type as a tagged object so type-specific
 // options cannot appear as fields on unrelated column types.
-func (c Column) MarshalJSON() ([]byte, error) {
+func (c ColumnDef) MarshalJSON() ([]byte, error) {
 	type wireColumn struct {
 		Name     string          `json:"Name"`
 		Type     json.RawMessage `json:"Type"`
@@ -78,7 +78,7 @@ func (c Column) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON decodes the tagged column type representation.
-func (c *Column) UnmarshalJSON(data []byte) error {
+func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 	type wireColumn struct {
 		Name     string          `json:"Name"`
 		Type     json.RawMessage `json:"Type"`
@@ -93,19 +93,19 @@ func (c *Column) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	*c = Column{Name: wire.Name, Type: columnType, Nullable: wire.Nullable, Default: wire.Default}
+	*c = ColumnDef{Name: wire.Name, Type: columnType, Nullable: wire.Nullable, Default: wire.Default}
 	return nil
 }
 
-// UniqueConstraint requires the listed columns to be unique together.
-type UniqueConstraint struct {
+// UniqueDef requires the listed columns to be unique together.
+type UniqueDef struct {
 	Name    string
 	Columns []string
 }
 
-// CheckConstraint requires Expression to evaluate to true for each row.
+// CheckDef requires Expression to evaluate to true for each row.
 // Expression is a schema-level SQL expression and is rendered only by a DDL-capable dialect.
-type CheckConstraint struct {
+type CheckDef struct {
 	Name       string
 	Expression string
 }
@@ -135,8 +135,8 @@ type ForeignKeyDef struct {
 	OnUpdate          ReferenceAction
 }
 
-// Table describes a database table and its constraints.
-type Table struct {
+// TableDef describes a database table and its constraints.
+type TableDef struct {
 	// Schema names the namespace holding the table: a PostgreSQL schema, a
 	// MySQL database, or a SQLite attached-database name. A renderer quotes it
 	// as an identifier separate from Name and never interprets it further, so
@@ -159,17 +159,17 @@ type Table struct {
 	// descriptor.
 	Schema            string
 	Name              string
-	Columns           []Column
+	Columns           []ColumnDef
 	PrimaryKey        []string
-	UniqueConstraints []UniqueConstraint
-	Checks            []CheckConstraint
+	UniqueConstraints []UniqueDef
+	Checks            []CheckDef
 	Indexes           []IndexDef
 	ForeignKeys       []ForeignKeyDef
-	Relationships     []Relationship
+	Relationships     []RelationshipDef
 }
 
 // Qualified reports whether t names a schema.
-func (t Table) Qualified() bool {
+func (t TableDef) Qualified() bool {
 	return t.Schema != ""
 }
 
@@ -178,7 +178,7 @@ func (t Table) Qualified() bool {
 // and map keys only. It is never a SQL identifier: a renderer quotes Schema
 // and Name as two identifiers, and dialect.QuoteIdentifier rejects the
 // dotted string this returns.
-func (t Table) QualifiedName() string {
+func (t TableDef) QualifiedName() string {
 	if t.Schema == "" {
 		return t.Name
 	}
@@ -186,16 +186,16 @@ func (t Table) QualifiedName() string {
 }
 
 // Clone returns a copy of t that does not share slices with t.
-func (t Table) Clone() Table {
+func (t TableDef) Clone() TableDef {
 	clone := t
-	clone.Columns = append([]Column(nil), t.Columns...)
+	clone.Columns = append([]ColumnDef(nil), t.Columns...)
 	clone.PrimaryKey = append([]string(nil), t.PrimaryKey...)
-	clone.UniqueConstraints = make([]UniqueConstraint, len(t.UniqueConstraints))
+	clone.UniqueConstraints = make([]UniqueDef, len(t.UniqueConstraints))
 	for i, constraint := range t.UniqueConstraints {
 		clone.UniqueConstraints[i] = constraint
 		clone.UniqueConstraints[i].Columns = append([]string(nil), constraint.Columns...)
 	}
-	clone.Checks = append([]CheckConstraint(nil), t.Checks...)
+	clone.Checks = append([]CheckDef(nil), t.Checks...)
 	clone.Indexes = make([]IndexDef, len(t.Indexes))
 	for i, index := range t.Indexes {
 		clone.Indexes[i] = index
@@ -207,7 +207,7 @@ func (t Table) Clone() Table {
 		clone.ForeignKeys[i].Columns = append([]string(nil), key.Columns...)
 		clone.ForeignKeys[i].ReferencedColumns = append([]string(nil), key.ReferencedColumns...)
 	}
-	clone.Relationships = make([]Relationship, len(t.Relationships))
+	clone.Relationships = make([]RelationshipDef, len(t.Relationships))
 	for i, relationship := range t.Relationships {
 		clone.Relationships[i] = relationship.Clone()
 	}
@@ -215,17 +215,17 @@ func (t Table) Clone() Table {
 }
 
 // Column returns the column named name.
-func (t Table) Column(name string) (Column, bool) {
+func (t TableDef) Column(name string) (ColumnDef, bool) {
 	for _, column := range t.Columns {
 		if column.Name == name {
 			return column, true
 		}
 	}
-	return Column{}, false
+	return ColumnDef{}, false
 }
 
 // Validate reports whether t has a valid, internally consistent descriptor.
-func (t Table) Validate() error {
+func (t TableDef) Validate() error {
 	if t.Schema != "" {
 		if err := ValidateIdentifier(t.Schema); err != nil {
 			return validationError("table.schema", "%s", err)
@@ -288,7 +288,7 @@ func (t Table) Validate() error {
 	return validateRelationships(t.Relationships, t.ForeignKeys, columns)
 }
 
-func validateRelationships(relationships []Relationship, foreignKeys []ForeignKeyDef, columns map[string]struct{}) error {
+func validateRelationships(relationships []RelationshipDef, foreignKeys []ForeignKeyDef, columns map[string]struct{}) error {
 	for i, relationship := range relationships {
 		path := fmt.Sprintf("relationships[%d]", i)
 		if relationship.Name == "" {
@@ -339,7 +339,7 @@ func validateRelationships(relationships []Relationship, foreignKeys []ForeignKe
 // path that first used it. This lets callers detect a name reused across
 // different kinds of constraints (unique, check, foreign key), since the
 // renderer emits all of them into a single CREATE TABLE constraint namespace.
-func validateNamedColumnLists(path string, constraints []UniqueConstraint, columns map[string]struct{}, constraintNames map[string]string) error {
+func validateNamedColumnLists(path string, constraints []UniqueDef, columns map[string]struct{}, constraintNames map[string]string) error {
 	for i, constraint := range constraints {
 		itemPath := fmt.Sprintf("%s[%d]", path, i)
 		if constraint.Name != "" {
@@ -358,7 +358,7 @@ func validateNamedColumnLists(path string, constraints []UniqueConstraint, colum
 	return nil
 }
 
-func validateChecks(checks []CheckConstraint, constraintNames map[string]string) error {
+func validateChecks(checks []CheckDef, constraintNames map[string]string) error {
 	for i, check := range checks {
 		path := fmt.Sprintf("checks[%d]", i)
 		if check.Name != "" {

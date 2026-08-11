@@ -1,7 +1,7 @@
 // Package inspect reads live database metadata into schema descriptors.
 //
 // For PostgreSQL and SQLite, a table descriptor is either complete or an
-// error: this package never returns a schema.Table silently missing columns
+// error: this package never returns a schema.TableDef silently missing columns
 // or a primary key. PostgreSQL's information_schema is filtered per column
 // and per table by the inspecting role's privileges while pg_catalog is not;
 // this package cross-checks the two and reports [IncompleteMetadataError] or
@@ -113,12 +113,12 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 // [IncompleteMetadataError] when the inspecting role's privileges hide some
 // or all of the table's columns; see the package doc for the MySQL
 // limitation, which this method cannot detect.
-func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, error) {
+func (i Inspector) Table(ctx context.Context, tableName string) (schema.TableDef, error) {
 	if err := schema.ValidateIdentifier(tableName); err != nil {
-		return schema.Table{}, fmt.Errorf("inspect: invalid table name: %w", err)
+		return schema.TableDef{}, fmt.Errorf("inspect: invalid table name: %w", err)
 	}
 	if isNil(i.queryer) || isNil(i.dialect) {
-		return schema.Table{}, fmt.Errorf("inspect: invalid inspector")
+		return schema.TableDef{}, fmt.Errorf("inspect: invalid inspector")
 	}
 	if i.dialect.Name() == "sqlite" {
 		return i.sqliteTable(ctx, tableName)
@@ -126,63 +126,63 @@ func (i Inspector) Table(ctx context.Context, tableName string) (schema.Table, e
 	return i.informationSchemaTable(ctx, tableName)
 }
 
-func (i Inspector) informationSchemaTable(ctx context.Context, tableName string) (schema.Table, error) {
+func (i Inspector) informationSchemaTable(ctx context.Context, tableName string) (schema.TableDef, error) {
 	queries, err := i.informationSchemaQueries(ctx)
 	if err != nil {
-		return schema.Table{}, err
+		return schema.TableDef{}, err
 	}
 	columns, err := i.readColumns(ctx, queries.columns, queries.argument(tableName))
 	if err != nil {
-		return schema.Table{}, err
+		return schema.TableDef{}, err
 	}
 	if i.dialect.Name() == "postgresql" {
 		if err := i.postgreSQLCheckColumnVisibility(ctx, tableName, len(columns)); err != nil {
-			return schema.Table{}, err
+			return schema.TableDef{}, err
 		}
 	} else if len(columns) == 0 {
-		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
+		return schema.TableDef{}, &TableNotFoundError{Table: tableName, Scope: "the current database"}
 	}
 	primaryKey, err := i.readPrimaryKey(ctx, queries.primaryKey, queries.argument(tableName))
 	if err != nil {
-		return schema.Table{}, err
+		return schema.TableDef{}, err
 	}
-	table := schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
+	table := schema.TableDef{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
 	if queries.uniqueConstraints != "" {
 		table.UniqueConstraints, err = i.readUniqueConstraints(ctx, queries.uniqueConstraints, queries.argument(tableName))
 		if err != nil {
-			return schema.Table{}, err
+			return schema.TableDef{}, err
 		}
 	}
 	if queries.checks != "" {
 		table.Checks, err = i.readChecks(ctx, queries.checks, queries.argument(tableName))
 		if err != nil {
-			return schema.Table{}, err
+			return schema.TableDef{}, err
 		}
 	}
 	if queries.unsupportedExclusionConstraints != "" {
 		if err := i.rejectUnsupportedExclusionConstraints(ctx, queries.unsupportedExclusionConstraints, queries.argument(tableName)); err != nil {
-			return schema.Table{}, err
+			return schema.TableDef{}, err
 		}
 	}
 	if queries.unsupportedIndexes != "" {
 		if err := i.rejectUnsupportedIndexes(ctx, queries.unsupportedIndexes, queries.argument(tableName)); err != nil {
-			return schema.Table{}, err
+			return schema.TableDef{}, err
 		}
 	}
 	if queries.indexes != "" {
 		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.argument(tableName))
 		if err != nil {
-			return schema.Table{}, err
+			return schema.TableDef{}, err
 		}
 	}
 	if queries.foreignKeys != "" {
 		table.ForeignKeys, err = i.readForeignKeys(ctx, queries.foreignKeys, queries.argument(tableName))
 		if err != nil {
-			return schema.Table{}, err
+			return schema.TableDef{}, err
 		}
 	}
 	if err := table.Validate(); err != nil {
-		return schema.Table{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
+		return schema.TableDef{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
 }
@@ -299,11 +299,11 @@ func (i Inspector) postgreSQLCatalogColumnCount(ctx context.Context, tableName s
 	return true, count, nil
 }
 
-func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Table, error) {
+func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.TableDef, error) {
 	query := "PRAGMA table_info(\"" + tableName + "\")"
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
-		return schema.Table{}, fmt.Errorf("inspect: read SQLite columns: %w", err)
+		return schema.TableDef{}, fmt.Errorf("inspect: read SQLite columns: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -311,7 +311,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 		position int64
 		name     string
 	}
-	columns := make([]schema.Column, 0)
+	columns := make([]schema.ColumnDef, 0)
 	primaryColumns := make([]primaryColumn, 0)
 	for rows.Next() {
 		var ordinal int64
@@ -321,7 +321,7 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 		var defaultValue any
 		var primaryPosition int64
 		if err := rows.Scan(&ordinal, &name, &databaseType, &notNull, &defaultValue, &primaryPosition); err != nil {
-			return schema.Table{}, fmt.Errorf("inspect: scan SQLite column: %w", err)
+			return schema.TableDef{}, fmt.Errorf("inspect: scan SQLite column: %w", err)
 		}
 		// The signedness result is discarded: SQLite's declared type carries
 		// none this package can trust, because an INTEGER column stores a
@@ -330,19 +330,19 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 		// that truth rather than the declaration.
 		columnType, err := normalizeType(i.dialect.Name(), databaseType)
 		if err != nil {
-			return schema.Table{}, fmt.Errorf("inspect: column %q: %w", name, err)
+			return schema.TableDef{}, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
-		column := schema.Column{Name: name, Type: columnType, Nullable: notNull == 0 && primaryPosition == 0, Default: text(defaultValue)}
+		column := schema.ColumnDef{Name: name, Type: columnType, Nullable: notNull == 0 && primaryPosition == 0, Default: text(defaultValue)}
 		columns = append(columns, column)
 		if primaryPosition > 0 {
 			primaryColumns = append(primaryColumns, primaryColumn{position: primaryPosition, name: name})
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return schema.Table{}, fmt.Errorf("inspect: iterate SQLite columns: %w", err)
+		return schema.TableDef{}, fmt.Errorf("inspect: iterate SQLite columns: %w", err)
 	}
 	if len(columns) == 0 {
-		return schema.Table{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
+		return schema.TableDef{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
 	sort.Slice(primaryColumns, func(left, right int) bool {
 		return primaryColumns[left].position < primaryColumns[right].position
@@ -351,21 +351,21 @@ func (i Inspector) sqliteTable(ctx context.Context, tableName string) (schema.Ta
 	for index, column := range primaryColumns {
 		primaryKey[index] = column.name
 	}
-	table := schema.Table{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
+	table := schema.TableDef{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
 	if err := table.Validate(); err != nil {
-		return schema.Table{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
+		return schema.TableDef{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
 }
 
-func (i Inspector) readColumns(ctx context.Context, query string, argument any) ([]schema.Column, error) {
+func (i Inspector) readColumns(ctx context.Context, query string, argument any) ([]schema.ColumnDef, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read columns: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	columns := make([]schema.Column, 0)
+	columns := make([]schema.ColumnDef, 0)
 	for rows.Next() {
 		var name string
 		var databaseType string
@@ -380,7 +380,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		if err != nil {
 			return nil, fmt.Errorf("inspect: column %q: %w", name, err)
 		}
-		column := schema.Column{
+		column := schema.ColumnDef{
 			Name:     name,
 			Type:     columnType,
 			Nullable: strings.EqualFold(nullable, "YES"),
@@ -427,7 +427,7 @@ func (i Inspector) readPrimaryKey(ctx context.Context, query string, argument an
 	return columns, nil
 }
 
-func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argument any) ([]schema.UniqueConstraint, error) {
+func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argument any) ([]schema.UniqueDef, error) {
 	// PostgreSQL 18 permits NOT ENFORCED only for CHECK and foreign-key constraints, so a UNIQUE NOT ENFORCED catalog row cannot exist.
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
@@ -435,7 +435,7 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 	}
 	defer func() { _ = rows.Close() }()
 
-	var constraints []schema.UniqueConstraint
+	var constraints []schema.UniqueDef
 	for rows.Next() {
 		var name string
 		var column string
@@ -461,7 +461,7 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 			return nil, fmt.Errorf("inspect: unique constraint %q cannot be represented: rasql does not support unique constraints whose backing indexes use nondefault collations, storage options or tablespaces, or replica identity", name)
 		}
 		if len(constraints) == 0 || constraints[len(constraints)-1].Name != name {
-			constraints = append(constraints, schema.UniqueConstraint{Name: name})
+			constraints = append(constraints, schema.UniqueDef{Name: name})
 		}
 		constraints[len(constraints)-1].Columns = append(constraints[len(constraints)-1].Columns, column)
 	}
@@ -471,14 +471,14 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 	return constraints, nil
 }
 
-func (i Inspector) readChecks(ctx context.Context, query string, argument any) ([]schema.CheckConstraint, error) {
+func (i Inspector) readChecks(ctx context.Context, query string, argument any) ([]schema.CheckDef, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read check constraints: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var checks []schema.CheckConstraint
+	var checks []schema.CheckDef
 	for rows.Next() {
 		var name string
 		var expression string
@@ -497,7 +497,7 @@ func (i Inspector) readChecks(ctx context.Context, query string, argument any) (
 		if !enforced {
 			return nil, fmt.Errorf("inspect: check constraint %q cannot be represented: rasql does not support NOT ENFORCED check constraints", name)
 		}
-		checks = append(checks, schema.CheckConstraint{Name: name, Expression: expression})
+		checks = append(checks, schema.CheckDef{Name: name, Expression: expression})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate check constraints: %w", err)
@@ -895,7 +895,7 @@ func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, error)
 // followed by a display width and then by UNSIGNED, is an integer here.
 //
 // ZEROFILL and any other trailing modifier returns an error instead, because
-// schema.Column cannot record it and a descriptor that dropped it would
+// schema.ColumnDef cannot record it and a descriptor that dropped it would
 // re-render as a column with a different meaning.
 func mysqlIntegerDeclaration(typeName string, databaseType string) (bool, bool, error) {
 	base, rest := splitMySQLDeclaration(typeName)

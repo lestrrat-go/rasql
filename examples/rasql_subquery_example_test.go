@@ -46,15 +46,12 @@ func Example_rasql_subquery() {
 		UserID int64
 		Amount int64
 	}
-	orders := rasql.MustTable[orderRow](schema.Table{
-		Name: "orders",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "user_id", Type: schema.IntegerType{}},
-			{Name: "amount", Type: schema.IntegerType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+		schema.Integer("id"),
+		schema.Integer("user_id"),
+		schema.Integer("amount"),
+		schema.PrimaryKey("id"),
+	))
 	// Create both descriptors before querying orders against the users subquery.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)

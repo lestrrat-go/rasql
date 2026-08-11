@@ -101,9 +101,9 @@ func TestSelectBuilder(t *testing.T) {
 func selectOrdersTable(t *testing.T) query.Table {
 	t.Helper()
 
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},

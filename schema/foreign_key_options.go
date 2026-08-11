@@ -1,6 +1,6 @@
 package schema
 
-// ForeignKeyOption configures the ForeignKey constructor.
+// ForeignKeyOption configures the ForeignKey and ForeignKeyOn constructors.
 type ForeignKeyOption interface {
 	applyForeignKey(*foreignKeyBuilder) error
 }
@@ -34,7 +34,7 @@ func (o foreignKeyTableOption) applyTable(b *tableBuilder) error {
 	if o.builder.relationshipName == "" {
 		return validationError("foreign_keys", "As name must not be empty")
 	}
-	b.relationships = append(b.relationships, Relationship{
+	b.relationships = append(b.relationships, RelationshipDef{
 		Name:              o.builder.relationshipName,
 		Kind:              RelationshipBelongsTo,
 		Columns:           append([]string(nil), o.builder.key.Columns...),
@@ -46,13 +46,20 @@ func (o foreignKeyTableOption) applyTable(b *tableBuilder) error {
 }
 
 // ForeignKey declares a foreign key over the single local column, configured
-// by opts. A composite foreign key over more than one local column is
-// declared with a struct literal: schema.Table{ForeignKeys: []schema.ForeignKeyDef{...}}.
+// by opts.
 func ForeignKey(column string, opts ...ForeignKeyOption) TableOption {
-	builder := foreignKeyBuilder{key: ForeignKeyDef{Columns: []string{column}}}
+	return ForeignKeyOn([]string{column}, opts...)
+}
+
+// ForeignKeyOn declares a foreign key over columns, configured by opts. It is
+// the composite counterpart to ForeignKey, sharing its builder and its
+// option set: References or ReferencesIn must list one referenced column per
+// entry in columns.
+func ForeignKeyOn(columns []string, opts ...ForeignKeyOption) TableOption {
+	builder := foreignKeyBuilder{key: ForeignKeyDef{Columns: append([]string(nil), columns...)}}
 	for _, opt := range opts {
 		if opt == nil {
-			return foreignKeyTableOption{err: validationError("foreign_keys", "option for column %q must not be nil", column)}
+			return foreignKeyTableOption{err: validationError("foreign_keys", "option for columns %v must not be nil", columns)}
 		}
 		if err := opt.applyForeignKey(&builder); err != nil {
 			return foreignKeyTableOption{err: err}
@@ -76,8 +83,9 @@ func (o namedForeignKeyOption) applyForeignKey(b *foreignKeyBuilder) error {
 
 // referencesForeignKeyOption states what a foreign key points at.
 type referencesForeignKeyOption struct {
-	table   string
-	columns []string
+	schemaName string
+	table      string
+	columns    []string
 }
 
 // References states the table and columns a foreign key points at.
@@ -85,7 +93,15 @@ func References(table string, columns ...string) ForeignKeyOption {
 	return referencesForeignKeyOption{table: table, columns: append([]string(nil), columns...)}
 }
 
+// ReferencesIn states the schema-qualified table and columns a foreign key
+// points at, exactly like References but naming the schema, database, or
+// attached-database holding the referenced table.
+func ReferencesIn(schemaName, table string, columns ...string) ForeignKeyOption {
+	return referencesForeignKeyOption{schemaName: schemaName, table: table, columns: append([]string(nil), columns...)}
+}
+
 func (o referencesForeignKeyOption) applyForeignKey(b *foreignKeyBuilder) error {
+	b.key.ReferencedSchema = o.schemaName
 	b.key.ReferencedTable = o.table
 	b.key.ReferencedColumns = o.columns
 	return nil
@@ -121,10 +137,11 @@ func (o onUpdateForeignKeyOption) applyForeignKey(b *foreignKeyBuilder) error {
 // foreign key.
 type asForeignKeyOption string
 
-// As derives a schema.Relationship of kind RelationshipBelongsTo from the
-// foreign key, named name, exactly as schema.Table{Relationships: ...} would
-// state one by hand. Set it when the generated method name should differ
-// from the one rasqlgen would otherwise derive from the local column name.
+// As derives a schema.RelationshipDef of kind RelationshipBelongsTo from the
+// foreign key, named name, exactly as schema.TableDef{Relationships: ...}
+// would state one by hand. Set it when the generated method name should
+// differ from the one rasqlgen would otherwise derive from the local column
+// name.
 func As(name string) ForeignKeyOption {
 	return asForeignKeyOption(name)
 }

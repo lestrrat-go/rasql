@@ -30,14 +30,11 @@ func newUsersTable(table rasql.Table[UserRow]) UsersTable {
 }
 
 // users keeps the generated row type and its column references together.
-var users = newUsersTable(rasql.MustTable[UserRow](schema.Table{
-	Name: "users",
-	Columns: []schema.Column{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-	},
-	PrimaryKey: []string{"id"},
-}))
+var users = newUsersTable(rasql.MustTableOf[UserRow](schema.MustTable("users",
+	schema.Integer("id"),
+	schema.Text("email"),
+	schema.PrimaryKey("id"),
+)))
 
 // As returns the table under alias, with every column rebound to it.
 func (t UsersTable) As(alias string) (UsersTable, error) {

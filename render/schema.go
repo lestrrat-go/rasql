@@ -9,7 +9,7 @@ import (
 )
 
 // CreateTable renders a CREATE TABLE statement for table.
-func CreateTable(d dialect.Dialect, table schema.Table) (Statement, error) {
+func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
 	if isNilDialect(d) {
 		return Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
@@ -24,7 +24,7 @@ func CreateTable(d dialect.Dialect, table schema.Table) (Statement, error) {
 }
 
 // CreateIndexes renders the CREATE INDEX statements for table.
-func CreateIndexes(d dialect.Dialect, table schema.Table) ([]Statement, error) {
+func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]Statement, error) {
 	if isNilDialect(d) {
 		return nil, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
@@ -42,7 +42,7 @@ func CreateIndexes(d dialect.Dialect, table schema.Table) ([]Statement, error) {
 	return statements, nil
 }
 
-func (r *renderer) writeCreateTable(table schema.Table) error {
+func (r *renderer) writeCreateTable(table schema.TableDef) error {
 	name, err := r.quoteQualified(table.Schema, table.Name)
 	if err != nil {
 		return err
@@ -104,7 +104,7 @@ func (r *renderer) writeCreateTable(table schema.Table) error {
 	return nil
 }
 
-func (r *renderer) writeCreateIndex(table schema.Table, index schema.IndexDef) error {
+func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef) error {
 	indexName, tableName, err := r.qualifiedIndexNames(table, index)
 	if err != nil {
 		return err
@@ -137,7 +137,7 @@ func (r *renderer) writeCreateIndex(table schema.Table, index schema.IndexDef) e
 // the indexed table bare, which is SQLite's form, since it cannot qualify the
 // table in "ON table" at all. A dialect with neither capability is refused
 // rather than silently dropping the qualifier.
-func (r *renderer) qualifiedIndexNames(table schema.Table, index schema.IndexDef) (string, string, error) {
+func (r *renderer) qualifiedIndexNames(table schema.TableDef, index schema.IndexDef) (string, string, error) {
 	if table.Schema == "" {
 		indexName, err := r.quoteIdentifier(index.Name)
 		if err != nil {
@@ -175,7 +175,7 @@ func (r *renderer) qualifiedIndexNames(table schema.Table, index schema.IndexDef
 	}
 }
 
-func (r *renderer) columnDefinition(column schema.Column) (string, error) {
+func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
 	name, err := r.quoteIdentifier(column.Name)
 	if err != nil {
 		return "", err
@@ -204,7 +204,7 @@ func (r *renderer) columnDefinition(column schema.Column) (string, error) {
 // can render, since it rejects a schema-qualified REFERENCES clause outright,
 // even for its own schema. A cross-schema reference on a dialect with neither
 // path is refused rather than silently rendered as same-schema or dropped.
-func (r *renderer) qualifiedReferencedTable(table schema.Table, key schema.ForeignKeyDef) (string, error) {
+func (r *renderer) qualifiedReferencedTable(table schema.TableDef, key schema.ForeignKeyDef) (string, error) {
 	if key.ReferencedSchema == "" {
 		return r.quoteIdentifier(key.ReferencedTable)
 	}
@@ -217,7 +217,7 @@ func (r *renderer) qualifiedReferencedTable(table schema.Table, key schema.Forei
 	return "", fmt.Errorf("dialect %s: foreign key on table %q references table %q in schema %q: this dialect lacks dialect.CapabilityQualifiedReference and can only reference table %q's own schema %q", r.dialect.Name(), table.Name, key.ReferencedTable, key.ReferencedSchema, table.Name, table.Schema)
 }
 
-func (r *renderer) foreignKeyDefinition(table schema.Table, key schema.ForeignKeyDef) (string, error) {
+func (r *renderer) foreignKeyDefinition(table schema.TableDef, key schema.ForeignKeyDef) (string, error) {
 	columns, err := r.quotedNames(key.Columns)
 	if err != nil {
 		return "", err

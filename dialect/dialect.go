@@ -53,7 +53,7 @@ type Dialect interface {
 	// dialect does not map, for a decimal whose precision or scale is outside
 	// what this dialect can express, and for an unsigned column on a dialect
 	// with no unsigned integer type.
-	TypeName(schema.Column) (string, error)
+	TypeName(schema.ColumnDef) (string, error)
 
 	UpsertStyle() UpsertStyle
 	Supports(Capability) bool
@@ -165,7 +165,7 @@ func (d builtin) Placeholder(position int) (string, error) {
 	return d.placeholder(position), nil
 }
 
-func (d builtin) TypeName(column schema.Column) (string, error) {
+func (d builtin) TypeName(column schema.ColumnDef) (string, error) {
 	if column.Type == nil {
 		return "", fmt.Errorf("dialect %s: unsupported nil column type", d.name)
 	}
@@ -194,7 +194,7 @@ func (d builtin) TypeName(column schema.Column) (string, error) {
 // a column silently rendered signed would reject values the descriptor permits.
 // Refusing is loud and recoverable, and the caller's fix is to declare the
 // column signed and say so in the descriptor.
-func (d builtin) unsignedTypeName(column schema.Column) (string, error) {
+func (d builtin) unsignedTypeName(column schema.ColumnDef) (string, error) {
 	if d.unsignedInteger == "" {
 		return "", fmt.Errorf("dialect %s: unsigned integer column %q cannot be represented: this dialect has no unsigned integer type, and rendering the column signed would narrow the values it permits", d.name, column.Name)
 	}
@@ -206,7 +206,7 @@ func (d builtin) unsignedTypeName(column schema.Column) (string, error) {
 // not say what the column means. SQLite then has no bound to check and renders
 // its decimalName with no precision/scale suffix; PostgreSQL and MySQL each
 // enforce their own maximum and render NAME(p,s).
-func (d builtin) decimalTypeName(column schema.Column, decimal schema.DecimalType) (string, error) {
+func (d builtin) decimalTypeName(column schema.ColumnDef, decimal schema.DecimalType) (string, error) {
 	scale, stated := decimal.Scale.Value()
 	if !stated {
 		return "", fmt.Errorf("dialect %s: decimal column %q states no scale", d.name, column.Name)

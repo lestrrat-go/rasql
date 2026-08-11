@@ -45,7 +45,7 @@ func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
 
 	source, err := os.ReadFile(usersOutput)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable(\"users\",")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 	require.Contains(t, string(source), "\tID query.Column\n")
 	require.Contains(t, string(source), "func (t UsersTable) As(alias string) (UsersTable, error) {")

@@ -77,10 +77,10 @@ func TestSelectRendersQualifiedJoin(t *testing.T) {
 
 func qualifiedJoinSelectStatement(t *testing.T) query.Select {
 	t.Helper()
-	events, err := query.NewTable(schema.Table{
+	events, err := query.NewTable(schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "action", Type: schema.TextType{}},
@@ -88,10 +88,10 @@ func qualifiedJoinSelectStatement(t *testing.T) query.Select {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Schema: "tenant",
 		Name:   "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -125,10 +125,10 @@ func qualifiedJoinSelectStatement(t *testing.T) query.Select {
 // qualified table's whole name in every position: FROM names the qualified
 // table, but a column reference is qualified by the alias alone.
 func TestSelectRendersAliasWithoutSchema(t *testing.T) {
-	events, err := query.NewTable(schema.Table{
+	events, err := query.NewTable(schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -152,10 +152,10 @@ func TestSelectRendersAliasWithoutSchema(t *testing.T) {
 // writeExpression, which the qualification change alters in exactly one
 // case, so a three-part key must appear in both.
 func TestSelectRendersQualifiedTableInGroupedStatement(t *testing.T) {
-	events, err := query.NewTable(schema.Table{
+	events, err := query.NewTable(schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -187,10 +187,10 @@ func TestSelectRendersQualifiedTableInGroupedStatement(t *testing.T) {
 // path: a subquery recurses into writeSelect, so its FROM and its columns go
 // through the same substitutions as a top-level statement.
 func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
-	events, err := query.NewTable(schema.Table{
+	events, err := query.NewTable(schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 	})
@@ -200,10 +200,10 @@ func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
 	inner, err := query.NewSelect(events, query.Project(eventsUserID))
 	require.NoError(t, err)
 
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Schema: "tenant",
 		Name:   "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -261,9 +261,9 @@ func TestSelectRendersAggregateFunctions(t *testing.T) {
 
 func aggregateSelectStatement(t *testing.T) query.Select {
 	t.Helper()
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.TextType{}},
 		},
@@ -322,9 +322,9 @@ func TestSelectRendersDistinctStatement(t *testing.T) {
 
 func distinctSelectStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -332,9 +332,9 @@ func distinctSelectStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 	users, err = users.As("u")
 	require.NoError(t, err)
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.FloatType{}},
@@ -372,9 +372,9 @@ func distinctSelectStatement(t *testing.T) query.Select {
 // renders as COUNT(DISTINCT x), the modifier COUNT(DISTINCT x) needs now that
 // BuildCount refuses a distinct SelectBuilder.
 func TestSelectRendersDistinctFunctionArgument(t *testing.T) {
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -419,18 +419,18 @@ func TestSelectRendersDistinctFunctionArgument(t *testing.T) {
 // TestSelectRendersSubqueriesForBuiltInDialects, and that placeholder
 // numbering carries through it unaffected, since DISTINCT binds no argument.
 func TestSelectRendersDistinctSubquery(t *testing.T) {
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "status", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -470,9 +470,9 @@ func TestSelectRendersDistinctSubquery(t *testing.T) {
 // pins placeholder numbering with a bound argument sitting inside COALESCE
 // between two other binds.
 func TestSelectRendersScalarFunctions(t *testing.T) {
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 			{Name: "score", Type: schema.IntegerType{}, Nullable: true},
@@ -528,9 +528,9 @@ func TestSelectRendersScalarFunctions(t *testing.T) {
 // caller-supplied name raw, with no quoting, exactly like a curated function
 // name, once validation has confirmed it is a legal identifier.
 func TestSelectRendersScalarFunctionEscapeHatch(t *testing.T) {
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "doc", Type: schema.JSONType{}},
 		},
@@ -555,9 +555,9 @@ func TestSelectRendersScalarFunctionEscapeHatch(t *testing.T) {
 // modifier on a curated scalar call, so this path is the only one that reaches
 // the renderer with a non-aggregate name.
 func TestSelectRendersDistinctEscapeHatchArgument(t *testing.T) {
-	posts, err := query.NewTable(schema.Table{
+	posts, err := query.NewTable(schema.TableDef{
 		Name: "posts",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "tag", Type: schema.TextType{}},
 		},
@@ -611,9 +611,9 @@ func TestSelectRendersGroupedStatement(t *testing.T) {
 
 func groupedSelectStatement(t *testing.T) query.Select {
 	t.Helper()
-	tasks, err := query.NewTable(schema.Table{
+	tasks, err := query.NewTable(schema.TableDef{
 		Name: "tasks",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "status", Type: schema.TextType{}},
 		},
@@ -644,9 +644,9 @@ func groupedSelectStatement(t *testing.T) query.Select {
 // own arguments join the enclosing statement's list at the position the clause
 // occupies, so placeholder numbering stays correct across GROUP BY and HAVING.
 func TestSelectRendersSubqueryInGroupedClauses(t *testing.T) {
-	tasks, err := query.NewTable(schema.Table{
+	tasks, err := query.NewTable(schema.TableDef{
 		Name: "tasks",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "priority", Type: schema.IntegerType{}},
 		},
@@ -789,18 +789,18 @@ func TestSelectRendersSubqueriesForBuiltInDialects(t *testing.T) {
 // shares the outer renderer, so a bound value before the subquery, bound values
 // inside it, and a bound value after it all number from one contiguous sequence.
 func TestSelectRendersSubqueryPlaceholdersInOrder(t *testing.T) {
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "status", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.IntegerType{}},
@@ -845,17 +845,17 @@ func TestSelectRendersSubqueryPlaceholdersInOrder(t *testing.T) {
 // carries no such restriction on any of the three, since it is never combined
 // with IN.
 func TestSelectRejectsLimitedSubqueryInMembership(t *testing.T) {
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -908,9 +908,9 @@ func TestSelectRejectsLimitedSubqueryInMembership(t *testing.T) {
 // scope from the outer statement even though it names the same table.
 func subqueryStatement(t *testing.T) query.Select {
 	t.Helper()
-	tasksDefinition := schema.Table{
+	tasksDefinition := schema.TableDef{
 		Name: "tasks",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "project_id", Type: schema.IntegerType{}},
 			{Name: "title", Type: schema.TextType{}},
@@ -920,9 +920,9 @@ func subqueryStatement(t *testing.T) query.Select {
 	}
 	tasks, err := query.NewTable(tasksDefinition)
 	require.NoError(t, err)
-	projects, err := query.NewTable(schema.Table{
+	projects, err := query.NewTable(schema.TableDef{
 		Name: "projects",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "owner_id", Type: schema.IntegerType{}},
 		},
@@ -968,17 +968,17 @@ func subqueryStatement(t *testing.T) query.Select {
 // a column as a member, which is valid SQL and is accepted by design.
 func columnMembershipStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -1006,9 +1006,9 @@ func columnMembershipStatement(t *testing.T) query.Select {
 
 func membershipStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -1033,9 +1033,9 @@ func membershipStatement(t *testing.T) query.Select {
 
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -1043,9 +1043,9 @@ func selectStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 	users, err = users.As("u")
 	require.NoError(t, err)
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.FloatType{}},

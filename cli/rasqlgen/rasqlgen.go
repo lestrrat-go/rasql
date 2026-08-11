@@ -108,7 +108,7 @@ func runSchema(args []string, writer io.Writer) error {
 	if *input != "" && *dsn != "" {
 		return errors.New("schema accepts either -input or -dsn, not both")
 	}
-	var tables []schema.Table
+	var tables []schema.TableDef
 	switch {
 	case *input != "":
 		data, err := readInputFile(*input)
@@ -167,7 +167,7 @@ func runSchema(args []string, writer io.Writer) error {
 	return nil
 }
 
-func writeGeneratedSchemaFiles(directory string, packageName string, tables []schema.Table) error {
+func writeGeneratedSchemaFiles(directory string, packageName string, tables []schema.TableDef) error {
 	info, err := os.Stat(directory)
 	if err != nil {
 		return err
@@ -179,7 +179,7 @@ func writeGeneratedSchemaFiles(directory string, packageName string, tables []sc
 		return err
 	}
 
-	sorted := append([]schema.Table(nil), tables...)
+	sorted := append([]schema.TableDef(nil), tables...)
 	sort.Slice(sorted, func(left, right int) bool {
 		return sorted[left].Name < sorted[right].Name
 	})
@@ -208,8 +208,8 @@ func schemaOutputFilename(tableName string) string {
 	return strings.ToLower(tableName) + "_gen.go"
 }
 
-func inspectTables(ctx context.Context, inspector inspect.Inspector, names []string) ([]schema.Table, error) {
-	tables := make([]schema.Table, len(names))
+func inspectTables(ctx context.Context, inspector inspect.Inspector, names []string) ([]schema.TableDef, error) {
+	tables := make([]schema.TableDef, len(names))
 	for index, name := range names {
 		table, err := inspector.Table(ctx, name)
 		if err != nil {
@@ -220,7 +220,7 @@ func inspectTables(ctx context.Context, inspector inspect.Inspector, names []str
 	return tables, nil
 }
 
-func filterTables(tables []schema.Table, names []string) ([]schema.Table, error) {
+func filterTables(tables []schema.TableDef, names []string) ([]schema.TableDef, error) {
 	if len(names) == 0 {
 		return tables, nil
 	}
@@ -228,7 +228,7 @@ func filterTables(tables []schema.Table, names []string) ([]schema.Table, error)
 	for _, name := range names {
 		requested[name] = struct{}{}
 	}
-	filtered := make([]schema.Table, 0, len(tables))
+	filtered := make([]schema.TableDef, 0, len(tables))
 	found := make(map[string]struct{}, len(names))
 	for _, table := range tables {
 		if _, ok := requested[table.Name]; !ok {

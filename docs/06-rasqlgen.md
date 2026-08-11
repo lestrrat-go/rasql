@@ -33,7 +33,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | `-package` | Package name for the generated files. Required. |
 | `-output` | Existing directory for generated files. Required. |
 
-Supply either `-dsn` or `-input`, never both. Direct inspection supports PostgreSQL, MySQL, and SQLite; the command bundles their `pgx`, `mysql`, and `sqlite` drivers, so nothing needs importing to use `-dsn`. PostgreSQL inspection preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys, including exact decimal columns (`NUMERIC`/`DECIMAL`), which generate a Go `string` field and whose generated descriptor restates the column's `Precision` and `Scale`. MySQL and SQLite inspection currently preserves supported columns and primary keys. A generated `Scale` reads `schema.NewDecimalScale(s)` rather than a bare number, and is emitted even when `s` is `0`, because the zero value of `schema.DecimalScale` means no scale was stated and `Table.Validate` rejects a decimal column that states none. It reports an error when an inspected type, index, or constraint has metadata that the schema descriptor cannot reproduce, and when a PostgreSQL column is a bare, unconstrained `NUMERIC`, since PostgreSQL reports no precision for it to record.
+Supply either `-dsn` or `-input`, never both. Direct inspection supports PostgreSQL, MySQL, and SQLite; the command bundles their `pgx`, `mysql`, and `sqlite` drivers, so nothing needs importing to use `-dsn`. PostgreSQL inspection preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys, including exact decimal columns (`NUMERIC`/`DECIMAL`), which generate a Go `string` field and whose generated descriptor restates the column's `Precision` and `Scale`. MySQL and SQLite inspection currently preserves supported columns and primary keys. A generated `schema.Decimal` call restates precision and scale positionally, and states scale even when it is `0`, because the zero value of `schema.DecimalScale` means no scale was stated and `TableDef.Validate` rejects a decimal column that states none. It reports an error when an inspected type, index, or constraint has metadata that the schema descriptor cannot reproduce, and when a PostgreSQL column is a bare, unconstrained `NUMERIC`, since PostgreSQL reports no precision for it to record.
 
 `schema` writes one file per table, named `<table>_gen.go` in lowercase. The example writes `users_gen.go` and `orders_gen.go` in `internal/store`.
 
@@ -41,7 +41,7 @@ When selected tables contain supported foreign keys, `rasqlgen` also emits typed
 
 `-dsn` reads every requested table in one transaction and commits it after the last read, so a migration that commits partway through cannot split the generated descriptor across two schema versions. It requests repeatable-read and read-only modes where the driver supports them. `-timeout` bounds that whole transaction, from opening it through the last metadata query; a server that accepts the connection but never answers cancels the command instead of hanging it indefinitely.
 
-`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.Table` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, whether with `-input` or `-dsn`, is rejected as a flag-parsing error rather than silently collapsed to one table. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
+`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.TableDef` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, whether with `-input` or `-dsn`, is rejected as a flag-parsing error rather than silently collapsed to one table. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
 
 ### What it generates
 
@@ -91,7 +91,7 @@ func newUsersTable(table rasql.Table[UsersRow]) UsersTable {
 	}
 }
 
-var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{ /* … */ }))
+var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable("users" /* … */)))
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {
@@ -253,7 +253,7 @@ Names come from the table and column names. Underscore-separated parts are capit
 
 A `boolean` column decodes from any integer value, not just 0 and 1: zero decodes as `false`, and any nonzero value decodes as `true`.
 
-An `integer` column that sets `Unsigned` generates a `uint64` field rather than an `int64` one, because it reaches 18446744073709551615 and `int64` stops at 9223372036854775807. The generated descriptor restates `Unsigned: true`, so regenerating from the emitted source produces the same column instead of a signed one, and a `schema.Table` read through `-input` keeps it too, since it is a plain JSON boolean. See [Unsigned integer columns](02-schema.md#unsigned-integer-columns) for which engines can render such a column.
+An `integer` column that sets `Unsigned` generates a `uint64` field rather than an `int64` one, because it reaches 18446744073709551615 and `int64` stops at 9223372036854775807. The generated descriptor restates `schema.Unsigned()`, so regenerating from the emitted source produces the same column instead of a signed one, and a `schema.TableDef` read through `-input` keeps it too, since it is a plain JSON boolean. See [Unsigned integer columns](02-schema.md#unsigned-integer-columns) for which engines can render such a column.
 
 The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `QueryTable`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `DecodeRow` or `ColumnValue`, because those belong to the row type's own mapping methods.
 

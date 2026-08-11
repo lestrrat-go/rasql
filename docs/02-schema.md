@@ -15,67 +15,13 @@ import (
 )
 
 func Example_schema_table_definition() {
-	// This example defines one reusable table descriptor in Go code.
-	// Describe each database table once with schema.Table. The same descriptor
-	// can later supply a reusable query.Table or generate DDL.
-	table := schema.Table{
-		// Name is the database table identifier.
-		Name: "users",
-		// Columns list each database column and its dialect-neutral logical type.
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "email", Type: schema.TextType{}},
-		},
-		// PrimaryKey names columns from Columns that uniquely identify each row.
-		PrimaryKey: []string{"id"},
-	}
-	// Validate the descriptor before it is used to create references or DDL.
-	if err := table.Validate(); err != nil {
-		fmt.Printf("failed to define table: %s\n", err)
-		return
-	}
-
-	fmt.Printf("%s: %d columns\n", table.Name, len(table.Columns))
-
-	// Output:
-	// users: 2 columns
-}
-```
-source: [examples/schema_table_definition_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_example_test.go)
-<!-- END INCLUDE -->
-
-## Describe a table with constructors and options
-
-A struct literal repeats every column name across `PrimaryKey`, `Indexes`,
-`UniqueConstraints`, and `ForeignKeys`. `schema.NewTable` and `schema.MustTable`
-build the same kind of descriptor from a table name and a list of
-`schema.TableOption` values instead: a column constructor such as
-`schema.Integer` or `schema.Text` and a constraint constructor such as
-`schema.PrimaryKey`, `schema.Unique`, `schema.Check`, `schema.Index`, or
-`schema.ForeignKey` are each a `TableOption`, so they may appear in any order.
-`NewTable` collects the columns and constraints each option declares and
-assembles them into a `Table` afterward, which is what makes the order
-harmless: `schema.PrimaryKey("id")` may appear before `schema.Integer("id")`
-declares the column it names.
-
-<!-- INCLUDE(examples/schema_table_definition_options_example_test.go) -->
-```go
-package examples_test
-
-import (
-	"fmt"
-
-	"github.com/lestrrat-go/rasql/schema"
-)
-
-func Example_schema_table_definition_options() {
-	// This example defines the same kind of reusable table descriptor as
-	// Example_schema_table_definition, built with schema.MustTable instead of
-	// a struct literal. A column constructor such as schema.Integer and a
-	// constraint constructor such as schema.PrimaryKey each return a
+	// This example defines two reusable table descriptors in Go code, built
+	// with schema.MustTable. A column constructor such as schema.Integer and
+	// a constraint constructor such as schema.PrimaryKey each return a
 	// schema.TableOption, so they may appear in any order: PrimaryKey names
 	// "id" below before Integer declares it, and the assembled descriptor is
-	// the same either way.
+	// the same either way. The same descriptor can later supply a reusable
+	// query.Table or generate DDL.
 	users := schema.MustTable("users",
 		schema.Integer("id"),
 		schema.Text("email"),
@@ -90,9 +36,9 @@ func Example_schema_table_definition_options() {
 
 	// A foreign key's Named, References, and OnDelete options configure the
 	// constraint itself. As additionally derives the belongs-to
-	// schema.Relationship that rasqlgen would otherwise name on its own from
-	// the local column, letting the generated method read orders.Buyer()
-	// rather than orders.Customer().
+	// schema.RelationshipDef that rasqlgen would otherwise name on its own
+	// from the local column, letting the generated method read
+	// orders.Buyer() rather than orders.Customer().
 	orders := schema.MustTable("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
@@ -113,38 +59,58 @@ func Example_schema_table_definition_options() {
 	// orders: foreign key orders_customer_fkey references customers, relationship "buyer"
 }
 ```
-source: [examples/schema_table_definition_options_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_options_example_test.go)
+source: [examples/schema_table_definition_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_example_test.go)
 <!-- END INCLUDE -->
 
-`MustTable` panics on an invalid descriptor and suits a table declared once at
-package initialization, exactly like `rasql.MustTable[T]`; `NewTable` returns
-the error instead, for a descriptor assembled at runtime. Both validate the
-assembled descriptor exactly as `Table.Validate` would validate a struct
+`schema.MustTable` panics on an invalid descriptor and suits a table declared
+once at package initialization, exactly like `rasql.MustTableOf[T]`;
+`schema.NewTable` returns the error instead, for a descriptor assembled at
+runtime. Both collect the columns and constraints each `schema.TableOption`
+declares and assemble them into a `schema.TableDef` afterward, which is what
+makes the order harmless: `schema.PrimaryKey("id")` may appear before
+`schema.Integer("id")` declares the column it names. Both then validate the
+assembled descriptor exactly as `TableDef.Validate` would validate a struct
 literal, so an unknown primary key column or a duplicate constraint name is
 rejected the same way either form is built.
 
-A column constructor takes zero or more `schema.ColumnOption` values:
-`schema.Nullable()` marks the column nullable, `schema.Default(expr)` states
-its default expression, and `schema.Unsigned()` marks an integer column
-unsigned, rejected on every other column type. `schema.Decimal` takes
-precision and scale as ordinary arguments rather than options, since
-`Table.Validate` requires both anyway. `schema.ForeignKey` takes the single
-local column and a list of `schema.ForeignKeyOption` values: `schema.Named`
-states the constraint name, `schema.References` states the target table and
-columns, `schema.OnDelete` and `schema.OnUpdate` state the reference actions
-(`schema.Cascade`, `schema.Restrict`, `schema.SetNull`, `schema.SetDefault`,
-and `schema.NoAction`), and `schema.As` derives a belongs-to `Relationship`
-alongside it.
+A column constructor such as `schema.Integer` or `schema.Text` takes zero or
+more `schema.ColumnOption` values: `schema.Nullable()` marks the column
+nullable, `schema.Default(expr)` states its default expression, and
+`schema.Unsigned()` marks an integer column unsigned, rejected on every other
+column type. `schema.Decimal` takes precision and scale as ordinary arguments
+rather than options, since `TableDef.Validate` requires both anyway.
 
-The option form covers what a hand-written descriptor typically needs, not
-every shape a struct literal can express. A composite foreign key spanning
-more than one local column, a named unique constraint or check, or a unique
-index all still take a struct literal: `schema.Table{ForeignKeys:
-[]schema.ForeignKeyDef{...}}` and its siblings remain fully supported, and
-`inspect` and `rasqlgen` keep emitting them so that every descriptor they
-produce round-trips exactly.
+| Constructor | Declares |
+| --- | --- |
+| `schema.PrimaryKey` | The columns that uniquely identify each row. |
+| `schema.Unique` / `schema.UniqueNamed` | An unnamed, or named, uniqueness requirement over columns. |
+| `schema.Check` / `schema.CheckNamed` | An unnamed, or named, check constraint over an expression. |
+| `schema.Index` / `schema.UniqueIndex` | A plain, or unique, secondary index over columns. |
+| `schema.ForeignKey` / `schema.ForeignKeyOn` | A foreign key over one column, or over several. |
+| `schema.InSchema` | The namespace qualifying the table. |
 
-`schema.Table` carries the table name, its columns, and its constraints:
+`schema.ForeignKey` takes the single local column and `schema.ForeignKeyOn`
+takes a `[]string` of them for a composite key; both take the same list of
+`schema.ForeignKeyOption` values: `schema.Named` states the constraint name,
+`schema.References` states the target table and columns, `schema.ReferencesIn`
+does the same for a target qualified by schema, `schema.OnDelete` and
+`schema.OnUpdate` state the reference actions (`schema.Cascade`,
+`schema.Restrict`, `schema.SetNull`, `schema.SetDefault`, and
+`schema.NoAction`), and `schema.As` derives a belongs-to `RelationshipDef`
+alongside it. Together these constructors cover every shape a struct literal
+can express: a composite foreign key, a named unique constraint or check, and
+a unique index all have an option-form constructor, with no need to fall back
+to a struct literal for any of them.
+
+## The struct literal
+
+`schema.TableDef` is the descriptor itself; `schema.NewTable` and
+`schema.MustTable` are one way to build one. Its fields are exactly what a
+`schema.TableOption` assembles behind the scenes, and they are also what
+`inspect` returns from a live database and what `migrate`'s diff compares
+between two descriptors, so reading a descriptor back, whether from
+`inspect.Table` or from a variable holding one, means reading this struct
+rather than a list of options:
 
 | Field | Holds |
 | --- | --- |
@@ -158,11 +124,21 @@ produce round-trips exactly.
 | `ForeignKeys` | References to other tables, with their update and delete actions. |
 | `Relationships` | Optional named relationship metadata used by generated relationship APIs. |
 
-Call `Validate` before using a descriptor. It reports a `*schema.ValidationError` naming the part that is wrong, such as a primary key that lists a column the table does not declare. Non-empty names given to `UniqueConstraints`, `Checks`, and `ForeignKeys` must be unique across all three, since a dialect renders them together into one `CREATE TABLE` constraint list. `MustTable` and `NewTable` validate as well, so a separate `Validate` call is only needed for a descriptor built at runtime that is not immediately turned into a table.
+A struct literal remains a fully supported way to build a `schema.TableDef`
+directly, and every field takes a keyed composite literal such as
+`schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{...}, ...}`.
+Call `Validate` before using a descriptor built this way. It reports a
+`*schema.ValidationError` naming the part that is wrong, such as a primary
+key that lists a column the table does not declare. Non-empty names given to
+`UniqueConstraints`, `Checks`, and `ForeignKeys` must be unique across all
+three, since a dialect renders them together into one `CREATE TABLE`
+constraint list. `MustTable` and `NewTable` validate as well, so a separate
+`Validate` call is only needed for a descriptor built at runtime that is not
+immediately turned into a table.
 
 ## Relationships
 
-`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.Relationship` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
+`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`; the `schema.As` foreign-key option states one explicitly, in the option form, instead. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
 
 The generated API covers one bounded slice: a non-null single-column foreign key that targets a non-null single-column primary key with the same generated Go type. When both tables are generated in the package, the child table exposes a belongs-to method and the parent table exposes the inverse has-many method. Each relation exposes `Join` and `Load`; `Load` fetches all related rows with one secondary `IN` query and groups them by key. Callers must split very large parent slices themselves when they approach the database parameter limit.
 
@@ -176,7 +152,7 @@ Qualification reaches DML, column references, and DDL. A `SELECT`, `INSERT`, `UP
 
 A foreign key that references a table in another schema names it with `ForeignKeyDef.ReferencedSchema`, validated the same way as `Table.Schema` and left empty for the server to resolve, exactly like an empty `Table.Schema`. PostgreSQL and MySQL render a stated `ReferencedSchema` as a second qualified identifier in the `REFERENCES` clause. SQLite cannot: it rejects a schema-qualified `REFERENCES` outright, even when the reference names the referencing table's own schema, so rasql drops a same-schema qualifier there rather than refuse a reference that means the same thing either way, and refuses to render a genuinely cross-schema reference instead of silently pointing it at the wrong table. An unqualified table's foreign keys are unaffected either way: qualifying `Table.Schema` alone, without also stating `ForeignKeyDef.ReferencedSchema`, would let PostgreSQL resolve an unqualified `REFERENCES` through the connection's `search_path` rather than the table's own schema, which is why the two fields ship together.
 
-`schema.Table` and `query.Table` each answer two questions about qualification. `Qualified` reports whether a schema is named at all, and `QualifiedName` returns `schema.name` for display, falling back to `name` for an unqualified table. Neither is a SQL identifier: a renderer quotes `Schema` and `Name` as two identifiers, and `dialect.QuoteIdentifier` rejects the dotted string `QualifiedName` returns. On `query.Table` the two describe the table rather than the reference: `Qualified` stays true once the table is aliased, while `QualifiedName` returns the alias, because that is what an error message about an aliased table has to name. `query.Table.QualifierSchema` reports what actually qualifies a rendered column, which is nothing at all once an alias replaces the table's whole name.
+`schema.TableDef` and `query.Table` each answer two questions about qualification. `Qualified` reports whether a schema is named at all, and `QualifiedName` returns `schema.name` for display, falling back to `name` for an unqualified table. Neither is a SQL identifier: a renderer quotes `Schema` and `Name` as two identifiers, and `dialect.QuoteIdentifier` rejects the dotted string `QualifiedName` returns. On `query.Table` the two describe the table rather than the reference: `Qualified` stays true once the table is aliased, while `QualifiedName` returns the alias, because that is what an error message about an aliased table has to name. `query.Table.QualifierSchema` reports what actually qualifies a rendered column, which is nothing at all once an alias replaces the table's whole name.
 
 <!-- INCLUDE(examples/schema_qualified_table_example_test.go) -->
 ```go
@@ -228,16 +204,13 @@ func Example_schema_qualified_table() {
 		return
 	}
 
-	// Schema qualifies the table without changing how any other field works.
-	events := rasql.MustTable[eventRow](schema.Table{
-		Schema: "audit",
-		Name:   "events",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "action", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	// InSchema qualifies the table without changing how any other option works.
+	events := rasql.MustTableOf[eventRow](schema.MustTable("events",
+		schema.InSchema("audit"),
+		schema.Integer("id"),
+		schema.Text("action"),
+		schema.PrimaryKey("id"),
+	))
 
 	if err := rasql.Create(ctx, client, events); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
@@ -289,7 +262,7 @@ A column's `Type` is a logical type, not a database type. The dialect maps it to
 
 A column also carries `Nullable`, `Default`, and its concrete `Type`. Type-specific options live on that type: `IntegerType.Unsigned` describes unsigned integers, while `DecimalType` carries `Precision` and `Scale`. Identifiers must be simple: `schema.ValidateIdentifier` accepts a leading letter or underscore followed by letters, digits, or underscores, and everything else is rejected rather than quoted around.
 
-`schema.DecimalType` is an exact decimal, for money, quantities, and any other value a binary floating-point `FloatType` would round. A decimal type must set `Precision` (the total number of significant digits, at least 1) and `Scale` (the number of those digits right of the decimal point, no more than `Precision`); `Table.Validate` rejects a decimal type that omits either. `Scale` is a `schema.DecimalScale` rather than a plain `int`, and is stated with `schema.NewDecimalScale`, because a `DECIMAL(19,0)` column is legitimate and its zero scale has to be distinguishable from a descriptor that named no scale at all; the zero value of `schema.DecimalScale` means "no scale stated" and `DecimalScale.Value` returns the stated scale together with whether one was stated. Each dialect renders `Precision`/`Scale` into its own DDL: PostgreSQL and MySQL render `NUMERIC(p,s)` and `DECIMAL(p,s)`, each exact and each enforcing its own maximum precision and scale. On both, a decimal column decodes to its declared scale in string form, zero-padded on the right: a `NUMERIC(19,4)` column yields `"19.9900"` for the value `19.99`, not `"19.99"`, so a caller comparing decimal strings has to compare on the declared scale. That declared scale governs the column itself; a projected expression over it need not keep it, and [Scalar functions](03-querying.md#scalar-functions) states where MySQL widens one. SQLite has no exact decimal storage class, so it renders `TEXT` instead: the column round-trips its digits exactly and applies no such padding, decoding to a Go `string` on every dialect, but a SQLite decimal column compares and orders lexicographically rather than numerically, since it is stored as text rather than a number. A caller that wants a real decimal type in Go, rather than a `string`, can write its own row struct with a field implementing `sql.Scanner` and `driver.Valuer`; `row.Assign` checks for that interface before every built-in conversion, so the raw driver value reaches it unchanged.
+`schema.DecimalType` is an exact decimal, for money, quantities, and any other value a binary floating-point `FloatType` would round. A decimal type must set `Precision` (the total number of significant digits, at least 1) and `Scale` (the number of those digits right of the decimal point, no more than `Precision`); `TableDef.Validate` rejects a decimal type that omits either. `Scale` is a `schema.DecimalScale` rather than a plain `int`, and is stated with `schema.NewDecimalScale`, because a `DECIMAL(19,0)` column is legitimate and its zero scale has to be distinguishable from a descriptor that named no scale at all; the zero value of `schema.DecimalScale` means "no scale stated" and `DecimalScale.Value` returns the stated scale together with whether one was stated. Each dialect renders `Precision`/`Scale` into its own DDL: PostgreSQL and MySQL render `NUMERIC(p,s)` and `DECIMAL(p,s)`, each exact and each enforcing its own maximum precision and scale. On both, a decimal column decodes to its declared scale in string form, zero-padded on the right: a `NUMERIC(19,4)` column yields `"19.9900"` for the value `19.99`, not `"19.99"`, so a caller comparing decimal strings has to compare on the declared scale. That declared scale governs the column itself; a projected expression over it need not keep it, and [Scalar functions](03-querying.md#scalar-functions) states where MySQL widens one. SQLite has no exact decimal storage class, so it renders `TEXT` instead: the column round-trips its digits exactly and applies no such padding, decoding to a Go `string` on every dialect, but a SQLite decimal column compares and orders lexicographically rather than numerically, since it is stored as text rather than a number. A caller that wants a real decimal type in Go, rather than a `string`, can write its own row struct with a field implementing `sql.Scanner` and `driver.Valuer`; `row.Assign` checks for that interface before every built-in conversion, so the raw driver value reaches it unchanged.
 
 <!-- INCLUDE(examples/schema_decimal_column_example_test.go) -->
 ```go
@@ -335,18 +308,16 @@ func Example_schema_decimal_column() {
 		return
 	}
 
-	// A DecimalType column must state Precision and Scale; Table.Validate
-	// rejects a decimal column that omits either. Scale is stated through
-	// schema.NewDecimalScale so that a scale of 0 is distinguishable from a
-	// column that named no scale at all.
-	invoices := rasql.MustTable[invoiceRow](schema.Table{
-		Name: "invoices",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	// schema.Decimal takes precision and scale positionally, rather than as
+	// options, because TableDef.Validate rejects a decimal column that lacks
+	// either: stating both here makes an incomplete decimal column impossible
+	// to construct in the first place instead of merely rejected once
+	// assembled.
+	invoices := rasql.MustTableOf[invoiceRow](schema.MustTable("invoices",
+		schema.Integer("id"),
+		schema.Decimal("amount", 19, 4),
+		schema.PrimaryKey("id"),
+	))
 	// SQLite has no exact decimal storage class, so the dialect declares this
 	// column TEXT rather than NUMERIC(19,4), which would round through REAL.
 	if err := rasql.Create(ctx, client, invoices); err != nil {
@@ -381,7 +352,7 @@ source: [examples/schema_decimal_column_example_test.go](https://github.com/lest
 
 ## Unsigned integer columns
 
-A `schema.IntegerType` column is signed unless `IntegerType.Unsigned` is true. An unsigned column stores no negative values and reaches 18446744073709551615 instead of 9223372036854775807. Other concrete column types cannot carry this option. `Table.Validate` still checks the type-specific values, while dialects reject unsigned integers when they have no unsigned integer syntax.
+A `schema.IntegerType` column is signed unless `IntegerType.Unsigned` is true. An unsigned column stores no negative values and reaches 18446744073709551615 instead of 9223372036854775807. Other concrete column types cannot carry this option. `TableDef.Validate` still checks the type-specific values, while dialects reject unsigned integers when they have no unsigned integer syntax.
 
 Engines differ here, and rasql says so instead of papering over it. MySQL has unsigned integer types and renders such a column `BIGINT UNSIGNED`. PostgreSQL has none, and SQLite stores a signed 64-bit value whatever a column is declared, so both report an error naming the column rather than render a signed `BIGINT` that would reject the values the descriptor permits. A schema that has to run on all three declares the column signed, and narrows the range it claims to what every engine can hold.
 
@@ -405,21 +376,14 @@ func Example_schema_unsigned_column() {
 	// This example declares an unsigned integer column and renders its DDL for
 	// each dialect. MySQL is the only supported engine with an unsigned
 	// integer type, so it is the only one that renders the table.
-	events := schema.Table{
-		Name: "events",
-		Columns: []schema.Column{
-			// An unsigned column reaches 18446744073709551615, where a signed
-			// one stops at 9223372036854775807. rasqlgen generates a uint64
-			// field for it rather than an int64 one.
-			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
-			{Name: "sequence", Type: schema.IntegerType{}},
-		},
-		PrimaryKey: []string{"id"},
-	}
-	if err := events.Validate(); err != nil {
-		fmt.Printf("failed to define table: %s\n", err)
-		return
-	}
+	events := schema.MustTable("events",
+		// An unsigned column reaches 18446744073709551615, where a signed one
+		// stops at 9223372036854775807. rasqlgen generates a uint64 field for
+		// it rather than an int64 one.
+		schema.Integer("id", schema.Unsigned()),
+		schema.Integer("sequence"),
+		schema.PrimaryKey("id"),
+	)
 
 	mysql, err := render.CreateTable(dialect.MySQL(), events)
 	if err != nil {
@@ -449,7 +413,7 @@ source: [examples/schema_unsigned_column_example_test.go](https://github.com/les
 
 ## Bind a row type to the table
 
-A bare `schema.Table` describes the database. Pairing it with a Go type produces a `rasql.Table[T]`, which is what the typed API takes:
+A bare `schema.TableDef` describes the database. Pairing it with a Go type produces a `rasql.Table[T]`, which is what the typed API takes:
 
 ```go
 type UserRow struct {
@@ -457,10 +421,10 @@ type UserRow struct {
 	Email string `rasql:"email"`
 }
 
-users := rasql.MustTable[UserRow](definition)
+users := rasql.MustTableOf[UserRow](definition)
 ```
 
-Each field's `rasql` tag names the column it holds. `MustTable` panics on an invalid descriptor and suits generated or otherwise constant tables; `NewTable` returns the error instead, for descriptors assembled at runtime.
+Each field's `rasql` tag names the column it holds. `rasql.MustTableOf` panics on an invalid descriptor and suits generated or otherwise constant tables; `rasql.TableOf` returns the error instead, for descriptors assembled at runtime.
 
 A `rasql.Table[T]` is half of a table value rather than the whole of it. Wrap it in a type holding one `query.Column` field per column, so that `users.ID` is the column reference the builders take. That is the shape [`rasqlgen`](06-rasqlgen.md) emits, the shape every example on these pages uses, and the shape a hand-written table should have too. [Getting started](01-getting-started.md#the-table-used-throughout-the-documentation) shows the full wrapper for the `users` table, and [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows what the fields are worth.
 
@@ -468,7 +432,7 @@ Two methods remain for code that only learns a column name while it runs. `users
 
 ## Read a table out of a database
 
-`inspect` turns live database metadata back into a `schema.Table`, normalizing native column types into logical ones.
+`inspect` turns live database metadata back into a `schema.TableDef`, normalizing native column types into logical ones.
 
 <!-- INCLUDE(examples/inspect_sqlite_table_example_test.go) -->
 ```go
@@ -485,7 +449,7 @@ import (
 )
 
 func Example_inspect_sqlite_table() {
-	// This example reads an existing SQLite table into a normalized schema.Table.
+	// This example reads an existing SQLite table into a normalized schema.TableDef.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

@@ -42,14 +42,11 @@ func Example_rasql_group_by() {
 		Status string
 		Total  int64
 	}
-	tasks := rasql.MustTable[taskRow](schema.Table{
-		Name: "tasks",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "status", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	tasks := rasql.MustTableOf[taskRow](schema.MustTable("tasks",
+		schema.Integer("id"),
+		schema.Text("status"),
+		schema.PrimaryKey("id"),
+	))
 	if err := rasql.Create(ctx, client, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return

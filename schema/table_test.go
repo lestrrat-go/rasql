@@ -12,7 +12,7 @@ import (
 func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor := validTable()
 	descriptor.Schema = "audit"
-	descriptor.Relationships = []schema.Relationship{{
+	descriptor.Relationships = []schema.RelationshipDef{{
 		Name:              "Customer",
 		Kind:              schema.RelationshipBelongsTo,
 		Columns:           []string{"customer_id"},
@@ -88,15 +88,15 @@ func TestColumnTypeKinds(t *testing.T) {
 // stated scale is a plain JSON number, and an unstated one is null rather than
 // a number that would decode back as a stated scale of zero.
 func TestDecimalScaleJSON(t *testing.T) {
-	encoded, err := json.Marshal(schema.Column{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(0)}})
+	encoded, err := json.Marshal(schema.ColumnDef{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(0)}})
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), `"Type":{"Kind":"decimal","Precision":19,"Scale":0}`)
 
-	encoded, err = json.Marshal(schema.Column{Name: "id", Type: schema.IntegerType{}})
+	encoded, err = json.Marshal(schema.ColumnDef{Name: "id", Type: schema.IntegerType{}})
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), `"Type":{"Kind":"integer","Unsigned":false}`)
 
-	var decoded schema.Column
+	var decoded schema.ColumnDef
 	require.NoError(t, json.Unmarshal([]byte(`{"Name":"amount","Type":{"Kind":"decimal","Precision":19,"Scale":0}}`), &decoded))
 	decimal, ok := decoded.Type.(schema.DecimalType)
 	require.True(t, ok)
@@ -104,14 +104,14 @@ func TestDecimalScaleJSON(t *testing.T) {
 	require.True(t, stated)
 	require.Equal(t, 0, scale)
 
-	decoded = schema.Column{}
+	decoded = schema.ColumnDef{}
 	require.NoError(t, json.Unmarshal([]byte(`{"Name":"amount","Type":{"Kind":"decimal","Precision":19}}`), &decoded))
 	decimal, ok = decoded.Type.(schema.DecimalType)
 	require.True(t, ok)
 	_, stated = decimal.Scale.Value()
 	require.False(t, stated)
 
-	decoded = schema.Column{}
+	decoded = schema.ColumnDef{}
 	require.NoError(t, json.Unmarshal([]byte(`{"Name":"amount","Type":{"Kind":"decimal","Precision":19,"Scale":null}}`), &decoded))
 	decimal, ok = decoded.Type.(schema.DecimalType)
 	require.True(t, ok)
@@ -134,34 +134,34 @@ func TestTableColumn(t *testing.T) {
 }
 
 func TestTableValidate(t *testing.T) {
-	tests := map[string]schema.Table{
+	tests := map[string]schema.TableDef{
 		"empty table name": {
-			Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+			Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		},
 		"invalid column type": {
 			Name:    "orders",
-			Columns: []schema.Column{{Name: "id"}},
+			Columns: []schema.ColumnDef{{Name: "id"}},
 		},
 		"duplicate column": {
 			Name: "orders",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 				{Name: "id", Type: schema.IntegerType{}},
 			},
 		},
 		"unknown primary key column": {
 			Name:       "orders",
-			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"missing"},
 		},
 		"empty index name": {
 			Name:    "orders",
-			Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+			Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 			Indexes: []schema.IndexDef{{Columns: []string{"id"}}},
 		},
 		"foreign key arity": {
 			Name: "orders",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 				{Name: "customer_id", Type: schema.IntegerType{}},
 			},
@@ -173,25 +173,25 @@ func TestTableValidate(t *testing.T) {
 		},
 		"unique constraint name duplicates check name": {
 			Name: "orders",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 			},
-			UniqueConstraints: []schema.UniqueConstraint{{
+			UniqueConstraints: []schema.UniqueDef{{
 				Name:    "dup",
 				Columns: []string{"id"},
 			}},
-			Checks: []schema.CheckConstraint{{
+			Checks: []schema.CheckDef{{
 				Name:       "dup",
 				Expression: "id > 0",
 			}},
 		},
 		"unique constraint name duplicates foreign key name": {
 			Name: "orders",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 				{Name: "org_id", Type: schema.IntegerType{}},
 			},
-			UniqueConstraints: []schema.UniqueConstraint{{
+			UniqueConstraints: []schema.UniqueDef{{
 				Name:    "dup",
 				Columns: []string{"id"},
 			}},
@@ -204,11 +204,11 @@ func TestTableValidate(t *testing.T) {
 		},
 		"check name duplicates foreign key name": {
 			Name: "orders",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 				{Name: "org_id", Type: schema.IntegerType{}},
 			},
-			Checks: []schema.CheckConstraint{{
+			Checks: []schema.CheckDef{{
 				Name:       "dup",
 				Expression: "id > 0",
 			}},
@@ -221,19 +221,19 @@ func TestTableValidate(t *testing.T) {
 		},
 		"decimal column with zero precision": {
 			Name:    "payments",
-			Columns: []schema.Column{{Name: "amount", Type: schema.DecimalType{Precision: 0, Scale: schema.NewDecimalScale(0)}}},
+			Columns: []schema.ColumnDef{{Name: "amount", Type: schema.DecimalType{Precision: 0, Scale: schema.NewDecimalScale(0)}}},
 		},
 		"decimal column with negative scale": {
 			Name:    "payments",
-			Columns: []schema.Column{{Name: "amount", Type: schema.DecimalType{Precision: 4, Scale: schema.NewDecimalScale(-1)}}},
+			Columns: []schema.ColumnDef{{Name: "amount", Type: schema.DecimalType{Precision: 4, Scale: schema.NewDecimalScale(-1)}}},
 		},
 		"decimal scale exceeds precision": {
 			Name:    "payments",
-			Columns: []schema.Column{{Name: "amount", Type: schema.DecimalType{Precision: 4, Scale: schema.NewDecimalScale(5)}}},
+			Columns: []schema.ColumnDef{{Name: "amount", Type: schema.DecimalType{Precision: 4, Scale: schema.NewDecimalScale(5)}}},
 		},
 		"decimal column with no scale": {
 			Name:    "payments",
-			Columns: []schema.Column{{Name: "amount", Type: schema.DecimalType{Precision: 19}}},
+			Columns: []schema.ColumnDef{{Name: "amount", Type: schema.DecimalType{Precision: 19}}},
 		},
 	}
 
@@ -253,30 +253,30 @@ func TestTableValidate(t *testing.T) {
 // checks that a *schema.ValidationError came back, not what it says.
 func TestTableValidateDecimalColumnMessages(t *testing.T) {
 	tests := map[string]struct {
-		column  schema.Column
+		column  schema.ColumnDef
 		wantErr string
 	}{
 		"zero precision": {
-			column:  schema.Column{Name: "amount", Type: schema.DecimalType{Precision: 0, Scale: schema.NewDecimalScale(0)}},
+			column:  schema.ColumnDef{Name: "amount", Type: schema.DecimalType{Precision: 0, Scale: schema.NewDecimalScale(0)}},
 			wantErr: "must state a precision of at least 1",
 		},
 		"negative scale": {
-			column:  schema.Column{Name: "amount", Type: schema.DecimalType{Precision: 4, Scale: schema.NewDecimalScale(-1)}},
+			column:  schema.ColumnDef{Name: "amount", Type: schema.DecimalType{Precision: 4, Scale: schema.NewDecimalScale(-1)}},
 			wantErr: "must not be negative",
 		},
 		"scale exceeds precision": {
-			column:  schema.Column{Name: "amount", Type: schema.DecimalType{Precision: 4, Scale: schema.NewDecimalScale(5)}},
+			column:  schema.ColumnDef{Name: "amount", Type: schema.DecimalType{Precision: 4, Scale: schema.NewDecimalScale(5)}},
 			wantErr: "scale 5 exceeds precision 4",
 		},
 		"no scale at all": {
-			column:  schema.Column{Name: "amount", Type: schema.DecimalType{Precision: 19}},
+			column:  schema.ColumnDef{Name: "amount", Type: schema.DecimalType{Precision: 19}},
 			wantErr: "must state a scale",
 		},
 	}
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			table := schema.Table{Name: "payments", Columns: []schema.Column{test.column}}
+			table := schema.TableDef{Name: "payments", Columns: []schema.ColumnDef{test.column}}
 			err := table.Validate()
 			require.ErrorContains(t, err, test.wantErr)
 		})
@@ -288,9 +288,9 @@ func TestTableValidateDecimalColumnMessages(t *testing.T) {
 // stated scale of zero is one of those valid scales, so it is covered here
 // rather than among the rejections.
 func TestTableValidateAcceptsDecimalColumn(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "payments",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 			{Name: "quantity", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(0)}},
@@ -304,9 +304,9 @@ func TestTableValidateAcceptsDecimalColumn(t *testing.T) {
 // TestTableValidateUnsignedColumn covers the integer-specific signedness
 // option. Other concrete types cannot carry it in the first place.
 func TestTableValidateUnsignedColumn(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
 			{Name: "sequence", Type: schema.IntegerType{}},
 		},
@@ -320,9 +320,9 @@ func TestTableValidateUnsignedColumn(t *testing.T) {
 // descriptor makes that round trip as JSON, so signedness recorded in the
 // integer type survives it.
 func TestColumnUnsignedJSON(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
 			{Name: "sequence", Type: schema.IntegerType{}},
 		},
@@ -334,7 +334,7 @@ func TestColumnUnsignedJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), `"Unsigned":true`)
 
-	var decoded schema.Table
+	var decoded schema.TableDef
 	require.NoError(t, json.Unmarshal(encoded, &decoded))
 	require.Equal(t, table, decoded)
 	require.NoError(t, decoded.Validate())
@@ -342,28 +342,28 @@ func TestColumnUnsignedJSON(t *testing.T) {
 	require.Equal(t, schema.IntegerType{}, decoded.Columns[1].Type)
 
 	// The old flat type representation is no longer accepted.
-	decoded = schema.Table{}
+	decoded = schema.TableDef{}
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"events","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}`), &decoded))
 }
 
 func TestColumnTypeJSONRejectsIrrelevantOptions(t *testing.T) {
-	var decoded schema.Column
+	var decoded schema.ColumnDef
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"name","Type":{"Kind":"text","Unsigned":true}}`), &decoded))
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"id","Type":{"Kind":"integer","Precision":4}}`), &decoded))
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"id","Type":{"Kind":"unknown"}}`), &decoded))
 }
 
 func TestTableValidateDuplicateConstraintNameReportsPath(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
-		UniqueConstraints: []schema.UniqueConstraint{{
+		UniqueConstraints: []schema.UniqueDef{{
 			Name:    "dup",
 			Columns: []string{"id"},
 		}},
-		Checks: []schema.CheckConstraint{{
+		Checks: []schema.CheckDef{{
 			Name:       "dup",
 			Expression: "id > 0",
 		}},
@@ -376,16 +376,16 @@ func TestTableValidateDuplicateConstraintNameReportsPath(t *testing.T) {
 }
 
 func TestTableValidateAllowsRepeatedEmptyConstraintNames(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "org_id", Type: schema.IntegerType{}},
 		},
-		UniqueConstraints: []schema.UniqueConstraint{{
+		UniqueConstraints: []schema.UniqueDef{{
 			Columns: []string{"id"},
 		}},
-		Checks: []schema.CheckConstraint{{
+		Checks: []schema.CheckDef{{
 			Expression: "id > 0",
 		}},
 		ForeignKeys: []schema.ForeignKeyDef{{
@@ -399,9 +399,9 @@ func TestTableValidateAllowsRepeatedEmptyConstraintNames(t *testing.T) {
 }
 
 func TestTableValidatesRelationshipMetadata(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "customer_id", Type: schema.IntegerType{}},
 		},
@@ -411,7 +411,7 @@ func TestTableValidatesRelationshipMetadata(t *testing.T) {
 			ReferencedTable:   "customers",
 			ReferencedColumns: []string{"id"},
 		}},
-		Relationships: []schema.Relationship{{
+		Relationships: []schema.RelationshipDef{{
 			Name:              "Customer",
 			Kind:              schema.RelationshipBelongsTo,
 			Columns:           []string{"customer_id"},
@@ -427,9 +427,9 @@ func TestTableValidatesRelationshipMetadata(t *testing.T) {
 }
 
 func TestTableRejectsRelationshipWithoutMatchingForeignKey(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "other_id", Type: schema.IntegerType{}},
@@ -439,7 +439,7 @@ func TestTableRejectsRelationshipWithoutMatchingForeignKey(t *testing.T) {
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
 		}},
-		Relationships: []schema.Relationship{{
+		Relationships: []schema.RelationshipDef{{
 			Name:              "User",
 			Kind:              schema.RelationshipBelongsTo,
 			Columns:           []string{"other_id"},
@@ -466,7 +466,7 @@ func TestValidateIdentifier(t *testing.T) {
 // optional Schema field: an empty Schema is skipped, a valid identifier
 // passes, and an invalid one reports table.schema.
 func TestTableValidatesSchemaQualifier(t *testing.T) {
-	base := func(schemaName string) schema.Table {
+	base := func(schemaName string) schema.TableDef {
 		table := validTable()
 		table.Schema = schemaName
 		return table
@@ -491,7 +491,7 @@ func TestTableValidatesSchemaQualifier(t *testing.T) {
 // empty stays valid, exactly like Table.Schema, and an invalid identifier is
 // reported at foreign_keys[0].referenced_schema.
 func TestTableValidatesForeignKeyReferencedSchema(t *testing.T) {
-	base := func(referencedSchema string) schema.Table {
+	base := func(referencedSchema string) schema.TableDef {
 		table := validTable()
 		table.ForeignKeys[0].ReferencedSchema = referencedSchema
 		return table
@@ -515,30 +515,30 @@ func TestTableValidatesForeignKeyReferencedSchema(t *testing.T) {
 // TestTableQualifiedName pins QualifiedName and Qualified for both an
 // unqualified and a qualified table.
 func TestTableQualifiedName(t *testing.T) {
-	unqualified := schema.Table{Name: "users"}
+	unqualified := schema.TableDef{Name: "users"}
 	require.False(t, unqualified.Qualified())
 	require.Equal(t, "users", unqualified.QualifiedName())
 
-	qualified := schema.Table{Schema: "audit", Name: "events"}
+	qualified := schema.TableDef{Schema: "audit", Name: "events"}
 	require.True(t, qualified.Qualified())
 	require.Equal(t, "audit.events", qualified.QualifiedName())
 }
 
-func validTable() schema.Table {
-	return schema.Table{
+func validTable() schema.TableDef {
+	return schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "customer_id", Type: schema.IntegerType{}},
 			{Name: "status", Type: schema.TextType{}, Default: "'new'"},
 			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 		},
 		PrimaryKey: []string{"id"},
-		UniqueConstraints: []schema.UniqueConstraint{{
+		UniqueConstraints: []schema.UniqueDef{{
 			Name:    "orders_customer_status_key",
 			Columns: []string{"customer_id", "status"},
 		}},
-		Checks: []schema.CheckConstraint{{
+		Checks: []schema.CheckDef{{
 			Name:       "orders_status_check",
 			Expression: "status <> ''",
 		}},

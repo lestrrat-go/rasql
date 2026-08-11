@@ -12,19 +12,19 @@ import (
 )
 
 func TestCreateTableRendersDialectTypesAndConstraints(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "customer_id", Type: schema.IntegerType{}},
 			{Name: "metadata", Type: schema.JSONType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
-		UniqueConstraints: []schema.UniqueConstraint{{
+		UniqueConstraints: []schema.UniqueDef{{
 			Name:    "orders_customer_key",
 			Columns: []string{"customer_id"},
 		}},
-		Checks: []schema.CheckConstraint{{
+		Checks: []schema.CheckDef{{
 			Name:       "orders_id_check",
 			Expression: "id > 0",
 		}},
@@ -52,9 +52,9 @@ func TestCreateTableRendersDialectTypesAndConstraints(t *testing.T) {
 }
 
 func TestCreateTableRendersDecimalColumns(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "invoices",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 			{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},
@@ -96,9 +96,9 @@ func TestCreateTableRendersDecimalColumns(t *testing.T) {
 // and the two dialects with no unsigned integer type refuse the table instead
 // of narrowing it silently.
 func TestCreateTableRendersUnsignedIntegerColumns(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
 			{Name: "sequence", Type: schema.IntegerType{}},
 		},
@@ -120,9 +120,9 @@ func TestCreateTableRendersUnsignedIntegerColumns(t *testing.T) {
 }
 
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "invoices",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.DecimalType{Precision: 100, Scale: schema.NewDecimalScale(4)}},
 		},
@@ -140,10 +140,10 @@ func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 // joined by a dot on every dialect, and section 3.2 of the design measured
 // that all three accept that form.
 func TestCreateTableRendersQualifiedName(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -185,10 +185,10 @@ func TestCreateTableRendersQualifiedName(t *testing.T) {
 // design), while a genuinely cross-schema reference is refused rather than
 // silently narrowed to the wrong table.
 func TestCreateTableRendersQualifiedForeignKey(t *testing.T) {
-	crossSchema := schema.Table{
+	crossSchema := schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -239,10 +239,10 @@ func TestCreateTableRendersQualifiedForeignKey(t *testing.T) {
 // the design). Both the plain and the UNIQUE form are covered, since the
 // qualifier position is decided before the UNIQUE keyword is even written.
 func TestCreateIndexRendersDialectQualifierPosition(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -316,19 +316,19 @@ func (d noQualifiedDDLDialect) Supports(capability dialect.Capability) bool {
 // because the empty-schema paths in writeCreateTable, qualifiedIndexNames and
 // qualifiedReferencedTable never call dialect.Dialect.Supports at all.
 func TestUnqualifiedDDLIsUnchanged(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "customer_id", Type: schema.IntegerType{}},
 			{Name: "metadata", Type: schema.JSONType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
-		UniqueConstraints: []schema.UniqueConstraint{{
+		UniqueConstraints: []schema.UniqueDef{{
 			Name:    "orders_customer_key",
 			Columns: []string{"customer_id"},
 		}},
-		Checks: []schema.CheckConstraint{{
+		Checks: []schema.CheckDef{{
 			Name:       "orders_id_check",
 			Expression: "id > 0",
 		}},
@@ -395,10 +395,10 @@ func TestUnqualifiedDDLIsUnchanged(t *testing.T) {
 // NUMERIC(p,s) type exactly as it would unqualified, next to a qualified
 // table name.
 func TestCreateTableRendersQualifiedDecimalColumn(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Schema: "audit",
 		Name:   "invoices",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 		},
@@ -425,10 +425,10 @@ func TestSQLiteExecutesQualifiedDDL(t *testing.T) {
 	_, err = database.ExecContext(t.Context(), `ATTACH DATABASE ':memory:' AS audit`)
 	require.NoError(t, err)
 
-	table := schema.Table{
+	table := schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},

@@ -2,7 +2,7 @@ package schema
 
 // ColumnOption configures a column constructor such as Integer or Text.
 type ColumnOption interface {
-	applyColumn(*Column) error
+	applyColumn(*ColumnDef) error
 }
 
 // columnTableOption carries either a fully-built Column or the first error a
@@ -12,7 +12,7 @@ type ColumnOption interface {
 // the error only once it applies every option, the same place every other
 // TableOption error surfaces.
 type columnTableOption struct {
-	column Column
+	column ColumnDef
 	err    error
 }
 
@@ -28,7 +28,7 @@ func (o columnTableOption) applyTable(b *tableBuilder) error {
 // and returns it as a TableOption. Every typed column constructor (Boolean,
 // Integer, and so on) is a thin wrapper around this.
 func column(name string, columnType ColumnType, opts ...ColumnOption) TableOption {
-	built := Column{Name: name, Type: columnType}
+	built := ColumnDef{Name: name, Type: columnType}
 	for _, opt := range opts {
 		if opt == nil {
 			return columnTableOption{err: validationError("columns", "option for column %q must not be nil", name)}
@@ -97,7 +97,7 @@ func Nullable() ColumnOption {
 	return nullableColumnOption{}
 }
 
-func (nullableColumnOption) applyColumn(c *Column) error {
+func (nullableColumnOption) applyColumn(c *ColumnDef) error {
 	c.Nullable = true
 	return nil
 }
@@ -111,7 +111,7 @@ func Default(expr string) ColumnOption {
 	return defaultColumnOption(expr)
 }
 
-func (o defaultColumnOption) applyColumn(c *Column) error {
+func (o defaultColumnOption) applyColumn(c *ColumnDef) error {
 	c.Default = string(o)
 	return nil
 }
@@ -125,7 +125,7 @@ func Unsigned() ColumnOption {
 	return unsignedColumnOption{}
 }
 
-func (unsignedColumnOption) applyColumn(c *Column) error {
+func (unsignedColumnOption) applyColumn(c *ColumnDef) error {
 	integer, ok := c.Type.(IntegerType)
 	if !ok {
 		return validationError("columns", "column %q: Unsigned only applies to integer columns", c.Name)

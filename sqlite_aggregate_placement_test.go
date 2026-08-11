@@ -256,12 +256,12 @@ func TestSQLiteRunsScalarFunctionsBesideAggregates(t *testing.T) {
 // aggregatePlacementFixture opens an in-memory SQLite database holding three
 // users, and returns it with the table descriptor the placement tests build
 // statements from.
-func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.Table) {
+func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	t.Helper()
 
-	definition := schema.Table{
+	definition := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -282,7 +282,7 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.Table) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](definition)
+	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.Create(t.Context(), client, users))
 	for _, fixture := range []user{
