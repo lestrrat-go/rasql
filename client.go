@@ -12,24 +12,15 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Queryer executes rendered SELECT statements. It is implemented by *sql.DB and *sql.Tx.
-// A debug Queryer may return nil rows after logging a query; row.Scan treats that as no result rows.
-type Queryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
-// Execer executes statements that do not return rows.
-type Execer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
 // Handle is a database/sql handle that both reads rows and executes statements.
 // *sql.DB and *sql.Tx implement it. New requires it, so a Client can always run
-// a write; a queryer that only reads is rejected where it is supplied rather
+// a write; a value that only reads is rejected where it is supplied rather
 // than where a write is attempted.
+// A debug Handle may return nil rows after logging a query; row.Scan treats
+// that as no result rows.
 type Handle interface {
-	Queryer
-	Execer
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
 // Client executes queries for a fixed SQL dialect.
