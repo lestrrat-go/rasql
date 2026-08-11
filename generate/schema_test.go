@@ -241,7 +241,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	}
 
-	source, err := generate.Schema("generated", users, orders, invoices)
+	source, err := generate.PackageSource("generated", users, orders, invoices)
 	require.NoError(t, err)
 	require.Contains(t, string(source), "type OrdersRow struct")
 	require.Contains(t, string(source), "type UsersRow struct")
@@ -288,7 +288,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.NotContains(t, string(source), "var Users =")
 	require.Less(t, stringIndex(t, source, "var ordersTable"), stringIndex(t, source, "var usersTable"))
 
-	repeated, err := generate.Schema("generated", invoices, orders, users)
+	repeated, err := generate.PackageSource("generated", invoices, orders, users)
 	require.NoError(t, err)
 	require.Equal(t, string(source), string(repeated), "generated source must not depend on input order")
 
@@ -333,7 +333,7 @@ func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
 		columns[index] = schema.ColumnDef{Name: "column_" + strconv.Itoa(index), Type: schema.IntegerType{}}
 	}
 
-	source, err := generate.Schema("generated", schema.TableDef{
+	source, err := generate.PackageSource("generated", schema.TableDef{
 		Name:       "wide",
 		Columns:    columns,
 		PrimaryKey: []string{"column_0"},
@@ -463,11 +463,11 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 		}},
 	}
 
-	source, err := generate.Schema("generated", users, orders)
+	source, err := generate.PackageSource("generated", users, orders)
 	require.NoError(t, err)
-	usersSource, err := generate.SchemaTable("generated", users, users, orders)
+	usersSource, err := generate.TableSource("generated", users, users, orders)
 	require.NoError(t, err)
-	ordersSource, err := generate.SchemaTable("generated", orders, users, orders)
+	ordersSource, err := generate.TableSource("generated", orders, users, orders)
 	require.NoError(t, err)
 	require.Contains(t, string(source), "func (t OrdersTable) User() OrdersTableUserRelation")
 	require.Contains(t, string(source), "func (t UsersTable) Orders() UsersTableOrdersRelation")
@@ -515,7 +515,7 @@ func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 		},
 	}
 
-	source, err := generate.Schema("generated", users, memberships)
+	source, err := generate.PackageSource("generated", users, memberships)
 	require.NoError(t, err)
 	text := string(source)
 	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
@@ -543,7 +543,7 @@ func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
 			PrimaryKey:  []string{"id"},
 			ForeignKeys: foreignKeys,
 		}
-		source, err := generate.Schema("generated", users, memberships)
+		source, err := generate.PackageSource("generated", users, memberships)
 		require.NoError(t, err)
 		return string(source)
 	}
@@ -578,7 +578,7 @@ func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
 		}},
 	}
 
-	source, err := generate.Schema("generated", employees)
+	source, err := generate.PackageSource("generated", employees)
 	require.NoError(t, err)
 	text := string(source)
 	require.Contains(t, text, "func (t EmployeesTable) Manager() EmployeesTableManagerRelation")
@@ -601,7 +601,7 @@ func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
 		}},
 	}
 
-	source, err := generate.Schema("generated", employees)
+	source, err := generate.PackageSource("generated", employees)
 	require.NoError(t, err)
 	directory, err := os.MkdirTemp(".", ".tmp-self-relationship-schema-*")
 	require.NoError(t, err)
@@ -641,7 +641,7 @@ func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
 		}},
 	}
 
-	source, err := generate.Schema("generated", users, aliases)
+	source, err := generate.PackageSource("generated", users, aliases)
 	require.NoError(t, err)
 	text := string(source)
 	require.Contains(t, text, "func (t UsersTable) UserAs() UsersTableUserAsRelation")
@@ -687,7 +687,7 @@ func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
 		}},
 	}
 
-	source, err := generate.Schema("generated", users, memberships)
+	source, err := generate.PackageSource("generated", users, memberships)
 	require.NoError(t, err)
 	text := string(source)
 	for _, expected := range []string{
@@ -717,7 +717,7 @@ func TestSchemaGeneratesDecimalColumns(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	}
 
-	source, err := generate.Schema("generated", invoices)
+	source, err := generate.PackageSource("generated", invoices)
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
 	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
@@ -745,7 +745,7 @@ func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	}
 
-	source, err := generate.Schema("generated", events)
+	source, err := generate.PackageSource("generated", events)
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
 	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
@@ -756,14 +756,14 @@ func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
 }
 
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {
-	_, err := generate.Schema("not-valid")
+	_, err := generate.PackageSource("not-valid")
 	require.Error(t, err)
 }
 
 func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
 	for _, columnName := range []string{"table", "as", "ref", "column", "decode_row", "column_value"} {
 		t.Run(columnName, func(t *testing.T) {
-			_, err := generate.Schema("generated", schema.TableDef{
+			_, err := generate.PackageSource("generated", schema.TableDef{
 				Name: "users",
 				Columns: []schema.ColumnDef{
 					{Name: "id", Type: schema.IntegerType{}},
@@ -814,14 +814,14 @@ func TestSchemaRejectsCollidingRelationshipMethodNames(t *testing.T) {
 		},
 	}
 
-	_, err := generate.Schema("generated", users, orders)
+	_, err := generate.PackageSource("generated", users, orders)
 	require.ErrorContains(t, err, `relationships[0] "BillingUser"`)
 	require.ErrorContains(t, err, `relationships[1] "billing_user"`)
 	require.ErrorContains(t, err, `duplicate generated method "BillingUser"`)
 }
 
 func TestSchemaAllowsScanColumns(t *testing.T) {
-	source, err := generate.Schema("generated", schema.TableDef{
+	source, err := generate.PackageSource("generated", schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -834,7 +834,7 @@ func TestSchemaAllowsScanColumns(t *testing.T) {
 }
 
 func TestSchemaRejectsCollidingGeneratedNames(t *testing.T) {
-	_, err := generate.Schema("generated",
+	_, err := generate.PackageSource("generated",
 		schema.TableDef{
 			Name:       "users",
 			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
@@ -875,7 +875,7 @@ func TestSchemaRejectsRelationshipTypeCollisions(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	}
 
-	_, err := generate.Schema("generated", users, orders, collision)
+	_, err := generate.PackageSource("generated", users, orders, collision)
 	require.ErrorContains(t, err, `relationship "Orders" on table "users"`)
 	require.ErrorContains(t, err, `UsersTableOrdersRelation`)
 }
@@ -907,7 +907,7 @@ func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
 		}},
 	}
 
-	err := generate.ValidateSchema("generated", users, orders)
+	err := generate.Validate("generated", users, orders)
 	require.ErrorContains(t, err, `relationship "as" on table "orders" uses reserved generated method "As"`)
 }
 
@@ -931,7 +931,7 @@ func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
 		}},
 	}
 
-	source, err := generate.Schema("generated", users, orders)
+	source, err := generate.PackageSource("generated", users, orders)
 	require.NoError(t, err)
 	require.Contains(t, string(source), "AsID *int64")
 	require.NotContains(t, string(source), "func (t OrdersTable) As() OrdersTableAsRelation")
@@ -947,7 +947,7 @@ func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	}
 
-	source, err := generate.Schema("generated", apiKeys)
+	source, err := generate.PackageSource("generated", apiKeys)
 	require.NoError(t, err)
 	require.Contains(t, string(source), "func APIKeys() APIKeysTable {")
 	require.Contains(t, string(source), "type APIKeysRow struct {")
@@ -959,7 +959,7 @@ func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
 }
 
 func TestSchemaRejectsCollidingInitialismNames(t *testing.T) {
-	_, err := generate.Schema("generated",
+	_, err := generate.PackageSource("generated",
 		schema.TableDef{
 			Name:       "api_keys",
 			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},

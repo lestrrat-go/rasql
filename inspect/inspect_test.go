@@ -211,7 +211,7 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 		},
 	}, table.ForeignKeys)
 
-	source, err := generate.Schema("generated", table)
+	source, err := generate.PackageSource("generated", table)
 	require.NoError(t, err)
 	require.Contains(t, string(source), `schema.UniqueNamed("uq_users_email", "email")`)
 	require.Contains(t, string(source), `schema.UniqueNamed("uq_users_tenant_email", "tenant_id", "email")`)
@@ -714,7 +714,7 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 
-	source, err := generate.Schema("generated", table)
+	source, err := generate.PackageSource("generated", table)
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*Active\s+bool$`, string(source))
 	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64$`, string(source))
@@ -1078,7 +1078,7 @@ func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
 	require.Contains(t, rendered.SQL(), "`id` BIGINT UNSIGNED NOT NULL")
 	require.Contains(t, rendered.SQL(), "`sequence` BIGINT NOT NULL")
 
-	source, err := generate.Schema("generated", table)
+	source, err := generate.PackageSource("generated", table)
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
 	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
@@ -1476,7 +1476,7 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 
-	source, err := generate.Schema("generated", table)
+	source, err := generate.PackageSource("generated", table)
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*ID\s+int64$`, string(source))
 	require.NotContains(t, string(source), "ID *int64")

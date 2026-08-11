@@ -175,7 +175,7 @@ func writeGeneratedSchemaFiles(directory string, packageName string, tables []sc
 	if !info.IsDir() {
 		return fmt.Errorf("schema output %q is not a directory", directory)
 	}
-	if err := generate.ValidateSchema(packageName, tables...); err != nil {
+	if err := generate.Validate(packageName, tables...); err != nil {
 		return err
 	}
 
@@ -192,7 +192,7 @@ func writeGeneratedSchemaFiles(directory string, packageName string, tables []sc
 		filenames[filename] = table.Name
 	}
 	for _, table := range sorted {
-		source, err := generate.SchemaTable(packageName, table, sorted...)
+		source, err := generate.TableSource(packageName, table, sorted...)
 		if err != nil {
 			return err
 		}

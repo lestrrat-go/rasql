@@ -47,7 +47,7 @@ func Example_rasql_group_by() {
 		schema.Text("status"),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.Create(ctx, client, tasks); err != nil {
+	if err := rasql.CreateTable(ctx, client, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}

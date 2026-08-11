@@ -32,7 +32,7 @@ func Example_rasql_sqlite_query() {
 		return
 	}
 	// Create the schema described by the generated table descriptor.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

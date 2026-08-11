@@ -71,7 +71,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.Create(t.Context(), client, records))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, records))
 	for _, fixture := range []record{
 		{ID: 1, City: "tokyo", Age: 30},
 		{ID: 2, City: "osaka", Age: 20},

@@ -51,11 +51,11 @@ func Example_rasql_dynamic_projection() {
 		schema.PrimaryKey("id"),
 	))
 	// Create both descriptors before querying their joined rows.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.Create(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
