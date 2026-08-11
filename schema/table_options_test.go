@@ -14,7 +14,7 @@ import (
 // the same table, proving the option form is a genuine alternative to the
 // literal rather than a different, narrower shape.
 func TestNewTableMatchesStructLiteral(t *testing.T) {
-	built, err := schema.NewTable("orders",
+	built, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
 		schema.Text("status", schema.Default("'new'")),
@@ -65,7 +65,7 @@ func TestNewTableMatchesStructLiteral(t *testing.T) {
 // column options for a single column applied in different orders, and
 // requires an identical result either way.
 func TestNewTableOptionOrderDoesNotMatter(t *testing.T) {
-	columnsFirst, err := schema.NewTable("users",
+	columnsFirst, err := schema.NewTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
 		schema.PrimaryKey("id"),
@@ -73,7 +73,7 @@ func TestNewTableOptionOrderDoesNotMatter(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	keyFirst, err := schema.NewTable("users",
+	keyFirst, err := schema.NewTableDef("users",
 		schema.PrimaryKey("id"),
 		schema.Unique("email"),
 		schema.Integer("id"),
@@ -85,10 +85,11 @@ func TestNewTableOptionOrderDoesNotMatter(t *testing.T) {
 }
 
 // TestNewTableAssemblesForeignKeyAndRelationship covers ForeignKey's four
-// options together: Named, References, OnDelete, and As, the last of which
-// derives a belongs-to Relationship separate from the ForeignKeyDef itself.
+// options together: Named, References, OnDelete, and RelationshipNamed, the
+// last of which derives a belongs-to Relationship separate from the
+// ForeignKeyDef itself.
 func TestNewTableAssemblesForeignKeyAndRelationship(t *testing.T) {
-	table, err := schema.NewTable("orders",
+	table, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
 		schema.PrimaryKey("id"),
@@ -97,7 +98,7 @@ func TestNewTableAssemblesForeignKeyAndRelationship(t *testing.T) {
 			schema.References("customers", "id"),
 			schema.OnDelete(schema.Cascade),
 			schema.OnUpdate(schema.Restrict),
-			schema.As("buyer")),
+			schema.RelationshipNamed("buyer")),
 	)
 	require.NoError(t, err)
 
@@ -120,11 +121,11 @@ func TestNewTableAssemblesForeignKeyAndRelationship(t *testing.T) {
 }
 
 // TestForeignKeyWithoutAsDeclaresNoRelationship covers the common case: a
-// foreign key with no As leaves Relationships empty, so rasqlgen derives its
-// own name from the local column exactly as it does for a struct literal
-// that also states no Relationships.
+// foreign key with no RelationshipNamed leaves Relationships empty, so
+// rasqlgen derives its own name from the local column exactly as it does
+// for a struct literal that also states no Relationships.
 func TestForeignKeyWithoutAsDeclaresNoRelationship(t *testing.T) {
-	table, err := schema.NewTable("orders",
+	table, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
 		schema.PrimaryKey("id"),
@@ -135,7 +136,7 @@ func TestForeignKeyWithoutAsDeclaresNoRelationship(t *testing.T) {
 }
 
 func TestNewTableInSchema(t *testing.T) {
-	table, err := schema.NewTable("events",
+	table, err := schema.NewTableDef("events",
 		schema.InSchema("audit"),
 		schema.Integer("id"),
 		schema.PrimaryKey("id"),
@@ -145,11 +146,12 @@ func TestNewTableInSchema(t *testing.T) {
 	require.True(t, table.Qualified())
 }
 
-// TestNewTableValidatesAssembledDescriptor covers the contract that NewTable
-// runs Table.Validate on the assembled descriptor: an unknown primary key
-// column is rejected exactly as it would be from a struct literal.
-func TestNewTableValidatesAssembledDescriptor(t *testing.T) {
-	_, err := schema.NewTable("orders",
+// TestNewTableDefValidatesAssembledDescriptor covers the contract that
+// NewTableDef runs Table.Validate on the assembled descriptor: an unknown
+// primary key column is rejected exactly as it would be from a struct
+// literal.
+func TestNewTableDefValidatesAssembledDescriptor(t *testing.T) {
+	_, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
 		schema.PrimaryKey("missing"),
 	)
@@ -160,7 +162,7 @@ func TestNewTableValidatesAssembledDescriptor(t *testing.T) {
 
 func TestMustTablePanicsOnInvalidDescriptor(t *testing.T) {
 	require.Panics(t, func() {
-		schema.MustTable("orders",
+		schema.MustTableDef("orders",
 			schema.Integer("id"),
 			schema.PrimaryKey("missing"),
 		)
@@ -168,7 +170,7 @@ func TestMustTablePanicsOnInvalidDescriptor(t *testing.T) {
 }
 
 func TestMustTableReturnsValidTable(t *testing.T) {
-	table := schema.MustTable("orders",
+	table := schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.PrimaryKey("id"),
 	)
@@ -176,14 +178,14 @@ func TestMustTableReturnsValidTable(t *testing.T) {
 }
 
 func TestNewTableRejectsNilTableOption(t *testing.T) {
-	_, err := schema.NewTable("orders", nil)
+	_, err := schema.NewTableDef("orders", nil)
 	require.Error(t, err)
 	var validationErr *schema.ValidationError
 	require.True(t, errors.As(err, &validationErr))
 }
 
 func TestNewTableRejectsPrimaryKeyDeclaredTwice(t *testing.T) {
-	_, err := schema.NewTable("orders",
+	_, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("other_id"),
 		schema.PrimaryKey("id"),
@@ -194,7 +196,7 @@ func TestNewTableRejectsPrimaryKeyDeclaredTwice(t *testing.T) {
 }
 
 func TestNewTableRejectsNilColumnOption(t *testing.T) {
-	_, err := schema.NewTable("orders", schema.Integer("id", nil))
+	_, err := schema.NewTableDef("orders", schema.Integer("id", nil))
 	require.Error(t, err)
 	var validationErr *schema.ValidationError
 	require.True(t, errors.As(err, &validationErr))
@@ -203,13 +205,13 @@ func TestNewTableRejectsNilColumnOption(t *testing.T) {
 // TestUnsignedRejectsNonIntegerColumn covers Unsigned's type check: it
 // applies only to IntegerType, exactly like IntegerType.Unsigned itself.
 func TestUnsignedRejectsNonIntegerColumn(t *testing.T) {
-	_, err := schema.NewTable("events", schema.Text("id", schema.Unsigned()))
+	_, err := schema.NewTableDef("events", schema.Text("id", schema.Unsigned()))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "Unsigned only applies to integer columns")
 }
 
 func TestUnsignedMarksIntegerColumn(t *testing.T) {
-	table, err := schema.NewTable("events",
+	table, err := schema.NewTableDef("events",
 		schema.Integer("id", schema.Unsigned()),
 		schema.PrimaryKey("id"),
 	)
@@ -218,7 +220,7 @@ func TestUnsignedMarksIntegerColumn(t *testing.T) {
 }
 
 func TestNullableAndDefaultColumnOptions(t *testing.T) {
-	table, err := schema.NewTable("users",
+	table, err := schema.NewTableDef("users",
 		schema.Integer("id"),
 		schema.Text("nickname", schema.Nullable()),
 		schema.Time("created_at", schema.Default("CURRENT_TIMESTAMP")),
@@ -230,7 +232,7 @@ func TestNullableAndDefaultColumnOptions(t *testing.T) {
 }
 
 func TestNewTableRejectsNilForeignKeyOption(t *testing.T) {
-	_, err := schema.NewTable("orders",
+	_, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
 		schema.PrimaryKey("id"),
@@ -242,16 +244,16 @@ func TestNewTableRejectsNilForeignKeyOption(t *testing.T) {
 }
 
 func TestForeignKeyAsRejectsEmptyName(t *testing.T) {
-	_, err := schema.NewTable("orders",
+	_, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
 		schema.PrimaryKey("id"),
 		schema.ForeignKey("customer_id",
 			schema.References("customers", "id"),
-			schema.As("")),
+			schema.RelationshipNamed("")),
 	)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "As name must not be empty")
+	require.ErrorContains(t, err, "RelationshipNamed name must not be empty")
 }
 
 // TestIndexDefAndForeignKeyDefJSONUnchanged proves that renaming the Go
@@ -302,7 +304,7 @@ func TestIndexDefAndForeignKeyDefJSONUnchanged(t *testing.T) {
 }
 
 func TestUniqueNamedDeclaresNamedConstraint(t *testing.T) {
-	table, err := schema.NewTable("users",
+	table, err := schema.NewTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
 		schema.PrimaryKey("id"),
@@ -316,7 +318,7 @@ func TestUniqueNamedDeclaresNamedConstraint(t *testing.T) {
 }
 
 func TestCheckNamedDeclaresNamedConstraint(t *testing.T) {
-	table, err := schema.NewTable("users",
+	table, err := schema.NewTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
 		schema.PrimaryKey("id"),
@@ -330,7 +332,7 @@ func TestCheckNamedDeclaresNamedConstraint(t *testing.T) {
 }
 
 func TestUniqueIndexDeclaresUniqueIndex(t *testing.T) {
-	table, err := schema.NewTable("users",
+	table, err := schema.NewTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
 		schema.PrimaryKey("id"),
@@ -348,7 +350,7 @@ func TestUniqueIndexDeclaresUniqueIndex(t *testing.T) {
 // composite counterpart to ForeignKey, sharing ForeignKey's option set
 // including the new ReferencesIn for a schema-qualified target.
 func TestForeignKeyOnDeclaresCompositeForeignKey(t *testing.T) {
-	table, err := schema.NewTable("order_items",
+	table, err := schema.NewTableDef("order_items",
 		schema.Integer("order_id"),
 		schema.Integer("tenant_id"),
 		schema.PrimaryKey("order_id", "tenant_id"),
@@ -369,7 +371,7 @@ func TestForeignKeyOnDeclaresCompositeForeignKey(t *testing.T) {
 }
 
 func TestReferencesInQualifiesSingleColumnForeignKey(t *testing.T) {
-	table, err := schema.NewTable("orders",
+	table, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
 		schema.PrimaryKey("id"),
@@ -391,7 +393,7 @@ func TestReferencesInQualifiesSingleColumnForeignKey(t *testing.T) {
 // added, and requires the option form and the equivalent hand-written,
 // fully-keyed struct literal to describe exactly the same table.
 func TestNewTableMatchesStructLiteralEveryFeature(t *testing.T) {
-	built, err := schema.NewTable("orders",
+	built, err := schema.NewTableDef("orders",
 		schema.InSchema("billing"),
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
@@ -411,7 +413,7 @@ func TestNewTableMatchesStructLiteralEveryFeature(t *testing.T) {
 			schema.References("customers", "id"),
 			schema.OnDelete(schema.Cascade),
 			schema.OnUpdate(schema.Restrict),
-			schema.As("customer")),
+			schema.RelationshipNamed("customer")),
 		schema.ForeignKeyOn([]string{"tenant_id", "customer_id"},
 			schema.Named("orders_tenant_customer_fkey"),
 			schema.ReferencesIn("crm", "tenant_customers", "tenant_id", "customer_id"),

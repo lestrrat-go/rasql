@@ -8,7 +8,7 @@ type ColumnOption interface {
 // columnTableOption carries either a fully-built Column or the first error a
 // ColumnOption reported while building one. Reporting the error through
 // applyTable, rather than from the column constructor itself, is what lets
-// Integer, Text, and the rest return a bare TableOption: NewTable surfaces
+// Integer, Text, and the rest return a bare TableOption: NewTableDef surfaces
 // the error only once it applies every option, the same place every other
 // TableOption error surfaces.
 type columnTableOption struct {

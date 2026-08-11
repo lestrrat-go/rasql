@@ -46,7 +46,7 @@ func Example_rasql_subquery() {
 		UserID int64
 		Amount int64
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("user_id"),
 		schema.Integer("amount"),
