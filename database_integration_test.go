@@ -72,7 +72,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// containment rule internal/dbtest's package doc states for the
 	// database and role names a live test creates directly.
 	tableName := dbtest.UniqueName(t, "rasql_integration_records")
-	records, err := rasql.NewTable[record](integrationTable(tableName))
+	records, err := rasql.TableOf[record](integrationTable(tableName))
 	require.NoError(t, err)
 	recordID, err := records.Column("id")
 	require.NoError(t, err)
@@ -264,10 +264,10 @@ func requireSameDecimal(t *testing.T, expected, actual string) {
 	require.Zero(t, expectedValue.Cmp(actualValue), "%q and %q are different numbers", expected, actual)
 }
 
-func integrationTable(name string) schema.Table {
-	return schema.Table{
+func integrationTable(name string) schema.TableDef {
+	return schema.TableDef{
 		Name: name,
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "active", Type: schema.BooleanType{}},
 			{Name: "email", Type: schema.TextType{}},
@@ -308,9 +308,9 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		Name string `rasql:"name"`
 	}
 	customersName := dbtest.UniqueName(t, "rasql_qualified_customers")
-	customers, err := rasql.NewTable[customerRow](schema.Table{
+	customers, err := rasql.TableOf[customerRow](schema.TableDef{
 		Name: customersName,
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "name", Type: schema.TextType{}},
 		},
@@ -340,22 +340,22 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		CustomerID int64 `rasql:"customer_id"`
 	}
 	ordersName := dbtest.UniqueName(t, "rasql_qualified_orders")
-	orders, err := rasql.NewTable[orderRow](schema.Table{
+	orders, err := rasql.TableOf[orderRow](schema.TableDef{
 		Schema: schemaName,
 		Name:   ordersName,
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "customer_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              ordersName + "_customer_fkey",
 			Columns:           []string{"customer_id"},
 			ReferencedSchema:  "public",
 			ReferencedTable:   customersName,
 			ReferencedColumns: []string{"id"},
 		}},
-		Indexes: []schema.Index{{
+		Indexes: []schema.IndexDef{{
 			Name:    ordersName + "_customer_idx",
 			Columns: []string{"customer_id"},
 		}},
@@ -400,10 +400,10 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		Action  string `rasql:"action"`
 	}
 	eventsName := dbtest.UniqueName(t, "rasql_qualified_events")
-	events, err := rasql.NewTable[eventRow](schema.Table{
+	events, err := rasql.TableOf[eventRow](schema.TableDef{
 		Schema: schemaName,
 		Name:   eventsName,
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "actor_id", Type: schema.IntegerType{}},
 			{Name: "action", Type: schema.TextType{}},
@@ -412,11 +412,11 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		// The index names actor_id, not the action column beside it,
 		// because MySQL maps schema.TextType to TEXT and refuses an index
 		// on a BLOB/TEXT column unless the index states a key length --
-		// which schema.Index has no field for. actor_id is a fixed-width
+		// which schema.IndexDef has no field for. actor_id is a fixed-width
 		// BIGINT, so it indexes on every dialect and the qualified
 		// CREATE INDEX this test exists to exercise is the only thing
 		// under test here.
-		Indexes: []schema.Index{{
+		Indexes: []schema.IndexDef{{
 			Name:    eventsName + "_actor_idx",
 			Columns: []string{"actor_id"},
 		}},
@@ -449,8 +449,8 @@ func testQualifiedDDLMySQL(t *testing.T) {
 
 // TestIntegrationTableUsesItsNameArgument pins that integrationTable is
 // parameterized by name rather than carrying a fixed literal: this needs no
-// live server, since it is the same schema.Table construction
-// testDatabaseIntegration feeds into rasql.NewTable, the DROP/CREATE
+// live server, since it is the same schema.TableDef construction
+// testDatabaseIntegration feeds into rasql.TableOf, the DROP/CREATE
 // statements, and inspector.Table -- all from the single tableName variable
 // dbtest.UniqueName produces (see testDatabaseIntegration above). Reverting
 // integrationTable to hardcode "rasql_integration_records" -- the bug this
@@ -470,7 +470,7 @@ func TestIntegrationTableUsesItsNameArgument(t *testing.T) {
 		t.Fatalf("integrationTable(%q).Name = %q, want %q", "rasql_integration_records_2", second.Name, "rasql_integration_records_2")
 	}
 	if first.Name == second.Name {
-		t.Fatalf("two different name arguments both produced schema.Table.Name %q; integrationTable must not carry a fixed table name", first.Name)
+		t.Fatalf("two different name arguments both produced schema.TableDef.Name %q; integrationTable must not carry a fixed table name", first.Name)
 	}
 
 	// Everything but the name must stay identical, so parameterizing the

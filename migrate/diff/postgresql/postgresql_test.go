@@ -12,9 +12,9 @@ import (
 func TestDiffLiveMatchesInlinePrimaryKey(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
-	liveSources, err := analyzer.LiveSources(schema.Table{
+	liveSources, err := analyzer.LiveSources(schema.TableDef{
 		Name:       "members",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)

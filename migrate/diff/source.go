@@ -24,7 +24,7 @@ const (
 // SourcesFromTable renders one inspected table as desired-schema sources.
 // The dialect package selects the dialect; this shared helper only preserves
 // the source layout used by diff-live.
-func SourcesFromTable(d dialect.Dialect, table schema.Table) ([]Source, error) {
+func SourcesFromTable(d dialect.Dialect, table schema.TableDef) ([]Source, error) {
 	created, err := render.CreateTable(d, table)
 	if err != nil {
 		return nil, fmt.Errorf("render inspected table %q: %w", table.QualifiedName(), err)

@@ -77,7 +77,7 @@ type UsersTable struct {
 	Email query.Column
 }
 
-var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{ /* … */ }))
+var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable("users" /* … */)))
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {

@@ -106,15 +106,15 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	// A per-run unique name keeps this test from ever dropping a table it did
 	// not create, for the reason testDatabaseIntegration records.
 	tableName := dbtest.UniqueName(t, "rasql_aggregate_order_records")
-	definition := schema.Table{
+	definition := schema.TableDef{
 		Name: tableName,
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
-	records, err := rasql.NewTable[record](definition)
+	records, err := rasql.TableOf[record](definition)
 	require.NoError(t, err)
 
 	_, err = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)

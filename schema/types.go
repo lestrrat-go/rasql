@@ -1,13 +1,25 @@
 // Package schema defines dialect-neutral database schema descriptors.
 //
-// Every exported descriptor struct in this package is built with a keyed
-// composite literal, and every literal of one in this repository is keyed.
-// These structs gain fields as the descriptor model grows, and a new field is
-// placed next to the fields it belongs with rather than appended at the end:
-// Table.Schema and ForeignKey.ReferencedSchema were each inserted ahead of
-// existing fields. An unkeyed composite literal matches fields by position and
-// must list every one of them, so it is not a supported way to build a
-// descriptor.
+// Build a TableDef with NewTable or MustTable: a column constructor such as
+// Integer or Text and a constraint constructor such as PrimaryKey, Unique,
+// Check, Index, or ForeignKey each return a TableOption, and NewTable
+// assembles them into a descriptor in any order. This is the recommended way
+// to describe a table by hand, and it covers everything a struct literal
+// does: a composite foreign key, a named unique constraint or check, and a
+// unique index each have their own option-form constructor.
+//
+// TableDef is also the descriptor itself, and building one directly with a
+// keyed composite literal remains fully supported: it is what inspect
+// returns from a live database and what migrate's diff compares between two
+// descriptors, so code that reads a descriptor back reads this struct
+// either way. Every exported descriptor struct in this package accepts a
+// keyed composite literal, and every literal of one in this repository is
+// keyed. These structs gain fields as the descriptor model grows, and a new
+// field is placed next to the fields it belongs with rather than appended at
+// the end: TableDef.Schema and ForeignKeyDef.ReferencedSchema were each
+// inserted ahead of existing fields. An unkeyed composite literal matches
+// fields by position and must list every one of them, so it is not a
+// supported way to build a descriptor.
 package schema
 
 import "fmt"
@@ -16,16 +28,16 @@ import "fmt"
 type ReferenceAction string
 
 const (
-	ReferenceActionNoAction   ReferenceAction = "NO ACTION"
-	ReferenceActionRestrict   ReferenceAction = "RESTRICT"
-	ReferenceActionCascade    ReferenceAction = "CASCADE"
-	ReferenceActionSetNull    ReferenceAction = "SET NULL"
-	ReferenceActionSetDefault ReferenceAction = "SET DEFAULT"
+	NoAction   ReferenceAction = "NO ACTION"
+	Restrict   ReferenceAction = "RESTRICT"
+	Cascade    ReferenceAction = "CASCADE"
+	SetNull    ReferenceAction = "SET NULL"
+	SetDefault ReferenceAction = "SET DEFAULT"
 )
 
 func (a ReferenceAction) valid() bool {
 	switch a {
-	case "", ReferenceActionNoAction, ReferenceActionRestrict, ReferenceActionCascade, ReferenceActionSetNull, ReferenceActionSetDefault:
+	case "", NoAction, Restrict, Cascade, SetNull, SetDefault:
 		return true
 	default:
 		return false
@@ -45,10 +57,10 @@ const (
 	RelationshipHasMany RelationshipKind = "has_many"
 )
 
-// Relationship describes a navigable relationship derived from a foreign key.
+// RelationshipDef describes a navigable relationship derived from a foreign key.
 // The first relationship slice supports belongs-to relationships. The column
 // lists are copied by Table.Relationships, so callers may inspect them safely.
-type Relationship struct {
+type RelationshipDef struct {
 	Name              string
 	Kind              RelationshipKind
 	Columns           []string
@@ -58,7 +70,7 @@ type Relationship struct {
 }
 
 // Clone returns a copy of r that does not share slices with r.
-func (r Relationship) Clone() Relationship {
+func (r RelationshipDef) Clone() RelationshipDef {
 	r.Columns = append([]string(nil), r.Columns...)
 	r.ReferencedColumns = append([]string(nil), r.ReferencedColumns...)
 	return r

@@ -44,15 +44,12 @@ func Example_rasql_dynamic_projection() {
 		UserID int64
 		Email  string
 	}
-	orders := rasql.MustTable[orderRow](schema.Table{
-		Name: "orders",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "user_id", Type: schema.IntegerType{}},
-			{Name: "total", Type: schema.IntegerType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+		schema.Integer("id"),
+		schema.Integer("user_id"),
+		schema.Integer("total"),
+		schema.PrimaryKey("id"),
+	))
 	// Create both descriptors before querying their joined rows.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)

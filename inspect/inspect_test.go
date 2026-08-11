@@ -48,7 +48,7 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "email", Type: schema.TextType{}, Nullable: true},
 	}, table.Columns)
@@ -83,7 +83,7 @@ func TestPostgreSQLInspectorNormalizesNumericColumn(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "payments")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 	}, table.Columns)
 }
@@ -189,34 +189,36 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
-	require.Equal(t, []schema.UniqueConstraint{
+	require.Equal(t, []schema.UniqueDef{
 		{Name: "uq_users_email", Columns: []string{"email"}},
 		{Name: "uq_users_tenant_email", Columns: []string{"tenant_id", "email"}},
 	}, table.UniqueConstraints)
-	require.Equal(t, []schema.CheckConstraint{
+	require.Equal(t, []schema.CheckDef{
 		{Name: "chk_users_email", Expression: "email <> ''"},
 	}, table.Checks)
-	require.Equal(t, []schema.Index{
+	require.Equal(t, []schema.IndexDef{
 		{Name: "users_email_idx", Columns: []string{"email"}},
 		{Name: "users_tenant_email_idx", Columns: []string{"tenant_id", "email"}, Unique: true},
 	}, table.Indexes)
-	require.Equal(t, []schema.ForeignKey{
+	require.Equal(t, []schema.ForeignKeyDef{
 		{
 			Name:              "fk_users_account",
 			Columns:           []string{"account_id", "tenant_id"},
 			ReferencedTable:   "accounts",
 			ReferencedColumns: []string{"id", "tenant_id"},
-			OnDelete:          schema.ReferenceActionCascade,
-			OnUpdate:          schema.ReferenceActionNoAction,
+			OnDelete:          schema.Cascade,
+			OnUpdate:          schema.NoAction,
 		},
 	}, table.ForeignKeys)
 
 	source, err := generate.Schema("generated", table)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "UniqueConstraints: []schema.UniqueConstraint{")
-	require.Contains(t, string(source), "Checks: []schema.CheckConstraint{")
-	require.Contains(t, string(source), "Indexes: []schema.Index{")
-	require.Contains(t, string(source), "ForeignKeys: []schema.ForeignKey{")
+	require.Contains(t, string(source), `schema.UniqueNamed("uq_users_email", "email")`)
+	require.Contains(t, string(source), `schema.UniqueNamed("uq_users_tenant_email", "tenant_id", "email")`)
+	require.Contains(t, string(source), `schema.CheckNamed("chk_users_email", "email <> ''")`)
+	require.Contains(t, string(source), `schema.Index("users_email_idx", "email")`)
+	require.Contains(t, string(source), `schema.UniqueIndex("users_tenant_email_idx", "tenant_id", "email")`)
+	require.Contains(t, string(source), `schema.ForeignKeyOn([]string{"account_id", "tenant_id"}, schema.Named("fk_users_account"), schema.References("accounts", "id", "tenant_id"), schema.OnDelete(schema.Cascade), schema.OnUpdate(schema.NoAction), schema.As("Account"))`)
 }
 
 func TestPostgreSQLInspectorRejectsReplicaIdentityIndex(t *testing.T) {
@@ -361,14 +363,14 @@ func TestPostgreSQLInspectorUsesPostgreSQL14CatalogQueries(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
-	require.Equal(t, []schema.CheckConstraint{{Name: "chk_users_email", Expression: "email <> ''"}}, table.Checks)
-	require.Equal(t, []schema.ForeignKey{{
+	require.Equal(t, []schema.CheckDef{{Name: "chk_users_email", Expression: "email <> ''"}}, table.Checks)
+	require.Equal(t, []schema.ForeignKeyDef{{
 		Name:              "fk_users_account",
 		Columns:           []string{"id"},
 		ReferencedTable:   "accounts",
 		ReferencedColumns: []string{"id"},
-		OnDelete:          schema.ReferenceActionNoAction,
-		OnUpdate:          schema.ReferenceActionNoAction,
+		OnDelete:          schema.NoAction,
+		OnUpdate:          schema.NoAction,
 	}}, table.ForeignKeys)
 }
 
@@ -616,7 +618,7 @@ func TestMySQLInspectorRejectsPartialColumnMetadata(t *testing.T) {
 	expectMySQLCreateTable(mock, "users", "CREATE TABLE `users` (`id` bigint NOT NULL, `email` varchar(255) NOT NULL, `secret` text NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB")
 
 	table, err := inspector.Table(t.Context(), "users")
-	require.Equal(t, schema.Table{}, table)
+	require.Equal(t, schema.TableDef{}, table)
 	require.ErrorIs(t, err, inspect.ErrIncompleteMetadata)
 	var incomplete *inspect.IncompleteMetadataError
 	require.ErrorAs(t, err, &incomplete)
@@ -643,7 +645,7 @@ func TestMySQLInspectorRejectsZeroVisibleColumnMetadata(t *testing.T) {
 	expectMySQLCreateTable(mock, "users", "CREATE TABLE `users` (`id` bigint NOT NULL, `secret` text NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB")
 
 	table, err := inspector.Table(t.Context(), "users")
-	require.Equal(t, schema.Table{}, table)
+	require.Equal(t, schema.TableDef{}, table)
 	require.ErrorIs(t, err, inspect.ErrIncompleteMetadata)
 	var incomplete *inspect.IncompleteMetadataError
 	require.ErrorAs(t, err, &incomplete)
@@ -671,7 +673,7 @@ func TestMySQLInspectorReportsTableNotFoundWhenSHOWCreateProvesAbsence(t *testin
 		WillReturnError(&mysql.MySQLError{Number: 1146, Message: "Table 'test.ghosts' doesn't exist"})
 
 	table, err := inspector.Table(t.Context(), "ghosts")
-	require.Equal(t, schema.Table{}, table)
+	require.Equal(t, schema.TableDef{}, table)
 	require.ErrorIs(t, err, inspect.ErrTableNotFound)
 	var notFound *inspect.TableNotFoundError
 	require.ErrorAs(t, err, &notFound)
@@ -705,7 +707,7 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "active", Type: schema.BooleanType{}},
 		{Name: "login_attempts", Type: schema.IntegerType{}},
@@ -840,9 +842,9 @@ func TestMySQLInspectorReadsConstraints(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
-	require.Equal(t, []schema.UniqueConstraint{{Name: "uq_users_email", Columns: []string{"email"}}}, table.UniqueConstraints)
-	require.Equal(t, []schema.CheckConstraint{{Name: "chk_users_email", Expression: "email <> ''"}}, table.Checks)
-	require.Equal(t, []schema.ForeignKey{{Name: "fk_users_account", Columns: []string{"account_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id"}, OnDelete: schema.ReferenceActionCascade, OnUpdate: schema.ReferenceActionNoAction}}, table.ForeignKeys)
+	require.Equal(t, []schema.UniqueDef{{Name: "uq_users_email", Columns: []string{"email"}}}, table.UniqueConstraints)
+	require.Equal(t, []schema.CheckDef{{Name: "chk_users_email", Expression: "email <> ''"}}, table.Checks)
+	require.Equal(t, []schema.ForeignKeyDef{{Name: "fk_users_account", Columns: []string{"account_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction}}, table.ForeignKeys)
 
 	rendered, err := render.CreateTable(dialect.MySQL(), table)
 	require.NoError(t, err)
@@ -895,7 +897,7 @@ func TestMySQLInspectorReadsOrdinaryIndexes(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Index{{Name: "users_email_uidx", Columns: []string{"email"}, Unique: true}}, table.Indexes)
+	require.Equal(t, []schema.IndexDef{{Name: "users_email_uidx", Columns: []string{"email"}, Unique: true}}, table.Indexes)
 }
 
 func TestMySQLInspectorRejectsUnsupportedIndexParts(t *testing.T) {
@@ -1030,13 +1032,13 @@ func TestMySQLInspectorReadsOrdinaryIndexesLegacy(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Index{{Name: "users_email_idx", Columns: []string{"email"}}}, table.Indexes)
+	require.Equal(t, []schema.IndexDef{{Name: "users_email_idx", Columns: []string{"email"}}}, table.Indexes)
 }
 
 // TestMySQLInspectorRecordsUnsignedIntegerColumn follows one unsigned column
 // the whole way: the catalog reports bigint(20) unsigned, the descriptor
 // records it, the MySQL renderer puts the UNSIGNED back, and the generator
-// emits a uint64 field for it. Before signedness reached schema.Column this
+// emits a uint64 field for it. Before signedness reached schema.ColumnDef this
 // same catalog row inspected into a plain integer column and re-rendered as
 // `id` BIGINT, which stops at 9223372036854775807 and rejects every value a
 // BIGINT UNSIGNED column above it holds.
@@ -1066,7 +1068,7 @@ func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{Unsigned: true}},
 		{Name: "sequence", Type: schema.IntegerType{}},
 	}, table.Columns)
@@ -1141,19 +1143,19 @@ func TestMySQLInspectorMatchesIntegerColumnTypeExactly(t *testing.T) {
 func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
 	tests := map[string]struct {
 		columnType string
-		want       schema.Column
+		want       schema.ColumnDef
 	}{
-		"bigint":                            {columnType: "bigint", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
-		"bigint with width":                 {columnType: "bigint(20)", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
-		"bigint unsigned":                   {columnType: "bigint unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
-		"bigint width unsigned":             {columnType: "bigint(20) unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
-		"int unsigned":                      {columnType: "int(10) unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
-		"integer alias":                     {columnType: "integer", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
-		"smallint unsigned":                 {columnType: "smallint unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
-		"mediumint":                         {columnType: "mediumint", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
-		"tinyint":                           {columnType: "tinyint", want: schema.Column{Name: "id", Type: schema.IntegerType{}}},
-		"tinyint(1) is a boolean":           {columnType: "tinyint(1)", want: schema.Column{Name: "id", Type: schema.BooleanType{}}},
-		"unsigned tinyint(1) is an integer": {columnType: "tinyint(1) unsigned", want: schema.Column{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"bigint":                            {columnType: "bigint", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
+		"bigint with width":                 {columnType: "bigint(20)", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
+		"bigint unsigned":                   {columnType: "bigint unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"bigint width unsigned":             {columnType: "bigint(20) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"int unsigned":                      {columnType: "int(10) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"integer alias":                     {columnType: "integer", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
+		"smallint unsigned":                 {columnType: "smallint unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"mediumint":                         {columnType: "mediumint", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
+		"tinyint":                           {columnType: "tinyint", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
+		"tinyint(1) is a boolean":           {columnType: "tinyint(1)", want: schema.ColumnDef{Name: "id", Type: schema.BooleanType{}}},
+		"unsigned tinyint(1) is an integer": {columnType: "tinyint(1) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
 	}
 
 	for name, test := range tests {
@@ -1180,7 +1182,7 @@ func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
 
 			table, err := inspector.Table(t.Context(), "events")
 			require.NoError(t, err)
-			require.Equal(t, []schema.Column{test.want}, table.Columns)
+			require.Equal(t, []schema.ColumnDef{test.want}, table.Columns)
 		})
 	}
 }
@@ -1210,7 +1212,7 @@ func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {
 
 	table, err := inspector.Table(t.Context(), "payments")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}},
 	}, table.Columns)
 }
@@ -1305,7 +1307,7 @@ func TestMySQLInspectorAcceptsDocumentedDecimalSpellings(t *testing.T) {
 
 			table, err := inspector.Table(t.Context(), "payments")
 			require.NoError(t, err)
-			require.Equal(t, []schema.Column{
+			require.Equal(t, []schema.ColumnDef{
 				{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}},
 			}, table.Columns)
 		})
@@ -1418,7 +1420,7 @@ func TestSQLiteInspectorRejectsIncompleteColumnMetadata(t *testing.T) {
 			AddRow(0, "id", "INTEGER", 1, nil, 1, 0))
 
 	table, err := inspector.Table(t.Context(), "events")
-	require.Equal(t, schema.Table{}, table)
+	require.Equal(t, schema.TableDef{}, table)
 	require.ErrorIs(t, err, inspect.ErrIncompleteMetadata)
 	var incomplete *inspect.IncompleteMetadataError
 	require.ErrorAs(t, err, &incomplete)
@@ -1450,7 +1452,7 @@ func TestSQLiteInspectorRejectsCreateTableAsSelectDefinition(t *testing.T) {
 			AddRow("CREATE TABLE copy AS SELECT id FROM source"))
 
 	table, err := inspector.Table(t.Context(), "copy")
-	require.Equal(t, schema.Table{}, table)
+	require.Equal(t, schema.TableDef{}, table)
 	require.ErrorContains(t, err, "CREATE TABLE AS SELECT")
 }
 
@@ -1468,7 +1470,7 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
 	}, table.Columns)
@@ -1542,7 +1544,7 @@ func TestSQLiteInspectorReadsTempTable(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "selected_temp")
 	require.NoError(t, err)
 	require.Equal(t, "selected_temp", table.Name)
-	require.Equal(t, []schema.Column{{Name: "id", Type: schema.IntegerType{}}}, table.Columns)
+	require.Equal(t, []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 }
 
@@ -1593,14 +1595,14 @@ func TestSQLiteInspectorReadsTableConstraints(t *testing.T) {
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "children")
 	require.NoError(t, err)
-	require.Equal(t, []schema.UniqueConstraint{{Columns: []string{"email"}}}, table.UniqueConstraints)
-	require.Equal(t, []schema.CheckConstraint{{Expression: "length(email) > 0"}}, table.Checks)
-	require.Equal(t, []schema.ForeignKey{{
+	require.Equal(t, []schema.UniqueDef{{Columns: []string{"email"}}}, table.UniqueConstraints)
+	require.Equal(t, []schema.CheckDef{{Expression: "length(email) > 0"}}, table.Checks)
+	require.Equal(t, []schema.ForeignKeyDef{{
 		Columns:           []string{"parent_id"},
 		ReferencedTable:   "parents",
 		ReferencedColumns: []string{"id"},
-		OnDelete:          schema.ReferenceActionNoAction,
-		OnUpdate:          schema.ReferenceActionNoAction,
+		OnDelete:          schema.NoAction,
+		OnUpdate:          schema.NoAction,
 	}}, table.ForeignKeys)
 }
 
@@ -1619,14 +1621,14 @@ func TestSQLiteInspectorReadsConstraintsWithForeignKeyActions(t *testing.T) {
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "children")
 	require.NoError(t, err)
-	require.Equal(t, []schema.UniqueConstraint{{Columns: []string{"email"}}}, table.UniqueConstraints)
-	require.Equal(t, []schema.CheckConstraint{{Expression: "parent_id > 0"}}, table.Checks)
-	require.Equal(t, []schema.ForeignKey{{
+	require.Equal(t, []schema.UniqueDef{{Columns: []string{"email"}}}, table.UniqueConstraints)
+	require.Equal(t, []schema.CheckDef{{Expression: "parent_id > 0"}}, table.Checks)
+	require.Equal(t, []schema.ForeignKeyDef{{
 		Columns:           []string{"parent_id"},
 		ReferencedTable:   "parents",
 		ReferencedColumns: []string{"id"},
-		OnDelete:          schema.ReferenceActionCascade,
-		OnUpdate:          schema.ReferenceActionSetNull,
+		OnDelete:          schema.Cascade,
+		OnUpdate:          schema.SetNull,
 	}}, table.ForeignKeys)
 }
 
@@ -1730,7 +1732,7 @@ func TestSQLiteInspectorMarksTableLevelDescendingIntegerPrimaryKeyAsNonNullable(
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
 		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
 	}, table.Columns)
@@ -1751,7 +1753,7 @@ func TestSQLiteInspectorMarksTableLevelCollatedIntegerPrimaryKeyAsNonNullable(t 
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
 		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
 	}, table.Columns)
@@ -1989,7 +1991,7 @@ func TestSQLiteInspectorPreservesNullableCompositeIntegerPrimaryKey(t *testing.T
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
 		{Name: "sequence", Type: schema.IntegerType{}, Nullable: true},
 		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
@@ -2011,7 +2013,7 @@ func TestSQLiteInspectorPreservesNullableDescendingIntegerPrimaryKey(t *testing.
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Nullable: true},
 		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
 	}, table.Columns)
@@ -2032,7 +2034,7 @@ func TestSQLiteInspectorPreservesNullableTextPrimaryKey(t *testing.T) {
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "events")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.TextType{}, Nullable: true},
 		{Name: "payload", Type: schema.BytesType{}, Nullable: true},
 	}, table.Columns)
@@ -2050,7 +2052,7 @@ func (*nilPointerDialect) QuoteIdentifier(string) (string, error) { return "", n
 
 func (*nilPointerDialect) Placeholder(int) (string, error) { return "", nil }
 
-func (*nilPointerDialect) TypeName(schema.Column) (string, error) { return "", nil }
+func (*nilPointerDialect) TypeName(schema.ColumnDef) (string, error) { return "", nil }
 
 func (*nilPointerDialect) UpsertStyle() dialect.UpsertStyle { return dialect.UpsertUnsupported }
 
@@ -2206,7 +2208,7 @@ func TestPostgreSQLInspectorReportsTruncatedColumnsWhenPartiallyVisible(t *testi
 
 	table, err := inspector.Table(t.Context(), "widgets")
 	require.Error(t, err)
-	require.Equal(t, schema.Table{}, table)
+	require.Equal(t, schema.TableDef{}, table)
 	require.ErrorIs(t, err, inspect.ErrIncompleteMetadata)
 	var incomplete *inspect.IncompleteMetadataError
 	require.ErrorAs(t, err, &incomplete)
@@ -2235,7 +2237,7 @@ func TestPostgreSQLInspectorReturnsCompleteDescriptorWhenCountsAgree(t *testing.
 
 	table, err := inspector.Table(t.Context(), "widgets")
 	require.NoError(t, err)
-	require.Equal(t, []schema.Column{
+	require.Equal(t, []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 	}, table.Columns)

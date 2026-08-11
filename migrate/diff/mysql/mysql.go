@@ -52,7 +52,7 @@ func (Analyzer) Dialect() string {
 }
 
 // LiveSources converts one inspected MySQL table into desired-schema sources.
-func (Analyzer) LiveSources(table schema.Table) ([]diff.Source, error) {
+func (Analyzer) LiveSources(table schema.TableDef) ([]diff.Source, error) {
 	return diff.SourcesFromTable(dialect.MySQL(), table)
 }
 

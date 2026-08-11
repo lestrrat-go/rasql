@@ -34,7 +34,7 @@ type Analyzer interface {
 // ValidateLivePlan checks that generated statements stay within that table.
 type LiveAnalyzer interface {
 	Analyzer
-	LiveSources(schema.Table) ([]Source, error)
+	LiveSources(schema.TableDef) ([]Source, error)
 	ValidateLivePlan(Plan, string) error
 }
 

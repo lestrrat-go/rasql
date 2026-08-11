@@ -40,18 +40,16 @@ func Example_schema_decimal_column() {
 		return
 	}
 
-	// A DecimalType column must state Precision and Scale; Table.Validate
-	// rejects a decimal column that omits either. Scale is stated through
-	// schema.NewDecimalScale so that a scale of 0 is distinguishable from a
-	// column that named no scale at all.
-	invoices := rasql.MustTable[invoiceRow](schema.Table{
-		Name: "invoices",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	// schema.Decimal takes precision and scale positionally, rather than as
+	// options, because TableDef.Validate rejects a decimal column that lacks
+	// either: stating both here makes an incomplete decimal column impossible
+	// to construct in the first place instead of merely rejected once
+	// assembled.
+	invoices := rasql.MustTableOf[invoiceRow](schema.MustTable("invoices",
+		schema.Integer("id"),
+		schema.Decimal("amount", 19, 4),
+		schema.PrimaryKey("id"),
+	))
 	// SQLite has no exact decimal storage class, so the dialect declares this
 	// column TEXT rather than NUMERIC(19,4), which would round through REAL.
 	// SQL: CREATE TABLE invoices (id INTEGER NOT NULL, amount TEXT NOT NULL, PRIMARY KEY (id))

@@ -188,7 +188,7 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	liveTable, err := runWithHardDeadline(ctx, func() (schema.Table, error) {
+	liveTable, err := runWithHardDeadline(ctx, func() (schema.TableDef, error) {
 		return inspector.Table(ctx, *tableName)
 	})
 	if err != nil {

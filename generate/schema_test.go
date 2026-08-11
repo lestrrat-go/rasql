@@ -209,31 +209,31 @@ func Rejected(ctx context.Context, client rasql.Client) {
 `
 
 func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}, Nullable: true},
 			{Name: "created_at", Type: schema.TimeType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
-	orders := schema.Table{
+	orders := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
 		}},
 	}
-	invoices := schema.Table{
+	invoices := schema.TableDef{
 		Name: "invoices",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 			{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},
@@ -248,8 +248,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "type InvoicesRow struct")
 	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
 	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
-	require.Contains(t, string(source), `{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},`)
-	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},`)
+	require.Contains(t, string(source), `schema.Decimal("amount", 19, 4),`)
+	require.Contains(t, string(source), `schema.Decimal("tax_rate", 5, 4, schema.Nullable()),`)
 	require.Contains(t, string(source), "Email")
 	require.Contains(t, string(source), "CreatedAt")
 	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
@@ -277,8 +277,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "\tCreatedAt query.Column\n")
 	require.Contains(t, string(source), "func newUsersTable(table rasql.Table[UsersRow]) UsersTable {")
 	require.Contains(t, string(source), "CreatedAt: rasql.MustColumn(table, \"created_at\"),")
-	require.Contains(t, string(source), "var ordersTable = newOrdersTable(rasql.MustTable[OrdersRow](schema.Table{")
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTable[UsersRow](schema.Table{")
+	require.Contains(t, string(source), "var ordersTable = newOrdersTable(rasql.MustTableOf[OrdersRow](schema.MustTable(\"orders\",")
+	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable(\"users\",")
 	require.Contains(t, string(source), "func Orders() OrdersTable {")
 	require.Contains(t, string(source), "func Users() UsersTable {")
 	require.Contains(t, string(source), "type OrdersTableUserRelation struct {")
@@ -328,12 +328,12 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 }
 
 func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
-	columns := make([]schema.Column, 65)
+	columns := make([]schema.ColumnDef, 65)
 	for index := range columns {
-		columns[index] = schema.Column{Name: "column_" + strconv.Itoa(index), Type: schema.IntegerType{}}
+		columns[index] = schema.ColumnDef{Name: "column_" + strconv.Itoa(index), Type: schema.IntegerType{}}
 	}
 
-	source, err := generate.Schema("generated", schema.Table{
+	source, err := generate.Schema("generated", schema.TableDef{
 		Name:       "wide",
 		Columns:    columns,
 		PrimaryKey: []string{"column_0"},
@@ -440,21 +440,21 @@ func TestGeneratedSelfReferentialRelationshipsRender(t *testing.T) {
 `
 
 func TestSchemaGeneratesTypedRelationships(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Schema:     "tenant",
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	orders := schema.Table{
+	orders := schema.TableDef{
 		Schema: "tenant",
 		Name:   "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              "orders_user_id_fkey",
 			Columns:           []string{"user_id"},
 			ReferencedSchema:  "tenant",
@@ -472,7 +472,7 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 	require.Contains(t, string(source), "func (t OrdersTable) User() OrdersTableUserRelation")
 	require.Contains(t, string(source), "func (t UsersTable) Orders() UsersTableOrdersRelation")
 	require.Contains(t, string(source), "func (r UsersTableOrdersRelation) Load")
-	require.Contains(t, string(source), "Relationships: []schema.Relationship{")
+	require.Contains(t, string(source), `schema.As("User")`)
 	require.Contains(t, string(usersSource), "func (t UsersTable) Orders() UsersTableOrdersRelation")
 	require.Contains(t, string(ordersSource), "func (t OrdersTable) User() OrdersTableUserRelation")
 
@@ -496,20 +496,20 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 }
 
 func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	memberships := schema.Table{
+	memberships := schema.TableDef{
 		Name: "memberships",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "billing_user_id", Type: schema.IntegerType{}},
 			{Name: "shipping_user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{
+		ForeignKeys: []schema.ForeignKeyDef{
 			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 		},
@@ -527,15 +527,15 @@ func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 }
 
 func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	generateSource := func(foreignKeys []schema.ForeignKey) string {
-		memberships := schema.Table{
+	generateSource := func(foreignKeys []schema.ForeignKeyDef) string {
+		memberships := schema.TableDef{
 			Name: "memberships",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 				{Name: "billing_user_id", Type: schema.IntegerType{}},
 				{Name: "shipping_user_id", Type: schema.IntegerType{}},
@@ -547,14 +547,14 @@ func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
 		require.NoError(t, err)
 		return string(source)
 	}
-	foreignKeys := []schema.ForeignKey{
+	foreignKeys := []schema.ForeignKeyDef{
 		{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 		{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 	}
 
 	for _, source := range []string{
 		generateSource(foreignKeys),
-		generateSource([]schema.ForeignKey{foreignKeys[1], foreignKeys[0]}),
+		generateSource([]schema.ForeignKeyDef{foreignKeys[1], foreignKeys[0]}),
 	} {
 		memberships := generatedMethodBlock(t, source, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
 		require.Contains(t, memberships, "ChildKey: child.BillingUserID")
@@ -564,14 +564,14 @@ func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
 }
 
 func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
-	employees := schema.Table{
+	employees := schema.TableDef{
 		Name: "employees",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "manager_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"manager_id"},
 			ReferencedTable:   "employees",
 			ReferencedColumns: []string{"id"},
@@ -587,14 +587,14 @@ func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
 }
 
 func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
-	employees := schema.Table{
+	employees := schema.TableDef{
 		Name: "employees",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "manager_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"manager_id"},
 			ReferencedTable:   "employees",
 			ReferencedColumns: []string{"id"},
@@ -622,19 +622,19 @@ func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
 }
 
 func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	aliases := schema.Table{
+	aliases := schema.TableDef{
 		Name: "as",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
@@ -661,24 +661,24 @@ func generatedMethodBlock(t *testing.T, source, signature string) string {
 }
 
 func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	memberships := schema.Table{
+	memberships := schema.TableDef{
 		Name: "memberships",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "billing_user_id", Type: schema.IntegerType{}},
 			{Name: "shipping_user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{
+		ForeignKeys: []schema.ForeignKeyDef{
 			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 		},
-		Relationships: []schema.Relationship{{
+		Relationships: []schema.RelationshipDef{{
 			Name:              "BillingUser",
 			Kind:              schema.RelationshipBelongsTo,
 			Columns:           []string{"billing_user_id"},
@@ -704,11 +704,11 @@ func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
 
 // TestSchemaGeneratesDecimalColumns pins the generator's decimal mapping in
 // isolation: a DecimalType column becomes a Go string field, and the
-// descriptor literal restates Precision and Scale in declaration order.
+// generated schema.Decimal call restates precision and scale positionally.
 func TestSchemaGeneratesDecimalColumns(t *testing.T) {
-	invoices := schema.Table{
+	invoices := schema.TableDef{
 		Name: "invoices",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 			{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},
@@ -721,22 +721,23 @@ func TestSchemaGeneratesDecimalColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
 	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
-	require.Contains(t, string(source), `{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},`)
-	require.Contains(t, string(source), `{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},`)
+	require.Contains(t, string(source), `schema.Decimal("amount", 19, 4),`)
+	require.Contains(t, string(source), `schema.Decimal("tax_rate", 5, 4, schema.Nullable()),`)
 	// A stated scale of zero must survive generation: emitting nothing would
 	// leave the regenerated descriptor stating no scale at all.
-	require.Contains(t, string(source), `{Name: "quantity", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(0)}},`)
+	require.Contains(t, string(source), `schema.Decimal("quantity", 10, 0),`)
 }
 
 // TestSchemaGeneratesUnsignedIntegerColumns pins the generator's signedness
 // mapping. An unsigned integer column reaches 18446744073709551615, which
 // int64 cannot hold, so its row field is a uint64; a signed one keeps int64.
-// The descriptor literal restates Unsigned, so regenerating from the generated
-// source produces the same column rather than a signed one.
+// The generated schema.Integer call restates schema.Unsigned(), so
+// regenerating from the generated source produces the same column rather
+// than a signed one.
 func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
-	events := schema.Table{
+	events := schema.TableDef{
 		Name: "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
 			{Name: "sequence", Type: schema.IntegerType{}},
 			{Name: "parent_id", Type: schema.IntegerType{Unsigned: true}, Nullable: true},
@@ -749,9 +750,9 @@ func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
 	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
 	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
 	require.Regexp(t, `(?m)^\s*ParentID\s+\*uint64$`, string(source))
-	require.Contains(t, string(source), `{Name: "id", Type: schema.IntegerType{Unsigned: true}},`)
-	require.Contains(t, string(source), `{Name: "sequence", Type: schema.IntegerType{}},`)
-	require.Contains(t, string(source), `{Name: "parent_id", Type: schema.IntegerType{Unsigned: true}, Nullable: true},`)
+	require.Contains(t, string(source), `schema.Integer("id", schema.Unsigned()),`)
+	require.Contains(t, string(source), `schema.Integer("sequence"),`)
+	require.Contains(t, string(source), `schema.Integer("parent_id", schema.Unsigned(), schema.Nullable()),`)
 }
 
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {
@@ -762,9 +763,9 @@ func TestSchemaRejectsInvalidPackageName(t *testing.T) {
 func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
 	for _, columnName := range []string{"table", "as", "query_table", "column", "decode_row", "column_value"} {
 		t.Run(columnName, func(t *testing.T) {
-			_, err := generate.Schema("generated", schema.Table{
+			_, err := generate.Schema("generated", schema.TableDef{
 				Name: "users",
-				Columns: []schema.Column{
+				Columns: []schema.ColumnDef{
 					{Name: "id", Type: schema.IntegerType{}},
 					{Name: columnName, Type: schema.TextType{}},
 				},
@@ -778,24 +779,24 @@ func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
 }
 
 func TestSchemaRejectsCollidingRelationshipMethodNames(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	orders := schema.Table{
+	orders := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
 		}},
-		Relationships: []schema.Relationship{
+		Relationships: []schema.RelationshipDef{
 			{
 				Name:              "BillingUser",
 				Kind:              schema.RelationshipBelongsTo,
@@ -820,9 +821,9 @@ func TestSchemaRejectsCollidingRelationshipMethodNames(t *testing.T) {
 }
 
 func TestSchemaAllowsScanColumns(t *testing.T) {
-	source, err := generate.Schema("generated", schema.Table{
+	source, err := generate.Schema("generated", schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "scan_columns", Type: schema.TextType{}},
 		},
@@ -834,14 +835,14 @@ func TestSchemaAllowsScanColumns(t *testing.T) {
 
 func TestSchemaRejectsCollidingGeneratedNames(t *testing.T) {
 	_, err := generate.Schema("generated",
-		schema.Table{
+		schema.TableDef{
 			Name:       "users",
-			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		},
-		schema.Table{
+		schema.TableDef{
 			Name:       "users_table",
-			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		},
 	)
@@ -850,27 +851,27 @@ func TestSchemaRejectsCollidingGeneratedNames(t *testing.T) {
 }
 
 func TestSchemaRejectsRelationshipTypeCollisions(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	orders := schema.Table{
+	orders := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
 		}},
 	}
-	collision := schema.Table{
+	collision := schema.TableDef{
 		Name:       "users_table_orders_relation",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
 
@@ -880,24 +881,24 @@ func TestSchemaRejectsRelationshipTypeCollisions(t *testing.T) {
 }
 
 func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	orders := schema.Table{
+	orders := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
 		}},
-		Relationships: []schema.Relationship{{
+		Relationships: []schema.RelationshipDef{{
 			Name:              "as",
 			Kind:              schema.RelationshipBelongsTo,
 			Columns:           []string{"user_id"},
@@ -911,19 +912,19 @@ func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
 }
 
 func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
-	users := schema.Table{
+	users := schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	orders := schema.Table{
+	orders := schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "as_id", Type: schema.IntegerType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"as_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
@@ -937,9 +938,9 @@ func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
 }
 
 func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
-	apiKeys := schema.Table{
+	apiKeys := schema.TableDef{
 		Name: "api_keys",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "api_key", Type: schema.TextType{}},
 		},
@@ -950,7 +951,7 @@ func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(source), "func APIKeys() APIKeysTable {")
 	require.Contains(t, string(source), "type APIKeysRow struct {")
-	require.Contains(t, string(source), "var apiKeysTable = newAPIKeysTable(rasql.MustTable[APIKeysRow](")
+	require.Contains(t, string(source), "var apiKeysTable = newAPIKeysTable(rasql.MustTableOf[APIKeysRow](")
 
 	// The api_key column must spell "API" the same way the api_keys table
 	// does, so the package does not expose the same word two ways.
@@ -959,14 +960,14 @@ func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
 
 func TestSchemaRejectsCollidingInitialismNames(t *testing.T) {
 	_, err := generate.Schema("generated",
-		schema.Table{
+		schema.TableDef{
 			Name:       "api_keys",
-			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		},
-		schema.Table{
+		schema.TableDef{
 			Name:       "APIKeys",
-			Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		},
 	)

@@ -82,9 +82,9 @@ func TestTypedSelectScansKnownProjectionDirectly(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[staticScanUser](schema.Table{
+	users, err := rasql.TableOf[staticScanUser](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -111,9 +111,9 @@ func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[directScanUser](schema.Table{
+	users, err := rasql.TableOf[directScanUser](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -144,9 +144,9 @@ func TestTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[directScanUser](schema.Table{
+	users, err := rasql.TableOf[directScanUser](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -176,9 +176,9 @@ func TestTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[plannedScanUser](schema.Table{
+	users, err := rasql.TableOf[plannedScanUser](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "name", Type: schema.TextType{}},
 		},
 	})
@@ -211,9 +211,9 @@ func TestTypedSelectOneStopsAfterSecondRow(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
-	users, err := rasql.NewTable[user](schema.Table{
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -251,9 +251,9 @@ func TestTypedSelectOneNoRows(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
-	users, err := rasql.NewTable[user](schema.Table{
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -285,9 +285,9 @@ func TestTypedSelectOneQueryFailureIsNotNoRows(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
-	users, err := rasql.NewTable[user](schema.Table{
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
@@ -481,9 +481,9 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 			ID     int64 `rasql:"id"`
 			UserID int64 `rasql:"user_id"`
 		}
-		orders, err := rasql.NewTable[order](schema.Table{
+		orders, err := rasql.TableOf[order](schema.TableDef{
 			Name: "orders",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 				{Name: "user_id", Type: schema.IntegerType{}},
 			},
@@ -526,9 +526,9 @@ func TestTypedSelectWhereIn(t *testing.T) {
 		type user struct {
 			ID int64 `rasql:"id"`
 		}
-		users, err := rasql.NewTable[user](schema.Table{
+		users, err := rasql.TableOf[user](schema.TableDef{
 			Name: "users",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 			},
 			PrimaryKey: []string{"id"},
@@ -559,9 +559,9 @@ func TestTypedSelectWhereIn(t *testing.T) {
 		type user struct {
 			ID int64 `rasql:"id"`
 		}
-		users, err := rasql.NewTable[user](schema.Table{
+		users, err := rasql.TableOf[user](schema.TableDef{
 			Name: "users",
-			Columns: []schema.Column{
+			Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}},
 			},
 			PrimaryKey: []string{"id"},

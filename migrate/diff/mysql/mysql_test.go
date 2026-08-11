@@ -15,10 +15,10 @@ import (
 
 func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
 	analyzer := mysql.New()
-	sources, err := analyzer.LiveSources(schema.Table{
+	sources, err := analyzer.LiveSources(schema.TableDef{
 		Name:    "members",
-		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
-		Indexes: []schema.Index{{Name: "members_email_idx", Columns: []string{"email"}}},
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
+		Indexes: []schema.IndexDef{{Name: "members_email_idx", Columns: []string{"email"}}},
 	})
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
@@ -30,9 +30,9 @@ func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
 func TestDiffLiveMatchesInlinePrimaryKeyUnderMySQLIdentifierRules(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (ID bigint PRIMARY KEY);")
-	liveSources, err := analyzer.LiveSources(schema.Table{
+	liveSources, err := analyzer.LiveSources(schema.TableDef{
 		Name:       "members",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
@@ -47,10 +47,10 @@ func TestDiffLiveMatchesInlinePrimaryKeyUnderMySQLIdentifierRules(t *testing.T) 
 func TestDiffLiveMatchesMySQLQuotedIdentifiersToOrdinaryIdentifiers(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint); CREATE INDEX members_id_idx ON members (id);")
-	liveSources, err := analyzer.LiveSources(schema.Table{
+	liveSources, err := analyzer.LiveSources(schema.TableDef{
 		Name:    "members",
-		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}, Nullable: true}},
-		Indexes: []schema.Index{{Name: "members_id_idx", Columns: []string{"id"}}},
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Nullable: true}},
+		Indexes: []schema.IndexDef{{Name: "members_id_idx", Columns: []string{"id"}}},
 	})
 	require.NoError(t, err)
 	live, err := analyzer.Parse(liveSources)
@@ -60,10 +60,10 @@ func TestDiffLiveMatchesMySQLQuotedIdentifiersToOrdinaryIdentifiers(t *testing.T
 	require.NoError(t, err)
 	require.Empty(t, plan.Statements)
 
-	differentCase, err := analyzer.LiveSources(schema.Table{
+	differentCase, err := analyzer.LiveSources(schema.TableDef{
 		Name:    "Members",
-		Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}, Nullable: true}},
-		Indexes: []schema.Index{{Name: "members_id_idx", Columns: []string{"id"}}},
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Nullable: true}},
+		Indexes: []schema.IndexDef{{Name: "members_id_idx", Columns: []string{"id"}}},
 	})
 	require.NoError(t, err)
 	otherLive, err := analyzer.Parse(differentCase)

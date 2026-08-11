@@ -87,9 +87,9 @@ func TestSQLiteRunsDistinctStatements(t *testing.T) {
 // why COUNT(DISTINCT column) is not a count of the rows SELECT DISTINCT
 // returns.
 func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
-	definition := schema.Table{
+	definition := schema.TableDef{
 		Name: "visits",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "city", Type: schema.TextType{}, Nullable: true},
 		},
@@ -110,7 +110,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 		ID   int64   `rasql:"id"`
 		City *string `rasql:"city"`
 	}
-	visits, err := rasql.NewTable[visit](definition)
+	visits, err := rasql.TableOf[visit](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.Create(t.Context(), client, visits))
 	tokyo := "tokyo"
@@ -212,12 +212,12 @@ func TestSQLiteAnswersUnprojectedDistinctOrderArbitrarily(t *testing.T) {
 // distinctFixture opens an in-memory SQLite database holding three users
 // across two cities and distinct ages, so DISTINCT city has a real duplicate
 // to remove and ORDER BY age has a real per-row difference from ORDER BY city.
-func distinctFixture(t *testing.T) (*sql.DB, schema.Table) {
+func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	t.Helper()
 
-	definition := schema.Table{
+	definition := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "city", Type: schema.TextType{}},
 			{Name: "age", Type: schema.IntegerType{}},
@@ -240,7 +240,7 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.Table) {
 		City string `rasql:"city"`
 		Age  int64  `rasql:"age"`
 	}
-	users, err := rasql.NewTable[user](definition)
+	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.Create(t.Context(), client, users))
 	for _, fixture := range []user{

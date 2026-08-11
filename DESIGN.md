@@ -51,7 +51,7 @@ schema ──> dialect ──┐
 
 ## Public API shape
 
-The public API starts with descriptors rather than a global registry. Applications can create a `schema.Table` directly, while generated code exposes typed `rasql.Table` values that retain reusable `query.Table` values. This keeps multiple schemas and test fixtures isolated in the same process.
+The public API starts with descriptors rather than a global registry. Applications can create a `schema.TableDef` directly, while generated code exposes typed `rasql.Table` values that retain reusable `query.Table` values. This keeps multiple schemas and test fixtures isolated in the same process.
 
 `rasql.Table[T]` is an interface implemented only inside `rasql`, so a generated table type can embed it and add one `query.Column` field per column. Application code then names a column as a struct field rather than a string, and never names a table type of its own.
 

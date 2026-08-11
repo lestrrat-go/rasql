@@ -103,11 +103,11 @@ func TestSQLiteRefusesAmbiguousSources(t *testing.T) {
 	})
 }
 
-func ambiguousSourceUsers(schemaName string) schema.Table {
-	return schema.Table{
+func ambiguousSourceUsers(schemaName string) schema.TableDef {
+	return schema.TableDef{
 		Schema: schemaName,
 		Name:   "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -115,10 +115,10 @@ func ambiguousSourceUsers(schemaName string) schema.Table {
 	}
 }
 
-func ambiguousSourceOrders() schema.Table {
-	return schema.Table{
+func ambiguousSourceOrders() schema.TableDef {
+	return schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -126,7 +126,7 @@ func ambiguousSourceOrders() schema.Table {
 	}
 }
 
-func ambiguousSourceAlias(t *testing.T, definition schema.Table, alias string) query.Table {
+func ambiguousSourceAlias(t *testing.T, definition schema.TableDef, alias string) query.Table {
 	t.Helper()
 	table, err := query.MustNewTable(definition).As(alias)
 	require.NoError(t, err)
