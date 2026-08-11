@@ -33,8 +33,9 @@ type Client struct {
 }
 
 // New creates a query client. It does not open a connection or start a
-// transaction. Use Begin for a client bound to a transaction. Optional hooks
-// observe statements executed by the returned client.
+// transaction. Use NewDB instead when the handle also needs to start
+// transactions with DB.Begin. Optional hooks observe statements executed by
+// the returned client.
 func New(handle Handle, d dialect.Dialect, hooks ...Hook) (Client, error) {
 	if isNil(handle) {
 		return Client{}, fmt.Errorf("rasql: handle must not be nil")
@@ -143,7 +144,7 @@ func createTableDef(ctx context.Context, x Executor, table schema.TableDef) erro
 }
 
 // CreateTable renders and executes table's definition followed by its indexes.
-// Callers that require atomic DDL pass a Tx from Begin.
+// Callers that require atomic DDL pass a Tx from DB.Begin.
 func CreateTable[T any](ctx context.Context, x Executor, table Table[T]) error {
 	if isNilTable(table) {
 		return fmt.Errorf("rasql: table must not be nil")

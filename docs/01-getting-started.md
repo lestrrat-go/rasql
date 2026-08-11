@@ -84,7 +84,7 @@ A `rasql.Client` pairs a database handle with the dialect used to render SQL:
 client, err := rasql.New(database, dialect.SQLite())
 ```
 
-`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Querying](03-querying.md) shows. To start a transaction, use `rasql.Begin` instead, which the [Transactions](04-writing.md#transactions) section covers.
+`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Querying](03-querying.md) shows. To start a transaction, use `rasql.NewDB` instead, which the [Transactions](04-writing.md#transactions) section covers.
 
 Pick the dialect that matches the database: `dialect.PostgreSQL()`, `dialect.MySQL()`, or `dialect.SQLite()`. The dialect decides how identifiers are quoted, how placeholders are numbered, how logical column types become DDL, and which syntax the renderer may use.
 
