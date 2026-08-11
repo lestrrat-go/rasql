@@ -123,11 +123,11 @@ func compareSchemaObjects[T any](baseline, target map[string]T, equal func(T, T)
 // Plan is a reviewed set of SQL sources generated for one migration.
 type Plan struct {
 	Dialect    string
-	Statements []Statement
+	Statements []PlannedStatement
 }
 
-// Statement is one generated native SQL source file.
-type Statement struct {
+// PlannedStatement is one generated native SQL source file.
+type PlannedStatement struct {
 	Source  string
 	SQL     string
 	Summary string
