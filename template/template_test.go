@@ -365,7 +365,10 @@ func requireGeneratedSourceCompiles(t *testing.T, source []byte) {
 		require.NoError(t, os.RemoveAll(directory))
 	})
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "query.go"), source, 0o600))
-	module := "module example.com/generated\n\ngo 1.26.0\n\nrequire (\n\tgithub.com/lestrrat-go/rasql v0.0.0\n\tgithub.com/lestrrat-go/rasql-mysql v0.0.0-20260803090041-496b40acb82a\n\tgithub.com/lestrrat-go/rasql-pg v0.0.0-20260803045404-7e3faf0c19bd\n\tgithub.com/lestrrat-go/rasql-sqlite v0.0.0-20260811104459-ee943b3c3228\n)\n\nreplace github.com/lestrrat-go/rasql => ../..\n"
+	repoGoMod, err := os.ReadFile("../go.mod")
+	require.NoError(t, err)
+	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/generated\n", 1)
+	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
 	command := exec.CommandContext(t.Context(), "go", "test", ".")
 	command.Dir = directory
