@@ -284,7 +284,7 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	}
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
 	for _, fixture := range []user{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},

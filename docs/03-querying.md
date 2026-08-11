@@ -32,7 +32,7 @@ The tables in this section enumerate every operation the public API offers. The 
 | `UPDATE` with arbitrary expressions | `query.NewUpdate(table.Ref(), assignments…)` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | `DELETE` by predicate | `rasql.DeleteFrom(table)` | `DeleteBuilder` |
 | `DELETE` with `RETURNING` | `rasql.DeleteFrom(table).Returning(...)` | `DeleteReturningBuilder` |
-| `CREATE TABLE` plus its indexes | `rasql.Create(ctx, client, table)` | `error` |
+| `CREATE TABLE` plus its indexes | `rasql.CreateTable(ctx, client, table)` | `error` |
 | Upsert | `query.New…` then `rasql.Exec(ctx, client, statement)` | `sql.Result` |
 | Write with `RETURNING` | `query.New….WithReturning(...)` then `rasql.QueryWrite(ctx, client, statement)` / `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `row.Dynamic` or `[]T` / `T` |
 | Compiled [static template](05-templates.md) | `client.ExecRendered(ctx, statement)` | `sql.Result` |
@@ -237,7 +237,7 @@ func Example_rasql_scalar_function() {
 		schema.Text("nickname", schema.Nullable()),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.Create(ctx, client, members); err != nil {
+	if err := rasql.CreateTable(ctx, client, members); err != nil {
 		fmt.Printf("failed to create members table: %s\n", err)
 		return
 	}
@@ -417,7 +417,7 @@ func Example_rasql_typed_query() {
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -516,7 +516,7 @@ func Example_rasql_where_in() {
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -634,11 +634,11 @@ func Example_rasql_subquery() {
 		schema.PrimaryKey("id"),
 	))
 	// Create both descriptors before querying orders against the users subquery.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.Create(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -779,7 +779,7 @@ func Example_rasql_count() {
 		return
 	}
 	// Create the table described by the generated users descriptor.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -879,7 +879,7 @@ func Example_rasql_group_by() {
 		schema.Text("status"),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.Create(ctx, client, tasks); err != nil {
+	if err := rasql.CreateTable(ctx, client, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
@@ -994,7 +994,7 @@ func Example_rasql_distinct() {
 		schema.Integer("user_id"),
 		schema.PrimaryKey("id"),
 	))
-	if err := rasql.Create(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -1145,11 +1145,11 @@ func Example_rasql_dynamic_projection() {
 		schema.PrimaryKey("id"),
 	))
 	// Create both descriptors before querying their joined rows.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.Create(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}

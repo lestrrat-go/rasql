@@ -31,16 +31,16 @@ var reservedFieldNames = map[string]struct{}{
 	"tableRow":         {},
 }
 
-// ValidateSchema checks whether packageName and tables can produce Go source.
+// Validate checks whether packageName and tables can produce Go source.
 // It checks names across all tables, so callers that generate one file per
 // table can still reject collisions between those files before writing any.
-func ValidateSchema(packageName string, tables ...schema.TableDef) error {
+func Validate(packageName string, tables ...schema.TableDef) error {
 	_, err := prepareSchema(packageName, tables)
 	return err
 }
 
-// Schema returns formatted Go source declaring reusable table descriptors in packageName.
-func Schema(packageName string, tables ...schema.TableDef) ([]byte, error) {
+// PackageSource returns formatted Go source declaring reusable table descriptors in packageName.
+func PackageSource(packageName string, tables ...schema.TableDef) ([]byte, error) {
 	clones, err := prepareSchema(packageName, tables)
 	if err != nil {
 		return nil, err
@@ -48,10 +48,10 @@ func Schema(packageName string, tables ...schema.TableDef) ([]byte, error) {
 	return schemaSource(packageName, clones, clones)
 }
 
-// SchemaTable returns the generated source for table. allTables supplies the
+// TableSource returns the generated source for table. allTables supplies the
 // package-wide descriptors used to derive relationship methods. It is useful
 // to callers such as rasqlgen that keep one generated file per table.
-func SchemaTable(packageName string, table schema.TableDef, allTables ...schema.TableDef) ([]byte, error) {
+func TableSource(packageName string, table schema.TableDef, allTables ...schema.TableDef) ([]byte, error) {
 	if len(allTables) == 0 {
 		allTables = []schema.TableDef{table}
 	}

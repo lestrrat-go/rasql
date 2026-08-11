@@ -651,7 +651,7 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 	mock.ExpectExec("CREATE INDEX \"users_email_idx\" ON \"users\" (\"email\")").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	require.NoError(t, rasql.Create(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

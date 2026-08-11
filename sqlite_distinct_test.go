@@ -112,7 +112,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 	}
 	visits, err := rasql.TableOf[visit](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, visits))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, visits))
 	tokyo := "tokyo"
 	// NULL, NULL, tokyo: two distinct rows, one distinct non-NULL value.
 	for _, fixture := range []visit{
@@ -242,7 +242,7 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	}
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.Create(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
 	for _, fixture := range []user{
 		{ID: 1, City: "tokyo", Age: 30},
 		{ID: 2, City: "osaka", Age: 20},

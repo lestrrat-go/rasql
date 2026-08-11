@@ -82,7 +82,7 @@ func Example_rasql_insert_defaults() {
 		fmt.Printf("failed to create rasql client: %s\n", err)
 		return
 	}
-	if err := rasql.Create(ctx, client, defaultUsers); err != nil {
+	if err := rasql.CreateTable(ctx, client, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
 	}

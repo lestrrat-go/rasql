@@ -119,7 +119,7 @@ func (c Client) ExecRendered(ctx context.Context, statement render.Statement) (s
 	return result, nil
 }
 
-func createTable(ctx context.Context, x Executor, table schema.TableDef) error {
+func createTableDef(ctx context.Context, x Executor, table schema.TableDef) error {
 	if isNil(x) {
 		return fmt.Errorf("rasql: executor must not be nil")
 	}
@@ -142,13 +142,13 @@ func createTable(ctx context.Context, x Executor, table schema.TableDef) error {
 	return nil
 }
 
-// Create renders and executes table's definition followed by its indexes.
+// CreateTable renders and executes table's definition followed by its indexes.
 // Callers that require atomic DDL pass a Tx from Begin.
-func Create[T any](ctx context.Context, x Executor, table Table[T]) error {
+func CreateTable[T any](ctx context.Context, x Executor, table Table[T]) error {
 	if isNilTable(table) {
 		return fmt.Errorf("rasql: table must not be nil")
 	}
-	return createTable(ctx, x, table.Ref().Definition())
+	return createTableDef(ctx, x, table.Ref().Definition())
 }
 
 func isNil(value any) bool {

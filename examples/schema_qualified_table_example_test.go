@@ -23,7 +23,7 @@ func Example_schema_qualified_table() {
 	// here, a SQLite attached-database name. rasql never creates the
 	// namespace itself, so the ATTACH DATABASE below stands in for a
 	// reviewed native migration, which is the only way rasql creates a
-	// namespace in production; rasql.Create then renders CREATE TABLE
+	// namespace in production; rasql.CreateTable then renders CREATE TABLE
 	// "audit"."events" into the namespace that migration already created.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -55,7 +55,7 @@ func Example_schema_qualified_table() {
 	))
 
 	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.Create(ctx, client, events); err != nil {
+	if err := rasql.CreateTable(ctx, client, events); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}

@@ -32,7 +32,7 @@ func Example_rasql_quickstart() {
 		return
 	}
 	// A real application creates its tables through migrations instead.
-	if err := rasql.Create(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
