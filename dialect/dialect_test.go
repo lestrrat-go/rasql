@@ -183,12 +183,14 @@ func TestBuiltinsRenderUnsignedIntegerTypeNames(t *testing.T) {
 // TestBuiltinsRenderTextTypeNames pins how each dialect renders
 // schema.TextType.Width. An unstated width always renders the dialect's
 // plain unbounded text type. A stated width renders VARCHAR(width) on
-// PostgreSQL and MySQL, both of which enforce it exactly; SQLite renders
-// plain TEXT regardless; it assigns column type by affinity rather than by
-// declared type, so a VARCHAR(n) column there would store and enforce
-// exactly like TEXT, and rendering VARCHAR(n) syntax would claim an
-// enforcement that never happens, the same reason it already drops
-// DecimalType's precision and scale (TestBuiltinsRejectUnrepresentableDecimals).
+// PostgreSQL and MySQL, which enforce it on different terms: PostgreSQL
+// rejects an over-length insert outright, MySQL only under strict SQL mode.
+// SQLite renders plain TEXT regardless; it assigns column type by affinity
+// rather than by declared type, so a VARCHAR(n) column there would store
+// and enforce exactly like TEXT, and rendering VARCHAR(n) syntax would
+// claim an enforcement that never happens, the same reason it already
+// drops DecimalType's precision and scale
+// (TestBuiltinsRejectUnrepresentableDecimals).
 func TestBuiltinsRenderTextTypeNames(t *testing.T) {
 	tests := map[string]struct {
 		dialect          dialect.Dialect

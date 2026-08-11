@@ -122,11 +122,12 @@ func TestCreateTableRendersUnsignedIntegerColumns(t *testing.T) {
 // TestCreateTableRendersTextWidthColumns is the DDL half of the text-width
 // fix: MySQL renders a stated width as VARCHAR(width), where it used to
 // render every schema.TextType column TEXT regardless, which MySQL refuses
-// to index without a key length (error 1170). PostgreSQL enforces
-// VARCHAR(n) exactly like MySQL, so it renders the same way; SQLite renders
-// plain TEXT regardless of a stated width, since it assigns column storage
-// by affinity rather than by declared type and would not enforce the bound
-// either way.
+// to index without a key length (error 1170). PostgreSQL renders
+// VARCHAR(n) too, rejecting an over-length insert outright where MySQL
+// only does so under strict SQL mode, so it renders the same way; SQLite
+// renders plain TEXT regardless of a stated width, since it assigns column
+// storage by affinity rather than by declared type and would not enforce
+// the bound either way.
 func TestCreateTableRendersTextWidthColumns(t *testing.T) {
 	table := schema.TableDef{
 		Name: "users",
