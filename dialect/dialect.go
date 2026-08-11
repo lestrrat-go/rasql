@@ -70,8 +70,10 @@ func PostgreSQL() Dialect {
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
-		// PostgreSQL's VARCHAR(n) enforces the length exactly like MySQL's, so
-		// a stated schema.TextType.Width renders VARCHAR(n) here too rather
+		// PostgreSQL's VARCHAR(n) rejects an over-length value whatever the
+		// server settings, truncating instead only when the excess is all
+		// spaces, where MySQL rejects it only under strict SQL mode, so a
+		// stated schema.TextType.Width renders VARCHAR(n) here too rather
 		// than being dropped: see builtin.textTypeName.
 		varcharText: true,
 		types: map[schema.TypeKind]string{
