@@ -94,20 +94,20 @@ func scanTypedRowsStatic[T any](rows *sql.Rows) iter.Seq2[T, error] {
 
 // scanTypedRendered defers the query until iteration begins and maps each
 // result column to a generated row field at runtime.
-func scanTypedRendered[T any](ctx context.Context, x Executor, statement render.Statement) iter.Seq2[T, error] {
-	return scanTypedRenderedWith(ctx, x, statement, scanTypedRows[T])
+func scanTypedRendered[T any](ctx context.Context, db DB, statement render.Statement) iter.Seq2[T, error] {
+	return scanTypedRenderedWith(ctx, db, statement, scanTypedRows[T])
 }
 
 // scanTypedRenderedStatic defers the query until iteration begins and scans a
 // statically-known complete generated row projection directly into its fields.
-func scanTypedRenderedStatic[T any](ctx context.Context, x Executor, statement render.Statement) iter.Seq2[T, error] {
-	return scanTypedRenderedWith(ctx, x, statement, scanTypedRowsStatic[T])
+func scanTypedRenderedStatic[T any](ctx context.Context, db DB, statement render.Statement) iter.Seq2[T, error] {
+	return scanTypedRenderedWith(ctx, db, statement, scanTypedRowsStatic[T])
 }
 
-func scanTypedRenderedWith[T any](ctx context.Context, x Executor, statement render.Statement, scan func(*sql.Rows) iter.Seq2[T, error]) iter.Seq2[T, error] {
+func scanTypedRenderedWith[T any](ctx context.Context, db DB, statement render.Statement, scan func(*sql.Rows) iter.Seq2[T, error]) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
-		rows, err := x.QueryRendered(ctx, statement)
+		rows, err := db.QueryRendered(ctx, statement)
 		if err != nil {
 			yield(zero, err)
 			return

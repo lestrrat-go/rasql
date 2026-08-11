@@ -104,7 +104,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 	// An in-memory SQLite database is per connection, so keep the test on one.
 	database.SetMaxOpenConns(1)
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	type visit struct {
 		ID   int64   `rasql:"id"`
@@ -112,7 +112,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 	}
 	visits, err := rasql.TableOf[visit](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), client, visits))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, visits))
 	tokyo := "tokyo"
 	// NULL, NULL, tokyo: two distinct rows, one distinct non-NULL value.
 	for _, fixture := range []visit{
@@ -120,7 +120,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 		{ID: 2, City: nil},
 		{ID: 3, City: &tokyo},
 	} {
-		_, err = rasql.Insert(t.Context(), client, visits, fixture)
+		_, err = rasql.Insert(t.Context(), db, visits, fixture)
 		require.NoError(t, err)
 	}
 
@@ -233,7 +233,7 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	// An in-memory SQLite database is per connection, so keep the test on one.
 	database.SetMaxOpenConns(1)
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	type user struct {
 		ID   int64  `rasql:"id"`
@@ -242,13 +242,13 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	}
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), client, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 	for _, fixture := range []user{
 		{ID: 1, City: "tokyo", Age: 30},
 		{ID: 2, City: "osaka", Age: 20},
 		{ID: 3, City: "tokyo", Age: 10},
 	} {
-		_, err = rasql.Insert(t.Context(), client, users, fixture)
+		_, err = rasql.Insert(t.Context(), db, users, fixture)
 		require.NoError(t, err)
 	}
 	return database, definition

@@ -14,7 +14,7 @@ import (
 // An empty parent slice returns an empty map without executing a query.
 func LoadHasMany[Parent, Child any, Key comparable](
 	ctx context.Context,
-	x Executor,
+	db DB,
 	childTable Table[Child],
 	childKeyColumn query.ColumnRef,
 	parents []Parent,
@@ -37,7 +37,7 @@ func LoadHasMany[Parent, Child any, Key comparable](
 		keys = append(keys, relationshipQueryKey(key))
 		grouped[key] = nil
 	}
-	children, err := SelectFrom(childTable).WhereIn(childKeyColumn, keys...).All(ctx, x)
+	children, err := SelectFrom(childTable).WhereIn(childKeyColumn, keys...).All(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func LoadHasMany[Parent, Child any, Key comparable](
 // executing a query.
 func LoadBelongsTo[Child, Parent any, Key comparable](
 	ctx context.Context,
-	x Executor,
+	db DB,
 	parentTable Table[Parent],
 	parentKeyColumn query.ColumnRef,
 	children []Child,
@@ -77,7 +77,7 @@ func LoadBelongsTo[Child, Parent any, Key comparable](
 		seen[key] = struct{}{}
 		keys = append(keys, relationshipQueryKey(key))
 	}
-	parents, err := SelectFrom(parentTable).WhereIn(parentKeyColumn, keys...).All(ctx, x)
+	parents, err := SelectFrom(parentTable).WhereIn(parentKeyColumn, keys...).All(ctx, db)
 	if err != nil {
 		return nil, err
 	}

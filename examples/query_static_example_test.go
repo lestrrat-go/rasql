@@ -24,7 +24,7 @@ func Example_query_static() {
 		return
 	}
 	// Bind requires each named value exactly once and returns a precompiled,
-	// parameterized statement that rasql.Client can execute directly.
+	// parameterized statement that rasql.DB can execute directly.
 	statement, err := compiled.Bind(map[string]any{"email": "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to bind template: %s\n", err)

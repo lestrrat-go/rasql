@@ -52,12 +52,12 @@ func newServer(ctx context.Context) (web.Server, *sql.DB, error) {
 		_ = database.Close()
 		return web.Server{}, nil, fmt.Errorf("enable SQLite foreign keys: %w", err)
 	}
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
 		_ = database.Close()
-		return web.Server{}, nil, fmt.Errorf("create rasql client: %w", err)
+		return web.Server{}, nil, fmt.Errorf("create rasql db: %w", err)
 	}
-	repository := store.New(client)
+	repository := store.New(db)
 	if err := repository.SeedDemo(ctx); err != nil {
 		_ = database.Close()
 		return web.Server{}, nil, fmt.Errorf("seed taskboard: %w", err)

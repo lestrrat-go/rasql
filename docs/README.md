@@ -4,7 +4,7 @@ These pages explain how to use `rasql` in an application. For what `rasql` is an
 
 ## Reading order
 
-1. [Getting started](01-getting-started.md) creates a client and runs a first query end to end.
+1. [Getting started](01-getting-started.md) creates a DB and runs a first query end to end.
 2. [Schemas](02-schema.md) describes tables in Go code, and reads existing tables back from a database.
 3. [Querying](03-querying.md) reads rows: typed selects, joins, custom projections, and SQL inspection. Its [operation reference](03-querying.md#operation-reference) enumerates every statement, builder method, and predicate.
 4. [Writing rows](04-writing.md) creates tables and inserts, updates, or deletes rows, including inside a [transaction](04-writing.md#transactions).

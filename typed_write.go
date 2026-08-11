@@ -29,20 +29,20 @@ type ColumnValuer interface {
 // Insert encodes value's rasql-tagged fields and writes it to table.
 // Value must have one exported tagged field for every table column,
 // or implement ColumnValuer.
-func Insert[T any](ctx context.Context, x Executor, table Table[T], value T) (sql.Result, error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func Insert[T any](ctx context.Context, db DB, table Table[T], value T) (sql.Result, error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
-	return InsertWithOptions(ctx, x, table, value)
+	return InsertWithOptions(ctx, db, table, value)
 }
 
 // InsertWithOptions encodes value's rasql-tagged fields and writes it to table.
 // Value must have one exported tagged field for every table column,
 // or implement ColumnValuer. DefaultColumns omits named columns so the
 // database applies their defaults.
-func InsertWithOptions[T any](ctx context.Context, x Executor, table Table[T], value T, options ...InsertOption) (sql.Result, error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func InsertWithOptions[T any](ctx context.Context, db DB, table Table[T], value T, options ...InsertOption) (sql.Result, error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
 	defaults, err := insertDefaults(options)
 	if err != nil {
@@ -52,17 +52,17 @@ func InsertWithOptions[T any](ctx context.Context, x Executor, table Table[T], v
 	if err != nil {
 		return nil, fmt.Errorf("rasql: build INSERT: %w", err)
 	}
-	return Exec(ctx, x, statement)
+	return Exec(ctx, db, statement)
 }
 
 // InsertMany encodes values' rasql-tagged fields and writes them as one
 // parameterized INSERT statement. Every value must have one exported tagged
 // field for every table column, or implement ColumnValuer.
-func InsertMany[T any](ctx context.Context, x Executor, table Table[T], values []T) (sql.Result, error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func InsertMany[T any](ctx context.Context, db DB, table Table[T], values []T) (sql.Result, error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
-	return InsertManyWithOptions(ctx, x, table, values)
+	return InsertManyWithOptions(ctx, db, table, values)
 }
 
 // InsertManyWithOptions is InsertMany with the same database-default options
@@ -70,9 +70,9 @@ func InsertMany[T any](ctx context.Context, x Executor, table Table[T], values [
 // row, while every unselected column remains a bound value. When every column
 // uses a database default, it executes one default-values INSERT per row because
 // the supported dialects do not share a multi-row default-values syntax.
-func InsertManyWithOptions[T any](ctx context.Context, x Executor, table Table[T], values []T, options ...InsertOption) (sql.Result, error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func InsertManyWithOptions[T any](ctx context.Context, db DB, table Table[T], values []T, options ...InsertOption) (sql.Result, error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
 	defaults, err := insertDefaults(options)
 	if err != nil {
@@ -83,9 +83,9 @@ func InsertManyWithOptions[T any](ctx context.Context, x Executor, table Table[T
 		return nil, fmt.Errorf("rasql: build INSERT: %w", err)
 	}
 	if statement.UsesDefaultValues() && len(values) > 1 {
-		return execDefaultInserts(ctx, x, statement, len(values))
+		return execDefaultInserts(ctx, db, statement, len(values))
 	}
-	return Exec(ctx, x, statement)
+	return Exec(ctx, db, statement)
 }
 
 // InsertOption configures InsertWithOptions.
@@ -199,15 +199,15 @@ func writeTargetTable(statement query.WriteStatement) (query.TableRef, bool) {
 
 // QueryWriteAll runs statement through QueryWrite and decodes every
 // returned row as T. The RETURNING projections must cover the columns T maps.
-func QueryWriteAll[T any](ctx context.Context, x Executor, statement query.WriteStatement) ([]T, error) {
+func QueryWriteAll[T any](ctx context.Context, db DB, statement query.WriteStatement) ([]T, error) {
 	if err := validateTypedWriteReturning[T](statement); err != nil {
 		return nil, err
 	}
-	rendered, err := renderQueryWrite(x, statement)
+	rendered, err := renderQueryWrite(db, statement)
 	if err != nil {
 		return nil, err
 	}
-	return collectAll(scanTypedRendered[T](ctx, x, rendered))
+	return collectAll(scanTypedRendered[T](ctx, db, rendered))
 }
 
 // QueryWriteOne runs statement through QueryWrite and decodes exactly one
@@ -215,24 +215,24 @@ func QueryWriteAll[T any](ctx context.Context, x Executor, statement query.Write
 // It returns [ErrNoRows] when RETURNING produced no rows and [ErrMultipleRows]
 // when it produced more than one, the same sentinels
 // [TypedSelectBuilder.One] reports.
-func QueryWriteOne[T any](ctx context.Context, x Executor, statement query.WriteStatement) (T, error) {
+func QueryWriteOne[T any](ctx context.Context, db DB, statement query.WriteStatement) (T, error) {
 	var zero T
 	if err := validateTypedWriteReturning[T](statement); err != nil {
 		return zero, err
 	}
-	rendered, err := renderQueryWrite(x, statement)
+	rendered, err := renderQueryWrite(db, statement)
 	if err != nil {
 		return zero, err
 	}
-	return exactlyOne(scanTypedRendered[T](ctx, x, rendered))
+	return exactlyOne(scanTypedRendered[T](ctx, db, rendered))
 }
 
 // Update encodes value's rasql-tagged fields and updates its table row.
 // It matches primary-key fields and updates every non-primary-key column.
 // Value must have one exported tagged field for every table column,
 // or implement ColumnValuer.
-func Update[T any](ctx context.Context, x Executor, table Table[T], value T) (sql.Result, error) {
-	return UpdateWithOptions(ctx, x, table, value)
+func Update[T any](ctx context.Context, db DB, table Table[T], value T) (sql.Result, error) {
+	return UpdateWithOptions(ctx, db, table, value)
 }
 
 // UpdateWithOptions encodes a typed update and executes it. Without options it
@@ -241,9 +241,9 @@ func Update[T any](ctx context.Context, x Executor, table Table[T], value T) (sq
 // supplies a predicate, which makes the operation a bulk update; when it is
 // supplied without UpdateColumns, all non-primary-key columns are assigned.
 // Values are always passed to the query builder as bound parameters.
-func UpdateWithOptions[T any](ctx context.Context, x Executor, table Table[T], value T, options ...UpdateOption) (sql.Result, error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func UpdateWithOptions[T any](ctx context.Context, db DB, table Table[T], value T, options ...UpdateOption) (sql.Result, error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
 	config, err := updateOptions(options)
 	if err != nil {
@@ -253,15 +253,15 @@ func UpdateWithOptions[T any](ctx context.Context, x Executor, table Table[T], v
 	if err != nil {
 		return nil, fmt.Errorf("rasql: build UPDATE: %w", err)
 	}
-	return Exec(ctx, x, statement)
+	return Exec(ctx, db, statement)
 }
 
 // UpdateMany applies one set of typed values to every row matched by the
 // explicit UpdateWhere option. It rejects calls without UpdateWhere so a bulk
 // operation cannot silently fall back to a primary-key update.
-func UpdateMany[T any](ctx context.Context, x Executor, table Table[T], value T, options ...UpdateOption) (sql.Result, error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func UpdateMany[T any](ctx context.Context, db DB, table Table[T], value T, options ...UpdateOption) (sql.Result, error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
 	config, err := updateOptions(options)
 	if err != nil {
@@ -274,7 +274,7 @@ func UpdateMany[T any](ctx context.Context, x Executor, table Table[T], value T,
 	if err != nil {
 		return nil, fmt.Errorf("rasql: build UPDATE: %w", err)
 	}
-	return Exec(ctx, x, statement)
+	return Exec(ctx, db, statement)
 }
 
 // UpdateOption configures UpdateWithOptions.
@@ -419,10 +419,10 @@ func (r defaultInsertResults) RowsAffected() (int64, error) {
 	return total, nil
 }
 
-func execDefaultInserts(ctx context.Context, x Executor, statement query.Insert, count int) (sql.Result, error) {
+func execDefaultInserts(ctx context.Context, db DB, statement query.Insert, count int) (sql.Result, error) {
 	results := make(defaultInsertResults, count)
 	for i := range count {
-		result, err := Exec(ctx, x, statement)
+		result, err := Exec(ctx, db, statement)
 		if err != nil {
 			return nil, fmt.Errorf("rasql: execute default INSERT row %d: %w", i, err)
 		}

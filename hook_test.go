@@ -52,7 +52,7 @@ func TestClientHooksRunInOrderAndPreserveStatement(t *testing.T) {
 			return nil
 		},
 	}
-	client, err := rasql.New(database, dialect.PostgreSQL(), first, second)
+	db, err := rasql.New(database, dialect.PostgreSQL(), first, second)
 	require.NoError(t, err)
 	statement, err := render.Precompiled("INSERT INTO users (email) VALUES ($1)", "ada@example.com")
 	require.NoError(t, err)
@@ -60,7 +60,7 @@ func TestClientHooksRunInOrderAndPreserveStatement(t *testing.T) {
 		WithArgs("ada@example.com").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	_, err = client.ExecRendered(t.Context(), statement)
+	_, err = db.ExecRendered(t.Context(), statement)
 	require.NoError(t, err)
 	require.Equal(t, []string{"first before", "second before", "second after", "first after"}, events)
 }
@@ -75,9 +75,9 @@ func TestClientHooksObserveQuery(t *testing.T) {
 	})
 
 	var observed rasql.Operation
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	client, err = client.WithHooks(rasql.HookFunc{
+	db, err = db.WithHooks(rasql.HookFunc{
 		BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
 			observed = operation
 			return nil
@@ -90,7 +90,7 @@ func TestClientHooksObserveQuery(t *testing.T) {
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(42))
 
-	rows, err := client.QueryRendered(t.Context(), statement)
+	rows, err := db.QueryRendered(t.Context(), statement)
 	require.NoError(t, err)
 	require.NoError(t, rows.Close())
 	require.Equal(t, rasql.QueryOperation, observed.Kind())
@@ -108,7 +108,7 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 		expected := errors.New("policy denied")
-		client, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{
+		db, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{
 			BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
 				require.Equal(t, rasql.ExecOperation, operation.Kind())
 				return expected
@@ -118,7 +118,7 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 		statement, err := render.Precompiled("DELETE FROM users")
 		require.NoError(t, err)
 
-		_, err = client.ExecRendered(t.Context(), statement)
+		_, err = db.ExecRendered(t.Context(), statement)
 		require.ErrorIs(t, err, expected)
 		require.ErrorContains(t, err, "hook before exec")
 	})
@@ -132,7 +132,7 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 		expected := errors.New("metrics sink unavailable")
-		client, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{
+		db, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{
 			AfterFunc: func(_ context.Context, operation rasql.Operation, err error) error {
 				require.NoError(t, err)
 				require.Equal(t, rasql.ExecOperation, operation.Kind())
@@ -146,13 +146,13 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			WithArgs(42).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		_, err = client.ExecRendered(t.Context(), statement)
+		_, err = db.ExecRendered(t.Context(), statement)
 		require.ErrorIs(t, err, expected)
 		require.ErrorContains(t, err, "hook after exec")
 	})
 }
 
-func TestTxHooksRunInsideExplicitTransaction(t *testing.T) {
+func TestHooksRunInsideExplicitTransaction(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -179,7 +179,7 @@ func TestTxHooksRunInsideExplicitTransaction(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	db, err := rasql.NewDB(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)

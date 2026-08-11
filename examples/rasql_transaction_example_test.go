@@ -26,9 +26,8 @@ func Example_rasql_transaction() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A DB couples a database handle with the dialect used to render SQL, and
-	// can also start transactions on that same handle.
-	db, err := rasql.NewDB(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
@@ -39,7 +38,9 @@ func Example_rasql_transaction() {
 		return
 	}
 
-	// db.Begin starts a transaction on the same handle db was built from.
+	// db.Begin starts a transaction on the same handle and returns another DB
+	// bound to it. There is no separate transaction type to carry around: tx is
+	// a DB, so everything below takes it exactly as it takes db.
 	tx, err := db.Begin(ctx, nil)
 	if err != nil {
 		fmt.Printf("failed to begin transaction: %s\n", err)

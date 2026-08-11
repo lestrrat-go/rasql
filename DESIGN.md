@@ -55,7 +55,7 @@ The public API starts with descriptors rather than a global registry. Applicatio
 
 `rasql.Table[T]` is an interface implemented only inside `rasql`, so a generated table type can embed it and add one `query.ColumnRef` field per column. Application code then names a column as a struct field rather than a string, and never names a table type of its own.
 
-Statements are immutable after construction. The basic `query` API exposes validated statement values. The `render` fluent builder owns a dialect and returns parameterized SQL, while the root `rasql` fluent builder carries neither a client nor a dialect and receives an `Executor` only at terminal calls.
+Statements are immutable after construction. The basic `query` API exposes validated statement values. The `render` fluent builder owns a dialect and returns parameterized SQL, while the root `rasql` fluent builder carries neither a database handle nor a dialect and receives a `rasql.DB` only at terminal calls.
 
 Query execution returns a rangeable `iter.Seq2` sequence plus any construction error. A sequence yields rows lazily and then at most one execution or scanning error, which keeps row resources open only while the caller ranges over them. `SelectFrom` infers its result type from a `rasql.Table`; `DecodeFrom` maps a custom projection into an explicit result type, and `DecodeFromRef` does the same for a `query.TableRef` with no Go row type. Both decode each yielded row before it reaches the loop, while `All` and `One` remain collection helpers built on the same sequence.
 

@@ -27,10 +27,10 @@ func Example_rasql_dynamic_projection() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A Client couples a database handle with the dialect used to render SQL.
-	client, err := rasql.New(database, dialect.SQLite())
+	// A DB couples a database handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 	// A typed descriptor makes orders usable with rasql.Insert as well.
@@ -51,11 +51,11 @@ func Example_rasql_dynamic_projection() {
 		schema.PrimaryKey("id"),
 	))
 	// Create both descriptors before querying their joined rows.
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, orders); err != nil {
+	if err := rasql.CreateTable(ctx, db, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -73,7 +73,7 @@ func Example_rasql_dynamic_projection() {
 		return
 	}
 	// Populate both tables through the typed rasql API.
-	if _, err := rasql.Insert(ctx, client, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -81,7 +81,7 @@ func Example_rasql_dynamic_projection() {
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {
-		if _, err := rasql.Insert(ctx, client, orders, order); err != nil {
+		if _, err := rasql.Insert(ctx, db, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -94,7 +94,7 @@ func Example_rasql_dynamic_projection() {
 		Project(query.Project(users.ID).As("user_id"), query.Project(users.Email)).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
-		Query(ctx, client)
+		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to build order totals query: %s\n", err)
 		return

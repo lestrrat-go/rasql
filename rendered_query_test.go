@@ -25,7 +25,7 @@ func TestQueryRenderedDecodesCTEAndWindowResult(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	statement, err := render.Precompiled(`WITH ranked_users AS (
 	SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank
@@ -37,7 +37,7 @@ SELECT id, email, rank FROM ranked_users WHERE id >= $1`, 2)
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "rank"}).
 			AddRow(int64(2), "bob@example.com", int64(2)))
 
-	rows, err := rasql.QueryRendered[renderedRank](t.Context(), client, statement)
+	rows, err := rasql.QueryRendered[renderedRank](t.Context(), db, statement)
 	require.NoError(t, err)
 	var found []renderedRank
 	for value, err := range rows {
@@ -56,7 +56,7 @@ func TestQueryRenderedAllAndOneUseTypedDecoding(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	allStatement, err := render.Precompiled("SELECT id, email, rank FROM ranked_users ORDER BY rank")
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestQueryRenderedAllAndOneUseTypedDecoding(t *testing.T) {
 			AddRow(int64(1), "ada@example.com", int64(1)).
 			AddRow(int64(2), "bob@example.com", int64(2)))
 
-	all, err := rasql.QueryRenderedAll[renderedRank](t.Context(), client, allStatement)
+	all, err := rasql.QueryRenderedAll[renderedRank](t.Context(), db, allStatement)
 	require.NoError(t, err)
 	require.Equal(t, []renderedRank{
 		{ID: 1, Email: "ada@example.com", Rank: 1},
@@ -78,19 +78,19 @@ func TestQueryRenderedAllAndOneUseTypedDecoding(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "rank"}).
 			AddRow(int64(1), "ada@example.com", int64(1)))
 
-	one, err := rasql.QueryRenderedOne[renderedRank](t.Context(), client, oneStatement)
+	one, err := rasql.QueryRenderedOne[renderedRank](t.Context(), db, oneStatement)
 	require.NoError(t, err)
 	require.Equal(t, renderedRank{ID: 1, Email: "ada@example.com", Rank: 1}, one)
 }
 
 func TestQueryRenderedValidatesBeforeReturningSequence(t *testing.T) {
-	var client rasql.Client
+	var db rasql.DB
 	statement, err := render.Precompiled("SELECT 1")
 	require.NoError(t, err)
 
-	rows, err := rasql.QueryRendered[renderedRank](t.Context(), client, statement)
+	rows, err := rasql.QueryRendered[renderedRank](t.Context(), db, statement)
 	require.Nil(t, rows)
-	require.ErrorContains(t, err, "rasql: executor must not be nil")
+	require.ErrorContains(t, err, "rasql: invalid DB")
 
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -99,9 +99,9 @@ func TestQueryRenderedValidatesBeforeReturningSequence(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	client, err = rasql.New(database, dialect.SQLite())
+	db, err = rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	rows, err = rasql.QueryRendered[renderedRank](t.Context(), client, render.Statement{})
+	rows, err = rasql.QueryRendered[renderedRank](t.Context(), db, render.Statement{})
 	require.Nil(t, rows)
 	require.ErrorContains(t, err, "rasql: statement SQL must not be empty")
 }

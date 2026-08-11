@@ -29,12 +29,12 @@ func Example_rasql_typed_static_template() {
 	defer func() { _ = database.Close() }()
 	database.SetMaxOpenConns(1)
 
-	client, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, client, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -43,7 +43,7 @@ func Example_rasql_typed_static_template() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		if _, err := rasql.Insert(ctx, client, users, user); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -69,7 +69,7 @@ func Example_rasql_typed_static_template() {
 		return
 	}
 	// SQL: WITH ranked_users AS (SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank FROM users) SELECT id, email, rank FROM ranked_users WHERE id >= ? ORDER BY rank (argument: 2)
-	rows, err := rasql.QueryRenderedAll[rankedUser](ctx, client, statement)
+	rows, err := rasql.QueryRenderedAll[rankedUser](ctx, db, statement)
 	if err != nil {
 		fmt.Printf("failed to query ranked users: %s\n", err)
 		return

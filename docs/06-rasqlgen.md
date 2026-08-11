@@ -121,14 +121,14 @@ must use the same supported Go key type as the referenced primary key.
 
 For `orders.user_id REFERENCES users(id)`, `store.Orders().User()` returns
 the belongs-to relation and `store.Users().Orders()` returns its inverse
-has-many relation. Call each relation's `Load` method with the executor and
+has-many relation. Call each relation's `Load` method with the `rasql.DB` and
 the already-fetched rows to perform the batched eager load.
 
 Each relation also has `Join()`, which returns the existing `query.Join` value
 for use with `rasql.SelectFrom` or `rasql.DecodeFrom`. `Load` uses one `IN`
 query for the supplied rows and returns a map keyed by the primary or foreign
 key, so callers can attach the results without an N+1 query loop. Empty input
-returns an empty map without touching the executor.
+returns an empty map without touching the database.
 
 For a self-referential table, the generated relation aliases its joined side
 and rebinds the relation keys, so `Join()` can be used directly without a
@@ -280,7 +280,7 @@ The input is a static template, so it holds SQL text plus `{{bind "name"}}` acti
 SELECT id, email FROM users WHERE email = {{bind "email"}}
 ```
 
-The generated function takes one parameter per distinct bind name, in the order the names first appear, and returns the statement ready for `rasql.QueryRendered[T]`, `client.QueryRendered`, or `client.ExecRendered`:
+The generated function takes one parameter per distinct bind name, in the order the names first appear, and returns the statement ready for `rasql.QueryRendered[T]`, `db.QueryRendered`, or `db.ExecRendered`:
 
 ```go
 func UserByEmail(email any) (render.Statement, error)

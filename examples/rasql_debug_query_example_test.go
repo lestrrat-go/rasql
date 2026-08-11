@@ -29,16 +29,16 @@ func Example_rasql_debug_query() {
 	// This example prints the SQL for a typed query without opening a database.
 	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Handle. This
 	// debug Handle lets the example show the generated statement without a database.
-	client, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
+	db, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
 	if err != nil {
-		fmt.Printf("failed to create rasql client: %s\n", err)
+		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
 
 	// users is declared in query_example_tables_test.go with the shape rasqlgen
 	// emits; an application would write store.Users() instead.
 	count := 0
-	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Query(context.Background(), client)
+	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Query(context.Background(), db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

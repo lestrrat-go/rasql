@@ -34,7 +34,7 @@ func deleteUsersTable(t *testing.T) rasql.Table[deleteUser] {
 
 func TestDeleteRejectsNilPredicate(t *testing.T) {
 	users := deleteUsersTable(t)
-	d := clientForBuild(t).Dialect()
+	d := dbForBuild(t).Dialect()
 	var typedNil *query.Binary
 	for _, builder := range []struct {
 		name  string
@@ -79,7 +79,7 @@ func TestDeleteFrom(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		mock.ExpectExec("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1)").
 			WithArgs(42).
@@ -88,7 +88,7 @@ func TestDeleteFrom(t *testing.T) {
 		users := deleteUsersTable(t)
 		id, err := users.Column("id")
 		require.NoError(t, err)
-		result, err := rasql.DeleteFrom(users).WhereEqual(id, 42).Exec(t.Context(), client)
+		result, err := rasql.DeleteFrom(users).WhereEqual(id, 42).Exec(t.Context(), db)
 		require.NoError(t, err)
 		rows, err := result.RowsAffected()
 		require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestDeleteFrom(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		mock.ExpectExec("DELETE FROM \"users\" WHERE (\"users\".\"id\" IN ($1, $2))").
 			WithArgs(1, 2).
@@ -113,7 +113,7 @@ func TestDeleteFrom(t *testing.T) {
 		users := deleteUsersTable(t)
 		id, err := users.Column("id")
 		require.NoError(t, err)
-		result, err := rasql.DeleteFrom(users).WhereIn(id, 1, 2).Exec(t.Context(), client)
+		result, err := rasql.DeleteFrom(users).WhereIn(id, 1, 2).Exec(t.Context(), db)
 		require.NoError(t, err)
 		rows, err := result.RowsAffected()
 		require.NoError(t, err)
@@ -124,7 +124,7 @@ func TestDeleteFrom(t *testing.T) {
 		users := deleteUsersTable(t)
 		id, err := users.Column("id")
 		require.NoError(t, err)
-		_, err = rasql.DeleteFrom(users).WhereIn(id).Build(clientForBuild(t).Dialect())
+		_, err = rasql.DeleteFrom(users).WhereIn(id).Build(dbForBuild(t).Dialect())
 		require.EqualError(t, err, "rasql: IN requires at least one value")
 	})
 
@@ -138,7 +138,7 @@ func TestDeleteFrom(t *testing.T) {
 		archivedID, err := other.Column("id")
 		require.NoError(t, err)
 
-		_, err = rasql.DeleteFrom(deleteUsersTable(t)).WhereIn(archivedID, 1).Build(clientForBuild(t).Dialect())
+		_, err = rasql.DeleteFrom(deleteUsersTable(t)).WhereIn(archivedID, 1).Build(dbForBuild(t).Dialect())
 		require.ErrorContains(t, err, "archived_users")
 	})
 
@@ -148,14 +148,14 @@ func TestDeleteFrom(t *testing.T) {
 		require.NoError(t, err)
 		statement, err := rasql.DeleteFrom(users).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t, "DELETE FROM \"users\" WHERE (\"users\".\"email\" = $1)", statement.SQL())
 		require.Equal(t, []any{"ada@example.com"}, statement.Args())
 	})
 
 	t.Run("no predicate is rejected at Build", func(t *testing.T) {
-		_, err := rasql.DeleteFrom(deleteUsersTable(t)).Build(clientForBuild(t).Dialect())
+		_, err := rasql.DeleteFrom(deleteUsersTable(t)).Build(dbForBuild(t).Dialect())
 		require.ErrorContains(t, err, "requires a WHERE predicate or an explicit AllowAll")
 	})
 
@@ -168,10 +168,10 @@ func TestDeleteFrom(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 
-		_, err = rasql.DeleteFrom(deleteUsersTable(t)).Exec(t.Context(), client)
+		_, err = rasql.DeleteFrom(deleteUsersTable(t)).Exec(t.Context(), db)
 		require.ErrorContains(t, err, "requires a WHERE predicate or an explicit AllowAll")
 	})
 
@@ -180,14 +180,14 @@ func TestDeleteFrom(t *testing.T) {
 		id, err := users.Column("id")
 		require.NoError(t, err)
 
-		statement, err := rasql.DeleteFrom(users).WhereIn(id, 1, 2).Build(clientForBuild(t).Dialect())
+		statement, err := rasql.DeleteFrom(users).WhereIn(id, 1, 2).Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t, "DELETE FROM \"users\" WHERE (\"users\".\"id\" IN ($1, $2))", statement.SQL())
 		require.Equal(t, []any{1, 2}, statement.Args())
 	})
 
 	t.Run("AllowAll builds a full-table delete", func(t *testing.T) {
-		statement, err := rasql.DeleteFrom(deleteUsersTable(t)).AllowAll().Build(clientForBuild(t).Dialect())
+		statement, err := rasql.DeleteFrom(deleteUsersTable(t)).AllowAll().Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t, "DELETE FROM \"users\"", statement.SQL())
 		require.Empty(t, statement.Args())
@@ -202,12 +202,12 @@ func TestDeleteFrom(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		mock.ExpectExec("DELETE FROM \"users\"").
 			WillReturnResult(sqlmock.NewResult(0, 3))
 
-		result, err := rasql.DeleteFrom(deleteUsersTable(t)).AllowAll().Exec(t.Context(), client)
+		result, err := rasql.DeleteFrom(deleteUsersTable(t)).AllowAll().Exec(t.Context(), db)
 		require.NoError(t, err)
 		rows, err := result.RowsAffected()
 		require.NoError(t, err)
@@ -220,17 +220,17 @@ func TestDeleteFrom(t *testing.T) {
 		require.NoError(t, err)
 
 		t.Run("AllowAll then WhereEqual", func(t *testing.T) {
-			_, err := rasql.DeleteFrom(users).AllowAll().WhereEqual(id, 42).Build(clientForBuild(t).Dialect())
+			_, err := rasql.DeleteFrom(users).AllowAll().WhereEqual(id, 42).Build(dbForBuild(t).Dialect())
 			require.ErrorContains(t, err, "must not be combined")
 		})
 
 		t.Run("WhereEqual then AllowAll", func(t *testing.T) {
-			_, err := rasql.DeleteFrom(users).WhereEqual(id, 42).AllowAll().Build(clientForBuild(t).Dialect())
+			_, err := rasql.DeleteFrom(users).WhereEqual(id, 42).AllowAll().Build(dbForBuild(t).Dialect())
 			require.ErrorContains(t, err, "must not be combined")
 		})
 
 		t.Run("WhereIn then AllowAll", func(t *testing.T) {
-			_, err := rasql.DeleteFrom(users).WhereIn(id, 42).AllowAll().Build(clientForBuild(t).Dialect())
+			_, err := rasql.DeleteFrom(users).WhereIn(id, 42).AllowAll().Build(dbForBuild(t).Dialect())
 			require.ErrorContains(t, err, "must not be combined")
 		})
 	})
@@ -245,7 +245,7 @@ func TestDeleteFrom(t *testing.T) {
 		archivedID, err := other.Column("id")
 		require.NoError(t, err)
 
-		_, err = rasql.DeleteFrom(deleteUsersTable(t)).WhereEqual(archivedID, 1).Build(clientForBuild(t).Dialect())
+		_, err = rasql.DeleteFrom(deleteUsersTable(t)).WhereEqual(archivedID, 1).Build(dbForBuild(t).Dialect())
 		require.ErrorContains(t, err, "archived_users")
 	})
 
@@ -258,7 +258,7 @@ func TestDeleteFrom(t *testing.T) {
 		statement, err := rasql.DeleteFrom(users).
 			Where(query.Equal(id, query.Bind(42))).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`DELETE FROM "users" WHERE (("users"."id" = $1) AND ("users"."email" = $2))`,
@@ -275,7 +275,7 @@ func TestDeleteFrom(t *testing.T) {
 		statement, err := rasql.DeleteFrom(users).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
 			WhereEqual(id, 42).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`DELETE FROM "users" WHERE (("users"."email" = $1) AND ("users"."id" = $2))`,
@@ -292,7 +292,7 @@ func TestDeleteFrom(t *testing.T) {
 		statement, err := rasql.DeleteFrom(users).
 			WhereEqual(email, "ada@example.com").
 			WhereIn(id, 1, 2).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(t,
 			`DELETE FROM "users" WHERE (("users"."email" = $1) AND ("users"."id" IN ($2, $3)))`,
@@ -318,7 +318,7 @@ func TestDeleteFrom(t *testing.T) {
 		first := base.Where(query.Equal(email, query.Bind("ada@example.com")))
 		second := base.Where(query.Equal(email, query.Bind("bob@example.com")))
 
-		d := clientForBuild(t).Dialect()
+		d := dbForBuild(t).Dialect()
 		firstStatement, err := first.Build(d)
 		require.NoError(t, err)
 		secondStatement, err := second.Build(d)
@@ -347,7 +347,7 @@ func TestDeleteFrom(t *testing.T) {
 		_, err = rasql.DeleteFrom(users).
 			WhereEqual(id, 1).
 			WhereEqual(archivedID, 1).
-			Build(clientForBuild(t).Dialect())
+			Build(dbForBuild(t).Dialect())
 		require.ErrorContains(t, err, "archived_users")
 	})
 
@@ -355,7 +355,7 @@ func TestDeleteFrom(t *testing.T) {
 		users := deleteUsersTable(t)
 		id, err := users.Column("id")
 		require.NoError(t, err)
-		d := clientForBuild(t).Dialect()
+		d := dbForBuild(t).Dialect()
 		fromQuery, err := rasql.DeleteFromRef(users.Ref()).WhereEqual(id, 42).Build(d)
 		require.NoError(t, err)
 		typed, err := rasql.DeleteFrom(users).WhereEqual(id, 42).Build(d)
@@ -380,7 +380,7 @@ func TestDeleteReturningBuild(t *testing.T) {
 	statement, err := rasql.DeleteFrom(users).
 		WhereEqual(id, 42).
 		Returning(query.Project(id), query.Project(email)).
-		Build(clientForBuild(t).Dialect())
+		Build(dbForBuild(t).Dialect())
 	require.NoError(t, err)
 	require.Equal(t, `DELETE FROM "users" WHERE ("users"."id" = $1) RETURNING "id", "email"`, statement.SQL())
 	require.Equal(t, []any{42}, statement.Args())
@@ -395,7 +395,7 @@ func TestDeleteReturningQuery(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users := deleteUsersTable(t)
 	id, err := users.Column("id")
@@ -409,7 +409,7 @@ func TestDeleteReturningQuery(t *testing.T) {
 	sequence, err := rasql.DeleteFrom(users).
 		WhereEqual(id, 42).
 		Returning(query.Project(id), query.Project(email)).
-		Query(t.Context(), client)
+		Query(t.Context(), db)
 	rows := collectRows(t, sequence, err)
 	require.Len(t, rows, 1)
 	idColumn, err := row.Int64("id")
@@ -434,7 +434,7 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users := deleteUsersTable(t)
 		id, err := users.Column("id")
@@ -447,7 +447,7 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 
 		rows, err := rasql.QueryDeleteAll[deleteUser](
 			t.Context(),
-			client,
+			db,
 			rasql.DeleteFrom(users).WhereEqual(id, 42).Returning(query.Project(id), query.Project(email)),
 		)
 		require.NoError(t, err)
@@ -463,7 +463,7 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 
-		client, err := rasql.New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users := deleteUsersTable(t)
 		id, err := users.Column("id")
@@ -476,7 +476,7 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 
 		user, err := rasql.QueryDeleteOne[deleteUser](
 			t.Context(),
-			client,
+			db,
 			rasql.DeleteFrom(users).WhereEqual(id, 42).Returning(query.Project(id), query.Project(email)),
 		)
 		require.NoError(t, err)
@@ -505,8 +505,8 @@ func TestDeleteReturningRequiresProjection(t *testing.T) {
 	require.EqualError(t, err, "rasql: RETURNING requires at least one projection")
 }
 
-// clientForBuild returns a client that renders statements without executing them.
-func clientForBuild(t *testing.T) rasql.Client {
+// dbForBuild returns a DB that renders statements without executing them.
+func dbForBuild(t *testing.T) rasql.DB {
 	t.Helper()
 
 	database, mock, err := sqlmock.New()
@@ -515,7 +515,7 @@ func clientForBuild(t *testing.T) rasql.Client {
 		mock.ExpectClose()
 		require.NoError(t, database.Close())
 	})
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	return client
+	return db
 }

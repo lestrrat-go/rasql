@@ -180,23 +180,23 @@ func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (render.Statement, error
 }
 
 // Query returns a rangeable sequence that decodes each result row as T.
-func (b TypedSelectBuilder[T]) Query(ctx context.Context, x Executor) (iter.Seq2[T, error], error) {
-	if isNil(x) {
-		return nil, fmt.Errorf("rasql: executor must not be nil")
+func (b TypedSelectBuilder[T]) Query(ctx context.Context, db DB) (iter.Seq2[T, error], error) {
+	if err := db.valid(); err != nil {
+		return nil, err
 	}
-	statement, err := b.builder.Build(x.Dialect())
+	statement, err := b.builder.Build(db.Dialect())
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
 	if b.staticScan {
-		return scanTypedRenderedStatic[T](ctx, x, statement), nil
+		return scanTypedRenderedStatic[T](ctx, db, statement), nil
 	}
-	return scanTypedRendered[T](ctx, x, statement), nil
+	return scanTypedRendered[T](ctx, db, statement), nil
 }
 
 // All collects every row from Query.
-func (b TypedSelectBuilder[T]) All(ctx context.Context, x Executor) ([]T, error) {
-	rows, err := b.Query(ctx, x)
+func (b TypedSelectBuilder[T]) All(ctx context.Context, db DB) ([]T, error) {
+	rows, err := b.Query(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -209,16 +209,16 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context, x Executor) ([]T, error)
 // then page a copy of it for the rows.
 // Like [TypedSelectBuilder.One], it reports [ErrNoRows] or [ErrMultipleRows]
 // when the database returns anything other than the one row COUNT(*) produces.
-func (b TypedSelectBuilder[T]) Count(ctx context.Context, x Executor) (int64, error) {
-	return b.builder.Count(ctx, x)
+func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) {
+	return b.builder.Count(ctx, db)
 }
 
 // One returns exactly one row from Query.
 // It returns [ErrNoRows] when the statement matched no rows and
 // [ErrMultipleRows] when it matched more than one.
-func (b TypedSelectBuilder[T]) One(ctx context.Context, x Executor) (T, error) {
+func (b TypedSelectBuilder[T]) One(ctx context.Context, db DB) (T, error) {
 	var zero T
-	rows, err := b.Query(ctx, x)
+	rows, err := b.Query(ctx, db)
 	if err != nil {
 		return zero, err
 	}

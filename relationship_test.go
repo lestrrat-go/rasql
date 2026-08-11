@@ -37,7 +37,7 @@ func TestLoadHasManyGroupsRowsByParentKey(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	_, err = rasql.TableOf[relationshipUser](schema.TableDef{
 		Name:       "users",
@@ -58,7 +58,7 @@ func TestLoadHasManyGroupsRowsByParentKey(t *testing.T) {
 		WithArgs(int64(1), int64(2)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).AddRow(int64(10), int64(1)).AddRow(int64(11), int64(1)).AddRow(int64(20), int64(2)))
 
-	loaded, err := rasql.LoadHasMany(t.Context(), client, orders, userID,
+	loaded, err := rasql.LoadHasMany(t.Context(), db, orders, userID,
 		[]relationshipUser{{ID: 1}, {ID: 2}, {ID: 1}},
 		func(user relationshipUser) int64 { return user.ID },
 		func(order relationshipOrder) int64 { return order.UserID },
@@ -79,7 +79,7 @@ func TestLoadBelongsToGroupsRowsByForeignKey(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users, err := rasql.TableOf[relationshipUser](schema.TableDef{
 		Name:       "users",
@@ -94,7 +94,7 @@ func TestLoadBelongsToGroupsRowsByForeignKey(t *testing.T) {
 		WithArgs(int64(1), int64(2)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)).AddRow(int64(2)))
 
-	loaded, err := rasql.LoadBelongsTo(t.Context(), client, users, userID,
+	loaded, err := rasql.LoadBelongsTo(t.Context(), db, users, userID,
 		[]relationshipOrder{{ID: 10, UserID: 1}, {ID: 11, UserID: 1}, {ID: 20, UserID: 2}},
 		func(order relationshipOrder) int64 { return order.UserID },
 		func(user relationshipUser) int64 { return user.ID },
@@ -112,7 +112,7 @@ func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	client, err := rasql.New(database, dialect.MySQL())
+	db, err := rasql.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	users, err := rasql.TableOf[unsignedRelationshipUser](schema.TableDef{
 		Name:       "users",
@@ -140,7 +140,7 @@ func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
 		WithArgs(keyText).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
-	hasMany, err := rasql.LoadHasMany(t.Context(), client, orders, orderUserID,
+	hasMany, err := rasql.LoadHasMany(t.Context(), db, orders, orderUserID,
 		[]unsignedRelationshipUser{{ID: key}},
 		func(user unsignedRelationshipUser) uint64 { return user.ID },
 		func(order unsignedRelationshipOrder) uint64 { return order.UserID },
@@ -154,7 +154,7 @@ func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
 		WithArgs(keyText).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
-	belongsTo, err := rasql.LoadBelongsTo(t.Context(), client, users, userID,
+	belongsTo, err := rasql.LoadBelongsTo(t.Context(), db, users, userID,
 		[]unsignedRelationshipOrder{{ID: 10, UserID: key}},
 		func(order unsignedRelationshipOrder) uint64 { return order.UserID },
 		func(user unsignedRelationshipUser) uint64 { return user.ID },
@@ -181,8 +181,10 @@ func TestLoadRelationshipsSkipsEmptyInput(t *testing.T) {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
+	// A zero DB proves the empty input short-circuits before either loader
+	// looks at the database at all.
 	hasMany, err := rasql.LoadHasMany[relationshipUser, relationshipOrder, int64](
-		t.Context(), nil, orders, orderUserID, nil,
+		t.Context(), rasql.DB{}, orders, orderUserID, nil,
 		func(user relationshipUser) int64 { return user.ID },
 		func(order relationshipOrder) int64 { return order.UserID },
 	)
@@ -190,7 +192,7 @@ func TestLoadRelationshipsSkipsEmptyInput(t *testing.T) {
 	require.Empty(t, hasMany)
 
 	belongsTo, err := rasql.LoadBelongsTo[relationshipOrder, relationshipUser, int64](
-		t.Context(), nil, users, userID, nil,
+		t.Context(), rasql.DB{}, users, userID, nil,
 		func(order relationshipOrder) int64 { return order.UserID },
 		func(user relationshipUser) int64 { return user.ID },
 	)
