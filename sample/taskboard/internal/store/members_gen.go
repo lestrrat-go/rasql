@@ -99,10 +99,12 @@ func newMembersTable(table rasql.Table[MembersRow]) MembersTable {
 }
 
 var membersTable = newMembersTable(rasql.MustTableOf[MembersRow](schema.MustTable("members",
+	schema.InSchema("main"),
 	schema.Integer("id"),
 	schema.Text("name"),
 	schema.Text("email"),
 	schema.PrimaryKey("id"),
+	schema.Unique("email"),
 )))
 
 // Members returns the descriptor for the "members" table.

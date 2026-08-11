@@ -8,7 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lestrrat-go/rasql-mysql v0.0.0-20260803090041-496b40acb82a
 	github.com/lestrrat-go/rasql-pg v0.0.0-20260803045404-7e3faf0c19bd
-	github.com/lestrrat-go/rasql-sqlite v0.0.0-20260803093924-08502c4f05f3
+	github.com/lestrrat-go/rasql-sqlite v0.0.0-20260811104459-ee943b3c3228
 	github.com/stretchr/testify v1.11.1
 	modernc.org/sqlite v1.55.0
 )
