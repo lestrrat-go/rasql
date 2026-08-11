@@ -157,7 +157,7 @@ func newDefaultUsersTable(table rasql.Table[defaultUserRow]) defaultUsersTable {
 	}
 }
 
-var defaultUsers = newDefaultUsersTable(rasql.MustTableOf[defaultUserRow](schema.MustTable("default_users",
+var defaultUsers = newDefaultUsersTable(rasql.MustTableOf[defaultUserRow](schema.MustTableDef("default_users",
 	schema.Integer("id"),
 	schema.Text("email"),
 	schema.Text("status", schema.Default("'pending'")),

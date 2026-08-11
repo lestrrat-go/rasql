@@ -98,7 +98,7 @@ func newMembersTable(table rasql.Table[MembersRow]) MembersTable {
 	}
 }
 
-var membersTable = newMembersTable(rasql.MustTableOf[MembersRow](schema.MustTable("members",
+var membersTable = newMembersTable(rasql.MustTableOf[MembersRow](schema.MustTableDef("members",
 	schema.InSchema("main"),
 	schema.Integer("id"),
 	schema.Text("name"),

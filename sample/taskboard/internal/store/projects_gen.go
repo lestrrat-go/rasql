@@ -112,14 +112,14 @@ func newProjectsTable(table rasql.Table[ProjectsRow]) ProjectsTable {
 	}
 }
 
-var projectsTable = newProjectsTable(rasql.MustTableOf[ProjectsRow](schema.MustTable("projects",
+var projectsTable = newProjectsTable(rasql.MustTableOf[ProjectsRow](schema.MustTableDef("projects",
 	schema.InSchema("main"),
 	schema.Integer("id"),
 	schema.Integer("owner_id"),
 	schema.Text("name"),
 	schema.Boolean("archived", schema.Default("FALSE")),
 	schema.PrimaryKey("id"),
-	schema.ForeignKey("owner_id", schema.References("members", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.As("Owner")),
+	schema.ForeignKey("owner_id", schema.References("members", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.RelationshipNamed("Owner")),
 )))
 
 // Projects returns the descriptor for the "projects" table.

@@ -231,7 +231,7 @@ func Example_rasql_scalar_function() {
 		ID   int64
 		Name string
 	}
-	members := rasql.MustTableOf[memberRow](schema.MustTable("members",
+	members := rasql.MustTableOf[memberRow](schema.MustTableDef("members",
 		schema.Integer("id"),
 		schema.Text("email"),
 		schema.Text("nickname", schema.Nullable()),
@@ -627,7 +627,7 @@ func Example_rasql_subquery() {
 		UserID int64
 		Amount int64
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("user_id"),
 		schema.Integer("amount"),
@@ -874,7 +874,7 @@ func Example_rasql_group_by() {
 		Status string
 		Total  int64
 	}
-	tasks := rasql.MustTableOf[taskRow](schema.MustTable("tasks",
+	tasks := rasql.MustTableOf[taskRow](schema.MustTableDef("tasks",
 		schema.Integer("id"),
 		schema.Text("status"),
 		schema.PrimaryKey("id"),
@@ -989,7 +989,7 @@ func Example_rasql_distinct() {
 	type orderingUser struct {
 		UserID int64 `rasql:"user_id"`
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("user_id"),
 		schema.PrimaryKey("id"),
@@ -1138,7 +1138,7 @@ func Example_rasql_dynamic_projection() {
 		UserID int64
 		Email  string
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("user_id"),
 		schema.Integer("total"),

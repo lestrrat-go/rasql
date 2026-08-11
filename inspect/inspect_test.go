@@ -218,7 +218,7 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	require.Contains(t, string(source), `schema.CheckNamed("chk_users_email", "email <> ''")`)
 	require.Contains(t, string(source), `schema.Index("users_email_idx", "email")`)
 	require.Contains(t, string(source), `schema.UniqueIndex("users_tenant_email_idx", "tenant_id", "email")`)
-	require.Contains(t, string(source), `schema.ForeignKeyOn([]string{"account_id", "tenant_id"}, schema.Named("fk_users_account"), schema.References("accounts", "id", "tenant_id"), schema.OnDelete(schema.Cascade), schema.OnUpdate(schema.NoAction), schema.As("Account"))`)
+	require.Contains(t, string(source), `schema.ForeignKeyOn([]string{"account_id", "tenant_id"}, schema.Named("fk_users_account"), schema.References("accounts", "id", "tenant_id"), schema.OnDelete(schema.Cascade), schema.OnUpdate(schema.NoAction), schema.RelationshipNamed("Account"))`)
 }
 
 func TestPostgreSQLInspectorRejectsReplicaIdentityIndex(t *testing.T) {

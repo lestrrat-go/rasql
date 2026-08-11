@@ -1,12 +1,12 @@
 // Package schema defines dialect-neutral database schema descriptors.
 //
-// Build a TableDef with NewTable or MustTable: a column constructor such as
-// Integer or Text and a constraint constructor such as PrimaryKey, Unique,
-// Check, Index, or ForeignKey each return a TableOption, and NewTable
-// assembles them into a descriptor in any order. This is the recommended way
-// to describe a table by hand, and it covers everything a struct literal
-// does: a composite foreign key, a named unique constraint or check, and a
-// unique index each have their own option-form constructor.
+// Build a TableDef with NewTableDef or MustTableDef: a column constructor
+// such as Integer or Text and a constraint constructor such as PrimaryKey,
+// Unique, Check, Index, or ForeignKey each return a TableOption, and
+// NewTableDef assembles them into a descriptor in any order. This is the
+// recommended way to describe a table by hand, and it covers everything a
+// struct literal does: a composite foreign key, a named unique constraint or
+// check, and a unique index each have their own option-form constructor.
 //
 // TableDef is also the descriptor itself, and building one directly with a
 // keyed composite literal remains fully supported: it is what inspect

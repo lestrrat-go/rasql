@@ -41,7 +41,7 @@ func Example_rasql_distinct() {
 	type orderingUser struct {
 		UserID int64 `rasql:"user_id"`
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("user_id"),
 		schema.PrimaryKey("id"),

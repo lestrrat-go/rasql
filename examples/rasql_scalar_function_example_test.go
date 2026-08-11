@@ -44,7 +44,7 @@ func Example_rasql_scalar_function() {
 		ID   int64
 		Name string
 	}
-	members := rasql.MustTableOf[memberRow](schema.MustTable("members",
+	members := rasql.MustTableOf[memberRow](schema.MustTableDef("members",
 		schema.Integer("id"),
 		schema.Text("email"),
 		schema.Text("nickname", schema.Nullable()),

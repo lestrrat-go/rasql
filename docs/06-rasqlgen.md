@@ -93,7 +93,7 @@ func newUsersTable(table rasql.Table[UsersRow]) UsersTable {
 	}
 }
 
-var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable("users" /* … */)))
+var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef("users" /* … */)))
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {

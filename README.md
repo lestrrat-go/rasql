@@ -77,7 +77,7 @@ type UsersTable struct {
 	Email query.ColumnRef
 }
 
-var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTable("users" /* … */)))
+var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef("users" /* … */)))
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {
