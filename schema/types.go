@@ -1,12 +1,15 @@
 // Package schema defines dialect-neutral database schema descriptors.
 //
-// Every exported descriptor struct in this package is built with a keyed
-// composite literal, and every literal of one in this repository is keyed.
-// These structs gain fields as the descriptor model grows, and a new field is
-// placed next to the fields it belongs with rather than appended at the end:
-// Table.Schema and ForeignKey.ReferencedSchema were each inserted ahead of
-// existing fields. An unkeyed composite literal matches fields by position and
-// must list every one of them, so it is not a supported way to build a
+// A Table is built either with NewTable or MustTable, which assemble a
+// descriptor from Column and constraint options such as Integer, PrimaryKey,
+// and ForeignKey, or with a keyed composite literal. Every exported
+// descriptor struct in this package accepts a keyed composite literal, and
+// every literal of one in this repository is keyed. These structs gain
+// fields as the descriptor model grows, and a new field is placed next to
+// the fields it belongs with rather than appended at the end: Table.Schema
+// and ForeignKeyDef.ReferencedSchema were each inserted ahead of existing
+// fields. An unkeyed composite literal matches fields by position and must
+// list every one of them, so it is not a supported way to build a
 // descriptor.
 package schema
 
@@ -16,16 +19,16 @@ import "fmt"
 type ReferenceAction string
 
 const (
-	ReferenceActionNoAction   ReferenceAction = "NO ACTION"
-	ReferenceActionRestrict   ReferenceAction = "RESTRICT"
-	ReferenceActionCascade    ReferenceAction = "CASCADE"
-	ReferenceActionSetNull    ReferenceAction = "SET NULL"
-	ReferenceActionSetDefault ReferenceAction = "SET DEFAULT"
+	NoAction   ReferenceAction = "NO ACTION"
+	Restrict   ReferenceAction = "RESTRICT"
+	Cascade    ReferenceAction = "CASCADE"
+	SetNull    ReferenceAction = "SET NULL"
+	SetDefault ReferenceAction = "SET DEFAULT"
 )
 
 func (a ReferenceAction) valid() bool {
 	switch a {
-	case "", ReferenceActionNoAction, ReferenceActionRestrict, ReferenceActionCascade, ReferenceActionSetNull, ReferenceActionSetDefault:
+	case "", NoAction, Restrict, Cascade, SetNull, SetDefault:
 		return true
 	default:
 		return false

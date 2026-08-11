@@ -225,7 +225,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
@@ -454,7 +454,7 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              "orders_user_id_fkey",
 			Columns:           []string{"user_id"},
 			ReferencedSchema:  "tenant",
@@ -509,7 +509,7 @@ func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 			{Name: "shipping_user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{
+		ForeignKeys: []schema.ForeignKeyDef{
 			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 		},
@@ -532,7 +532,7 @@ func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
 		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
-	generateSource := func(foreignKeys []schema.ForeignKey) string {
+	generateSource := func(foreignKeys []schema.ForeignKeyDef) string {
 		memberships := schema.Table{
 			Name: "memberships",
 			Columns: []schema.Column{
@@ -547,14 +547,14 @@ func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
 		require.NoError(t, err)
 		return string(source)
 	}
-	foreignKeys := []schema.ForeignKey{
+	foreignKeys := []schema.ForeignKeyDef{
 		{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 		{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 	}
 
 	for _, source := range []string{
 		generateSource(foreignKeys),
-		generateSource([]schema.ForeignKey{foreignKeys[1], foreignKeys[0]}),
+		generateSource([]schema.ForeignKeyDef{foreignKeys[1], foreignKeys[0]}),
 	} {
 		memberships := generatedMethodBlock(t, source, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
 		require.Contains(t, memberships, "ChildKey: child.BillingUserID")
@@ -571,7 +571,7 @@ func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
 			{Name: "manager_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"manager_id"},
 			ReferencedTable:   "employees",
 			ReferencedColumns: []string{"id"},
@@ -594,7 +594,7 @@ func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
 			{Name: "manager_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"manager_id"},
 			ReferencedTable:   "employees",
 			ReferencedColumns: []string{"id"},
@@ -634,7 +634,7 @@ func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
@@ -674,7 +674,7 @@ func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
 			{Name: "shipping_user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{
+		ForeignKeys: []schema.ForeignKeyDef{
 			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
 		},
@@ -790,7 +790,7 @@ func TestSchemaRejectsCollidingRelationshipMethodNames(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
@@ -862,7 +862,7 @@ func TestSchemaRejectsRelationshipTypeCollisions(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
@@ -892,7 +892,7 @@ func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
@@ -923,7 +923,7 @@ func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
 			{Name: "as_id", Type: schema.IntegerType{}, Nullable: true},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"as_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},

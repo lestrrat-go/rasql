@@ -28,14 +28,14 @@ func TestCreateTableRendersDialectTypesAndConstraints(t *testing.T) {
 			Name:       "orders_id_check",
 			Expression: "id > 0",
 		}},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              "orders_customer_fk",
 			Columns:           []string{"customer_id"},
 			ReferencedTable:   "customers",
 			ReferencedColumns: []string{"id"},
-			OnDelete:          schema.ReferenceActionCascade,
+			OnDelete:          schema.Cascade,
 		}},
-		Indexes: []schema.Index{{
+		Indexes: []schema.IndexDef{{
 			Name:    "orders_customer_idx",
 			Columns: []string{"customer_id"},
 		}},
@@ -193,13 +193,13 @@ func TestCreateTableRendersQualifiedForeignKey(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              "events_user_id_fkey",
 			Columns:           []string{"user_id"},
 			ReferencedSchema:  "tenant",
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
-			OnDelete:          schema.ReferenceActionCascade,
+			OnDelete:          schema.Cascade,
 		}},
 	}
 
@@ -217,13 +217,13 @@ func TestCreateTableRendersQualifiedForeignKey(t *testing.T) {
 	require.ErrorContains(t, err, `"audit"`)
 
 	sameSchema := crossSchema
-	sameSchema.ForeignKeys = []schema.ForeignKey{{
+	sameSchema.ForeignKeys = []schema.ForeignKeyDef{{
 		Name:              "events_user_id_fkey",
 		Columns:           []string{"user_id"},
 		ReferencedSchema:  "audit",
 		ReferencedTable:   "users",
 		ReferencedColumns: []string{"id"},
-		OnDelete:          schema.ReferenceActionCascade,
+		OnDelete:          schema.Cascade,
 	}}
 	rendered, err = render.CreateTable(dialect.SQLite(), sameSchema)
 	require.NoError(t, err)
@@ -247,7 +247,7 @@ func TestCreateIndexRendersDialectQualifierPosition(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		Indexes: []schema.Index{
+		Indexes: []schema.IndexDef{
 			{Name: "events_user_id_idx", Columns: []string{"user_id"}},
 			{Name: "events_user_id_uidx", Columns: []string{"user_id"}, Unique: true},
 		},
@@ -332,14 +332,14 @@ func TestUnqualifiedDDLIsUnchanged(t *testing.T) {
 			Name:       "orders_id_check",
 			Expression: "id > 0",
 		}},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              "orders_customer_fk",
 			Columns:           []string{"customer_id"},
 			ReferencedTable:   "customers",
 			ReferencedColumns: []string{"id"},
-			OnDelete:          schema.ReferenceActionCascade,
+			OnDelete:          schema.Cascade,
 		}},
-		Indexes: []schema.Index{{
+		Indexes: []schema.IndexDef{{
 			Name:    "orders_customer_idx",
 			Columns: []string{"customer_id"},
 		}},
@@ -433,7 +433,7 @@ func TestSQLiteExecutesQualifiedDDL(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		Indexes: []schema.Index{
+		Indexes: []schema.IndexDef{
 			{Name: "events_user_id_idx", Columns: []string{"user_id"}},
 			{Name: "events_user_id_uidx", Columns: []string{"user_id"}, Unique: true},
 		},

@@ -635,7 +635,7 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
-		Indexes: []schema.Index{{
+		Indexes: []schema.IndexDef{{
 			Name:    "users_email_idx",
 			Columns: []string{"email"},
 		}},

@@ -44,6 +44,106 @@ func Example_schema_table_definition() {
 source: [examples/schema_table_definition_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_example_test.go)
 <!-- END INCLUDE -->
 
+## Describe a table with constructors and options
+
+A struct literal repeats every column name across `PrimaryKey`, `Indexes`,
+`UniqueConstraints`, and `ForeignKeys`. `schema.NewTable` and `schema.MustTable`
+build the same kind of descriptor from a table name and a list of
+`schema.TableOption` values instead: a column constructor such as
+`schema.Integer` or `schema.Text` and a constraint constructor such as
+`schema.PrimaryKey`, `schema.Unique`, `schema.Check`, `schema.Index`, or
+`schema.ForeignKey` are each a `TableOption`, so they may appear in any order.
+`NewTable` collects the columns and constraints each option declares and
+assembles them into a `Table` afterward, which is what makes the order
+harmless: `schema.PrimaryKey("id")` may appear before `schema.Integer("id")`
+declares the column it names.
+
+<!-- INCLUDE(examples/schema_table_definition_options_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/schema"
+)
+
+func Example_schema_table_definition_options() {
+	// This example defines the same kind of reusable table descriptor as
+	// Example_schema_table_definition, built with schema.MustTable instead of
+	// a struct literal. A column constructor such as schema.Integer and a
+	// constraint constructor such as schema.PrimaryKey each return a
+	// schema.TableOption, so they may appear in any order: PrimaryKey names
+	// "id" below before Integer declares it, and the assembled descriptor is
+	// the same either way.
+	users := schema.MustTable("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.Text("nickname", schema.Nullable()),
+		schema.Time("created_at", schema.Default("CURRENT_TIMESTAMP")),
+		schema.Decimal("balance", 19, 4),
+		schema.PrimaryKey("id"),
+		schema.Unique("email"),
+		schema.Index("users_email_idx", "email"),
+		schema.Check("balance >= 0"),
+	)
+
+	// A foreign key's Named, References, and OnDelete options configure the
+	// constraint itself. As additionally derives the belongs-to
+	// schema.Relationship that rasqlgen would otherwise name on its own from
+	// the local column, letting the generated method read orders.Buyer()
+	// rather than orders.Customer().
+	orders := schema.MustTable("orders",
+		schema.Integer("id"),
+		schema.Integer("customer_id"),
+		schema.PrimaryKey("id"),
+		schema.ForeignKey("customer_id",
+			schema.Named("orders_customer_fkey"),
+			schema.References("customers", "id"),
+			schema.OnDelete(schema.Cascade),
+			schema.As("buyer")),
+	)
+
+	fmt.Printf("%s: %d columns, primary key %v\n", users.Name, len(users.Columns), users.PrimaryKey)
+	fmt.Printf("%s: foreign key %s references %s, relationship %q\n",
+		orders.Name, orders.ForeignKeys[0].Name, orders.ForeignKeys[0].ReferencedTable, orders.Relationships[0].Name)
+
+	// Output:
+	// users: 5 columns, primary key [id]
+	// orders: foreign key orders_customer_fkey references customers, relationship "buyer"
+}
+```
+source: [examples/schema_table_definition_options_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_options_example_test.go)
+<!-- END INCLUDE -->
+
+`MustTable` panics on an invalid descriptor and suits a table declared once at
+package initialization, exactly like `rasql.MustTable[T]`; `NewTable` returns
+the error instead, for a descriptor assembled at runtime. Both validate the
+assembled descriptor exactly as `Table.Validate` would validate a struct
+literal, so an unknown primary key column or a duplicate constraint name is
+rejected the same way either form is built.
+
+A column constructor takes zero or more `schema.ColumnOption` values:
+`schema.Nullable()` marks the column nullable, `schema.Default(expr)` states
+its default expression, and `schema.Unsigned()` marks an integer column
+unsigned, rejected on every other column type. `schema.Decimal` takes
+precision and scale as ordinary arguments rather than options, since
+`Table.Validate` requires both anyway. `schema.ForeignKey` takes the single
+local column and a list of `schema.ForeignKeyOption` values: `schema.Named`
+states the constraint name, `schema.References` states the target table and
+columns, `schema.OnDelete` and `schema.OnUpdate` state the reference actions
+(`schema.Cascade`, `schema.Restrict`, `schema.SetNull`, `schema.SetDefault`,
+and `schema.NoAction`), and `schema.As` derives a belongs-to `Relationship`
+alongside it.
+
+The option form covers what a hand-written descriptor typically needs, not
+every shape a struct literal can express. A composite foreign key spanning
+more than one local column, a named unique constraint or check, or a unique
+index all still take a struct literal: `schema.Table{ForeignKeys:
+[]schema.ForeignKeyDef{...}}` and its siblings remain fully supported, and
+`inspect` and `rasqlgen` keep emitting them so that every descriptor they
+produce round-trips exactly.
+
 `schema.Table` carries the table name, its columns, and its constraints:
 
 | Field | Holds |
@@ -74,7 +174,7 @@ Composite keys, nullable foreign keys, nullable or non-primary target columns, m
 
 Qualification reaches DML, column references, and DDL. A `SELECT`, `INSERT`, `UPDATE`, or `DELETE` built from a qualified descriptor renders `"audit"."events"` as its target, a column reached through the unaliased table renders `"audit"."events"."id"`, and `render.CreateTable`, `render.CreateIndexes`, and `rasql.Create` render `CREATE TABLE "audit"."events"` and its indexes into the named namespace on every dialect that can express it. rasql never creates, drops, or connects to the namespace itself: an application that needs `audit` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created, and `rasql.Create` then fails with the server's own error if that namespace does not exist. `inspect` never fills `Schema` in, and [`rasqlgen`](06-rasqlgen.md) never emits one; qualified inspection and generation are not supported yet, so a qualified table is re-read through a hand-written descriptor.
 
-A foreign key that references a table in another schema names it with `ForeignKey.ReferencedSchema`, validated the same way as `Table.Schema` and left empty for the server to resolve, exactly like an empty `Table.Schema`. PostgreSQL and MySQL render a stated `ReferencedSchema` as a second qualified identifier in the `REFERENCES` clause. SQLite cannot: it rejects a schema-qualified `REFERENCES` outright, even when the reference names the referencing table's own schema, so rasql drops a same-schema qualifier there rather than refuse a reference that means the same thing either way, and refuses to render a genuinely cross-schema reference instead of silently pointing it at the wrong table. An unqualified table's foreign keys are unaffected either way: qualifying `Table.Schema` alone, without also stating `ForeignKey.ReferencedSchema`, would let PostgreSQL resolve an unqualified `REFERENCES` through the connection's `search_path` rather than the table's own schema, which is why the two fields ship together.
+A foreign key that references a table in another schema names it with `ForeignKeyDef.ReferencedSchema`, validated the same way as `Table.Schema` and left empty for the server to resolve, exactly like an empty `Table.Schema`. PostgreSQL and MySQL render a stated `ReferencedSchema` as a second qualified identifier in the `REFERENCES` clause. SQLite cannot: it rejects a schema-qualified `REFERENCES` outright, even when the reference names the referencing table's own schema, so rasql drops a same-schema qualifier there rather than refuse a reference that means the same thing either way, and refuses to render a genuinely cross-schema reference instead of silently pointing it at the wrong table. An unqualified table's foreign keys are unaffected either way: qualifying `Table.Schema` alone, without also stating `ForeignKeyDef.ReferencedSchema`, would let PostgreSQL resolve an unqualified `REFERENCES` through the connection's `search_path` rather than the table's own schema, which is why the two fields ship together.
 
 `schema.Table` and `query.Table` each answer two questions about qualification. `Qualified` reports whether a schema is named at all, and `QualifiedName` returns `schema.name` for display, falling back to `name` for an unqualified table. Neither is a SQL identifier: a renderer quotes `Schema` and `Name` as two identifiers, and `dialect.QuoteIdentifier` rejects the dotted string `QualifiedName` returns. On `query.Table` the two describe the table rather than the reference: `Qualified` stays true once the table is aliased, while `QualifiedName` returns the alias, because that is what an error message about an aliased table has to name. `query.Table.QualifierSchema` reports what actually qualifies a rendered column, which is nothing at all once an alias replaces the table's whole name.
 

@@ -189,18 +189,18 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	require.Equal(t, []schema.CheckConstraint{
 		{Name: "chk_users_email", Expression: "email <> ''"},
 	}, table.Checks)
-	require.Equal(t, []schema.Index{
+	require.Equal(t, []schema.IndexDef{
 		{Name: "users_email_idx", Columns: []string{"email"}},
 		{Name: "users_tenant_email_idx", Columns: []string{"tenant_id", "email"}, Unique: true},
 	}, table.Indexes)
-	require.Equal(t, []schema.ForeignKey{
+	require.Equal(t, []schema.ForeignKeyDef{
 		{
 			Name:              "fk_users_account",
 			Columns:           []string{"account_id", "tenant_id"},
 			ReferencedTable:   "accounts",
 			ReferencedColumns: []string{"id", "tenant_id"},
-			OnDelete:          schema.ReferenceActionCascade,
-			OnUpdate:          schema.ReferenceActionNoAction,
+			OnDelete:          schema.Cascade,
+			OnUpdate:          schema.NoAction,
 		},
 	}, table.ForeignKeys)
 
@@ -208,8 +208,8 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(source), "UniqueConstraints: []schema.UniqueConstraint{")
 	require.Contains(t, string(source), "Checks: []schema.CheckConstraint{")
-	require.Contains(t, string(source), "Indexes: []schema.Index{")
-	require.Contains(t, string(source), "ForeignKeys: []schema.ForeignKey{")
+	require.Contains(t, string(source), "Indexes: []schema.IndexDef{")
+	require.Contains(t, string(source), "ForeignKeys: []schema.ForeignKeyDef{")
 }
 
 func TestPostgreSQLInspectorRejectsReplicaIdentityIndex(t *testing.T) {
@@ -355,13 +355,13 @@ func TestPostgreSQLInspectorUsesPostgreSQL14CatalogQueries(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
 	require.Equal(t, []schema.CheckConstraint{{Name: "chk_users_email", Expression: "email <> ''"}}, table.Checks)
-	require.Equal(t, []schema.ForeignKey{{
+	require.Equal(t, []schema.ForeignKeyDef{{
 		Name:              "fk_users_account",
 		Columns:           []string{"id"},
 		ReferencedTable:   "accounts",
 		ReferencedColumns: []string{"id"},
-		OnDelete:          schema.ReferenceActionNoAction,
-		OnUpdate:          schema.ReferenceActionNoAction,
+		OnDelete:          schema.NoAction,
+		OnUpdate:          schema.NoAction,
 	}}, table.ForeignKeys)
 }
 

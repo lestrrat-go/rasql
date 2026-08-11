@@ -110,15 +110,15 @@ type CheckConstraint struct {
 	Expression string
 }
 
-// Index describes an index owned by a table.
-type Index struct {
+// IndexDef describes an index owned by a table.
+type IndexDef struct {
 	Name    string
 	Columns []string
 	Unique  bool
 }
 
-// ForeignKey describes a foreign-key constraint.
-type ForeignKey struct {
+// ForeignKeyDef describes a foreign-key constraint.
+type ForeignKeyDef struct {
 	Name    string
 	Columns []string
 
@@ -163,8 +163,8 @@ type Table struct {
 	PrimaryKey        []string
 	UniqueConstraints []UniqueConstraint
 	Checks            []CheckConstraint
-	Indexes           []Index
-	ForeignKeys       []ForeignKey
+	Indexes           []IndexDef
+	ForeignKeys       []ForeignKeyDef
 	Relationships     []Relationship
 }
 
@@ -196,12 +196,12 @@ func (t Table) Clone() Table {
 		clone.UniqueConstraints[i].Columns = append([]string(nil), constraint.Columns...)
 	}
 	clone.Checks = append([]CheckConstraint(nil), t.Checks...)
-	clone.Indexes = make([]Index, len(t.Indexes))
+	clone.Indexes = make([]IndexDef, len(t.Indexes))
 	for i, index := range t.Indexes {
 		clone.Indexes[i] = index
 		clone.Indexes[i].Columns = append([]string(nil), index.Columns...)
 	}
-	clone.ForeignKeys = make([]ForeignKey, len(t.ForeignKeys))
+	clone.ForeignKeys = make([]ForeignKeyDef, len(t.ForeignKeys))
 	for i, key := range t.ForeignKeys {
 		clone.ForeignKeys[i] = key
 		clone.ForeignKeys[i].Columns = append([]string(nil), key.Columns...)
@@ -288,7 +288,7 @@ func (t Table) Validate() error {
 	return validateRelationships(t.Relationships, t.ForeignKeys, columns)
 }
 
-func validateRelationships(relationships []Relationship, foreignKeys []ForeignKey, columns map[string]struct{}) error {
+func validateRelationships(relationships []Relationship, foreignKeys []ForeignKeyDef, columns map[string]struct{}) error {
 	for i, relationship := range relationships {
 		path := fmt.Sprintf("relationships[%d]", i)
 		if relationship.Name == "" {
@@ -377,7 +377,7 @@ func validateChecks(checks []CheckConstraint, constraintNames map[string]string)
 	return nil
 }
 
-func validateIndexes(indexes []Index, columns map[string]struct{}) error {
+func validateIndexes(indexes []IndexDef, columns map[string]struct{}) error {
 	names := make(map[string]struct{}, len(indexes))
 	for i, index := range indexes {
 		path := fmt.Sprintf("indexes[%d]", i)
@@ -395,7 +395,7 @@ func validateIndexes(indexes []Index, columns map[string]struct{}) error {
 	return nil
 }
 
-func validateForeignKeys(keys []ForeignKey, columns map[string]struct{}, constraintNames map[string]string) error {
+func validateForeignKeys(keys []ForeignKeyDef, columns map[string]struct{}, constraintNames map[string]string) error {
 	for i, key := range keys {
 		path := fmt.Sprintf("foreign_keys[%d]", i)
 		if key.Name != "" {

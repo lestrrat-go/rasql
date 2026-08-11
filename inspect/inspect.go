@@ -545,14 +545,14 @@ func (i Inspector) rejectUnsupportedExclusionConstraints(ctx context.Context, qu
 	return fmt.Errorf("inspect: exclusion constraint %q cannot be represented: rasql does not support exclusion constraints", name)
 }
 
-func (i Inspector) readIndexes(ctx context.Context, query string, argument any) ([]schema.Index, error) {
+func (i Inspector) readIndexes(ctx context.Context, query string, argument any) ([]schema.IndexDef, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read indexes: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var indexes []schema.Index
+	var indexes []schema.IndexDef
 	for rows.Next() {
 		var name string
 		var unique bool
@@ -561,7 +561,7 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any) 
 			return nil, fmt.Errorf("inspect: scan index: %w", err)
 		}
 		if len(indexes) == 0 || indexes[len(indexes)-1].Name != name {
-			indexes = append(indexes, schema.Index{Name: name, Unique: unique})
+			indexes = append(indexes, schema.IndexDef{Name: name, Unique: unique})
 		}
 		indexes[len(indexes)-1].Columns = append(indexes[len(indexes)-1].Columns, column)
 	}
@@ -571,14 +571,14 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any) 
 	return indexes, nil
 }
 
-func (i Inspector) readForeignKeys(ctx context.Context, query string, argument any) ([]schema.ForeignKey, error) {
+func (i Inspector) readForeignKeys(ctx context.Context, query string, argument any) ([]schema.ForeignKeyDef, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read foreign keys: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var keys []schema.ForeignKey
+	var keys []schema.ForeignKeyDef
 	for rows.Next() {
 		var name string
 		var column string
@@ -627,7 +627,7 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 			return nil, fmt.Errorf("inspect: foreign key %q: %w", name, err)
 		}
 		if len(keys) == 0 || keys[len(keys)-1].Name != name {
-			keys = append(keys, schema.ForeignKey{
+			keys = append(keys, schema.ForeignKeyDef{
 				Name:            name,
 				ReferencedTable: referencedTable,
 				OnDelete:        onDelete,
@@ -650,15 +650,15 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 func referenceAction(code string) (schema.ReferenceAction, error) {
 	switch code {
 	case "a":
-		return schema.ReferenceActionNoAction, nil
+		return schema.NoAction, nil
 	case "r":
-		return schema.ReferenceActionRestrict, nil
+		return schema.Restrict, nil
 	case "c":
-		return schema.ReferenceActionCascade, nil
+		return schema.Cascade, nil
 	case "n":
-		return schema.ReferenceActionSetNull, nil
+		return schema.SetNull, nil
 	case "d":
-		return schema.ReferenceActionSetDefault, nil
+		return schema.SetDefault, nil
 	default:
 		return "", fmt.Errorf("unsupported reference action %q", code)
 	}

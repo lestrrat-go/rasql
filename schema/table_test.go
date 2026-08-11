@@ -157,7 +157,7 @@ func TestTableValidate(t *testing.T) {
 		"empty index name": {
 			Name:    "orders",
 			Columns: []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
-			Indexes: []schema.Index{{Columns: []string{"id"}}},
+			Indexes: []schema.IndexDef{{Columns: []string{"id"}}},
 		},
 		"foreign key arity": {
 			Name: "orders",
@@ -165,7 +165,7 @@ func TestTableValidate(t *testing.T) {
 				{Name: "id", Type: schema.IntegerType{}},
 				{Name: "customer_id", Type: schema.IntegerType{}},
 			},
-			ForeignKeys: []schema.ForeignKey{{
+			ForeignKeys: []schema.ForeignKeyDef{{
 				Columns:           []string{"id", "customer_id"},
 				ReferencedTable:   "customers",
 				ReferencedColumns: []string{"id"},
@@ -195,7 +195,7 @@ func TestTableValidate(t *testing.T) {
 				Name:    "dup",
 				Columns: []string{"id"},
 			}},
-			ForeignKeys: []schema.ForeignKey{{
+			ForeignKeys: []schema.ForeignKeyDef{{
 				Name:              "dup",
 				Columns:           []string{"org_id"},
 				ReferencedTable:   "orgs",
@@ -212,7 +212,7 @@ func TestTableValidate(t *testing.T) {
 				Name:       "dup",
 				Expression: "id > 0",
 			}},
-			ForeignKeys: []schema.ForeignKey{{
+			ForeignKeys: []schema.ForeignKeyDef{{
 				Name:              "dup",
 				Columns:           []string{"org_id"},
 				ReferencedTable:   "orgs",
@@ -388,7 +388,7 @@ func TestTableValidateAllowsRepeatedEmptyConstraintNames(t *testing.T) {
 		Checks: []schema.CheckConstraint{{
 			Expression: "id > 0",
 		}},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"org_id"},
 			ReferencedTable:   "orgs",
 			ReferencedColumns: []string{"id"},
@@ -405,7 +405,7 @@ func TestTableValidatesRelationshipMetadata(t *testing.T) {
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "customer_id", Type: schema.IntegerType{}},
 		},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              "orders_customer_id_fkey",
 			Columns:           []string{"customer_id"},
 			ReferencedTable:   "customers",
@@ -434,7 +434,7 @@ func TestTableRejectsRelationshipWithoutMatchingForeignKey(t *testing.T) {
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "other_id", Type: schema.IntegerType{}},
 		},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"user_id"},
 			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
@@ -542,16 +542,16 @@ func validTable() schema.Table {
 			Name:       "orders_status_check",
 			Expression: "status <> ''",
 		}},
-		Indexes: []schema.Index{{
+		Indexes: []schema.IndexDef{{
 			Name:    "orders_customer_idx",
 			Columns: []string{"customer_id"},
 		}},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              "orders_customer_fk",
 			Columns:           []string{"customer_id"},
 			ReferencedTable:   "customers",
 			ReferencedColumns: []string{"id"},
-			OnDelete:          schema.ReferenceActionCascade,
+			OnDelete:          schema.Cascade,
 		}},
 	}
 }

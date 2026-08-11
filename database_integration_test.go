@@ -348,14 +348,14 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 			{Name: "customer_id", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
-		ForeignKeys: []schema.ForeignKey{{
+		ForeignKeys: []schema.ForeignKeyDef{{
 			Name:              ordersName + "_customer_fkey",
 			Columns:           []string{"customer_id"},
 			ReferencedSchema:  "public",
 			ReferencedTable:   customersName,
 			ReferencedColumns: []string{"id"},
 		}},
-		Indexes: []schema.Index{{
+		Indexes: []schema.IndexDef{{
 			Name:    ordersName + "_customer_idx",
 			Columns: []string{"customer_id"},
 		}},
@@ -412,11 +412,11 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		// The index names actor_id, not the action column beside it,
 		// because MySQL maps schema.TextType to TEXT and refuses an index
 		// on a BLOB/TEXT column unless the index states a key length --
-		// which schema.Index has no field for. actor_id is a fixed-width
+		// which schema.IndexDef has no field for. actor_id is a fixed-width
 		// BIGINT, so it indexes on every dialect and the qualified
 		// CREATE INDEX this test exists to exercise is the only thing
 		// under test here.
-		Indexes: []schema.Index{{
+		Indexes: []schema.IndexDef{{
 			Name:    eventsName + "_actor_idx",
 			Columns: []string{"actor_id"},
 		}},

@@ -182,13 +182,13 @@ func mergeRelationships(table schema.Table) []schema.Relationship {
 		if matched[index] {
 			continue
 		}
-		derived := derivedRelationships(schema.Table{ForeignKeys: []schema.ForeignKey{key}})
+		derived := derivedRelationships(schema.Table{ForeignKeys: []schema.ForeignKeyDef{key}})
 		relationships = append(relationships, derived...)
 	}
 	return relationships
 }
 
-func relationshipMatchesForeignKey(relationship schema.Relationship, key schema.ForeignKey) bool {
+func relationshipMatchesForeignKey(relationship schema.Relationship, key schema.ForeignKeyDef) bool {
 	return relationship.ReferencedSchema == key.ReferencedSchema &&
 		relationship.ReferencedTable == key.ReferencedTable &&
 		stringSlicesEqual(relationship.Columns, key.Columns) &&
@@ -1066,6 +1066,15 @@ func rowFieldType(column schema.Column) string {
 	}
 }
 
+// writeTable emits table as a keyed schema.Table struct literal rather than
+// through schema.NewTable's constructor-and-option form. The literal is the
+// only shape with full fidelity for what inspect and a hand-maintained
+// schema can both produce: a composite foreign key, a named unique
+// constraint or check, or a unique index, none of which the option
+// constructors (schema.Unique, schema.Check, schema.Index, schema.ForeignKey)
+// take a name or more than one column for. Generated code stays exact for
+// every descriptor this way, at the cost of the verbosity the option form
+// exists to avoid for hand-written tables.
 func writeTable(source *bytes.Buffer, table schema.Table, indent string) {
 	source.WriteString("schema.Table{\n")
 	if table.Schema != "" {
@@ -1186,12 +1195,12 @@ func writeChecks(source *bytes.Buffer, checks []schema.CheckConstraint, indent s
 	source.WriteString("},\n")
 }
 
-func writeIndexes(source *bytes.Buffer, indexes []schema.Index, indent string) {
+func writeIndexes(source *bytes.Buffer, indexes []schema.IndexDef, indent string) {
 	if len(indexes) == 0 {
 		return
 	}
 	source.WriteString(indent)
-	source.WriteString("Indexes: []schema.Index{\n")
+	source.WriteString("Indexes: []schema.IndexDef{\n")
 	for _, index := range indexes {
 		source.WriteString(indent)
 		source.WriteString("\t{Name: ")
@@ -1207,12 +1216,12 @@ func writeIndexes(source *bytes.Buffer, indexes []schema.Index, indent string) {
 	source.WriteString("},\n")
 }
 
-func writeForeignKeys(source *bytes.Buffer, keys []schema.ForeignKey, indent string) {
+func writeForeignKeys(source *bytes.Buffer, keys []schema.ForeignKeyDef, indent string) {
 	if len(keys) == 0 {
 		return
 	}
 	source.WriteString(indent)
-	source.WriteString("ForeignKeys: []schema.ForeignKey{\n")
+	source.WriteString("ForeignKeys: []schema.ForeignKeyDef{\n")
 	for _, key := range keys {
 		source.WriteString(indent)
 		source.WriteString("\t{Name: ")
@@ -1294,16 +1303,16 @@ func columnTypeLiteral(columnType schema.ColumnType) string {
 
 func referenceActionConstant(action schema.ReferenceAction) string {
 	switch action {
-	case schema.ReferenceActionNoAction:
-		return "schema.ReferenceActionNoAction"
-	case schema.ReferenceActionRestrict:
-		return "schema.ReferenceActionRestrict"
-	case schema.ReferenceActionCascade:
-		return "schema.ReferenceActionCascade"
-	case schema.ReferenceActionSetNull:
-		return "schema.ReferenceActionSetNull"
-	case schema.ReferenceActionSetDefault:
-		return "schema.ReferenceActionSetDefault"
+	case schema.NoAction:
+		return "schema.NoAction"
+	case schema.Restrict:
+		return "schema.Restrict"
+	case schema.Cascade:
+		return "schema.Cascade"
+	case schema.SetNull:
+		return "schema.SetNull"
+	case schema.SetDefault:
+		return "schema.SetDefault"
 	default:
 		return "schema.ReferenceAction(" + quote(string(action)) + ")"
 	}
