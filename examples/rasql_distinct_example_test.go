@@ -41,14 +41,11 @@ func Example_rasql_distinct() {
 	type orderingUser struct {
 		UserID int64 `rasql:"user_id"`
 	}
-	orders := rasql.MustTable[orderRow](schema.Table{
-		Name: "orders",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "user_id", Type: schema.IntegerType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+		schema.Integer("id"),
+		schema.Integer("user_id"),
+		schema.PrimaryKey("id"),
+	))
 	if err := rasql.Create(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return

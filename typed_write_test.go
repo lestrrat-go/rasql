@@ -34,9 +34,9 @@ func TestInsertExecutesTypedRow(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -46,7 +46,7 @@ func TestInsertExecutesTypedRow(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](table)
+	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
 		WithArgs(int64(42), "ada@example.com").
@@ -74,9 +74,9 @@ func TestInsertManyExecutesOneParameterizedStatement(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](schema.Table{
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -113,9 +113,9 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryRow(t *testing.T) {
 		Email  string `rasql:"email"`
 		Status string `rasql:"status"`
 	}
-	users, err := rasql.NewTable[user](schema.Table{
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}, Default: "next_user_id()"},
 			{Name: "email", Type: schema.TextType{}},
 			{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
@@ -172,9 +172,9 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testin
 
 			client, err := rasql.New(database, test.dialect)
 			require.NoError(t, err)
-			users, err := rasql.NewTable[user](schema.Table{
+			users, err := rasql.TableOf[user](schema.TableDef{
 				Name: "users",
-				Columns: []schema.Column{
+				Columns: []schema.ColumnDef{
 					{Name: "id", Type: schema.IntegerType{}, Default: "next_user_id()"},
 					{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
 				},
@@ -204,9 +204,9 @@ func TestInsertManyWithOptionsValidatesAllDefaultRows(t *testing.T) {
 		ID     int64  `rasql:"id"`
 		Status string `rasql:"status"`
 	}
-	users, err := rasql.NewTable[*user](schema.Table{
+	users, err := rasql.TableOf[*user](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}, Default: "next_user_id()"},
 			{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
 		},
@@ -228,9 +228,9 @@ func TestInsertManyRejectsEmptyRows(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
-	users, err := rasql.NewTable[user](schema.Table{
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
@@ -270,9 +270,9 @@ func TestInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[generatedDefaultUser](schema.Table{
+	users, err := rasql.TableOf[generatedDefaultUser](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}, Default: "generated_user_id()"},
 			{Name: "email", Type: schema.TextType{}},
 			{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
@@ -298,9 +298,9 @@ func TestInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
 }
 
 func TestInsertRejectsUnknownDefaultColumn(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -310,7 +310,7 @@ func TestInsertRejectsUnknownDefaultColumn(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](table)
+	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 
 	_, err = rasql.InsertWithOptions(t.Context(), rasql.Client{}, users, user{}, rasql.DefaultColumns("missing"))
@@ -332,9 +332,9 @@ func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](schema.Table{
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}, Default: "next_user_id()"},
 			{Name: "email", Type: schema.TextType{}, Default: "'unknown'"},
 		},
@@ -359,9 +359,9 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -399,9 +399,9 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -554,9 +554,9 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -591,9 +591,9 @@ func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -684,9 +684,9 @@ func TestQueryWriteAllowsIncompleteCustomReturning(t *testing.T) {
 // QueryWriteOne error-path tests share.
 func deleteReturningStatement(t *testing.T) query.Delete {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -715,9 +715,9 @@ func TestUpdateExecutesTypedRow(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -727,7 +727,7 @@ func TestUpdateExecutesTypedRow(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[user](table)
+	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 	mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
 		WithArgs("grace@example.com", int64(42)).
@@ -755,9 +755,9 @@ func TestUpdateWithOptionsUpdatesSelectedFieldsByPrimaryKey(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[patch](schema.Table{
+	users, err := rasql.TableOf[patch](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 			{Name: "status", Type: schema.TextType{}},
@@ -793,9 +793,9 @@ func TestUpdateManyBulkUpdatesPartialRowByPredicate(t *testing.T) {
 	type patch struct {
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[patch](schema.Table{
+	users, err := rasql.TableOf[patch](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 			{Name: "status", Type: schema.TextType{}},
@@ -824,9 +824,9 @@ func TestUpdateWithOptionsRejectsInvalidConfiguration(t *testing.T) {
 	type patch struct {
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.NewTable[patch](schema.Table{
+	users, err := rasql.TableOf[patch](schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -849,14 +849,14 @@ func TestUpdateRejectsTableWithoutPrimaryKey(t *testing.T) {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
 	}
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
 	}
-	users, err := rasql.NewTable[user](table)
+	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 
 	_, err = rasql.Update(t.Context(), rasql.Client{}, users, user{ID: 42, Email: "grace@example.com"})
@@ -875,12 +875,12 @@ func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 	type key struct {
 		ID int64 `rasql:"id"`
 	}
-	columns := []schema.Column{
+	columns := []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "email", Type: schema.TextType{}},
 	}
 
-	keyed, err := rasql.NewTable[user](schema.Table{
+	keyed, err := rasql.TableOf[user](schema.TableDef{
 		Schema:     "tenant",
 		Name:       "users",
 		Columns:    columns,
@@ -890,7 +890,7 @@ func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 	_, err = rasql.InsertWithOptions(t.Context(), rasql.Client{}, keyed, user{}, rasql.DefaultColumns("missing"))
 	require.ErrorContains(t, err, `table "tenant.users" has no column "missing" selected for a database default`)
 
-	unkeyed, err := rasql.NewTable[user](schema.Table{
+	unkeyed, err := rasql.TableOf[user](schema.TableDef{
 		Schema:  "tenant",
 		Name:    "users",
 		Columns: columns,
@@ -899,7 +899,7 @@ func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 	_, err = rasql.Update(t.Context(), rasql.Client{}, unkeyed, user{ID: 42})
 	require.ErrorContains(t, err, `table "tenant.users" has no primary key`)
 
-	allKey, err := rasql.NewTable[key](schema.Table{
+	allKey, err := rasql.TableOf[key](schema.TableDef{
 		Schema:     "tenant",
 		Name:       "users",
 		Columns:    columns[:1],
@@ -921,9 +921,9 @@ func TestUpdateMatchesCompositePrimaryKey(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "memberships",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "account_id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "role", Type: schema.TextType{}},
@@ -935,7 +935,7 @@ func TestUpdateMatchesCompositePrimaryKey(t *testing.T) {
 		UserID    int64  `rasql:"user_id"`
 		Role      string `rasql:"role"`
 	}
-	memberships, err := rasql.NewTable[membership](table)
+	memberships, err := rasql.TableOf[membership](table)
 	require.NoError(t, err)
 	mock.ExpectExec("UPDATE \"memberships\" SET \"role\" = $1 WHERE ((\"memberships\".\"account_id\" = $2) AND (\"memberships\".\"user_id\" = $3))").
 		WithArgs("admin", int64(10), int64(42)).
@@ -1126,9 +1126,9 @@ func (u partiallyMappedUser) ColumnValue(name string) (any, bool) {
 }
 
 func TestWritesUseColumnValuer(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -1146,7 +1146,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[mappedUser](table)
+		users, err := rasql.TableOf[mappedUser](table)
 		require.NoError(t, err)
 		// The tags are crossed, so these arguments prove ColumnValue supplied them.
 		mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
@@ -1168,7 +1168,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[mappedUser](table)
+		users, err := rasql.TableOf[mappedUser](table)
 		require.NoError(t, err)
 		mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
 			WithArgs("grace@example.com", int64(42)).
@@ -1189,7 +1189,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[wrappedUser](table)
+		users, err := rasql.TableOf[wrappedUser](table)
 		require.NoError(t, err)
 		// The wrapper tags nothing, so these arguments prove the promoted
 		// ColumnValue supplied them rather than the tag path failing.
@@ -1202,7 +1202,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 	})
 
 	t.Run("missing column", func(t *testing.T) {
-		users, err := rasql.NewTable[partiallyMappedUser](table)
+		users, err := rasql.TableOf[partiallyMappedUser](table)
 		require.NoError(t, err)
 
 		_, err = rasql.Insert(t.Context(), rasql.Client{}, users, partiallyMappedUser{ID: 42})
@@ -1211,9 +1211,9 @@ func TestWritesUseColumnValuer(t *testing.T) {
 }
 
 func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -1238,7 +1238,7 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[taggedWrapperUser](table)
+		users, err := rasql.TableOf[taggedWrapperUser](table)
 		require.NoError(t, err)
 		mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
 			WithArgs(int64(42), "ada@example.com").
@@ -1259,7 +1259,7 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[taggedWrapperUser](table)
+		users, err := rasql.TableOf[taggedWrapperUser](table)
 		require.NoError(t, err)
 		mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
 			WithArgs("ada@example.com", int64(42)).
@@ -1271,9 +1271,9 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 }
 
 func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -1315,7 +1315,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[declaringWrapperUser](table)
+		users, err := rasql.TableOf[declaringWrapperUser](table)
 		require.NoError(t, err)
 		mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
 			WithArgs(int64(42), "method@example.com").
@@ -1336,7 +1336,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[declaringWrapperUser](table)
+		users, err := rasql.TableOf[declaringWrapperUser](table)
 		require.NoError(t, err)
 		mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
 			WithArgs("method@example.com", int64(42)).
@@ -1357,7 +1357,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[pointerDeclaringWrapperUser](table)
+		users, err := rasql.TableOf[pointerDeclaringWrapperUser](table)
 		require.NoError(t, err)
 		mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
 			WithArgs(int64(42), "method@example.com").
@@ -1378,7 +1378,7 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 
 		client, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		users, err := rasql.NewTable[pointerDeclaringWrapperUser](table)
+		users, err := rasql.TableOf[pointerDeclaringWrapperUser](table)
 		require.NoError(t, err)
 		mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
 			WithArgs("method@example.com", int64(42)).
@@ -1390,10 +1390,10 @@ func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
 }
 
 // usersTable is the table the mapping fixtures above are written against.
-func usersTable() schema.Table {
-	return schema.Table{
+func usersTable() schema.TableDef {
+	return schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
@@ -1415,7 +1415,7 @@ func requireInsertBinds[T any](t *testing.T, value T, id int64, email string) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[T](usersTable())
+	users, err := rasql.TableOf[T](usersTable())
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
 		WithArgs(id, email).
@@ -1438,7 +1438,7 @@ func requireUpdateBinds[T any](t *testing.T, value T, id int64, email string) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[T](usersTable())
+	users, err := rasql.TableOf[T](usersTable())
 	require.NoError(t, err)
 	mock.ExpectExec("UPDATE \"users\" SET \"email\" = $1 WHERE (\"users\".\"id\" = $2)").
 		WithArgs(email, id).
@@ -1694,15 +1694,15 @@ func TestInsertRejectsMissingTaggedColumn(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
-	table := schema.Table{
+	table := schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	}
-	users, err := rasql.NewTable[user](table)
+	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
 
 	_, err = rasql.Insert(t.Context(), rasql.Client{}, users, user{ID: 42})

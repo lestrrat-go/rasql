@@ -39,15 +39,15 @@ func TestLoadHasManyGroupsRowsByParentKey(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	_, err = rasql.NewTable[relationshipUser](schema.Table{
+	_, err = rasql.TableOf[relationshipUser](schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orders, err := rasql.NewTable[relationshipOrder](schema.Table{
+	orders, err := rasql.TableOf[relationshipOrder](schema.TableDef{
 		Name:       "orders",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
@@ -81,9 +81,9 @@ func TestLoadBelongsToGroupsRowsByForeignKey(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[relationshipUser](schema.Table{
+	users, err := rasql.TableOf[relationshipUser](schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
@@ -114,15 +114,15 @@ func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
 
 	client, err := rasql.New(database, dialect.MySQL())
 	require.NoError(t, err)
-	users, err := rasql.NewTable[unsignedRelationshipUser](schema.Table{
+	users, err := rasql.TableOf[unsignedRelationshipUser](schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orders, err := rasql.NewTable[unsignedRelationshipOrder](schema.Table{
+	orders, err := rasql.TableOf[unsignedRelationshipOrder](schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
 			{Name: "user_id", Type: schema.IntegerType{Unsigned: true}},
 		},
@@ -164,15 +164,15 @@ func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
 }
 
 func TestLoadRelationshipsSkipsEmptyInput(t *testing.T) {
-	users, err := rasql.NewTable[relationshipUser](schema.Table{
+	users, err := rasql.TableOf[relationshipUser](schema.TableDef{
 		Name:       "users",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orders, err := rasql.NewTable[relationshipOrder](schema.Table{
+	orders, err := rasql.TableOf[relationshipOrder](schema.TableDef{
 		Name:       "orders",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)

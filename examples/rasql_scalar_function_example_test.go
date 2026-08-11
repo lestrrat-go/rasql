@@ -44,15 +44,12 @@ func Example_rasql_scalar_function() {
 		ID   int64
 		Name string
 	}
-	members := rasql.MustTable[memberRow](schema.Table{
-		Name: "members",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "email", Type: schema.TextType{}},
-			{Name: "nickname", Type: schema.TextType{}, Nullable: true},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	members := rasql.MustTableOf[memberRow](schema.MustTable("members",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.Text("nickname", schema.Nullable()),
+		schema.PrimaryKey("id"),
+	))
 	if err := rasql.Create(ctx, client, members); err != nil {
 		fmt.Printf("failed to create members table: %s\n", err)
 		return

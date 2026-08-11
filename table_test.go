@@ -165,10 +165,10 @@ func requirePanicsWithNilDereference(t *testing.T, fn func()) {
 	require.Contains(t, failure.Error(), "invalid memory address or nil pointer dereference")
 }
 
-func staffDefinition() schema.Table {
-	return schema.Table{
+func staffDefinition() schema.TableDef {
+	return schema.TableDef{
 		Name: "staff",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "manager_id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
@@ -180,7 +180,7 @@ func staffDefinition() schema.Table {
 func staff(t *testing.T) staffTable {
 	t.Helper()
 
-	table, err := rasql.NewTable[staffRow](staffDefinition())
+	table, err := rasql.TableOf[staffRow](staffDefinition())
 	require.NoError(t, err)
 	return newStaffTable(table)
 }
@@ -190,9 +190,9 @@ func staff(t *testing.T) staffTable {
 func contractors(t *testing.T) rasql.Table[staffRow] {
 	t.Helper()
 
-	table, err := rasql.NewTable[staffRow](schema.Table{
+	table, err := rasql.TableOf[staffRow](schema.TableDef{
 		Name:       "contractors",
-		Columns:    []schema.Column{{Name: "id", Type: schema.IntegerType{}}},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
@@ -201,7 +201,7 @@ func contractors(t *testing.T) rasql.Table[staffRow] {
 
 func TestTable(t *testing.T) {
 	t.Run("Column resolves and rejects names", func(t *testing.T) {
-		table, err := rasql.NewTable[staffRow](staffDefinition())
+		table, err := rasql.TableOf[staffRow](staffDefinition())
 		require.NoError(t, err)
 
 		column, err := table.Column("email")
@@ -214,7 +214,7 @@ func TestTable(t *testing.T) {
 	})
 
 	t.Run("QueryTable exposes the validated definition", func(t *testing.T) {
-		table, err := rasql.NewTable[staffRow](staffDefinition())
+		table, err := rasql.TableOf[staffRow](staffDefinition())
 		require.NoError(t, err)
 		require.Equal(t, "staff", table.QueryTable().Name())
 		require.Equal(t, staffDefinition().Columns, table.QueryTable().Definition().Columns)
@@ -222,16 +222,16 @@ func TestTable(t *testing.T) {
 	})
 
 	t.Run("NewTable rejects an invalid definition", func(t *testing.T) {
-		_, err := rasql.NewTable[staffRow](schema.Table{})
+		_, err := rasql.TableOf[staffRow](schema.TableDef{})
 		require.Error(t, err)
 		require.Panics(t, func() {
-			rasql.MustTable[staffRow](schema.Table{})
+			rasql.MustTableOf[staffRow](schema.TableDef{})
 		})
 	})
 }
 
 func TestMustColumn(t *testing.T) {
-	table, err := rasql.NewTable[staffRow](staffDefinition())
+	table, err := rasql.TableOf[staffRow](staffDefinition())
 	require.NoError(t, err)
 
 	require.Equal(t, "id", rasql.MustColumn(table, "id").Name())
@@ -476,7 +476,7 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 func TestNilTableReportsErrors(t *testing.T) {
 	requireNilTableRejected[rasql.Table[staffRow]](t, "nil interface", nil)
 
-	failed, err := rasql.NewTable[staffRow](schema.Table{})
+	failed, err := rasql.TableOf[staffRow](schema.TableDef{})
 	require.Error(t, err)
 	require.Nil(t, failed)
 	requireNilTableRejected(t, "nil table from a failed NewTable", failed)
@@ -499,7 +499,7 @@ func TestNilTableReportsErrors(t *testing.T) {
 }
 
 func TestUsableTableIsAccepted(t *testing.T) {
-	table, err := rasql.NewTable[staffRow](staffDefinition())
+	table, err := rasql.TableOf[staffRow](staffDefinition())
 	require.NoError(t, err)
 
 	requireTableUsable(t, "typed table", table)
@@ -532,7 +532,7 @@ func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
 	// that keeps the string case passing could still relabel this one. Here the
 	// embedded table is VALID, so tableRow succeeds and the guard never probes
 	// this QueryTable at all; the panic below comes straight from it.
-	table, err := rasql.NewTable[staffRow](staffDefinition())
+	table, err := rasql.TableOf[staffRow](staffDefinition())
 	require.NoError(t, err)
 	buggyNilDeref := nilDereferenceStaffTable{Table: table}
 
@@ -552,7 +552,7 @@ func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
 // first fixes this, because tableRow is unexported and a type outside this
 // package can never intercept it, so it always reaches the embedded table.
 func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
-	table, err := rasql.NewTable[staffRow](staffDefinition())
+	table, err := rasql.TableOf[staffRow](staffDefinition())
 	require.NoError(t, err)
 	buggy := nilDereferenceStaffTable{Table: table}
 

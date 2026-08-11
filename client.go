@@ -128,7 +128,7 @@ func (c Client) ExecRendered(ctx context.Context, statement render.Statement) (s
 	return result, nil
 }
 
-func createTable(ctx context.Context, x Executor, table schema.Table) error {
+func createTable(ctx context.Context, x Executor, table schema.TableDef) error {
 	if isNil(x) {
 		return fmt.Errorf("rasql: executor must not be nil")
 	}

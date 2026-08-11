@@ -231,15 +231,12 @@ func Example_rasql_scalar_function() {
 		ID   int64
 		Name string
 	}
-	members := rasql.MustTable[memberRow](schema.Table{
-		Name: "members",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "email", Type: schema.TextType{}},
-			{Name: "nickname", Type: schema.TextType{}, Nullable: true},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	members := rasql.MustTableOf[memberRow](schema.MustTable("members",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.Text("nickname", schema.Nullable()),
+		schema.PrimaryKey("id"),
+	))
 	if err := rasql.Create(ctx, client, members); err != nil {
 		fmt.Printf("failed to create members table: %s\n", err)
 		return
@@ -630,15 +627,12 @@ func Example_rasql_subquery() {
 		UserID int64
 		Amount int64
 	}
-	orders := rasql.MustTable[orderRow](schema.Table{
-		Name: "orders",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "user_id", Type: schema.IntegerType{}},
-			{Name: "amount", Type: schema.IntegerType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+		schema.Integer("id"),
+		schema.Integer("user_id"),
+		schema.Integer("amount"),
+		schema.PrimaryKey("id"),
+	))
 	// Create both descriptors before querying orders against the users subquery.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
@@ -880,14 +874,11 @@ func Example_rasql_group_by() {
 		Status string
 		Total  int64
 	}
-	tasks := rasql.MustTable[taskRow](schema.Table{
-		Name: "tasks",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "status", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	tasks := rasql.MustTableOf[taskRow](schema.MustTable("tasks",
+		schema.Integer("id"),
+		schema.Text("status"),
+		schema.PrimaryKey("id"),
+	))
 	if err := rasql.Create(ctx, client, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
@@ -998,14 +989,11 @@ func Example_rasql_distinct() {
 	type orderingUser struct {
 		UserID int64 `rasql:"user_id"`
 	}
-	orders := rasql.MustTable[orderRow](schema.Table{
-		Name: "orders",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "user_id", Type: schema.IntegerType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+		schema.Integer("id"),
+		schema.Integer("user_id"),
+		schema.PrimaryKey("id"),
+	))
 	if err := rasql.Create(ctx, client, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
@@ -1150,15 +1138,12 @@ func Example_rasql_dynamic_projection() {
 		UserID int64
 		Email  string
 	}
-	orders := rasql.MustTable[orderRow](schema.Table{
-		Name: "orders",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "user_id", Type: schema.IntegerType{}},
-			{Name: "total", Type: schema.IntegerType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	orders := rasql.MustTableOf[orderRow](schema.MustTable("orders",
+		schema.Integer("id"),
+		schema.Integer("user_id"),
+		schema.Integer("total"),
+		schema.PrimaryKey("id"),
+	))
 	// Create both descriptors before querying their joined rows.
 	if err := rasql.Create(ctx, client, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)

@@ -28,7 +28,7 @@ func (Analyzer) Dialect() string {
 }
 
 // LiveSources converts one inspected PostgreSQL table into desired-schema sources.
-func (Analyzer) LiveSources(table schema.Table) ([]diff.Source, error) {
+func (Analyzer) LiveSources(table schema.TableDef) ([]diff.Source, error) {
 	return diff.SourcesFromTable(dialect.PostgreSQL(), table)
 }
 

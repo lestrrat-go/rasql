@@ -46,16 +46,13 @@ func Example_schema_qualified_table() {
 		return
 	}
 
-	// Schema qualifies the table without changing how any other field works.
-	events := rasql.MustTable[eventRow](schema.Table{
-		Schema: "audit",
-		Name:   "events",
-		Columns: []schema.Column{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "action", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
+	// InSchema qualifies the table without changing how any other option works.
+	events := rasql.MustTableOf[eventRow](schema.MustTable("events",
+		schema.InSchema("audit"),
+		schema.Integer("id"),
+		schema.Text("action"),
+		schema.PrimaryKey("id"),
+	))
 
 	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
 	if err := rasql.Create(ctx, client, events); err != nil {

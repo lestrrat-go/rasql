@@ -106,9 +106,9 @@ func TestSelectBuilderWithDialectDoesNotMutateReceiver(t *testing.T) {
 
 func TestSelectBuilderBuildsCountStatement(t *testing.T) {
 	users := fluentUsers(t)
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -224,9 +224,9 @@ func TestSelectBuilderBuildsGroupedStatement(t *testing.T) {
 // validation judged did not yet select from the joined table.
 func TestSelectBuilderGroupsByJoinedColumn(t *testing.T) {
 	users := fluentUsers(t)
-	orders, err := query.NewTable(schema.Table{
+	orders, err := query.NewTable(schema.TableDef{
 		Name: "orders",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 		},
@@ -557,9 +557,9 @@ func TestSelectBuilderPredicatesDoNotAlias(t *testing.T) {
 
 func fluentUsers(t *testing.T) query.Table {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},

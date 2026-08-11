@@ -517,7 +517,7 @@ func (upsertOnlyDialect) QuoteIdentifier(name string) (string, error) { return `
 
 func (upsertOnlyDialect) Placeholder(int) (string, error) { return "?", nil }
 
-func (upsertOnlyDialect) TypeName(schema.Column) (string, error) { return "", nil }
+func (upsertOnlyDialect) TypeName(schema.ColumnDef) (string, error) { return "", nil }
 
 func (d upsertOnlyDialect) UpsertStyle() dialect.UpsertStyle { return d.style }
 
@@ -785,10 +785,10 @@ func TestSQLiteDefaultValuesUpsertIsRejected(t *testing.T) {
 
 func qualifiedWriteTable(t *testing.T) (query.Table, query.Column, query.Column, query.Column) {
 	t.Helper()
-	events, err := query.NewTable(schema.Table{
+	events, err := query.NewTable(schema.TableDef{
 		Schema: "audit",
 		Name:   "events",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "user_id", Type: schema.IntegerType{}},
 			{Name: "action", Type: schema.TextType{}},
@@ -807,9 +807,9 @@ func qualifiedWriteTable(t *testing.T) (query.Table, query.Column, query.Column,
 
 func writeTable(t *testing.T) (query.Table, query.Column, query.Column) {
 	t.Helper()
-	users, err := query.NewTable(schema.Table{
+	users, err := query.NewTable(schema.TableDef{
 		Name: "users",
-		Columns: []schema.Column{
+		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
 		},

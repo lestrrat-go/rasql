@@ -59,15 +59,12 @@ func newDefaultUsersTable(table rasql.Table[defaultUserRow]) defaultUsersTable {
 	}
 }
 
-var defaultUsers = newDefaultUsersTable(rasql.MustTable[defaultUserRow](schema.Table{
-	Name: "default_users",
-	Columns: []schema.Column{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-		{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
-	},
-	PrimaryKey: []string{"id"},
-}))
+var defaultUsers = newDefaultUsersTable(rasql.MustTableOf[defaultUserRow](schema.MustTable("default_users",
+	schema.Integer("id"),
+	schema.Text("email"),
+	schema.Text("status", schema.Default("'pending'")),
+	schema.PrimaryKey("id"),
+)))
 
 func Example_rasql_insert_defaults() {
 	ctx := context.Background()

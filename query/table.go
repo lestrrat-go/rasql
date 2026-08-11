@@ -33,12 +33,12 @@ import (
 
 // Table identifies a table used by a statement.
 type Table struct {
-	definition schema.Table
+	definition schema.TableDef
 	alias      string
 }
 
 // NewTable validates definition and returns a table for it.
-func NewTable(definition schema.Table) (Table, error) {
+func NewTable(definition schema.TableDef) (Table, error) {
 	if err := definition.Validate(); err != nil {
 		return Table{}, fmt.Errorf("query table: %w", err)
 	}
@@ -47,7 +47,7 @@ func NewTable(definition schema.Table) (Table, error) {
 
 // MustNewTable returns a table for definition or panics when definition is invalid.
 // It is intended for generated or otherwise static schema descriptors.
-func MustNewTable(definition schema.Table) Table {
+func MustNewTable(definition schema.TableDef) Table {
 	table, err := NewTable(definition)
 	if err != nil {
 		panic(fmt.Sprintf("query table: %s", err))
@@ -123,7 +123,7 @@ func (t Table) QualifiedName() string {
 }
 
 // Definition returns a copy of the underlying schema descriptor.
-func (t Table) Definition() schema.Table {
+func (t Table) Definition() schema.TableDef {
 	return t.definition.Clone()
 }
 
