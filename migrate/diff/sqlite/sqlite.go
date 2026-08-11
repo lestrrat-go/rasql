@@ -521,9 +521,9 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		return diff.Plan{}, manualMigrationError(diagnostics)
 	}
 
-	plan := diff.Plan{Dialect: "sqlite", Statements: make([]diff.Statement, len(generated))}
+	plan := diff.Plan{Dialect: "sqlite", Statements: make([]diff.PlannedStatement, len(generated))}
 	for index, statement := range generated {
-		plan.Statements[index] = diff.Statement{
+		plan.Statements[index] = diff.PlannedStatement{
 			Source:  statement.name + ".sql",
 			SQL:     statement.sql,
 			Summary: statement.summary,

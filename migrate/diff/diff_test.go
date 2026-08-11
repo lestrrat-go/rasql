@@ -36,7 +36,7 @@ func TestWriteMigrationCreatesNewDirectory(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "migrations", "001_create_users")
 	plan := diff.Plan{
 		Dialect: "postgresql",
-		Statements: []diff.Statement{
+		Statements: []diff.PlannedStatement{
 			{Source: "001_create_users.sql", SQL: "CREATE TABLE users (id bigint);\n", Summary: "create table users"},
 			{Source: "002_users_email_index.sql", SQL: "CREATE INDEX users_email_idx ON users (email);\n", Summary: "create index users_email_idx"},
 		},
@@ -51,7 +51,7 @@ func TestWriteMigrationCreatesNewDirectory(t *testing.T) {
 func TestPlanValidateReportsBothConflictingObjects(t *testing.T) {
 	plan := diff.Plan{
 		Dialect: "sqlite",
-		Statements: []diff.Statement{
+		Statements: []diff.PlannedStatement{
 			{Source: "001_create_table_foo_bar.sql", SQL: "CREATE TABLE foo-bar;", Summary: "create table foo-bar"},
 			{Source: "001_create_table_foo_bar.sql", SQL: "CREATE TABLE foo_bar;", Summary: "create table foo_bar"},
 		},

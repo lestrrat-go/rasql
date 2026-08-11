@@ -48,7 +48,7 @@ func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, diff.Plan{
 		Dialect: "postgresql",
-		Statements: []diff.Statement{
+		Statements: []diff.PlannedStatement{
 			{
 				Source:  "001_add_column_members_email.sql",
 				SQL:     "ALTER TABLE members ADD COLUMN email text;\n",
@@ -73,7 +73,7 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, []diff.Statement{{
+	require.Equal(t, []diff.PlannedStatement{{
 		Source:  "001_create_table_projects.sql",
 		SQL:     "CREATE TABLE projects (id bigint PRIMARY KEY, owner_id bigint NOT NULL);\n",
 		Summary: "create table projects",
@@ -108,7 +108,7 @@ func TestDiffGeneratesNewRequiredColumnWithDefault(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, []diff.Statement{{
+	require.Equal(t, []diff.PlannedStatement{{
 		Source:  "001_add_column_members_active.sql",
 		SQL:     "ALTER TABLE members ADD COLUMN active boolean NOT NULL DEFAULT TRUE;\n",
 		Summary: "add column members.active",
