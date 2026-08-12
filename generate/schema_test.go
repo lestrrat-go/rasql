@@ -792,6 +792,27 @@ func TestSchemaGeneratesTextWidthColumns(t *testing.T) {
 	require.Contains(t, string(source), `schema.Text("flag", schema.Width(0)),`)
 }
 
+// TestSchemaGeneratesFixedWidthTextColumns pins the generator's Fixed
+// mapping, the counterpart to TestSchemaGeneratesTextWidthColumns: a
+// fixed-width column restates schema.Fixed() alongside schema.Width(n) in
+// the generated schema.Text call, so regenerating from the generated
+// source keeps rendering CHAR(n) rather than silently reverting to
+// VARCHAR(n) and reintroducing the diff this package's Fixed support fixes.
+func TestSchemaGeneratesFixedWidthTextColumns(t *testing.T) {
+	events := schema.TableDef{
+		Name: "events",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "code", Type: schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := generate.PackageSource("generated", events)
+	require.NoError(t, err)
+	require.Contains(t, string(source), `schema.Text("code", schema.Width(10), schema.Fixed()),`)
+}
+
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {
 	_, err := generate.PackageSource("not-valid")
 	require.Error(t, err)

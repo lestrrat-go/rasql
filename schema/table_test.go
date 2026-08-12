@@ -144,11 +144,11 @@ func TestDecimalScaleJSON(t *testing.T) {
 func TestTextWidthJSON(t *testing.T) {
 	encoded, err := json.Marshal(schema.ColumnDef{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}})
 	require.NoError(t, err)
-	require.Contains(t, string(encoded), `"Type":{"Kind":"text","Width":255}`)
+	require.Contains(t, string(encoded), `"Type":{"Fixed":false,"Kind":"text","Width":255}`)
 
 	encoded, err = json.Marshal(schema.ColumnDef{Name: "bio", Type: schema.TextType{}})
 	require.NoError(t, err)
-	require.Contains(t, string(encoded), `"Type":{"Kind":"text","Width":null}`)
+	require.Contains(t, string(encoded), `"Type":{"Fixed":false,"Kind":"text","Width":null}`)
 
 	var decoded schema.ColumnDef
 	require.NoError(t, json.Unmarshal([]byte(`{"Name":"email","Type":{"Kind":"text","Width":255}}`), &decoded))
@@ -176,6 +176,37 @@ func TestTextWidthJSON(t *testing.T) {
 	require.False(t, stated)
 
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"email","Type":{"Kind":"text","Width":"wide"}}`), &decoded))
+}
+
+// TestTextTypeFixedJSON covers the JSON round-trip of TextType.Fixed
+// alongside Width, for both the fixed-width and variable-width forms, and
+// pins that a snapshot written before Fixed existed decodes as unstated
+// (false), the same backward-compatible read TestTextWidthJSON pins for a
+// snapshot written before Width existed.
+func TestTextTypeFixedJSON(t *testing.T) {
+	encoded, err := json.Marshal(schema.ColumnDef{Name: "id", Type: schema.TextType{Width: schema.NewTextWidth(36), Fixed: true}})
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"Type":{"Fixed":true,"Kind":"text","Width":36}`)
+
+	var decoded schema.ColumnDef
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(36), Fixed: true}, decoded.Type)
+
+	encoded, err = json.Marshal(schema.ColumnDef{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}})
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"Type":{"Fixed":false,"Kind":"text","Width":255}`)
+
+	decoded = schema.ColumnDef{}
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(255)}, decoded.Type)
+
+	// A snapshot written before TextType had Fixed omits it entirely, which
+	// decodes as false rather than an error.
+	decoded = schema.ColumnDef{}
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"email","Type":{"Kind":"text","Width":255}}`), &decoded))
+	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(255)}, decoded.Type)
+
+	require.Error(t, json.Unmarshal([]byte(`{"Name":"id","Type":{"Kind":"text","Width":36,"Fixed":"yes"}}`), &decoded))
 }
 
 func TestTableColumn(t *testing.T) {
@@ -296,6 +327,10 @@ func TestTableValidate(t *testing.T) {
 			Name:    "users",
 			Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(-1)}}},
 		},
+		"fixed-width text column without a stated width": {
+			Name:    "users",
+			Columns: []schema.ColumnDef{{Name: "code", Type: schema.TextType{Fixed: true}}},
+		},
 	}
 
 	for name, table := range tests {
@@ -389,6 +424,7 @@ func TestTableValidateAcceptsTextWidth(t *testing.T) {
 			{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}},
 			{Name: "flag", Type: schema.TextType{Width: schema.NewTextWidth(0)}},
 			{Name: "bio", Type: schema.TextType{}},
+			{Name: "code", Type: schema.TextType{Width: schema.NewTextWidth(36), Fixed: true}},
 		},
 		PrimaryKey: []string{"id"},
 	}

@@ -233,15 +233,22 @@ func (d builtin) unsignedTypeName(column schema.ColumnDef) (string, error) {
 
 // textTypeName renders the DDL type for a TextType column. An unstated width
 // (the zero value of schema.TextType.Width) always renders this dialect's
-// plain, unbounded text type. A stated width renders VARCHAR(width) on a
-// dialect that enforces it (see the varcharText field on each builtin
-// above); on one that does not, the width is dropped and the plain text
-// type renders instead, the same way decimalTypeName below drops SQLite's
-// decimal precision and scale rather than pretend to enforce them.
+// plain, unbounded text type. A stated width renders VARCHAR(width), or
+// CHAR(width) when text.Fixed says the column is fixed-width, on a dialect
+// that enforces it (see the varcharText field on each builtin above); on one
+// that does not, the width is dropped and the plain text type renders
+// instead, the same way decimalTypeName below drops SQLite's decimal
+// precision and scale rather than pretend to enforce them. SQLite's
+// varcharText is always false, so a stated Fixed there renders plain TEXT
+// too, for the same reason: SQLite's type affinity never enforces a
+// declared width, fixed or not.
 func (d builtin) textTypeName(text schema.TextType) string {
 	width, stated := text.Width.Value()
 	if !stated || !d.varcharText {
 		return d.types[schema.KindText]
+	}
+	if text.Fixed {
+		return fmt.Sprintf("CHAR(%d)", width)
 	}
 	return fmt.Sprintf("VARCHAR(%d)", width)
 }
