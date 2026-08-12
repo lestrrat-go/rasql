@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
@@ -157,6 +158,15 @@ func TestIndexedTextRequiresWidthOnMySQL(t *testing.T) {
 		"CREATE TABLE unbounded_text_key (id BIGINT NOT NULL, label TEXT NOT NULL, PRIMARY KEY (id), INDEX (label))")
 	require.Error(t, err,
 		"MySQL itself refuses a key over an unbounded TEXT column, which is why rasql refuses to render one")
-	require.Contains(t, err.Error(), "1170",
+	// The code is read off the driver's parsed error rather than matched
+	// against the message text, for the reason internal/dbtest/mysql.go
+	// already gives: Number is a stable documented value, while a substring
+	// search for "1170" would also accept any other failure whose text
+	// happens to contain those digits -- including one where MySQL never
+	// saw the statement at all, which is the very thing this asserts.
+	var mysqlErr *mysql.MySQLError
+	require.ErrorAs(t, err, &mysqlErr,
+		"the refusal must come from MySQL itself, not from a connection or driver failure")
+	require.EqualValues(t, 1170, mysqlErr.Number,
 		"the refusal is MySQL error 1170, the one rasql's render-time check exists to pre-empt")
 }
