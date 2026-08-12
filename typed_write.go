@@ -129,12 +129,23 @@ func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
 	return config.defaultColumns, nil
 }
 
+// completeRow is the mapping a row type states when it both scans a fixed
+// column order and maps result columns by name. rasqlgen writes that pair for
+// every row type it emits, so the pair stands in for the generated contract
+// without a marker method on the generated type. A row type that maps part of a
+// table states it by declaring [row.DestinationScanner] alone, and typed writes
+// leave its RETURNING projections alone.
+type completeRow interface {
+	row.Scanner
+	row.DestinationScanner
+}
+
 func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
 	if isNil(statement) || len(statement.Returning()) == 0 {
 		return nil
 	}
 	var result T
-	if _, ok := any(&result).(row.GeneratedRow); !ok {
+	if _, ok := any(&result).(completeRow); !ok {
 		return nil
 	}
 

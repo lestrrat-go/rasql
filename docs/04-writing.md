@@ -511,6 +511,8 @@ source: [examples/rasql_returning_example_test.go](https://github.com/lestrrat-g
 
 `QueryWriteOne` reports its row count through the same sentinels `One` does, described under [Select typed rows](03-querying.md#select-typed-rows): `rasql.ErrNoRows` when `RETURNING` produced no rows, and `rasql.ErrMultipleRows` when it produced more than one.
 
+Both typed terminals refuse a `RETURNING` clause that omits a column of the target table when `T` maps the whole table, because the omitted field would come back as a zero value with nothing to say so. A row type maps the whole table when it declares both `ScanRow` and `ScanDestinations`, which is the pair [rasqlgen](06-rasqlgen.md) writes for every row type it generates. A hand-written row type that maps only part of a table declares `ScanDestinations` alone, and these terminals then accept whatever projections it is given.
+
 A fluent delete uses the same dynamic and typed terminals:
 
 <!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_dynamic) -->

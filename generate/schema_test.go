@@ -31,7 +31,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var _ row.GeneratedRow = (*generated.UsersRow)(nil)
+var _ row.Scanner = (*generated.UsersRow)(nil)
+var _ row.DestinationScanner = (*generated.UsersRow)(nil)
 
 func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)

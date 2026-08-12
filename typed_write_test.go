@@ -541,8 +541,6 @@ func (u *generatedReturningUser) ScanDestinations(columns []string) ([]any, erro
 	return destinations, nil
 }
 
-func (*generatedReturningUser) IsGeneratedRow() {}
-
 func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
