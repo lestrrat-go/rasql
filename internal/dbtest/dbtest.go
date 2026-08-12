@@ -4,30 +4,22 @@
 // any rasql package, so a live test is not limited to the root package the
 // way TestDatabaseIntegration once was.
 //
-// Resolution order, for both databases independently:
+// Resolution, for both databases independently, has exactly one path: the
+// relevant RASQL_TEST_POSTGRES_DSN or RASQL_TEST_MYSQL_DSN environment
+// variable must be set to a non-blank value, which is PARSED with the
+// driver's own parser (pgx.ParseConfig for PostgreSQL, mysql.ParseDSN for
+// MySQL). This is exactly the DSN CI's integration job sets (see
+// .github/workflows/ci.yml), which brings up the compose file checked in at
+// the repository root (compose.yaml) as a workflow step before running the
+// suite. This package never runs Docker itself; when the variable is unset
+// or blank, the calling test is skipped with a message naming exactly what
+// to run locally: bring up compose.yaml with `docker compose up -d --wait`
+// and export the DSN it defines.
 //
-//  1. If the relevant RASQL_TEST_POSTGRES_DSN or RASQL_TEST_MYSQL_DSN
-//     environment variable is set to a non-blank value, that value is
-//     PARSED with the driver's own parser (pgx.ParseConfig for PostgreSQL,
-//     mysql.ParseDSN for MySQL) and Docker is never touched. This is CI's
-//     path (see .github/workflows/ci.yml), and it keeps that behavior
-//     exactly as it is today.
-//  2. Otherwise, if Docker is usable, the compose file checked in at the
-//     repository root (compose.yaml) is brought up with
-//     `docker compose up -d --wait <service>` -- only the single service
-//     the caller needs, never both -- and the DSN is derived from that
-//     file's fixed ports -- 5432 for PostgreSQL, 3306 for MySQL -- the same
-//     ports and credentials CI's DSNs already assume.
-//  3. Otherwise the calling test is skipped, naming which of the following
-//     was detected: the docker binary missing from PATH, the daemon being
-//     unreachable (including a permission error talking to its socket), or
-//     the `compose` subcommand not being available.
-//
-// Whichever of those a database resolves to -- a caller-supplied DSN or the
-// Docker fallback -- this package then creates a database (a schema, for
-// MySQL) named uniquely for this run, and hands back a configuration
-// pointed at THAT database rather than whatever the resolved DSN or compose
-// fallback itself named. Safety no longer depends on proving where a
+// Whichever DSN a database resolves to, this package then creates a
+// database (a schema, for MySQL) named uniquely for this run, and hands
+// back a configuration pointed at THAT database rather than whatever the
+// resolved DSN itself named. Safety no longer depends on proving where a
 // supplied DSN's text points: earlier revisions of this package tried to
 // verify that from the DSN's own text alone, which required reimplementing
 // pieces of each driver's own parser this package cannot call, and an audit
@@ -41,39 +33,26 @@
 // per-database boundary cannot contain a cluster-wide PostgreSQL role or a
 // global MySQL user the way it contains a table.
 //
-// Unavailability and failure are different outcomes and this package treats
-// them differently. Docker being unusable is a fact about the machine, not
-// about rasql, so it skips the test rather than failing it. A compose
-// bring-up that fails after Docker has already been confirmed reachable
-// fails the test loudly instead, carrying Docker's own message, uniformly
-// -- whether the cause is a broken compose file, a broken image reference,
-// or a host port compose wants (5432 or 3306) already being in use by
-// something else, commonly a PostgreSQL or MySQL server the developer
-// already has running locally. There is no classification of which of
-// those it was: the person running the suite can read Docker's own message
-// and, if it is a port already in use, set RASQL_TEST_POSTGRES_DSN or
-// RASQL_TEST_MYSQL_DSN to point at the database they already have running
-// instead of bringing up compose. Failing to create this package's own
-// fresh database once connected -- including a set of credentials that
-// cannot CREATE DATABASE at all -- fails loudly the same way, for the same
-// reason.
+// A set DSN that turns out to be unparseable fails the test loudly rather
+// than falling back to skip: it carries a specific, wrong answer from
+// whoever set it, not the absence of one. Failing to create this package's
+// own fresh database once connected -- including a set of credentials that
+// cannot CREATE DATABASE at all -- fails loudly for the same reason.
 //
-// This package never tears containers down, and has no opt-in to make it
-// do so. go test ./... compiles and runs every package as a separate
-// binary, and runs those binaries in parallel, so several packages can
-// reach step 2 at the same moment in different processes; bring-up is
-// serialized with an advisory file lock (see lock_unix.go), but a
-// t.Cleanup that ran `docker compose down` in one package would destroy
-// the database another package is still using. A developer stops the
-// containers by hand once finished:
+// This package never tears down whatever brought the database up, and has
+// no opt-in to make it do so: several `go test ./...` binaries can be using
+// the same containers at once, and an automatic `docker compose down` in
+// one package's cleanup would destroy the database another package's tests
+// are still using. A developer stops the containers by hand once finished:
 //
 //	docker compose down -v
 //
 // This package -- and therefore any test that imports it -- builds only on
 // unix (see the //go:build unix constraint at the top of every file in this
-// package, including lock_unix.go's advisory file lock, which has no
-// portable equivalent this package relies on). A consumer test file must
-// carry the same constraint; otherwise `go test ./...` fails to build that
+// package). Nothing left in this package is itself unix-specific; the
+// constraint predates this package's single-DSN-path form and is kept
+// unchanged rather than relitigated here. A consumer test file must carry
+// the same constraint; otherwise `go test ./...` fails to build that
 // package's test binary on a non-unix platform instead of skipping it. See
 // database_integration_test.go and inspect/postgresql_privilege_test.go for
 // the pattern.
@@ -98,15 +77,19 @@ const (
 	mysqlEnvVar = "RASQL_TEST_MYSQL_DSN"
 
 	// postgresComposeDSN matches the "postgres" service in compose.yaml and
-	// the postgres_dsn CI sets for its PostgreSQL matrix leg.
+	// the RASQL_TEST_POSTGRES_DSN CI's integration job sets. skipNoDSN
+	// quotes it verbatim in the skip message resolvePostgreSQLServerConfig
+	// emits when RASQL_TEST_POSTGRES_DSN is unset, so a developer can export
+	// exactly this value after bringing compose.yaml up.
 	postgresComposeDSN = "postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable"
 	// mysqlComposeDSN matches the "mysql" service in compose.yaml and the
-	// RASQL_TEST_MYSQL_DSN CI sets for the integration job. It authenticates
-	// as root, not the rasql/rasql account MYSQL_USER/MYSQL_PASSWORD create:
-	// the official mysql image grants that account privileges scoped to
-	// MYSQL_DATABASE only, so it cannot CREATE DATABASE for this package's
-	// fresh per-run schema. root, whose password both service definitions
-	// already set via MYSQL_ROOT_PASSWORD, can.
+	// RASQL_TEST_MYSQL_DSN CI's integration job sets, quoted the same way by
+	// skipNoDSN via resolveMySQLServerConfig. It authenticates as root, not
+	// the rasql/rasql account MYSQL_USER/MYSQL_PASSWORD create: the official
+	// mysql image grants that account privileges scoped to MYSQL_DATABASE
+	// only, so it cannot CREATE DATABASE for this package's fresh per-run
+	// schema. root, whose password both service definitions already set via
+	// MYSQL_ROOT_PASSWORD, can.
 	mysqlComposeDSN = "root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true"
 
 	// cleanupTimeout bounds a t.Cleanup-registered database drop. It cannot
@@ -120,25 +103,25 @@ const (
 // dsnDecision is the pure decision at the heart of both
 // resolvePostgreSQLServerConfig and resolveMySQLServerConfig: given an
 // environment variable's raw state -- its value and whether it was set at
-// all -- does resolution parse and use that
-// value, or fall through to the Docker/skip path? It returns (trimmed,
-// useValue, shouldLog): trimmed is value with leading and trailing
-// whitespace removed, and useValue reports whether the caller should parse
-// trimmed at all. Callers parse trimmed, never value, so a DSN with a
-// trailing newline -- the same adjacent case an all-whitespace value is --
-// is handled by the value it clearly means rather than failing on
+// all -- does resolution parse and use that value, or fall through to skip?
+// It returns (trimmed, useValue, shouldLog): trimmed is value with leading
+// and trailing whitespace removed, and useValue reports whether the caller
+// should parse trimmed at all. Callers parse trimmed, never value, so a DSN
+// with a trailing newline -- the same adjacent case an all-whitespace value
+// is -- is handled by the value it clearly means rather than failing on
 // incidental formatting. When resolution falls through because the
 // variable was present but blank after trimming (as opposed to simply
-// unset), shouldLog reports that, so the caller can emit the
-// present-but-blank diagnostic.
+// unset), shouldLog reports that, so the caller's skip message can say
+// which of the two actually happened instead of reporting a present-but-blank
+// value as though it were never set at all.
 //
-// This function does no environment lookups, runs no Docker commands, and
-// logs nothing itself -- it is pure input to output -- so it can be unit
-// tested directly without touching Docker or process environment state.
-// See dsnDecision's test for why that separation exists.
+// This function does no environment lookups and logs nothing itself -- it
+// is pure input to output -- so it can be unit tested directly without
+// touching process environment state. See dsnDecision's test for why that
+// separation exists.
 //
 // A present-but-blank value is deliberately treated the same as unset and
-// falls through to Docker/skip, rather than failing fast. This is not an
+// falls through to skip, rather than failing fast. This is not an
 // oversight; two things rule out failing here:
 //
 //   - Clearing an inherited DSN to opt out of live tests is a real
@@ -184,13 +167,34 @@ func openAndPing(t *testing.T, db *sql.DB) *sql.DB {
 	return db
 }
 
-// blankDiagnostic logs why a present-but-blank RASQL_TEST_*_DSN value is
-// being ignored, so the person who expected their DSN to be used can see
-// why it was not, instead of reading a Docker or skip message that never
-// names their variable.
-func blankDiagnostic(t *testing.T, envVar string) {
+// skipNoDSN skips the calling test because envVar did not resolve to a DSN,
+// naming exactly what to run to get a live database: bring up the
+// checked-in compose.yaml and export the DSN it defines for envVar. blank
+// distinguishes envVar being present but empty from it being absent
+// entirely -- the two cases dsnDecision's third return value tells the two
+// callers apart -- so the message opens with "is set to a blank value" or
+// "is not set" and never reports one as though it were the other. Folding
+// this distinction directly into the one skip message, rather than logging
+// a separate diagnostic first, is deliberate: two separate lines invited
+// them to drift out of sync with each other (as they once did, saying a
+// variable was both blank and unset in the same test run), and a single
+// line cannot make that particular mistake.
+//
+// The skip itself is the intended result of an unset DSN, not a gap: a
+// machine with neither RASQL_TEST_POSTGRES_DSN nor RASQL_TEST_MYSQL_DSN set
+// is expected to see `go test ./...` pass with every live test skipped,
+// rather than fail or hang trying to reach a database that was never
+// started (see CONTRIBUTING.md's "Live database tests" section). Live
+// coverage against a real server comes from CI's `integration` job, which
+// sets both variables after bringing compose.yaml up, not from this skip
+// path.
+func skipNoDSN(t *testing.T, envVar, composeDSN string, blank bool) {
 	t.Helper()
-	t.Logf("%s is set to a blank value; ignoring it and falling through to Docker/skip resolution", envVar)
+	state := "is not set"
+	if blank {
+		state = "is set to a blank value"
+	}
+	t.Skipf("%s %s; bring up compose.yaml with `docker compose up -d --wait` and export %s=%s", envVar, state, envVar, composeDSN)
 }
 
 // UniqueName generates a name unlikely to collide with another concurrent
