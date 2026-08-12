@@ -24,14 +24,14 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 			decodeRows[T](row.Scan(rows))(yield)
 			return
 		}
+		defer func() {
+			_ = rows.Close()
+		}()
 		names, err := rows.Columns()
 		if err != nil {
 			yield(zero, fmt.Errorf("row: read result columns: %w", err))
 			return
 		}
-		defer func() {
-			_ = rows.Close()
-		}()
 		index := 0
 		var result T
 		scanner := any(&result).(row.DestinationScanner)
