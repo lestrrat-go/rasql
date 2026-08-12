@@ -179,6 +179,15 @@ func openAndPing(t *testing.T, db *sql.DB) *sql.DB {
 // them to drift out of sync with each other (as they once did, saying a
 // variable was both blank and unset in the same test run), and a single
 // line cannot make that particular mistake.
+//
+// The skip itself is the intended result of an unset DSN, not a gap: a
+// machine with neither RASQL_TEST_POSTGRES_DSN nor RASQL_TEST_MYSQL_DSN set
+// is expected to see `go test ./...` pass with every live test skipped,
+// rather than fail or hang trying to reach a database that was never
+// started (see CONTRIBUTING.md's "Live database tests" section). Live
+// coverage against a real server comes from CI's `integration` job, which
+// sets both variables after bringing compose.yaml up, not from this skip
+// path.
 func skipNoDSN(t *testing.T, envVar, composeDSN string, blank bool) {
 	t.Helper()
 	state := "is not set"
