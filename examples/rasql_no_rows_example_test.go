@@ -40,10 +40,12 @@ func Example_rasql_no_rows() {
 	}
 
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 1)
+	// BEGIN(no_rows)
 	_, err = rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, db)
 	if errors.Is(err, rasql.ErrNoRows) {
 		fmt.Println("no such user")
 	}
+	// END(no_rows)
 	// rasql.ErrNoRows wraps database/sql.ErrNoRows, so a caller that already
 	// branches on the standard library's sentinel keeps working unchanged.
 	fmt.Println("also sql.ErrNoRows:", errors.Is(err, sql.ErrNoRows))

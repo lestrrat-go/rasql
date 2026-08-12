@@ -333,20 +333,7 @@ source: [examples/rasql_scalar_function_example_test.go](https://github.com/lest
 
 A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `GROUP BY` clause, `HAVING` clause, and `ORDER BY` clause of a `SELECT` statement, and nowhere else: every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — refuses one, the same way those clauses refuse an aggregate. A subquery reads no table of the statement that encloses it: every column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a correlation. A subquery may nest inside another subquery to any depth.
 
-```go
-owned, err := query.NewSelect(projects.Ref(), query.Project(projects.ID))
-owned, err = owned.WithWhere(query.Equal(projects.OwnerID, query.Bind(7)))
-
-allTasks, err := tasks.As("all_tasks")
-average, err := query.NewSelect(allTasks.Ref(), query.Project(query.Avg(allTasks.Priority)))
-
-rows, err := rasql.DecodeFrom[taskSummary](tasks).
-	Project(query.Project(tasks.ID), query.Project(tasks.Title)).
-	Where(query.InSelect(tasks.ProjectID, owned)).
-	Where(query.GreaterThanOrEqual(tasks.Priority, query.Scalar(average))).
-	OrderAsc(tasks.ID).
-	All(ctx, db)
-```
+[Filter with a subquery](#filter-with-a-subquery) below builds both forms against a database, with one subquery reading its own table and another reading an alias of the enclosing statement's table.
 
 `query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit; the arguments a subquery binds join the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an `OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject; PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`.
 
@@ -465,12 +452,15 @@ source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat
 
 `One` also reports the result's row count: it returns `rasql.ErrNoRows` when the statement matched no rows and `rasql.ErrMultipleRows` when it matched more than one. `rasql.ErrNoRows` wraps `sql.ErrNoRows`, so `errors.Is(err, sql.ErrNoRows)` holds too, and code already written against `database/sql` keeps working:
 
+<!-- INCLUDE(examples/rasql_no_rows_example_test.go#no_rows) -->
 ```go
-user, err := rasql.SelectFrom(users).WhereEqual(users.ID, id).One(ctx, db)
+_, err = rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, db)
 if errors.Is(err, rasql.ErrNoRows) {
-	// no such user
+	fmt.Println("no such user")
 }
 ```
+source: [examples/rasql_no_rows_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_no_rows_example_test.go)
+<!-- END INCLUDE -->
 
 `Build(d)` skips execution and returns the rendered `render.Statement`, which carries the SQL text and its ordered arguments. It takes a `dialect.Dialect` rather than a `rasql.DB`, because rendering needs the dialect and nothing else. It is the direct way to log or test a statement.
 
@@ -561,6 +551,7 @@ source: [examples/rasql_where_in_example_test.go](https://github.com/lestrrat-go
 
 For anything richer, `Where` and `Order` accept expressions from the `query` package:
 
+<!-- INCLUDE(examples/rasql_where_expressions_example_test.go#where_expressions) -->
 ```go
 rows, err := rasql.SelectFrom(users).
 	Where(query.And(
@@ -570,6 +561,8 @@ rows, err := rasql.SelectFrom(users).
 	Order(query.Desc(users.ID)).
 	Query(ctx, db)
 ```
+source: [examples/rasql_where_expressions_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_where_expressions_example_test.go)
+<!-- END INCLUDE -->
 
 A generated field cannot name a column the table does not have, because the field would not exist. A table built at run time has no such fields, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column; a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
 
@@ -1055,16 +1048,20 @@ source: [examples/rasql_distinct_example_test.go](https://github.com/lestrrat-go
 
 `As` returns the table under an alias with every column field rebound to it, so the alias qualifies the columns reached through the aliased value:
 
+<!-- INCLUDE(examples/rasql_self_join_example_test.go#self_join) -->
 ```go
-// employees is a generated table with id and manager_id columns.
 manager, err := employees.As("manager")
 if err != nil {
-	return err
+	fmt.Printf("failed to alias employees: %s\n", err)
+	return
 }
 rows, err := rasql.SelectFrom(employees).
 	Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
+	OrderAsc(employees.ID).
 	Query(ctx, db)
 ```
+source: [examples/rasql_self_join_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_self_join_example_test.go)
+<!-- END INCLUDE -->
 
 `employees.ID` still renders as `"employees"."id"`, while `manager.ID` renders as `"manager"."id"`. `As` fails when the alias is not a valid identifier.
 

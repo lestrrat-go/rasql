@@ -8,11 +8,15 @@ Every write operation, predicate, and statement constructor is listed in the [op
 
 `rasql.CreateTable` renders a table descriptor as DDL and executes it, then creates its indexes.
 
+<!-- INCLUDE(examples/rasql_sqlite_query_example_test.go#create_table) -->
 ```go
 if err := rasql.CreateTable(ctx, db, users); err != nil {
-	return err
+	fmt.Printf("failed to create users table: %s\n", err)
+	return
 }
 ```
+source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_sqlite_query_example_test.go)
+<!-- END INCLUDE -->
 
 Each statement runs on its own. To create several tables atomically, run `CreateTable` through the `rasql.DB` returned by `DB.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
 
@@ -402,17 +406,22 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 
 `NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
+<!-- INCLUDE(examples/rasql_partial_update_example_test.go#partial_update) -->
 ```go
 statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email, query.Bind("ada@example.com")))
 if err != nil {
-	return err
+	fmt.Printf("failed to build update: %s\n", err)
+	return
 }
 statement, err = statement.WithWhere(query.LessThan(users.ID, query.Bind(100)))
 if err != nil {
-	return err
+	fmt.Printf("failed to filter update: %s\n", err)
+	return
 }
 result, err := rasql.Exec(ctx, db, statement)
 ```
+source: [examples/rasql_partial_update_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_partial_update_example_test.go)
+<!-- END INCLUDE -->
 
 Each `With…` method returns a new validated statement rather than changing the one it was called on, matching the immutable style of the select builders. `NewUpsert` accepts an explicit conflict target the same way; check `dialect.CapabilityConflictTarget` before relying on it, since MySQL lacks it and rejects a statement that sets one.
 
@@ -504,6 +513,7 @@ source: [examples/rasql_returning_example_test.go](https://github.com/lestrrat-g
 
 A fluent delete uses the same dynamic and typed terminals:
 
+<!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_dynamic) -->
 ```go
 builder := rasql.DeleteFrom(users).
 	WhereEqual(users.ID, 42).
@@ -511,18 +521,23 @@ builder := rasql.DeleteFrom(users).
 
 rows, err := builder.Query(ctx, db)
 ```
+source: [examples/rasql_delete_returning_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_delete_returning_example_test.go)
+<!-- END INCLUDE -->
 
 `Query` returns `row.Dynamic` values. `QueryDeleteAll[T]` and `QueryDeleteOne[T]`
 decode the projections into `T` and follow the same empty or multiple-row rules
 as `QueryWriteAll[T]` and `QueryWriteOne[T]`. Use one terminal per builder:
 
+<!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_typed) -->
 ```go
-builder := rasql.DeleteFrom(users).
-	WhereEqual(users.ID, 42).
+typed := rasql.DeleteFrom(users).
+	WhereEqual(users.ID, 43).
 	Returning(query.Project(users.ID), query.Project(users.Email))
 
-deleted, err := rasql.QueryDeleteOne[UserRow](ctx, db, builder)
+deleted, err := rasql.QueryDeleteOne[UserRow](ctx, db, typed)
 ```
+source: [examples/rasql_delete_returning_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_delete_returning_example_test.go)
+<!-- END INCLUDE -->
 
 A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result.LastInsertId()` from `Exec` instead.
 
@@ -534,10 +549,11 @@ A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result
 
 Hooks run in registration order before execution and reverse registration order after execution. A hook cannot replace the SQL or its bound arguments, so policy checks and logging do not change the statement sent to the driver.
 
+<!-- INCLUDE(examples/rasql_hook_example_test.go#hook) -->
 ```go
 policy := rasql.HookFunc{
 	BeforeFunc: func(ctx context.Context, operation rasql.Operation) error {
-		if operation.Kind() == rasql.ExecOperation && operation.SQL() == "DELETE FROM users" {
+		if operation.Kind() == rasql.ExecOperation && operation.SQL() == `DELETE FROM "users"` {
 			return errors.New("unfiltered deletes are disabled")
 		}
 		return nil
@@ -547,8 +563,12 @@ policy := rasql.HookFunc{
 db, err = db.WithHooks(policy)
 if err != nil {
 	// Handle invalid hook configuration.
+	fmt.Printf("failed to install the hook: %s\n", err)
+	return
 }
 ```
+source: [examples/rasql_hook_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_hook_example_test.go)
+<!-- END INCLUDE -->
 
 Pass hooks to `rasql.New`, or add them with `DB.WithHooks`. A transaction started by `DB.Begin` inherits every hook already registered on that `DB`, then appends any hooks passed to `Begin` itself. A policy hook registered on a `DB` therefore also runs for operations inside transactions started from it, not just for calls made directly through the `DB`. Add hooks scoped to only the transaction by passing them to `Begin`, or by calling `WithHooks` on the `DB` it returns. `WithHooks` returns the same concrete `DB` value, so transaction ownership and explicit `Commit` or `Rollback` remain visible.
 

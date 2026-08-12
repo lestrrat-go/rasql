@@ -11,6 +11,25 @@ go vet ./...
 
 Most of the suite needs no database. It also needs no Docker: any test that does need a live database skips cleanly when its DSN is not set (see below), so `go test ./...` always passes on a machine with nothing set up.
 
+## Code in the documentation
+
+Every Go block in `README.md` and `docs/` is copied from a file the compiler and `go test` see, and `TestDocGoBlocksComeFromExamples` fails on one that is written by hand. A block is delimited by include markers and its body is generated, so never edit the body itself:
+
+```
+<!-- INCLUDE(examples/rasql_hook_example_test.go#hook) -->
+<!-- END INCLUDE -->
+```
+
+A target naming a file alone includes that whole file. A target ending in `#name` includes only the region an example marks with `// BEGIN(name)` and `// END(name)`, shifted to the left margin, which is how a short passage shows a few lines instead of a whole example. `TestDocRegionsAreIncluded` fails on a region no page includes, so the markers and the pages stay in step.
+
+Write the example first, under `examples/`, as an `Example*` function with an `// Output:` block. Then add the markers and fill every block:
+
+```sh
+go test ./examples/ -update-docs
+```
+
+The same flag rewrites the checked-in generated files the documentation shows, `examples/store/users_gen.go` and `examples/store/user_by_email_gen.go`, which `TestGeneratedStoreIsCurrent` and `TestGeneratedQueryIsCurrent` otherwise fail on when `rasqlgen` output changes.
+
 ## Live database tests
 
 A handful of tests run against a real PostgreSQL or MySQL server rather than a mock, such as `TestDatabaseIntegration` at the repository root and the privilege tests in `inspect/`. Any package can add one: `internal/dbtest` gives a test in any package a live `*sql.DB` or an already-parsed connection config (`*pgx.ConnConfig` / `*mysql.Config`) for PostgreSQL and MySQL, resolved a single way:
