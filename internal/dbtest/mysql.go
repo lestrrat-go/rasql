@@ -97,17 +97,12 @@ func mysqlSchemaExists(ctx context.Context, admin *sql.DB, name string) (bool, e
 	}
 }
 
-// mysqlComposeService is the compose.yaml service MySQLConfig brings up
-// when no DSN is set; see ensureComposeUp in compose.go.
-var mysqlComposeService = composeService{name: "mysql", envVar: mysqlEnvVar}
-
 var mysqlConfigCache perTestCache[*mysql.Config]
 
 // MySQLConfig returns a parsed MySQL connection configuration for a fresh,
 // per-run database (a schema, in MySQL terms) created on a live server,
 // resolved as described in the package doc. It skips the calling test
-// rather than returning an error when no DSN or usable Docker fallback is
-// available.
+// rather than returning an error when RASQL_TEST_MYSQL_DSN is not set.
 //
 // Like PostgreSQLConfig, it returns the driver's own *mysql.Config rather
 // than a DSN string, so a caller needing different credentials modifies the
@@ -149,9 +144,8 @@ func mysqlOpenDB(t *testing.T, config *mysql.Config) *sql.DB {
 
 // resolveMySQLServerConfig resolves a MySQL connection configuration the
 // way the package doc describes -- a set RASQL_TEST_MYSQL_DSN parsed with
-// the mysql driver's own parser, or the Docker compose fallback -- without
-// yet creating this run's own fresh database. createFreshMySQLDatabase does
-// that next; see MySQLConfig.
+// the mysql driver's own parser -- without yet creating this run's own
+// fresh database. createFreshMySQLDatabase does that next; see MySQLConfig.
 func resolveMySQLServerConfig(t *testing.T) *mysql.Config {
 	t.Helper()
 	value, set := os.LookupEnv(mysqlEnvVar)
@@ -160,14 +154,8 @@ func resolveMySQLServerConfig(t *testing.T) *mysql.Config {
 		if shouldLog {
 			blankDiagnostic(t, mysqlEnvVar)
 		}
-		ensureComposeUp(t, mysqlComposeService)
-		// mysqlComposeDSN is this package's own constant, not user input;
-		// see the identical comment in resolvePostgreSQLServerConfig.
-		config, err := mysql.ParseDSN(mysqlComposeDSN)
-		if err != nil {
-			t.Fatalf("dbtest: parse mysqlComposeDSN: %v", err)
-		}
-		return config
+		skipNoDSN(t, mysqlEnvVar, mysqlComposeDSN)
+		return nil
 	}
 
 	config, err := mysql.ParseDSN(trimmed)

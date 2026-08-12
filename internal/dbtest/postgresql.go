@@ -111,16 +111,12 @@ func pgDatabaseExists(ctx context.Context, admin *sql.DB, name string) (bool, er
 	}
 }
 
-// postgresComposeService is the compose.yaml service PostgreSQLConfig
-// brings up when no DSN is set; see ensureComposeUp in compose.go.
-var postgresComposeService = composeService{name: "postgres", envVar: postgresEnvVar}
-
 var postgresConfigCache perTestCache[*pgx.ConnConfig]
 
 // PostgreSQLConfig returns a parsed PostgreSQL connection configuration for
 // a fresh, per-run database created on a live server, resolved as described
 // in the package doc. It skips the calling test rather than returning an
-// error when no DSN or usable Docker fallback is available.
+// error when RASQL_TEST_POSTGRES_DSN is not set.
 //
 // It returns pgx's own *pgx.ConnConfig rather than a DSN string on purpose.
 // A caller that needs different credentials against the same database (see
@@ -154,9 +150,9 @@ func PostgreSQLDB(t *testing.T) *sql.DB {
 
 // resolvePostgreSQLServerConfig resolves a PostgreSQL connection
 // configuration the way the package doc describes -- a set
-// RASQL_TEST_POSTGRES_DSN parsed with pgx's own parser, or the Docker
-// compose fallback -- without yet creating this run's own fresh database.
-// createFreshPostgreSQLDatabase does that next; see PostgreSQLConfig.
+// RASQL_TEST_POSTGRES_DSN parsed with pgx's own parser -- without yet
+// creating this run's own fresh database. createFreshPostgreSQLDatabase does
+// that next; see PostgreSQLConfig.
 func resolvePostgreSQLServerConfig(t *testing.T) *pgx.ConnConfig {
 	t.Helper()
 	value, set := os.LookupEnv(postgresEnvVar)
@@ -165,15 +161,8 @@ func resolvePostgreSQLServerConfig(t *testing.T) *pgx.ConnConfig {
 		if shouldLog {
 			blankDiagnostic(t, postgresEnvVar)
 		}
-		ensureComposeUp(t, postgresComposeService)
-		// postgresComposeDSN is this package's own constant, not user
-		// input, so a parse failure here would be a bug in this package
-		// rather than something to validate against.
-		config, err := pgx.ParseConfig(postgresComposeDSN)
-		if err != nil {
-			t.Fatalf("dbtest: parse postgresComposeDSN: %v", err)
-		}
-		return config
+		skipNoDSN(t, postgresEnvVar, postgresComposeDSN)
+		return nil
 	}
 
 	config, err := pgx.ParseConfig(trimmed)
