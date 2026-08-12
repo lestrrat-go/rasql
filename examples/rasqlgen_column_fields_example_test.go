@@ -1,0 +1,54 @@
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
+)
+
+// Example_rasqlgen_column_fields contrasts the two ways to name a column. A
+// string is checked when the statement is rendered, so a typo survives until
+// then; a generated column field is checked by the compiler, so the same typo
+// never builds.
+func Example_rasqlgen_column_fields() {
+	// BEGIN(string_column)
+	correct := rasql.SelectFromRef(store.Users().Ref()).Select("id").WhereEqual("id", 42)
+	typo := rasql.SelectFromRef(store.Users().Ref()).Select("id").WhereEqual("emial", 42)
+	// END(string_column)
+
+	// Nothing separates the two until one of them is rendered.
+	statement, err := correct.Build(dialect.PostgreSQL())
+	if err != nil {
+		fmt.Printf("failed to build the correct select: %s\n", err)
+		return
+	}
+	fmt.Println(statement.SQL())
+	if _, err := typo.Build(dialect.PostgreSQL()); err != nil {
+		fmt.Println(err)
+	}
+
+	// BEGIN(typed_column)
+	users := store.Users()
+	built, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Build(dialect.PostgreSQL())
+	// END(typed_column)
+	if err != nil {
+		fmt.Printf("failed to build the typed select: %s\n", err)
+		return
+	}
+	fmt.Println(built.SQL())
+
+	// A name looked up while the program runs is checked when the lookup runs,
+	// since that is the first moment the name exists.
+	// BEGIN(column_lookup)
+	column, err := users.Column("emial")
+	// END(column_lookup)
+	fmt.Println(column.Name(), err)
+
+	// Output:
+	// SELECT "users"."id" FROM "users" WHERE ("users"."id" = $1)
+	// query column: table "users" has no column "emial"
+	// SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)
+	//  query column: table "users" has no column "emial"
+}
