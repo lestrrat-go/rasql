@@ -156,12 +156,9 @@ func PostgreSQLDB(t *testing.T) *sql.DB {
 func resolvePostgreSQLServerConfig(t *testing.T) *pgx.ConnConfig {
 	t.Helper()
 	value, set := os.LookupEnv(postgresEnvVar)
-	trimmed, useValue, shouldLog := dsnDecision(value, set)
+	trimmed, useValue, blank := dsnDecision(value, set)
 	if !useValue {
-		if shouldLog {
-			blankDiagnostic(t, postgresEnvVar)
-		}
-		skipNoDSN(t, postgresEnvVar, postgresComposeDSN)
+		skipNoDSN(t, postgresEnvVar, postgresComposeDSN, blank)
 		return nil
 	}
 

@@ -111,8 +111,9 @@ const (
 // is -- is handled by the value it clearly means rather than failing on
 // incidental formatting. When resolution falls through because the
 // variable was present but blank after trimming (as opposed to simply
-// unset), shouldLog reports that, so the caller can emit the
-// present-but-blank diagnostic.
+// unset), shouldLog reports that, so the caller's skip message can say
+// which of the two actually happened instead of reporting a present-but-blank
+// value as though it were never set at all.
 //
 // This function does no environment lookups and logs nothing itself -- it
 // is pure input to output -- so it can be unit tested directly without
@@ -166,22 +167,25 @@ func openAndPing(t *testing.T, db *sql.DB) *sql.DB {
 	return db
 }
 
-// blankDiagnostic logs why a present-but-blank RASQL_TEST_*_DSN value is
-// being ignored, so the person who expected their DSN to be used can see
-// why it was not, instead of reading a skip message that never names their
-// variable.
-func blankDiagnostic(t *testing.T, envVar string) {
+// skipNoDSN skips the calling test because envVar did not resolve to a DSN,
+// naming exactly what to run to get a live database: bring up the
+// checked-in compose.yaml and export the DSN it defines for envVar. blank
+// distinguishes envVar being present but empty from it being absent
+// entirely -- the two cases dsnDecision's third return value tells the two
+// callers apart -- so the message opens with "is set to a blank value" or
+// "is not set" and never reports one as though it were the other. Folding
+// this distinction directly into the one skip message, rather than logging
+// a separate diagnostic first, is deliberate: two separate lines invited
+// them to drift out of sync with each other (as they once did, saying a
+// variable was both blank and unset in the same test run), and a single
+// line cannot make that particular mistake.
+func skipNoDSN(t *testing.T, envVar, composeDSN string, blank bool) {
 	t.Helper()
-	t.Logf("%s is set to a blank value; ignoring it and skipping", envVar)
-}
-
-// skipNoDSN skips the calling test because envVar is not set (or is set to
-// a blank value; see blankDiagnostic for that diagnostic), naming exactly
-// what to run to get a live database: bring up the checked-in compose.yaml
-// and export the DSN it defines for envVar.
-func skipNoDSN(t *testing.T, envVar, composeDSN string) {
-	t.Helper()
-	t.Skipf("%s is not set; bring up compose.yaml with `docker compose up -d --wait` and export %s=%s", envVar, envVar, composeDSN)
+	state := "is not set"
+	if blank {
+		state = "is set to a blank value"
+	}
+	t.Skipf("%s %s; bring up compose.yaml with `docker compose up -d --wait` and export %s=%s", envVar, state, envVar, composeDSN)
 }
 
 // UniqueName generates a name unlikely to collide with another concurrent

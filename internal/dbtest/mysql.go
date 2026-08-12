@@ -149,12 +149,9 @@ func mysqlOpenDB(t *testing.T, config *mysql.Config) *sql.DB {
 func resolveMySQLServerConfig(t *testing.T) *mysql.Config {
 	t.Helper()
 	value, set := os.LookupEnv(mysqlEnvVar)
-	trimmed, useValue, shouldLog := dsnDecision(value, set)
+	trimmed, useValue, blank := dsnDecision(value, set)
 	if !useValue {
-		if shouldLog {
-			blankDiagnostic(t, mysqlEnvVar)
-		}
-		skipNoDSN(t, mysqlEnvVar, mysqlComposeDSN)
+		skipNoDSN(t, mysqlEnvVar, mysqlComposeDSN, blank)
 		return nil
 	}
 
