@@ -13,26 +13,21 @@ import (
 
 // TestDSNDecision pins the pure decision inside resolvePostgreSQLServerConfig
 // and resolveMySQLServerConfig: given an environment variable's raw state,
-// does resolution parse and use its value, or fall through to the
-// Docker/skip path (see part 1's blank-DSN case, "a blank, empty and
-// all-whitespace DSN still takes the Docker-or-skip path")? It covers
-// unset, a real value, an all-whitespace value (empty, single space, and
-// tab, since dsnDecision treats them identically), and a real value padded
-// with whitespace -- pinning that padding is trimmed away rather than
-// treated as part of the value, that both unset and all-whitespace fall
-// through, and that only a present-but-blank value asks for the diagnostic
-// log.
+// does resolution parse and use its value, or fall through to skip? It
+// covers unset, a real value, an all-whitespace value (empty, single space,
+// and tab, since dsnDecision treats them identically), and a real value
+// padded with whitespace -- pinning that padding is trimmed away rather
+// than treated as part of the value, that both unset and all-whitespace
+// fall through, and that only a present-but-blank value asks for the
+// diagnostic log.
 //
 // This is deliberately a test of dsnDecision alone, not of
 // PostgreSQLConfig/MySQLConfig/resolvePostgreSQLServerConfig/resolveMySQLServerConfig
-// end-to-end: those reach ensureComposeUp, which runs `docker compose up`
-// when Docker is reachable. On a CI runner that already has PostgreSQL and
-// MySQL service containers bound to ports 5432/3306, that bring-up fails
-// even though resolution itself made the right decision -- a test of the
-// decision should not perform the action the decision leads to. dsnDecision
-// touches no environment variable and no Docker, so this test needs
-// neither, and passes identically with Docker installed, absent, or
-// already using the ports compose would want.
+// end-to-end: those call t.Skipf on the fall-through path, which this test
+// cannot observe without a live *testing.T failure -- a test of the
+// decision should not perform the action the decision leads to.
+// dsnDecision touches no environment variable itself, so this test needs
+// none set.
 func TestDSNDecision(t *testing.T) {
 	t.Run("unset falls through without logging", func(t *testing.T) {
 		trimmed, useValue, shouldLog := dsnDecision("", false)

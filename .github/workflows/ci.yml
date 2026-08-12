@@ -40,39 +40,17 @@ jobs:
   integration:
     name: Database integration
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: rasql
-          POSTGRES_PASSWORD: rasql
-          POSTGRES_USER: rasql
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U rasql -d rasql"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: rasql
-          MYSQL_PASSWORD: rasql
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_USER: rasql
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -urasql -prasql"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.x'
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@4eb059ff7f16592f9c84d5ca339c53cb7c5064e2 # v2
+        with:
+          version: v5.4.0
+      - name: Bring up live databases
+        run: docker compose up -d --wait
       - name: Run the suite against live databases
         env:
           RASQL_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true

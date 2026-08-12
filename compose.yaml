@@ -1,15 +1,16 @@
-# Local live-database services for rasql, mirroring the `integration` job in
-# .github/workflows/ci.yml: same images, same credentials, same
-# healthchecks. Ports are fixed so the DSNs CI already uses
-# (RASQL_TEST_POSTGRES_DSN / RASQL_TEST_MYSQL_DSN) work unchanged locally.
+# Live-database services for rasql. This is the single definition of them:
+# the `integration` job in .github/workflows/ci.yml brings this file up as a
+# workflow step, and a developer brings it up locally the same way. Ports
+# are fixed so RASQL_TEST_POSTGRES_DSN / RASQL_TEST_MYSQL_DSN can point at
+# them unchanged in both places.
 #
 # Bring both up with:
 #
 #   docker compose up -d --wait
 #
-# internal/dbtest does this automatically for a live test when the relevant
-# DSN environment variable is not set. Containers are never torn down
-# automatically; stop them yourself with:
+# internal/dbtest never runs Docker itself; a live test skips when the
+# relevant DSN environment variable is not set, naming this command. Once
+# up, containers are never torn down automatically; stop them yourself with:
 #
 #   docker compose down -v
 services:
