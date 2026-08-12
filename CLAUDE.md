@@ -12,4 +12,4 @@ Get a live database the single way this repository supports: bring up `compose.y
 
 NEVER report behavior as verified against an engine when only fixture tests ran. Name which engines were actually reachable (e.g. "confirmed against PostgreSQL; MySQL was unreachable").
 
-A new assertion about engine behavior belongs in a live test guarded by `internal/dbtest`, added alongside the existing fixture test rather than replacing it.
+A new assertion about engine behavior belongs in a live test guarded by `internal/dbtest`, added alongside the existing fixture test rather than replacing it. `text_width_integration_test.go` is the worked example: it pins what a live catalog reports back for a stated text width, and asserts MySQL's own error 1170 rather than trusting rasql's render-time check to describe it.
