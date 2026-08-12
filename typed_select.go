@@ -200,7 +200,7 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context, db DB) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	return collectAll(rows)
+	return collectAll(rows, b.builder.rowLimitHint())
 }
 
 // Count executes COUNT(*) over the rows the statement matches.

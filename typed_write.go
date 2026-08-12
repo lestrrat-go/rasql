@@ -218,7 +218,7 @@ func QueryWriteAll[T any](ctx context.Context, db DB, statement query.WriteState
 	if err != nil {
 		return nil, err
 	}
-	return collectAll(scanTypedRendered[T](ctx, db, rendered))
+	return collectAll(scanTypedRendered[T](ctx, db, rendered), 0)
 }
 
 // QueryWriteOne runs statement through QueryWrite and decodes exactly one

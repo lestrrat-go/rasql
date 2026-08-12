@@ -16,7 +16,9 @@ const (
 	benchmarkDriverName   = "rasql-typed-row-scan"
 	benchmarkFullQuery    = "SELECT id, name, email"
 	benchmarkNameQuery    = "SELECT name"
+	benchmarkLargeQuery   = "SELECT id, name, email LARGE"
 	benchmarkRowsPerQuery = 10
+	benchmarkLargeRows    = 10000
 )
 
 func init() {
@@ -150,7 +152,7 @@ func BenchmarkScanDestinations(b *testing.B) {
 func BenchmarkTypedRowScan(b *testing.B) {
 	b.Run("full_static_generated", func(b *testing.B) {
 		b.ReportAllocs()
-		benchmarkQueryRows(b, benchmarkFullQuery, func(rows *sql.Rows) {
+		benchmarkQueryRows(b, benchmarkFullQuery, benchmarkRowsPerQuery, func(rows *sql.Rows) {
 			for result, err := range scanTypedRowsStatic[benchmarkMemberRow](rows) {
 				if err != nil {
 					b.Fatal(err)
@@ -164,7 +166,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 
 	b.Run("full_dynamic", func(b *testing.B) {
 		b.ReportAllocs()
-		benchmarkQueryRows(b, benchmarkFullQuery, func(rows *sql.Rows) {
+		benchmarkQueryRows(b, benchmarkFullQuery, benchmarkRowsPerQuery, func(rows *sql.Rows) {
 			for result, err := range decodeRows[benchmarkMemberRow](row.Scan(rows)) {
 				if err != nil {
 					b.Fatal(err)
@@ -178,7 +180,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 
 	b.Run("partial_generated", func(b *testing.B) {
 		b.ReportAllocs()
-		benchmarkQueryRows(b, benchmarkNameQuery, func(rows *sql.Rows) {
+		benchmarkQueryRows(b, benchmarkNameQuery, benchmarkRowsPerQuery, func(rows *sql.Rows) {
 			for result, err := range scanTypedRows[benchmarkMemberRow](rows) {
 				if err != nil {
 					b.Fatal(err)
@@ -192,7 +194,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 
 	b.Run("partial_dynamic", func(b *testing.B) {
 		b.ReportAllocs()
-		benchmarkQueryRows(b, benchmarkNameQuery, func(rows *sql.Rows) {
+		benchmarkQueryRows(b, benchmarkNameQuery, benchmarkRowsPerQuery, func(rows *sql.Rows) {
 			for result, err := range decodeRows[benchmarkMemberName](row.Scan(rows)) {
 				if err != nil {
 					b.Fatal(err)
@@ -205,7 +207,53 @@ func BenchmarkTypedRowScan(b *testing.B) {
 	})
 }
 
-func benchmarkQueryRows(b *testing.B, query string, consume func(*sql.Rows)) {
+// BenchmarkCollectAll isolates the slice-growth cost collectAll pays when it
+// has no hint against what it pays when it can pre-size the slice from a
+// LIMIT, using the 10,000-row query so the growth pattern actually shows up.
+func BenchmarkCollectAll(b *testing.B) {
+	database, err := sql.Open(benchmarkDriverName, "")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+
+	run := func(b *testing.B, hint int) {
+		b.Helper()
+		b.ReportAllocs()
+		for range b.N {
+			rows, err := database.QueryContext(b.Context(), benchmarkLargeQuery)
+			if err != nil {
+				b.Fatal(err)
+			}
+			decoded, err := collectAll(scanTypedRowsStatic[benchmarkMemberRow](rows), hint)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(decoded) != benchmarkLargeRows {
+				b.Fatalf("got %d rows, want %d", len(decoded), benchmarkLargeRows)
+			}
+		}
+	}
+
+	b.Run("no_hint", func(b *testing.B) {
+		run(b, 0)
+	})
+	b.Run("exact_hint", func(b *testing.B) {
+		run(b, benchmarkLargeRows)
+	})
+	// capped_hint uses an absurd hint far beyond any real LIMIT to prove the
+	// byte-budget clamp holds: this must not attempt a hundred-million-element
+	// allocation.
+	b.Run("capped_hint", func(b *testing.B) {
+		run(b, 100_000_000)
+	})
+}
+
+func benchmarkQueryRows(b *testing.B, query string, rowsPerQuery int, consume func(*sql.Rows)) {
 	b.Helper()
 	database, err := sql.Open(benchmarkDriverName, "")
 	if err != nil {
@@ -226,7 +274,7 @@ func benchmarkQueryRows(b *testing.B, query string, consume func(*sql.Rows)) {
 		consume(rows)
 	}
 	b.StopTimer()
-	b.ReportMetric(float64(b.Elapsed())/float64(b.N*benchmarkRowsPerQuery), "ns/row")
+	b.ReportMetric(float64(b.Elapsed())/float64(b.N*rowsPerQuery), "ns/row")
 }
 
 type benchmarkDriver struct{}
@@ -262,6 +310,12 @@ func (benchmarkConn) QueryContext(_ context.Context, query string, _ []driver.Na
 			columns:   []string{"name"},
 			values:    []driver.Value{"Ada Lovelace"},
 			remaining: benchmarkRowsPerQuery,
+		}, nil
+	case benchmarkLargeQuery:
+		return &benchmarkResultRows{
+			columns:   []string{"id", "name", "email"},
+			values:    []driver.Value{int64(7), "Ada Lovelace", "ada@example.com"},
+			remaining: benchmarkLargeRows,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported query %q", query)
