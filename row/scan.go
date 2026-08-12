@@ -24,16 +24,14 @@ type Scanner interface {
 // DestinationScanner is implemented by row types that map result-column names
 // to destinations for [ScanSource.Scan]. Generated row types implement it so
 // typed queries can scan partial or reordered result sets without Dynamic.
+//
+// A row type that implements DestinationScanner alone maps whichever columns it
+// chooses to. One that implements Scanner as well states that it maps a whole
+// table, which is the pair rasqlgen writes, and a typed write reading a
+// RETURNING clause into such a row type requires the clause to project every
+// column of the table it writes.
 type DestinationScanner interface {
 	ScanDestinations([]string) ([]any, error)
-}
-
-// GeneratedRow is implemented by rows emitted by rasqlgen. It marks the
-// generated mapping contract used by typed writes to validate RETURNING
-// projections. Custom DestinationScanner implementations do not need it.
-type GeneratedRow interface {
-	DestinationScanner
-	IsGeneratedRow()
 }
 
 // Scan returns a rangeable sequence of the result rows in rows.
