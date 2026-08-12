@@ -1114,6 +1114,9 @@ func writeColumnOption(source *bytes.Buffer, column schema.ColumnDef) {
 			source.WriteString(strconv.Itoa(width))
 			source.WriteString(")")
 		}
+		if text.Fixed {
+			source.WriteString(", schema.Fixed()")
+		}
 	}
 	if column.Nullable {
 		source.WriteString(", schema.Nullable()")

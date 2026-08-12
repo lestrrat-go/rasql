@@ -314,8 +314,12 @@ func (t TableDef) Validate() error {
 				return validationError(path+".type.scale", "decimal scale %d exceeds precision %d", scale, typed.Precision)
 			}
 		case TextType:
-			if width, stated := typed.Width.Value(); stated && width < 0 {
+			width, stated := typed.Width.Value()
+			if stated && width < 0 {
 				return validationError(path+".type.width", "text width must not be negative")
+			}
+			if typed.Fixed && !stated {
+				return validationError(path+".type.width", "fixed-width text column must state a width: use schema.Width, since bare CHAR means CHAR(1), not an unbounded column")
 			}
 		}
 		if _, exists := columns[column.Name]; exists {
