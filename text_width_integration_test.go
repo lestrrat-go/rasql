@@ -116,8 +116,11 @@ func TestTextWidthAgainstLiveDatabases(t *testing.T) {
 // MySQL refuses to build a key over an unbounded TEXT column with error 1170,
 // so rasql refuses to render such a statement, and a stated width is what
 // makes the column indexable. Both halves are asserted against the server:
-// that the bounded column really can be indexed, and that MySQL really does
-// reject the unbounded one when the SQL reaches it directly.
+// that the bounded column really is indexed, confirmed by reading the index
+// back from MySQL's own information_schema.statistics rather than trusting
+// CreateTable's nil error to mean an index was ever issued, and that MySQL
+// really does reject the unbounded one with error 1170 when the SQL reaches
+// it directly.
 func TestIndexedTextRequiresWidthOnMySQL(t *testing.T) {
 	ctx := context.Background()
 	database := dbtest.MySQLDB(t)
@@ -133,6 +136,22 @@ func TestIndexedTextRequiresWidthOnMySQL(t *testing.T) {
 	table := rasql.MustTableOf[struct{}](definition)
 	require.NoError(t, rasql.CreateTable(ctx, db, table),
 		"a bounded text column is indexable on MySQL")
+
+	// CreateTable returning nil only means MySQL accepted the statements it
+	// sent; it says nothing about what those statements were. Reading the
+	// index back from information_schema.statistics -- scoped to the
+	// current database with DATABASE() so a same-named index elsewhere
+	// cannot make this pass by accident -- is what actually proves the
+	// column is indexable, which is the claim this test exists to pin.
+	var indexedColumn string
+	err = database.QueryRowContext(ctx,
+		"SELECT column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?",
+		"indexed_text_width", "indexed_text_width_label",
+	).Scan(&indexedColumn)
+	require.NoError(t, err,
+		"MySQL's catalog must show an index named indexed_text_width_label on indexed_text_width, or CreateTable succeeding proved nothing about indexability")
+	require.Equal(t, "label", indexedColumn,
+		"the index MySQL's catalog reports must cover the label column, since an index that exists but covers the wrong column would not make label indexable either")
 
 	_, err = database.ExecContext(ctx,
 		"CREATE TABLE unbounded_text_key (id BIGINT NOT NULL, label TEXT NOT NULL, PRIMARY KEY (id), INDEX (label))")
