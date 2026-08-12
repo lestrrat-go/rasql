@@ -2,6 +2,7 @@ package row_test
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -530,43 +531,67 @@ func (u *pointerDecodingWrapper) DecodeRow(r row.Dynamic) error {
 	return nil
 }
 
+// decodeFromBothOrders runs check against two Dynamic values holding the same
+// data under different column orders, so a cached shadow decision that turned
+// out to depend on which row built the cache first would show up as a result
+// that differs between the two calls. This is what proves the cached decision
+// is a property of the type rather than of whichever row reached it first.
+func decodeFromBothOrders(t *testing.T, forward, reordered row.Dynamic, check func(t *testing.T, source row.Dynamic)) {
+	t.Helper()
+	t.Run("forward column order", func(t *testing.T) { check(t, forward) })
+	t.Run("reordered columns", func(t *testing.T) { check(t, reordered) })
+}
+
 func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
 	result, err := row.NewDynamic(
 		[]string{"id", "email", "nickname", "label"},
 		[]any{int64(42), []byte("ada@example.com"), int64(7), []byte("ada")},
 	)
 	require.NoError(t, err)
+	reordered, err := row.NewDynamic(
+		[]string{"label", "nickname", "email", "id"},
+		[]any{[]byte("ada"), int64(7), []byte("ada@example.com"), int64(42)},
+	)
+	require.NoError(t, err)
 
 	t.Run("embedded value", func(t *testing.T) {
-		decoded, err := row.Decode[fieldedDecoderWrapper](result)
-		require.NoError(t, err)
-		require.Equal(t, int64(42), decoded.ID)
-		require.Equal(t, "ada@example.com", decoded.Email)
-		// The promoted DecodeRow would have set Extra and filled the embedded
-		// fields, so an empty embedded value proves the tags mapped the row.
-		require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			decoded, err := row.Decode[fieldedDecoderWrapper](source)
+			require.NoError(t, err)
+			require.Equal(t, int64(42), decoded.ID)
+			require.Equal(t, "ada@example.com", decoded.Email)
+			// The promoted DecodeRow would have set Extra and filled the embedded
+			// fields, so an empty embedded value proves the tags mapped the row.
+			require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+		})
 	})
 
 	t.Run("embedded pointer", func(t *testing.T) {
-		decoded, err := row.Decode[pointerFieldedDecoderWrapper](result)
-		require.NoError(t, err)
-		require.Equal(t, int64(42), decoded.ID)
-		require.Nil(t, decoded.selfDecodedUser)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			decoded, err := row.Decode[pointerFieldedDecoderWrapper](source)
+			require.NoError(t, err)
+			require.Equal(t, int64(42), decoded.ID)
+			require.Nil(t, decoded.selfDecodedUser)
+		})
 	})
 
 	t.Run("exported embedded field", func(t *testing.T) {
 		// The field path maps an embedded field of an exported type like any
 		// other field, and no column is named after its type, so the decode
 		// fails rather than filling half of the row.
-		_, err := row.Decode[exportedFieldedDecoderWrapper](result)
-		require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			_, err := row.Decode[exportedFieldedDecoderWrapper](source)
+			require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+		})
 	})
 
 	t.Run("exported embedded field tagged out", func(t *testing.T) {
-		decoded, err := row.Decode[skippedFieldedDecoderWrapper](result)
-		require.NoError(t, err)
-		require.Equal(t, "ada@example.com", decoded.Email)
-		require.Equal(t, ExportedDecodedUser{}, decoded.ExportedDecodedUser)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			decoded, err := row.Decode[skippedFieldedDecoderWrapper](source)
+			require.NoError(t, err)
+			require.Equal(t, "ada@example.com", decoded.Email)
+			require.Equal(t, ExportedDecodedUser{}, decoded.ExportedDecodedUser)
+		})
 	})
 
 	t.Run("tagged anonymous field", func(t *testing.T) {
@@ -575,31 +600,39 @@ func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
 		// embedded row type is exported, so the field path maps it too and finds
 		// no column named after it, which is what it does for a named field of an
 		// exported type in the same shape.
-		_, err := row.Decode[anonymousFieldedDecoderWrapper](result)
-		require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			_, err := row.Decode[anonymousFieldedDecoderWrapper](source)
+			require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+		})
 	})
 
 	t.Run("untagged anonymous field", func(t *testing.T) {
-		_, err := row.Decode[untaggedAnonymousFieldedDecoderWrapper](result)
-		require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			_, err := row.Decode[untaggedAnonymousFieldedDecoderWrapper](source)
+			require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+		})
 	})
 
 	t.Run("tagged anonymous field over an unexported decoder", func(t *testing.T) {
 		// The field path skips the unexported embedded field and maps Label, so
 		// the decode succeeds. The promoted DecodeRow would have filled the
 		// embedded fields and left Label empty.
-		decoded, err := row.Decode[unexportedAnonymousFieldedDecoderWrapper](result)
-		require.NoError(t, err)
-		require.Equal(t, Label("ada"), decoded.Label)
-		require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			decoded, err := row.Decode[unexportedAnonymousFieldedDecoderWrapper](source)
+			require.NoError(t, err)
+			require.Equal(t, Label("ada"), decoded.Label)
+			require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+		})
 	})
 
 	t.Run("untagged anonymous field over an unexported decoder", func(t *testing.T) {
 		// Label carries no tag here, so the column is its snake-cased field name.
-		decoded, err := row.Decode[untaggedUnexportedAnonymousFieldedDecoderWrapper](result)
-		require.NoError(t, err)
-		require.Equal(t, Label("ada"), decoded.Label)
-		require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			decoded, err := row.Decode[untaggedUnexportedAnonymousFieldedDecoderWrapper](source)
+			require.NoError(t, err)
+			require.Equal(t, Label("ada"), decoded.Label)
+			require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+		})
 	})
 }
 
@@ -609,19 +642,28 @@ func TestDecodeFollowsDeclaredRowDecoder(t *testing.T) {
 		[]any{int64(42), []byte("ada@example.com"), int64(7)},
 	)
 	require.NoError(t, err)
+	reordered, err := row.NewDynamic(
+		[]string{"nickname", "email", "id"},
+		[]any{int64(7), []byte("ada@example.com"), int64(42)},
+	)
+	require.NoError(t, err)
 
 	t.Run("value receiver", func(t *testing.T) {
-		_, err := row.Decode[valueDecodingWrapper](result)
-		require.ErrorContains(t, err, "declared value receiver ran")
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			_, err := row.Decode[valueDecodingWrapper](source)
+			require.ErrorContains(t, err, "declared value receiver ran")
+		})
 	})
 
 	t.Run("pointer receiver", func(t *testing.T) {
-		decoded, err := row.Decode[pointerDecodingWrapper](result)
-		require.NoError(t, err)
-		// The tag names "nickname", whose value is 7, so 42 proves the declared
-		// method ran instead of the tag path.
-		require.Equal(t, int64(42), decoded.ID)
-		require.Equal(t, "declared", decoded.Trace)
+		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
+			decoded, err := row.Decode[pointerDecodingWrapper](source)
+			require.NoError(t, err)
+			// The tag names "nickname", whose value is 7, so 42 proves the
+			// declared method ran instead of the tag path.
+			require.Equal(t, int64(42), decoded.ID)
+			require.Equal(t, "declared", decoded.Trace)
+		})
 	})
 }
 
@@ -631,4 +673,153 @@ func TestNewRejectsInvalidShape(t *testing.T) {
 
 	_, err = row.NewDynamic([]string{"id", "id"}, []any{int64(1), int64(2)})
 	require.Error(t, err)
+}
+
+// TestDecodeErrorsFromFieldMappingRules covers the three field-mapping error
+// cases buildPlan now resolves once per type instead of Decode recomputing on
+// every row: none of them had a dedicated test before this change.
+func TestDecodeErrorsFromFieldMappingRules(t *testing.T) {
+	result, err := row.NewDynamic([]string{"id"}, []any{int64(42)})
+	require.NoError(t, err)
+
+	t.Run("unexported field with a tag is not exported", func(t *testing.T) {
+		type badRow struct {
+			hidden int64 `rasql:"id"`
+		}
+		_, err := row.Decode[badRow](result)
+		require.ErrorContains(t, err, `row: field hidden for column "id" is not exported`)
+		_ = badRow{}.hidden // silence unused-field vet noise from the tag-only reference
+	})
+
+	t.Run("tag with an empty column name", func(t *testing.T) {
+		type badRow struct {
+			ID int64 `rasql:""`
+		}
+		_, err := row.Decode[badRow](result)
+		require.ErrorContains(t, err, "row: field ID has an empty rasql column name")
+	})
+
+	t.Run("no mappable fields at all", func(t *testing.T) {
+		type badRow struct {
+			hidden int64
+		}
+		_, err := row.Decode[badRow](result)
+		require.ErrorContains(t, err, "has no exported fields")
+		_ = badRow{}.hidden
+	})
+}
+
+// TestNewDynamicIsIndependentOfCallerSlices proves NewDynamic still hands back
+// a row the caller cannot reach through its own slices afterward, which the
+// map representation gave for free and the header/values representation has
+// to earn explicitly by cloning both the names and the values.
+func TestNewDynamicIsIndependentOfCallerSlices(t *testing.T) {
+	names := []string{"id", "payload"}
+	payload := []byte("original")
+	values := []any{int64(1), payload}
+
+	result, err := row.NewDynamic(names, values)
+	require.NoError(t, err)
+
+	names[0] = "mutated"
+	values[0] = int64(999)
+	payload[0] = 'X'
+
+	id, err := row.Get[int64](result, "id")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), id)
+
+	stored, err := row.Get[[]byte](result, "payload")
+	require.NoError(t, err)
+	require.Equal(t, []byte("original"), stored)
+}
+
+// TestZeroDynamicIsSafe proves every read path treats a zero-value Dynamic
+// the way it always treated a nil map: every column reports absent rather
+// than panicking.
+func TestZeroDynamicIsSafe(t *testing.T) {
+	var zero row.Dynamic
+
+	var destination int64
+	err := row.Assign(zero, "id", &destination)
+	require.ErrorContains(t, err, `row: column "id" is not present`)
+
+	_, err = row.Get[int64](zero, "id")
+	require.ErrorContains(t, err, `row: column "id" is not present`)
+
+	id, err := row.Int64("id")
+	require.NoError(t, err)
+	_, err = id.Get(zero)
+	require.ErrorContains(t, err, `row: column "id" is not present`)
+
+	type user struct {
+		ID int64
+	}
+	_, err = row.Decode[user](zero)
+	require.ErrorContains(t, err, `row: column "id" is not present`)
+}
+
+// concurrentPlanRowA and concurrentPlanRowB are two distinct row types so that
+// decoding them from two goroutines at once exercises decodePlans, the
+// package-level sync.Map, on two different keys concurrently.
+type concurrentPlanRowA struct {
+	ID int64
+}
+
+type concurrentPlanRowB struct {
+	Name string
+}
+
+// TestDecodeConcurrentTypesAreSafe decodes two different row types from
+// Dynamic values of the same query in two goroutines. Run under -race, it
+// exercises the plan cache's sync.Map and the columnHeader two Dynamic values
+// of the query would share, proving both are safe for concurrent readers.
+func TestDecodeConcurrentTypesAreSafe(t *testing.T) {
+	result, err := row.NewDynamic([]string{"id", "name"}, []any{int64(42), "Ada"})
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	var aErr, bErr error
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			_, aErr = row.Decode[concurrentPlanRowA](result)
+			if aErr != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			_, bErr = row.Decode[concurrentPlanRowB](result)
+			if bErr != nil {
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	require.NoError(t, aErr)
+	require.NoError(t, bErr)
+}
+
+// orderedErrorRow declares a field whose column is missing before a field
+// whose tag is invalid. Before the plan cache, Decode recomputed both facts
+// while walking fields row by row, so the first field's error -- the missing
+// column -- won because the loop reached it first. The plan is now resolved
+// for the whole type once, before any row is read, so the field-mapping
+// error always wins even though it is declared second.
+type orderedErrorRow struct {
+	Missing int64
+	Invalid int64 `rasql:""`
+}
+
+func TestDecodeErrorOrderPrefersPlanError(t *testing.T) {
+	result, err := row.NewDynamic([]string{"id"}, []any{int64(42)})
+	require.NoError(t, err)
+
+	_, err = row.Decode[orderedErrorRow](result)
+	require.ErrorContains(t, err, "row: field Invalid has an empty rasql column name")
+	require.NotContains(t, err.Error(), "Missing")
 }

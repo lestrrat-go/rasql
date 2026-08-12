@@ -54,7 +54,7 @@ func Assign[T any](r Dynamic, name string, destination *T) error {
 	if destination == nil {
 		return fmt.Errorf("row: destination for column %q must not be nil", name)
 	}
-	value, ok := r.values[name]
+	value, ok := r.lookup(name)
 	if !ok {
 		return fmt.Errorf("row: column %q is not present", name)
 	}
@@ -67,64 +67,48 @@ func Assign[T any](r Dynamic, name string, destination *T) error {
 // Decode populates T through its DecodeRow method when it declares one, and from
 // rasql-tagged fields or snake-cased exported field names otherwise. Decoder
 // states which of the two a struct that embeds a Decoder takes.
+//
+// The per-type facts this needs -- whether T maps itself, and if not, which
+// fields map to which columns -- are resolved once per type by planFor and
+// cached, rather than recomputed on every call. A type whose plan holds an
+// error (a bad tag, an unexported tagged field, or a build that cannot tell a
+// declared DecodeRow from a promoted one) reports the same error on every
+// call, resolved before any row is read: an error found while planning always
+// wins over a per-row error, such as a missing column, that a field reached
+// earlier in declaration order would have reported first under the old,
+// per-row walk.
 func Decode[T any](r Dynamic) (T, error) {
 	var result T
-	// A row type that states its own mapping needs no fields to map, so its
-	// DecodeRow is called and nothing is read by reflection. A DecodeRow promoted
-	// from an embedded field is not that statement when the row type declares
-	// mappable fields of its own, so those fields are read instead. A DecodeRow
-	// the row type declares itself is always that statement.
-	if decoder, ok := any(&result).(Decoder); ok {
-		shadowed, err := fieldsShadowEmbeddedDecoder(reflect.TypeFor[T]())
-		if err != nil {
+	plan := planFor(reflect.TypeFor[T]())
+	if plan.err != nil {
+		if plan.errWraps {
+			return result, fmt.Errorf("row: decode %T: %w", result, plan.err)
+		}
+		return result, plan.err
+	}
+	if plan.mapsItself {
+		decoder := any(&result).(Decoder)
+		if err := decoder.DecodeRow(r); err != nil {
 			return result, fmt.Errorf("row: decode %T: %w", result, err)
 		}
-		if !shadowed {
-			if err := decoder.DecodeRow(r); err != nil {
-				return result, fmt.Errorf("row: decode %T: %w", result, err)
-			}
-			return result, nil
-		}
+		return result, nil
+	}
+	if !plan.isStruct {
+		return result, fmt.Errorf("row: decode destination %T must be a struct", result)
+	}
+	if len(plan.fields) == 0 {
+		return result, fmt.Errorf("row: decode destination %T has no exported fields", result)
 	}
 
 	destination := reflect.ValueOf(&result).Elem()
-	if destination.Kind() != reflect.Struct {
-		return result, fmt.Errorf("row: decode destination %T must be a struct", result)
-	}
-
-	fields := 0
-	typeOfResult := destination.Type()
-	for index := range destination.NumField() {
-		field := typeOfResult.Field(index)
-		columnName, tagged := field.Tag.Lookup("rasql")
-		if columnName == "-" {
-			continue
-		}
-		if field.PkgPath != "" {
-			if tagged {
-				return result, fmt.Errorf("row: field %s for column %q is not exported", field.Name, columnName)
-			}
-			continue
-		}
-		if tagged {
-			columnName, _, _ = strings.Cut(columnName, ",")
-			if columnName == "" {
-				return result, fmt.Errorf("row: field %s has an empty rasql column name", field.Name)
-			}
-		} else {
-			columnName = snakeCase(field.Name)
-		}
-		fields++
-		value, ok := r.values[columnName]
+	for _, field := range plan.fields {
+		value, ok := r.lookup(field.column)
 		if !ok {
-			return result, fmt.Errorf("row: column %q is not present", columnName)
+			return result, fmt.Errorf("row: column %q is not present", field.column)
 		}
-		if err := assign(destination.Field(index), value); err != nil {
-			return result, fmt.Errorf("row: decode column %q: %w", columnName, err)
+		if err := assign(destination.Field(field.index), value); err != nil {
+			return result, fmt.Errorf("row: decode column %q: %w", field.column, err)
 		}
-	}
-	if fields == 0 {
-		return result, fmt.Errorf("row: decode destination %T has no exported fields", result)
 	}
 	return result, nil
 }
