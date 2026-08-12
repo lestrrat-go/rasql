@@ -241,6 +241,30 @@ func TestBuiltinsRenderTextWidthZero(t *testing.T) {
 	}
 }
 
+// TestBuiltinsRenderFixedTextTypeNames pins how each dialect renders
+// schema.TextType.Fixed: PostgreSQL and MySQL render CHAR(width) instead of
+// VARCHAR(width) on a fixed-width column, while SQLite keeps rendering plain
+// TEXT regardless, the same way it already ignores a stated width, since
+// its type affinity never enforces either.
+func TestBuiltinsRenderFixedTextTypeNames(t *testing.T) {
+	tests := map[string]struct {
+		dialect       dialect.Dialect
+		fixedTypeName string
+	}{
+		"postgresql": {dialect: dialect.PostgreSQL(), fixedTypeName: "CHAR(36)"},
+		"mysql":      {dialect: dialect.MySQL(), fixedTypeName: "CHAR(36)"},
+		"sqlite":     {dialect: dialect.SQLite(), fixedTypeName: "TEXT"},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixed, err := test.dialect.TypeName(schema.ColumnDef{Type: schema.TextType{Width: schema.NewTextWidth(36), Fixed: true}})
+			require.NoError(t, err)
+			require.Equal(t, test.fixedTypeName, fixed)
+		})
+	}
+}
+
 func TestBuiltinsRejectNilColumnType(t *testing.T) {
 	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
 		t.Run(d.Name(), func(t *testing.T) {

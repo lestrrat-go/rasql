@@ -55,8 +55,15 @@ func (FloatType) columnType()    {}
 // constraint over, an unbounded text column refuses to render one used that
 // way rather than send the database a statement it will reject; see
 // dialect.Dialect.TypeName and render.CreateTable.
+//
+// Fixed reports whether the column is fixed-width (CHAR(n) rather than
+// VARCHAR(n)) on a dialect that distinguishes the two. It is meaningless
+// unless Width states a value: bare CHAR means CHAR(1), not an unbounded
+// column, so Table.Validate refuses Fixed set without a stated Width. Use
+// the Fixed ColumnOption, alongside Width, to state it.
 type TextType struct {
 	Width TextWidth
+	Fixed bool
 }
 
 func (TextType) Kind() TypeKind { return KindText }
@@ -120,6 +127,7 @@ func marshalColumnType(columnType ColumnType) ([]byte, error) {
 		} else {
 			fields["Width"] = nil
 		}
+		fields["Fixed"] = typed.Fixed
 	case DecimalType:
 		fields["Precision"] = typed.Precision
 		scale, stated := typed.Scale.Value()
@@ -183,7 +191,7 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 		}
 		return FloatType{}, nil
 	case KindText:
-		if err := allow("Width"); err != nil {
+		if err := allow("Width", "Fixed"); err != nil {
 			return nil, err
 		}
 		var width TextWidth
@@ -192,7 +200,13 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 				return nil, fmt.Errorf("schema: decode text width: %w", err)
 			}
 		}
-		return TextType{Width: width}, nil
+		var fixed bool
+		if value, ok := fields["Fixed"]; ok {
+			if err := json.Unmarshal(value, &fixed); err != nil {
+				return nil, fmt.Errorf("schema: decode text fixed: %w", err)
+			}
+		}
+		return TextType{Width: width, Fixed: fixed}, nil
 	case KindBytes:
 		if err := allow(); err != nil {
 			return nil, err

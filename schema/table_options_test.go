@@ -253,6 +253,40 @@ func TestWidthAcceptsZero(t *testing.T) {
 	require.Equal(t, 0, width)
 }
 
+// TestFixedRejectsNonTextColumn covers Fixed's type check: it applies only
+// to TextType, the same shape as TestUnsignedRejectsNonIntegerColumn and
+// TestWidthRejectsNonTextColumn.
+func TestFixedRejectsNonTextColumn(t *testing.T) {
+	_, err := schema.NewTableDef("events", schema.Integer("id", schema.Fixed()))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Fixed only applies to text columns")
+}
+
+// TestFixedMarksTextColumn covers the option applying regardless of whether
+// Width was already applied, since options run in the order given and
+// Fixed must not depend on Width running first.
+func TestFixedMarksTextColumn(t *testing.T) {
+	table, err := schema.NewTableDef("users",
+		schema.Integer("id"),
+		schema.Text("code", schema.Width(36), schema.Fixed()),
+		schema.Text("token", schema.Fixed(), schema.Width(32)),
+		schema.PrimaryKey("id"),
+	)
+	require.NoError(t, err)
+	require.True(t, table.Columns[1].Type.(schema.TextType).Fixed)
+	require.True(t, table.Columns[2].Type.(schema.TextType).Fixed)
+}
+
+// TestFixedWithoutWidthRejected covers the validation Fixed exists to
+// guard: bare CHAR means CHAR(1), not an unbounded column, so a fixed-width
+// column that never states a width is rejected at NewTableDef, not just at
+// a later Validate call.
+func TestFixedWithoutWidthRejected(t *testing.T) {
+	_, err := schema.NewTableDef("users", schema.Text("code", schema.Fixed()))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "fixed-width text column must state a width")
+}
+
 func TestNullableAndDefaultColumnOptions(t *testing.T) {
 	table, err := schema.NewTableDef("users",
 		schema.Integer("id"),

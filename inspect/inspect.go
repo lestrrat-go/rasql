@@ -2038,8 +2038,10 @@ func normalizeType(dialectName string, databaseType string, characterMaximumLeng
 			return schema.DecimalType{}, nil
 		case "TEXT":
 			return schema.TextType{}, nil
-		case "CHARACTER VARYING", "CHARACTER", "VARCHAR", "CHAR":
+		case "CHARACTER VARYING", "VARCHAR":
 			return schema.TextType{Width: postgreSQLTextWidth(characterMaximumLength)}, nil
+		case "CHARACTER", "CHAR":
+			return schema.TextType{Width: postgreSQLTextWidth(characterMaximumLength), Fixed: true}, nil
 		case "BYTEA":
 			return schema.BytesType{}, nil
 		case "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE", "DATE", "TIME WITH TIME ZONE", "TIME WITHOUT TIME ZONE":
@@ -2083,13 +2085,9 @@ func normalizeType(dialectName string, databaseType string, characterMaximumLeng
 // since bare CHARACTER means CHARACTER(1) and the catalog reports 1 for it;
 // a NULL therefore maps to an unstated width rather than to a stated width
 // of 0, which schema.NewTextWidth(0) represents as something else entirely.
-//
-// schema.TextType has no fixed-versus-variable flag, so CHARACTER(n) cannot
-// round-trip faithfully: textTypeName renders every stated width as
-// VARCHAR(n), the same as CHARACTER VARYING(n). A CHARACTER(n) column is
-// mapped to a stated width anyway, matching mysqlTextWidth's treatment of
-// MySQL's CHAR, rather than refused outright, because refusing it would
-// regress inspection of a schema that already has such a column.
+// The caller in normalizeType records CHARACTER's fixed-versus-variable
+// distinction separately, as schema.TextType.Fixed, so this function only
+// ever needs to report the width itself.
 func postgreSQLTextWidth(characterMaximumLength sql.NullInt64) schema.TextWidth {
 	if !characterMaximumLength.Valid {
 		return schema.TextWidth{}
@@ -2132,46 +2130,48 @@ func normalizeMySQLType(typeName string, databaseType string) (schema.ColumnType
 	case strings.Contains(typeName, "DATE") || strings.Contains(typeName, "TIME"):
 		return schema.TimeType{}, nil
 	case strings.Contains(typeName, "CHAR") || strings.Contains(typeName, "TEXT") || strings.Contains(typeName, "ENUM") || strings.Contains(typeName, "SET"):
-		width, err := mysqlTextWidth(typeName, databaseType)
+		width, fixed, err := mysqlTextWidth(typeName, databaseType)
 		if err != nil {
 			return nil, err
 		}
-		return schema.TextType{Width: width}, nil
+		return schema.TextType{Width: width, Fixed: fixed}, nil
 	}
 	return nil, fmt.Errorf("unsupported mysql type %q", databaseType)
 }
 
 // mysqlTextWidth reports the schema.TextWidth a MySQL CHAR or VARCHAR
-// declaration states, matched as a whole declaration for the same reason
+// declaration states, and whether it is fixed-width (CHAR rather than
+// VARCHAR), matched as a whole declaration for the same reason
 // mysqlIntegerDeclaration and mysqlDecimalDeclaration are: a substring test
 // cannot see what follows the type. TEXT, ENUM and SET all reach this
 // function too, from the same catalog-text match that reaches CHAR and
 // VARCHAR, but none of them carries a plain numeric length in COLUMN_TYPE —
 // MySQL never reports TEXT as TEXT(n), and ENUM/SET carry a value list this
 // package does not otherwise preserve — so all three return an unstated
-// width unchanged, exactly as they did before schema.TextType had one.
-func mysqlTextWidth(typeName string, databaseType string) (schema.TextWidth, error) {
+// width and Fixed false unchanged, exactly as they did before schema.TextType
+// had a width.
+func mysqlTextWidth(typeName string, databaseType string) (schema.TextWidth, bool, error) {
 	base, rest := splitMySQLDeclaration(typeName)
 	if base != "CHAR" && base != "VARCHAR" {
-		return schema.TextWidth{}, nil
+		return schema.TextWidth{}, false, nil
 	}
 
 	if !strings.HasPrefix(rest, "(") {
-		return schema.TextWidth{}, fmt.Errorf("unsupported mysql type %q: a %s column must be declared %s(width)", databaseType, base, base)
+		return schema.TextWidth{}, false, fmt.Errorf("unsupported mysql type %q: a %s column must be declared %s(width)", databaseType, base, base)
 	}
 	end := strings.Index(rest, ")")
 	if end < 0 || !validDigitRun(rest[1:end]) {
-		return schema.TextWidth{}, fmt.Errorf("unsupported mysql type %q: a %s column must be declared %s(width)", databaseType, base, base)
+		return schema.TextWidth{}, false, fmt.Errorf("unsupported mysql type %q: a %s column must be declared %s(width)", databaseType, base, base)
 	}
 	width, err := strconv.Atoi(strings.TrimSpace(rest[1:end]))
 	if err != nil {
-		return schema.TextWidth{}, fmt.Errorf("unsupported mysql type %q: %w", databaseType, err)
+		return schema.TextWidth{}, false, fmt.Errorf("unsupported mysql type %q: %w", databaseType, err)
 	}
 	rest = strings.TrimSpace(rest[end+1:])
 	if rest != "" {
-		return schema.TextWidth{}, fmt.Errorf("mysql type %q cannot be represented: a text column must carry no %s modifier, because rasql cannot record one", databaseType, rest)
+		return schema.TextWidth{}, false, fmt.Errorf("mysql type %q cannot be represented: a text column must carry no %s modifier, because rasql cannot record one", databaseType, rest)
 	}
-	return schema.NewTextWidth(width), nil
+	return schema.NewTextWidth(width), base == "CHAR", nil
 }
 
 // mysqlDecimalDeclaration reports whether typeName, an upper-cased MySQL

@@ -157,3 +157,26 @@ func (o widthColumnOption) applyColumn(c *ColumnDef) error {
 	c.Type = text
 	return nil
 }
+
+// fixedColumnOption marks a text column fixed-width.
+type fixedColumnOption struct{}
+
+// Fixed marks a text column as fixed-width, so a dialect that distinguishes
+// CHAR(n) from VARCHAR(n) renders CHAR(n). Applying it to any other column
+// type is rejected: only TextType carries this option. It must be combined
+// with Width: bare CHAR means CHAR(1), not an unbounded column, so
+// Table.Validate rejects a fixed-width column that never states a width,
+// regardless of which option is applied first.
+func Fixed() ColumnOption {
+	return fixedColumnOption{}
+}
+
+func (fixedColumnOption) applyColumn(c *ColumnDef) error {
+	text, ok := c.Type.(TextType)
+	if !ok {
+		return validationError("columns", "column %q: Fixed only applies to text columns", c.Name)
+	}
+	text.Fixed = true
+	c.Type = text
+	return nil
+}

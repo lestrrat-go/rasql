@@ -18,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	mysqldiff "github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
@@ -68,9 +69,9 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 // carries one, since data_type never spells a length the way MySQL's
 // column_type does. An unbounded CHARACTER VARYING and bare TEXT report a
 // NULL character_maximum_length and normalize to an unstated width, not a
-// stated width of 0. schema.TextType has no fixed-versus-variable flag, so a
-// CHARACTER(n) column is mapped to a stated width too, matching how MySQL's
-// CHAR is handled, even though it re-renders as VARCHAR(n).
+// stated width of 0. data_type also distinguishes character from character
+// varying, so a CHARACTER(n) column normalizes with Fixed set, matching how
+// MySQL's CHAR is handled, and re-renders as CHAR(n) rather than VARCHAR(n).
 func TestPostgreSQLInspectorNormalizesTextWidth(t *testing.T) {
 	tests := map[string]struct {
 		dataType               string
@@ -78,7 +79,7 @@ func TestPostgreSQLInspectorNormalizesTextWidth(t *testing.T) {
 		want                   schema.ColumnType
 	}{
 		"varchar with width":          {dataType: "character varying", characterMaximumLength: int64(255), want: schema.TextType{Width: schema.NewTextWidth(255)}},
-		"character with width":        {dataType: "character", characterMaximumLength: int64(36), want: schema.TextType{Width: schema.NewTextWidth(36)}},
+		"character with width":        {dataType: "character", characterMaximumLength: int64(36), want: schema.TextType{Width: schema.NewTextWidth(36), Fixed: true}},
 		"unbounded character varying": {dataType: "character varying", characterMaximumLength: nil, want: schema.TextType{}},
 		"text":                        {dataType: "text", characterMaximumLength: nil, want: schema.TextType{}},
 	}
@@ -140,6 +141,55 @@ func TestPostgreSQLInspectorRoundTripsTextWidthWithoutSpuriousDiff(t *testing.T)
 	live, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
 	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(255)}, live.Columns[1].Type)
+
+	analyzer := postgresql.New()
+	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: createTable.SQL()}})
+	require.NoError(t, err)
+	liveSources, err := analyzer.LiveSources(live)
+	require.NoError(t, err)
+	liveSnapshot, err := analyzer.Parse(liveSources)
+	require.NoError(t, err)
+
+	plan, err := analyzer.Diff(baseline, liveSnapshot)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+// TestPostgreSQLInspectorRoundTripsCharacterWidthWithoutSpuriousDiff covers
+// PostgreSQL's CHARACTER(n), the counterpart to
+// TestPostgreSQLInspectorRoundTripsTextWidthWithoutSpuriousDiff: before
+// data_type distinguished character from character varying, a live
+// CHARACTER(n) column inspected with an unstated fixed-ness and re-rendered
+// as VARCHAR(n), the CHARACTER(n) limitation this package's PostgreSQL
+// Fixed support closes.
+func TestPostgreSQLInspectorRoundTripsCharacterWidthWithoutSpuriousDiff(t *testing.T) {
+	desired := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "code", Type: schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	createTable, err := render.CreateTable(dialect.PostgreSQL(), desired)
+	require.NoError(t, err)
+
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale, character_maximum_length FROM information_schema\\.columns").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil).
+			AddRow("code", "character", "NO", nil, nil, nil, int64(10)))
+	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
+	expectPostgreSQLEmptyMetadata(mock, "users")
+
+	live, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}, live.Columns[1].Type)
 
 	analyzer := postgresql.New()
 	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: createTable.SQL()}})
@@ -1287,14 +1337,16 @@ func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
 // TEXT, ENUM and SET normalize to an unstated width exactly as they did
 // before TextType had one. MySQL never reports TEXT as TEXT(n), and ENUM/SET
 // carry a value list this package does not otherwise preserve, so none of
-// the three has a plain numeric length to record.
+// the three has a plain numeric length to record. CHAR additionally
+// normalizes with Fixed set, since COLUMN_TYPE distinguishes CHAR from
+// VARCHAR, and re-renders as CHAR(n) rather than VARCHAR(n).
 func TestMySQLInspectorNormalizesTextWidth(t *testing.T) {
 	tests := map[string]struct {
 		columnType string
 		want       schema.ColumnType
 	}{
 		"varchar with width": {columnType: "varchar(255)", want: schema.TextType{Width: schema.NewTextWidth(255)}},
-		"char with width":    {columnType: "char(36)", want: schema.TextType{Width: schema.NewTextWidth(36)}},
+		"char with width":    {columnType: "char(36)", want: schema.TextType{Width: schema.NewTextWidth(36), Fixed: true}},
 		"varchar zero width": {columnType: "varchar(0)", want: schema.TextType{Width: schema.NewTextWidth(0)}},
 		"bare text":          {columnType: "text", want: schema.TextType{}},
 		"enum has no width":  {columnType: "enum('a','b')", want: schema.TextType{}},
@@ -1329,6 +1381,120 @@ func TestMySQLInspectorNormalizesTextWidth(t *testing.T) {
 			require.Equal(t, []schema.ColumnDef{{Name: "value", Type: test.want}}, table.Columns)
 		})
 	}
+}
+
+// TestMySQLInspectorRoundTripsUUIDWithoutSpuriousDiff is a regression test
+// for the defect this package's Fixed support fixes: schema.UUIDType renders
+// CHAR(36) on MySQL, but a live CHAR(36) column used to inspect with an
+// unstated fixed-ness, re-rendering as VARCHAR(36) and making
+// migrate/diff/mysql report "column events.id changed" with a
+// manualMigrationError and an empty Plan instead of the empty, error-free
+// plan an unchanged column deserves. This exercises the same
+// render.CreateTable -> inspect -> LiveSources -> Diff path diff-live uses.
+// The inspected descriptor still says TextType where the desired schema
+// says UUIDType: rasql cannot recover the logical type MySQL's catalog
+// never recorded, only stop it from producing a phantom diff.
+func TestMySQLInspectorRoundTripsUUIDWithoutSpuriousDiff(t *testing.T) {
+	desired := schema.TableDef{
+		Name: "events",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.UUIDType{}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	createTable, err := render.CreateTable(dialect.MySQL(), desired)
+	require.NoError(t, err)
+
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+		WithArgs("events").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "char(36)", "NO", nil, nil, nil))
+	expectMySQLCreateTable(mock, "events", "CREATE TABLE `events` (`id` char(36) NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB")
+	mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+		WithArgs("events").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	expectMySQLIndexes(mock, "events", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}))
+
+	live, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(36), Fixed: true}, live.Columns[0].Type)
+
+	analyzer := mysqldiff.New()
+	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: createTable.SQL()}})
+	require.NoError(t, err)
+	liveSources, err := analyzer.LiveSources(live)
+	require.NoError(t, err)
+	liveSnapshot, err := analyzer.Parse(liveSources)
+	require.NoError(t, err)
+
+	plan, err := analyzer.Diff(baseline, liveSnapshot)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
+}
+
+// TestMySQLInspectorRoundTripsFixedWidthTextWithoutSpuriousDiff covers a
+// hand-declared fixed-width text column, not just schema.UUIDType: any
+// MySQL CHAR(n) column hit the same "column changed" diagnostic before
+// Fixed existed, since inspecting CHAR(n) produced an unstated fixed-ness
+// that re-rendered as VARCHAR(n).
+func TestMySQLInspectorRoundTripsFixedWidthTextWithoutSpuriousDiff(t *testing.T) {
+	desired := schema.TableDef{
+		Name: "events",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "code", Type: schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	createTable, err := render.CreateTable(dialect.MySQL(), desired)
+	require.NoError(t, err)
+
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+		WithArgs("events").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil).
+			AddRow("code", "char(10)", "NO", nil, nil, nil))
+	expectMySQLCreateTable(mock, "events", "CREATE TABLE `events` (`id` bigint NOT NULL, `code` char(10) NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB")
+	mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+		WithArgs("events").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+	expectMySQLIndexes(mock, "events", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}))
+
+	live, err := inspector.Table(t.Context(), "events")
+	require.NoError(t, err)
+	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}, live.Columns[1].Type)
+
+	analyzer := mysqldiff.New()
+	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: createTable.SQL()}})
+	require.NoError(t, err)
+	liveSources, err := analyzer.LiveSources(live)
+	require.NoError(t, err)
+	liveSnapshot, err := analyzer.Parse(liveSources)
+	require.NoError(t, err)
+
+	plan, err := analyzer.Diff(baseline, liveSnapshot)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
 }
 
 // TestMySQLInspectorMatchesTextColumnTypeExactly covers the two ways a
