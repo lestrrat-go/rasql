@@ -80,9 +80,16 @@ Those fields are the reason a filter never spells a column as a string. `WhereEq
 
 A `rasql.DB` pairs a database handle with the dialect used to render SQL:
 
+<!-- INCLUDE(examples/rasql_sqlite_query_example_test.go#new_db) -->
 ```go
 db, err := rasql.New(database, dialect.SQLite())
+if err != nil {
+	fmt.Printf("failed to create rasql db: %s\n", err)
+	return
+}
 ```
+source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_sqlite_query_example_test.go)
+<!-- END INCLUDE -->
 
 `rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Querying](03-querying.md) shows. To start a transaction, call `Begin` on the resulting `DB` instead, which the [Transactions](04-writing.md#transactions) section covers.
 
@@ -168,17 +175,25 @@ The `database.SetMaxOpenConns(1)` call is a SQLite detail, not a `rasql` require
 
 Query methods return the construction error before iteration begins, so an invalid statement fails at the call rather than midway through a loop. When ranging over results, the sequence yields rows first and at most one error after them, which is why every example checks the error inside the loop:
 
+<!-- INCLUDE(examples/rasql_query_errors_example_test.go#query_errors) -->
 ```go
 rows, err := rasql.SelectFrom(users).Query(ctx, db)
 if err != nil {
 	// The statement could not be validated or rendered.
+	fmt.Printf("failed to query users: %s\n", err)
+	return
 }
 for user, err := range rows {
 	if err != nil {
 		// Execution or scanning failed. No further rows follow.
+		fmt.Printf("failed to read user: %s\n", err)
+		return
 	}
+	fmt.Println(user.Email)
 }
 ```
+source: [examples/rasql_query_errors_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_query_errors_example_test.go)
+<!-- END INCLUDE -->
 
 ## Next
 

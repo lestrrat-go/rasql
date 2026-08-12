@@ -438,6 +438,7 @@ Inspecting a live MySQL or PostgreSQL database preserves the width a `CHAR(n)`/`
 
 A bare `schema.TableDef` describes the database. Pairing it with a Go type produces a `rasql.Table[T]`, which is what the typed API takes:
 
+<!-- INCLUDE(examples/schema_bind_row_type_example_test.go#bind_row_type) -->
 ```go
 type UserRow struct {
 	ID    int64  `rasql:"id"`
@@ -446,6 +447,8 @@ type UserRow struct {
 
 users := rasql.MustTableOf[UserRow](definition)
 ```
+source: [examples/schema_bind_row_type_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_bind_row_type_example_test.go)
+<!-- END INCLUDE -->
 
 Each field's `rasql` tag names the column it holds. `rasql.MustTableOf` panics on an invalid descriptor and suits generated or otherwise constant tables; `rasql.TableOf` returns the error instead, for descriptors assembled at runtime.
 
