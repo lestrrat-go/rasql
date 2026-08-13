@@ -39,21 +39,16 @@ func TestScan(t *testing.T) {
 		}
 		require.Len(t, decoded, 2)
 
-		id, err := row.Int64("id")
+		gotID, err := row.Get[int64](decoded[0], "id")
 		require.NoError(t, err)
-		email, err := row.String("email")
-		require.NoError(t, err)
-
-		gotID, err := id.Get(decoded[0])
-		require.NoError(t, err)
-		gotEmail, err := email.Get(decoded[0])
+		gotEmail, err := row.Get[string](decoded[0], "email")
 		require.NoError(t, err)
 		require.Equal(t, int64(1), gotID)
 		require.Equal(t, "ada@example.com", gotEmail)
 
-		gotID, err = id.Get(decoded[1])
+		gotID, err = row.Get[int64](decoded[1], "id")
 		require.NoError(t, err)
-		gotEmail, err = email.Get(decoded[1])
+		gotEmail, err = row.Get[string](decoded[1], "email")
 		require.NoError(t, err)
 		require.Equal(t, int64(2), gotID)
 		require.Equal(t, "bob@example.com", gotEmail)
@@ -146,11 +141,6 @@ func TestScan(t *testing.T) {
 		rows, err := database.QueryContext(t.Context(), "SELECT")
 		require.NoError(t, err)
 
-		id, err := row.Int64("id")
-		require.NoError(t, err)
-		payload, err := row.Bytes("payload")
-		require.NoError(t, err)
-
 		decoded := make([]row.Dynamic, 0, 3)
 		for result, err := range row.Scan(rows) {
 			require.NoError(t, err)
@@ -161,11 +151,11 @@ func TestScan(t *testing.T) {
 		wantIDs := []int64{1, 2, 3}
 		wantPayloads := [][]byte{[]byte("first"), []byte("second"), []byte("third")}
 		for i, result := range decoded {
-			gotID, err := id.Get(result)
+			gotID, err := row.Get[int64](result, "id")
 			require.NoError(t, err)
 			require.Equal(t, wantIDs[i], gotID)
 
-			gotPayload, err := payload.Get(result)
+			gotPayload, err := row.Get[[]byte](result, "payload")
 			require.NoError(t, err)
 			require.Equal(t, wantPayloads[i], gotPayload)
 		}

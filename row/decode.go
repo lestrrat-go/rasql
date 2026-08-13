@@ -29,7 +29,7 @@ var timeLayouts = []string{
 // Decoder is implemented by row types that map result columns themselves.
 // Decode prefers it over struct tags and snake-cased field names, so a
 // generated row type carries its own mapping instead of restating it as a tag.
-// A single result value is decoded by ColumnDecoder instead.
+// A single result value is decoded by Get or Assign instead.
 //
 // One shape is mapped by its fields even though it satisfies Decoder: a struct
 // that embeds a Decoder, declares mappable fields of its own, and declares no
