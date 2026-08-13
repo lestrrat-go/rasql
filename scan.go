@@ -67,3 +67,40 @@ type Scanner interface {
 type DestinationScanner interface {
 	ScanDestinations([]string) ([]any, error)
 }
+
+// ScanMask records which columns of a row type a [DestinationScanner.ScanDestinations]
+// call has already mapped, so a result set that names the same column twice is
+// rejected instead of being scanned into the same field twice.
+//
+// Generated ScanDestinations methods build one with [NewScanMask] and call
+// [ScanMask.Mark] once for each column they recognize. A hand-written
+// implementation can do the same.
+type ScanMask []uint64
+
+// NewScanMask returns a mask that holds one bit per column, all unmarked.
+func NewScanMask(columns int) ScanMask {
+	if columns <= 0 {
+		return nil
+	}
+	return make(ScanMask, (columns+63)/64)
+}
+
+// Mark records that the column at index has been mapped, and reports whether
+// that column was still unmarked. A false return means the column was already
+// mapped, which is how a duplicate result column is detected.
+//
+// Mark panics if index is negative or names a column the mask was not sized
+// for, because either is a mistake in the calling ScanDestinations rather than
+// something a result set can cause.
+func (m ScanMask) Mark(index int) bool {
+	if index < 0 || index >= len(m)*64 {
+		panic(fmt.Sprintf("rasql: scan mask index %d out of range for %d columns", index, len(m)*64))
+	}
+	word := index / 64
+	bit := uint64(1) << (index % 64)
+	if m[word]&bit != 0 {
+		return false
+	}
+	m[word] |= bit
+	return true
+}
