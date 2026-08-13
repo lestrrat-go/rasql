@@ -117,6 +117,58 @@ func TestWritePackageRejectsFilenameCollisionBeforeWriting(t *testing.T) {
 	require.Empty(t, entries)
 }
 
+// TestWritePackageWritesTheWholePackage pins the exact set of files one call
+// leaves behind: one per table, plus the two the package shares.
+func TestWritePackageWritesTheWholePackage(t *testing.T) {
+	directory := t.TempDir()
+
+	require.NoError(t, generate.WritePackage("store", directory, usersTableDef(), ordersTableDef()))
+
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	require.ElementsMatch(t, []string{"users_gen.go", "orders_gen.go", "schema_gen.go", "schema_gen_test.go"}, names)
+
+	descriptor, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), "var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}")
+}
+
+// TestWritePackageAcceptsGenTestSuffix confirms genfile.Write's suffix guard
+// accepts the one destination WritePackage writes that does not end in plain
+// _gen.go: the generated validity test, schema_gen_test.go.
+func TestWritePackageAcceptsGenTestSuffix(t *testing.T) {
+	directory := t.TempDir()
+
+	require.NoError(t, generate.WritePackage("store", directory, usersTableDef()))
+
+	source, err := os.ReadFile(filepath.Join(directory, "schema_gen_test.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func TestGeneratedDefinitionsAreValid(t *testing.T) {")
+}
+
+// TestWritePackageRejectsTableNamedSchema confirms that a table literally
+// named "schema" is rejected before anything is written, because
+// schemaOutputFilename would otherwise produce schema_gen.go, colliding with
+// the package-wide descriptor file every run writes.
+func TestWritePackageRejectsTableNamedSchema(t *testing.T) {
+	directory := t.TempDir()
+	table := schema.MustTableDef("schema",
+		schema.Integer("id"),
+		schema.PrimaryKey("id"),
+	)
+
+	err := generate.WritePackage("store", directory, table)
+	require.ErrorContains(t, err, `schema table "schema" generates "schema_gen.go"`)
+	require.NoFileExists(t, filepath.Join(directory, "schema_gen.go"))
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
 func TestWritePackageRejectsInvalidPackageNameBeforeWriting(t *testing.T) {
 	directory := t.TempDir()
 

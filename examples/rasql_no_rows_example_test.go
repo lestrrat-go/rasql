@@ -41,7 +41,7 @@ func Example_rasql_no_rows() {
 
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 1)
 	// BEGIN(no_rows)
-	_, err = rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, db)
+	_, err = rasql.SelectFrom(users).WhereEqual(users.ID(), 1).One(ctx, db)
 	if errors.Is(err, rasql.ErrNoRows) {
 		fmt.Println("no such user")
 	}

@@ -64,7 +64,7 @@ func Example_rasql_transaction() {
 	// The same builder shape that runs against db also runs against tx: it
 	// reads the two rows written above, before they are committed.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, tx)
+	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID()).All(ctx, tx)
 	if err != nil {
 		fmt.Printf("failed to query users in transaction: %s\n", err)
 		return
@@ -81,7 +81,7 @@ func Example_rasql_transaction() {
 	// connection, and the transaction holds it until Commit or Rollback
 	// releases it back to the pool.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, db)
+	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID()).All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users after commit: %s\n", err)
 		return

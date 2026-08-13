@@ -13,7 +13,8 @@ import (
 )
 
 // Write writes source to path without ever truncating an
-// existing file in place. Its resolved destination must end in _gen.go.
+// existing file in place. Its resolved destination must end in _gen.go, or
+// in _gen_test.go for a generated test file.
 // When path is a symbolic link it writes through
 // the link to the file the link points at, leaving the link itself intact.
 // A path that names a directory, or a symbolic link that resolves to one,
@@ -41,7 +42,7 @@ func Write(path string, source []byte) error {
 	if err != nil {
 		return err
 	}
-	if !strings.HasSuffix(destination, "_gen.go") {
+	if !strings.HasSuffix(destination, "_gen.go") && !strings.HasSuffix(destination, "_gen_test.go") {
 		return fmt.Errorf("generated output %q must end in _gen.go", destination)
 	}
 	mode, err := generatedFileMode(destination)

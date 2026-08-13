@@ -38,7 +38,7 @@ func Example_rasql_debug_query() {
 	// users is declared in query_example_tables_test.go with the shape rasqlgen
 	// emits; an application would write store.Users() instead.
 	count := 0
-	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Query(context.Background(), db)
+	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).Query(context.Background(), db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

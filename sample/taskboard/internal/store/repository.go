@@ -26,9 +26,9 @@ func (repository Repository) SeedDemo(ctx context.Context) error {
 	tasks := Tasks()
 	existing, err := rasql.DecodeFrom[MembersRow](members).
 		Project(
-			query.Project(members.ID),
-			query.Project(members.Name),
-			query.Project(members.Email),
+			query.Project(members.ID()),
+			query.Project(members.Name()),
+			query.Project(members.Email()),
 		).
 		Limit(1).
 		All(ctx, repository.db)
@@ -81,16 +81,16 @@ func (repository Repository) OpenTasks(ctx context.Context, projectID int64, lim
 	tasks := Tasks()
 	projects := Projects()
 	return rasql.DecodeFrom[taskboard.Summary](tasks).
-		Join(rasql.InnerJoin(projects, query.Equal(tasks.ProjectID, projects.ID))).
+		Join(rasql.InnerJoin(projects, query.Equal(tasks.ProjectID(), projects.ID()))).
 		Project(
-			query.Project(tasks.Title),
-			query.Project(tasks.Priority),
+			query.Project(tasks.Title()),
+			query.Project(tasks.Priority()),
 		).
 		Where(query.And(
-			query.Equal(projects.ID, query.Bind(projectID)),
-			query.NotEqual(tasks.Status, query.Bind("done")),
+			query.Equal(projects.ID(), query.Bind(projectID)),
+			query.NotEqual(tasks.Status(), query.Bind("done")),
 		)).
-		Order(query.Asc(tasks.Priority), query.Asc(tasks.ID)).
+		Order(query.Asc(tasks.Priority()), query.Asc(tasks.ID())).
 		Limit(limit).
 		Offset(offset).
 		All(ctx, repository.db)

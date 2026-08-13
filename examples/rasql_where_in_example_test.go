@@ -52,8 +52,8 @@ func Example_rasql_where_in() {
 	// Query return an error instead of rendering IN (), which is not valid SQL.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id IN (?, ?) ORDER BY users.id ASC (arguments: 1, 3)
 	rows, err := rasql.SelectFrom(users).
-		WhereIn(users.ID, 1, 3).
-		OrderAsc(users.ID).
+		WhereIn(users.ID(), 1, 3).
+		OrderAsc(users.ID()).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)

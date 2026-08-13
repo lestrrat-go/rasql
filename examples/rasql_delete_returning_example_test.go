@@ -45,8 +45,8 @@ func Example_rasql_delete_returning() {
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email (argument: 42)
 	// BEGIN(delete_returning_dynamic)
 	builder := dynamic.DeleteFrom(users.Ref()).
-		WhereEqual(users.ID, 42).
-		Returning(query.Project(users.ID), query.Project(users.Email))
+		WhereEqual(users.ID(), 42).
+		Returning(query.Project(users.ID()), query.Project(users.Email()))
 
 	rows, err := builder.Query(ctx, db)
 	// END(delete_returning_dynamic)
@@ -70,8 +70,8 @@ func Example_rasql_delete_returning() {
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email (argument: 43)
 	// BEGIN(delete_returning_typed)
 	typed := rasql.DeleteFrom(users).
-		WhereEqual(users.ID, 43).
-		Returning(query.Project(users.ID), query.Project(users.Email))
+		WhereEqual(users.ID(), 43).
+		Returning(query.Project(users.ID()), query.Project(users.Email()))
 
 	deleted, err := rasql.QueryDeleteOne[UserRow](ctx, db, typed)
 	// END(delete_returning_typed)

@@ -55,9 +55,9 @@ func Example_rasql_scalar_function() {
 		return
 	}
 
-	// members has no generated column fields, so its columns are looked up by
-	// name. That lookup validates them against the descriptor as the query is
-	// assembled.
+	// members has no generated column accessors, so its columns are looked up
+	// by name. That lookup validates them against the descriptor as the query
+	// is assembled.
 	id, err := members.Column("id")
 	if err != nil {
 		fmt.Printf("failed to find members.id: %s\n", err)

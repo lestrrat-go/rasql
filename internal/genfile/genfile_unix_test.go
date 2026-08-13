@@ -71,6 +71,25 @@ func TestWriteGeneratedFileKeepsOutputModeBits(t *testing.T) {
 	}
 }
 
+// TestWriteGeneratedFileAcceptsGenTestSuffix confirms the suffix guard's
+// unix-specific write path (mode preservation, atomic rename) also covers a
+// _gen_test.go destination, the one a schema run writes that does not end in
+// plain _gen.go.
+func TestWriteGeneratedFileAcceptsGenTestSuffix(t *testing.T) {
+	directory := t.TempDir()
+	output := filepath.Join(directory, "schema_gen_test.go")
+	require.NoError(t, os.WriteFile(output, []byte("// stale\n"), 0o644))
+	require.NoError(t, os.Chmod(output, 0o644))
+
+	require.NoError(t, Write(output, []byte(generatedSource)))
+	source, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Equal(t, []byte(generatedSource), source)
+	info, err := os.Stat(output)
+	require.NoError(t, err)
+	require.Equal(t, fs.FileMode(0o644), info.Mode().Perm())
+}
+
 func TestWriteGeneratedFileRejectsDirectory(t *testing.T) {
 	directory := t.TempDir()
 	output := filepath.Join(directory, "outdir")

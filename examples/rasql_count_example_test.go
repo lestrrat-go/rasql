@@ -60,7 +60,7 @@ func Example_rasql_count() {
 	fmt.Println("total:", total)
 
 	// SQL: SELECT COUNT(*) FROM users WHERE users.id = ? (argument: 2)
-	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID, 2).Count(ctx, db)
+	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 2).Count(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
 		return

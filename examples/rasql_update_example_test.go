@@ -50,7 +50,7 @@ func Example_rasql_update() {
 	}
 
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, db)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return

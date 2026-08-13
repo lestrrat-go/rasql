@@ -46,7 +46,7 @@ func Example_rasql_quickstart() {
 
 	// One returns a single decoded row and fails when the result holds any other count.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 1)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, db)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 1).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
@@ -62,7 +62,7 @@ func Example_rasql_quickstart() {
 
 	// All collects every result row instead of ranging over them.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	found, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, db)
+	found, err := rasql.SelectFrom(users).OrderAsc(users.ID()).All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
@@ -71,7 +71,7 @@ func Example_rasql_quickstart() {
 
 	// DeleteFrom builds the predicate from generated columns, like the select builder.
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, db)
+	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID(), 1).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return

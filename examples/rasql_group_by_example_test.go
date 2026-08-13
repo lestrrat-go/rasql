@@ -64,8 +64,8 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	// tasks has no generated column field for status, so it is looked up by
-	// name. That lookup validates it against the descriptor as the query is
+	// tasks has no generated column accessor for status, so it is looked up
+	// by name. That lookup validates it against the descriptor as the query is
 	// assembled.
 	status, err := tasks.Column("status")
 	if err != nil {

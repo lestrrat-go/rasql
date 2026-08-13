@@ -35,44 +35,38 @@ type UserRow struct {
 	Email string `rasql:"email"`
 }
 
-// UsersTable embeds the typed table and exposes one field per column, so a
-// mistyped column name fails to compile instead of failing at run time.
+// UsersTable embeds the typed table and exposes one accessor method per
+// column, so a mistyped column name fails to compile instead of failing at
+// run time.
 type UsersTable struct {
 	rasql.Table[UserRow]
-	ID    query.ColumnRef
-	Email query.ColumnRef
 }
 
-func newUsersTable(table rasql.Table[UserRow]) UsersTable {
-	return UsersTable{
-		Table: table,
-		ID:    rasql.MustColumn(table, "id"),
-		Email: rasql.MustColumn(table, "email"),
-	}
-}
+func (t UsersTable) ID() query.ColumnRef    { return rasql.ColumnOf(t.Table, "id") }
+func (t UsersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
 
-// users keeps the generated row type and its column references together.
-var users = newUsersTable(rasql.MustTableOf[UserRow](schema.MustTableDef("users",
+// users keeps the generated row type and its table value together.
+var users = UsersTable{rasql.MustTableOf[UserRow](schema.MustTableDef("users",
 	schema.Integer("id"),
 	schema.Text("email"),
 	schema.PrimaryKey("id"),
-)))
+))}
 
-// As returns the table under alias, with every column rebound to it.
+// As returns the table under alias.
 func (t UsersTable) As(alias string) (UsersTable, error) {
 	aliased, err := rasql.As(t.Table, alias)
 	if err != nil {
 		return UsersTable{}, err
 	}
-	return newUsersTable(aliased), nil
+	return UsersTable{Table: aliased}, nil
 }
 ```
 source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
 <!-- END INCLUDE -->
 
-Three things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. The embedded `rasql.Table[UserRow]` binds that row type to a validated table description, so the compiler knows what a query against `users` returns. The `ID` and `Email` fields are the column references the query builders take.
+Three things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. The embedded `rasql.Table[UserRow]` binds that row type to a validated table description, so the compiler knows what a query against `users` returns. The `ID` and `Email` methods are the column accessors the query builders take.
 
-Those fields are the reason a filter never spells a column as a string. `WhereEqual(users.ID, 42)` builds, while `WhereEqual(users.Emial, 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) shows what that covers and the three cases it does not.
+Those accessors are the reason a filter never spells a column as a string. `WhereEqual(users.ID(), 42)` builds, while `WhereEqual(users.Emial(), 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column accessors catch](06-rasqlgen.md#what-the-column-accessors-catch) shows what that covers and the three cases it does not.
 
 [Schemas](02-schema.md) covers how to write these tables by hand, and [`rasqlgen`](06-rasqlgen.md) covers how to generate them.
 
@@ -147,7 +141,7 @@ func Example_rasql_sqlite_query() {
 
 	// users is a typed table descriptor with the shape emitted by rasqlgen.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, db)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

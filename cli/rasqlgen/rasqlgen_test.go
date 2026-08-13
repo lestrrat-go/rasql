@@ -84,6 +84,21 @@ func TestRunQueryRejectsOutputWithoutGeneratedSuffix(t *testing.T) {
 	require.NoFileExists(t, output)
 }
 
+// TestRunSchemaAcceptsGenTestSuffix confirms writeGeneratedFile's suffix
+// guard accepts the one destination the schema command writes that does not
+// end in plain _gen.go: the generated validity test, schema_gen_test.go.
+func TestRunSchemaAcceptsGenTestSuffix(t *testing.T) {
+	directory := t.TempDir()
+	input := filepath.Join(directory, "schema.json")
+	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
+	require.NoError(t, os.WriteFile(input, data, 0o600))
+
+	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
+	source, err := os.ReadFile(filepath.Join(directory, "schema_gen_test.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func TestGeneratedDefinitionsAreValid(t *testing.T) {")
+}
+
 func mustReadDir(t *testing.T, directory string) []os.DirEntry {
 	t.Helper()
 	entries, err := os.ReadDir(directory)
@@ -145,11 +160,13 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef(\"users\",")
+	require.Contains(t, string(source), "func Users() UsersTable {")
+	descriptor, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), "var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}")
 	// inspect never reports a namespace, so the generated descriptor must not
 	// qualify the table with one.
-	require.NotContains(t, string(source), "schema.InSchema(")
-	require.Contains(t, string(source), "func Users() UsersTable {")
+	require.NotContains(t, string(descriptor), "Schema:")
 }
 
 func TestRunSchemaInspectsSQLite(t *testing.T) {
@@ -168,9 +185,11 @@ func TestRunSchemaInspectsSQLite(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "type UsersRow struct {")
-	require.Contains(t, string(source), "schema.InSchema(\"main\")")
 	require.Contains(t, string(source), "ID   int64")
 	require.Contains(t, string(source), "Name string")
+	descriptor, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), `Schema: "main"`)
 }
 
 func TestRunSchemaInspectsMySQL(t *testing.T) {

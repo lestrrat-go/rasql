@@ -12,21 +12,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// generatedStore and generatedQuery are the rasqlgen output the documentation
-// shows. Both are checked in, and compiled by every build, so a page can show
-// real generated source instead of a copy someone kept up to date by hand.
+// generatedStore, generatedSchema, generatedSchemaTest and generatedQuery are
+// the rasqlgen output the documentation shows. All are checked in, and
+// compiled by every build, so a page can show real generated source instead
+// of a copy someone kept up to date by hand.
 const (
-	generatedStore = "examples/store/users_gen.go"
-	generatedQuery = "examples/store/user_by_email_gen.go"
-	queryTemplate  = "examples/store/user_by_email.sql"
+	generatedStore      = "examples/store/users_gen.go"
+	generatedSchema     = "examples/store/schema_gen.go"
+	generatedSchemaTest = "examples/store/schema_gen_test.go"
+	generatedQuery      = "examples/store/user_by_email_gen.go"
+	queryTemplate       = "examples/store/user_by_email.sql"
 )
 
-// TestGeneratedStoreIsCurrent regenerates the checked-in descriptor from the
-// table definition it was generated for and fails when the two differ, which is
-// what stops the documentation from showing output the generator stopped
-// producing. The definition is stated here in Go rather than read from a
-// snapshot file, so the check needs neither a database nor a checked-in copy of
-// the schema.
+// TestGeneratedStoreIsCurrent regenerates the checked-in typed surface and
+// descriptor files from the table definition they were generated for and
+// fails when they differ, which is what stops the documentation from
+// showing output the generator stopped producing. The definition is stated
+// here in Go rather than read from a snapshot file, so the check needs
+// neither a database nor a checked-in copy of the schema.
 func TestGeneratedStoreIsCurrent(t *testing.T) {
 	definition, err := schema.NewTableDef("users",
 		schema.Integer("id"),
@@ -35,9 +38,17 @@ func TestGeneratedStoreIsCurrent(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	source, err := generate.TableSource("store", definition, definition)
+	tableSource, err := generate.TableSource("store", definition, definition)
 	require.NoError(t, err)
-	requireGeneratedFile(t, generatedStore, string(source))
+	requireGeneratedFile(t, generatedStore, string(tableSource))
+
+	descriptorSource, err := generate.DescriptorSource("store", definition)
+	require.NoError(t, err)
+	requireGeneratedFile(t, generatedSchema, string(descriptorSource))
+
+	descriptorTestSource, err := generate.DescriptorTestSource("store", definition)
+	require.NoError(t, err)
+	requireGeneratedFile(t, generatedSchemaTest, string(descriptorTestSource))
 }
 
 // TestGeneratedQueryIsCurrent regenerates the checked-in query function through

@@ -21,43 +21,36 @@ type EmployeeRow struct {
 	ManagerID *int64 `rasql:"manager_id"`
 }
 
-// EmployeesTable has the shape rasqlgen emits: the typed table plus one column
-// reference per column.
+// EmployeesTable has the shape rasqlgen emits: the typed table plus one
+// accessor method per column.
 type EmployeesTable struct {
 	rasql.Table[EmployeeRow]
-	ID        query.ColumnRef
-	Name      query.ColumnRef
-	ManagerID query.ColumnRef
 }
 
-func newEmployeesTable(table rasql.Table[EmployeeRow]) EmployeesTable {
-	return EmployeesTable{
-		Table:     table,
-		ID:        rasql.MustColumn(table, "id"),
-		Name:      rasql.MustColumn(table, "name"),
-		ManagerID: rasql.MustColumn(table, "manager_id"),
-	}
-}
+func (t EmployeesTable) ID() query.ColumnRef        { return rasql.ColumnOf(t.Table, "id") }
+func (t EmployeesTable) Name() query.ColumnRef      { return rasql.ColumnOf(t.Table, "name") }
+func (t EmployeesTable) ManagerID() query.ColumnRef { return rasql.ColumnOf(t.Table, "manager_id") }
 
-var employees = newEmployeesTable(rasql.MustTableOf[EmployeeRow](schema.MustTableDef("employees",
+var employees = EmployeesTable{rasql.MustTableOf[EmployeeRow](schema.MustTableDef("employees",
 	schema.Integer("id"),
 	schema.Text("name"),
 	schema.Integer("manager_id", schema.Nullable()),
 	schema.PrimaryKey("id"),
-)))
+))}
 
-// As returns the table under alias, with every column rebound to it.
+// As returns the table under alias.
 func (t EmployeesTable) As(alias string) (EmployeesTable, error) {
 	aliased, err := rasql.As(t.Table, alias)
 	if err != nil {
 		return EmployeesTable{}, err
 	}
-	return newEmployeesTable(aliased), nil
+	return EmployeesTable{Table: aliased}, nil
 }
 
 // Example_rasql_self_join joins a table to itself. The alias is what keeps the
-// two sides apart, and As rebinds every column field to it, so the join
-// condition names one side through employees and the other through manager.
+// two sides apart, and the column accessors read whichever table value they
+// are called on, so the join condition names one side through employees and
+// the other through manager.
 func Example_rasql_self_join() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -98,8 +91,8 @@ func Example_rasql_self_join() {
 		return
 	}
 	rows, err := rasql.SelectFrom(employees).
-		Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
-		OrderAsc(employees.ID).
+		Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID(), manager.ID()))).
+		OrderAsc(employees.ID()).
 		Query(ctx, db)
 	// END(self_join)
 	if err != nil {
