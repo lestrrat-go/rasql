@@ -18,20 +18,6 @@ type ProjectsRow struct {
 	Archived bool
 }
 
-// DecodeRow assigns each result column to its field.
-func (r *ProjectsRow) DecodeRow(src row.Dynamic) error {
-	if err := row.Assign(src, "id", &r.ID); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "owner_id", &r.OwnerID); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "name", &r.Name); err != nil {
-		return err
-	}
-	return row.Assign(src, "archived", &r.Archived)
-}
-
 // ScanRow scans each result column directly into its field.
 func (r *ProjectsRow) ScanRow(src row.ScanSource) error {
 	return src.Scan(&r.ID, &r.OwnerID, &r.Name, &r.Archived)

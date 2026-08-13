@@ -28,7 +28,7 @@ Write the example first, under `examples/`, as an `Example*` function with an `/
 go test ./examples/ -update-docs
 ```
 
-The same flag rewrites the checked-in generated files the documentation shows, `examples/store/users_gen.go` and `examples/store/user_by_email_gen.go`, which `TestGeneratedStoreIsCurrent` and `TestGeneratedQueryIsCurrent` otherwise fail on when `rasqlgen` output changes.
+The same flag rewrites the checked-in generated files the documentation shows, `examples/store/users_gen.go` and `examples/store/user_by_email_gen.go`, which `TestGeneratedStoreIsCurrent` and `TestGeneratedQueryIsCurrent` otherwise fail on when `rasqlgen` output changes. The three files under `sample/taskboard/internal/store` are generated too, and no test checks them, so a generator change must also run `rm -f sample/taskboard/internal/store/.taskboard-schema.db && cd sample/taskboard/internal/store && go generate ./...`, which applies the SQLite migrations to a throwaway database and regenerates from it.
 
 ## Live database tests
 

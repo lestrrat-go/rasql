@@ -1,6 +1,6 @@
 // Package method reports where a type's method is written, so a mapping method a
 // type declares can be told apart from one Go promotes from an embedded field.
-// Both mapping directions need that distinction: a promoted method maps only the
+// The write direction needs that distinction: a promoted method maps only the
 // embedded fields and knows nothing about the fields declared around them.
 package method
 
