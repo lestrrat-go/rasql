@@ -2,7 +2,7 @@
 // -source`: ordinary Go that imports the schema package directly and calls
 // generate.WritePackage itself. A user who would rather not invoke
 // rasqlgen for this step puts a few lines like these behind their own
-// go:generate line instead.
+// generate directive instead.
 package main
 
 // BEGIN(schema_source_program)
