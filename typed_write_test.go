@@ -13,7 +13,6 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -521,7 +520,7 @@ func (u *generatedReturningUser) ScanColumns() []string {
 	return []string{"id", "email"}
 }
 
-func (u *generatedReturningUser) ScanRow(source row.ScanSource) error {
+func (u *generatedReturningUser) ScanRow(source rasql.ScanSource) error {
 	return source.Scan(&u.ID, &u.Email)
 }
 

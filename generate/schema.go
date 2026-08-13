@@ -91,7 +91,6 @@ func schemaSource(packageName string, tables, allTables []schema.TableDef) ([]by
 		source.WriteString("\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
-		source.WriteString("\t\"github.com/lestrrat-go/rasql/row\"\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
 		source.WriteString(")\n\n")
 	}
@@ -863,7 +862,7 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("// ScanRow scans each result column directly into its field.\n")
 	source.WriteString("func (r *")
 	source.WriteString(typeName)
-	source.WriteString(") ScanRow(src row.ScanSource) error {\n")
+	source.WriteString(") ScanRow(src rasql.ScanSource) error {\n")
 	for index, column := range table.Columns {
 		if !isTimeColumn(column) {
 			continue

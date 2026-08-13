@@ -1,11 +1,17 @@
 package rasql_test
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/stretchr/testify/require"
+)
+
+var (
+	_ rasql.ScanSource = (*sql.Row)(nil)
+	_ rasql.ScanSource = (*sql.Rows)(nil)
 )
 
 // scanValueRecorder implements sql.Scanner. Its underlying type is a struct

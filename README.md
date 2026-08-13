@@ -51,7 +51,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -61,7 +60,7 @@ type UsersRow struct {
 }
 
 // ScanRow scans each result column directly into its field.
-func (r *UsersRow) ScanRow(src row.ScanSource) error {
+func (r *UsersRow) ScanRow(src rasql.ScanSource) error {
 	return src.Scan(&r.ID, &r.Email)
 }
 
@@ -286,7 +285,7 @@ Most applications only import the root `rasql` package plus `dialect` and `schem
 | `dialect` | Decides identifier quoting, placeholders, type mapping, and syntax support. |
 | `query` | Represents dialect-neutral statements and expressions, with validation. |
 | `render` | Turns a validated query into SQL text and an ordered argument list. |
-| `row` | Provides dynamic result rows and value decoding. |
+| `dynamic` | Reads results whose column names are known only at run time. |
 | `inspect` | Reads live database metadata into `schema` descriptors. |
 | `migrate` | Plans and executes forward-only DDL migrations with durable history. |
 | `template`, `generate`, `cmd/rasqlgen` | Compile templates and descriptors into deterministic Go source. |

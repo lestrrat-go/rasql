@@ -9,9 +9,9 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -317,7 +317,7 @@ func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 // TestTypedSelectBuilderCountReadsANonIntegerCount pins the countRow path's
 // conversion, which is where the rebuild onto render.SelectBuilder changed
 // behavior: Count now scans through database/sql's own conversion
-// (convertAssign) rather than through the reflective row.Get[int64] the
+// (convertAssign) rather than through the reflective dynamic.Get[int64] the
 // untyped builder still uses, and that conversion accepts a string or a
 // []byte for an integer destination where the reflective path does not.
 func TestTypedSelectBuilderCountReadsANonIntegerCount(t *testing.T) {
@@ -443,7 +443,7 @@ func TestDBQueryRenderedExecutesStaticStatement(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
 
 	sqlRows, err := db.QueryRendered(t.Context(), statement)
-	rows := collectRows(t, row.Scan(sqlRows), err)
+	rows := collectRows(t, rowvalue.Scan(sqlRows), err)
 	require.Len(t, rows, 1)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -783,10 +783,10 @@ func (q *debugQueryer) ExecContext(_ context.Context, query string, arguments ..
 	return nil, nil
 }
 
-func collectRows(t *testing.T, sequence iter.Seq2[row.Dynamic, error], queryError error) []row.Dynamic {
+func collectRows(t *testing.T, sequence iter.Seq2[rowvalue.Row, error], queryError error) []rowvalue.Row {
 	t.Helper()
 	require.NoError(t, queryError)
-	result := make([]row.Dynamic, 0)
+	result := make([]rowvalue.Row, 0)
 	for value, err := range sequence {
 		require.NoError(t, err)
 		result = append(result, value)

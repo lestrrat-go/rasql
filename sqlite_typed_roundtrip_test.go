@@ -335,8 +335,8 @@ func TestSQLiteTypedSelectCountsRows(t *testing.T) {
 }
 
 // generatedEventRow has no ScanRow method, so SelectFrom falls back to
-// row.Decode. Its untagged fields snake-case to the table's column names, so
-// the field-mapping fallback maps it without help.
+// field-mapping decode. Its untagged fields snake-case to the table's column
+// names, so the fallback maps it without help.
 type generatedEventRow struct {
 	ID        int64
 	Active    bool
@@ -390,7 +390,7 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 		CreatedAt: time.Date(2026, time.August, 1, 12, 30, 45, 123456789, time.UTC),
 		Note:      &note,
 	}
-	// Insert reaches ColumnValue, and One reaches the row.Decode field-mapping fallback.
+	// Insert reaches ColumnValue, and One reaches the field-mapping decode fallback.
 	_, err = rasql.Insert(t.Context(), db, events, expected)
 	require.NoError(t, err)
 

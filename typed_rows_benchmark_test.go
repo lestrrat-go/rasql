@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/row"
+	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -34,7 +34,7 @@ type benchmarkMemberRow struct {
 	Email string
 }
 
-func (r *benchmarkMemberRow) ScanRow(source row.ScanSource) error {
+func (r *benchmarkMemberRow) ScanRow(source ScanSource) error {
 	return source.Scan(&r.ID, &r.Name, &r.Email)
 }
 
@@ -156,7 +156,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 	b.Run("full_dynamic", func(b *testing.B) {
 		b.ReportAllocs()
 		benchmarkQueryRows(b, benchmarkFullQuery, benchmarkRowsPerQuery, func(rows *sql.Rows) {
-			for result, err := range decodeRows[benchmarkMemberRow](row.Scan(rows)) {
+			for result, err := range decodeRows[benchmarkMemberRow](rowvalue.Scan(rows)) {
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -184,7 +184,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 	b.Run("partial_dynamic", func(b *testing.B) {
 		b.ReportAllocs()
 		benchmarkQueryRows(b, benchmarkNameQuery, benchmarkRowsPerQuery, func(rows *sql.Rows) {
-			for result, err := range decodeRows[benchmarkMemberName](row.Scan(rows)) {
+			for result, err := range decodeRows[benchmarkMemberName](rowvalue.Scan(rows)) {
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -254,7 +254,7 @@ type benchmarkCountRow struct {
 // query itself served by a fake driver that returns instantly. Comparing this
 // benchmark's numbers before and after the typed_select.go rebuild in step 4
 // of the ORM/helper split is the one behavior change that rebuild makes: Count
-// moves off the reflective row.Get[int64] path onto a countRow scanned
+// moves off the reflective dynamic.Get[int64] path onto a countRow scanned
 // directly by database/sql.
 func BenchmarkTypedSelectCount(b *testing.B) {
 	database, err := sql.Open(benchmarkDriverName, "")

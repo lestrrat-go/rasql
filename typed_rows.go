@@ -7,8 +7,8 @@ import (
 	"iter"
 	"reflect"
 
+	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/row"
 )
 
 // scanTypedRows maps runtime result-column names to generated fields before
@@ -21,8 +21,8 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 		}
 
 		var probe T
-		if _, dynamic := any(&probe).(row.DestinationScanner); !dynamic {
-			decodeRows[T](row.Scan(rows))(yield)
+		if _, dynamic := any(&probe).(DestinationScanner); !dynamic {
+			decodeRows[T](rowvalue.Scan(rows))(yield)
 			return
 		}
 		defer func() {
@@ -35,7 +35,7 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 		}
 		index := 0
 		var result T
-		scanner := any(&result).(row.DestinationScanner)
+		scanner := any(&result).(DestinationScanner)
 		destinations, err := scanner.ScanDestinations(names)
 		if err != nil {
 			yield(zero, fmt.Errorf("rasql: configure result scan: %w", err))
@@ -67,9 +67,9 @@ func scanTypedRowsStatic[T any](rows *sql.Rows) iter.Seq2[T, error] {
 		}
 
 		var result T
-		scanner, ok := any(&result).(row.Scanner)
+		scanner, ok := any(&result).(Scanner)
 		if !ok {
-			decodeRows[T](row.Scan(rows))(yield)
+			decodeRows[T](rowvalue.Scan(rows))(yield)
 			return
 		}
 
@@ -117,9 +117,9 @@ func scanTypedRenderedWith[T any](ctx context.Context, db DB, statement render.S
 	}
 }
 
-// decodeRows adapts a rangeable sequence of row.Dynamic into one that decodes each
-// row as T.
-func decodeRows[T any](rows iter.Seq2[row.Dynamic, error]) iter.Seq2[T, error] {
+// decodeRows adapts a rangeable sequence of rowvalue.Row into one that decodes
+// each row as T.
+func decodeRows[T any](rows iter.Seq2[rowvalue.Row, error]) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		index := 0
@@ -128,7 +128,7 @@ func decodeRows[T any](rows iter.Seq2[row.Dynamic, error]) iter.Seq2[T, error] {
 				yield(zero, err)
 				return
 			}
-			decoded, err := row.Decode[T](result)
+			decoded, err := rowvalue.Decode[T](result)
 			if err != nil {
 				yield(zero, fmt.Errorf("rasql: decode row %d: %w", index, err))
 				return
