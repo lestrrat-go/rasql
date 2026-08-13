@@ -1,10 +1,12 @@
-package rasql
+package dynamic
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"iter"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
@@ -22,23 +24,20 @@ type DeleteBuilder struct {
 }
 
 // DeleteReturningBuilder adds a RETURNING clause to a delete builder.
-// QueryDeleteAll and QueryDeleteOne decode its rows into a caller-selected
-// type. dynamic.DeleteFrom(table.Ref()).Returning(...).Query(ctx, db) reads
-// the same rows undecoded.
+// Query returns dynamic rows.
 type DeleteReturningBuilder struct {
 	builder     DeleteBuilder
 	projections []query.Projection
 	err         error
 }
 
-// DeleteFrom starts a fluent DELETE builder for table.
+// DeleteFrom starts a fluent DELETE builder using table as its target.
+// It is the counterpart of rasql.DeleteFrom for a query.TableRef with no Go
+// row type.
 // Build and Exec report an error when the builder carries no predicate.
 // Call AllowAll to delete every row of the target table.
-func DeleteFrom[T any](table Table[T]) DeleteBuilder {
-	if isNilTable(table) {
-		return DeleteBuilder{}.withError(fmt.Errorf("rasql: table must not be nil"))
-	}
-	return DeleteBuilder{from: table.Ref()}
+func DeleteFrom(table query.TableRef) DeleteBuilder {
+	return DeleteBuilder{from: table}
 }
 
 // Where adds a predicate created through the basic query API.
@@ -98,8 +97,7 @@ func (b DeleteBuilder) AllowAll() DeleteBuilder {
 }
 
 // Returning adds projections to the delete's RETURNING clause. Query runs the
-// delete and returns dynamic rows, while QueryDeleteAll and QueryDeleteOne
-// decode those rows into a caller-selected type.
+// delete and returns dynamic rows.
 func (b DeleteBuilder) Returning(projections ...query.Projection) DeleteReturningBuilder {
 	return DeleteReturningBuilder{builder: b}.Returning(projections...)
 }
@@ -114,15 +112,15 @@ func (b DeleteBuilder) Build(d dialect.Dialect) (render.Statement, error) {
 }
 
 // Exec builds the statement and executes it.
-func (b DeleteBuilder) Exec(ctx context.Context, db DB) (sql.Result, error) {
-	if err := db.valid(); err != nil {
+func (b DeleteBuilder) Exec(ctx context.Context, db rasql.DB) (sql.Result, error) {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	statement, err := b.statement()
 	if err != nil {
 		return nil, err
 	}
-	return Exec(ctx, db, statement)
+	return rasql.Exec(ctx, db, statement)
 }
 
 // Returning adds projections to an existing delete RETURNING builder.
@@ -147,25 +145,17 @@ func (b DeleteReturningBuilder) Build(d dialect.Dialect) (render.Statement, erro
 	return render.Delete(d, statement)
 }
 
-// QueryDeleteAll runs a fluent delete with RETURNING and decodes every returned
-// row as T.
-func QueryDeleteAll[T any](ctx context.Context, db DB, b DeleteReturningBuilder) ([]T, error) {
+// Query runs the delete and returns its RETURNING rows as a rangeable sequence
+// of dynamic rows. The statement runs when the sequence is first ranged.
+func (b DeleteReturningBuilder) Query(ctx context.Context, db rasql.DB) (iter.Seq2[Row, error], error) {
+	if err := db.Validate(); err != nil {
+		return nil, err
+	}
 	statement, err := b.statement()
 	if err != nil {
 		return nil, err
 	}
-	return QueryWriteAll[T](ctx, db, statement)
-}
-
-// QueryDeleteOne runs a fluent delete with RETURNING and decodes exactly one
-// returned row as T.
-func QueryDeleteOne[T any](ctx context.Context, db DB, b DeleteReturningBuilder) (T, error) {
-	var zero T
-	statement, err := b.statement()
-	if err != nil {
-		return zero, err
-	}
-	return QueryWriteOne[T](ctx, db, statement)
+	return QueryWrite(ctx, db, statement)
 }
 
 func (b DeleteReturningBuilder) statement() (query.Delete, error) {

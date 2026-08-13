@@ -3,7 +3,6 @@ package rasql_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"iter"
 	"testing"
 
@@ -16,96 +15,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
-
-func TestDBQueryExecutesParameterizedSelect(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	statement := selectStatement(t)
-	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
-		WithArgs(42).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
-
-	sequence, err := rasql.Query(t.Context(), db, statement)
-	rows := collectRows(t, sequence, err)
-	require.Len(t, rows, 1)
-
-	gotID, err := row.Get[int64](rows[0], "id")
-	require.NoError(t, err)
-	gotEmail, err := row.Get[string](rows[0], "email")
-	require.NoError(t, err)
-	require.Equal(t, int64(42), gotID)
-	require.Equal(t, "ada@example.com", gotEmail)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestDBSelectFromBuildsAndExecutesQuery(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.TableDef{
-		Name: "users",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "email", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
-	require.NoError(t, err)
-	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
-		WithArgs(42).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
-
-	sequence, err := rasql.SelectFromRef(users).
-		Select("id", "email").
-		WhereEqual("id", 42).
-		Query(t.Context(), db)
-	rows := collectRows(t, sequence, err)
-	require.Len(t, rows, 1)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSelectBuilderWhereInMatchesRenderSelectFrom(t *testing.T) {
-	users, err := query.NewTableRef(schema.TableDef{
-		Name: "users",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "email", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
-	require.NoError(t, err)
-
-	fromRender, err := render.SelectFrom(dialect.PostgreSQL(), users).
-		Select("id", "email").
-		WhereIn("id", 1, 2).
-		Build()
-	require.NoError(t, err)
-
-	db, err := rasql.New(&debugQueryer{}, dialect.PostgreSQL())
-	require.NoError(t, err)
-	fromClient, err := rasql.SelectFromRef(users).
-		Select("id", "email").
-		WhereIn("id", 1, 2).
-		Build(db.Dialect())
-	require.NoError(t, err)
-
-	require.Equal(t, fromRender.SQL(), fromClient.SQL())
-	require.Equal(t, fromRender.Args(), fromClient.Args())
-}
 
 func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -367,35 +276,6 @@ func TestDecodeFromDecodesDistinctRows(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSelectBuilderCountReturnsRowCount(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.TableDef{
-		Name: "users",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "email", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
-	require.NoError(t, err)
-	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
-		WithArgs(42).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
-
-	count, err := rasql.SelectFromRef(users).WhereEqual("id", 42).Count(t.Context(), db)
-	require.NoError(t, err)
-	require.Equal(t, int64(3), count)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -434,49 +314,79 @@ func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSelectBuilderCountRejectsWrongRowCount(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	users, err := query.NewTableRef(schema.TableDef{
+// TestTypedSelectBuilderCountReadsANonIntegerCount pins the countRow path's
+// conversion, which is where the rebuild onto render.SelectBuilder changed
+// behavior: Count now scans through database/sql's own conversion
+// (convertAssign) rather than through the reflective row.Get[int64] the
+// untyped builder still uses, and that conversion accepts a string or a
+// []byte for an integer destination where the reflective path does not.
+func TestTypedSelectBuilderCountReadsANonIntegerCount(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		value any
+	}{
+		{name: "string", value: "3"},
+		{name: "[]byte", value: []byte("3")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+			db, err := rasql.New(database, dialect.PostgreSQL())
+			require.NoError(t, err)
+			type user struct {
+				ID    int64  `rasql:"id"`
+				Email string `rasql:"email"`
+			}
+			users, err := rasql.TableOf[user](schema.TableDef{
+				Name: "users",
+				Columns: []schema.ColumnDef{
+					{Name: "id", Type: schema.IntegerType{}},
+					{Name: "email", Type: schema.TextType{}},
+				},
+				PrimaryKey: []string{"id"},
+			})
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\"").
+				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(testCase.value))
+
+			count, err := rasql.SelectFrom(users).Count(t.Context(), db)
+			require.NoError(t, err)
+			require.Equal(t, int64(3), count)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+// TestTypedSelectBuilderRejectsEmptyIn pins the new err field TypedSelectBuilder
+// carries directly since the rebuild onto render.SelectBuilder: WhereIn's empty
+// value list no longer travels through the untyped builder's own error state.
+func TestTypedSelectBuilderRejectsEmptyIn(t *testing.T) {
+	type user struct {
+		ID    int64  `rasql:"id"`
+		Email string `rasql:"email"`
+	}
+	users, err := rasql.TableOf[user](schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	// Count reports the shared single-row sentinels, the same ones One
-	// reports, rather than a message of its own.
-	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\"").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}))
-	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\"").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)).AddRow(int64(2)))
-
-	_, err = rasql.SelectFromRef(users).Count(t.Context(), db)
-	require.ErrorIs(t, err, rasql.ErrNoRows)
-
-	_, err = rasql.SelectFromRef(users).Count(t.Context(), db)
-	require.ErrorIs(t, err, rasql.ErrMultipleRows)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestDBQueryAllowsDebugQueryer(t *testing.T) {
-	queryer := &debugQueryer{}
-	db, err := rasql.New(queryer, dialect.PostgreSQL())
+	id, err := users.Column("id")
 	require.NoError(t, err)
 
-	sequence, err := rasql.Query(t.Context(), db, selectStatement(t))
-	rows := collectRows(t, sequence, err)
-	require.Empty(t, rows)
-	require.Equal(t, "SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)", queryer.query)
-	require.Equal(t, []any{42}, queryer.arguments)
+	_, err = rasql.SelectFrom(users).WhereIn(id).Build(dbForBuild(t).Dialect())
+	require.EqualError(t, err, "rasql: IN requires at least one value")
+
+	_, err = rasql.SelectFrom(users).WhereIn(id).All(t.Context(), dbForBuild(t))
+	require.EqualError(t, err, "rasql: render SELECT: rasql: IN requires at least one value")
 }
 
 func TestDBExecExecutesParameterizedInsert(t *testing.T) {
@@ -538,67 +448,6 @@ func TestDBQueryRenderedExecutesStaticStatement(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDBQueryClosesRowsWhenIterationStops(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	statement := selectStatement(t)
-	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
-		WithArgs(42).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).
-			AddRow(int64(42), "ada@example.com").
-			AddRow(int64(43), "bob@example.com")).
-		RowsWillBeClosed()
-
-	rows, err := rasql.Query(t.Context(), db, statement)
-	require.NoError(t, err)
-	for result, err := range rows {
-		require.NoError(t, err)
-		id, err := row.Get[int64](result, "id")
-		require.NoError(t, err)
-		require.Equal(t, int64(42), id)
-		break
-	}
-}
-
-func TestDBQueryReturnsExecutionError(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	statement := selectStatement(t)
-	expected := errors.New("database unavailable")
-	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
-		WithArgs(42).
-		WillReturnError(expected)
-
-	// The statement runs when the sequence is ranged, not when Query returns,
-	// so an execution error arrives as the sequence's one yielded error rather
-	// than as Query's own. That is what keeps an abandoned sequence from
-	// opening a cursor.
-	rows, err := rasql.Query(t.Context(), db, statement)
-	require.NoError(t, err)
-	yielded := 0
-	for _, err := range rows {
-		require.ErrorIs(t, err, expected)
-		yielded++
-	}
-	require.Equal(t, 1, yielded)
-}
-
 func TestCreateExecutesTableAndIndexes(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -636,83 +485,15 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDBQueryWriteReturnsRows(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	statement := insertReturningStatement(t)
-	mock.ExpectQuery("INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\"").
-		WithArgs("ada@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
-
-	sequence, err := rasql.QueryWrite(t.Context(), db, statement)
-	rows := collectRows(t, sequence, err)
-	require.Len(t, rows, 1)
-
-	gotID, err := row.Get[int64](rows[0], "id")
-	require.NoError(t, err)
-	gotEmail, err := row.Get[string](rows[0], "email")
-	require.NoError(t, err)
-	require.Equal(t, int64(42), gotID)
-	require.Equal(t, "ada@example.com", gotEmail)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestDBQueryWriteRejectsStatementWithoutReturning(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	statement, err := query.NewInsert(usersWriteTable(t), []query.ColumnRef{usersEmailColumn(t)}, []query.Expression{query.Bind("ada@example.com")})
-	require.NoError(t, err)
-
-	_, err = rasql.QueryWrite(t.Context(), db, statement)
-	require.ErrorContains(t, err, "rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
-}
-
-func TestDBQueryWriteRejectsUnsupportedDialect(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	db, err := rasql.New(database, dialect.MySQL())
-	require.NoError(t, err)
-	statement := insertReturningStatement(t)
-
-	_, err = rasql.QueryWrite(t.Context(), db, statement)
-	require.ErrorContains(t, err, "RETURNING is not supported")
-}
-
 // TestEveryEntryPointRejectsAZeroDB checks that the zero DB{} is refused by
 // the functions that take one, before they render or execute anything.
+// dynamic.Query and dynamic.QueryWrite have the equivalent check in
+// dynamic/execute_test.go, since neither lives in this package anymore.
 func TestEveryEntryPointRejectsAZeroDB(t *testing.T) {
 	var zero rasql.DB
 	users := deleteUsersTable(t)
 
-	_, err := rasql.QueryWrite(t.Context(), zero, insertReturningStatement(t))
-	require.ErrorContains(t, err, "rasql: invalid DB")
-
-	_, err = rasql.Query(t.Context(), zero, selectStatement(t))
-	require.ErrorContains(t, err, "rasql: invalid DB")
-
-	_, err = rasql.Exec(t.Context(), zero, insertStatement(t))
+	_, err := rasql.Exec(t.Context(), zero, insertStatement(t))
 	require.ErrorContains(t, err, "rasql: invalid DB")
 
 	_, err = rasql.SelectFrom(users).All(t.Context(), zero)
@@ -885,7 +666,7 @@ func usersEmailColumn(t *testing.T) query.ColumnRef {
 }
 
 // insertReturningStatement builds an INSERT that returns id and email, the
-// statement the QueryWrite and Exec rejection tests share.
+// statement the Exec rejection test shares.
 func insertReturningStatement(t *testing.T) query.Insert {
 	t.Helper()
 	users := usersWriteTable(t)
@@ -934,32 +715,21 @@ func selectStatement(t *testing.T) query.Select {
 	return statement
 }
 
-type debugQueryer struct {
-	query     string
-	arguments []any
-}
-
-func (q *debugQueryer) QueryContext(_ context.Context, query string, arguments ...any) (*sql.Rows, error) {
-	q.query = query
-	q.arguments = append([]any(nil), arguments...)
-	return nil, nil
-}
-
-func (q *debugQueryer) ExecContext(_ context.Context, query string, arguments ...any) (sql.Result, error) {
-	q.query = query
-	q.arguments = append([]any(nil), arguments...)
-	return nil, nil
-}
-
-func collectRows(t *testing.T, sequence iter.Seq2[row.Dynamic, error], queryError error) []row.Dynamic {
+// leakTestDB returns a DB over a mock whose expectations are checked when the
+// test ends.
+func leakTestDB(t *testing.T) (rasql.DB, sqlmock.Sqlmock) {
 	t.Helper()
-	require.NoError(t, queryError)
-	result := make([]row.Dynamic, 0)
-	for value, err := range sequence {
-		require.NoError(t, err)
-		result = append(result, value)
-	}
-	return result
+
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	db, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	return db, mock
 }
 
 // requireLazyRowSequence asserts that obtaining a row sequence and abandoning it
@@ -995,84 +765,10 @@ func requireLazyRowSequence[T any](t *testing.T, mock sqlmock.Sqlmock, expect fu
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// leakTestDB returns a DB over a mock whose expectations are checked when the
-// test ends.
-func leakTestDB(t *testing.T) (rasql.DB, sqlmock.Sqlmock) {
-	t.Helper()
-
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	return db, mock
-}
-
-func TestQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
-	db, mock := leakTestDB(t)
-	users := deleteUsersTable(t)
-	id, err := users.Ref().Column("id")
-	require.NoError(t, err)
-	statement, err := query.NewSelect(users.Ref(), query.Project(id))
-	require.NoError(t, err)
-
-	requireLazyRowSequence(t, mock,
-		func() {
-			mock.ExpectQuery(`SELECT "users"."id" FROM "users"`).
-				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42))).
-				RowsWillBeClosed()
-		},
-		func() (iter.Seq2[row.Dynamic, error], error) {
-			return rasql.Query(t.Context(), db, statement)
-		})
-}
-
-func TestQueryWriteRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
-	db, mock := leakTestDB(t)
-	users := deleteUsersTable(t)
-	id, err := users.Ref().Column("id")
-	require.NoError(t, err)
-	email, err := users.Ref().Column("email")
-	require.NoError(t, err)
-	insert, err := query.NewInsert(users.Ref(), []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
-	require.NoError(t, err)
-	statement, err := insert.WithReturning(query.Project(id))
-	require.NoError(t, err)
-
-	requireLazyRowSequence(t, mock,
-		func() {
-			mock.ExpectQuery(`INSERT INTO "users" ("email") VALUES ($1) RETURNING "id"`).
-				WithArgs("ada@example.com").
-				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42))).
-				RowsWillBeClosed()
-		},
-		func() (iter.Seq2[row.Dynamic, error], error) {
-			return rasql.QueryWrite(t.Context(), db, statement)
-		})
-}
-
-func TestSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
-	db, mock := leakTestDB(t)
-	users := deleteUsersTable(t)
-
-	requireLazyRowSequence(t, mock,
-		func() {
-			mock.ExpectQuery(`SELECT "users"."id" FROM "users"`).
-				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42))).
-				RowsWillBeClosed()
-		},
-		func() (iter.Seq2[row.Dynamic, error], error) {
-			return rasql.SelectFromRef(users.Ref()).Select("id").Query(t.Context(), db)
-		})
-}
-
-// TypedSelectBuilder.Query delegates to SelectBuilder.Query, so it inherits
-// whichever rule that one follows. This checks the inherited behavior rather
-// than assuming it.
+// TestTypedSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged pins the
+// laziness rule directly to TypedSelectBuilder.Query: since the rebuild onto
+// render.SelectBuilder, the typed builder owns this rule itself rather than
+// inheriting it by delegating to the untyped builder's Query.
 func TestTypedSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 	db, mock := leakTestDB(t)
 	users := deleteUsersTable(t)
@@ -1086,4 +782,36 @@ func TestTypedSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T
 		func() (iter.Seq2[deleteUser, error], error) {
 			return rasql.SelectFrom(users).Query(t.Context(), db)
 		})
+}
+
+// debugQueryer is a Handle that logs the statement it is given instead of
+// running it. db_test.go uses it for a handle that cannot start a
+// transaction; the tests below use it to prove a logged statement never
+// reaches the database.
+type debugQueryer struct {
+	query     string
+	arguments []any
+}
+
+func (q *debugQueryer) QueryContext(_ context.Context, query string, arguments ...any) (*sql.Rows, error) {
+	q.query = query
+	q.arguments = append([]any(nil), arguments...)
+	return nil, nil
+}
+
+func (q *debugQueryer) ExecContext(_ context.Context, query string, arguments ...any) (sql.Result, error) {
+	q.query = query
+	q.arguments = append([]any(nil), arguments...)
+	return nil, nil
+}
+
+func collectRows(t *testing.T, sequence iter.Seq2[row.Dynamic, error], queryError error) []row.Dynamic {
+	t.Helper()
+	require.NoError(t, queryError)
+	result := make([]row.Dynamic, 0)
+	for value, err := range sequence {
+		require.NoError(t, err)
+		result = append(result, value)
+	}
+	return result
 }

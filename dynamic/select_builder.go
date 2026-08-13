@@ -1,14 +1,14 @@
-package rasql
+package dynamic
 
 import (
 	"context"
 	"fmt"
 	"iter"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/row"
 )
 
 // SelectBuilder builds a SELECT statement through an immutable fluent API and
@@ -26,10 +26,10 @@ type SelectBuilder struct {
 	err      error
 }
 
-// SelectFromRef starts a fluent SELECT builder using table as its primary
-// table. It is the untyped counterpart of SelectFrom, for a query.TableRef with no
-// Go row type, and its terminals yield row.Dynamic rather than a decoded type.
-func SelectFromRef(table query.TableRef) SelectBuilder {
+// SelectFrom starts a fluent SELECT builder using table as its primary
+// table. It is the counterpart of rasql.SelectFrom for a query.TableRef with
+// no Go row type, and its terminals yield Row rather than a decoded type.
+func SelectFrom(table query.TableRef) SelectBuilder {
 	return SelectBuilder{builder: render.SelectFrom(nil, table)}
 }
 
@@ -82,7 +82,7 @@ func (b SelectBuilder) GroupBy(expressions ...query.Expression) SelectBuilder {
 }
 
 // GroupByColumns adds primary-table columns to the grouping by name.
-// It is the untyped counterpart of passing a generated query.ColumnRef to GroupBy.
+// It is the counterpart of passing a generated query.ColumnRef to GroupBy.
 func (b SelectBuilder) GroupByColumns(names ...string) SelectBuilder {
 	b.builder = b.builder.GroupByColumns(names...)
 	return b
@@ -158,8 +158,8 @@ func (b SelectBuilder) Build(d dialect.Dialect) (render.Statement, error) {
 // The statement runs when the sequence is first ranged over, not when Query
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
-func (b SelectBuilder) Query(ctx context.Context, db DB) (iter.Seq2[row.Dynamic, error], error) {
-	if err := db.valid(); err != nil {
+func (b SelectBuilder) Query(ctx context.Context, db rasql.DB) (iter.Seq2[Row, error], error) {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	statement, err := b.Build(db.Dialect())
@@ -173,10 +173,10 @@ func (b SelectBuilder) Query(ctx context.Context, db DB) (iter.Seq2[row.Dynamic,
 // It ignores ordering and reports an error when the builder sets a limit or an
 // offset: count an unpaged builder, then page a copy of it for the rows.
 // A COUNT(*) statement returns exactly one row, so Count reports the same
-// [ErrNoRows] and [ErrMultipleRows] as every other single-row read when the
-// database returns anything else.
-func (b SelectBuilder) Count(ctx context.Context, db DB) (int64, error) {
-	if err := db.valid(); err != nil {
+// [rasql.ErrNoRows] and [rasql.ErrMultipleRows] as every other single-row read
+// when the database returns anything else.
+func (b SelectBuilder) Count(ctx context.Context, db rasql.DB) (int64, error) {
+	if err := db.Validate(); err != nil {
 		return 0, err
 	}
 	if b.err != nil {
@@ -194,14 +194,14 @@ func (b SelectBuilder) Count(ctx context.Context, db DB) (int64, error) {
 
 // countValues adapts a sequence of result rows into the int64 held by each
 // row's "count" result column, the name BuildCount projects COUNT(*) under.
-func countValues(rows iter.Seq2[row.Dynamic, error]) iter.Seq2[int64, error] {
+func countValues(rows iter.Seq2[Row, error]) iter.Seq2[int64, error] {
 	return func(yield func(int64, error) bool) {
 		for result, err := range rows {
 			if err != nil {
 				yield(0, err)
 				return
 			}
-			count, err := row.Get[int64](result, "count")
+			count, err := Get[int64](result, "count")
 			if err != nil {
 				yield(0, err)
 				return

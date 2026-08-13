@@ -7,7 +7,6 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -36,36 +35,17 @@ func TestDeleteRejectsNilPredicate(t *testing.T) {
 	users := deleteUsersTable(t)
 	d := dbForBuild(t).Dialect()
 	var typedNil *query.Binary
-	for _, builder := range []struct {
-		name  string
-		build func(query.Expression) error
+	for _, predicate := range []struct {
+		name       string
+		expression query.Expression
 	}{
-		{
-			name: "DeleteFrom",
-			build: func(expression query.Expression) error {
-				_, err := rasql.DeleteFrom(users).Where(expression).Build(d)
-				return err
-			},
-		},
-		{
-			name: "DeleteFromRef",
-			build: func(expression query.Expression) error {
-				_, err := rasql.DeleteFromRef(users.Ref()).Where(expression).Build(d)
-				return err
-			},
-		},
+		{name: "nil interface"},
+		{name: "typed nil", expression: typedNil},
 	} {
-		for _, predicate := range []struct {
-			name       string
-			expression query.Expression
-		}{
-			{name: "nil interface"},
-			{name: "typed nil", expression: typedNil},
-		} {
-			t.Run(builder.name+"/"+predicate.name, func(t *testing.T) {
-				require.ErrorContains(t, builder.build(predicate.expression), "WHERE expression must not be nil")
-			})
-		}
+		t.Run(predicate.name, func(t *testing.T) {
+			_, err := rasql.DeleteFrom(users).Where(predicate.expression).Build(d)
+			require.ErrorContains(t, err, "WHERE expression must not be nil")
+		})
 	}
 }
 
@@ -350,24 +330,6 @@ func TestDeleteFrom(t *testing.T) {
 			Build(dbForBuild(t).Dialect())
 		require.ErrorContains(t, err, "archived_users")
 	})
-
-	t.Run("DeleteFromRef builds the same statement", func(t *testing.T) {
-		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		d := dbForBuild(t).Dialect()
-		fromQuery, err := rasql.DeleteFromRef(users.Ref()).WhereEqual(id, 42).Build(d)
-		require.NoError(t, err)
-		typed, err := rasql.DeleteFrom(users).WhereEqual(id, 42).Build(d)
-		require.NoError(t, err)
-		require.Equal(t, typed.SQL(), fromQuery.SQL())
-
-		fromQueryAllowAll, err := rasql.DeleteFromRef(users.Ref()).AllowAll().Build(d)
-		require.NoError(t, err)
-		typedAllowAll, err := rasql.DeleteFrom(users).AllowAll().Build(d)
-		require.NoError(t, err)
-		require.Equal(t, typedAllowAll.SQL(), fromQueryAllowAll.SQL())
-	})
 }
 
 func TestDeleteReturningBuild(t *testing.T) {
@@ -384,40 +346,6 @@ func TestDeleteReturningBuild(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `DELETE FROM "users" WHERE ("users"."id" = $1) RETURNING "id", "email"`, statement.SQL())
 	require.Equal(t, []any{42}, statement.Args())
-}
-
-func TestDeleteReturningQuery(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	users := deleteUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
-	mock.ExpectQuery("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1) RETURNING \"id\", \"email\"").
-		WithArgs(42).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
-
-	sequence, err := rasql.DeleteFrom(users).
-		WhereEqual(id, 42).
-		Returning(query.Project(id), query.Project(email)).
-		Query(t.Context(), db)
-	rows := collectRows(t, sequence, err)
-	require.Len(t, rows, 1)
-	gotID, err := row.Get[int64](rows[0], "id")
-	require.NoError(t, err)
-	gotEmail, err := row.Get[string](rows[0], "email")
-	require.NoError(t, err)
-	require.Equal(t, int64(42), gotID)
-	require.Equal(t, "ada@example.com", gotEmail)
 }
 
 func TestDeleteReturningTypedHelpers(t *testing.T) {

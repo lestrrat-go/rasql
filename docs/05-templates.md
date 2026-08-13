@@ -75,7 +75,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/row"
+	"github.com/lestrrat-go/rasql/dynamic"
 	querytemplate "github.com/lestrrat-go/rasql/template"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -132,18 +132,18 @@ func Example_rasql_static_template() {
 	}
 
 	// SQL: SELECT id, email FROM users WHERE email = ? (argument: "ada@example.com")
-	// QueryRendered runs the template statement; row.Scan turns its rows into a rangeable sequence.
+	// QueryRendered runs the template statement; dynamic.Scan turns its rows into a rangeable sequence.
 	sqlRows, err := db.QueryRendered(ctx, statement)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
 	}
-	for result, err := range row.Scan(sqlRows) {
+	for result, err := range dynamic.Scan(sqlRows) {
 		if err != nil {
 			fmt.Printf("failed to query user: %s\n", err)
 			return
 		}
-		email, err := row.Get[string](result, "email")
+		email, err := dynamic.Get[string](result, "email")
 		if err != nil {
 			fmt.Printf("failed to read email: %s\n", err)
 			return
@@ -158,7 +158,7 @@ func Example_rasql_static_template() {
 source: [examples/rasql_static_template_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_static_template_example_test.go)
 <!-- END INCLUDE -->
 
-`QueryRendered` returns rows, and `ExecRendered` runs a statement that returns none. Because the result shape comes from hand-written SQL, rows arrive as `row.Dynamic` by default. Use `rasql.QueryRendered[T]`, `rasql.QueryRenderedAll[T]`, or `rasql.QueryRenderedOne[T]` when the selected column names map to a Go result type. The typed helpers use the same row decoding as typed builders: `rasql` tags, and snake-cased field names for untagged fields.
+`QueryRendered` returns rows, and `ExecRendered` runs a statement that returns none. Because the result shape comes from hand-written SQL, rows arrive as `dynamic.Row` by default. Use `rasql.QueryRendered[T]`, `rasql.QueryRenderedAll[T]`, or `rasql.QueryRenderedOne[T]` when the selected column names map to a Go result type. The typed helpers use the same row decoding as typed builders: `rasql` tags, and snake-cased field names for untagged fields.
 
 <!-- INCLUDE(examples/rasql_typed_static_template_example_test.go) -->
 ```go
@@ -256,9 +256,9 @@ Read dynamic results in one of three ways:
 
 | Call | Gives |
 | --- | --- |
-| `row.Get[T](result, "email")` | One named value, decoded as `T`. |
-| `row.Assign(result, "email", &value)` | The same value, decoded into an existing destination. |
-| `row.Decode[T](result)` | A whole struct, matching `rasql` tags or snake-cased field names. |
+| `dynamic.Get[T](result, "email")` | One named value, decoded as `T`. |
+| `dynamic.Assign(result, "email", &value)` | The same value, decoded into an existing destination. |
+| `dynamic.Decode[T](result)` | A whole struct, matching `rasql` tags or snake-cased field names. |
 
 ## Generate a function instead
 

@@ -7,8 +7,8 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/dynamic"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -44,7 +44,7 @@ func Example_rasql_delete_returning() {
 
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email (argument: 42)
 	// BEGIN(delete_returning_dynamic)
-	builder := rasql.DeleteFrom(users).
+	builder := dynamic.DeleteFrom(users.Ref()).
 		WhereEqual(users.ID, 42).
 		Returning(query.Project(users.ID), query.Project(users.Email))
 
@@ -60,7 +60,7 @@ func Example_rasql_delete_returning() {
 			return
 		}
 		var email string
-		if err := row.Assign(deleted, "email", &email); err != nil {
+		if err := dynamic.Assign(deleted, "email", &email); err != nil {
 			fmt.Printf("failed to read the email column: %s\n", err)
 			return
 		}

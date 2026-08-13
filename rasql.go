@@ -14,9 +14,12 @@
 // through [ErrNoRows] or [ErrMultipleRows].
 //
 // A write statement built through the query package that carries a RETURNING
-// clause is read with QueryWrite, or the typed QueryWriteAll and QueryWriteOne,
-// instead of Exec, which rejects it.
+// clause is read with dynamic.QueryWrite, or the typed QueryWriteAll and
+// QueryWriteOne, instead of Exec, which rejects it.
 //
-// The schema, query, render, row, and dialect packages expose lower-level APIs
-// for schema generation, dynamic queries, rendering, and result handling.
+// The schema, query, render, row, dynamic, and dialect packages expose
+// lower-level APIs for schema generation, dynamic queries, rendering, and
+// result handling. A column name known only as a string at run time is
+// served by rasql/dynamic, which imports this package; this package never
+// imports it.
 package rasql
