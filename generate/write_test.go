@@ -20,6 +20,16 @@ func usersTableDef() schema.TableDef {
 	)
 }
 
+// namedTableDef returns a table with the same shape as usersTableDef under
+// whatever name the caller gives, which is what the spelling tests vary.
+func namedTableDef(name string) schema.TableDef {
+	return schema.MustTableDef(name,
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+	)
+}
+
 func ordersTableDef() schema.TableDef {
 	return schema.MustTableDef("orders",
 		schema.Integer("id"),
@@ -307,7 +317,7 @@ func TestWritePackageRefusesToOrphanAnEarlierTableFile(t *testing.T) {
 	err := generate.WritePackage("store", directory, users)
 	require.ErrorContains(t, err, "refusing to write schema output")
 	require.ErrorContains(t, err, `orders_gen.go was generated for table "orders"`)
-	require.ErrorContains(t, err, "ordersTable")
+	require.ErrorContains(t, err, "would no longer find the ordersTable value it reads")
 	require.ErrorContains(t, err, "name every table the package needs in one run, or delete the file first")
 	for name, source := range generated {
 		unchanged, err := os.ReadFile(filepath.Join(directory, name))
@@ -324,6 +334,81 @@ func TestWritePackageRefusesToOrphanAnEarlierTableFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(descriptor), "var usersDef = schema.TableDef{")
 	require.NotContains(t, string(descriptor), "var ordersDef = schema.TableDef{")
+}
+
+// TestWritePackageAllowsARenameThatKeepsTheSameFile pins the run the guard
+// must not refuse. schemaOutputFilename lowercases the whole table name, so
+// "Users" and "users" name one users_gen.go and one usersTable value: the
+// second run rewrites exactly the file the first wrote and strands nothing.
+// What it leaves behind is one file per table, holding the second spelling.
+func TestWritePackageAllowsARenameThatKeepsTheSameFile(t *testing.T) {
+	for _, rename := range []string{"users", "USERS", "Users"} {
+		t.Run(rename, func(t *testing.T) {
+			directory := t.TempDir()
+			require.NoError(t, generate.WritePackage("store", directory, namedTableDef("Users")))
+
+			renamed := namedTableDef(rename)
+			require.NoError(t, generate.WritePackage("store", directory, renamed))
+
+			entries, err := os.ReadDir(directory)
+			require.NoError(t, err)
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			require.ElementsMatch(t, []string{"users_gen.go", "schema_gen.go", "schema_gen_test.go"}, names)
+
+			// Nothing of the first spelling survives: the file holds the
+			// bytes the second run generates, and the descriptor it reads is
+			// declared for the second spelling.
+			want, err := schemagen.TableSurfaceSource("store", renamed, renamed)
+			require.NoError(t, err)
+			got, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			descriptor, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+			require.NoError(t, err)
+			require.Contains(t, string(descriptor), "var usersTable = ")
+			require.Contains(t, string(descriptor), `Name: "`+rename+`"`)
+		})
+	}
+}
+
+// TestWritePackageRefusesARenameThatWritesAnotherFile pins the half of the
+// same question that must keep refusing. "APIKeys" and "api_keys" share the
+// apiKeysTable value but generate apikeys_gen.go and api_keys_gen.go, so
+// letting the second run through would leave both files declaring the same
+// types and the package would not compile. The refusal says that, rather
+// than blaming a value that is in fact still declared.
+func TestWritePackageRefusesARenameThatWritesAnotherFile(t *testing.T) {
+	directory := t.TempDir()
+	require.NoError(t, generate.WritePackage("store", directory, namedTableDef("APIKeys")))
+
+	generated := make(map[string]string, 3)
+	for _, name := range []string{"apikeys_gen.go", "schema_gen.go", "schema_gen_test.go"} {
+		source, err := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, err)
+		generated[name] = string(source)
+	}
+
+	err := generate.WritePackage("store", directory, namedTableDef("api_keys"))
+	require.ErrorContains(t, err, "refusing to write schema output")
+	require.ErrorContains(t, err, `apikeys_gen.go was generated for table "APIKeys"`)
+	require.ErrorContains(t, err, `which this run spells "api_keys" and generates into api_keys_gen.go instead`)
+	require.ErrorContains(t, err, "name every table the package needs in one run, or delete the file first")
+	require.NotContains(t, err.Error(), "would no longer find", "this run declares apiKeysTable, so the refusal must not claim the value goes missing")
+	require.NoFileExists(t, filepath.Join(directory, "api_keys_gen.go"))
+	for name, source := range generated {
+		unchanged, err := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, err)
+		require.Equal(t, source, string(unchanged), "%s must be exactly as the refused run found it", name)
+	}
+
+	// Deleting the file the refusal names is the way out here too.
+	require.NoError(t, os.Remove(filepath.Join(directory, "apikeys_gen.go")))
+	require.NoError(t, generate.WritePackage("store", directory, namedTableDef("api_keys")))
+	require.FileExists(t, filepath.Join(directory, "api_keys_gen.go"))
+	require.NoFileExists(t, filepath.Join(directory, "apikeys_gen.go"))
 }
 
 // TestWritePackageAllowsARerunThatKeepsEveryTable confirms the orphan guard

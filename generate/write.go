@@ -29,7 +29,7 @@ import (
 //
 // The per-table files hold the generated surface without the descriptors,
 // which schemaDescriptorFilename declares once for the whole package, so a
-// run must name every table the package already holds a file for; see
+// run must write every per-table file the package already holds; see
 // requireNoOrphanedTableFiles.
 func WritePackage(packageName, directory string, tables ...schema.TableDef) error {
 	info, err := os.Stat(directory)
@@ -109,6 +109,15 @@ func WritePackage(packageName, directory string, tables ...schema.TableDef) erro
 // it stays behind reading a value nothing declares any more and the package
 // stops compiling on the next build.
 //
+// What decides that is the destination a previous table generated, never
+// its name. schemaOutputFilename lowercases the whole name, so "Users" and
+// "users" share one destination, and a run that writes that destination
+// replaces the earlier file whole: nothing of the earlier spelling is left
+// behind, and the run has nothing to answer for. Comparing names instead
+// would refuse a plain change of case, and comparing descriptor variables
+// would let one through that must not be, since "APIKeys" and "api_keys"
+// share the apiKeysTable variable but generate two different files.
+//
 // The refusal happens before the first file is written, so a run that would
 // end this way leaves the directory exactly as it was. Deleting the file
 // instead is not this package's decision to make: the file is the user's,
@@ -119,21 +128,31 @@ func requireNoOrphanedTableFiles(directory string, tables []schema.TableDef) err
 	if err != nil {
 		return err
 	}
-	generated := make(map[string]struct{}, len(tables))
+	written := make(map[string]struct{}, len(tables))
+	respellings := make(map[string]string, len(tables))
 	for _, table := range tables {
-		generated[table.Name] = struct{}{}
+		written[schemaOutputFilename(table.Name)] = struct{}{}
+		respellings[schemagen.DescriptorVarName(table.Name)] = table.Name
 	}
 	orphans := make([]string, 0, len(previous))
 	for _, name := range previous {
-		if _, exists := generated[name]; exists {
+		filename := schemaOutputFilename(name)
+		if _, exists := written[filename]; exists {
 			continue
 		}
-		filename := schemaOutputFilename(name)
 		if _, err := os.Lstat(filepath.Join(directory, filename)); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 			return err
+		}
+		// A previous table this run still declares, under a spelling that
+		// generates another file, keeps finding the value it reads, so the
+		// harm there is the stale second file rather than a missing value
+		// and the refusal has to say which of the two it is.
+		if respelling, exists := respellings[schemagen.DescriptorVarName(name)]; exists {
+			orphans = append(orphans, fmt.Sprintf("%s was generated for table %q, which this run spells %q and generates into %s instead, so it would stay behind as a second, stale file for the same table", filename, name, respelling, schemaOutputFilename(respelling)))
+			continue
 		}
 		orphans = append(orphans, fmt.Sprintf("%s was generated for table %q, which this run leaves out, and would no longer find the %s value it reads", filename, name, schemagen.DescriptorVarName(name)))
 	}

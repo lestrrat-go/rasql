@@ -90,4 +90,33 @@ func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
 	command.Dir = consumer
 	commandOutput, err = command.CombinedOutput()
 	require.NoError(t, err, string(commandOutput))
+
+	// A table whose only change is its case generates the same users_gen.go
+	// and the same usersTable value, so the run rewrites what is there
+	// rather than stranding it, and the guard has to let it through. This is
+	// what a migration that recased a table leaves behind, and the package
+	// it produces has to build like any other.
+	renamedPath := filepath.Join(consumer, "renamed.db")
+	database, err = sql.Open("sqlite", renamedPath)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE Users (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	command = exec.CommandContext(t.Context(), "go", "run", "github.com/lestrrat-go/rasql/cmd/rasqlgen", "schema", "-dsn", renamedPath, "-dialect", "sqlite", "-table", "Users", "-package", "store", "-output", outputDirectory)
+	command.Dir = consumer
+	commandOutput, err = command.CombinedOutput()
+	require.NoError(t, err, string(commandOutput))
+
+	descriptor, err = os.ReadFile(filepath.Join(outputDirectory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), `func UsersDef() schema.TableDef`)
+	require.Contains(t, string(descriptor), `"Users"`)
+	require.Contains(t, string(descriptor), "var usersTable = UsersTable{")
+	require.NoFileExists(t, ordersOutput)
+
+	command = exec.CommandContext(t.Context(), "go", "test", "./...")
+	command.Dir = consumer
+	commandOutput, err = command.CombinedOutput()
+	require.NoError(t, err, string(commandOutput))
 }

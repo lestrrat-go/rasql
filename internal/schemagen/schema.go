@@ -560,9 +560,10 @@ func tableTypeName(tableName string) string {
 
 // DescriptorVarName returns the package-level variable a generated table
 // accessor reads, which is the single declaration a TableSurfaceSource file
-// needs from the descriptor file written beside it. rasqlgen names it to
-// tell whether a generated file already in an output directory would still
-// find its table value after the run it is about to make.
+// needs from the descriptor file written beside it. rasqlgen names it when
+// it refuses a run, to say which value a generated file already in the
+// output directory reads and whether that run still declares it. Which
+// files a run may leave behind is decided by their names, not by this one.
 func DescriptorVarName(tableName string) string {
 	return descriptorName(tableName)
 }
