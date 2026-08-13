@@ -86,10 +86,6 @@ func TestRunQueryRejectsOutputWithoutGeneratedSuffix(t *testing.T) {
 	require.NoFileExists(t, output)
 }
 
-// generatedSource is a minimal file with the shape rasqlgen writes: the
-// generated marker on its first line, then the package clause.
-const generatedSource = genfile.Marker + "\n\npackage generated\n"
-
 // handWrittenSource is a file somebody wrote by hand that happens to sit
 // where generated output would land. Nothing about it says rasqlgen, which
 // is the whole point: the destination must survive.
