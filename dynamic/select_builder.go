@@ -17,13 +17,6 @@ import (
 // transaction started from it alike.
 type SelectBuilder struct {
 	builder render.SelectBuilder
-	// limit and hasLimit shadow the same state inside builder, which keeps
-	// them unexported with no getter. All reads them for a collection
-	// capacity. Limit is the only method that sets a limit on a
-	// SelectBuilder; a second one would have to set these too.
-	limit    int
-	hasLimit bool
-	err      error
 }
 
 // SelectFrom starts a fluent SELECT builder using table as its primary
@@ -123,19 +116,7 @@ func (b SelectBuilder) Distinct() SelectBuilder {
 // Limit sets the maximum number of result rows.
 func (b SelectBuilder) Limit(limit int) SelectBuilder {
 	b.builder = b.builder.Limit(limit)
-	b.limit = limit
-	b.hasLimit = true
 	return b
-}
-
-// rowLimitHint reports the most rows the statement can return, or 0 when that
-// is not bounded. An OFFSET shifts the result window rather than widening it,
-// so it does not enter the hint.
-func (b SelectBuilder) rowLimitHint() int {
-	if !b.hasLimit || b.limit < 0 {
-		return 0
-	}
-	return b.limit
 }
 
 // Offset sets the number of result rows to skip.
@@ -146,9 +127,6 @@ func (b SelectBuilder) Offset(offset int) SelectBuilder {
 
 // Build validates the statement and renders it for d without executing it.
 func (b SelectBuilder) Build(d dialect.Dialect) (render.Statement, error) {
-	if b.err != nil {
-		return render.Statement{}, b.err
-	}
 	return b.builder.WithDialect(d).Build()
 }
 
@@ -179,9 +157,6 @@ func (b SelectBuilder) Count(ctx context.Context, db rasql.DB) (int64, error) {
 	if err := db.Validate(); err != nil {
 		return 0, err
 	}
-	if b.err != nil {
-		return 0, b.err
-	}
 	statement, err := b.builder.WithDialect(db.Dialect()).BuildCount()
 	if err != nil {
 		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
@@ -211,11 +186,4 @@ func countValues(rows iter.Seq2[Row, error]) iter.Seq2[int64, error] {
 			}
 		}
 	}
-}
-
-func (b SelectBuilder) withError(err error) SelectBuilder {
-	if b.err == nil {
-		b.err = err
-	}
-	return b
 }

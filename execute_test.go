@@ -693,28 +693,6 @@ func insertStatement(t *testing.T) query.Insert {
 	return statement
 }
 
-func selectStatement(t *testing.T) query.Select {
-	t.Helper()
-	users, err := query.NewTableRef(schema.TableDef{
-		Name: "users",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "email", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
-	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
-	statement, err := query.NewSelect(users, query.Project(id), query.Project(email))
-	require.NoError(t, err)
-	statement, err = statement.WithWhere(query.Equal(id, query.Bind(42)))
-	require.NoError(t, err)
-	return statement
-}
-
 // leakTestDB returns a DB over a mock whose expectations are checked when the
 // test ends.
 func leakTestDB(t *testing.T) (rasql.DB, sqlmock.Sqlmock) {
