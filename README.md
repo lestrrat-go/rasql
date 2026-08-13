@@ -246,7 +246,7 @@ source: [examples/rasql_quickstart_example_test.go](https://github.com/lestrrat-
 
 `users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()` or `dialect.MySQL()` to run the same code against another database; only the driver and the DSN change with it.
 
-Inserts, updates, deletes, and typed selects have dedicated helpers. Fluent deletes can read deleted rows through `Returning`, `Query`, `QueryDeleteAll`, or `QueryDeleteOne`. Upserts and anything else beyond them are built through the `query` package and run with `rasql.Exec`, except a statement with a `RETURNING` clause, which reads its rows back through `dynamic.QueryWrite` instead.
+Inserts, updates, deletes, and typed selects have dedicated helpers. A fluent delete that carries `Returning` reads its deleted rows decoded through `rasql.QueryDeleteAll` or `rasql.QueryDeleteOne`, and undecoded through `dynamic.DeleteFrom(table.Ref()).Returning(...).Query`. Upserts and anything else beyond them are built through the `query` package and run with `rasql.Exec`, except a statement with a `RETURNING` clause, which reads its rows back through `dynamic.QueryWrite` instead.
 
 The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since an in-memory database belongs to one connection. A real application also creates its tables through migrations rather than `rasql.CreateTable`.
 
