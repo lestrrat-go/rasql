@@ -293,14 +293,15 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(source), string(repeated), "generated source must not depend on input order")
 
-	directory, err := os.MkdirTemp(".", ".tmp-schema-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedUsageTest), 0o600))
-	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"
+	// The replace directive must be absolute: t.TempDir() no longer nests the
+	// scratch module under this package directory, so a relative ".." would
+	// resolve against the temp directory's own location instead of the repo.
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
 
 	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
@@ -487,13 +488,16 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 	require.Contains(t, string(usersSource), "func (t UsersTable) Orders() UsersTableOrdersRelation")
 	require.Contains(t, string(ordersSource), "func (t OrdersTable) User() OrdersTableUserRelation")
 
-	directory, err := os.MkdirTemp(".", ".tmp-relationship-schema-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(directory)) })
+	directory := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "users_gen.go"), usersSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "orders_gen.go"), ordersSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedRelationshipUsageTest), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"), 0o600))
+	// The replace directive must be absolute: t.TempDir() no longer nests the
+	// scratch module under this package directory, so a relative ".." would
+	// resolve against the temp directory's own location instead of the repo.
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
 
 	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
 	command.Dir = directory
@@ -614,12 +618,15 @@ func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
 
 	source, err := generate.PackageSource("generated", employees)
 	require.NoError(t, err)
-	directory, err := os.MkdirTemp(".", ".tmp-self-relationship-schema-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(directory)) })
+	directory := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedSelfReferentialRelationshipUsageTest), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"), 0o600))
+	// The replace directive must be absolute: t.TempDir() no longer nests the
+	// scratch module under this package directory, so a relative ".." would
+	// resolve against the temp directory's own location instead of the repo.
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
 
 	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
 	command.Dir = directory

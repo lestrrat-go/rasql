@@ -594,12 +594,7 @@ func TestRedactErrorRemovesDSN(t *testing.T) {
 
 func newTestDirectory(t *testing.T) string {
 	t.Helper()
-	directory, err := os.MkdirTemp(".", ".tmp-rasqlmigrate-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
-	return directory
+	return t.TempDir()
 }
 
 func setCommandOutput(t *testing.T) *bytes.Buffer {

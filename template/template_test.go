@@ -359,16 +359,17 @@ func (whitespacePlaceholderDialect) Placeholder(int) (string, error) {
 
 func requireGeneratedSourceCompiles(t *testing.T, source []byte) {
 	t.Helper()
-	directory, err := os.MkdirTemp(".", ".tmp-template-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "query.go"), source, 0o600))
 	repoGoMod, err := os.ReadFile("../go.mod")
 	require.NoError(t, err)
+	// The replace directive must be absolute: t.TempDir() no longer nests the
+	// scratch module under this package directory, so a relative ".." would
+	// resolve against the temp directory's own location instead of the repo.
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
 	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/generated\n", 1)
-	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => ../..\n"
+	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
 	command := exec.CommandContext(t.Context(), "go", "test", ".")
 	command.Dir = directory
