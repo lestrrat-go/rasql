@@ -2,27 +2,92 @@ package rasqlgen
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
-// runSchemaSource implements `rasqlgen schema -source`. It resolves
-// sourceDir to a package inside the caller's Go module, writes a temporary
-// package main into that module that imports the schema package and calls
-// generate.WritePackage itself, runs it with `go run`, and removes the
-// temporary directory on both the success and the failure path.
+// runSchemaSource implements `rasqlgen schema -source`. It handles SIGINT
+// and SIGTERM for the duration of the run and delegates the work to
+// generateFromSchemaSource, which owns the temporary directory and its
+// cleanup.
+//
+// Handling those two signals is what makes the cleanup reachable at all.
+// Left at their default disposition they terminate the process outright,
+// and Go runs no deferred function on the way out, so an interrupted run
+// would leave its temporary directory inside the user's module. Handled,
+// the signal becomes an ordinary context cancellation that returns through
+// the existing defer.
+func runSchemaSource(sourceDir, packageName, outputDir string, tableNames []string, writer io.Writer) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// NotifyContext reports only that a signal arrived, never which one,
+	// and the signal has to be named again to re-raise it below. A second
+	// registration records it: the signal package delivers to every
+	// channel registered for that signal, so this one does not compete
+	// with the context's own.
+	received := make(chan os.Signal, 1)
+	signal.Notify(received, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(received)
+
+	err := generateFromSchemaSource(ctx, sourceDir, packageName, outputDir, tableNames, writer)
+	if ctx.Err() == nil {
+		return err
+	}
+
+	// Only reached once generateFromSchemaSource has returned, so its
+	// cleanup defer has already removed the temporary directory. The
+	// signal is then re-raised with its default disposition, which is
+	// what keeps the conventional status for an interrupted process (130
+	// for SIGINT, 143 for SIGTERM) instead of replacing it with this
+	// command's own exit 1. Cleanup comes first either way: on a platform
+	// that will not deliver the signal to this process, the call below
+	// returns and err is reported the ordinary way.
+	select {
+	case sig := <-received:
+		raiseWithDefaultDisposition(sig)
+	default:
+	}
+	return err
+}
+
+// raiseWithDefaultDisposition restores sig's default disposition and sends
+// it to this process. On a Unix system the signal is delivered before the
+// send returns and the process terminates there, so nothing after the call
+// runs. On a system that rejects the send, it returns and leaves the caller
+// to report the run's error instead.
+func raiseWithDefaultDisposition(sig os.Signal) {
+	signal.Reset(sig)
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		return
+	}
+	_ = process.Signal(sig)
+}
+
+// generateFromSchemaSource resolves sourceDir to a package inside the
+// caller's Go module, writes a temporary package main into that module that
+// imports the schema package and calls generate.WritePackage itself, runs
+// it with `go run`, and removes the temporary directory on both the success
+// and the failure path.
 //
 // The child writes the generated files itself: nothing is serialized back
 // to this process, and the child's combined stdout and stderr are forwarded
 // to writer as they are produced.
-func runSchemaSource(sourceDir, packageName, outputDir string, tableNames []string, writer io.Writer) error {
+//
+// Cancelling ctx stops the child and returns, so the cleanup below runs on
+// that path too.
+func generateFromSchemaSource(ctx context.Context, sourceDir, packageName, outputDir string, tableNames []string, writer io.Writer) error {
 	// The output path must be made absolute before anything changes
 	// directory: -output is relative to the user's invocation cwd, but the
 	// child process below runs with its cwd at the module root.
@@ -38,7 +103,7 @@ func runSchemaSource(sourceDir, packageName, outputDir string, tableNames []stri
 		return fmt.Errorf("schema output %q is not a directory", outputDir)
 	}
 
-	importPath, moduleDir, err := resolveSchemaSourcePackage(sourceDir)
+	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, sourceDir)
 	if err != nil {
 		return err
 	}
@@ -61,10 +126,16 @@ func runSchemaSource(sourceDir, packageName, outputDir string, tableNames []stri
 	// The argument is joined with a literal "./" rather than filepath.Join
 	// so it stays a relative package pattern on every platform, built from
 	// only the temporary directory's base name.
-	cmd := exec.Command("go", "run", "./"+filepath.Base(temporaryDir))
+	cmd := exec.CommandContext(ctx, "go", "run", "./"+filepath.Base(temporaryDir))
 	cmd.Dir = moduleDir
 	cmd.Stdout = writer
 	cmd.Stderr = writer
+	// writer is os.Stderr for the command itself, which exec hands to the
+	// child as a file descriptor. Any other writer makes exec create a
+	// pipe and wait for every holder of its write end to close, and a
+	// process the child leaves behind holds one; WaitDelay bounds that
+	// wait so a cancelled run still reaches the cleanup above promptly.
+	cmd.WaitDelay = 10 * time.Second
 	if err := cmd.Run(); err != nil {
 		// The detail already reached writer through the child's own
 		// stderr; this wrapper stays short rather than repeating it.
@@ -94,9 +165,13 @@ type schemaSourcePackageInfo struct {
 // inside the JSON. Only a missing directory or similarly unresolvable
 // sourceDir exits non-zero with a message on stderr, which is what this
 // reports. A compile failure in the package itself is caught later, when
-// runSchemaSource runs `go run` on the generated program that imports it.
-func resolveSchemaSourcePackage(sourceDir string) (string, string, error) {
-	cmd := exec.Command("go", "list", "-json", sourceDir)
+// generateFromSchemaSource runs `go run` on the generated program that
+// imports it.
+//
+// It runs under ctx so a signal arriving during resolution stops this
+// command as promptly as one arriving during the child run does.
+func resolveSchemaSourcePackage(ctx context.Context, sourceDir string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, "go", "list", "-json", sourceDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -92,7 +92,7 @@ func runSchema(args []string, writer io.Writer) error {
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
 	timeout := flags.Duration("timeout", 30*time.Second, "deadline for -dsn metadata inspection")
 	var tableNames tableNames
-	flags.Var(&tableNames, "table", "database table to generate; repeat for multiple tables (duplicate values are rejected)")
+	flags.Var(&tableNames, "table", "table to generate from the selected schema input; repeat for multiple tables (duplicate values are rejected)")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "directory for generated Go source files")
 	if err := parseCommandFlags(flags, args); err != nil {

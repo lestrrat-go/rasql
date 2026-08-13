@@ -44,7 +44,7 @@ When selected tables contain supported foreign keys, `rasqlgen` also emits typed
 
 Live MySQL inspection requires metadata privileges that expose every column in the selected table. MySQL filters `information_schema.columns` by column privileges, so a partial grant can otherwise produce an incomplete baseline; the inspector cross-checks the count against `SHOW CREATE TABLE` and returns `inspect.ErrIncompleteMetadata` instead. Grant table- or database-level `SELECT` (or equivalent full column visibility) before using MySQL live inspection or `diff-live`.
 
-`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.TableDef` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, whether with `-input` or `-dsn`, is rejected as a flag-parsing error rather than silently collapsed to one table. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
+`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.TableDef` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, in any of the three input modes, is rejected as a flag-parsing error rather than silently collapsed to one table. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
 
 ### A schema package as the source
 
@@ -74,7 +74,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
   -output internal/store
 ```
 
-During a run, `rasqlgen` writes a temporary `package main` into the user's own module, runs it with `go run` from the module root, and deletes it again on both the success and the failure path. The directory name begins with a dot, so `go list ./...`, `go build ./...`, and similar `./...` patterns skip it while it exists.
+During a run, `rasqlgen` writes a temporary `package main` into the user's own module, runs it with `go run` from the module root, and deletes it again on the success path, the failure path, and on an interrupt. `rasqlgen` handles SIGINT and SIGTERM for the length of a `-source` run rather than leaving them to end the process where no cleanup can run; the directory is removed first, and the command then ends on that same signal, so a caller still sees the conventional status for an interrupted run rather than an ordinary failure. The directory name begins with a dot, so `go list ./...`, `go build ./...`, and similar `./...` patterns skip it while it exists.
 
 The temporary program has to live inside the module: a schema package under `internal/`, which is where a schema package usually lives, cannot be imported from outside its own module. A program run from outside the module tree is rejected with `use of internal package ... not allowed`, so the temporary directory is created under the module root rather than, say, the system temp directory.
 
@@ -90,6 +90,7 @@ A user who would rather own the program entirely can skip `rasqlgen` for this st
 ```go
 import (
 	"fmt"
+	"os"
 
 	"github.com/lestrrat-go/rasql/examples/schemasource"
 	"github.com/lestrrat-go/rasql/generate"
@@ -97,13 +98,15 @@ import (
 
 func main() {
 	if err := generate.WritePackage("store", "internal/store", schemasource.Tables()...); err != nil {
-		fmt.Printf("failed to write schema package: %s\n", err)
-		return
+		fmt.Fprintf(os.Stderr, "failed to write schema package: %s\n", err)
+		os.Exit(1)
 	}
 }
 ```
 source: [examples/schemasource/gen/main.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schemasource/gen/main.go)
 <!-- END INCLUDE -->
+
+`go generate` runs that directive with the schema package's own directory as the working directory, so the relative `internal/store` above names a directory inside it, and like `-output` it has to exist before the program runs. Reporting the failure is not enough on its own: a step that printed the error and returned would exit 0, and a `go generate` run would look successful while producing nothing, so the program exits nonzero instead.
 
 Both routes call the same exported entry point, `generate.WritePackage(packageName, directory string, tables ...schema.TableDef) error`.
 
