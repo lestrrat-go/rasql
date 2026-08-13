@@ -262,8 +262,9 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.NotContains(t, string(source), "row.NewDynamic")
 	require.Contains(t, string(source), "return src.Scan(&r.ID, &r.Email, &timeScanner2)")
 	require.Contains(t, string(source), "func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {")
-	require.Contains(t, string(source), "\tvar scanned uint64\n")
-	require.Contains(t, string(source), "scanned |= uint64(1) << 0")
+	require.Contains(t, string(source), "\tscanned := row.NewScanMask(3)\n")
+	require.Contains(t, string(source), "\t\tscanIndexID = iota\n\t\tscanIndexEmail\n\t\tscanIndexCreatedAt\n")
+	require.Contains(t, string(source), "if !scanned.Mark(scanIndexID) {")
 	require.Contains(t, string(source), "\t\tcase \"created_at\":")
 	require.Contains(t, string(source), "\t\t\tdestinations[index] = &timeScanner2")
 	require.Contains(t, string(source), "func (r UsersRow) ColumnValue(name string) (any, bool) {")
@@ -329,7 +330,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(output), "as query.ColumnRef value")
 }
 
-func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
+func TestSchemaSizesScanMaskForWideRows(t *testing.T) {
 	columns := make([]schema.ColumnDef, 65)
 	for index := range columns {
 		columns[index] = schema.ColumnDef{Name: "column_" + strconv.Itoa(index), Type: schema.IntegerType{}}
@@ -341,8 +342,12 @@ func TestSchemaUsesMaskWordsForWideRows(t *testing.T) {
 		PrimaryKey: []string{"column_0"},
 	})
 	require.NoError(t, err)
-	require.Contains(t, string(source), "\tvar scanned [2]uint64\n")
-	require.Contains(t, string(source), "scanned[1]&(uint64(1)<<0)")
+	// A table wider than one mask word states its column count and nothing
+	// else. Splitting that count across words is row.ScanMask's job, so no
+	// bit arithmetic reaches the generated file.
+	require.Contains(t, string(source), "\tscanned := row.NewScanMask(65)\n")
+	require.Contains(t, string(source), "if !scanned.Mark(scanIndexColumn64) {")
+	require.NotContains(t, string(source), "uint64(1)<<")
 }
 
 const generatedRelationshipUsageTest = `package generated_test

@@ -893,6 +893,18 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("func (r *")
 	source.WriteString(typeName)
 	source.WriteString(") ScanDestinations(columns []string) ([]any, error) {\n")
+	if len(table.Columns) > 0 {
+		source.WriteString("\tconst (\n")
+		for index, column := range table.Columns {
+			source.WriteString("\t\t")
+			source.WriteString(scanIndexName(column.Name))
+			if index == 0 {
+				source.WriteString(" = iota")
+			}
+			source.WriteString("\n")
+		}
+		source.WriteString("\t)\n")
+	}
 	for index, column := range table.Columns {
 		if !isTimeColumn(column) {
 			continue
@@ -904,32 +916,21 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("\n")
 	}
 	source.WriteString("\tdestinations := make([]any, len(columns))\n")
-	maskWords := (len(table.Columns) + 63) / 64
-	if maskWords <= 1 {
-		source.WriteString("\tvar scanned uint64\n")
-	} else {
-		source.WriteString("\tvar scanned [")
-		source.WriteString(strconv.Itoa(maskWords))
-		source.WriteString("]uint64\n")
+	if len(table.Columns) > 0 {
+		source.WriteString("\tscanned := row.NewScanMask(")
+		source.WriteString(strconv.Itoa(len(table.Columns)))
+		source.WriteString(")\n")
 	}
 	source.WriteString("\tvar discard any\n")
 	source.WriteString("\tfor index, column := range columns {\n\t\tswitch column {\n")
 	for index, column := range table.Columns {
 		field := goName(column.Name)
-		word := index / 64
-		bit := index % 64
 		source.WriteString("\t\tcase ")
 		source.WriteString(quote(column.Name))
-		source.WriteString(":\n\t\t\tif ")
-		writeScanMask(source, maskWords, word)
-		source.WriteString(" & (uint64(1) << ")
-		source.WriteString(strconv.Itoa(bit))
-		source.WriteString(")")
-		source.WriteString(" != 0 {\n\t\t\t\treturn nil, fmt.Errorf(\"duplicate result column %q\", column)\n\t\t\t}\n\t\t\t")
-		writeScanMask(source, maskWords, word)
-		source.WriteString(" |= uint64(1) << ")
-		source.WriteString(strconv.Itoa(bit))
-		source.WriteString("\n\t\t\tdestinations[index] = ")
+		source.WriteString(":\n\t\t\tif !scanned.Mark(")
+		source.WriteString(scanIndexName(column.Name))
+		source.WriteString(") {\n\t\t\t\treturn nil, fmt.Errorf(\"duplicate result column %q\", column)\n\t\t\t}\n")
+		source.WriteString("\t\t\tdestinations[index] = ")
 		if isTimeColumn(column) {
 			source.WriteString("&timeScanner")
 			source.WriteString(strconv.Itoa(index))
@@ -968,14 +969,10 @@ func writeTimeScannerLiteral(source *bytes.Buffer, tableName string, destination
 	source.WriteString(", value)\n\t})")
 }
 
-func writeScanMask(source *bytes.Buffer, maskWords, word int) {
-	if maskWords <= 1 {
-		source.WriteString("scanned")
-		return
-	}
-	source.WriteString("scanned[")
-	source.WriteString(strconv.Itoa(word))
-	source.WriteString("]")
+// scanIndexName returns the name of the local constant that holds a column's
+// position in the row type's [row.ScanMask].
+func scanIndexName(columnName string) string {
+	return "scanIndex" + goName(columnName)
 }
 
 // writeRowColumnValue writes the rasql.ColumnValuer implementation, which is

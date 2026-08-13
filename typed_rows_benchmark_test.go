@@ -35,29 +35,33 @@ func (r *benchmarkMemberRow) ScanRow(source row.ScanSource) error {
 	return source.Scan(&r.ID, &r.Name, &r.Email)
 }
 
+// ScanDestinations mirrors what rasqlgen emits, so the benchmarks below measure
+// the generated shape rather than a hand-tuned stand-in for it.
 func (r *benchmarkMemberRow) ScanDestinations(columns []string) ([]any, error) {
+	const (
+		scanIndexID = iota
+		scanIndexName
+		scanIndexEmail
+	)
 	destinations := make([]any, len(columns))
-	var scanned uint64
+	scanned := row.NewScanMask(3)
 	var discard any
 	for index, column := range columns {
 		switch column {
 		case "id":
-			if scanned&(uint64(1)<<0) != 0 {
+			if !scanned.Mark(scanIndexID) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 0
 			destinations[index] = &r.ID
 		case "name":
-			if scanned&(uint64(1)<<1) != 0 {
+			if !scanned.Mark(scanIndexName) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 1
 			destinations[index] = &r.Name
 		case "email":
-			if scanned&(uint64(1)<<2) != 0 {
+			if !scanned.Mark(scanIndexEmail) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 2
 			destinations[index] = &r.Email
 		default:
 			destinations[index] = &discard
@@ -107,7 +111,7 @@ type benchmarkMemberName struct {
 
 func BenchmarkScanDestinations(b *testing.B) {
 	columns := []string{"id", "name", "email"}
-	b.Run("bitmask", func(b *testing.B) {
+	b.Run("scanmask", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
 			var result benchmarkMemberRow

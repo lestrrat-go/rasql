@@ -27,46 +27,48 @@ func (r *TasksRow) ScanRow(src row.ScanSource) error {
 
 // ScanDestinations maps result-column names to fields on r.
 func (r *TasksRow) ScanDestinations(columns []string) ([]any, error) {
+	const (
+		scanIndexID = iota
+		scanIndexProjectID
+		scanIndexAssigneeID
+		scanIndexTitle
+		scanIndexStatus
+		scanIndexPriority
+	)
 	destinations := make([]any, len(columns))
-	var scanned uint64
+	scanned := row.NewScanMask(6)
 	var discard any
 	for index, column := range columns {
 		switch column {
 		case "id":
-			if scanned&(uint64(1)<<0) != 0 {
+			if !scanned.Mark(scanIndexID) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 0
 			destinations[index] = &r.ID
 		case "project_id":
-			if scanned&(uint64(1)<<1) != 0 {
+			if !scanned.Mark(scanIndexProjectID) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 1
 			destinations[index] = &r.ProjectID
 		case "assignee_id":
-			if scanned&(uint64(1)<<2) != 0 {
+			if !scanned.Mark(scanIndexAssigneeID) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 2
 			destinations[index] = &r.AssigneeID
 		case "title":
-			if scanned&(uint64(1)<<3) != 0 {
+			if !scanned.Mark(scanIndexTitle) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 3
 			destinations[index] = &r.Title
 		case "status":
-			if scanned&(uint64(1)<<4) != 0 {
+			if !scanned.Mark(scanIndexStatus) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 4
 			destinations[index] = &r.Status
 		case "priority":
-			if scanned&(uint64(1)<<5) != 0 {
+			if !scanned.Mark(scanIndexPriority) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 5
 			destinations[index] = &r.Priority
 		default:
 			destinations[index] = &discard
