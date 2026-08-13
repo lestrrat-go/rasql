@@ -75,32 +75,39 @@ type DestinationScanner interface {
 // Generated ScanDestinations methods build one with [NewScanMask] and call
 // [ScanMask.Mark] once for each column they recognize. A hand-written
 // implementation can do the same.
-type ScanMask []uint64
+// The bits live in whole 64-bit words, so the allocation rounds up, but the
+// column count the caller asked for is kept alongside them: the bits past the
+// last column exist only because of that rounding and name no column, so Mark
+// must reject them rather than accept whatever the rounding left over.
+type ScanMask struct {
+	words   []uint64
+	columns int
+}
 
 // NewScanMask returns a mask that holds one bit per column, all unmarked.
 func NewScanMask(columns int) ScanMask {
 	if columns <= 0 {
-		return nil
+		return ScanMask{}
 	}
-	return make(ScanMask, (columns+63)/64)
+	return ScanMask{words: make([]uint64, (columns+63)/64), columns: columns}
 }
 
 // Mark records that the column at index has been mapped, and reports whether
 // that column was still unmarked. A false return means the column was already
 // mapped, which is how a duplicate result column is detected.
 //
-// Mark panics if index is negative or names a column the mask was not sized
-// for, because either is a mistake in the calling ScanDestinations rather than
-// something a result set can cause.
+// Mark panics if index is negative or is at or past the column count the mask
+// was built for, because either is a mistake in the calling ScanDestinations
+// rather than something a result set can cause.
 func (m ScanMask) Mark(index int) bool {
-	if index < 0 || index >= len(m)*64 {
-		panic(fmt.Sprintf("rasql: scan mask index %d out of range for %d columns", index, len(m)*64))
+	if index < 0 || index >= m.columns {
+		panic(fmt.Sprintf("rasql: scan mask index %d out of range for %d columns", index, m.columns))
 	}
 	word := index / 64
 	bit := uint64(1) << (index % 64)
-	if m[word]&bit != 0 {
+	if m.words[word]&bit != 0 {
 		return false
 	}
-	m[word] |= bit
+	m.words[word] |= bit
 	return true
 }
