@@ -7,7 +7,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -19,7 +18,7 @@ type ProjectsRow struct {
 }
 
 // ScanRow scans each result column directly into its field.
-func (r *ProjectsRow) ScanRow(src row.ScanSource) error {
+func (r *ProjectsRow) ScanRow(src rasql.ScanSource) error {
 	return src.Scan(&r.ID, &r.OwnerID, &r.Name, &r.Archived)
 }
 

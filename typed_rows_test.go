@@ -142,7 +142,7 @@ func openCloseCountingRows(t *testing.T, name string, driverImpl *closeCountingD
 	return rows
 }
 
-// closeCountingRow is a row type that implements row.DestinationScanner so
+// closeCountingRow is a row type that implements DestinationScanner so
 // scanTypedRows takes the dynamic-column-mapping branch under test.
 type closeCountingRow struct {
 	ID int64

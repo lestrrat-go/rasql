@@ -16,8 +16,8 @@ import (
 // logging or debugging wrapper around one. New requires it, so a DB can always
 // run a write; a value that only reads is rejected where it is supplied rather
 // than where a write is attempted.
-// A debug Handle may return nil rows after logging a query; row.Scan treats
-// that as no result rows.
+// A debug Handle may return nil rows after logging a query; dynamic.Scan
+// treats that as no result rows.
 type Handle interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
@@ -203,9 +203,9 @@ func (db DB) Rollback() error {
 }
 
 // QueryRendered executes statement and returns its result rows.
-// The caller owns the returned rows: hand them to row.Scan, which closes them,
-// or close them directly. A debug Handle that logs the statement instead of
-// running it may return nil rows, which row.Scan reads as no result rows.
+// The caller owns the returned rows: hand them to dynamic.Scan, which closes
+// them, or close them directly. A debug Handle that logs the statement instead
+// of running it may return nil rows, which dynamic.Scan reads as no result rows.
 func (db DB) QueryRendered(ctx context.Context, statement render.Statement) (*sql.Rows, error) {
 	if err := db.validStatement(statement); err != nil {
 		return nil, err

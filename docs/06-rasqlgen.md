@@ -60,7 +60,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -70,7 +69,7 @@ type UsersRow struct {
 }
 
 // ScanRow scans each result column directly into its field.
-func (r *UsersRow) ScanRow(src row.ScanSource) error {
+func (r *UsersRow) ScanRow(src rasql.ScanSource) error {
 	return src.Scan(&r.ID, &r.Email)
 }
 
@@ -181,17 +180,19 @@ explicit `query.Join` and typed builder APIs.
 
 The descriptor is a package-level variable, which Go cannot mark constant, so it stays unexported and only the accessor is exported. Importing code therefore cannot swap the descriptor out from under the rest of the program.
 
-### The mapping methods
+### The mapping and scan methods
 
 A generated row type carries no `rasql` tags. The generator already knows which column feeds which field, so it writes that mapping as Go code rather than as a string for reflection to parse at run time. Each method satisfies one interface:
 
 | Interface | Method | Used by |
 | --- | --- | --- |
-| `row.Scanner` | `ScanRow(row.ScanSource) error` | `SelectFrom`, when the builder owns the whole projection and no `Project` call narrowed it. |
-| `row.DestinationScanner` | `ScanDestinations([]string) ([]any, error)` | Every other typed read: `DecodeFrom`, a narrowed `SelectFrom`, `QueryWriteAll`/`QueryWriteOne`, `QueryRendered[T]`. |
+| `rasql.Scanner` | `ScanRow(rasql.ScanSource) error` | Every typed select whose builder owns the complete table projection. |
+| `rasql.DestinationScanner` | `ScanDestinations(columns []string) ([]any, error)` | Every typed select over a partial or reordered projection, and every typed write that reads a `RETURNING` clause. |
 | `rasql.ColumnValuer` | `ColumnValue(name string) (any, bool)` | `rasql.Insert` and `rasql.Update`. |
 
-A hand-written row type without these methods is mapped by `rasql` tags and snake-cased field names, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). The read side has no by-method mapping: deleting `DecodeRow` was deliberate, and the asymmetry with the write side's `ColumnValue` is the price of keeping `row.Dynamic` out of the typed API.
+`ScanRow` runs when the builder states the whole table projection, so the column order is known before the query runs. `ScanDestinations` runs whenever it is not: a projected subset, a reordered result, or a `RETURNING` clause. A row type that declares neither is mapped by its `rasql` tags and snake-cased field names.
+
+A hand-written row type without these methods is mapped by `rasql` tags and snake-cased field names, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). The read side has no by-method mapping: deleting `DecodeRow` was deliberate, and the asymmetry with the write side's `ColumnValue` is the price of keeping `dynamic.Row` out of the typed API.
 
 A field no single column holds is not a mapping problem. Keep the raw columns as fields and compute the value in a method:
 
@@ -240,7 +241,7 @@ type userWithRole struct {
 source: [examples/rasqlgen_embedded_row_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_embedded_row_example_test.go)
 <!-- END INCLUDE -->
 
-A `userWithRole` satisfies `row.DestinationScanner` through the promoted `ScanDestinations`, which knows only the embedded row's columns. Reading one therefore fills `ID` and `Email` from the embedded `store.UsersRow`, hands `Role` no destination at all, and reports nothing: the example prints `role=""`. `ScanRow` promotes the same way and behaves the same way. Unlike the write side, the read side does not check whether the outer type declared the method or inherited it, so there is no error to notice — the wrapper simply comes back half filled. Declare `ScanDestinations` on the outer type so it places every field, give the outer type a named field instead of embedding the row, or drop the scan methods altogether by declaring your own result struct with `rasql` tags.
+A `userWithRole` satisfies `rasql.DestinationScanner` through the promoted `ScanDestinations`, which knows only the embedded row's columns. Reading one therefore fills `ID` and `Email` from the embedded `store.UsersRow`, hands `Role` no destination at all, and reports nothing: the example prints `role=""`. `ScanRow` promotes the same way and behaves the same way. Unlike the write side, the read side does not check whether the outer type declared the method or inherited it, so there is no error to notice — the wrapper simply comes back half filled. Declare `ScanDestinations` on the outer type so it places every field, give the outer type a named field instead of embedding the row, or drop the scan methods altogether by declaring your own result struct with `rasql` tags.
 
 Embedding promotes `ColumnValue` in the same way, and the write side reads it differently. `Insert` and `Update` map a struct that embeds a `ColumnValuer`, carries `rasql` tags of its own, and declares no `ColumnValue` by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing is still mapped by its promoted `ColumnValue`. Declaring `ColumnValue` on the outer type maps such a wrapper by method again.
 
