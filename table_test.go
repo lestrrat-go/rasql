@@ -303,8 +303,8 @@ func TestTypedSelectBuilderRejectsForeignColumn(t *testing.T) {
 type nilTableEntryPoint[Wrapper rasql.Table[staffRow]] struct {
 	name string
 	// errorContains is the text the reported error must carry. InnerJoin and
-	// LeftJoin return a query.Join, which has no error channel, so they join an
-	// empty table and the error arrives from rendering that table at Build.
+	// LeftJoin return a query.Join, which has no error channel, so they join a
+	// zero query.TableRef and the error arrives from Select.Validate at Build.
 	errorContains string
 	run           func(t *testing.T, table Wrapper) error
 }
@@ -379,7 +379,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 		},
 		{
 			name:          "InnerJoin",
-			errorContains: "must not be empty",
+			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
 				employees := staff(t)
 				_, err := rasql.SelectFrom(employees).
@@ -390,7 +390,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 		},
 		{
 			name:          "LeftJoin",
-			errorContains: "must not be empty",
+			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
 				employees := staff(t)
 				_, err := rasql.SelectFrom(employees).

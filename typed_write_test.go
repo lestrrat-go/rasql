@@ -315,6 +315,30 @@ func TestInsertRejectsUnknownDefaultColumn(t *testing.T) {
 	require.ErrorContains(t, err, "has no column \"missing\" selected for a database default")
 }
 
+// TestInsertRejectsTableFromWithInvalidDescriptor pins that the write path
+// still revalidates a table built by rasql.TableFrom, which itself validates
+// nothing: typedTableReference calls definition.Validate() on every write, so
+// an invalid descriptor is rejected here even though it would render on the
+// read path (query.TableRefFrom's contract).
+func TestInsertRejectsTableFromWithInvalidDescriptor(t *testing.T) {
+	bad := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{""},
+	}
+	type user struct {
+		ID    int64  `rasql:""`
+		Email string `rasql:"email"`
+	}
+	users := rasql.TableFrom[user](bad)
+
+	_, err := rasql.Insert(t.Context(), buildOnlyDB(t), users, user{Email: "ada@example.com"})
+	require.ErrorContains(t, err, "table reference")
+}
+
 func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
