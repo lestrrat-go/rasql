@@ -250,8 +250,8 @@ A column named by a string is checked when the statement is built, so these two 
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#string_column) -->
 ```go
-correct := rasql.SelectFromRef(store.Users().Ref()).Select("id").WhereEqual("id", 42)
-typo := rasql.SelectFromRef(store.Users().Ref()).Select("id").WhereEqual("emial", 42)
+correct := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("id", 42)
+typo := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("emial", 42)
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->

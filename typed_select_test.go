@@ -773,3 +773,19 @@ func TestSelectAllOffsetDoesNotChangeTheReservation(t *testing.T) {
 	require.Len(t, got, 3)
 	require.Equal(t, 8, cap(got))
 }
+
+// selectOrdersTable returns a table to join deleteUsersTable against.
+func selectOrdersTable(t *testing.T) query.TableRef {
+	t.Helper()
+
+	orders, err := query.NewTableRef(schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	return orders
+}

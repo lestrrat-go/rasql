@@ -53,6 +53,7 @@ func TestZeroDBRejectsEveryMethodWithoutPanicking(t *testing.T) {
 	require.Nil(t, db.Handle())
 	require.ErrorContains(t, db.Commit(), "rasql: this DB is not a transaction")
 	require.ErrorContains(t, db.Rollback(), "rasql: this DB is not a transaction")
+	require.ErrorContains(t, db.Validate(), "rasql: invalid DB")
 }
 
 func TestDialectReturnsConfiguredDialect(t *testing.T) {

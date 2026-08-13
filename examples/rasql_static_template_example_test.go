@@ -7,7 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/row"
+	"github.com/lestrrat-go/rasql/dynamic"
 	querytemplate "github.com/lestrrat-go/rasql/template"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -64,18 +64,18 @@ func Example_rasql_static_template() {
 	}
 
 	// SQL: SELECT id, email FROM users WHERE email = ? (argument: "ada@example.com")
-	// QueryRendered runs the template statement; row.Scan turns its rows into a rangeable sequence.
+	// QueryRendered runs the template statement; dynamic.Scan turns its rows into a rangeable sequence.
 	sqlRows, err := db.QueryRendered(ctx, statement)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
 	}
-	for result, err := range row.Scan(sqlRows) {
+	for result, err := range dynamic.Scan(sqlRows) {
 		if err != nil {
 			fmt.Printf("failed to query user: %s\n", err)
 			return
 		}
-		email, err := row.Get[string](result, "email")
+		email, err := dynamic.Get[string](result, "email")
 		if err != nil {
 			fmt.Printf("failed to read email: %s\n", err)
 			return

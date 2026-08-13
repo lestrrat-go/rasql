@@ -6,7 +6,7 @@ These pages explain how to use `rasql` in an application. For what `rasql` is an
 
 1. [Getting started](01-getting-started.md) creates a DB and runs a first query end to end.
 2. [Schemas](02-schema.md) describes tables in Go code, and reads existing tables back from a database.
-3. [Querying](03-querying.md) reads rows: typed selects, joins, custom projections, and SQL inspection. Its [operation reference](03-querying.md#operation-reference) enumerates every statement, builder method, and predicate.
+3. [Querying](03-querying.md) reads rows: typed selects, joins, custom projections, and SQL inspection. Its [operation reference](03-querying.md#operation-reference) enumerates every statement, builder method, and predicate. `rasql` is the typed layer; `rasql/dynamic` holds the builders and row reads for columns you only know as strings when the program runs.
 4. [Writing rows](04-writing.md) creates tables and inserts, updates, or deletes rows, including inside a [transaction](04-writing.md#transactions).
 5. [Static templates](05-templates.md) compiles fixed SQL text with named binds.
 6. [`rasqlgen`](06-rasqlgen.md) generates Go source from a live database, a schema snapshot, or a template.

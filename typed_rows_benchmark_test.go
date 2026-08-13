@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/row"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 const (
@@ -239,6 +242,59 @@ func BenchmarkCollectAll(b *testing.B) {
 	})
 }
 
+// benchmarkCountTable is the table BenchmarkTypedSelectCount runs Count
+// against. Its shape does not matter to the benchmark; only the COUNT(*)
+// statement Count builds ever reaches the fake driver.
+type benchmarkCountRow struct {
+	ID int64 `rasql:"id"`
+}
+
+// BenchmarkTypedSelectCount isolates TypedSelectBuilder.Count's own cost: the
+// route from a rendered COUNT(*) statement to the returned int64, with the
+// query itself served by a fake driver that returns instantly. Comparing this
+// benchmark's numbers before and after the typed_select.go rebuild in step 4
+// of the ORM/helper split is the one behavior change that rebuild makes: Count
+// moves off the reflective row.Get[int64] path onto a countRow scanned
+// directly by database/sql.
+func BenchmarkTypedSelectCount(b *testing.B) {
+	database, err := sql.Open(benchmarkDriverName, "")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+
+	db, err := New(database, dialect.SQLite())
+	if err != nil {
+		b.Fatal(err)
+	}
+	table, err := TableOf[benchmarkCountRow](schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		count, err := SelectFrom(table).Count(b.Context(), db)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if count != 3 {
+			b.Fatalf("got count %d, want 3", count)
+		}
+	}
+}
+
 func benchmarkQueryRows(b *testing.B, query string, rowsPerQuery int, consume func(*sql.Rows)) {
 	b.Helper()
 	database, err := sql.Open(benchmarkDriverName, "")
@@ -284,6 +340,13 @@ func (benchmarkConn) Begin() (driver.Tx, error) {
 }
 
 func (benchmarkConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "COUNT(*)") {
+		return &benchmarkResultRows{
+			columns:   []string{"count"},
+			values:    []driver.Value{int64(3)},
+			remaining: 1,
+		}, nil
+	}
 	switch query {
 	case benchmarkFullQuery:
 		return &benchmarkResultRows{

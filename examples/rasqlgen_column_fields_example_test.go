@@ -5,6 +5,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/dynamic"
 	"github.com/lestrrat-go/rasql/examples/store"
 )
 
@@ -14,8 +15,8 @@ import (
 // never builds.
 func Example_rasqlgen_column_fields() {
 	// BEGIN(string_column)
-	correct := rasql.SelectFromRef(store.Users().Ref()).Select("id").WhereEqual("id", 42)
-	typo := rasql.SelectFromRef(store.Users().Ref()).Select("id").WhereEqual("emial", 42)
+	correct := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("id", 42)
+	typo := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("emial", 42)
 	// END(string_column)
 
 	// Nothing separates the two until one of them is rendered.
