@@ -4,12 +4,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
@@ -573,4 +575,200 @@ func TestTypedSelectWhereIn(t *testing.T) {
 		_, err = rasql.SelectFrom(users).WhereIn(id).One(t.Context(), db)
 		require.ErrorContains(t, err, "at least one value")
 	})
+}
+
+// The cap() assertions below are deliberately coupled to collectAll's sizing
+// rule: a future change to maxCollectPreallocBytes, or to how a LIMIT feeds
+// preallocCapacity, is expected to change these numbers, not just the numbers
+// in typed_rows_prealloc_test.go.
+
+// TestSelectAllSizesResultFromLimit is the assertion that proves the change:
+// a LIMIT pre-sizes the collected slice to the limit, not just to the number
+// of rows actually returned.
+func TestSelectAllSizesResultFromLimit(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	db, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users := deleteUsersTable(t)
+
+	mock.ExpectQuery(`SELECT "users"."id", "users"."email" FROM "users" LIMIT $1`).
+		WithArgs(8).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).
+			AddRow(int64(1), "ada@example.com").
+			AddRow(int64(2), "bob@example.com").
+			AddRow(int64(3), "cy@example.com"))
+
+	got, err := rasql.SelectFrom(users).Limit(8).All(t.Context(), db)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	require.Equal(t, 8, cap(got))
+}
+
+// TestSelectAllCapsTheReservationForAnAbsurdLimit proves the byte-budget
+// clamp holds: a LIMIT far beyond any real result must not translate into an
+// allocation anywhere near that size.
+func TestSelectAllCapsTheReservationForAnAbsurdLimit(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	db, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users := deleteUsersTable(t)
+
+	mock.ExpectQuery(`SELECT "users"."id", "users"."email" FROM "users" LIMIT $1`).
+		WithArgs(10_000_000).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).
+			AddRow(int64(1), "ada@example.com").
+			AddRow(int64(2), "bob@example.com"))
+
+	got, err := rasql.SelectFrom(users).Limit(10_000_000).All(t.Context(), db)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Less(t, cap(got), 10_000_000)
+	// maxCollectPreallocBytes = 256 * 1024, defined in typed_rows.go.
+	require.LessOrEqual(t, cap(got)*int(reflect.TypeFor[deleteUser]().Size()), 256*1024)
+}
+
+// TestSelectAllWithoutLimitReservesNothing proves that a builder with no
+// Limit reproduces today's unhinted collectAll behavior: no exact capacity is
+// pinned here, since the growth pattern belongs to Go's append, not to this
+// package.
+func TestSelectAllWithoutLimitReservesNothing(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	db, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users := deleteUsersTable(t)
+
+	mock.ExpectQuery(`SELECT "users"."id", "users"."email" FROM "users"`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).
+			AddRow(int64(1), "ada@example.com").
+			AddRow(int64(2), "bob@example.com"))
+
+	got, err := rasql.SelectFrom(users).All(t.Context(), db)
+	require.NoError(t, err)
+	require.Equal(t, []deleteUser{
+		{ID: 1, Email: "ada@example.com"},
+		{ID: 2, Email: "bob@example.com"},
+	}, got)
+	require.GreaterOrEqual(t, cap(got), 2)
+}
+
+// TestSelectAllReturnsEmptyNotNilForNoRows pins a publicly observable, and
+// previously untested, behavior: an empty result decodes to a non-nil empty
+// slice, not nil, across every path that reaches collectAll.
+func TestSelectAllReturnsEmptyNotNilForNoRows(t *testing.T) {
+	t.Run("All with no limit", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		db, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users := deleteUsersTable(t)
+
+		mock.ExpectQuery(`SELECT "users"."id", "users"."email" FROM "users"`).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "email"}))
+
+		got, err := rasql.SelectFrom(users).All(t.Context(), db)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Empty(t, got)
+	})
+
+	t.Run("All with Limit(5)", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		db, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users := deleteUsersTable(t)
+
+		mock.ExpectQuery(`SELECT "users"."id", "users"."email" FROM "users" LIMIT $1`).
+			WithArgs(5).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "email"}))
+
+		got, err := rasql.SelectFrom(users).Limit(5).All(t.Context(), db)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Empty(t, got)
+	})
+
+	t.Run("QueryRenderedAll", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		db, err := rasql.New(database, dialect.SQLite())
+		require.NoError(t, err)
+		statement, err := render.Precompiled("SELECT id, email FROM users")
+		require.NoError(t, err)
+		mock.ExpectQuery(statement.SQL()).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "email"}))
+
+		got, err := rasql.QueryRenderedAll[deleteUser](t.Context(), db, statement)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Empty(t, got)
+	})
+}
+
+// TestSelectAllOffsetDoesNotChangeTheReservation pins the decision that an
+// OFFSET is ignored for sizing: it shifts the result window rather than
+// widening it, so it must not enter the hint alongside the LIMIT.
+func TestSelectAllOffsetDoesNotChangeTheReservation(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	db, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users := deleteUsersTable(t)
+
+	mock.ExpectQuery(`SELECT "users"."id", "users"."email" FROM "users" LIMIT $1 OFFSET $2`).
+		WithArgs(8, 100).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).
+			AddRow(int64(1), "ada@example.com").
+			AddRow(int64(2), "bob@example.com").
+			AddRow(int64(3), "cy@example.com"))
+
+	got, err := rasql.SelectFrom(users).Limit(8).Offset(100).All(t.Context(), db)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	require.Equal(t, 8, cap(got))
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"iter"
+	"reflect"
 
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/row"
@@ -140,9 +141,36 @@ func decodeRows[T any](rows iter.Seq2[row.Dynamic, error]) iter.Seq2[T, error] {
 	}
 }
 
-// collectAll gathers every value from a rangeable sequence.
-func collectAll[T any](rows iter.Seq2[T, error]) ([]T, error) {
-	decoded := make([]T, 0)
+// maxCollectPreallocBytes bounds the slice collectAll reserves before it has
+// read a single row. A LIMIT is an upper bound on the result, not a count of
+// it, so a statement that sets an enormous one must not be able to commit an
+// enormous allocation for a result that turns out to be three rows.
+const maxCollectPreallocBytes = 256 * 1024
+
+// preallocCapacity turns an upper bound on the row count into a slice capacity.
+// It returns 0 when there is no bound to work from, which leaves collectAll
+// allocating nothing up front, and it clamps a bound that would reserve more
+// than maxCollectPreallocBytes. A row type wider than the whole budget clamps
+// to 0, which is the unhinted behavior.
+func preallocCapacity[T any](hint int) int {
+	if hint <= 0 {
+		return 0
+	}
+	size := int(reflect.TypeFor[T]().Size())
+	if size < 1 {
+		size = 1
+	}
+	if maximum := maxCollectPreallocBytes / size; hint > maximum {
+		return maximum
+	}
+	return hint
+}
+
+// collectAll gathers every value from a rangeable sequence. hint is the most
+// rows the sequence can yield, or 0 when that is not known. It returns a
+// non-nil empty slice for an empty sequence.
+func collectAll[T any](rows iter.Seq2[T, error], hint int) ([]T, error) {
+	decoded := make([]T, 0, preallocCapacity[T](hint))
 	for value, err := range rows {
 		if err != nil {
 			return nil, err
