@@ -46,7 +46,7 @@ func QueryRenderedAll[T any](ctx context.Context, db DB, statement render.Statem
 	if err != nil {
 		return nil, err
 	}
-	return collectAll(rows)
+	return collectAll(rows, 0)
 }
 
 // QueryRenderedOne executes a precompiled SELECT and decodes exactly one
