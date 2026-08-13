@@ -26,11 +26,7 @@ func run(args []string) error {
 }
 
 func TestRunSchemaGeneratesSource(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
@@ -48,11 +44,7 @@ func TestRunSchemaGeneratesSource(t *testing.T) {
 // would generate an int64 field and a signed descriptor, and the column would
 // silently lose every value above 9223372036854775807.
 func TestRunSchemaKeepsUnsignedColumnsFromInput(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[{"Name":"events","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":true}},{"Name":"sequence","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
@@ -66,11 +58,7 @@ func TestRunSchemaKeepsUnsignedColumnsFromInput(t *testing.T) {
 }
 
 func TestRunSchemaFiltersInputTables(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[
 		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
@@ -86,11 +74,7 @@ func TestRunSchemaFiltersInputTables(t *testing.T) {
 }
 
 func TestRunSchemaRejectsDuplicateFilteredInputTables(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[
 		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
@@ -98,23 +82,19 @@ func TestRunSchemaRejectsDuplicateFilteredInputTables(t *testing.T) {
 	]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
-	err = run([]string{"schema", "-input", input, "-table", "users", "-package", "generated", "-output", directory})
+	err := run([]string{"schema", "-input", input, "-table", "users", "-package", "generated", "-output", directory})
 	require.ErrorContains(t, err, `generate: table "users" duplicates generated name "Users"`)
 	_, err = os.Stat(filepath.Join(directory, "users_gen.go"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestRunSchemaRejectsUnknownInputTable(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
-	err = run([]string{"schema", "-input", input, "-table", "orders", "-package", "generated", "-output", directory})
+	err := run([]string{"schema", "-input", input, "-table", "orders", "-package", "generated", "-output", directory})
 	require.ErrorContains(t, err, `schema input has no table "orders"`)
 	_, err = os.Stat(filepath.Join(directory, "orders_gen.go"))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -141,11 +121,7 @@ func TestRunSchemaRejectsDuplicateTableFlag(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-			require.NoError(t, err)
-			t.Cleanup(func() {
-				require.NoError(t, os.RemoveAll(directory))
-			})
+			directory := t.TempDir()
 			input := filepath.Join(directory, "schema.json")
 			data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 			require.NoError(t, os.WriteFile(input, data, 0o600))
@@ -172,11 +148,7 @@ func TestRunSchemaRejectsDuplicateTableFlag(t *testing.T) {
 }
 
 func TestRunSchemaGeneratesOneFilePerTable(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[
 		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
@@ -196,11 +168,7 @@ func TestRunSchemaGeneratesOneFilePerTable(t *testing.T) {
 }
 
 func TestRunSchemaRejectsCrossFileNameCollisionsBeforeWriting(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[
 		{"Name":"api_keys","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
@@ -208,7 +176,7 @@ func TestRunSchemaRejectsCrossFileNameCollisionsBeforeWriting(t *testing.T) {
 	]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
-	err = run([]string{"schema", "-input", input, "-package", "generated", "-output", directory})
+	err := run([]string{"schema", "-input", input, "-package", "generated", "-output", directory})
 	require.ErrorContains(t, err, `generate: table "api_keys" duplicates generated name "APIKeys"`)
 	require.NoFileExists(t, filepath.Join(directory, "api_keys_gen.go"))
 	require.NoFileExists(t, filepath.Join(directory, "api__keys_gen.go"))
@@ -218,11 +186,7 @@ func TestRunSchemaRejectsCrossFileNameCollisionsBeforeWriting(t *testing.T) {
 // leaves each final generated file, without a temporary file from its
 // write-then-rename sequence.
 func TestRunSchemaSuccessLeavesNoTemporaryFile(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
@@ -241,33 +205,25 @@ func TestRunSchemaSuccessLeavesNoTemporaryFile(t *testing.T) {
 // TestRunSchemaOutputDirectoryMissingReturnsError confirms that schema output
 // must name an existing directory.
 func TestRunSchemaOutputDirectoryMissingReturnsError(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	output := filepath.Join(directory, "missing")
 	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 	require.NoError(t, os.WriteFile(input, data, 0o600))
 
-	err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
+	err := run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
 	require.Error(t, err)
 	require.NoFileExists(t, filepath.Join(directory, "users_gen.go"))
 }
 
 func TestRunSchemaRejectsFileOutput(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "schema.json")
 	output := filepath.Join(directory, "schema_gen.go")
 	require.NoError(t, os.WriteFile(input, []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`), 0o600))
 	require.NoError(t, os.WriteFile(output, []byte("SENTINEL"), 0o600))
 
-	err = run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
+	err := run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
 	require.ErrorContains(t, err, "is not a directory")
 	contents, err := os.ReadFile(output)
 	require.NoError(t, err)
@@ -282,27 +238,19 @@ func queryOutputArgs(t *testing.T, directory string) []string {
 }
 
 func TestRunQueryRejectsDirectoryOutput(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-output-directory-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	output := filepath.Join(directory, "outdir")
 	require.NoError(t, os.Mkdir(output, 0o700))
 
-	err = run(append(queryOutputArgs(t, directory), "-output", output))
+	err := run(append(queryOutputArgs(t, directory), "-output", output))
 	require.ErrorContains(t, err, "is a directory")
 	require.Empty(t, mustReadDir(t, output))
 }
 
 func TestRunQueryOutputPaths(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-output-directory-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	missing := filepath.Join(directory, "missing", "out_gen.go")
-	err = run(append(queryOutputArgs(t, directory), "-output", missing))
+	err := run(append(queryOutputArgs(t, directory), "-output", missing))
 	require.Error(t, err)
 
 	output := filepath.Join(directory, "out_gen.go")
@@ -311,14 +259,10 @@ func TestRunQueryOutputPaths(t *testing.T) {
 }
 
 func TestRunQueryRejectsOutputWithoutGeneratedSuffix(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-output-name-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	output := filepath.Join(directory, "output.go")
 
-	err = run(append(queryOutputArgs(t, directory), "-output", output))
+	err := run(append(queryOutputArgs(t, directory), "-output", output))
 	require.ErrorContains(t, err, "must end in _gen.go")
 	require.NoFileExists(t, output)
 }
@@ -331,11 +275,7 @@ func mustReadDir(t *testing.T, directory string) []os.DirEntry {
 }
 
 func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -396,11 +336,7 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 }
 
 func TestRunSchemaInspectsSQLite(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	databasePath := filepath.Join(directory, "schema.db")
 	database, err := sql.Open("sqlite", databasePath)
 	require.NoError(t, err)
@@ -421,11 +357,7 @@ func TestRunSchemaInspectsSQLite(t *testing.T) {
 }
 
 func TestRunSchemaInspectsMySQL(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -508,16 +440,12 @@ func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
 	for _, source := range sources {
 		for _, timeout := range timeouts {
 			t.Run(source.name+"/"+timeout.name, func(t *testing.T) {
-				directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-				require.NoError(t, err)
-				t.Cleanup(func() {
-					require.NoError(t, os.RemoveAll(directory))
-				})
+				directory := t.TempDir()
 				input := filepath.Join(directory, "schema.json")
 				data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
 				require.NoError(t, os.WriteFile(input, data, 0o600))
 
-				err = run(append(source.args(input, directory), "-timeout", timeout.value))
+				err := run(append(source.args(input, directory), "-timeout", timeout.value))
 				require.ErrorContains(t, err, "schema -timeout must be positive")
 				_, err = os.Stat(filepath.Join(directory, "users_gen.go"))
 				require.ErrorIs(t, err, os.ErrNotExist)
@@ -527,11 +455,7 @@ func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
 }
 
 func TestRunSchemaInspectionRespectsTimeout(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -576,11 +500,7 @@ func TestRunSchemaInspectionRespectsTimeout(t *testing.T) {
 }
 
 func TestRunSchemaRejectsTransactionBeginFailure(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -645,11 +565,7 @@ func (recordingTxTx) Rollback() error { return nil }
 var recordingTxDriverCounter int64
 
 func TestRunSchemaBeginsRepeatableReadReadOnlyTransaction(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 
 	driverName := fmt.Sprintf("rasqlgen-recording-tx-driver-%d", atomic.AddInt64(&recordingTxDriverCounter, 1))
 	recorder := &recordingTxDriver{recorded: make(chan driver.TxOptions, 1)}
@@ -663,7 +579,7 @@ func TestRunSchemaBeginsRepeatableReadReadOnlyTransaction(t *testing.T) {
 		openDatabase = previousOpenDatabase
 	})
 
-	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", directory})
+	err := run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", directory})
 	require.Error(t, err)
 
 	select {
@@ -678,11 +594,7 @@ func TestRunSchemaBeginsRepeatableReadReadOnlyTransaction(t *testing.T) {
 }
 
 func TestRunQueryGeneratesSource(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-query-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	input := filepath.Join(directory, "user.sql")
 	output := filepath.Join(directory, "query_gen.go")
 	require.NoError(t, os.WriteFile(input, []byte("SELECT id FROM users WHERE id = {{bind \"id\"}}"), 0o600))
@@ -862,16 +774,12 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			output.Reset()
-			directory, err := os.MkdirTemp(".", ".tmp-unexpected-args-*")
-			require.NoError(t, err)
-			t.Cleanup(func() {
-				require.NoError(t, os.RemoveAll(directory))
-			})
+			directory := t.TempDir()
 			input := filepath.Join(directory, testCase.inputName)
 			generated := filepath.Join(directory, "generated_gen.go")
 			require.NoError(t, os.WriteFile(input, []byte(testCase.inputContent), 0o600))
 
-			err = run(testCase.buildArgs(input, generated))
+			err := run(testCase.buildArgs(input, generated))
 			require.EqualError(t, err, testCase.expected)
 			require.NotErrorIs(t, err, flag.ErrHelp)
 			_, statErr := os.Stat(generated)
@@ -895,11 +803,7 @@ func TestRunRejectsInvalidFlag(t *testing.T) {
 }
 
 func TestRunSchemaRejectsOversizedInput(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	previousMaxInputBytes := maxInputBytes
 	maxInputBytes = 128
 	t.Cleanup(func() {
@@ -912,7 +816,7 @@ func TestRunSchemaRejectsOversizedInput(t *testing.T) {
 	require.NoError(t, os.WriteFile(validInput, validData, 0o600))
 
 	require.NoError(t, run([]string{"schema", "-input", validInput, "-package", "generated", "-output", directory}))
-	_, err = os.Stat(filepath.Join(directory, "users_gen.go"))
+	_, err := os.Stat(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 
 	oversizedInput := filepath.Join(directory, "oversized-schema.json")
@@ -925,11 +829,7 @@ func TestRunSchemaRejectsOversizedInput(t *testing.T) {
 }
 
 func TestRunQueryRejectsOversizedInput(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-query-command-*")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	previousMaxInputBytes := maxInputBytes
 	maxInputBytes = 128
 	t.Cleanup(func() {
@@ -943,7 +843,7 @@ func TestRunQueryRejectsOversizedInput(t *testing.T) {
 	require.NoError(t, os.WriteFile(validInput, validData, 0o600))
 
 	require.NoError(t, run([]string{"query", "-input", validInput, "-function", "UserByID", "-dialect", "postgresql", "-package", "generated", "-output", validOutput}))
-	_, err = os.Stat(validOutput)
+	_, err := os.Stat(validOutput)
 	require.NoError(t, err)
 
 	oversizedInput := filepath.Join(directory, "oversized-user.sql")

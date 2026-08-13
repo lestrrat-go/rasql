@@ -10,13 +10,7 @@ import (
 )
 
 func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
-	directory, err := os.MkdirTemp(".", ".tmp-schema-go-run-*")
-	require.NoError(t, err)
-	directory, err = filepath.Abs(directory)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(directory))
-	})
+	directory := t.TempDir()
 	repository, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
 	consumer := filepath.Join(directory, "consumer")
