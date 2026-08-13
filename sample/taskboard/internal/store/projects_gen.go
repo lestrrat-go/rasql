@@ -24,34 +24,36 @@ func (r *ProjectsRow) ScanRow(src rasql.ScanSource) error {
 
 // ScanDestinations maps result-column names to fields on r.
 func (r *ProjectsRow) ScanDestinations(columns []string) ([]any, error) {
+	const (
+		scanIndexID = iota
+		scanIndexOwnerID
+		scanIndexName
+		scanIndexArchived
+	)
 	destinations := make([]any, len(columns))
-	var scanned uint64
+	scanned := rasql.NewScanMask(4)
 	var discard any
 	for index, column := range columns {
 		switch column {
 		case "id":
-			if scanned&(uint64(1)<<0) != 0 {
+			if !scanned.Mark(scanIndexID) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 0
 			destinations[index] = &r.ID
 		case "owner_id":
-			if scanned&(uint64(1)<<1) != 0 {
+			if !scanned.Mark(scanIndexOwnerID) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 1
 			destinations[index] = &r.OwnerID
 		case "name":
-			if scanned&(uint64(1)<<2) != 0 {
+			if !scanned.Mark(scanIndexName) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 2
 			destinations[index] = &r.Name
 		case "archived":
-			if scanned&(uint64(1)<<3) != 0 {
+			if !scanned.Mark(scanIndexArchived) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 3
 			destinations[index] = &r.Archived
 		default:
 			destinations[index] = &discard

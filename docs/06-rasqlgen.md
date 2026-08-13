@@ -75,22 +75,24 @@ func (r *UsersRow) ScanRow(src rasql.ScanSource) error {
 
 // ScanDestinations maps result-column names to fields on r.
 func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {
+	const (
+		scanIndexID = iota
+		scanIndexEmail
+	)
 	destinations := make([]any, len(columns))
-	var scanned uint64
+	scanned := rasql.NewScanMask(2)
 	var discard any
 	for index, column := range columns {
 		switch column {
 		case "id":
-			if scanned&(uint64(1)<<0) != 0 {
+			if !scanned.Mark(scanIndexID) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 0
 			destinations[index] = &r.ID
 		case "email":
-			if scanned&(uint64(1)<<1) != 0 {
+			if !scanned.Mark(scanIndexEmail) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			scanned |= uint64(1) << 1
 			destinations[index] = &r.Email
 		default:
 			destinations[index] = &discard
@@ -191,6 +193,8 @@ A generated row type carries no `rasql` tags. The generator already knows which 
 | `rasql.ColumnValuer` | `ColumnValue(name string) (any, bool)` | `rasql.Insert` and `rasql.Update`. |
 
 `ScanRow` runs when the builder states the whole table projection, so the column order is known before the query runs. `ScanDestinations` runs whenever it is not: a projected subset, a reordered result, or a `RETURNING` clause. A row type that declares neither is mapped by its `rasql` tags and snake-cased field names.
+
+The generated `ScanDestinations` rejects a result set that names the same column twice, rather than scanning it into the same field twice. It tracks which columns it has already placed in a [`rasql.ScanMask`](https://pkg.go.dev/github.com/lestrrat-go/rasql#ScanMask), built with `rasql.NewScanMask(columnCount)` and marked one column at a time with `Mark`, which reports `false` for a column already placed. A hand-written `ScanDestinations` can use the same type for the same check.
 
 A hand-written row type without these methods is mapped by `rasql` tags and snake-cased field names, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). The read side has no by-method mapping: deleting `DecodeRow` was deliberate, and the asymmetry with the write side's `ColumnValue` is the price of keeping `dynamic.Row` out of the typed API.
 

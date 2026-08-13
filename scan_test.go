@@ -92,3 +92,66 @@ func TestScanValue(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestScanMask(t *testing.T) {
+	t.Run("marks each column once", func(t *testing.T) {
+		mask := rasql.NewScanMask(3)
+		require.True(t, mask.Mark(0))
+		require.True(t, mask.Mark(2))
+		require.False(t, mask.Mark(0), "a second Mark of the same column reports the duplicate")
+		require.False(t, mask.Mark(2))
+		require.True(t, mask.Mark(1), "an untouched column is unaffected by its neighbors")
+	})
+
+	// A table wider than one 64-bit word is the case the mask exists to hide
+	// from generated code, so the columns on either side of the word boundary
+	// must stay independent.
+	t.Run("spans word boundaries", func(t *testing.T) {
+		mask := rasql.NewScanMask(130)
+		for _, index := range []int{63, 64, 65, 129} {
+			require.True(t, mask.Mark(index), "column %d starts unmarked", index)
+		}
+		for _, index := range []int{63, 64, 65, 129} {
+			require.False(t, mask.Mark(index), "column %d stays marked", index)
+		}
+		require.True(t, mask.Mark(0))
+		require.True(t, mask.Mark(128))
+	})
+
+	// The bits are packed into whole 64-bit words, so a column count that is
+	// not a multiple of 64 leaves spare bits in the last word. Those bits name
+	// no column, and the range Mark accepts is the requested column count
+	// rather than whatever the rounding allocated.
+	t.Run("accepts exactly the requested column count", func(t *testing.T) {
+		require.True(t, rasql.NewScanMask(1).Mark(0))
+		require.True(t, rasql.NewScanMask(64).Mark(63))
+		require.True(t, rasql.NewScanMask(65).Mark(64), "the first column past a word boundary is still a column")
+		require.Panics(t, func() {
+			rasql.NewScanMask(65).Mark(65)
+		})
+	})
+
+	// An index the mask was not sized for is a mistake in the calling
+	// ScanDestinations, so it panics rather than reporting a duplicate column
+	// that the result set never contained.
+	t.Run("panics outside the requested range", func(t *testing.T) {
+		mask := rasql.NewScanMask(2)
+		// Index 2 is inside the mask's single allocated word but outside the
+		// two columns it was built for.
+		require.PanicsWithValue(t, "rasql: scan mask index 2 out of range for 2 columns", func() {
+			mask.Mark(2)
+		})
+		require.PanicsWithValue(t, "rasql: scan mask index 63 out of range for 2 columns", func() {
+			mask.Mark(63)
+		})
+		require.PanicsWithValue(t, "rasql: scan mask index 64 out of range for 2 columns", func() {
+			mask.Mark(64)
+		})
+		require.PanicsWithValue(t, "rasql: scan mask index -1 out of range for 2 columns", func() {
+			mask.Mark(-1)
+		})
+		require.PanicsWithValue(t, "rasql: scan mask index 0 out of range for 0 columns", func() {
+			rasql.NewScanMask(0).Mark(0)
+		})
+	})
+}
