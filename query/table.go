@@ -26,23 +26,35 @@
 package query
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/schema"
 )
 
 // TableRef identifies a table used by a statement.
+//
+// A TableRef built by NewTableRef, MustTableRef or TableRefFrom holds a pointer
+// to its descriptor, so the zero TableRef is the only invalid one. It is
+// comparable, but == compares that pointer and not the table: two refs built
+// from the same descriptor are never ==. Compare tables through key() instead.
 type TableRef struct {
-	definition schema.TableDef
+	definition *schema.TableDef
 	alias      string
 }
+
+// ErrNilTable is what a zero TableRef reports. A TableRef is constructed by
+// NewTableRef, MustTableRef or TableRefFrom; the zero value is the only one
+// that carries no table.
+var ErrNilTable = errors.New("query table: table must not be nil")
 
 // NewTableRef validates definition and returns a table for it.
 func NewTableRef(definition schema.TableDef) (TableRef, error) {
 	if err := definition.Validate(); err != nil {
 		return TableRef{}, fmt.Errorf("query table: %w", err)
 	}
-	return TableRef{definition: definition.Clone()}, nil
+	clone := definition.Clone()
+	return TableRef{definition: &clone}, nil
 }
 
 // MustTableRef returns a table for definition or panics when definition is invalid.
@@ -53,6 +65,40 @@ func MustTableRef(definition schema.TableDef) TableRef {
 		panic(fmt.Sprintf("query table: %s", err))
 	}
 	return table
+}
+
+// TableRefFrom returns a table for definition without validating it and without
+// copying it.
+//
+// It is the trusting counterpart to NewTableRef, for a descriptor whose validity
+// is already established: rasqlgen runs generate.Validate over every descriptor
+// it emits, so a generated table is validated before it is ever compiled.
+//
+// It validates nothing. Every dialect this module ships re-validates each
+// identifier at render time through Dialect.QuoteIdentifier and returns an error
+// rather than escaping it, so an unvalidated descriptor cannot smuggle SQL
+// through a rendered identifier. It can still describe a table the server will
+// reject, and it can describe one the server accepts but the caller did not mean,
+// such as a descriptor repeating a column name. A caller assembling a descriptor
+// at runtime, or reading one from configuration, wants NewTableRef.
+//
+// It clones nothing. The returned TableRef reads the descriptor's slices in
+// place, so mutating definition.Columns, definition.PrimaryKey or any other
+// slice after this call changes what the ref reports. Assigning to a scalar field
+// of the caller's own variable does not, because definition is passed by value.
+// Treat the descriptor as frozen once it is handed over.
+func TableRefFrom(definition schema.TableDef) TableRef {
+	return TableRef{definition: &definition}
+}
+
+// def returns the descriptor behind t, or a zero descriptor when t is the zero
+// TableRef. The cold string accessors read through it; Column, key and
+// Qualifier test the pointer directly rather than copy the whole descriptor.
+func (t TableRef) def() schema.TableDef {
+	if t.definition == nil {
+		return schema.TableDef{}
+	}
+	return *t.definition
 }
 
 // As returns a copy of t with alias as its SQL alias.
@@ -70,7 +116,7 @@ func (t TableRef) As(alias string) (TableRef, error) {
 
 // Name returns the underlying table name.
 func (t TableRef) Name() string {
-	return t.definition.Name
+	return t.def().Name
 }
 
 // Alias returns the SQL alias, or an empty string when the table is unaliased.
@@ -83,13 +129,16 @@ func (t TableRef) Qualifier() string {
 	if t.alias != "" {
 		return t.alias
 	}
+	if t.definition == nil {
+		return ""
+	}
 	return t.definition.Name
 }
 
 // Schema returns the schema qualifying the table, or an empty string when the
 // table is unqualified.
 func (t TableRef) Schema() string {
-	return t.definition.Schema
+	return t.def().Schema
 }
 
 // Qualified reports whether the underlying descriptor names a schema. It
@@ -98,7 +147,7 @@ func (t TableRef) Schema() string {
 // alias alone. Read QualifierSchema instead to learn what, if anything,
 // qualifies a rendered column reference.
 func (t TableRef) Qualified() bool {
-	return t.definition.Qualified()
+	return t.def().Qualified()
 }
 
 // QualifierSchema returns the schema that qualifies Qualifier, or an empty
@@ -109,7 +158,7 @@ func (t TableRef) QualifierSchema() string {
 	if t.alias != "" {
 		return ""
 	}
-	return t.definition.Schema
+	return t.def().Schema
 }
 
 // QualifiedName returns the table's name for an error message: the alias
@@ -119,18 +168,18 @@ func (t TableRef) QualifiedName() string {
 	if t.alias != "" {
 		return t.alias
 	}
-	return t.definition.QualifiedName()
+	return t.def().QualifiedName()
 }
 
 // Definition returns a copy of the underlying schema descriptor.
 func (t TableRef) Definition() schema.TableDef {
-	return t.definition.Clone()
+	return t.def().Clone()
 }
 
 // Column returns a reference to a named column in t.
 func (t TableRef) Column(name string) (ColumnRef, error) {
-	if err := t.validate(); err != nil {
-		return ColumnRef{}, err
+	if t.definition == nil {
+		return ColumnRef{}, ErrNilTable
 	}
 	if _, ok := t.definition.Column(name); !ok {
 		return ColumnRef{}, fmt.Errorf("query column: table %q has no column %q", t.QualifiedName(), name)
@@ -138,20 +187,26 @@ func (t TableRef) Column(name string) (ColumnRef, error) {
 	return ColumnRef{source: t, name: name}, nil
 }
 
+// column looks a column up on t's descriptor. It exists so the package's other
+// files can read the descriptor without dereferencing a possibly-nil pointer.
+func (t TableRef) column(name string) (schema.ColumnDef, bool) {
+	if t.definition == nil {
+		return schema.ColumnDef{}, false
+	}
+	return t.definition.Column(name)
+}
+
 func (t TableRef) validate() error {
-	if err := t.definition.Validate(); err != nil {
-		return fmt.Errorf("query table: %w", err)
-	}
-	if t.alias == "" {
-		return nil
-	}
-	if err := schema.ValidateIdentifier(t.alias); err != nil {
-		return fmt.Errorf("query table alias: %w", err)
+	if t.definition == nil {
+		return ErrNilTable
 	}
 	return nil
 }
 
 func (t TableRef) key() string {
+	if t.definition == nil {
+		return "\x00\x00" + t.alias
+	}
 	return t.definition.Schema + "\x00" + t.definition.Name + "\x00" + t.alias
 }
 
@@ -177,7 +232,7 @@ func (t TableRef) reference() sourceReference {
 	return sourceReference{
 		qualifier:  t.Qualifier(),
 		schema:     t.QualifierSchema(),
-		descriptor: t.definition.QualifiedName(),
+		descriptor: t.def().QualifiedName(),
 	}
 }
 
