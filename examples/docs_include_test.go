@@ -568,3 +568,271 @@ func fenceLanguage(file string) string {
 	}
 	return "go"
 }
+
+// accessorSectionHeading names the section that explains what the generated
+// column accessors catch. The two checks below are scoped to it, so renaming
+// the heading fails this test on purpose: a rename has to move the checks with
+// it rather than silently switch them off.
+const accessorSectionHeading = "### What the column accessors catch"
+
+// inlineCode matches an inline code span. A span quotes an identifier or a
+// compiler message verbatim, so it is not the page's own claim about what kind
+// of member a column becomes.
+var inlineCode = regexp.MustCompile("`[^`]*`")
+
+// compileOutcome matches prose stating whether something reaches a build.
+var compileOutcome = regexp.MustCompile(`(?i)\bcompiles?\b|\bcompiling\b|\bcompile-time\b`)
+
+// structField matches the word this documentation uses for a member of the row
+// struct, which is the wrong word for the member a builder call names.
+var structField = regexp.MustCompile(`(?i)\bfields?\b`)
+
+// accessorMethodClaim matches the wording that attributes a collision to the
+// generated accessor method rather than to a struct member.
+var accessorMethodClaim = regexp.MustCompile(`(?i)accessor method`)
+
+// accessorCompileProblem reports why a sentence misnames the member the
+// compiler checks, or the empty string when it does not. A column reaches a
+// builder as an accessor METHOD on the table type, so a sentence about what
+// does or does not compile must not call that member a field. The section also
+// describes genuine row struct fields, in sentences that state no compile
+// outcome, and those are not governed.
+func accessorCompileProblem(sentence string) string {
+	prose := inlineCode.ReplaceAllString(sentence, "")
+	if !compileOutcome.MatchString(prose) {
+		return ""
+	}
+	if structField.MatchString(prose) {
+		return "calls the member a build checks a field, where a column reaches a builder as an accessor method on the table type"
+	}
+	return ""
+}
+
+// tableSideReserved lists the reserved generated names that collide as an
+// accessor METHOD on the table type: the embedded rasql.Table's own field name
+// and the methods reached through it.
+var tableSideReserved = []string{"Table", "As", "Ref", "Column", "tableRow"}
+
+// rowSideReserved lists the reserved generated names that collide as a FIELD on
+// the row type, which declares each of them as a method of its own. The table
+// type has no member by any of these names.
+var rowSideReserved = []string{"ScanRow", "ScanDestinations", "ColumnValue"}
+
+// reservedNamesProblem reports why a passage misstates the reserved generated
+// name rule, or the empty string when it states it correctly. One derived
+// identifier names two different generated members, so the passage has to name
+// all eight reserved names, blame the table-side group on the accessor method,
+// and blame the row-side group on the row type field. A passage that calls the
+// whole set one kind of member is wrong about one group whichever kind it
+// picks.
+func reservedNamesProblem(passage string) string {
+	spans := make(map[string][2]int, len(tableSideReserved)+len(rowSideReserved))
+	for _, name := range append(append([]string{}, tableSideReserved...), rowSideReserved...) {
+		token := "`" + name + "`"
+		start := strings.Index(passage, token)
+		if start < 0 {
+			return fmt.Sprintf("omits the reserved generated name %q", name)
+		}
+		spans[name] = [2]int{start, strings.LastIndex(passage, token) + len(token)}
+	}
+
+	tableStart, tableEnd := groupBounds(spans, tableSideReserved)
+	rowStart, rowEnd := groupBounds(spans, rowSideReserved)
+	if tableStart > rowStart {
+		return "names the row-side reserved names before the table-side ones, so neither reason can be read against its group"
+	}
+	if structField.MatchString(inlineCode.ReplaceAllString(passage[:tableStart], "")) {
+		return "calls the generated name a field before listing any reserved name, which is wrong for the table-side group"
+	}
+	tableReason := inlineCode.ReplaceAllString(passage[tableEnd:rowStart], "")
+	if structField.MatchString(tableReason) {
+		return "blames the table-side reserved names on a field, where the collision is with the column accessor method"
+	}
+	if !accessorMethodClaim.MatchString(tableReason) {
+		return "does not say the table-side reserved names collide with the column accessor method"
+	}
+	if !structField.MatchString(inlineCode.ReplaceAllString(passage[rowEnd:], "")) {
+		return "does not say the row-side reserved names collide as a field on the row type"
+	}
+	return ""
+}
+
+// groupBounds reports where a group of reserved names starts and where its last
+// mention ends, so the reason stated for that group can be read on its own.
+func groupBounds(spans map[string][2]int, group []string) (int, int) {
+	start, end := spans[group[0]][0], spans[group[0]][1]
+	for _, name := range group[1:] {
+		if spans[name][0] < start {
+			start = spans[name][0]
+		}
+		if spans[name][1] > end {
+			end = spans[name][1]
+		}
+	}
+	return start, end
+}
+
+// accessorCompileFixtures pin accessorCompileProblem to concrete prose. The
+// entries marked historical are wording this pull request replaced, quoted so
+// the guard is proven against the exact text it exists to reject; every other
+// entry is invented for this table and appears nowhere in the tree.
+var accessorCompileFixtures = []struct {
+	name     string
+	sentence string
+	reject   bool
+}{
+	{
+		name:     "historical contrast with a passed name calls the accessor a field",
+		sentence: "Passing a name instead of a field does not compile either:",
+		reject:   true,
+	},
+	{
+		name:     "historical migration payoff calls the accessor a field",
+		sentence: "Drop or rename a column, regenerate, and every use of the old field stops compiling, instead of failing one query at a time in production.",
+		reject:   true,
+	},
+	{
+		name:     "invented sentence renames a column and keeps the field wording",
+		sentence: "Regenerate after a rename and the old field no longer compiles.",
+		reject:   true,
+	},
+	{
+		name:     "invented contrast names the accessor call",
+		sentence: "Passing a name instead of an accessor call does not compile either:",
+		reject:   false,
+	},
+	{
+		name:     "invented migration payoff names the accessor method",
+		sentence: "Drop or rename a column, regenerate, and every call to the old accessor method stops compiling.",
+		reject:   false,
+	},
+	{
+		name:     "invented sentence quotes the compiler naming a field",
+		sentence: "A misspelled accessor does not compile: `users.Emial undefined (type UsersTable has no field or method Emial)`.",
+		reject:   false,
+	},
+	{
+		name:     "invented sentence describes a row field without a build claim",
+		sentence: "A nullable column becomes a pointer field on the row type.",
+		reject:   false,
+	},
+}
+
+// reservedNamesFixtures pin reservedNamesProblem to concrete prose, under the
+// same historical and invented convention.
+var reservedNamesFixtures = []struct {
+	name    string
+	passage string
+	reject  bool
+}{
+	{
+		name:    "historical passage calls every reserved name a field name",
+		passage: "A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because those belong to the row type's own scan and mapping methods.",
+		reject:  true,
+	},
+	{
+		name:    "invented passage calls every reserved name an accessor method name",
+		passage: "A column also fails when its accessor method name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because those belong to the row type's own scan and mapping methods.",
+		reject:  true,
+	},
+	{
+		name:    "invented passage blames the table-side group on a field",
+		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its row type field would collide with the embedded `rasql.Table`, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods.",
+		reject:  true,
+	},
+	{
+		name:    "invented passage drops a reserved name",
+		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, or `Column`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods.",
+		reject:  true,
+	},
+	{
+		name:    "invented passage splits the two groups by member kind",
+		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods.",
+		reject:  false,
+	},
+}
+
+// TestDocsNameGeneratedColumnMembers holds the documentation to what the
+// generator actually emits for a column: an accessor METHOD on the table type
+// and a FIELD on the row type. One derived identifier names both, which is why
+// the reserved generated names split into two groups with a different reason
+// each.
+func TestDocsNameGeneratedColumnMembers(t *testing.T) {
+	t.Run("accessor section fixtures", func(t *testing.T) {
+		for _, fixture := range accessorCompileFixtures {
+			t.Run(fixture.name, func(t *testing.T) {
+				problem := accessorCompileProblem(fixture.sentence)
+				if fixture.reject {
+					require.NotEmpty(t, problem, "the rule accepts a sentence calling the compiler-checked member a field:\n%s", fixture.sentence)
+					return
+				}
+				require.Empty(t, problem, "the rule rejects a sentence that already names the accessor: %s", problem)
+			})
+		}
+	})
+
+	t.Run("accessor section", func(t *testing.T) {
+		section := accessorSection(t)
+		for _, sentence := range passageUnit.Split(section, -1) {
+			problem := accessorCompileProblem(sentence)
+			require.Empty(t, problem,
+				"docs/06-rasqlgen.md %s:\n%s",
+				problem, strings.TrimSpace(sentence))
+		}
+	})
+
+	t.Run("reserved name fixtures", func(t *testing.T) {
+		for _, fixture := range reservedNamesFixtures {
+			t.Run(fixture.name, func(t *testing.T) {
+				problem := reservedNamesProblem(fixture.passage)
+				if fixture.reject {
+					require.NotEmpty(t, problem, "the rule accepts a passage that misstates the reserved generated names:\n%s", fixture.passage)
+					return
+				}
+				require.Empty(t, problem, "the rule rejects a passage that already splits the two groups: %s", problem)
+			})
+		}
+	})
+
+	t.Run("reserved names", func(t *testing.T) {
+		owners := 0
+		for _, page := range documentationPages(t) {
+			contents, err := os.ReadFile(page)
+			require.NoError(t, err)
+
+			prose := fencedBlock.ReplaceAllString(string(contents), "")
+			for _, paragraph := range strings.Split(prose, "\n\n") {
+				if !strings.Contains(paragraph, "`tableRow`") {
+					continue
+				}
+				owners++
+				problem := reservedNamesProblem(paragraph)
+				require.Empty(t, problem,
+					"%s %s:\n%s",
+					page, problem, strings.TrimSpace(paragraph))
+			}
+		}
+		require.Equal(t, 1, owners, "the reserved generated name rule must have exactly one owning passage in the documentation")
+	})
+}
+
+// accessorSection returns the prose of the section named by
+// accessorSectionHeading, with its fenced examples removed.
+func accessorSection(t *testing.T) string {
+	t.Helper()
+
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "06-rasqlgen.md"))
+	require.NoError(t, err)
+
+	_, after, found := strings.Cut(string(contents), accessorSectionHeading+"\n")
+	require.True(t, found, "docs/06-rasqlgen.md no longer has the %q section; move these checks to its new heading", accessorSectionHeading)
+
+	body := after
+	for _, line := range strings.Split(after, "\n") {
+		if strings.HasPrefix(line, "#") {
+			body, _, _ = strings.Cut(after, "\n"+line+"\n")
+			break
+		}
+	}
+	return fencedBlock.ReplaceAllString(body, "")
+}

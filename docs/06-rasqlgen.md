@@ -360,7 +360,7 @@ Writing `users.Emial()` in place of `users.ID()` there does not reach a build at
 users.Emial undefined (type UsersTable has no field or method Emial)
 ```
 
-Passing a name instead of a field does not compile either:
+Passing a name instead of an accessor call does not compile either:
 
 ```
 cannot use "id" (untyped string constant) as query.ColumnRef value in argument to
@@ -369,7 +369,7 @@ rasql.SelectFrom(users).WhereEqual
 
 Three things make that work. The generator derives each accessor from the same descriptor it renders SQL from, so the accessor list and the table cannot drift apart. The builders accept a `query.ColumnRef` rather than a name, so there is no string left to misspell. Each accessor reads the table value it is called on, rather than a value bound once when the table was built, which is why an aliased table's accessors qualify its columns correctly with nothing to rebind.
 
-The payoff arrives at the next migration. Drop or rename a column, regenerate, and every use of the old field stops compiling, instead of failing one query at a time in production.
+The payoff arrives at the next migration. Drop or rename a column, regenerate, and every call to the old accessor method stops compiling, instead of failing one query at a time in production.
 
 Three mistakes still reach run time. A column of another table is a valid `query.ColumnRef`, so it compiles and fails when the statement is built:
 
@@ -409,7 +409,7 @@ An `integer` column that sets `Unsigned` generates a `uint64` field rather than 
 
 A `text` column that states a `Width` still generates a plain `string` field, but the generated descriptor restates `schema.Width(n)`, so regenerating keeps the same bound instead of an unbounded column. A fixed-width column restates `schema.Fixed()` alongside it, so regenerating a column inspected from a live `CHAR(n)`/`CHARACTER(n)` column keeps rendering `CHAR(n)` instead of reverting to `VARCHAR(n)`. See [Text column width](02-schema.md#text-column-width) for how MySQL and PostgreSQL inspection preserve both, and why MySQL needs a width to index such a column at all.
 
-The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because those belong to the row type's own scan and mapping methods. A table also fails when its accessor would spell the fixed function name `schema_gen_test.go` declares, since one run would otherwise write that identifier into two files of the same package; the error names the identifier.
+The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods. A table also fails when its accessor would spell the fixed function name `schema_gen_test.go` declares, since one run would otherwise write that identifier into two files of the same package; the error names the identifier.
 
 ## `rasqlgen query`
 
