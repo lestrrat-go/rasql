@@ -34,7 +34,7 @@ import (
 var _ row.Scanner = (*generated.UsersRow)(nil)
 var _ row.DestinationScanner = (*generated.UsersRow)(nil)
 
-func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
+func TestGeneratedRowDecodesByFieldName(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
 	result, err := row.NewDynamic(
 		[]string{"id", "email", "created_at"},
@@ -42,7 +42,8 @@ func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// row.Decode finds DecodeRow on *UsersRow, so no tag is read.
+	// UsersRow carries no rasql tags, so row.Decode's field-mapping fallback
+	// snake-cases ID, Email and CreatedAt onto id, email and created_at.
 	decoded, err := row.Decode[generated.UsersRow](result)
 	require.NoError(t, err)
 	require.Equal(t, int64(7), decoded.ID)
@@ -60,7 +61,7 @@ func TestGeneratedRowMapsItsOwnColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, decoded.Email)
 
-	// A missing column is reported by the generated DecodeRow.
+	// A missing column is reported by the field-mapping fallback.
 	partial, err := row.NewDynamic([]string{"id"}, []any{int64(7)})
 	require.NoError(t, err)
 	_, err = row.Decode[generated.UsersRow](partial)
@@ -254,13 +255,11 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "Email")
 	require.Contains(t, string(source), "CreatedAt")
 	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
-	require.Contains(t, string(source), "func (r *UsersRow) DecodeRow(src row.Dynamic) error {")
-	require.Contains(t, string(source), "if err := row.Assign(src, \"id\", &r.ID); err != nil {")
-	require.Contains(t, string(source), "if err := row.Assign(src, \"email\", &r.Email); err != nil {")
-	require.Contains(t, string(source), "\treturn row.Assign(src, \"created_at\", &r.CreatedAt)\n")
 	require.Contains(t, string(source), "type usersTimeScanner func(any) error")
 	require.Contains(t, string(source), "func (r *UsersRow) ScanRow(src row.ScanSource) error {")
 	require.Contains(t, string(source), "timeScanner2 := usersTimeScanner(func(value any) error {")
+	require.Contains(t, string(source), "\t\treturn rasql.ScanValue(&r.CreatedAt, value)\n")
+	require.NotContains(t, string(source), "row.NewDynamic")
 	require.Contains(t, string(source), "return src.Scan(&r.ID, &r.Email, &timeScanner2)")
 	require.Contains(t, string(source), "func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {")
 	require.Contains(t, string(source), "\tvar scanned uint64\n")
@@ -270,7 +269,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "func (r UsersRow) ColumnValue(name string) (any, bool) {")
 	require.Contains(t, string(source), "\tcase \"created_at\":\n\t\treturn r.CreatedAt, true\n")
 	require.Contains(t, string(source), "\treturn nil, false\n")
-	// A nullable column is a pointer field, and DecodeRow must assign through it.
+	// A nullable column is a pointer field, and the generated scan methods
+	// assign through it.
 	require.Contains(t, string(source), "\tEmail     *string\n")
 	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
 	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/row\"")
@@ -827,7 +827,7 @@ func TestSchemaRejectsInvalidPackageName(t *testing.T) {
 }
 
 func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
-	for _, columnName := range []string{"table", "as", "ref", "column", "decode_row", "column_value"} {
+	for _, columnName := range []string{"table", "as", "ref", "column", "scan_row", "scan_destinations", "column_value"} {
 		t.Run(columnName, func(t *testing.T) {
 			_, err := generate.PackageSource("generated", schema.TableDef{
 				Name: "users",

@@ -90,7 +90,7 @@ func Example_rasql_insert() {
 source: [examples/rasql_insert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_insert_example_test.go)
 <!-- END INCLUDE -->
 
-The value must carry one exported tagged field for every column of the table, so a row that omits a column is a compile-time or validation problem rather than a silent `NULL`. A generated row type has no tags and supplies its column values through a `ColumnValue` method instead, which [the two mapping methods](06-rasqlgen.md#the-two-mapping-methods) covers. `Insert` returns the driver's `sql.Result`, which reports rows affected and, on databases that support it, the last inserted id.
+The value must carry one exported tagged field for every column of the table, so a row that omits a column is a compile-time or validation problem rather than a silent `NULL`. A generated row type has no tags and supplies its column values through a `ColumnValue` method instead, which [the mapping methods](06-rasqlgen.md#the-mapping-methods) covers. `Insert` returns the driver's `sql.Result`, which reports rows affected and, on databases that support it, the last inserted id.
 
 `rasql.InsertMany` applies the same mapping to a slice of values and emits one parameterized multi-row `INSERT`. `InsertManyWithOptions` accepts `DefaultColumns` and omits those columns from every row; when every column is selected, it executes one dialect-rendered default-values `INSERT` per row. An empty slice is rejected, and callers that need to split a very large batch should make several calls so each statement stays under the database's parameter limit.
 
@@ -110,27 +110,17 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// defaultUserRow and defaultUsersTable have the method-based shape rasqlgen
-// emits for a table with a generated ID and a defaulted status.
+// defaultUserRow and defaultUsersTable have the shape rasqlgen emits for a
+// table with a generated ID and a defaulted status: no tags, a ColumnValue
+// for writes, and read columns derived from the field names.
 type defaultUserRow struct {
 	ID     int64
 	Email  string
 	Status string
-}
-
-func (r *defaultUserRow) DecodeRow(source row.Dynamic) error {
-	if err := row.Assign(source, "id", &r.ID); err != nil {
-		return err
-	}
-	if err := row.Assign(source, "email", &r.Email); err != nil {
-		return err
-	}
-	return row.Assign(source, "status", &r.Status)
 }
 
 func (r defaultUserRow) ColumnValue(name string) (any, bool) {

@@ -8,27 +8,17 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// defaultUserRow and defaultUsersTable have the method-based shape rasqlgen
-// emits for a table with a generated ID and a defaulted status.
+// defaultUserRow and defaultUsersTable have the shape rasqlgen emits for a
+// table with a generated ID and a defaulted status: no tags, a ColumnValue
+// for writes, and read columns derived from the field names.
 type defaultUserRow struct {
 	ID     int64
 	Email  string
 	Status string
-}
-
-func (r *defaultUserRow) DecodeRow(source row.Dynamic) error {
-	if err := row.Assign(source, "id", &r.ID); err != nil {
-		return err
-	}
-	if err := row.Assign(source, "email", &r.Email); err != nil {
-		return err
-	}
-	return row.Assign(source, "status", &r.Status)
 }
 
 func (r defaultUserRow) ColumnValue(name string) (any, bool) {

@@ -47,7 +47,7 @@ Live MySQL inspection requires metadata privileges that expose every column in t
 
 ### What it generates
 
-For a `users` table of `id` and `email` the file declares a row type with its mapping and scan methods, a table type with one field per column, the descriptor, and a table accessor:
+For a `users` table of `id` and `email` the file declares a row type with its scan methods and its column-value method, a table type with one field per column, the descriptor, and a table accessor:
 
 <!-- INCLUDE(examples/store/users_gen.go) -->
 ```go
@@ -67,14 +67,6 @@ import (
 type UsersRow struct {
 	ID    int64
 	Email string
-}
-
-// DecodeRow assigns each result column to its field.
-func (r *UsersRow) DecodeRow(src row.Dynamic) error {
-	if err := row.Assign(src, "id", &r.ID); err != nil {
-		return err
-	}
-	return row.Assign(src, "email", &r.Email)
 }
 
 // ScanRow scans each result column directly into its field.
@@ -189,61 +181,68 @@ explicit `query.Join` and typed builder APIs.
 
 The descriptor is a package-level variable, which Go cannot mark constant, so it stays unexported and only the accessor is exported. Importing code therefore cannot swap the descriptor out from under the rest of the program.
 
-### The two mapping methods
+### The mapping methods
 
 A generated row type carries no `rasql` tags. The generator already knows which column feeds which field, so it writes that mapping as Go code rather than as a string for reflection to parse at run time. Each method satisfies one interface:
 
 | Interface | Method | Used by |
 | --- | --- | --- |
-| `row.Decoder` | `DecodeRow(row.Dynamic) error` | `row.Decode`, and through it every typed select. |
+| `row.Scanner` | `ScanRow(row.ScanSource) error` | `SelectFrom`, when the builder owns the whole projection and no `Project` call narrowed it. |
+| `row.DestinationScanner` | `ScanDestinations([]string) ([]any, error)` | Every other typed read: `DecodeFrom`, a narrowed `SelectFrom`, `QueryWriteAll`/`QueryWriteOne`, `QueryRendered[T]`. |
 | `rasql.ColumnValuer` | `ColumnValue(name string) (any, bool)` | `rasql.Insert` and `rasql.Update`. |
 
-`row.Decode` looks for `DecodeRow` first and falls back to tags and snake-cased field names, and `Insert` and `Update` look for `ColumnValue` the same way. Neither direction follows a mapping method promoted from an embedded field blindly, which the trap below covers. Nothing about hand-written row types changes: tags stay the documented default for them, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). Writing both methods by hand states the mapping three times — once in the fields, once in `DecodeRow`, once in `ColumnValue` — and nothing checks that the three agree, which is a job for the generator rather than for a person.
+A hand-written row type without these methods is mapped by `rasql` tags and snake-cased field names, as in [Getting started](01-getting-started.md) and [Schemas](02-schema.md). The read side has no by-method mapping: deleting `DecodeRow` was deliberate, and the asymmetry with the write side's `ColumnValue` is the price of keeping `row.Dynamic` out of the typed API.
 
-`DecodeRow` is still the escape hatch for a mapping a tag cannot express, because it is ordinary code and can do more than name a column. A field computed from two columns is the usual case:
+A field no single column holds is not a mapping problem. Keep the raw columns as fields and compute the value in a method:
 
-<!-- INCLUDE(examples/rasqlgen_decode_row_example_test.go#computed_field) -->
+<!-- INCLUDE(examples/rasqlgen_computed_field_example_test.go#computed_field) -->
 ```go
 type userReport struct {
-	Email    string
-	FullName string
+	Email     string
+	FirstName string `rasql:"first_name"`
+	LastName  string `rasql:"last_name"`
 }
 
-func (r *userReport) DecodeRow(src row.Dynamic) error {
-	if err := row.Assign(src, "email", &r.Email); err != nil {
-		return err
-	}
-	var first, last string
-	if err := row.Assign(src, "first_name", &first); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "last_name", &last); err != nil {
-		return err
-	}
-	r.FullName = first + " " + last
-	return nil
+func (r userReport) FullName() string {
+	return r.FirstName + " " + r.LastName
 }
 ```
-source: [examples/rasqlgen_decode_row_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_decode_row_example_test.go)
+source: [examples/rasqlgen_computed_field_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_computed_field_example_test.go)
 <!-- END INCLUDE -->
 
-One trap is worth stating plainly. Embedding a row type promotes its `DecodeRow` to the outer struct, so the outer struct satisfies `row.Decoder` through a method that knows nothing about the fields added around it:
+The method is ordinary Go and the mapping stays a plain field-to-column mapping:
 
-<!-- INCLUDE(examples/rasqlgen_decode_row_example_test.go#embedded_row) -->
+<!-- INCLUDE(examples/rasqlgen_computed_field_example_test.go#computed_field_use) -->
+```go
+report, err := rasql.DecodeFrom[userReport](people).
+	Project(query.Project(email), query.Project(first), query.Project(last)).
+	One(ctx, db)
+if err != nil {
+	fmt.Printf("failed to query people: %s\n", err)
+	return
+}
+fmt.Println(report.Email, report.FullName())
+```
+source: [examples/rasqlgen_computed_field_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_computed_field_example_test.go)
+<!-- END INCLUDE -->
+
+Two routes stay open beyond a computed method: a field type implementing `sql.Scanner` converts one column any way the caller likes, and two fields may carry the same `rasql` tag, each with its own `sql.Scanner`. Anyone porting an old `DecodeRow` should expect a different failure mode: the struct falls through to field mapping and reports `row: column "full_name" is not present`, loudly rather than silently.
+
+One trap is worth stating plainly. Embedding a generated row type promotes its scan methods to the outer struct, and the typed read path uses them as Go presents them:
+
+<!-- INCLUDE(examples/rasqlgen_embedded_row_example_test.go#embedded_row) -->
 ```go
 type userWithRole struct {
-	store.UsersRow // promotes DecodeRow
+	store.UsersRow // promotes ScanRow and ScanDestinations
 	Role           string
 }
 ```
-source: [examples/rasqlgen_decode_row_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_decode_row_example_test.go)
+source: [examples/rasqlgen_embedded_row_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_embedded_row_example_test.go)
 <!-- END INCLUDE -->
 
-`row.Decode` does not follow that promotion blindly. It maps a struct that embeds a `row.Decoder`, declares mappable fields of its own, and declares no `DecodeRow` by those fields, because a promoted `DecodeRow` fills the embedded fields and knows nothing about the ones declared around them. Decoding a `userWithRole` therefore maps the embedded `store.UsersRow` like any other field, and fails with `row: column "users_row" is not present` instead of leaving `Role` at its zero value without reporting anything. Declare a `DecodeRow` on the outer type that calls the embedded one and then assigns the extra fields, or give the outer type its own named field instead of embedding. Tagging the embedded field `rasql:"-"` maps the wrapper by its own fields alone and leaves the embedded ones zero. A wrapper that declares no field of its own is still mapped by its promoted `DecodeRow`.
+A `userWithRole` satisfies `row.DestinationScanner` through the promoted `ScanDestinations`, which knows only the embedded row's columns. Reading one therefore fills `ID` and `Email` from the embedded `store.UsersRow`, hands `Role` no destination at all, and reports nothing: the example prints `role=""`. `ScanRow` promotes the same way and behaves the same way. Unlike the write side, the read side does not check whether the outer type declared the method or inherited it, so there is no error to notice — the wrapper simply comes back half filled. Declare `ScanDestinations` on the outer type so it places every field, give the outer type a named field instead of embedding the row, or drop the scan methods altogether by declaring your own result struct with `rasql` tags.
 
-Embedding promotes `ColumnValue` in the same way, and the write side reads it the same way. `Insert` and `Update` map a struct that embeds a `ColumnValuer`, carries `rasql` tags of its own, and declares no `ColumnValue` by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing, such as the `userWithRole` above, is still mapped by its promoted `ColumnValue`. Declaring the mapping method on the outer type — `DecodeRow` for reads, `ColumnValue` for writes — maps such a wrapper by method again, because Go dispatches to the declared method rather than to the promoted one, and the tags may stay or go.
-
-Which fields put a wrapper on the field path is where the two directions still differ. The read side maps tagged fields and untagged exported ones, so any exported field of its own is enough — embedded or named, as long as it is not the embedded field supplying the promoted `DecodeRow` — while the write side reads tags only.
+Embedding promotes `ColumnValue` in the same way, and the write side reads it differently. `Insert` and `Update` map a struct that embeds a `ColumnValuer`, carries `rasql` tags of its own, and declares no `ColumnValue` by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing is still mapped by its promoted `ColumnValue`. Declaring `ColumnValue` on the outer type maps such a wrapper by method again.
 
 ### What the column fields catch
 
@@ -324,7 +323,7 @@ An `integer` column that sets `Unsigned` generates a `uint64` field rather than 
 
 A `text` column that states a `Width` still generates a plain `string` field, but the generated descriptor restates `schema.Width(n)`, so regenerating keeps the same bound instead of an unbounded column, and a `schema.TableDef` read through `-input` keeps it too, since it is a plain JSON number. A fixed-width column restates `schema.Fixed()` alongside it, so regenerating a column inspected from a live `CHAR(n)`/`CHARACTER(n)` column keeps rendering `CHAR(n)` instead of reverting to `VARCHAR(n)`. See [Text column width](02-schema.md#text-column-width) for how MySQL and PostgreSQL inspection preserve both, and why MySQL needs a width to index such a column at all.
 
-The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `DecodeRow` or `ColumnValue`, because those belong to the row type's own mapping methods.
+The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because those belong to the row type's own scan and mapping methods.
 
 ## `rasqlgen query`
 

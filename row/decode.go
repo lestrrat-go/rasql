@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/lestrrat-go/rasql/internal/method"
 )
 
 var timeType = reflect.TypeFor[time.Time]()
@@ -24,20 +22,6 @@ var timeLayouts = []string{
 	"2006-01-02 15:04",
 	"2006-01-02T15:04",
 	"2006-01-02",
-}
-
-// Decoder is implemented by row types that map result columns themselves.
-// Decode prefers it over struct tags and snake-cased field names, so a
-// generated row type carries its own mapping instead of restating it as a tag.
-// A single result value is decoded by Get or Assign instead.
-//
-// One shape is mapped by its fields even though it satisfies Decoder: a struct
-// that embeds a Decoder, declares mappable fields of its own, and declares no
-// DecodeRow. Go promotes the embedded DecodeRow to the outer struct, where it
-// knows nothing about the fields declared around it, so those fields win.
-// Declaring DecodeRow on the outer type maps such a struct by method again.
-type Decoder interface {
-	DecodeRow(Dynamic) error
 }
 
 // Get decodes the named value in r as T.
@@ -64,34 +48,23 @@ func Assign[T any](r Dynamic, name string, destination *T) error {
 	return nil
 }
 
-// Decode populates T through its DecodeRow method when it declares one, and from
-// rasql-tagged fields or snake-cased exported field names otherwise. Decoder
-// states which of the two a struct that embeds a Decoder takes.
+// Decode populates T from rasql-tagged fields and snake-cased exported field
+// names. It is the only read mapping; a row type that carries generated scan
+// methods is filled by those instead, through the typed builders rather than
+// through Decode.
 //
-// The per-type facts this needs -- whether T maps itself, and if not, which
-// fields map to which columns -- are resolved once per type by planFor and
-// cached, rather than recomputed on every call. A type whose plan holds an
-// error (a bad tag, an unexported tagged field, or a build that cannot tell a
-// declared DecodeRow from a promoted one) reports the same error on every
-// call, resolved before any row is read: an error found while planning always
-// wins over a per-row error, such as a missing column, that a field reached
-// earlier in declaration order would have reported first under the old,
-// per-row walk.
+// The per-type facts this needs -- which fields map to which columns -- are
+// resolved once per type by planFor and cached, rather than recomputed on
+// every call. A type whose plan holds an error (a bad tag or an unexported
+// tagged field) reports the same error on every call, resolved before any row
+// is read: an error found while planning always wins over a per-row error,
+// such as a missing column, that a field reached earlier in declaration order
+// would have reported first under the old, per-row walk.
 func Decode[T any](r Dynamic) (T, error) {
 	var result T
 	plan := planFor(reflect.TypeFor[T]())
 	if plan.err != nil {
-		if plan.errWraps {
-			return result, fmt.Errorf("row: decode %T: %w", result, plan.err)
-		}
 		return result, plan.err
-	}
-	if plan.mapsItself {
-		decoder := any(&result).(Decoder)
-		if err := decoder.DecodeRow(r); err != nil {
-			return result, fmt.Errorf("row: decode %T: %w", result, err)
-		}
-		return result, nil
 	}
 	if !plan.isStruct {
 		return result, fmt.Errorf("row: decode destination %T must be a struct", result)
@@ -113,58 +86,14 @@ func Decode[T any](r Dynamic) (T, error) {
 	return result, nil
 }
 
-var decoderType = reflect.TypeFor[Decoder]()
-
-// fieldsShadowEmbeddedDecoder reports whether rowType embeds a Decoder, declares
-// mappable fields of its own, and declares no DecodeRow of its own. An interface
-// assertion cannot tell a promoted DecodeRow from one the row type declares, and
-// a promoted one fills only the embedded fields, so such a row type is mapped by
-// its fields. A row type that declares DecodeRow itself keeps the Decoder path,
-// because that method is the mapping it states and Go dispatches to it. A build
-// that cannot say which of the two a DecodeRow is reports an error rather than a
-// guess, because a guess fills the wrong fields silently.
-func fieldsShadowEmbeddedDecoder(rowType reflect.Type) (bool, error) {
-	if rowType == nil || rowType.Kind() != reflect.Struct {
-		return false, nil
-	}
-	embedded := false
-	declares := false
-	for index := range rowType.NumField() {
-		field := rowType.Field(index)
-		// Only the anonymous field that supplies the promoted DecodeRow is
-		// skipped. Any other anonymous field is one the field path maps like a
-		// named one, so it counts as a mappable field of the row type's own.
-		if field.Anonymous && implementsDecoder(field.Type) {
-			embedded = true
-			continue
-		}
-		if field.PkgPath != "" {
-			continue
-		}
-		if columnName, ok := field.Tag.Lookup("rasql"); ok && columnName == "-" {
-			continue
-		}
-		declares = true
-	}
-	if !embedded || !declares {
-		return false, nil
-	}
-	declared, err := method.Declared(rowType, "DecodeRow")
-	if err != nil {
-		return false, err
-	}
-	return !declared, nil
-}
-
-// implementsDecoder reports whether fieldType or its pointer maps result columns
-// itself, so an embedded value and an embedded pointer both count.
-func implementsDecoder(fieldType reflect.Type) bool {
-	if fieldType.Implements(decoderType) {
-		return true
-	}
-	return reflect.PointerTo(fieldType).Implements(decoderType)
-}
-
+// snakeCase derives the column name of an untagged field. It is lossy, so it
+// does not round-trip every column name: a column with repeated underscores,
+// such as a__b, becomes the field AB, and snakeCase("AB") is "ab" rather than
+// "a__b". An untagged field whose name does not survive that round trip is
+// looked up under the wrong column and reports "is not present". Give such a
+// field a rasql tag naming the column exactly, which buildPlan takes in
+// preference to this. Generated row types are unaffected either way, because
+// they map by exact column name through ScanDestinations and never reach here.
 func snakeCase(value string) string {
 	runes := []rune(value)
 	var result strings.Builder

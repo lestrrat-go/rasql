@@ -18,11 +18,16 @@ import (
 // A column whose generated field name lands on one of them is rejected, because
 // the field would shadow the embedded rasql.Table or its methods, or collide
 // with a mapping method declared on the row type.
+//
+// DecodeRow is deliberately absent, and the list is exactly these eight. Nothing
+// emits a DecodeRow method any more, so a decode_row column collides with
+// nothing: PackageSource with such a column returns a nil error and emits an
+// ordinary DecodeRow field. Re-adding it here would reject a legitimate column
+// name for a method that does not exist.
 var reservedFieldNames = map[string]struct{}{
 	"As":               {},
 	"Column":           {},
 	"ColumnValue":      {},
-	"DecodeRow":        {},
 	"Ref":              {},
 	"ScanDestinations": {},
 	"ScanRow":          {},
@@ -92,8 +97,6 @@ func schemaSource(packageName string, tables, allTables []schema.TableDef) ([]by
 	}
 	for _, table := range tables {
 		writeRowType(&source, table)
-		source.WriteString("\n")
-		writeRowDecode(&source, table)
 		source.WriteString("\n")
 		writeRowScan(&source, table)
 		source.WriteString("\n")
@@ -845,38 +848,6 @@ func writeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) 
 	source.WriteString(" })\n}\n\n")
 }
 
-// writeRowDecode writes the row.Decoder implementation. The generator
-// already knows which column feeds which field, so the row type states that
-// mapping directly instead of restating it as a tag for reflection to parse.
-func writeRowDecode(source *bytes.Buffer, table schema.TableDef) {
-	typeName := rowTypeName(table.Name)
-	source.WriteString("// DecodeRow assigns each result column to its field.\n")
-	source.WriteString("func (r *")
-	source.WriteString(typeName)
-	source.WriteString(") DecodeRow(src row.Dynamic) error {\n")
-	last := len(table.Columns) - 1
-	for index, column := range table.Columns {
-		if index == last {
-			source.WriteString("\treturn ")
-			writeRowAssign(source, column)
-			source.WriteString("\n")
-			break
-		}
-		source.WriteString("\tif err := ")
-		writeRowAssign(source, column)
-		source.WriteString("; err != nil {\n\t\treturn err\n\t}\n")
-	}
-	source.WriteString("}\n")
-}
-
-func writeRowAssign(source *bytes.Buffer, column schema.ColumnDef) {
-	source.WriteString("row.Assign(src, ")
-	source.WriteString(quote(column.Name))
-	source.WriteString(", &r.")
-	source.WriteString(goName(column.Name))
-	source.WriteString(")")
-}
-
 // writeRowScan writes the direct database/sql scan path and the runtime result
 // column mapping path.
 func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
@@ -900,7 +871,7 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("\ttimeScanner")
 		source.WriteString(strconv.Itoa(index))
 		source.WriteString(" := ")
-		writeTimeScannerLiteral(source, table.Name, column, "&r."+goName(column.Name))
+		writeTimeScannerLiteral(source, table.Name, "&r."+goName(column.Name))
 		source.WriteString("\n")
 	}
 	source.WriteString("\treturn src.Scan(")
@@ -929,7 +900,7 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("\ttimeScanner")
 		source.WriteString(strconv.Itoa(index))
 		source.WriteString(" := ")
-		writeTimeScannerLiteral(source, table.Name, column, "&r."+goName(column.Name))
+		writeTimeScannerLiteral(source, table.Name, "&r."+goName(column.Name))
 		source.WriteString("\n")
 	}
 	source.WriteString("\tdestinations := make([]any, len(columns))\n")
@@ -989,18 +960,12 @@ func timeScannerTypeName(tableName string) string {
 	return strings.TrimSuffix(descriptorName(tableName), "Table") + "TimeScanner"
 }
 
-func writeTimeScannerLiteral(source *bytes.Buffer, tableName string, column schema.ColumnDef, destination string) {
+func writeTimeScannerLiteral(source *bytes.Buffer, tableName string, destination string) {
 	source.WriteString(timeScannerTypeName(tableName))
 	source.WriteString("(func(value any) error {\n")
-	source.WriteString("\t\tdecoded, err := row.NewDynamic([]string{")
-	source.WriteString(quote(column.Name))
-	source.WriteString("}, []any{value})\n")
-	source.WriteString("\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
-	source.WriteString("\t\treturn row.Assign(decoded, ")
-	source.WriteString(quote(column.Name))
-	source.WriteString(", ")
+	source.WriteString("\t\treturn rasql.ScanValue(")
 	source.WriteString(destination)
-	source.WriteString(")\n\t})")
+	source.WriteString(", value)\n\t})")
 }
 
 func writeScanMask(source *bytes.Buffer, maskWords, word int) {
@@ -1014,7 +979,7 @@ func writeScanMask(source *bytes.Buffer, maskWords, word int) {
 }
 
 // writeRowColumnValue writes the rasql.ColumnValuer implementation, which is
-// the write-direction counterpart of DecodeRow.
+// the write-direction counterpart of the scan methods.
 func writeRowColumnValue(source *bytes.Buffer, table schema.TableDef) {
 	typeName := rowTypeName(table.Name)
 	source.WriteString("// ColumnValue returns the value of the named column.\n")

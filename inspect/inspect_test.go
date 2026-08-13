@@ -863,8 +863,8 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, `(?m)^\s*Active\s+bool$`, string(source))
 	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64$`, string(source))
-	require.Contains(t, string(source), `row.Assign(src, "active", &r.Active)`)
-	require.Contains(t, string(source), `row.Assign(src, "login_attempts", &r.LoginAttempts)`)
+	require.Contains(t, string(source), "return r.Active, true")
+	require.Contains(t, string(source), "return r.LoginAttempts, true")
 }
 
 func expectMySQLCreateTable(mock sqlmock.Sqlmock, tableName string, definition string) {

@@ -20,26 +20,6 @@ type TasksRow struct {
 	Priority   int64
 }
 
-// DecodeRow assigns each result column to its field.
-func (r *TasksRow) DecodeRow(src row.Dynamic) error {
-	if err := row.Assign(src, "id", &r.ID); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "project_id", &r.ProjectID); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "assignee_id", &r.AssigneeID); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "title", &r.Title); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "status", &r.Status); err != nil {
-		return err
-	}
-	return row.Assign(src, "priority", &r.Priority)
-}
-
 // ScanRow scans each result column directly into its field.
 func (r *TasksRow) ScanRow(src row.ScanSource) error {
 	return src.Scan(&r.ID, &r.ProjectID, &r.AssigneeID, &r.Title, &r.Status, &r.Priority)

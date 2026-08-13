@@ -31,16 +31,6 @@ type benchmarkMemberRow struct {
 	Email string
 }
 
-func (r *benchmarkMemberRow) DecodeRow(source row.Dynamic) error {
-	if err := row.Assign(source, "id", &r.ID); err != nil {
-		return err
-	}
-	if err := row.Assign(source, "name", &r.Name); err != nil {
-		return err
-	}
-	return row.Assign(source, "email", &r.Email)
-}
-
 func (r *benchmarkMemberRow) ScanRow(source row.ScanSource) error {
 	return source.Scan(&r.ID, &r.Name, &r.Email)
 }
@@ -113,10 +103,6 @@ func (r *benchmarkMemberRowBool) ScanDestinations(columns []string) ([]any, erro
 
 type benchmarkMemberName struct {
 	Name string
-}
-
-func (r *benchmarkMemberName) DecodeRow(source row.Dynamic) error {
-	return row.Assign(source, "name", &r.Name)
 }
 
 func BenchmarkScanDestinations(b *testing.B) {

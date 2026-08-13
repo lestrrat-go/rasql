@@ -16,14 +16,6 @@ type UsersRow struct {
 	Email string
 }
 
-// DecodeRow assigns each result column to its field.
-func (r *UsersRow) DecodeRow(src row.Dynamic) error {
-	if err := row.Assign(src, "id", &r.ID); err != nil {
-		return err
-	}
-	return row.Assign(src, "email", &r.Email)
-}
-
 // ScanRow scans each result column directly into its field.
 func (r *UsersRow) ScanRow(src row.ScanSource) error {
 	return src.Scan(&r.ID, &r.Email)
