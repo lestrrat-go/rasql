@@ -1,6 +1,6 @@
 # Writing rows
 
-The root package writes a typed row without building a statement by hand. For anything the typed helpers do not cover, the `query` package builds the statement and `rasql.Exec` runs it, except a statement carrying a `RETURNING` clause, which reads its rows back through `rasql.QueryWrite` or the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]`.
+The root package writes a typed row without building a statement by hand. For anything the typed helpers do not cover, the `query` package builds the statement and `rasql.Exec` runs it, except a statement carrying a `RETURNING` clause, which reads its rows back through `dynamic.QueryWrite` or the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]`.
 
 Every write operation, predicate, and statement constructor is listed in the [operation reference](03-querying.md#operation-reference).
 
@@ -390,7 +390,7 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 
 ## Build advanced write statements
 
-`rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for conflict handling or SQL shapes not covered by the typed helpers. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `rasql.QueryWrite` for one of those instead.
+`rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for conflict handling or SQL shapes not covered by the typed helpers. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `dynamic.QueryWrite` for one of those instead.
 
 `NewUpdate` and `NewDelete` accept a missing predicate while a statement is being assembled, but rendering and execution reject that shape unless the intent is explicit. Call `statement.AllowAll()` and use the returned statement when every row should be changed. A predicate and `AllowAll` cannot be combined.
 
@@ -431,7 +431,7 @@ Either keep conflict keys unique within one statement, or account for that updat
 
 ### Reading a `RETURNING` clause
 
-`WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `rasql.QueryWrite` renders and runs it, returning the same rangeable `row.Dynamic` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do:
+`WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `dynamic.QueryWrite` renders and runs it, returning the same rangeable `dynamic.Row` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do. The typed pair stays in `rasql`, because they name a Go type rather than a column string.
 
 <!-- INCLUDE(examples/rasql_returning_example_test.go) -->
 ```go
@@ -507,7 +507,7 @@ A fluent delete uses the same dynamic and typed terminals:
 
 <!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_dynamic) -->
 ```go
-builder := rasql.DeleteFrom(users).
+builder := dynamic.DeleteFrom(users.Ref()).
 	WhereEqual(users.ID, 42).
 	Returning(query.Project(users.ID), query.Project(users.Email))
 
@@ -516,9 +516,10 @@ rows, err := builder.Query(ctx, db)
 source: [examples/rasql_delete_returning_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_delete_returning_example_test.go)
 <!-- END INCLUDE -->
 
-`Query` returns `row.Dynamic` values. `QueryDeleteAll[T]` and `QueryDeleteOne[T]`
-decode the projections into `T` and follow the same empty or multiple-row rules
-as `QueryWriteAll[T]` and `QueryWriteOne[T]`. Use one terminal per builder:
+`dynamic.DeleteFrom` returns `dynamic.Row` values from its own `Query`.
+`rasql.QueryDeleteAll[T]` and `rasql.QueryDeleteOne[T]` decode the projections
+into `T` and follow the same empty or multiple-row rules as `QueryWriteAll[T]`
+and `QueryWriteOne[T]`. Use one terminal per builder:
 
 <!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_typed) -->
 ```go

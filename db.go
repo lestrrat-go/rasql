@@ -250,6 +250,13 @@ func (db DB) ExecRendered(ctx context.Context, statement render.Statement) (sql.
 	return result, nil
 }
 
+// Validate reports whether db came from New rather than being a zero DB. Every
+// entry point in this package answers a zero value with this error instead of a
+// nil dereference, and rasql/dynamic calls it for the same reason.
+func (db DB) Validate() error {
+	return db.valid()
+}
+
 // valid reports whether db came from New rather than being a zero DB, so every
 // entry point answers a zero value with an error instead of a nil dereference.
 func (db DB) valid() error {

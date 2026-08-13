@@ -8,13 +8,17 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/row"
 )
 
 // SelectFrom starts a typed fluent SELECT builder for table.
 // It selects every table column by default so All and One can decode T.
 func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 	if isNilTable(table) {
-		return TypedSelectBuilder[T]{builder: SelectFromRef(query.TableRef{}).withError(fmt.Errorf("rasql: table must not be nil"))}
+		return TypedSelectBuilder[T]{
+			builder: render.SelectFrom(nil, query.TableRef{}),
+			err:     fmt.Errorf("rasql: table must not be nil"),
+		}
 	}
 	reference := table.Ref()
 	definition := reference.Definition()
@@ -23,7 +27,7 @@ func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 		columns[index] = column.Name
 	}
 	return TypedSelectBuilder[T]{
-		builder:    SelectFromRef(reference).Select(columns...),
+		builder:    render.SelectFrom(nil, reference).Select(columns...),
 		staticScan: true,
 	}
 }
@@ -34,17 +38,20 @@ func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 // carrying generated scan methods is filled through those instead.
 func DecodeFrom[R any, T any](table Table[T]) TypedSelectBuilder[R] {
 	if isNilTable(table) {
-		return TypedSelectBuilder[R]{builder: SelectFromRef(query.TableRef{}).withError(fmt.Errorf("rasql: table must not be nil"))}
+		return TypedSelectBuilder[R]{
+			builder: render.SelectFrom(nil, query.TableRef{}),
+			err:     fmt.Errorf("rasql: table must not be nil"),
+		}
 	}
-	return TypedSelectBuilder[R]{builder: SelectFromRef(table.Ref())}
+	return TypedSelectBuilder[R]{builder: render.SelectFrom(nil, table.Ref())}
 }
 
-// DecodeFromRef starts a typed fluent SELECT builder for a table with no Go row type.
-// R's fields are mapped by their rasql tags, or by their snake-cased names
-// when untagged; a row type carrying generated scan methods is filled
+// DecodeFromRef starts a typed fluent SELECT builder for a table with no Go row
+// type. R's fields are mapped by their rasql tags, or by their snake-cased
+// names when untagged; a row type carrying generated scan methods is filled
 // through those instead.
 func DecodeFromRef[R any](table query.TableRef) TypedSelectBuilder[R] {
-	return TypedSelectBuilder[R]{builder: SelectFromRef(table)}
+	return TypedSelectBuilder[R]{builder: render.SelectFrom(nil, table)}
 }
 
 // InnerJoin returns an INNER JOIN on table with on as its condition.
@@ -67,9 +74,24 @@ func LeftJoin[T any](table Table[T], on query.Expression) query.Join {
 	return query.LeftJoin(table.Ref(), on)
 }
 
-// TypedSelectBuilder builds a SELECT that decodes rows as T.
+// TypedSelectBuilder builds a SELECT that decodes rows as T. It carries no
+// handle and no dialect, so one builder can be assembled once and run against a
+// DB and a transaction started from it alike.
 type TypedSelectBuilder[T any] struct {
-	builder    SelectBuilder
+	builder render.SelectBuilder
+	// limit and hasLimit shadow the same state inside builder, which render
+	// keeps unexported with no getter. All reads them for a collection
+	// capacity. Limit is the only method that sets a limit; a second one would
+	// have to set these too.
+	limit    int
+	hasLimit bool
+	// err holds the first error this package rejects a builder with.
+	// render.SelectBuilder carries an error of its own but exposes no way to
+	// set one, so a nil table or an empty IN list is held here and checked by
+	// Build before the render builder runs.
+	err error
+	// staticScan records that the builder owns the whole table projection, so
+	// a generated row type can be scanned directly into its fields.
 	staticScan bool
 }
 
@@ -110,8 +132,7 @@ func (b TypedSelectBuilder[T]) WhereEqual(column query.ColumnRef, value any) Typ
 // and reject a column whose table is not part of the statement.
 func (b TypedSelectBuilder[T]) WhereIn(column query.ColumnRef, values ...any) TypedSelectBuilder[T] {
 	if len(values) == 0 {
-		b.builder = b.builder.withError(fmt.Errorf("rasql: IN requires at least one value"))
-		return b
+		return b.withError(fmt.Errorf("rasql: IN requires at least one value"))
 	}
 	binds := make([]query.Expression, len(values))
 	for i, value := range values {
@@ -157,7 +178,7 @@ func (b TypedSelectBuilder[T]) OrderDesc(column query.ColumnRef) TypedSelectBuil
 // Distinct de-duplicates the result rows. SelectFrom projects every column of
 // the table, including its primary key, which already makes each row unique,
 // so Distinct is meaningful mainly beside a narrowed projection: DecodeFrom
-// with Project, or the untyped builder's Select with specific column names.
+// with Project, or dynamic.SelectBuilder's Select with specific column names.
 func (b TypedSelectBuilder[T]) Distinct() TypedSelectBuilder[T] {
 	b.builder = b.builder.Distinct()
 	return b
@@ -166,6 +187,8 @@ func (b TypedSelectBuilder[T]) Distinct() TypedSelectBuilder[T] {
 // Limit sets the maximum number of result rows.
 func (b TypedSelectBuilder[T]) Limit(limit int) TypedSelectBuilder[T] {
 	b.builder = b.builder.Limit(limit)
+	b.limit = limit
+	b.hasLimit = true
 	return b
 }
 
@@ -175,17 +198,34 @@ func (b TypedSelectBuilder[T]) Offset(offset int) TypedSelectBuilder[T] {
 	return b
 }
 
+// rowLimitHint reports the most rows the statement can return, or 0 when that
+// is not bounded. An OFFSET shifts the result window rather than widening it,
+// so it does not enter the hint.
+func (b TypedSelectBuilder[T]) rowLimitHint() int {
+	if !b.hasLimit || b.limit < 0 {
+		return 0
+	}
+	return b.limit
+}
+
 // Build validates the statement and renders it for d without executing it.
 func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (render.Statement, error) {
-	return b.builder.Build(d)
+	if b.err != nil {
+		return render.Statement{}, b.err
+	}
+	return b.builder.WithDialect(d).Build()
 }
 
 // Query returns a rangeable sequence that decodes each result row as T.
+// It reports validation and rendering errors before iteration starts and yields
+// an execution error instead of a row once iteration begins. The statement runs
+// when the sequence is first ranged over, not when Query returns, so a sequence
+// that is never ranged opens no cursor to leak.
 func (b TypedSelectBuilder[T]) Query(ctx context.Context, db DB) (iter.Seq2[T, error], error) {
 	if err := db.valid(); err != nil {
 		return nil, err
 	}
-	statement, err := b.builder.Build(db.Dialect())
+	statement, err := b.Build(db.Dialect())
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
@@ -201,7 +241,7 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context, db DB) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	return collectAll(rows, b.builder.rowLimitHint())
+	return collectAll(rows, b.rowLimitHint())
 }
 
 // Count executes COUNT(*) over the rows the statement matches.
@@ -211,7 +251,25 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context, db DB) ([]T, error) {
 // Like [TypedSelectBuilder.One], it reports [ErrNoRows] or [ErrMultipleRows]
 // when the database returns anything other than the one row COUNT(*) produces.
 func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) {
-	return b.builder.Count(ctx, db)
+	if err := db.valid(); err != nil {
+		return 0, err
+	}
+	if b.err != nil {
+		return 0, b.err
+	}
+	statement, err := b.builder.WithDialect(db.Dialect()).BuildCount()
+	if err != nil {
+		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	// Count consumes the sequence itself, so the statement runs before Count
+	// returns either way. It reads through the same static-scan path a
+	// generated row type takes, so the counted value never becomes an any this
+	// package owns.
+	counted, err := exactlyOne(scanTypedRenderedStatic[countRow](ctx, db, statement))
+	if err != nil {
+		return 0, err
+	}
+	return counted.Count, nil
 }
 
 // One returns exactly one row from Query.
@@ -224,4 +282,22 @@ func (b TypedSelectBuilder[T]) One(ctx context.Context, db DB) (T, error) {
 		return zero, err
 	}
 	return exactlyOne(rows)
+}
+
+func (b TypedSelectBuilder[T]) withError(err error) TypedSelectBuilder[T] {
+	if b.err == nil {
+		b.err = err
+	}
+	return b
+}
+
+// countRow reads the single value a COUNT(*) statement returns. BuildCount
+// projects it under the result name "count", and the statement has exactly one
+// column, so the field order is the projection order and ScanRow is enough.
+type countRow struct {
+	Count int64
+}
+
+func (r *countRow) ScanRow(src row.ScanSource) error {
+	return src.Scan(&r.Count)
 }

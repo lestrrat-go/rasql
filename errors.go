@@ -7,6 +7,8 @@ import (
 
 // ErrNoRows is returned by [TypedSelectBuilder.One], [QueryWriteOne],
 // [QueryDeleteOne], and the Count methods when the statement matched no rows.
+// rasql/dynamic's own single-row terminal, SelectBuilder.Count, reports this
+// same value rather than a sentinel of its own.
 // It lets a caller tell an
 // absent row from a
 // failed query, which is otherwise indistinguishable because both arrive as a
@@ -27,7 +29,9 @@ var ErrNoRows error = noRowsError{}
 
 // ErrMultipleRows is returned by [TypedSelectBuilder.One], [QueryWriteOne],
 // [QueryDeleteOne], and the Count methods when the statement matched more than
-// one row. It usually
+// one row. rasql/dynamic's own single-row terminal, SelectBuilder.Count,
+// reports this same value rather than a sentinel of its own.
+// It usually
 // means the predicate is not unique, so it deserves a different response from
 // ErrNoRows.
 //
