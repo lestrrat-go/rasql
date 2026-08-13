@@ -180,7 +180,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if !inSources {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.source.QualifiedName())
 		}
-		if _, exists := expression.source.definition.Column(expression.name); !exists {
+		if _, exists := expression.source.column(expression.name); !exists {
 			return expressionUsage{}, validationError(path, "references unknown column %q", expression.name)
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
@@ -191,7 +191,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if _, exists := ctx.sources[expression.column.source.key()]; !exists {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.column.source.QualifiedName())
 		}
-		if _, exists := expression.column.source.definition.Column(expression.column.name); !exists {
+		if _, exists := expression.column.source.column(expression.column.name); !exists {
 			return expressionUsage{}, validationError(path, "references unknown column %q", expression.column.name)
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
