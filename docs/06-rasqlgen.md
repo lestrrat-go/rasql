@@ -1,6 +1,6 @@
 # `rasqlgen`
 
-`rasqlgen` writes Go source: table descriptors from a database or a schema snapshot, and query functions from [static templates](05-templates.md). Its output is deterministic, so regenerating unchanged input produces identical files and an accidental edit shows up in review. That holds for `-dsn` and `-input`; with `-source` (below), output stays only as deterministic as the user's own `Tables` function, so a `Tables` that reads the clock or ranges a map produces different output per run.
+`rasqlgen` writes Go source: table descriptors from a database or a Go schema package, and query functions from [static templates](05-templates.md). Its output is deterministic, so regenerating unchanged input produces identical files and an accidental edit shows up in review. That holds for `-dsn`; with `-source` (below), output stays only as deterministic as the user's own `Tables` function, so a `Tables` that reads the clock or ranges a map produces different output per run.
 
 Run it from the module without installing a binary:
 
@@ -26,15 +26,14 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | Flag | Meaning |
 | --- | --- |
 | `-dsn` | Database connection string to inspect. |
-| `-input` | Path to a JSON array of table descriptors, instead of `-dsn`. |
-| `-source` | Directory of a Go package exporting `func Tables() []schema.TableDef`, instead of `-dsn` or `-input`. |
-| `-table` | Table to generate; repeat it for each table. Required with `-dsn`; filters a JSON snapshot from `-input` or a package from `-source`. Passing the same table name twice is an error. |
+| `-source` | Directory of a Go package exporting `func Tables() []schema.TableDef`, instead of `-dsn`. |
+| `-table` | Table to generate; repeat it for each table. Required with `-dsn`; filters a package from `-source`. Passing the same table name twice is an error. |
 | `-dialect` | Dialect and driver for `-dsn`, defaulting to `postgresql`. |
-| `-timeout` | Deadline for `-dsn` metadata inspection, defaulting to 30s. The deadline does not apply to `-input` or `-source`, but every `schema` invocation rejects a zero or negative value. |
+| `-timeout` | Deadline for `-dsn` metadata inspection, defaulting to 30s. The deadline does not apply to `-source`, but every `schema` invocation rejects a zero or negative value. |
 | `-package` | Package name for the generated files. Required. |
 | `-output` | Existing directory for generated files. Required. |
 
-Supply exactly one of `-dsn`, `-input`, or `-source`. Direct inspection supports PostgreSQL, MySQL, and SQLite; the command bundles their `pgx`, `mysql`, and `sqlite` drivers, so nothing needs importing to use `-dsn`. PostgreSQL inspection preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys, including exact decimal columns (`NUMERIC`/`DECIMAL`), which generate a Go `string` field and whose generated descriptor restates the column's `Precision` and `Scale`. MySQL inspection preserves supported columns, primary keys, and ordinary indexes; SQLite inspection currently preserves supported columns and primary keys. <!-- MySQL includes ordinary indexes here; SQLite does not, and no later clause contradicts that distinction. --> A generated `schema.Decimal` call restates precision and scale positionally, and states scale even when it is `0`, because the zero value of `schema.DecimalScale` means no scale was stated and `TableDef.Validate` rejects a decimal column that states none. It reports an error when an inspected type, index, or constraint has metadata that the schema descriptor cannot reproduce, and when a PostgreSQL column is a bare, unconstrained `NUMERIC`, since PostgreSQL reports no precision for it to record.
+Supply exactly one of `-dsn` or `-source`. Direct inspection supports PostgreSQL, MySQL, and SQLite; the command bundles their `pgx`, `mysql`, and `sqlite` drivers, so nothing needs importing to use `-dsn`. PostgreSQL inspection preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys, including exact decimal columns (`NUMERIC`/`DECIMAL`), which generate a Go `string` field and whose generated descriptor restates the column's `Precision` and `Scale`. MySQL inspection preserves supported columns, primary keys, and ordinary indexes; SQLite inspection currently preserves supported columns and primary keys. <!-- MySQL includes ordinary indexes here; SQLite does not, and no later clause contradicts that distinction. --> A generated `schema.Decimal` call restates precision and scale positionally, and states scale even when it is `0`, because the zero value of `schema.DecimalScale` means no scale was stated and `TableDef.Validate` rejects a decimal column that states none. It reports an error when an inspected type, index, or constraint has metadata that the schema descriptor cannot reproduce, and when a PostgreSQL column is a bare, unconstrained `NUMERIC`, since PostgreSQL reports no precision for it to record.
 
 `schema` writes one file per table, named `<table>_gen.go` in lowercase. The example writes `users_gen.go` and `orders_gen.go` in `internal/store`.
 
@@ -44,11 +43,9 @@ When selected tables contain supported foreign keys, `rasqlgen` also emits typed
 
 Live MySQL inspection requires metadata privileges that expose every column in the selected table. MySQL filters `information_schema.columns` by column privileges, so a partial grant can otherwise produce an incomplete baseline; the inspector cross-checks the count against `SHOW CREATE TABLE` and returns `inspect.ErrIncompleteMetadata` instead. Grant table- or database-level `SELECT` (or equivalent full column visibility) before using MySQL live inspection or `diff-live`.
 
-`-input` reads the same descriptors as JSON, which is how a checked-in snapshot works: inspect the database once, marshal the resulting `schema.TableDef` values, commit the file, and generate from it afterwards. Generation then needs no database, so a build or CI run stays offline. Without `-table`, the command generates every table in the snapshot. With one or more `-table` flags, it generates only those named tables and fails if the snapshot does not contain any requested name. Repeating the same `-table` value, in any of the three input modes, is rejected as a flag-parsing error rather than silently collapsed to one table. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
-
 ### A schema package as the source
 
-`-source` takes a third kind of input: a directory holding a Go package that exports exactly one function, `func Tables() []schema.TableDef`. The schema package is input only. The generated code never imports it, so it can be dropped from a production build.
+`-source` takes a second kind of input: a directory holding a Go package that exports exactly one function, `func Tables() []schema.TableDef`. The schema package is input only. The generated code never imports it, so it can be dropped from a production build.
 
 <!-- INCLUDE(examples/schemasource/tables.go#schema_source_tables) -->
 ```go
@@ -80,7 +77,7 @@ The temporary program has to live inside the module: a schema package under `int
 
 `-timeout` does not bound a `-source` run; a `go run` on a cold module cache can take far longer than the 30s default, and there is no separate deadline for it.
 
-`-source` runs `go run`, which may need to fetch a module on a cold cache, so generation in this mode is not reliably offline. `-dsn` and `-input` are unaffected.
+`-source` runs `go run`, which may need to fetch a module on a cold cache, so generation in this mode is not reliably offline. `-dsn` is unaffected by that particular issue, but it needs a reachable database of its own, so no `schema` mode is reliably offline end to end.
 
 A vendored module needs one extra step. `go run` under `-mod=vendor` only sees what is already vendored, and a schema package that imports only `github.com/lestrrat-go/rasql/schema` does not pull in `github.com/lestrrat-go/rasql/generate`, which the temporary program also imports. Add a blank import to the schema package, `import _ "github.com/lestrrat-go/rasql/generate"`, and re-run `go mod vendor`. Without it, `go run` reports `import lookup disabled by -mod=vendor`.
 
@@ -389,9 +386,9 @@ Names come from the table and column names. Underscore-separated parts are capit
 
 A `boolean` column decodes from any integer value, not just 0 and 1: zero decodes as `false`, and any nonzero value decodes as `true`.
 
-An `integer` column that sets `Unsigned` generates a `uint64` field rather than an `int64` one, because it reaches 18446744073709551615 and `int64` stops at 9223372036854775807. The generated descriptor restates `schema.Unsigned()`, so regenerating from the emitted source produces the same column instead of a signed one, and a `schema.TableDef` read through `-input` keeps it too, since it is a plain JSON boolean. See [Unsigned integer columns](02-schema.md#unsigned-integer-columns) for which engines can render such a column.
+An `integer` column that sets `Unsigned` generates a `uint64` field rather than an `int64` one, because it reaches 18446744073709551615 and `int64` stops at 9223372036854775807. The generated descriptor restates `schema.Unsigned()`, so regenerating from the emitted source produces the same column instead of a signed one. See [Unsigned integer columns](02-schema.md#unsigned-integer-columns) for which engines can render such a column.
 
-A `text` column that states a `Width` still generates a plain `string` field, but the generated descriptor restates `schema.Width(n)`, so regenerating keeps the same bound instead of an unbounded column, and a `schema.TableDef` read through `-input` keeps it too, since it is a plain JSON number. A fixed-width column restates `schema.Fixed()` alongside it, so regenerating a column inspected from a live `CHAR(n)`/`CHARACTER(n)` column keeps rendering `CHAR(n)` instead of reverting to `VARCHAR(n)`. See [Text column width](02-schema.md#text-column-width) for how MySQL and PostgreSQL inspection preserve both, and why MySQL needs a width to index such a column at all.
+A `text` column that states a `Width` still generates a plain `string` field, but the generated descriptor restates `schema.Width(n)`, so regenerating keeps the same bound instead of an unbounded column. A fixed-width column restates `schema.Fixed()` alongside it, so regenerating a column inspected from a live `CHAR(n)`/`CHARACTER(n)` column keeps rendering `CHAR(n)` instead of reverting to `VARCHAR(n)`. See [Text column width](02-schema.md#text-column-width) for how MySQL and PostgreSQL inspection preserve both, and why MySQL needs a width to index such a column at all.
 
 The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because those belong to the row type's own scan and mapping methods.
 
@@ -450,4 +447,4 @@ source: [sample/taskboard/internal/store/generate.go](https://github.com/lestrra
 
 `rasqlgen` never writes a generated file in place. It writes a temporary file beside each table or query file and renames it over the destination only after the write succeeds, so a failed run leaves an existing file untouched. Existing files keep their permission bits and sticky bit. On Unix platforms that replacement is atomic. Schema output directories must already exist; a symbolic link to a directory is allowed.
 
-Then `go generate ./...` refreshes everything. Because output is deterministic with `-dsn` and `-input`, a CI job can regenerate and fail when `git diff` is not empty, which catches a generated file that drifted from its source; a `-source` `Tables` function that is not itself deterministic can defeat that check.
+Then `go generate ./...` refreshes everything. Because output is deterministic with `-dsn`, a CI job can regenerate and fail when `git diff` is not empty, which catches a generated file that drifted from its source; a `-source` `Tables` function that is not itself deterministic can defeat that check.

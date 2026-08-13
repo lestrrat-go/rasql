@@ -194,7 +194,7 @@ func Tables() []schema.TableDef {
 }
 
 // This test spawns a real `go run`. -table filters which generated files
-// are written, the same as it does for -input and -dsn.
+// are written, the same as it does for -dsn.
 func TestRunSchemaSourceTableFlagFilters(t *testing.T) {
 	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
 	t.Chdir(moduleDir)
@@ -244,33 +244,11 @@ func TestRunSchemaSourceDirectoryNotAPackage(t *testing.T) {
 // happens before the source directory is ever resolved.
 func TestRunSchemaSourceFlagExclusivity(t *testing.T) {
 	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	require.NoError(t, os.WriteFile(input, []byte(`[]`), 0o600))
 
-	for _, tc := range []struct {
-		name string
-		args []string
-	}{
-		{
-			name: "source and input",
-			args: []string{"schema", "-source", "./internal/tables", "-input", input, "-package", "generated", "-output", directory},
-		},
-		{
-			name: "source and dsn",
-			args: []string{"schema", "-source", "./internal/tables", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", directory},
-		},
-		{
-			name: "source, input, and dsn",
-			args: []string{"schema", "-source", "./internal/tables", "-input", input, "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", directory},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var buffer bytes.Buffer
-			err := rasqlgen.Run(tc.args, &buffer)
-			require.EqualError(t, err, "schema accepts one of -input, -dsn, or -source, not several")
-			require.NotEqual(t, "schema requires one of -input, -dsn, or -source", err.Error())
-		})
-	}
+	var buffer bytes.Buffer
+	err := rasqlgen.Run([]string{"schema", "-source", "./internal/tables", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", directory}, &buffer)
+	require.EqualError(t, err, "schema accepts one of -dsn or -source, not both")
+	require.NotEqual(t, "schema requires one of -dsn or -source", err.Error())
 }
 
 // TestRunSchemaSourceTemporaryDirectoryDoesNotDisturbModuleListing pairs a

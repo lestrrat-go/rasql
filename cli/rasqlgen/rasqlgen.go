@@ -4,7 +4,6 @@ package rasqlgen
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -86,7 +85,6 @@ func printUsage(output io.Writer) {
 
 func runSchema(args []string, writer io.Writer) error {
 	flags := newFlagSet("schema", writer)
-	input := flags.String("input", "", "path to a JSON array of schema tables (max 64 MiB)")
 	dsn := flags.String("dsn", "", "database connection string")
 	source := flags.String("source", "", "directory of a Go package exporting func Tables() []schema.TableDef")
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
@@ -105,9 +103,6 @@ func runSchema(args []string, writer io.Writer) error {
 		return errors.New("schema requires -package and -output")
 	}
 	modeCount := 0
-	if *input != "" {
-		modeCount++
-	}
 	if *dsn != "" {
 		modeCount++
 	}
@@ -116,30 +111,14 @@ func runSchema(args []string, writer io.Writer) error {
 	}
 	switch {
 	case modeCount == 0:
-		return errors.New("schema requires one of -input, -dsn, or -source")
-	case *input != "" && *dsn != "" && *source == "":
-		// Keep the existing two-way message so current -input/-dsn
-		// behaviour does not change.
-		return errors.New("schema accepts either -input or -dsn, not both")
+		return errors.New("schema requires one of -dsn or -source")
 	case modeCount > 1:
-		return errors.New("schema accepts one of -input, -dsn, or -source, not several")
+		return errors.New("schema accepts one of -dsn or -source, not both")
 	}
 	var tables []schema.TableDef
 	switch {
 	case *source != "":
 		return runSchemaSource(*source, *packageName, *output, tableNames, writer)
-	case *input != "":
-		data, err := readInputFile(*input)
-		if err != nil {
-			return fmt.Errorf("read schema input: %w", err)
-		}
-		if err := json.Unmarshal(data, &tables); err != nil {
-			return fmt.Errorf("decode schema input: %w", err)
-		}
-		tables, err = filterTables(tables, tableNames)
-		if err != nil {
-			return err
-		}
 	case *dsn != "":
 		if len(tableNames) == 0 {
 			return errors.New("schema with -dsn requires at least one -table")
@@ -177,7 +156,7 @@ func runSchema(args []string, writer io.Writer) error {
 			return fmt.Errorf("commit %s inspection transaction: %w", databaseName, err)
 		}
 	default:
-		return errors.New("schema requires either -input or -dsn")
+		return errors.New("schema requires either -dsn or -source")
 	}
 	if err := generate.WritePackage(*packageName, *output, tables...); err != nil {
 		return fmt.Errorf("write schema output: %w", err)
@@ -195,31 +174,6 @@ func inspectTables(ctx context.Context, inspector inspect.Inspector, names []str
 		tables[index] = table
 	}
 	return tables, nil
-}
-
-func filterTables(tables []schema.TableDef, names []string) ([]schema.TableDef, error) {
-	if len(names) == 0 {
-		return tables, nil
-	}
-	requested := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		requested[name] = struct{}{}
-	}
-	filtered := make([]schema.TableDef, 0, len(tables))
-	found := make(map[string]struct{}, len(names))
-	for _, table := range tables {
-		if _, ok := requested[table.Name]; !ok {
-			continue
-		}
-		filtered = append(filtered, table)
-		found[table.Name] = struct{}{}
-	}
-	for _, name := range names {
-		if _, ok := found[name]; !ok {
-			return nil, fmt.Errorf("schema input has no table %q", name)
-		}
-	}
-	return filtered, nil
 }
 
 type tableNames []string
