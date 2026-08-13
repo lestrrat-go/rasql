@@ -25,26 +25,26 @@ import (
 	"example.com/generated"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/dynamic"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/stretchr/testify/require"
 )
 
-var _ row.Scanner = (*generated.UsersRow)(nil)
-var _ row.DestinationScanner = (*generated.UsersRow)(nil)
+var _ rasql.Scanner = (*generated.UsersRow)(nil)
+var _ rasql.DestinationScanner = (*generated.UsersRow)(nil)
 
 func TestGeneratedRowDecodesByFieldName(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
-	result, err := row.NewDynamic(
+	result, err := dynamic.NewRow(
 		[]string{"id", "email", "created_at"},
 		[]any{int64(7), "ada@example.com", createdAt},
 	)
 	require.NoError(t, err)
 
-	// UsersRow carries no rasql tags, so row.Decode's field-mapping fallback
-	// snake-cases ID, Email and CreatedAt onto id, email and created_at.
-	decoded, err := row.Decode[generated.UsersRow](result)
+	// UsersRow carries no rasql tags, so dynamic.Decode's field-mapping
+	// fallback snake-cases ID, Email and CreatedAt onto id, email and created_at.
+	decoded, err := dynamic.Decode[generated.UsersRow](result)
 	require.NoError(t, err)
 	require.Equal(t, int64(7), decoded.ID)
 	require.NotNil(t, decoded.Email)
@@ -52,19 +52,19 @@ func TestGeneratedRowDecodesByFieldName(t *testing.T) {
 	require.Equal(t, createdAt, decoded.CreatedAt)
 
 	// A nullable column decodes into a nil pointer rather than failing.
-	nullEmail, err := row.NewDynamic(
+	nullEmail, err := dynamic.NewRow(
 		[]string{"id", "email", "created_at"},
 		[]any{int64(7), nil, createdAt},
 	)
 	require.NoError(t, err)
-	decoded, err = row.Decode[generated.UsersRow](nullEmail)
+	decoded, err = dynamic.Decode[generated.UsersRow](nullEmail)
 	require.NoError(t, err)
 	require.Nil(t, decoded.Email)
 
 	// A missing column is reported by the field-mapping fallback.
-	partial, err := row.NewDynamic([]string{"id"}, []any{int64(7)})
+	partial, err := dynamic.NewRow([]string{"id"}, []any{int64(7)})
 	require.NoError(t, err)
-	_, err = row.Decode[generated.UsersRow](partial)
+	_, err = dynamic.Decode[generated.UsersRow](partial)
 	require.ErrorContains(t, err, ` + "`" + `column "email" is not present` + "`" + `)
 }
 
@@ -78,7 +78,7 @@ func TestGeneratedRowSuppliesItsOwnColumnValues(t *testing.T) {
 }
 
 func TestGeneratedRowScansDirectly(t *testing.T) {
-	var scanner row.Scanner = &generated.UsersRow{}
+	var scanner rasql.Scanner = &generated.UsersRow{}
 
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
 	err := scanner.ScanRow(scanSource{id: 7, email: "ada@example.com", createdAt: createdAt})
@@ -256,7 +256,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "CreatedAt")
 	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
 	require.Contains(t, string(source), "type usersTimeScanner func(any) error")
-	require.Contains(t, string(source), "func (r *UsersRow) ScanRow(src row.ScanSource) error {")
+	require.Contains(t, string(source), "func (r *UsersRow) ScanRow(src rasql.ScanSource) error {")
 	require.Contains(t, string(source), "timeScanner2 := usersTimeScanner(func(value any) error {")
 	require.Contains(t, string(source), "\t\treturn rasql.ScanValue(&r.CreatedAt, value)\n")
 	require.NotContains(t, string(source), "row.NewDynamic")
@@ -273,7 +273,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	// assign through it.
 	require.Contains(t, string(source), "\tEmail     *string\n")
 	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
-	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/row\"")
+	require.NotContains(t, string(source), "github.com/lestrrat-go/rasql/row")
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql\"")
 	require.Contains(t, string(source), "type UsersTable struct {\n\trasql.Table[UsersRow]\n")
 	require.Contains(t, string(source), "\tCreatedAt query.ColumnRef\n")
 	require.Contains(t, string(source), "func newUsersTable(table rasql.Table[UsersRow]) UsersTable {")

@@ -12,7 +12,6 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -50,11 +49,11 @@ func (u *plannedScanUser) ScanDestinations(columns []string) ([]any, error) {
 	return []any{&u.Name}, nil
 }
 
-func (u *staticScanUser) ScanRow(source row.ScanSource) error {
+func (u *staticScanUser) ScanRow(source rasql.ScanSource) error {
 	return source.Scan(&u.ID, &u.Email)
 }
 
-func (u *directScanUser) ScanRow(source row.ScanSource) error {
+func (u *directScanUser) ScanRow(source rasql.ScanSource) error {
 	return source.Scan(&u.ID, &u.Email)
 }
 

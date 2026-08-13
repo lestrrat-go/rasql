@@ -8,7 +8,6 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/row"
 )
 
 // SelectFrom starts a typed fluent SELECT builder for table.
@@ -298,6 +297,6 @@ type countRow struct {
 	Count int64
 }
 
-func (r *countRow) ScanRow(src row.ScanSource) error {
+func (r *countRow) ScanRow(src ScanSource) error {
 	return src.Scan(&r.Count)
 }

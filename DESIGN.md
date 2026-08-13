@@ -24,8 +24,7 @@ The migration package applies ordered, forward-only native SQL migrations for Po
 | `dialect` | Identifier quoting, placeholders, type mappings, and syntax capabilities. | `schema` |
 | `query` | Dialect-neutral statements and expressions with validation. | `schema` |
 | `render` | Converts a validated query into SQL text and ordered arguments. | `dialect`, `query` |
-| `row` | Typed column descriptors and result decoding. | Go standard library |
-| `rasql` | Executes statements, decodes typed rows, and provides the default fluent API. | `schema`, `dialect`, `query`, `render`, `row`, `database/sql` |
+| `rasql` | Executes statements, decodes typed rows, and provides the default fluent API. | `schema`, `dialect`, `query`, `render`, `database/sql` |
 | `inspect` | Reads database metadata and returns normalized schema descriptors. | `schema`, `dialect` |
 | `migrate` | Checksums, reports status, and applies forward-only native SQL migrations. | `schema`, `dialect`, `database/sql` |
 | `migrate/diff` | Loads desired-schema sources, owns dialect-neutral diff plans, and writes reviewed migration directories. | Go standard library |

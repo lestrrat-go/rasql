@@ -30,6 +30,20 @@ go test ./examples/ -update-docs
 
 The same flag rewrites the checked-in generated files the documentation shows, `examples/store/users_gen.go` and `examples/store/user_by_email_gen.go`, which `TestGeneratedStoreIsCurrent` and `TestGeneratedQueryIsCurrent` otherwise fail on when `rasqlgen` output changes. The three files under `sample/taskboard/internal/store` are generated too, and no test checks them, so a generator change must also run `rm -f sample/taskboard/internal/store/.taskboard-schema.db && cd sample/taskboard/internal/store && go generate ./...`, which applies the SQLite migrations to a throwaway database and regenerates from it.
 
+### Generated files outside the root module
+
+`sample/taskboard` is a separate module with its own checked-in `rasqlgen` output, and nothing in `go test ./...` regenerates or checks it. A change to the generator therefore leaves `sample/taskboard/internal/store/{members,projects,tasks}_gen.go` stale with a fully green root test run. Refresh them in the same commit:
+
+```sh
+cd sample/taskboard/internal/store && go generate ./...
+```
+
+That applies `sample/taskboard/migrations/sqlite` to a throwaway SQLite database and reruns `rasqlgen schema` against it; the database file is gitignored. Then run the sample module's own build and tests, which the root `go test ./...` never reaches:
+
+```sh
+cd sample/taskboard && go build ./... && go test ./...
+```
+
 ## Live database tests
 
 A handful of tests run against a real PostgreSQL or MySQL server rather than a mock, such as `TestDatabaseIntegration` at the repository root and the privilege tests in `inspect/`. Any package can add one: `internal/dbtest` gives a test in any package a live `*sql.DB` or an already-parsed connection config (`*pgx.ConnConfig` / `*mysql.Config`) for PostgreSQL and MySQL, resolved a single way:

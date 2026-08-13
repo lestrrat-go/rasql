@@ -1217,7 +1217,7 @@ This check is new, and it is a behaviour change: two sources sharing one rendere
 
 ## Decode a custom shape
 
-A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise. A field no single column holds is computed by a method on the result type from the raw columns beside it, or converted by a field type implementing `sql.Scanner`; see [the mapping methods](06-rasqlgen.md#the-mapping-methods). Use `DecodeFromRef` when the primary table is a bare `query.TableRef` with no Go row type.
+A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise. A field no single column holds is computed by a method on the result type from the raw columns beside it, or converted by a field type implementing `sql.Scanner`; see [the mapping methods](06-rasqlgen.md#the-mapping-and-scan-methods). Use `DecodeFromRef` when the primary table is a bare `query.TableRef` with no Go row type.
 
 <!-- INCLUDE(examples/rasql_dynamic_projection_example_test.go) -->
 ```go

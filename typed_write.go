@@ -9,7 +9,6 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/method"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 )
 
 // ColumnValuer is implemented by row types that supply their own column values.
@@ -133,11 +132,11 @@ func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
 // column order and maps result columns by name. rasqlgen writes that pair for
 // every row type it emits, so the pair stands in for the generated contract
 // without a marker method on the generated type. A row type that maps part of a
-// table states it by declaring [row.DestinationScanner] alone, and typed writes
+// table states it by declaring [DestinationScanner] alone, and typed writes
 // leave its RETURNING projections alone.
 type completeRow interface {
-	row.Scanner
-	row.DestinationScanner
+	Scanner
+	DestinationScanner
 }
 
 func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
