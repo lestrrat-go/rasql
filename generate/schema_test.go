@@ -304,7 +304,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 
 	descriptorTestSource, err := generate.DescriptorTestSource("generated", users, orders, invoices)
 	require.NoError(t, err)
-	require.Contains(t, string(descriptorTestSource), "func TestGeneratedDefinitionsAreValid(t *testing.T) {")
+	require.Contains(t, string(descriptorTestSource), "func TestRasqlgenGeneratedDefinitionsAreValid(t *testing.T) {")
 
 	directory := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
@@ -1255,8 +1255,65 @@ func TestDescriptorTestSourceFailsAnEditedDefinition(t *testing.T) {
 	command = exec.CommandContext(t.Context(), "go", "test", ".")
 	command.Dir = directory
 	output, err = command.CombinedOutput()
-	require.Errorf(t, err, "corrupted descriptor passed TestGeneratedDefinitionsAreValid:\n%s", output)
-	require.Contains(t, string(output), "TestGeneratedDefinitionsAreValid")
+	require.Errorf(t, err, "corrupted descriptor passed the generated test:\n%s", output)
+	require.Contains(t, string(output), "TestRasqlgenGeneratedDefinitionsAreValid")
+}
+
+// handWrittenDefinitionsTest is a test file somebody wrote by hand under the
+// name the generated test used to take. It is the name that mattered: a
+// generated test declaring it too would redeclare it in the same package and
+// stop the package compiling, and nothing in rasqlgen would notice, because
+// rasqlgen inspects only the path it writes and this declaration lives
+// somewhere else.
+const handWrittenDefinitionsTest = `package generated
+
+import "testing"
+
+func TestGeneratedDefinitionsAreValid(t *testing.T) {
+	t.Log("written by hand, and here first")
+}
+`
+
+// TestDescriptorTestSourceAvoidsHandWrittenNameCollision pins that the
+// generated test can be written into a package that already declares a test
+// under the generator's former name, and that the package still builds and
+// runs both tests.
+func TestDescriptorTestSourceAvoidsHandWrittenNameCollision(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	tableSource, err := generate.TableSource("generated", users, users)
+	require.NoError(t, err)
+	descriptorSource, err := generate.DescriptorSource("generated", users)
+	require.NoError(t, err)
+	descriptorTestSource, err := generate.DescriptorTestSource("generated", users)
+	require.NoError(t, err)
+	require.NotContains(t, string(descriptorTestSource), "func TestGeneratedDefinitionsAreValid(",
+		"the generated test must not take a name a person could reasonably write")
+
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "users_gen.go"), tableSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen.go"), descriptorSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen_test.go"), descriptorTestSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "hand_written_test.go"), []byte(handWrittenDefinitionsTest), 0o600))
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", "-run", "DefinitionsAreValid", "-v", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+	require.Contains(t, string(output), "TestGeneratedDefinitionsAreValid", "go test output:\n%s", output)
+	require.Contains(t, string(output), "TestRasqlgenGeneratedDefinitionsAreValid", "go test output:\n%s", output)
 }
 
 // TestGenerationIsIdempotent pins that generating twice from the same input

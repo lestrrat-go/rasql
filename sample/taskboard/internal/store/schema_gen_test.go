@@ -8,7 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-func TestGeneratedDefinitionsAreValid(t *testing.T) {
+func TestRasqlgenGeneratedDefinitionsAreValid(t *testing.T) {
 	for _, definition := range []schema.TableDef{membersDef, projectsDef, tasksDef} {
 		if err := definition.Validate(); err != nil {
 			t.Errorf("%s: %s", definition.Name, err)

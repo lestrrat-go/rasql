@@ -237,6 +237,20 @@ func TestColumnOf(t *testing.T) {
 		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](nil, "id"))
 	})
 
+	// A wrapper reaches every Table method through its embedded Table[T], so
+	// neither of the next two values is the nil interface, and both would
+	// dereference a nil embedded field if ColumnOf compared against nil.
+	// The zero wrapper is also what a generated As returns beside its error,
+	// so a caller who ignores that error and takes a column reference lands
+	// here.
+	t.Run("zero ColumnRef for a typed nil wrapper pointer", func(t *testing.T) {
+		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow]((*staffTable)(nil), "id"))
+	})
+
+	t.Run("zero ColumnRef for a zero wrapper value", func(t *testing.T) {
+		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](staffTable{}, "id"))
+	})
+
 	t.Run("zero ColumnRef for a column the table does not have", func(t *testing.T) {
 		table, err := rasql.TableOf[staffRow](staffDefinition())
 		require.NoError(t, err)

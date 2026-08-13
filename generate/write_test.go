@@ -147,7 +147,7 @@ func TestWritePackageAcceptsGenTestSuffix(t *testing.T) {
 
 	source, err := os.ReadFile(filepath.Join(directory, "schema_gen_test.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(source), "func TestGeneratedDefinitionsAreValid(t *testing.T) {")
+	require.Contains(t, string(source), "func TestRasqlgenGeneratedDefinitionsAreValid(t *testing.T) {")
 }
 
 // TestWritePackageRejectsTableNamedSchema confirms that a table literally

@@ -201,6 +201,25 @@ func writeTableDescriptor(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString(".Clone() }\n")
 }
 
+// descriptorTestFuncName is the name descriptorTestSource gives the test it
+// writes, and the one defining site of that literal outside the checked-in
+// generated files themselves.
+//
+// The generated test is an internal test in the caller's own package, so it
+// shares a declaration space with every hand-written test file beside it. A
+// plain name such as TestGeneratedDefinitionsAreValid is one a person could
+// reasonably write for a test of their own, and a package that already
+// declared it would stop compiling the moment rasqlgen wrote the generated
+// file. Nothing catches that first: rasqlgen inspects only the destination
+// path it writes, never the other files in the package, and the colliding
+// declaration lives in one of those.
+//
+// Naming the generator makes the collision implausible instead of merely
+// unlikely, and the name is a constant rather than derived from the package
+// or the descriptors, so regenerating the same input keeps producing the same
+// bytes.
+const descriptorTestFuncName = "TestRasqlgenGeneratedDefinitionsAreValid"
+
 // DescriptorTestSource returns the generated test that validates every
 // table's descriptor, so a hand-edit of a DO-NOT-EDIT descriptor file fails
 // in the caller's own test run instead of against a database.
@@ -226,7 +245,9 @@ func descriptorTestSource(packageName string, tables []schema.TableDef) ([]byte,
 	source.WriteString(packageName)
 	source.WriteString("\n\n")
 	source.WriteString("import (\n\t\"testing\"\n\n\t\"github.com/lestrrat-go/rasql/schema\"\n)\n\n")
-	source.WriteString("func TestGeneratedDefinitionsAreValid(t *testing.T) {\n")
+	source.WriteString("func ")
+	source.WriteString(descriptorTestFuncName)
+	source.WriteString("(t *testing.T) {\n")
 	source.WriteString("\tfor _, definition := range []schema.TableDef{")
 	for index, table := range tables {
 		if index > 0 {
