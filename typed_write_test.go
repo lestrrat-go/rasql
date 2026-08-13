@@ -3,7 +3,6 @@ package rasql_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -507,15 +506,15 @@ func TestQueryWriteOneReportsDecodeError(t *testing.T) {
 }
 
 // generatedReturningUser has the direct scan mapping rasqlgen writes for a row
-// type. DecodeRow fails when called so the test proves QueryWriteOne bypasses
-// dynamic decoding.
+// type. Every field is tagged out of the field-mapping fallback, because its
+// field names would otherwise snake-case to "id" and "email" and match the
+// projection, letting the fallback silently succeed even if the scan path
+// broke. With every field tagged "-", a successful scan proves
+// QueryWriteOne actually used ScanRow/ScanDestinations rather than falling
+// back to field mapping.
 type generatedReturningUser struct {
-	ID    int64
-	Email string
-}
-
-func (u *generatedReturningUser) DecodeRow(source row.Dynamic) error {
-	return errors.New("direct scanner must bypass DecodeRow")
+	ID    int64  `rasql:"-"`
+	Email string `rasql:"-"`
 }
 
 func (u *generatedReturningUser) ScanColumns() []string {

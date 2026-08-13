@@ -32,24 +32,6 @@ type decodeBenchFieldedRow struct {
 	Email string
 }
 
-// decodeBenchSelfDecodedRow maps itself through DecodeRow, so it takes
-// Decode's mapsItself path.
-type decodeBenchSelfDecodedRow struct {
-	ID    int64
-	Name  string
-	Email string
-}
-
-func (r *decodeBenchSelfDecodedRow) DecodeRow(source row.Dynamic) error {
-	if err := row.Assign(source, "id", &r.ID); err != nil {
-		return err
-	}
-	if err := row.Assign(source, "name", &r.Name); err != nil {
-		return err
-	}
-	return row.Assign(source, "email", &r.Email)
-}
-
 func BenchmarkRowDecode(b *testing.B) {
 	for _, rowCount := range []int{10, 1000} {
 		b.Run(fmt.Sprintf("field_mapped/%d_rows", rowCount), func(b *testing.B) {
@@ -60,24 +42,6 @@ func BenchmarkRowDecode(b *testing.B) {
 						b.Fatal(err)
 					}
 					result, err := row.Decode[decodeBenchFieldedRow](source)
-					if err != nil {
-						b.Fatal(err)
-					}
-					if result.ID != 7 {
-						b.Fatalf("decoded ID = %d, want 7", result.ID)
-					}
-				}
-			})
-		})
-
-		b.Run(fmt.Sprintf("self_decoded/%d_rows", rowCount), func(b *testing.B) {
-			b.ReportAllocs()
-			decodeBenchRun(b, rowCount, func(rows *sql.Rows) {
-				for source, err := range row.Scan(rows) {
-					if err != nil {
-						b.Fatal(err)
-					}
-					result, err := row.Decode[decodeBenchSelfDecodedRow](source)
 					if err != nil {
 						b.Fatal(err)
 					}

@@ -8,7 +8,6 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/row"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -335,26 +334,14 @@ func TestSQLiteTypedSelectCountsRows(t *testing.T) {
 	require.Equal(t, int64(1), activeFirst)
 }
 
-// generatedEventRow has the shape rasqlgen emits: no tags, and one method per
-// direction stating the column-to-field mapping.
+// generatedEventRow has no ScanRow method, so SelectFrom falls back to
+// row.Decode. Its untagged fields snake-case to the table's column names, so
+// the field-mapping fallback maps it without help.
 type generatedEventRow struct {
 	ID        int64
 	Active    bool
 	CreatedAt time.Time
 	Note      *string
-}
-
-func (r *generatedEventRow) DecodeRow(src row.Dynamic) error {
-	if err := row.Assign(src, "id", &r.ID); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "active", &r.Active); err != nil {
-		return err
-	}
-	if err := row.Assign(src, "created_at", &r.CreatedAt); err != nil {
-		return err
-	}
-	return row.Assign(src, "note", &r.Note)
 }
 
 func (r generatedEventRow) ColumnValue(name string) (any, bool) {
@@ -403,7 +390,7 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 		CreatedAt: time.Date(2026, time.August, 1, 12, 30, 45, 123456789, time.UTC),
 		Note:      &note,
 	}
-	// Insert reaches ColumnValue, and One reaches DecodeRow.
+	// Insert reaches ColumnValue, and One reaches the row.Decode field-mapping fallback.
 	_, err = rasql.Insert(t.Context(), db, events, expected)
 	require.NoError(t, err)
 

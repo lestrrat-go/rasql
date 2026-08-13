@@ -17,14 +17,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// directScanUser tags every field out of the field-mapping fallback. Its
+// field names would otherwise snake-case to "id" and "email" and match the
+// projection, so a passing test would prove nothing about whether ScanRow or
+// ScanDestinations actually ran. With every field tagged "-", the fallback has
+// no mapped fields left and fails outright, so a successful scan proves the
+// direct-scan path ran.
 type directScanUser struct {
-	ID    int64
-	Email string
+	ID    int64  `rasql:"-"`
+	Email string `rasql:"-"`
 }
 
+// staticScanUser tags every field out of the field-mapping fallback for the
+// same reason directScanUser does: its field names would otherwise match the
+// projection and let the fallback silently succeed even if the scan path broke.
 type staticScanUser struct {
-	ID    int64
-	Email string
+	ID    int64  `rasql:"-"`
+	Email string `rasql:"-"`
 }
 
 type plannedScanUser struct {
@@ -45,10 +54,6 @@ func (u *staticScanUser) ScanRow(source row.ScanSource) error {
 	return source.Scan(&u.ID, &u.Email)
 }
 
-func (u *staticScanUser) DecodeRow(row.Dynamic) error {
-	return errors.New("static scanner must bypass DecodeRow")
-}
-
 func (u *directScanUser) ScanRow(source row.ScanSource) error {
 	return source.Scan(&u.ID, &u.Email)
 }
@@ -67,10 +72,6 @@ func (u *directScanUser) ScanDestinations(columns []string) ([]any, error) {
 		}
 	}
 	return destinations, nil
-}
-
-func (u *directScanUser) DecodeRow(row.Dynamic) error {
-	return errors.New("direct scanner must bypass DecodeRow")
 }
 
 func TestTypedSelectScansKnownProjectionDirectly(t *testing.T) {

@@ -1,7 +1,6 @@
 package row_test
 
 import (
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -277,116 +276,45 @@ func TestAssignDecodesExactDecimalIntoString(t *testing.T) {
 	})
 }
 
-// selfDecodedUser maps its own columns and carries a tag that names a different
-// column, so a decode through the tag is distinguishable from one through the method.
-type selfDecodedUser struct {
+// embeddedUser is unexported, so the field walk skips it wherever it appears
+// as an anonymous embedded field; only fields declared directly on the
+// enclosing type are ever mapped through it.
+type embeddedUser struct {
 	ID    int64 `rasql:"nickname"`
 	Email string
 	Extra string
 }
 
-func (u *selfDecodedUser) DecodeRow(r row.Dynamic) error {
-	if err := row.Assign(r, "id", &u.ID); err != nil {
-		return err
-	}
-	if err := row.Assign(r, "email", &u.Email); err != nil {
-		return err
-	}
-	u.Extra = "derived"
-	return nil
-}
-
-// failingDecoder reports an error from DecodeRow so Decode's wrapping is visible.
-type failingDecoder struct{}
-
-func (failingDecoder) DecodeRow(row.Dynamic) error {
-	return errors.New("mapping failed")
-}
-
-// selfDecodedCount is not a struct, which the reflection path rejects.
-type selfDecodedCount int64
-
-func (c *selfDecodedCount) DecodeRow(r row.Dynamic) error {
-	return row.Assign(r, "id", (*int64)(c))
-}
-
-func TestDecodePrefersRowDecoder(t *testing.T) {
-	result, err := row.NewDynamic(
-		[]string{"id", "email", "nickname"},
-		[]any{int64(42), []byte("ada@example.com"), int64(7)},
-	)
-	require.NoError(t, err)
-
-	decoded, err := row.Decode[selfDecodedUser](result)
-	require.NoError(t, err)
-	// The tag names "nickname", so 42 proves DecodeRow ran instead of the tag path.
-	require.Equal(t, int64(42), decoded.ID)
-	require.Equal(t, "ada@example.com", decoded.Email)
-	require.Equal(t, "derived", decoded.Extra)
-
-	t.Run("propagates the error", func(t *testing.T) {
-		_, err := row.Decode[failingDecoder](result)
-		require.ErrorContains(t, err, "mapping failed")
-		require.ErrorContains(t, err, "row: decode")
-	})
-
-	t.Run("accepts a non-struct destination", func(t *testing.T) {
-		count, err := row.Decode[selfDecodedCount](result)
-		require.NoError(t, err)
-		require.Equal(t, selfDecodedCount(42), count)
-	})
-
-	t.Run("embedded without fields of its own", func(t *testing.T) {
-		// The wrapper declares no field, so only the promoted DecodeRow can map
-		// it and these values prove it ran.
-		decoded, err := row.Decode[decoderWrapper](result)
-		require.NoError(t, err)
-		require.Equal(t, int64(42), decoded.ID)
-		require.Equal(t, "ada@example.com", decoded.Email)
-		require.Equal(t, "derived", decoded.Extra)
-	})
-}
-
-// decoderWrapper embeds a row type that decodes itself and declares no field of
-// its own, so only the promoted DecodeRow can map it.
-type decoderWrapper struct {
-	selfDecodedUser
-}
-
-// fieldedDecoderWrapper embeds the same row type and declares tagged fields of
-// its own, so the promoted DecodeRow fills the embedded fields and the tags fill
-// the declared ones.
-type fieldedDecoderWrapper struct {
-	selfDecodedUser
+// fieldedWrapper embeds the unexported embeddedUser and declares tagged
+// fields of its own. The field walk skips the embedded field, so only the
+// declared ID and Email fields are mapped.
+type fieldedWrapper struct {
+	embeddedUser
 	ID    int64  `rasql:"id"`
 	Email string `rasql:"email"`
 }
 
-// ExportedDecodedUser is the same self-decoding row type under an exported name,
-// which is what a generated row type looks like. An embedded field of an
-// exported type is one the field path maps, where an embedded field of an
-// unexported type is one it skips.
-type ExportedDecodedUser struct {
+// ExportedUser is exported, unlike embeddedUser, which is what a generated
+// row type's exported name looks like. An embedded field of an exported type
+// is one the field path maps, where an embedded field of an unexported type
+// is one it skips.
+type ExportedUser struct {
 	ID int64
 }
 
-func (u *ExportedDecodedUser) DecodeRow(r row.Dynamic) error {
-	return row.Assign(r, "id", &u.ID)
-}
-
-// exportedFieldedDecoderWrapper embeds the exported row type and declares a
+// exportedFieldedWrapper embeds the exported row type and declares a
 // tagged field of its own, so the field path maps the embedded field as well and
 // looks for a column named after its type.
-type exportedFieldedDecoderWrapper struct {
-	ExportedDecodedUser
+type exportedFieldedWrapper struct {
+	ExportedUser
 	Email string `rasql:"email"`
 }
 
-// skippedFieldedDecoderWrapper tags the embedded field out of the mapping, which
+// skippedFieldedWrapper tags the embedded field out of the mapping, which
 // is how such a wrapper states that only its own fields are mapped.
-type skippedFieldedDecoderWrapper struct {
-	ExportedDecodedUser `rasql:"-"`
-	Email               string `rasql:"email"`
+type skippedFieldedWrapper struct {
+	ExportedUser `rasql:"-"`
+	Email        string `rasql:"email"`
 }
 
 // Label is a column value a row type embeds rather than names, so the field it
@@ -394,68 +322,39 @@ type skippedFieldedDecoderWrapper struct {
 // like any other, so it is a field of the wrapper's own just as a named one is.
 type Label string
 
-// anonymousFieldedDecoderWrapper embeds the exported row type and one exported
+// anonymousFieldedWrapper embeds the exported row type and one exported
 // anonymous field of its own, tagged.
-type anonymousFieldedDecoderWrapper struct {
-	ExportedDecodedUser
+type anonymousFieldedWrapper struct {
+	ExportedUser
 	Label `rasql:"label"`
 }
 
-// untaggedAnonymousFieldedDecoderWrapper is that shape without a tag, so the
+// untaggedAnonymousFieldedWrapper is that shape without a tag, so the
 // field path names the column by snake-casing the field name.
-type untaggedAnonymousFieldedDecoderWrapper struct {
-	ExportedDecodedUser
+type untaggedAnonymousFieldedWrapper struct {
+	ExportedUser
 	Label
 }
 
-// unexportedAnonymousFieldedDecoderWrapper embeds an unexported self-decoding row
-// type, which the field path skips, so the anonymous field of its own is the only
+// unexportedAnonymousFieldedWrapper embeds the unexported embeddedUser,
+// which the field path skips, so the anonymous field of its own is the only
 // one it maps.
-type unexportedAnonymousFieldedDecoderWrapper struct {
-	selfDecodedUser
+type unexportedAnonymousFieldedWrapper struct {
+	embeddedUser
 	Label `rasql:"label"`
 }
 
-// untaggedUnexportedAnonymousFieldedDecoderWrapper is that shape without a tag.
-type untaggedUnexportedAnonymousFieldedDecoderWrapper struct {
-	selfDecodedUser
+// untaggedUnexportedAnonymousFieldedWrapper is that shape without a tag.
+type untaggedUnexportedAnonymousFieldedWrapper struct {
+	embeddedUser
 	Label
 }
 
-// pointerFieldedDecoderWrapper embeds the row type by pointer, which promotes
-// DecodeRow just as an embedded value does while leaving the pointer nil.
-type pointerFieldedDecoderWrapper struct {
-	*selfDecodedUser
+// pointerFieldedWrapper embeds the row type by pointer. The field walk skips
+// it the same way it skips an embedded value, leaving the pointer nil.
+type pointerFieldedWrapper struct {
+	*embeddedUser
 	ID int64 `rasql:"id"`
-}
-
-// valueDecodingWrapper declares DecodeRow itself with a value receiver. Such a
-// method cannot assign to the row, so it reports an error that names itself and
-// the test observes that error rather than a decoded field.
-type valueDecodingWrapper struct {
-	selfDecodedUser
-	ID int64 `rasql:"id"`
-}
-
-func (valueDecodingWrapper) DecodeRow(row.Dynamic) error {
-	return errors.New("declared value receiver ran")
-}
-
-// pointerDecodingWrapper declares DecodeRow itself with a pointer receiver. Its
-// tag names a different column than the method reads, so the decoded ID names
-// which mapping ran.
-type pointerDecodingWrapper struct {
-	selfDecodedUser
-	ID    int64 `rasql:"nickname"`
-	Trace string
-}
-
-func (u *pointerDecodingWrapper) DecodeRow(r row.Dynamic) error {
-	if err := row.Assign(r, "id", &u.ID); err != nil {
-		return err
-	}
-	u.Trace = "declared"
-	return nil
 }
 
 // decodeFromBothOrders runs check against two Dynamic values holding the same
@@ -469,7 +368,7 @@ func decodeFromBothOrders(t *testing.T, forward, reordered row.Dynamic, check fu
 	t.Run("reordered columns", func(t *testing.T) { check(t, reordered) })
 }
 
-func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
+func TestDecodeMapsEmbeddedFieldsByName(t *testing.T) {
 	result, err := row.NewDynamic(
 		[]string{"id", "email", "nickname", "label"},
 		[]any{int64(42), []byte("ada@example.com"), int64(7), []byte("ada")},
@@ -483,22 +382,22 @@ func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
 
 	t.Run("embedded value", func(t *testing.T) {
 		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			decoded, err := row.Decode[fieldedDecoderWrapper](source)
+			decoded, err := row.Decode[fieldedWrapper](source)
 			require.NoError(t, err)
 			require.Equal(t, int64(42), decoded.ID)
 			require.Equal(t, "ada@example.com", decoded.Email)
-			// The promoted DecodeRow would have set Extra and filled the embedded
-			// fields, so an empty embedded value proves the tags mapped the row.
-			require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+			// embeddedUser is unexported, so the field walk skips it entirely; an
+			// empty embedded value proves only the declared tags mapped the row.
+			require.Equal(t, embeddedUser{}, decoded.embeddedUser)
 		})
 	})
 
 	t.Run("embedded pointer", func(t *testing.T) {
 		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			decoded, err := row.Decode[pointerFieldedDecoderWrapper](source)
+			decoded, err := row.Decode[pointerFieldedWrapper](source)
 			require.NoError(t, err)
 			require.Equal(t, int64(42), decoded.ID)
-			require.Nil(t, decoded.selfDecodedUser)
+			require.Nil(t, decoded.embeddedUser)
 		})
 	})
 
@@ -507,89 +406,56 @@ func TestDecodeIgnoresPromotedRowDecoder(t *testing.T) {
 		// other field, and no column is named after its type, so the decode
 		// fails rather than filling half of the row.
 		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			_, err := row.Decode[exportedFieldedDecoderWrapper](source)
-			require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+			_, err := row.Decode[exportedFieldedWrapper](source)
+			require.ErrorContains(t, err, `row: column "exported_user" is not present`)
 		})
 	})
 
 	t.Run("exported embedded field tagged out", func(t *testing.T) {
 		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			decoded, err := row.Decode[skippedFieldedDecoderWrapper](source)
+			decoded, err := row.Decode[skippedFieldedWrapper](source)
 			require.NoError(t, err)
 			require.Equal(t, "ada@example.com", decoded.Email)
-			require.Equal(t, ExportedDecodedUser{}, decoded.ExportedDecodedUser)
+			require.Equal(t, ExportedUser{}, decoded.ExportedUser)
 		})
 	})
 
 	t.Run("tagged anonymous field", func(t *testing.T) {
-		// The tagged anonymous Label is a mappable field of the wrapper, so the
-		// wrapper takes the field path rather than the promoted DecodeRow. The
+		// The tagged anonymous Label is a mappable field of the wrapper. The
 		// embedded row type is exported, so the field path maps it too and finds
 		// no column named after it, which is what it does for a named field of an
 		// exported type in the same shape.
 		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			_, err := row.Decode[anonymousFieldedDecoderWrapper](source)
-			require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+			_, err := row.Decode[anonymousFieldedWrapper](source)
+			require.ErrorContains(t, err, `row: column "exported_user" is not present`)
 		})
 	})
 
 	t.Run("untagged anonymous field", func(t *testing.T) {
 		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			_, err := row.Decode[untaggedAnonymousFieldedDecoderWrapper](source)
-			require.ErrorContains(t, err, `row: column "exported_decoded_user" is not present`)
+			_, err := row.Decode[untaggedAnonymousFieldedWrapper](source)
+			require.ErrorContains(t, err, `row: column "exported_user" is not present`)
 		})
 	})
 
-	t.Run("tagged anonymous field over an unexported decoder", func(t *testing.T) {
+	t.Run("tagged anonymous field over an unexported embedded type", func(t *testing.T) {
 		// The field path skips the unexported embedded field and maps Label, so
-		// the decode succeeds. The promoted DecodeRow would have filled the
-		// embedded fields and left Label empty.
+		// the decode succeeds.
 		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			decoded, err := row.Decode[unexportedAnonymousFieldedDecoderWrapper](source)
+			decoded, err := row.Decode[unexportedAnonymousFieldedWrapper](source)
 			require.NoError(t, err)
 			require.Equal(t, Label("ada"), decoded.Label)
-			require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
+			require.Equal(t, embeddedUser{}, decoded.embeddedUser)
 		})
 	})
 
-	t.Run("untagged anonymous field over an unexported decoder", func(t *testing.T) {
+	t.Run("untagged anonymous field over an unexported embedded type", func(t *testing.T) {
 		// Label carries no tag here, so the column is its snake-cased field name.
 		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			decoded, err := row.Decode[untaggedUnexportedAnonymousFieldedDecoderWrapper](source)
+			decoded, err := row.Decode[untaggedUnexportedAnonymousFieldedWrapper](source)
 			require.NoError(t, err)
 			require.Equal(t, Label("ada"), decoded.Label)
-			require.Equal(t, selfDecodedUser{}, decoded.selfDecodedUser)
-		})
-	})
-}
-
-func TestDecodeFollowsDeclaredRowDecoder(t *testing.T) {
-	result, err := row.NewDynamic(
-		[]string{"id", "email", "nickname"},
-		[]any{int64(42), []byte("ada@example.com"), int64(7)},
-	)
-	require.NoError(t, err)
-	reordered, err := row.NewDynamic(
-		[]string{"nickname", "email", "id"},
-		[]any{int64(7), []byte("ada@example.com"), int64(42)},
-	)
-	require.NoError(t, err)
-
-	t.Run("value receiver", func(t *testing.T) {
-		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			_, err := row.Decode[valueDecodingWrapper](source)
-			require.ErrorContains(t, err, "declared value receiver ran")
-		})
-	})
-
-	t.Run("pointer receiver", func(t *testing.T) {
-		decodeFromBothOrders(t, result, reordered, func(t *testing.T, source row.Dynamic) {
-			decoded, err := row.Decode[pointerDecodingWrapper](source)
-			require.NoError(t, err)
-			// The tag names "nickname", whose value is 7, so 42 proves the
-			// declared method ran instead of the tag path.
-			require.Equal(t, int64(42), decoded.ID)
-			require.Equal(t, "declared", decoded.Trace)
+			require.Equal(t, embeddedUser{}, decoded.embeddedUser)
 		})
 	})
 }
@@ -633,6 +499,11 @@ func TestDecodeErrorsFromFieldMappingRules(t *testing.T) {
 		_, err := row.Decode[badRow](result)
 		require.ErrorContains(t, err, "has no exported fields")
 		_ = badRow{}.hidden
+	})
+
+	t.Run("non-struct destination", func(t *testing.T) {
+		_, err := row.Decode[int64](result)
+		require.ErrorContains(t, err, "row: decode destination int64 must be a struct")
 	})
 }
 

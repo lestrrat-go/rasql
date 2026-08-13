@@ -29,9 +29,9 @@ func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 }
 
 // DecodeFrom starts a typed fluent SELECT builder for a custom result shape.
-// R is explicit and T is inferred from table. R is mapped by its DecodeRow
-// method when it has one, and projected column names map to R's rasql tags or
-// snake-cased exported field names otherwise.
+// R is explicit and T is inferred from table. R's fields are mapped by their
+// rasql tags, or by their snake-cased names when untagged; a row type
+// carrying generated scan methods is filled through those instead.
 func DecodeFrom[R any, T any](table Table[T]) TypedSelectBuilder[R] {
 	if isNilTable(table) {
 		return TypedSelectBuilder[R]{builder: SelectFromRef(query.TableRef{}).withError(fmt.Errorf("rasql: table must not be nil"))}
@@ -40,8 +40,9 @@ func DecodeFrom[R any, T any](table Table[T]) TypedSelectBuilder[R] {
 }
 
 // DecodeFromRef starts a typed fluent SELECT builder for a table with no Go row type.
-// R is mapped by its DecodeRow method when it has one, and projected column names
-// map to R's rasql tags or snake-cased exported field names otherwise.
+// R's fields are mapped by their rasql tags, or by their snake-cased names
+// when untagged; a row type carrying generated scan methods is filled
+// through those instead.
 func DecodeFromRef[R any](table query.TableRef) TypedSelectBuilder[R] {
 	return TypedSelectBuilder[R]{builder: SelectFromRef(table)}
 }
