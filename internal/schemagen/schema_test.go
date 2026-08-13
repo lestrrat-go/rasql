@@ -1379,6 +1379,78 @@ func TestSchemaRejectsDefinitionAccessorCollision(t *testing.T) {
 	require.ErrorContains(t, err, `duplicates generated name "UsersDef"`)
 }
 
+// TestSchemaRejectsGeneratedTestNameCollision pins that the fixed function
+// name rasqlgen writes into schema_gen_test.go takes part in the collision
+// check like every derived name does. A table named
+// test_rasqlgen_generated_definitions_are_valid derives exactly that
+// identifier for its accessor, so without the reservation rasqlgen would
+// write both declarations itself and the package would fail to build under
+// go test while still passing go build.
+func TestSchemaRejectsGeneratedTestNameCollision(t *testing.T) {
+	const reservedTable = "test_rasqlgen_generated_definitions_are_valid"
+	reserved := schema.TableDef{
+		Name:       reservedTable,
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	nearMiss := schema.TableDef{
+		Name:       "test_rasqlgen_generated_definitions",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	// The two sides of the collision: the name the generated test declares,
+	// and the accessor the table name derives. Renaming either without the
+	// other fails here rather than in a caller's build.
+	generatedTest, err := schemagen.DescriptorTestSource("generated", users)
+	require.NoError(t, err)
+	require.Contains(t, string(generatedTest), "func TestRasqlgenGeneratedDefinitionsAreValid(t *testing.T) {")
+
+	for name, generate := range map[string]func(tables ...schema.TableDef) error{
+		"Validate": func(tables ...schema.TableDef) error {
+			return schemagen.Validate("generated", tables...)
+		},
+		"PackageSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.PackageSource("generated", tables...)
+			return err
+		},
+		"TableSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.TableSource("generated", tables[0], tables...)
+			return err
+		},
+		"TableSurfaceSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.TableSurfaceSource("generated", tables[0], tables...)
+			return err
+		},
+		"DescriptorSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.DescriptorSource("generated", tables...)
+			return err
+		},
+		"DescriptorTestSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.DescriptorTestSource("generated", tables...)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := generate(reserved)
+			require.ErrorContains(t, err, `table "`+reservedTable+`"`)
+			require.ErrorContains(t, err, `duplicates generated name "TestRasqlgenGeneratedDefinitionsAreValid"`)
+			require.ErrorContains(t, err, "rasqlgen reserves")
+
+			// The reservation must cost nothing to an ordinary table. The
+			// same entry point still accepts a plain name and a near miss
+			// whose accessor is a prefix of the reserved identifier.
+			require.NoError(t, generate(users))
+			require.NoError(t, generate(nearMiss))
+		})
+	}
+}
+
 func stringIndex(t *testing.T, source []byte, value string) int {
 	t.Helper()
 	index := len(source)

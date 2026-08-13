@@ -183,6 +183,26 @@ func TestWritePackageRejectsTableNamedSchema(t *testing.T) {
 	require.Empty(t, entries)
 }
 
+// TestWritePackageRejectsTableSpellingTheGeneratedTest confirms that the
+// accessor for a table named test_rasqlgen_generated_definitions_are_valid is
+// refused before anything is written, because it spells the function
+// schema_gen_test.go declares. Both declarations would come from files this
+// run writes into an empty directory and marks DO NOT EDIT, so the package
+// would compile under go build and fail to build under go test.
+func TestWritePackageRejectsTableSpellingTheGeneratedTest(t *testing.T) {
+	directory := t.TempDir()
+	table := schema.MustTableDef("test_rasqlgen_generated_definitions_are_valid",
+		schema.Integer("id"),
+		schema.PrimaryKey("id"),
+	)
+
+	err := generate.WritePackage("store", directory, table)
+	require.ErrorContains(t, err, `duplicates generated name "TestRasqlgenGeneratedDefinitionsAreValid"`)
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
 // handWrittenSource is a file somebody wrote by hand that happens to sit
 // where generated output would land. Nothing about it says rasqlgen, which
 // is the whole point: the destination must survive.

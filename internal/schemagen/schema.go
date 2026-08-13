@@ -259,7 +259,26 @@ func writeTableDescriptor(source *bytes.Buffer, table schema.TableDef) {
 // unlikely, and the name is a constant rather than derived from the package
 // or the descriptors, so regenerating the same input keeps producing the same
 // bytes.
+//
+// Being fixed does not make it safe on its own: a table named
+// test_rasqlgen_generated_definitions_are_valid derives exactly this
+// identifier for its accessor, and both declarations would land in files
+// rasqlgen writes. reservedPackageNames is what stops that.
 const descriptorTestFuncName = "TestRasqlgenGeneratedDefinitionsAreValid"
+
+// reservedPackageNames holds every package-level identifier rasqlgen emits
+// with a fixed spelling rather than deriving it from a table. validateVariableNames
+// seeds its collision set with these, so a table whose generated name spells one
+// of them is refused with a collision error instead of generating a package
+// with two declarations of the same name.
+//
+// Names derived from a table name are not listed: validateVariableNames already
+// compares those against each other as it walks the input. Names a generated
+// type declares as a method rather than at package level are not listed either;
+// reservedFieldNames holds those.
+var reservedPackageNames = map[string]struct{}{
+	descriptorTestFuncName: {},
+}
 
 // DescriptorTestSource returns the generated test that validates every
 // table's descriptor. generate.DescriptorTestSource documents what a caller
@@ -388,15 +407,33 @@ func stringSlicesEqual(left, right []string) bool {
 	return true
 }
 
+// generatedNameConflict returns the error for a package-level name a table
+// would generate that is already taken. A name rasqlgen always emits, such as
+// descriptorTestFuncName, is reported as reserved, because no other table in
+// the input explains the clash and the caller's only remedy is to rename the
+// table.
+func generatedNameConflict(tableName, generated string) error {
+	if _, reserved := reservedPackageNames[generated]; reserved {
+		return fmt.Errorf("generate: table %q duplicates generated name %q, which rasqlgen reserves", tableName, generated)
+	}
+	return fmt.Errorf("generate: table %q duplicates generated name %q", tableName, generated)
+}
+
 func validateVariableNames(tables []schema.TableDef) error {
-	names := make(map[string]struct{}, len(tables)*2)
+	names := make(map[string]struct{}, len(tables)*2+len(reservedPackageNames))
+	// Seed the fixed package-level names rasqlgen writes beside the per-table
+	// declarations, so a table whose own generated name spells one of them is
+	// refused here instead of producing a package that does not compile.
+	for reserved := range reservedPackageNames {
+		names[reserved] = struct{}{}
+	}
 	for _, table := range tables {
 		variable := variableName(table.Name)
 		if variable == "" || !token.IsIdentifier(variable) {
 			return fmt.Errorf("generate: table %q cannot become a Go identifier", table.Name)
 		}
 		if _, exists := names[variable]; exists {
-			return fmt.Errorf("generate: table %q duplicates generated name %q", table.Name, variable)
+			return generatedNameConflict(table.Name, variable)
 		}
 		names[variable] = struct{}{}
 		for _, generated := range []string{
@@ -407,7 +444,7 @@ func validateVariableNames(tables []schema.TableDef) error {
 			definitionAccessorName(table.Name),
 		} {
 			if _, exists := names[generated]; exists {
-				return fmt.Errorf("generate: table %q duplicates generated name %q", table.Name, generated)
+				return generatedNameConflict(table.Name, generated)
 			}
 			names[generated] = struct{}{}
 		}
