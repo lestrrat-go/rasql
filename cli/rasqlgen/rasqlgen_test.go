@@ -11,11 +11,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,19 +86,56 @@ func TestRunQueryRejectsOutputWithoutGeneratedSuffix(t *testing.T) {
 	require.NoFileExists(t, output)
 }
 
-// TestRunSchemaAcceptsGenTestSuffix confirms writeGeneratedFile's suffix
-// guard accepts the one destination the schema command writes that does not
-// end in plain _gen.go: the generated validity test, schema_gen_test.go.
-func TestRunSchemaAcceptsGenTestSuffix(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
+// generatedSource is a minimal file with the shape rasqlgen writes: the
+// generated marker on its first line, then the package clause.
+const generatedSource = genfile.Marker + "\n\npackage generated\n"
 
-	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
-	source, err := os.ReadFile(filepath.Join(directory, "schema_gen_test.go"))
+// handWrittenSource is a file somebody wrote by hand that happens to sit
+// where generated output would land. Nothing about it says rasqlgen, which
+// is the whole point: the destination must survive.
+const handWrittenSource = "package store\n\n// Written by hand. Losing this file loses the only copy.\nfunc Keep() bool { return true }\n"
+
+// TestRunQueryRefusesHandWrittenDestination confirms the query command
+// reaches the same guard, since it writes through the same door.
+func TestRunQueryRefusesHandWrittenDestination(t *testing.T) {
+	directory := t.TempDir()
+	output := filepath.Join(directory, "user_gen.go")
+	require.NoError(t, os.WriteFile(output, []byte(handWrittenSource), 0o600))
+
+	err := run(append(queryOutputArgs(t, directory), "-output", output))
+	require.ErrorContains(t, err, "refusing to overwrite")
+	require.ErrorContains(t, err, output)
+	source, err := os.ReadFile(output)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "func TestGeneratedDefinitionsAreValid(t *testing.T) {")
+	require.Equal(t, handWrittenSource, string(source))
+}
+
+// TestGeneratedOutputCarriesTheMarker holds genfile.Marker to what the
+// generators actually emit. genfile decides what it may replace by that
+// first line, while generate and template each write the line themselves,
+// so a generator that changed its header would otherwise make every
+// regeneration refuse the output of the run before it. Running both
+// commands covers all four places the line is written.
+func TestGeneratedOutputCarriesTheMarker(t *testing.T) {
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "schema.db")
+	database, err := sql.Open("sqlite", databasePath)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	require.NoError(t, run([]string{"schema", "-dsn", databasePath, "-dialect", "sqlite", "-table", "users", "-package", "generated", "-output", directory}))
+
+	queryOutput := filepath.Join(directory, "user_by_id_gen.go")
+	require.NoError(t, run(append(queryOutputArgs(t, directory), "-output", queryOutput)))
+
+	written := []string{"users_gen.go", "schema_gen.go", "schema_gen_test.go", "user_by_id_gen.go"}
+	for _, name := range written {
+		source, err := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(string(source), genfile.Marker+"\n"),
+			"%s must start with %q, which is what rasqlgen recognizes its own output by", name, genfile.Marker)
+	}
 }
 
 func mustReadDir(t *testing.T, directory string) []os.DirEntry {

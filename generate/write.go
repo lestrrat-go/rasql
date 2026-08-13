@@ -46,6 +46,15 @@ func WritePackage(packageName, directory string, tables ...schema.TableDef) erro
 		}
 		filenames[filename] = table.Name
 	}
+	// Every destination is resolved before the first one is written. A
+	// schema run writes a package, not a file, and a refusal discovered
+	// while writing the third file would leave the first two already
+	// replaced and the rest of the package as it was.
+	for _, destination := range schemaOutputPaths(directory, sorted) {
+		if _, err := genfile.ResolveDestination(destination); err != nil {
+			return err
+		}
+	}
 	for _, table := range sorted {
 		source, err := TableSource(packageName, table, sorted...)
 		if err != nil {
@@ -87,4 +96,20 @@ const (
 
 func schemaOutputFilename(tableName string) string {
 	return strings.ToLower(tableName) + "_gen.go"
+}
+
+// schemaOutputPaths reports every path a WritePackage call into directory
+// writes, in the order it writes them: one file per table, then the two it
+// writes once per package. tables must already be sorted, and its filenames
+// must already have passed the collision check, so that the paths reported
+// here are the ones actually written.
+func schemaOutputPaths(directory string, tables []schema.TableDef) []string {
+	paths := make([]string, 0, len(tables)+2)
+	for _, table := range tables {
+		paths = append(paths, filepath.Join(directory, schemaOutputFilename(table.Name)))
+	}
+	return append(paths,
+		filepath.Join(directory, schemaDescriptorFilename),
+		filepath.Join(directory, schemaDescriptorTestFilename),
+	)
 }

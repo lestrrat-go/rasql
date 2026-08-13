@@ -169,6 +169,89 @@ func TestWritePackageRejectsTableNamedSchema(t *testing.T) {
 	require.Empty(t, entries)
 }
 
+// handWrittenSource is a file somebody wrote by hand that happens to sit
+// where generated output would land. Nothing about it says rasqlgen, which
+// is the whole point: the destination must survive.
+const handWrittenSource = "package store\n\n// Written by hand. Losing this file loses the only copy.\nfunc Keep() bool { return true }\n"
+
+// TestWritePackageRefusesHandWrittenDestination confirms the refusal reaches
+// every kind of destination a schema run writes: the per-table file, the
+// package-wide descriptor, and the package-wide descriptor test. A run that
+// hits one leaves the whole output directory as it found it.
+func TestWritePackageRefusesHandWrittenDestination(t *testing.T) {
+	for _, victim := range []string{"users_gen.go", "schema_gen.go", "schema_gen_test.go"} {
+		t.Run(victim, func(t *testing.T) {
+			directory := t.TempDir()
+			victimPath := filepath.Join(directory, victim)
+			require.NoError(t, os.WriteFile(victimPath, []byte(handWrittenSource), 0o600))
+
+			err := generate.WritePackage("store", directory, usersTableDef())
+			require.ErrorContains(t, err, "refusing to overwrite")
+			require.ErrorContains(t, err, victimPath)
+
+			source, err := os.ReadFile(victimPath)
+			require.NoError(t, err)
+			require.Equal(t, handWrittenSource, string(source))
+			// Nothing else was written either: the run reported the
+			// collision before it replaced anything.
+			entries, err := os.ReadDir(directory)
+			require.NoError(t, err)
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			require.ElementsMatch(t, []string{victim}, names)
+		})
+	}
+}
+
+// TestWritePackageResolvesEveryDestinationBeforeWriting pins the pre-scan. A
+// schema run writes a package rather than a file, so a collision on a file
+// it writes late must not leave the files it writes early already replaced.
+// The tables sort to orders_gen.go, users_gen.go, schema_gen.go,
+// schema_gen_test.go, so each victim below is preceded by at least one
+// destination the run would otherwise have written first.
+func TestWritePackageResolvesEveryDestinationBeforeWriting(t *testing.T) {
+	for _, victim := range []string{"users_gen.go", "schema_gen.go", "schema_gen_test.go"} {
+		t.Run(victim, func(t *testing.T) {
+			directory := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(directory, victim), []byte(handWrittenSource), 0o600))
+
+			err := generate.WritePackage("store", directory, usersTableDef(), ordersTableDef())
+			require.ErrorContains(t, err, "refusing to overwrite")
+			require.NoFileExists(t, filepath.Join(directory, "orders_gen.go"))
+			for _, name := range []string{"users_gen.go", "schema_gen.go", "schema_gen_test.go"} {
+				if name == victim {
+					continue
+				}
+				require.NoFileExists(t, filepath.Join(directory, name))
+			}
+		})
+	}
+}
+
+// TestWritePackageRegeneratesItsOwnOutput confirms the guard does not stand
+// in the way of the normal case. Running twice over the same directory
+// replaces every file the first run wrote, without complaint.
+func TestWritePackageRegeneratesItsOwnOutput(t *testing.T) {
+	directory := t.TempDir()
+
+	require.NoError(t, generate.WritePackage("store", directory, usersTableDef()))
+	first := make(map[string]string, 3)
+	for _, name := range []string{"users_gen.go", "schema_gen.go", "schema_gen_test.go"} {
+		source, err := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, err)
+		first[name] = string(source)
+	}
+
+	require.NoError(t, generate.WritePackage("store", directory, usersTableDef()))
+	for name, source := range first {
+		regenerated, err := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, err)
+		require.Equal(t, source, string(regenerated))
+	}
+}
+
 func TestWritePackageRejectsInvalidPackageNameBeforeWriting(t *testing.T) {
 	directory := t.TempDir()
 
