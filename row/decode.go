@@ -86,6 +86,14 @@ func Decode[T any](r Dynamic) (T, error) {
 	return result, nil
 }
 
+// snakeCase derives the column name of an untagged field. It is lossy, so it
+// does not round-trip every column name: a column with repeated underscores,
+// such as a__b, becomes the field AB, and snakeCase("AB") is "ab" rather than
+// "a__b". An untagged field whose name does not survive that round trip is
+// looked up under the wrong column and reports "is not present". Give such a
+// field a rasql tag naming the column exactly, which buildPlan takes in
+// preference to this. Generated row types are unaffected either way, because
+// they map by exact column name through ScanDestinations and never reach here.
 func snakeCase(value string) string {
 	runes := []rune(value)
 	var result strings.Builder
