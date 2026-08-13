@@ -1,4 +1,4 @@
-package row
+package rowvalue
 
 import (
 	"database/sql"
@@ -25,7 +25,7 @@ var timeLayouts = []string{
 }
 
 // Get decodes the named value in r as T.
-func Get[T any](r Dynamic, name string) (T, error) {
+func Get[T any](r Row, name string) (T, error) {
 	var result T
 	if err := Assign(r, name, &result); err != nil {
 		return result, err
@@ -34,7 +34,7 @@ func Get[T any](r Dynamic, name string) (T, error) {
 }
 
 // Assign decodes the named value in r into destination.
-func Assign[T any](r Dynamic, name string, destination *T) error {
+func Assign[T any](r Row, name string, destination *T) error {
 	if destination == nil {
 		return fmt.Errorf("row: destination for column %q must not be nil", name)
 	}
@@ -60,7 +60,7 @@ func Assign[T any](r Dynamic, name string, destination *T) error {
 // is read: an error found while planning always wins over a per-row error,
 // such as a missing column, that a field reached earlier in declaration order
 // would have reported first under the old, per-row walk.
-func Decode[T any](r Dynamic) (T, error) {
+func Decode[T any](r Row) (T, error) {
 	var result T
 	plan := planFor(reflect.TypeFor[T]())
 	if plan.err != nil {
