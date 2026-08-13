@@ -294,7 +294,7 @@ Most applications only import the root `rasql` package plus `dialect` and `schem
 | `dialect` | Decides identifier quoting, placeholders, type mapping, and syntax support. |
 | `query` | Represents dialect-neutral statements and expressions, with validation. |
 | `render` | Turns a validated query into SQL text and an ordered argument list. |
-| `row` | Provides typed column access and result decoding. |
+| `row` | Provides dynamic result rows and value decoding. |
 | `inspect` | Reads live database metadata into `schema` descriptors. |
 | `migrate` | Plans and executes forward-only DDL migrations with durable history. |
 | `template`, `generate`, `cmd/rasqlgen` | Compile templates and descriptors into deterministic Go source. |
