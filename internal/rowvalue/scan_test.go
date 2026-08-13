@@ -1,18 +1,12 @@
-package row_test
+package rowvalue_test
 
 import (
-	"database/sql"
 	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/lestrrat-go/rasql/row"
+	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/stretchr/testify/require"
-)
-
-var (
-	_ row.ScanSource = (*sql.Row)(nil)
-	_ row.ScanSource = (*sql.Rows)(nil)
 )
 
 func TestScan(t *testing.T) {
@@ -32,23 +26,23 @@ func TestScan(t *testing.T) {
 		rows, err := database.QueryContext(t.Context(), "SELECT")
 		require.NoError(t, err)
 
-		decoded := make([]row.Dynamic, 0)
-		for result, err := range row.Scan(rows) {
+		decoded := make([]rowvalue.Row, 0)
+		for result, err := range rowvalue.Scan(rows) {
 			require.NoError(t, err)
 			decoded = append(decoded, result)
 		}
 		require.Len(t, decoded, 2)
 
-		gotID, err := row.Get[int64](decoded[0], "id")
+		gotID, err := rowvalue.Get[int64](decoded[0], "id")
 		require.NoError(t, err)
-		gotEmail, err := row.Get[string](decoded[0], "email")
+		gotEmail, err := rowvalue.Get[string](decoded[0], "email")
 		require.NoError(t, err)
 		require.Equal(t, int64(1), gotID)
 		require.Equal(t, "ada@example.com", gotEmail)
 
-		gotID, err = row.Get[int64](decoded[1], "id")
+		gotID, err = rowvalue.Get[int64](decoded[1], "id")
 		require.NoError(t, err)
-		gotEmail, err = row.Get[string](decoded[1], "email")
+		gotEmail, err = rowvalue.Get[string](decoded[1], "email")
 		require.NoError(t, err)
 		require.Equal(t, int64(2), gotID)
 		require.Equal(t, "bob@example.com", gotEmail)
@@ -57,7 +51,7 @@ func TestScan(t *testing.T) {
 	t.Run("nil rows yields nothing and does not panic", func(t *testing.T) {
 		count := 0
 		require.NotPanics(t, func() {
-			for range row.Scan(nil) {
+			for range rowvalue.Scan(nil) {
 				count++
 			}
 		})
@@ -83,7 +77,7 @@ func TestScan(t *testing.T) {
 		require.NoError(t, err)
 
 		count := 0
-		for _, err := range row.Scan(rows) {
+		for _, err := range rowvalue.Scan(rows) {
 			require.NoError(t, err)
 			count++
 			break
@@ -108,7 +102,7 @@ func TestScan(t *testing.T) {
 		require.NoError(t, err)
 
 		count := 0
-		for _, err := range row.Scan(rows) {
+		for _, err := range rowvalue.Scan(rows) {
 			require.ErrorContains(t, err, "row: iterate result rows")
 			count++
 		}
@@ -141,8 +135,8 @@ func TestScan(t *testing.T) {
 		rows, err := database.QueryContext(t.Context(), "SELECT")
 		require.NoError(t, err)
 
-		decoded := make([]row.Dynamic, 0, 3)
-		for result, err := range row.Scan(rows) {
+		decoded := make([]rowvalue.Row, 0, 3)
+		for result, err := range rowvalue.Scan(rows) {
 			require.NoError(t, err)
 			decoded = append(decoded, result)
 		}
@@ -151,11 +145,11 @@ func TestScan(t *testing.T) {
 		wantIDs := []int64{1, 2, 3}
 		wantPayloads := [][]byte{[]byte("first"), []byte("second"), []byte("third")}
 		for i, result := range decoded {
-			gotID, err := row.Get[int64](result, "id")
+			gotID, err := rowvalue.Get[int64](result, "id")
 			require.NoError(t, err)
 			require.Equal(t, wantIDs[i], gotID)
 
-			gotPayload, err := row.Get[[]byte](result, "payload")
+			gotPayload, err := rowvalue.Get[[]byte](result, "payload")
 			require.NoError(t, err)
 			require.Equal(t, wantPayloads[i], gotPayload)
 		}
@@ -177,7 +171,7 @@ func TestScan(t *testing.T) {
 		require.NoError(t, err)
 
 		count := 0
-		for _, err := range row.Scan(rows) {
+		for _, err := range rowvalue.Scan(rows) {
 			require.ErrorContains(t, err, "row: create result row")
 			count++
 		}

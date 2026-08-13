@@ -1,4 +1,4 @@
-package row
+package rowvalue
 
 import (
 	"testing"
@@ -39,7 +39,7 @@ type planOnceEmptyTag struct {
 // caches rather than rebuilds on every Decode call.
 func TestPlanIsBuiltOncePerType(t *testing.T) {
 	t.Run("field-mapped struct", func(t *testing.T) {
-		source, err := NewDynamic([]string{"id"}, []any{int64(42)})
+		source, err := NewRow([]string{"id"}, []any{int64(42)})
 		require.NoError(t, err)
 
 		before := decodePlanBuilds.Load()
@@ -52,7 +52,7 @@ func TestPlanIsBuiltOncePerType(t *testing.T) {
 	})
 
 	t.Run("struct embedding an unexported row type with fields of its own", func(t *testing.T) {
-		source, err := NewDynamic([]string{"extra"}, []any{int64(7)})
+		source, err := NewRow([]string{"extra"}, []any{int64(7)})
 		require.NoError(t, err)
 
 		before := decodePlanBuilds.Load()
@@ -68,7 +68,7 @@ func TestPlanIsBuiltOncePerType(t *testing.T) {
 	})
 
 	t.Run("struct whose plan is an error", func(t *testing.T) {
-		source, err := NewDynamic([]string{"name"}, []any{"Ada"})
+		source, err := NewRow([]string{"name"}, []any{"Ada"})
 		require.NoError(t, err)
 
 		before := decodePlanBuilds.Load()
