@@ -9,10 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/schema"
 	querytemplate "github.com/lestrrat-go/rasql/template"
 	_ "modernc.org/sqlite"
@@ -90,6 +88,7 @@ func runSchema(args []string, writer io.Writer) error {
 	flags := newFlagSet("schema", writer)
 	input := flags.String("input", "", "path to a JSON array of schema tables (max 64 MiB)")
 	dsn := flags.String("dsn", "", "database connection string")
+	source := flags.String("source", "", "directory of a Go package exporting func Tables() []schema.TableDef")
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
 	timeout := flags.Duration("timeout", 30*time.Second, "deadline for -dsn metadata inspection")
 	var tableNames tableNames
@@ -105,11 +104,30 @@ func runSchema(args []string, writer io.Writer) error {
 	if *packageName == "" || *output == "" {
 		return errors.New("schema requires -package and -output")
 	}
-	if *input != "" && *dsn != "" {
+	modeCount := 0
+	if *input != "" {
+		modeCount++
+	}
+	if *dsn != "" {
+		modeCount++
+	}
+	if *source != "" {
+		modeCount++
+	}
+	switch {
+	case modeCount == 0:
+		return errors.New("schema requires one of -input, -dsn, or -source")
+	case *input != "" && *dsn != "" && *source == "":
+		// Keep the existing two-way message so current -input/-dsn
+		// behaviour does not change.
 		return errors.New("schema accepts either -input or -dsn, not both")
+	case modeCount > 1:
+		return errors.New("schema accepts one of -input, -dsn, or -source, not several")
 	}
 	var tables []schema.TableDef
 	switch {
+	case *source != "":
+		return runSchemaSource(*source, *packageName, *output, tableNames, writer)
 	case *input != "":
 		data, err := readInputFile(*input)
 		if err != nil {
@@ -161,51 +179,10 @@ func runSchema(args []string, writer io.Writer) error {
 	default:
 		return errors.New("schema requires either -input or -dsn")
 	}
-	if err := writeGeneratedSchemaFiles(*output, *packageName, tables); err != nil {
+	if err := generate.WritePackage(*packageName, *output, tables...); err != nil {
 		return fmt.Errorf("write schema output: %w", err)
 	}
 	return nil
-}
-
-func writeGeneratedSchemaFiles(directory string, packageName string, tables []schema.TableDef) error {
-	info, err := os.Stat(directory)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("schema output %q is not a directory", directory)
-	}
-	if err := generate.Validate(packageName, tables...); err != nil {
-		return err
-	}
-
-	sorted := append([]schema.TableDef(nil), tables...)
-	sort.Slice(sorted, func(left, right int) bool {
-		return sorted[left].Name < sorted[right].Name
-	})
-	filenames := make(map[string]string, len(sorted))
-	for _, table := range sorted {
-		filename := schemaOutputFilename(table.Name)
-		if other, exists := filenames[filename]; exists {
-			return fmt.Errorf("schema tables %q and %q both generate %q", other, table.Name, filename)
-		}
-		filenames[filename] = table.Name
-	}
-	for _, table := range sorted {
-		source, err := generate.TableSource(packageName, table, sorted...)
-		if err != nil {
-			return err
-		}
-		filename := schemaOutputFilename(table.Name)
-		if err := writeGeneratedFile(filepath.Join(directory, filename), source); err != nil {
-			return fmt.Errorf("write table %q: %w", table.Name, err)
-		}
-	}
-	return nil
-}
-
-func schemaOutputFilename(tableName string) string {
-	return strings.ToLower(tableName) + "_gen.go"
 }
 
 func inspectTables(ctx context.Context, inspector inspect.Inspector, names []string) ([]schema.TableDef, error) {
@@ -294,7 +271,7 @@ func runQuery(args []string, writer io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := writeGeneratedFile(*output, source); err != nil {
+	if err := genfile.Write(*output, source); err != nil {
 		return fmt.Errorf("write query output: %w", err)
 	}
 	return nil
@@ -323,194 +300,6 @@ func parseCommandFlags(flags *flag.FlagSet, args []string) error {
 // holding spaces cannot be mistaken for several arguments.
 func unexpectedArgumentsError(rest []string) error {
 	return fmt.Errorf("unexpected arguments: %q", rest)
-}
-
-// writeGeneratedFile writes source to path without ever truncating an
-// existing file in place. Its resolved destination must end in _gen.go.
-// When path is a symbolic link it writes through
-// the link to the file the link points at, leaving the link itself intact.
-// A path that names a directory, or a symbolic link that resolves to one,
-// is rejected with an error instead of being written into, regardless of
-// whether path ends in a trailing slash.
-// It writes to a temporary file in the same directory as that resolved
-// destination, then renames the temporary file over the destination only
-// after the write fully succeeds, so a failure at any point along the way
-// leaves the destination untouched instead of empty or partially written.
-// When the destination already exists, the mode bits generatedFileMode
-// reports for it are copied to the temporary file before the rename, so
-// regenerating never changes the mode of an existing output file; a file
-// that did not exist is created at 0600.
-//
-// The rename is only atomic on Unix platforms. os.Rename documents that
-// even within a single directory it is not an atomic operation on
-// non-Unix platforms, so a run interrupted there can leave the destination
-// missing or still holding its old contents.
-func writeGeneratedFile(path string, source []byte) error {
-	// Both the temporary file's directory and the rename destination come
-	// from the resolved path. Resolving only the destination would put the
-	// temporary file beside the link instead of beside its target, and
-	// renaming across filesystems fails with EXDEV.
-	destination, err := resolveOutputPath(path)
-	if err != nil {
-		return err
-	}
-	if !strings.HasSuffix(destination, "_gen.go") {
-		return fmt.Errorf("generated output %q must end in _gen.go", destination)
-	}
-	mode, err := generatedFileMode(destination)
-	if err != nil {
-		return err
-	}
-	directory := filepath.Dir(destination)
-	temporary, err := os.CreateTemp(directory, "."+filepath.Base(destination)+".tmp*")
-	if err != nil {
-		return err
-	}
-	removeTemporary := true
-	defer func() {
-		if removeTemporary {
-			_ = os.Remove(temporary.Name())
-		}
-	}()
-
-	if _, err := temporary.Write(source); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	// chmod before the rename, so the destination is never visible with
-	// the temporary file's mode instead of the mode it had before.
-	if err := os.Chmod(temporary.Name(), mode); err != nil {
-		return err
-	}
-	if err := os.Rename(temporary.Name(), destination); err != nil {
-		return err
-	}
-	removeTemporary = false
-	return nil
-}
-
-// maxOutputSymlinkDepth caps how many symbolic links resolveOutputPath
-// follows, so a link that points at itself or at another link in a cycle
-// reports an error instead of looping forever. Linux allows 40 links in a
-// single resolution, so this matches what an ordinary open would accept:
-// the destination the fortieth link names is still used, and only a
-// forty-first link that must be resolved is too many.
-const maxOutputSymlinkDepth = 40
-
-// resolveOutputPath reports the file writeGeneratedFile must replace for
-// the requested output path. A path that is not a symbolic link is its own
-// destination. A symbolic link resolves to whatever it points at, so the
-// generated source lands in the file the link names and the link itself
-// survives the rename; writing to the link's own path would instead delete
-// the link and leave its target holding stale content.
-//
-// A path that names a directory, or a symbolic link that resolves to one,
-// is rejected instead of being treated as a destination. os.Lstat follows
-// a trailing slash through to the directory even when the final component
-// is a link, so this one check catches a directory named with or without a
-// trailing slash and a directory reached through a link either way; without
-// it, withResolvedParent would rewrite a path such as "outdir/" into a new
-// child file "outdir/outdir" inside that directory and report success on
-// what was almost certainly a typo.
-//
-// A link that points at a path which does not exist resolves to that
-// missing path, matching what writing through the link would have done:
-// the missing file is created, with the 0600 that generatedFileMode gives
-// any new file, and the link keeps pointing at it. filepath.EvalSymlinks
-// cannot resolve the whole path here, because it fails on such a dangling
-// link; it is used only on directories, which always exist by the time
-// they are resolved.
-func resolveOutputPath(path string) (string, error) {
-	current := path
-	// followed counts the links already resolved. Testing it before the
-	// next Readlink rather than after the last one keeps the destination
-	// the fortieth link names in play, so a chain the kernel would accept
-	// is accepted here too.
-	for followed := 0; ; followed++ {
-		info, err := os.Lstat(current)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return withResolvedParent(current), nil
-			}
-			return "", err
-		}
-		if info.IsDir() {
-			return "", fmt.Errorf("resolve output %s: is a directory", path)
-		}
-		if info.Mode()&fs.ModeSymlink == 0 {
-			return withResolvedParent(current), nil
-		}
-		if followed == maxOutputSymlinkDepth {
-			return "", fmt.Errorf("resolve output %s: too many levels of symbolic links", path)
-		}
-		target, err := os.Readlink(current)
-		if err != nil {
-			return "", err
-		}
-		if filepath.IsAbs(target) {
-			current = target
-			continue
-		}
-		// A relative link is relative to the directory holding the link,
-		// and that is the directory the filesystem reaches rather than the
-		// one filepath.Dir spells. Joining against the lexical parent
-		// collapses a leading ".." in the target against a parent that is
-		// itself a link, which lands the resolved path beside the link
-		// instead of beside the directory the link points at. The Lstat
-		// above succeeded, so that parent exists and resolves.
-		parent, err := filepath.EvalSymlinks(filepath.Dir(current))
-		if err != nil {
-			return "", err
-		}
-		current = filepath.Join(parent, target)
-	}
-}
-
-// withResolvedParent reports path with the directory holding it replaced
-// by the directory the filesystem reaches, so writeGeneratedFile creates
-// its temporary file in, and renames over, the directory an ordinary open
-// of path would have used. A parent that cannot be resolved is left as it
-// was spelled, which leaves the resulting open to report the ENOENT an
-// ordinary open would have reported.
-//
-// path is never itself a directory here: resolveOutputPath rejects that
-// case before calling this, so filepath.Base(path) always names the file
-// the caller asked for rather than the directory holding it.
-func withResolvedParent(path string) string {
-	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
-	if err != nil {
-		return path
-	}
-	return filepath.Join(parent, filepath.Base(path))
-}
-
-// generatedFileMode reports the mode bits writeGeneratedFile must give
-// path. An existing file keeps the bits it already has, because the
-// generated output's mode is the caller's to choose. Only a path that does
-// not exist yet gets os.CreateTemp's 0600.
-//
-// The sticky bit travels with the permission bits, because writing the
-// file in place kept it and replacing the file must not quietly drop it.
-// Setuid and setgid deliberately do not travel: Linux clears both when an
-// unprivileged process writes a file, so writing in place lost them too,
-// and carrying them across here would make regenerating a file stricter
-// than writing it directly.
-func generatedFileMode(path string) (fs.FileMode, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return 0o600, nil
-		}
-		return 0, err
-	}
-	return info.Mode() & (fs.ModePerm | fs.ModeSticky), nil
 }
 
 func newFlagSet(name string, writer io.Writer) *flag.FlagSet {
