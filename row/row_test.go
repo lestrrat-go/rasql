@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTypedColumnsDecodeValues(t *testing.T) {
+func TestGetDecodesDriverValues(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
 	inputBytes := []byte("payload")
 	result, err := row.NewDynamic(
@@ -19,35 +19,22 @@ func TestTypedColumnsDecodeValues(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	active, err := row.Bool("active")
-	require.NoError(t, err)
-	id, err := row.Int64("id")
-	require.NoError(t, err)
-	ratio, err := row.Float64("ratio")
-	require.NoError(t, err)
-	name, err := row.String("name")
-	require.NoError(t, err)
-	payload, err := row.Bytes("payload")
-	require.NoError(t, err)
-	when, err := row.Time("created_at")
-	require.NoError(t, err)
-
-	gotActive, err := active.Get(result)
+	gotActive, err := row.Get[bool](result, "active")
 	require.NoError(t, err)
 	require.True(t, gotActive)
-	gotID, err := id.Get(result)
+	gotID, err := row.Get[int64](result, "id")
 	require.NoError(t, err)
 	require.Equal(t, int64(42), gotID)
-	gotRatio, err := ratio.Get(result)
+	gotRatio, err := row.Get[float64](result, "ratio")
 	require.NoError(t, err)
 	require.Equal(t, 1.5, gotRatio)
-	gotName, err := name.Get(result)
+	gotName, err := row.Get[string](result, "name")
 	require.NoError(t, err)
 	require.Equal(t, "Ada", gotName)
-	gotPayload, err := payload.Get(result)
+	gotPayload, err := row.Get[[]byte](result, "payload")
 	require.NoError(t, err)
 	require.Equal(t, []byte("payload"), gotPayload)
-	gotWhen, err := when.Get(result)
+	gotWhen, err := row.Get[time.Time](result, "created_at")
 	require.NoError(t, err)
 	require.Equal(t, createdAt, gotWhen)
 
@@ -55,7 +42,7 @@ func TestTypedColumnsDecodeValues(t *testing.T) {
 	require.Equal(t, []byte("payload"), gotPayload)
 }
 
-func TestTypedColumnsDecodeSQLiteValues(t *testing.T) {
+func TestGetDecodesSQLiteValues(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
 	result, err := row.NewDynamic(
 		[]string{"active", "created_at"},
@@ -63,79 +50,19 @@ func TestTypedColumnsDecodeSQLiteValues(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	active, err := row.Bool("active")
-	require.NoError(t, err)
-	when, err := row.Time("created_at")
-	require.NoError(t, err)
-
-	gotActive, err := active.Get(result)
+	gotActive, err := row.Get[bool](result, "active")
 	require.NoError(t, err)
 	require.True(t, gotActive)
-	gotWhen, err := when.Get(result)
+	gotWhen, err := row.Get[time.Time](result, "created_at")
 	require.NoError(t, err)
 	require.Equal(t, createdAt, gotWhen)
 }
 
-func TestNullableDecoderPreservesNull(t *testing.T) {
-	result, err := row.NewDynamic([]string{"name"}, []any{nil})
-	require.NoError(t, err)
-	name, err := row.NewColumn("name", row.Nullable(row.ColumnDecoderFunc[string](func(value any) (string, error) {
-		return value.(string), nil
-	})))
-	require.NoError(t, err)
-
-	got, err := name.Get(result)
-	require.NoError(t, err)
-	require.False(t, got.Valid)
-}
-
-func TestNullableDecoderPreservesNullWithNilDecoder(t *testing.T) {
-	result, err := row.NewDynamic([]string{"name"}, []any{nil})
-	require.NoError(t, err)
-	var decoder row.ColumnDecoder[string]
-	name, err := row.NewColumn("name", row.Nullable(decoder))
-	require.NoError(t, err)
-
-	got, err := name.Get(result)
-	require.NoError(t, err)
-	require.False(t, got.Valid)
-}
-
-func TestNullableDecoderRejectsNilDecoder(t *testing.T) {
-	result, err := row.NewDynamic([]string{"name"}, []any{"Ada"})
-	require.NoError(t, err)
-	var typedNil row.ColumnDecoderFunc[string]
-
-	for _, test := range []struct {
-		name    string
-		decoder row.ColumnDecoder[string]
-	}{
-		{name: "nil interface"},
-		{name: "typed nil", decoder: typedNil},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			name, err := row.NewColumn("name", row.Nullable(test.decoder))
-			require.NoError(t, err)
-
-			_, err = name.Get(result)
-			require.ErrorContains(t, err, "nullable decoder must not be nil")
-		})
-	}
-}
-
-func TestNewColumnRejectsTypedNilDecoder(t *testing.T) {
-	var decoder row.ColumnDecoderFunc[string]
-	_, err := row.NewColumn("name", decoder)
-	require.ErrorContains(t, err, "decoder for column \"name\" must not be nil")
-}
-
-func TestTypedColumnsRejectWrongType(t *testing.T) {
+func TestGetRejectsWrongType(t *testing.T) {
 	result, err := row.NewDynamic([]string{"id"}, []any{"42"})
 	require.NoError(t, err)
-	id, err := row.Int64("id")
-	require.NoError(t, err)
 
-	_, err = id.Get(result)
+	_, err = row.Get[int64](result, "id")
 	require.Error(t, err)
 }
 
@@ -745,11 +672,6 @@ func TestZeroDynamicIsSafe(t *testing.T) {
 	require.ErrorContains(t, err, `row: column "id" is not present`)
 
 	_, err = row.Get[int64](zero, "id")
-	require.ErrorContains(t, err, `row: column "id" is not present`)
-
-	id, err := row.Int64("id")
-	require.NoError(t, err)
-	_, err = id.Get(zero)
 	require.ErrorContains(t, err, `row: column "id" is not present`)
 
 	type user struct {
