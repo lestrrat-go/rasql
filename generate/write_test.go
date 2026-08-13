@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/genfile"
+	"github.com/lestrrat-go/rasql/internal/schemagen"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -27,24 +29,36 @@ func ordersTableDef() schema.TableDef {
 }
 
 // TestWritePackageWritesTableSourceBytes pins that WritePackage writes the
-// same bytes the CLI writes today, byte for byte against generate.TableSource.
+// same bytes the CLI writes today, byte for byte.
+//
+// The comparison is against schemagen.TableSurfaceSource, not
+// generate.TableSource: the per-table files hold the surface alone, with the
+// descriptors declared once in schema_gen.go, while generate.TableSource
+// returns both in one file, which is the form a caller of that package gets
+// rather than the form this directory holds.
 func TestWritePackageWritesTableSourceBytes(t *testing.T) {
 	directory := t.TempDir()
 	users, orders := usersTableDef(), ordersTableDef()
 
 	require.NoError(t, generate.WritePackage("store", directory, users, orders))
 
-	wantUsers, err := generate.TableSource("store", users, users, orders)
+	wantUsers, err := schemagen.TableSurfaceSource("store", users, users, orders)
 	require.NoError(t, err)
 	gotUsers, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Equal(t, wantUsers, gotUsers)
 
-	wantOrders, err := generate.TableSource("store", orders, users, orders)
+	wantOrders, err := schemagen.TableSurfaceSource("store", orders, users, orders)
 	require.NoError(t, err)
 	gotOrders, err := os.ReadFile(filepath.Join(directory, "orders_gen.go"))
 	require.NoError(t, err)
 	require.Equal(t, wantOrders, gotOrders)
+
+	wantDescriptor, err := generate.DescriptorSource("store", users, orders)
+	require.NoError(t, err)
+	gotDescriptor, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Equal(t, wantDescriptor, gotDescriptor)
 }
 
 // TestWritePackageInputOrderDoesNotMatter proves the output is sorted
@@ -250,6 +264,82 @@ func TestWritePackageRegeneratesItsOwnOutput(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, source, string(regenerated))
 	}
+}
+
+// TestWritePackageRefusesToOrphanAnEarlierTableFile pins what a narrowed
+// rerun does. Generating users and orders and then rerunning for users alone
+// rewrites schema_gen.go without the orders descriptor, while orders_gen.go
+// stays behind reading the ordersTable value that descriptor declared, so
+// the package stops compiling. The run refuses instead, before it writes
+// anything, and the refusal names the file and what to do about it.
+func TestWritePackageRefusesToOrphanAnEarlierTableFile(t *testing.T) {
+	directory := t.TempDir()
+	users, orders := usersTableDef(), ordersTableDef()
+	require.NoError(t, generate.WritePackage("store", directory, users, orders))
+
+	generated := make(map[string]string, 4)
+	for _, name := range []string{"users_gen.go", "orders_gen.go", "schema_gen.go", "schema_gen_test.go"} {
+		source, err := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, err)
+		generated[name] = string(source)
+	}
+
+	err := generate.WritePackage("store", directory, users)
+	require.ErrorContains(t, err, "refusing to write schema output")
+	require.ErrorContains(t, err, `orders_gen.go was generated for table "orders"`)
+	require.ErrorContains(t, err, "ordersTable")
+	require.ErrorContains(t, err, "name every table the package needs in one run, or delete the file first")
+	for name, source := range generated {
+		unchanged, err := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, err)
+		require.Equal(t, source, string(unchanged), "%s must be exactly as the refused run found it", name)
+	}
+
+	// Deleting the file the refusal names is one of the two ways out, so
+	// the same rerun then succeeds and leaves a package holding users
+	// alone.
+	require.NoError(t, os.Remove(filepath.Join(directory, "orders_gen.go")))
+	require.NoError(t, generate.WritePackage("store", directory, users))
+	descriptor, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), "var usersDef = schema.TableDef{")
+	require.NotContains(t, string(descriptor), "var ordersDef = schema.TableDef{")
+}
+
+// TestWritePackageAllowsARerunThatKeepsEveryTable confirms the orphan guard
+// stays out of the way of the runs that do not drop a table: the same two
+// tables again, and a query file generated beside them, which declares no
+// descriptor and so can never be orphaned by a schema run.
+func TestWritePackageAllowsARerunThatKeepsEveryTable(t *testing.T) {
+	directory := t.TempDir()
+	users, orders := usersTableDef(), ordersTableDef()
+	require.NoError(t, generate.WritePackage("store", directory, users, orders))
+
+	queryFile := filepath.Join(directory, "user_by_id_gen.go")
+	require.NoError(t, os.WriteFile(queryFile, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
+
+	require.NoError(t, generate.WritePackage("store", directory, users, orders))
+	require.NoError(t, generate.WritePackage("store", directory, orders, users))
+	require.FileExists(t, queryFile)
+}
+
+// TestWritePackageRejectsAnUnreadableDescriptorFile covers the one case
+// where the orphan guard cannot answer its own question. A descriptor file
+// that carries the marker but no longer parses has been edited since
+// rasqlgen wrote it, so which tables the package holds is unknown, and the
+// run stops rather than writing over a package it cannot reason about.
+func TestWritePackageRejectsAnUnreadableDescriptorFile(t *testing.T) {
+	directory := t.TempDir()
+	corrupted := genfile.Marker + "\n\npackage store\n\nvar usersDef = schema.TableDef{\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen.go"), []byte(corrupted), 0o600))
+
+	err := generate.WritePackage("store", directory, usersTableDef())
+	require.ErrorContains(t, err, "cannot read the tables")
+	require.ErrorContains(t, err, "delete it and rerun to regenerate the package")
+	source, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Equal(t, corrupted, string(source))
+	require.NoFileExists(t, filepath.Join(directory, "users_gen.go"))
 }
 
 func TestWritePackageRejectsInvalidPackageNameBeforeWriting(t *testing.T) {

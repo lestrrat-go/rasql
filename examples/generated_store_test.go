@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/cli/rasqlgen"
-	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/schemagen"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -38,15 +38,20 @@ func TestGeneratedStoreIsCurrent(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	tableSource, err := generate.TableSource("store", definition, definition)
+	// The three calls are the ones rasqlgen makes for a one-table package,
+	// so the checked-in files stay the split output the pages describe.
+	// generate.TableSource would return the surface and the descriptor in
+	// one file, which is the form a caller of that package gets, not the
+	// form this directory holds.
+	tableSource, err := schemagen.TableSurfaceSource("store", definition, definition)
 	require.NoError(t, err)
 	requireGeneratedFile(t, generatedStore, string(tableSource))
 
-	descriptorSource, err := generate.DescriptorSource("store", definition)
+	descriptorSource, err := schemagen.DescriptorSource("store", definition)
 	require.NoError(t, err)
 	requireGeneratedFile(t, generatedSchema, string(descriptorSource))
 
-	descriptorTestSource, err := generate.DescriptorTestSource("store", definition)
+	descriptorTestSource, err := schemagen.DescriptorTestSource("store", definition)
 	require.NoError(t, err)
 	requireGeneratedFile(t, generatedSchemaTest, string(descriptorTestSource))
 }
