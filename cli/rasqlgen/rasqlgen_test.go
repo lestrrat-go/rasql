@@ -25,209 +25,26 @@ func run(args []string) error {
 	return Run(args, commandOutput)
 }
 
-func TestRunSchemaGeneratesSource(t *testing.T) {
+func TestRunSchemaRejectsDuplicateTableFlag(t *testing.T) {
 	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
 
-	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
-	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
+	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef(\"users\",")
-	require.Contains(t, string(source), "func Users() UsersTable {")
-}
+	t.Cleanup(func() {
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	previousOpenDatabase := openDatabase
+	openDatabase = func(driverName string, dataSourceName string) (*sql.DB, error) {
+		return database, nil
+	}
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+	})
 
-// TestRunSchemaKeepsUnsignedColumnsFromInput proves signedness survives the
-// one path that carries a descriptor as JSON. An unsigned integer column read
-// through -input has to reach the generator still unsigned: dropped there, it
-// would generate an int64 field and a signed descriptor, and the column would
-// silently lose every value above 9223372036854775807.
-func TestRunSchemaKeepsUnsignedColumnsFromInput(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"events","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":true}},{"Name":"sequence","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
-
-	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
-	source, err := os.ReadFile(filepath.Join(directory, "events_gen.go"))
-	require.NoError(t, err)
-	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
-	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
-	require.Contains(t, string(source), `schema.Integer("id", schema.Unsigned()),`)
-}
-
-func TestRunSchemaFiltersInputTables(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[
-		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
-		{"Name":"orders","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}
-	]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
-
-	require.NoError(t, run([]string{"schema", "-input", input, "-table", "users", "-package", "generated", "-output", directory}))
-	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
-	require.NoError(t, err)
-	require.Contains(t, string(source), "func Users() UsersTable {")
-	require.NoFileExists(t, filepath.Join(directory, "orders_gen.go"))
-}
-
-func TestRunSchemaRejectsDuplicateFilteredInputTables(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[
-		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
-		{"Name":"users","Columns":[{"Name":"email","Type":{"Kind":"text"}}],"PrimaryKey":["email"]}
-	]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
-
-	err := run([]string{"schema", "-input", input, "-table", "users", "-package", "generated", "-output", directory})
-	require.ErrorContains(t, err, `generate: table "users" duplicates generated name "Users"`)
+	err = run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-table", "users", "-package", "generated", "-output", directory})
+	require.ErrorContains(t, err, `duplicate -table "users"`)
 	_, err = os.Stat(filepath.Join(directory, "users_gen.go"))
 	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
-func TestRunSchemaRejectsUnknownInputTable(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
-
-	err := run([]string{"schema", "-input", input, "-table", "orders", "-package", "generated", "-output", directory})
-	require.ErrorContains(t, err, `schema input has no table "orders"`)
-	_, err = os.Stat(filepath.Join(directory, "orders_gen.go"))
-	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
-func TestRunSchemaRejectsDuplicateTableFlag(t *testing.T) {
-	testCases := []struct {
-		name string
-		args func(input, output string) []string
-	}{
-		{
-			name: "input",
-			args: func(input, output string) []string {
-				return []string{"schema", "-input", input, "-table", "users", "-table", "users", "-package", "generated", "-output", output}
-			},
-		},
-		{
-			name: "dsn",
-			args: func(input, output string) []string {
-				return []string{"schema", "-dsn", "postgres://example", "-table", "users", "-table", "users", "-package", "generated", "-output", output}
-			},
-		},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			directory := t.TempDir()
-			input := filepath.Join(directory, "schema.json")
-			data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-			require.NoError(t, os.WriteFile(input, data, 0o600))
-
-			database, mock, err := sqlmock.New()
-			require.NoError(t, err)
-			t.Cleanup(func() {
-				require.NoError(t, mock.ExpectationsWereMet())
-			})
-			previousOpenDatabase := openDatabase
-			openDatabase = func(driverName string, dataSourceName string) (*sql.DB, error) {
-				return database, nil
-			}
-			t.Cleanup(func() {
-				openDatabase = previousOpenDatabase
-			})
-
-			err = run(testCase.args(input, directory))
-			require.ErrorContains(t, err, `duplicate -table "users"`)
-			_, err = os.Stat(filepath.Join(directory, "users_gen.go"))
-			require.ErrorIs(t, err, os.ErrNotExist)
-		})
-	}
-}
-
-func TestRunSchemaGeneratesOneFilePerTable(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[
-		{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
-		{"Name":"orders","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}
-	]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
-
-	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
-	users, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
-	require.NoError(t, err)
-	orders, err := os.ReadFile(filepath.Join(directory, "orders_gen.go"))
-	require.NoError(t, err)
-	require.Contains(t, string(users), "func Users() UsersTable {")
-	require.NotContains(t, string(users), "func Orders() OrdersTable {")
-	require.Contains(t, string(orders), "func Orders() OrdersTable {")
-	require.NotContains(t, string(orders), "func Users() UsersTable {")
-}
-
-func TestRunSchemaRejectsCrossFileNameCollisionsBeforeWriting(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[
-		{"Name":"api_keys","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]},
-		{"Name":"api__keys","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}
-	]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
-
-	err := run([]string{"schema", "-input", input, "-package", "generated", "-output", directory})
-	require.ErrorContains(t, err, `generate: table "api_keys" duplicates generated name "APIKeys"`)
-	require.NoFileExists(t, filepath.Join(directory, "api_keys_gen.go"))
-	require.NoFileExists(t, filepath.Join(directory, "api__keys_gen.go"))
-}
-
-// TestRunSchemaSuccessLeavesNoTemporaryFile confirms that a successful run
-// leaves each final generated file, without a temporary file from its
-// write-then-rename sequence.
-func TestRunSchemaSuccessLeavesNoTemporaryFile(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
-
-	require.NoError(t, run([]string{"schema", "-input", input, "-package", "generated", "-output", directory}))
-
-	entries, err := os.ReadDir(directory)
-	require.NoError(t, err)
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		names = append(names, entry.Name())
-	}
-	require.ElementsMatch(t, []string{"schema.json", "users_gen.go"}, names)
-}
-
-// TestRunSchemaOutputDirectoryMissingReturnsError confirms that schema output
-// must name an existing directory.
-func TestRunSchemaOutputDirectoryMissingReturnsError(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "missing")
-	data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-	require.NoError(t, os.WriteFile(input, data, 0o600))
-
-	err := run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
-	require.Error(t, err)
-	require.NoFileExists(t, filepath.Join(directory, "users_gen.go"))
-}
-
-func TestRunSchemaRejectsFileOutput(t *testing.T) {
-	directory := t.TempDir()
-	input := filepath.Join(directory, "schema.json")
-	output := filepath.Join(directory, "schema_gen.go")
-	require.NoError(t, os.WriteFile(input, []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`), 0o600))
-	require.NoError(t, os.WriteFile(output, []byte("SENTINEL"), 0o600))
-
-	err := run([]string{"schema", "-input", input, "-package", "generated", "-output", output})
-	require.ErrorContains(t, err, "is not a directory")
-	contents, err := os.ReadFile(output)
-	require.NoError(t, err)
-	require.Equal(t, []byte("SENTINEL"), contents)
 }
 
 func queryOutputArgs(t *testing.T, directory string) []string {
@@ -412,23 +229,6 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 }
 
 func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
-	sources := []struct {
-		name string
-		args func(input, output string) []string
-	}{
-		{
-			name: "input",
-			args: func(input, output string) []string {
-				return []string{"schema", "-input", input, "-package", "generated", "-output", output}
-			},
-		},
-		{
-			name: "dsn",
-			args: func(input, output string) []string {
-				return []string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", output}
-			},
-		},
-	}
 	timeouts := []struct {
 		name  string
 		value string
@@ -437,20 +237,15 @@ func TestRunSchemaRejectsNonPositiveTimeout(t *testing.T) {
 		{name: "negative", value: "-5s"},
 	}
 
-	for _, source := range sources {
-		for _, timeout := range timeouts {
-			t.Run(source.name+"/"+timeout.name, func(t *testing.T) {
-				directory := t.TempDir()
-				input := filepath.Join(directory, "schema.json")
-				data := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-				require.NoError(t, os.WriteFile(input, data, 0o600))
+	for _, timeout := range timeouts {
+		t.Run(timeout.name, func(t *testing.T) {
+			directory := t.TempDir()
 
-				err := run(append(source.args(input, directory), "-timeout", timeout.value))
-				require.ErrorContains(t, err, "schema -timeout must be positive")
-				_, err = os.Stat(filepath.Join(directory, "users_gen.go"))
-				require.ErrorIs(t, err, os.ErrNotExist)
-			})
-		}
+			err := run([]string{"schema", "-dsn", "postgres://example", "-table", "users", "-package", "generated", "-output", directory, "-timeout", timeout.value})
+			require.ErrorContains(t, err, "schema -timeout must be positive")
+			_, err = os.Stat(filepath.Join(directory, "users_gen.go"))
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
 	}
 }
 
@@ -720,7 +515,7 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 			inputName:    "schema.json",
 			inputContent: schemaContent,
 			buildArgs: func(input, output string) []string {
-				return []string{"schema", "-input", input, "-package", "generated", "-output", output, "ignored", "-table", "users"}
+				return []string{"schema", "-dsn", "postgres://example", "-package", "generated", "-output", output, "ignored", "-table", "users"}
 			},
 			expected: `unexpected arguments: ["ignored" "-table" "users"]`,
 		},
@@ -729,7 +524,7 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 			inputName:    "schema.json",
 			inputContent: schemaContent,
 			buildArgs: func(input, output string) []string {
-				return []string{"schema", "-input", input, "-package", "generated", "-output", output, ""}
+				return []string{"schema", "-dsn", "postgres://example", "-package", "generated", "-output", output, ""}
 			},
 			expected: `unexpected arguments: [""]`,
 		},
@@ -738,7 +533,7 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 			inputName:    "schema.json",
 			inputContent: schemaContent,
 			buildArgs: func(input, output string) []string {
-				return []string{"schema", "-input", input, "-package", "generated", "-output", output, "one two"}
+				return []string{"schema", "-dsn", "postgres://example", "-package", "generated", "-output", output, "one two"}
 			},
 			expected: `unexpected arguments: ["one two"]`,
 		},
@@ -800,32 +595,6 @@ func TestRunRejectsInvalidFlag(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, flag.ErrHelp)
 	require.Contains(t, output.String(), "flag provided but not defined: -unknown")
-}
-
-func TestRunSchemaRejectsOversizedInput(t *testing.T) {
-	directory := t.TempDir()
-	previousMaxInputBytes := maxInputBytes
-	maxInputBytes = 128
-	t.Cleanup(func() {
-		maxInputBytes = previousMaxInputBytes
-	})
-
-	validInput := filepath.Join(directory, "schema.json")
-	validData := []byte(`[{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false}}],"PrimaryKey":["id"]}]`)
-	require.LessOrEqual(t, len(validData), maxInputBytes)
-	require.NoError(t, os.WriteFile(validInput, validData, 0o600))
-
-	require.NoError(t, run([]string{"schema", "-input", validInput, "-package", "generated", "-output", directory}))
-	_, err := os.Stat(filepath.Join(directory, "users_gen.go"))
-	require.NoError(t, err)
-
-	oversizedInput := filepath.Join(directory, "oversized-schema.json")
-	oversizedData := bytes.Repeat([]byte("x"), maxInputBytes+1)
-	require.NoError(t, os.WriteFile(oversizedInput, oversizedData, 0o600))
-
-	err = run([]string{"schema", "-input", oversizedInput, "-package", "generated", "-output", directory})
-	require.ErrorContains(t, err, oversizedInput)
-	require.ErrorContains(t, err, fmt.Sprintf("%d bytes", maxInputBytes))
 }
 
 func TestRunQueryRejectsOversizedInput(t *testing.T) {
