@@ -26,19 +26,69 @@ func benchmarkTableDef(n int) schema.TableDef {
 }
 
 // BenchmarkTableRefColumn measures TableRef.Column's cost at increasing table
-// width. It looks up a fixed column name so the benchmark measures the nil
-// check plus the lookup itself, not the position of the hit.
+// width, for the first column, the last column, and a name the table does not
+// have. A lookup that walked the columns would grow with the table on the last
+// two, so the three probes together are what shows the cost is the same at any
+// width and at any position; measuring only the first column cannot show it,
+// because the first column is where a walk stops immediately.
+//
+// The missing probe is expected to allocate, and its allocations are not a
+// finding: they come from the fmt.Errorf that builds the error, which is part
+// of what TableRef.Column returns.
 func BenchmarkTableRefColumn(b *testing.B) {
-	for _, columns := range []int{2, 8, 32} {
-		b.Run(fmt.Sprintf("columns=%d", columns), func(b *testing.B) {
-			table := query.MustTableRef(benchmarkTableDef(columns))
-			b.ReportAllocs()
-			for b.Loop() {
-				if _, err := table.Column("c0"); err != nil {
-					b.Fatal(err)
+	for _, columns := range []int{2, 8, 32, 256, 1024} {
+		table := query.MustTableRef(benchmarkTableDef(columns))
+		probes := []struct {
+			name    string
+			column  string
+			present bool
+		}{
+			{name: "first", column: "c0", present: true},
+			{name: "last", column: fmt.Sprintf("c%d", columns-1), present: true},
+			{name: "missing", column: "absent", present: false},
+		}
+		for _, probe := range probes {
+			b.Run(fmt.Sprintf("columns=%d/%s", columns, probe.name), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_, err := table.Column(probe.column)
+					if (err == nil) != probe.present {
+						b.Fatalf("looking up %q returned err %v", probe.column, err)
+					}
 				}
-			}
-		})
+			})
+		}
+	}
+}
+
+// BenchmarkTableRefFromColumn measures the same three probes against a ref built
+// by TableRefFrom, which reads the caller's columns in place instead of its own
+// clone. A hit costs the same map lookup there, and a miss falls back to a walk
+// of the live columns, because the caller can still rename a column after the
+// index is built.
+func BenchmarkTableRefFromColumn(b *testing.B) {
+	for _, columns := range []int{2, 1024} {
+		table := query.TableRefFrom(benchmarkTableDef(columns))
+		probes := []struct {
+			name    string
+			column  string
+			present bool
+		}{
+			{name: "first", column: "c0", present: true},
+			{name: "last", column: fmt.Sprintf("c%d", columns-1), present: true},
+			{name: "missing", column: "absent", present: false},
+		}
+		for _, probe := range probes {
+			b.Run(fmt.Sprintf("columns=%d/%s", columns, probe.name), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_, err := table.Column(probe.column)
+					if (err == nil) != probe.present {
+						b.Fatalf("looking up %q returned err %v", probe.column, err)
+					}
+				}
+			})
+		}
 	}
 }
 

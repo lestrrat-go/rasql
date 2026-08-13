@@ -55,9 +55,15 @@ func MustTableOf[T any](definition schema.TableDef) Table[T] {
 
 // TableFrom creates a typed table from a descriptor that is already known to be
 // valid, without validating or copying it. It is the entry point generated code
-// uses: rasqlgen validates every descriptor it emits, so re-validating at package
-// initialization costs one map allocation and one pass over the columns per table
-// for a result that cannot change.
+// uses: rasqlgen validates every descriptor it emits, so validating again at
+// package initialization would re-derive a result that cannot change, and would
+// cost one identifier check per column plus a copy of every slice in the
+// descriptor.
+//
+// It is not free. Every entry point indexes the descriptor's column names once,
+// which costs one map allocation and one pass over the columns per table, and
+// buys a column lookup that costs the same at any table width. That is a cost
+// this entry point pays too; what it skips is validation and cloning.
 //
 // It carries query.TableRefFrom's contract, including that the returned table
 // reads the descriptor's slices in place. Read that doc before using it with a

@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -200,6 +201,63 @@ func TestTableRefFromDoesNotClone(t *testing.T) {
 
 	_, err = validated.Column("email")
 	require.NoError(t, err)
+}
+
+// TestTableRefStaysComparable requires what TableRef's own doc states: a
+// TableRef can be compared with == and used as a map key, and == compares the
+// descriptor pointer, so two refs over one descriptor are never equal. It is a
+// compile-time check as much as a run-time one, because a map or a slice field
+// on TableRef would stop == compiling for every caller. That is why the column
+// index sits behind the descriptor pointer instead.
+func TestTableRefStaysComparable(t *testing.T) {
+	definition := usersTable()
+	table := query.TableRefFrom(definition)
+	same := table
+	other := query.TableRefFrom(definition)
+
+	require.True(t, same == table, "a copy of a ref carries the same descriptor pointer")
+	require.False(t, other == table, "two refs over one descriptor hold separate pointers")
+
+	refs := map[query.TableRef]string{table: "table"}
+	require.Equal(t, "table", refs[same])
+	_, found := refs[other]
+	require.False(t, found, "a map over refs keys on the descriptor pointer too")
+}
+
+// TestTableRefColumnResolvesEveryPosition requires that a lookup finds a column
+// wherever it sits in a wide table and still reports one the table does not
+// have, through the validating and the trusting constructor alike. The lookup
+// reads an index built once per table rather than walking the columns, and a
+// column the index placed wrongly or dropped would show up here as a wrong
+// answer instead of only as a slow one. BenchmarkTableRefColumn covers the cost
+// this pins the correctness of.
+func TestTableRefColumnResolvesEveryPosition(t *testing.T) {
+	const width = 64
+	definition := benchmarkTableDef(width)
+
+	validated, err := query.NewTableRef(definition)
+	require.NoError(t, err)
+
+	refs := []struct {
+		name  string
+		table query.TableRef
+	}{
+		{name: "NewTableRef", table: validated},
+		{name: "TableRefFrom", table: query.TableRefFrom(definition)},
+	}
+	for _, ref := range refs {
+		t.Run(ref.name, func(t *testing.T) {
+			for i := range width {
+				name := fmt.Sprintf("c%d", i)
+				column, err := ref.table.Column(name)
+				require.NoError(t, err)
+				require.Equal(t, name, column.Name())
+			}
+
+			_, err := ref.table.Column("absent")
+			require.ErrorContains(t, err, `has no column "absent"`)
+		})
+	}
 }
 
 // TestTableRefFromInvalidDescriptorStillFailsBeforeReachingAServer requires
