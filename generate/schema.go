@@ -18,6 +18,12 @@ import (
 // A column whose generated field name lands on one of them is rejected, because
 // the field would shadow the embedded rasql.Table or its methods, or collide
 // with a mapping method declared on the row type.
+//
+// DecodeRow is deliberately absent, and the list is exactly these eight. Nothing
+// emits a DecodeRow method any more, so a decode_row column collides with
+// nothing: PackageSource with such a column returns a nil error and emits an
+// ordinary DecodeRow field. Re-adding it here would reject a legitimate column
+// name for a method that does not exist.
 var reservedFieldNames = map[string]struct{}{
 	"As":               {},
 	"Column":           {},
