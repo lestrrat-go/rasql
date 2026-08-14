@@ -822,6 +822,29 @@ func TestTableValidatesForeignKeyDeferrability(t *testing.T) {
 	require.ErrorContains(t, err, "foreign_keys[0].deferrable")
 }
 
+// TestTableValidateAcceptsCheckValidationFacts proves that a CheckDef naming
+// NoInherit, NotValid, or NotEnforced, such as what inspect now records for
+// a live PostgreSQL NO INHERIT, NOT VALID, or NOT ENFORCED check
+// constraint, is valid input: Validate describes the check constraint, and
+// only render.CreateTable and the migrate diff-live path refuse to build
+// DDL for it.
+func TestTableValidateAcceptsCheckValidationFacts(t *testing.T) {
+	table := validTable()
+	table.Checks[0].NoInherit = true
+	table.Checks[0].NotValid = true
+	table.Checks[0].NotEnforced = true
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateAcceptsForeignKeyValidationFacts is the foreign-key
+// counterpart to TestTableValidateAcceptsCheckValidationFacts.
+func TestTableValidateAcceptsForeignKeyValidationFacts(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].NotValid = true
+	table.ForeignKeys[0].NotEnforced = true
+	require.NoError(t, table.Validate())
+}
+
 // TestTableQualifiedName pins QualifiedName and Qualified for both an
 // unqualified and a qualified table.
 func TestTableQualifiedName(t *testing.T) {

@@ -135,6 +135,108 @@ func TestLiveSourcesRejectsNonDefaultForeignKeyDeferrability(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsCheckNoInherit proves that an inspected table
+// carrying a NO INHERIT check constraint does not reach diff-live's
+// generated desired-schema sources as a silently downgraded plain inherited
+// check constraint: LiveSources renders through render.CreateTable, which
+// refuses NoInherit, so the error surfaces here rather than a Plan going on
+// to emit the wrong DDL for it.
+func TestLiveSourcesRejectsCheckNoInherit(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "invoices",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "amount", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		Checks: []schema.CheckDef{{
+			Name:       "invoices_amount_check",
+			Expression: "amount >= 0",
+			NoInherit:  true,
+		}},
+	})
+	require.ErrorContains(t, err, `"invoices_amount_check"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsCheckNotValid is the NOT VALID counterpart to
+// TestLiveSourcesRejectsCheckNoInherit.
+func TestLiveSourcesRejectsCheckNotValid(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "invoices",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "amount", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		Checks: []schema.CheckDef{{
+			Name:       "invoices_amount_check",
+			Expression: "amount >= 0",
+			NotValid:   true,
+		}},
+	})
+	require.ErrorContains(t, err, `"invoices_amount_check"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsCheckNotEnforced is the NOT ENFORCED counterpart to
+// TestLiveSourcesRejectsCheckNoInherit.
+func TestLiveSourcesRejectsCheckNotEnforced(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "invoices",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "amount", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		Checks: []schema.CheckDef{{
+			Name:        "invoices_amount_check",
+			Expression:  "amount >= 0",
+			NotEnforced: true,
+		}},
+	})
+	require.ErrorContains(t, err, `"invoices_amount_check"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsForeignKeyNotValid proves that an inspected table
+// carrying a NOT VALID foreign key does not reach diff-live's generated
+// desired-schema sources as a silently downgraded plain validated foreign
+// key: LiveSources renders through render.CreateTable, which refuses
+// NotValid, so the error surfaces here rather than a Plan going on to emit
+// the wrong DDL for it.
+func TestLiveSourcesRejectsForeignKeyNotValid(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "orders",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "customer_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			NotValid:          true,
+		}},
+	})
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsForeignKeyNotEnforced is the NOT ENFORCED
+// counterpart to TestLiveSourcesRejectsForeignKeyNotValid.
+func TestLiveSourcesRejectsForeignKeyNotEnforced(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "orders",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "customer_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			NotEnforced:       true,
+		}},
+	})
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, `

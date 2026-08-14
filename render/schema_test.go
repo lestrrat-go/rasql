@@ -459,6 +459,168 @@ func TestCreateTableRejectsNonDefaultForeignKeyDeferrability(t *testing.T) {
 	require.Equal(t, "postgresql", renderErr.Dialect)
 }
 
+// TestCreateTableRejectsCheckNoInherit proves that a CheckDef naming
+// NoInherit, such as a NO INHERIT check constraint inspect now describes
+// instead of rejecting, is refused at render time with a typed error rather
+// than silently rendered as a plain inherited check constraint.
+func TestCreateTableRejectsCheckNoInherit(t *testing.T) {
+	table := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Checks: []schema.CheckDef{{
+			Name:       "invoices_amount_check",
+			Expression: "amount >= 0",
+			NoInherit:  true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"invoices_amount_check"`)
+	require.ErrorContains(t, err, "NO INHERIT")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var noInheritErr *render.UnsupportedCheckNoInheritError
+	require.ErrorAs(t, err, &noInheritErr)
+	require.Equal(t, "invoices_amount_check", noInheritErr.Check)
+	require.ErrorIs(t, err, render.ErrUnsupportedCheckNoInherit)
+
+	var renderErr *render.Error
+	require.ErrorAs(t, err, &renderErr)
+	require.Equal(t, "postgresql", renderErr.Dialect)
+}
+
+// TestCreateTableRejectsCheckNotValid proves that a CheckDef naming
+// NotValid, such as a NOT VALID check constraint inspect now describes
+// instead of rejecting, is refused at render time with a typed error rather
+// than silently rendered as a plain validated check constraint.
+func TestCreateTableRejectsCheckNotValid(t *testing.T) {
+	table := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Checks: []schema.CheckDef{{
+			Name:       "invoices_amount_check",
+			Expression: "amount >= 0",
+			NotValid:   true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"invoices_amount_check"`)
+	require.ErrorContains(t, err, "NOT VALID")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var notValidErr *render.UnsupportedCheckNotValidError
+	require.ErrorAs(t, err, &notValidErr)
+	require.Equal(t, "invoices_amount_check", notValidErr.Check)
+	require.ErrorIs(t, err, render.ErrUnsupportedCheckNotValid)
+}
+
+// TestCreateTableRejectsCheckNotEnforced proves that a CheckDef naming
+// NotEnforced, such as a NOT ENFORCED check constraint inspect now
+// describes instead of rejecting, is refused at render time with a typed
+// error rather than silently rendered as a plain enforced check constraint.
+func TestCreateTableRejectsCheckNotEnforced(t *testing.T) {
+	table := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Checks: []schema.CheckDef{{
+			Name:        "invoices_amount_check",
+			Expression:  "amount >= 0",
+			NotEnforced: true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"invoices_amount_check"`)
+	require.ErrorContains(t, err, "NOT ENFORCED")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var notEnforcedErr *render.UnsupportedCheckNotEnforcedError
+	require.ErrorAs(t, err, &notEnforcedErr)
+	require.Equal(t, "invoices_amount_check", notEnforcedErr.Check)
+	require.ErrorIs(t, err, render.ErrUnsupportedCheckNotEnforced)
+}
+
+// TestCreateTableRejectsForeignKeyNotValid proves that a ForeignKeyDef
+// naming NotValid, such as a NOT VALID foreign key inspect now describes
+// instead of rejecting, is refused at render time with a typed error rather
+// than silently rendered as a plain validated foreign key.
+func TestCreateTableRejectsForeignKeyNotValid(t *testing.T) {
+	table := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			NotValid:          true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "NOT VALID")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var notValidErr *render.UnsupportedForeignKeyNotValidError
+	require.ErrorAs(t, err, &notValidErr)
+	require.Equal(t, "orders_customer_fk", notValidErr.ForeignKey)
+	require.ErrorIs(t, err, render.ErrUnsupportedForeignKeyNotValid)
+
+	var renderErr *render.Error
+	require.ErrorAs(t, err, &renderErr)
+	require.Equal(t, "postgresql", renderErr.Dialect)
+}
+
+// TestCreateTableRejectsForeignKeyNotEnforced proves that a ForeignKeyDef
+// naming NotEnforced, such as a NOT ENFORCED foreign key inspect now
+// describes instead of rejecting, is refused at render time with a typed
+// error rather than silently rendered as a plain enforced foreign key.
+func TestCreateTableRejectsForeignKeyNotEnforced(t *testing.T) {
+	table := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			NotEnforced:       true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "NOT ENFORCED")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var notEnforcedErr *render.UnsupportedForeignKeyNotEnforcedError
+	require.ErrorAs(t, err, &notEnforcedErr)
+	require.Equal(t, "orders_customer_fk", notEnforcedErr.ForeignKey)
+	require.ErrorIs(t, err, render.ErrUnsupportedForeignKeyNotEnforced)
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",
