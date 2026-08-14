@@ -52,7 +52,7 @@ func Example_rasql_typed_query() {
 	// rows directly, so the loop does not need manual scanning or conversion.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.email ASC LIMIT 2 OFFSET 1
 	rows, err := rasql.SelectFrom(users).
-		OrderAsc(users.Email).
+		OrderAsc(users.Email()).
 		Offset(1).
 		Limit(2).
 		Query(ctx, db)

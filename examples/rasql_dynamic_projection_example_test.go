@@ -60,7 +60,7 @@ func Example_rasql_dynamic_projection() {
 		return
 	}
 
-	// orders has no generated column fields, so its columns are looked up by name.
+	// orders has no generated column accessors, so its columns are looked up by name.
 	// That lookup validates them against the descriptor as the query is assembled.
 	orderUserID, err := orders.Column("user_id")
 	if err != nil {
@@ -90,8 +90,8 @@ func Example_rasql_dynamic_projection() {
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
-		Join(rasql.InnerJoin(orders, query.Equal(users.ID, orderUserID))).
-		Project(query.Project(users.ID).As("user_id"), query.Project(users.Email)).
+		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orderUserID))).
+		Project(query.Project(users.ID()).As("user_id"), query.Project(users.Email())).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
 		Query(ctx, db)

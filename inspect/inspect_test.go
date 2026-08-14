@@ -356,14 +356,15 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 		},
 	}, table.ForeignKeys)
 
-	source, err := generate.PackageSource("generated", table)
+	source, err := generate.DescriptorSource("generated", table)
 	require.NoError(t, err)
-	require.Contains(t, string(source), `schema.UniqueNamed("uq_users_email", "email")`)
-	require.Contains(t, string(source), `schema.UniqueNamed("uq_users_tenant_email", "tenant_id", "email")`)
-	require.Contains(t, string(source), `schema.CheckNamed("chk_users_email", "email <> ''")`)
-	require.Contains(t, string(source), `schema.Index("users_email_idx", "email")`)
-	require.Contains(t, string(source), `schema.UniqueIndex("users_tenant_email_idx", "tenant_id", "email")`)
-	require.Contains(t, string(source), `schema.ForeignKeyOn([]string{"account_id", "tenant_id"}, schema.Named("fk_users_account"), schema.References("accounts", "id", "tenant_id"), schema.OnDelete(schema.Cascade), schema.OnUpdate(schema.NoAction), schema.RelationshipNamed("Account"))`)
+	require.Contains(t, string(source), `{Name: "uq_users_email", Columns: []string{"email"}}`)
+	require.Contains(t, string(source), `{Name: "uq_users_tenant_email", Columns: []string{"tenant_id", "email"}}`)
+	require.Contains(t, string(source), `{Name: "chk_users_email", Expression: "email <> ''"}`)
+	require.Contains(t, string(source), `{Name: "users_email_idx", Columns: []string{"email"}}`)
+	require.Contains(t, string(source), `{Name: "users_tenant_email_idx", Columns: []string{"tenant_id", "email"}, Unique: true}`)
+	require.Contains(t, string(source), `{Name: "fk_users_account", Columns: []string{"account_id", "tenant_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id", "tenant_id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction}`)
+	require.Contains(t, string(source), `{Name: "Account", Kind: schema.RelationshipBelongsTo, Columns: []string{"account_id", "tenant_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id", "tenant_id"}}`)
 }
 
 func TestPostgreSQLInspectorRejectsReplicaIdentityIndex(t *testing.T) {

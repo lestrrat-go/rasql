@@ -17,7 +17,7 @@ import (
 // It wraps [database/sql.ErrNoRows], so code that already branches on the
 // standard library's sentinel keeps working without change:
 //
-//	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, id).One(ctx, client)
+//	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), id).One(ctx, client)
 //	if errors.Is(err, rasql.ErrNoRows) {
 //		// no such user
 //	}

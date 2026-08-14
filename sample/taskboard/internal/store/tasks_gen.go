@@ -7,7 +7,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 type TasksRow struct {
@@ -98,51 +97,36 @@ func (r TasksRow) ColumnValue(name string) (any, bool) {
 // TasksTable is the generated table type for the "tasks" table.
 type TasksTable struct {
 	rasql.Table[TasksRow]
-	ID         query.ColumnRef
-	ProjectID  query.ColumnRef
-	AssigneeID query.ColumnRef
-	Title      query.ColumnRef
-	Status     query.ColumnRef
-	Priority   query.ColumnRef
 }
 
-func newTasksTable(table rasql.Table[TasksRow]) TasksTable {
-	return TasksTable{
-		Table:      table,
-		ID:         rasql.MustColumn(table, "id"),
-		ProjectID:  rasql.MustColumn(table, "project_id"),
-		AssigneeID: rasql.MustColumn(table, "assignee_id"),
-		Title:      rasql.MustColumn(table, "title"),
-		Status:     rasql.MustColumn(table, "status"),
-		Priority:   rasql.MustColumn(table, "priority"),
-	}
-}
+// ID returns a reference to the "id" column.
+func (t TasksTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
-var tasksTable = newTasksTable(rasql.MustTableOf[TasksRow](schema.MustTableDef("tasks",
-	schema.InSchema("main"),
-	schema.Integer("id"),
-	schema.Integer("project_id"),
-	schema.Integer("assignee_id"),
-	schema.Text("title"),
-	schema.Text("status"),
-	schema.Integer("priority"),
-	schema.PrimaryKey("id"),
-	schema.Check("status IN ('todo', 'in_progress', 'done')"),
-	schema.Index("tasks_open_by_project", "project_id", "status", "priority"),
-	schema.ForeignKey("assignee_id", schema.References("members", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.RelationshipNamed("Assignee")),
-	schema.ForeignKey("project_id", schema.References("projects", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.RelationshipNamed("Project")),
-)))
+// ProjectID returns a reference to the "project_id" column.
+func (t TasksTable) ProjectID() query.ColumnRef { return rasql.ColumnOf(t.Table, "project_id") }
+
+// AssigneeID returns a reference to the "assignee_id" column.
+func (t TasksTable) AssigneeID() query.ColumnRef { return rasql.ColumnOf(t.Table, "assignee_id") }
+
+// Title returns a reference to the "title" column.
+func (t TasksTable) Title() query.ColumnRef { return rasql.ColumnOf(t.Table, "title") }
+
+// Status returns a reference to the "status" column.
+func (t TasksTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+
+// Priority returns a reference to the "priority" column.
+func (t TasksTable) Priority() query.ColumnRef { return rasql.ColumnOf(t.Table, "priority") }
 
 // Tasks returns the descriptor for the "tasks" table.
 func Tasks() TasksTable {
 	return tasksTable
 }
 
-// As returns the table under alias, with every column rebound to it.
+// As returns the table under alias.
 func (t TasksTable) As(alias string) (TasksTable, error) {
 	aliased, err := rasql.As(t.Table, alias)
 	if err != nil {
 		return TasksTable{}, err
 	}
-	return newTasksTable(aliased), nil
+	return TasksTable{Table: aliased}, nil
 }

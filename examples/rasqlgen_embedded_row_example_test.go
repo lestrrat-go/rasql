@@ -51,7 +51,7 @@ func Example_rasqlgen_embedded_row() {
 
 	users := store.Users()
 	wrapped, err := rasql.DecodeFrom[userWithRole](users).
-		Project(query.Project(users.ID), query.Project(users.Email)).
+		Project(query.Project(users.ID()), query.Project(users.Email())).
 		One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)

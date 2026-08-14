@@ -62,7 +62,7 @@ func Example_rasql_subquery() {
 		return
 	}
 
-	// orders has no generated column fields, so its columns are looked up by name.
+	// orders has no generated column accessors, so its columns are looked up by name.
 	// That lookup validates them against the descriptor as the query is assembled.
 	orderUserID, err := orders.Column("user_id")
 	if err != nil {
@@ -99,12 +99,12 @@ func Example_rasql_subquery() {
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
 	// renders as its own SELECT.
-	domainUsers, err := query.NewSelect(users.Ref(), query.Project(users.ID))
+	domainUsers, err := query.NewSelect(users.Ref(), query.Project(users.ID()))
 	if err != nil {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
 	}
-	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email, query.Bind("%@example.com")))
+	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email(), query.Bind("%@example.com")))
 	if err != nil {
 		fmt.Printf("failed to filter domain-users subquery: %s\n", err)
 		return

@@ -44,7 +44,7 @@ func TestMembersRowScansPartialTypedResult(t *testing.T) {
 	require.NoError(t, err)
 	members := Members()
 	member, err := rasql.DecodeFrom[MembersRow](members).
-		Project(query.Project(members.Name)).
+		Project(query.Project(members.Name())).
 		One(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, MembersRow{Name: "Ada Lovelace"}, member)

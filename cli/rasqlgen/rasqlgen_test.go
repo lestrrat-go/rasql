@@ -11,11 +11,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,6 +86,54 @@ func TestRunQueryRejectsOutputWithoutGeneratedSuffix(t *testing.T) {
 	require.NoFileExists(t, output)
 }
 
+// handWrittenSource is a file somebody wrote by hand that happens to sit
+// where generated output would land. Nothing about it says rasqlgen, which
+// is the whole point: the destination must survive.
+const handWrittenSource = "package store\n\n// Written by hand. Losing this file loses the only copy.\nfunc Keep() bool { return true }\n"
+
+// TestRunQueryRefusesHandWrittenDestination confirms the query command
+// reaches the same guard, since it writes through the same door.
+func TestRunQueryRefusesHandWrittenDestination(t *testing.T) {
+	directory := t.TempDir()
+	output := filepath.Join(directory, "user_gen.go")
+	require.NoError(t, os.WriteFile(output, []byte(handWrittenSource), 0o600))
+
+	err := run(append(queryOutputArgs(t, directory), "-output", output))
+	require.ErrorContains(t, err, "refusing to overwrite")
+	require.ErrorContains(t, err, output)
+	source, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Equal(t, handWrittenSource, string(source))
+}
+
+// TestGeneratedOutputCarriesTheMarker holds genfile.Marker to what the
+// generators actually emit. genfile decides what it may replace by that
+// first line, while generate and template each write the line themselves,
+// so a generator that changed its header would otherwise make every
+// regeneration refuse the output of the run before it. Running both
+// commands covers all four places the line is written.
+func TestGeneratedOutputCarriesTheMarker(t *testing.T) {
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "schema.db")
+	database, err := sql.Open("sqlite", databasePath)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	require.NoError(t, run([]string{"schema", "-dsn", databasePath, "-dialect", "sqlite", "-table", "users", "-package", "generated", "-output", directory}))
+
+	queryOutput := filepath.Join(directory, "user_by_id_gen.go")
+	require.NoError(t, run(append(queryOutputArgs(t, directory), "-output", queryOutput)))
+
+	written := []string{"users_gen.go", "schema_gen.go", "schema_gen_test.go", "user_by_id_gen.go"}
+	for _, name := range written {
+		source, err := os.ReadFile(filepath.Join(directory, name))
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(string(source), genfile.Marker+"\n"),
+			"%s must start with %q, which is what rasqlgen recognizes its own output by", name, genfile.Marker)
+	}
+}
+
 func mustReadDir(t *testing.T, directory string) []os.DirEntry {
 	t.Helper()
 	entries, err := os.ReadDir(directory)
@@ -145,11 +195,13 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef(\"users\",")
+	require.Contains(t, string(source), "func Users() UsersTable {")
+	descriptor, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), "var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}")
 	// inspect never reports a namespace, so the generated descriptor must not
 	// qualify the table with one.
-	require.NotContains(t, string(source), "schema.InSchema(")
-	require.Contains(t, string(source), "func Users() UsersTable {")
+	require.NotContains(t, string(descriptor), "Schema:")
 }
 
 func TestRunSchemaInspectsSQLite(t *testing.T) {
@@ -168,9 +220,11 @@ func TestRunSchemaInspectsSQLite(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), "type UsersRow struct {")
-	require.Contains(t, string(source), "schema.InSchema(\"main\")")
 	require.Contains(t, string(source), "ID   int64")
 	require.Contains(t, string(source), "Name string")
+	descriptor, err := os.ReadFile(filepath.Join(directory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), `Schema: "main"`)
 }
 
 func TestRunSchemaInspectsMySQL(t *testing.T) {

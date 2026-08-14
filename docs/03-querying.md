@@ -2,7 +2,7 @@
 
 `rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
 
-Columns come from the generated table value, so `users.ID` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial` is a compile error rather than a failed query, which [What the column fields catch](06-rasqlgen.md#what-the-column-fields-catch) demonstrates along with the cases that still fail at run time.
+Columns come from the generated table value, so `users.ID()` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](06-rasqlgen.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
 
 Generated relationship methods provide a typed join and eager-loading path for the supported relationship slice described in [Relationships](02-schema.md#relationships). A child relation such as `orders.User()` exposes `Join()` for a fluent query and `Load(ctx, db, children)` for one batched lookup that returns related rows grouped by foreign-key value. The inverse parent relation such as `users.Orders()` returns children grouped by parent key. Use the ordinary `Join` API for unsupported relationship shapes.
 
@@ -54,7 +54,7 @@ Writes are covered in [Writing rows](04-writing.md); the rest of this page cover
 
 The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in `rasql`. The builder below it comes from `dynamic.SelectFrom`.
 
-The two builders differ in how they name a column. `TypedSelectBuilder` takes a `query.ColumnRef`, usually a generated field such as `users.ID`, so a wrong name does not compile and a join can order by a column of any table in the statement. `dynamic.SelectBuilder` has exactly one table and no generated columns, so it keeps plain names.
+The two builders differ in how they name a column. `TypedSelectBuilder` takes a `query.ColumnRef`, usually a generated accessor such as `users.ID()`, so a wrong name does not compile and a join can order by a column of any table in the statement. `dynamic.SelectBuilder` has exactly one table and no generated columns, so it keeps plain names.
 
 `TypedSelectBuilder`:
 
@@ -151,13 +151,13 @@ Every constructor below takes and returns `query.Expression`, so conditions nest
 | `query.Or(expressions…)` | `(a OR b …)` |
 | `query.Negate(expression)` | `NOT (expression)` |
 
-The value list of `query.In` and `query.NotIn` takes expressions, the same freedom the comparison constructors give both of their operands. Each `query.Bind` value becomes its own placeholder, so a list of `N` bound values costs `N` arguments against the dialect's parameter limit. A non-value operand is accepted deliberately and costs no argument: a column such as `orders.UserID` renders as a quoted identifier, which is how a column-to-column test like `query.In(users.ID, orders.UserID)` is written. `query.InSelect` and `query.NotInSelect` take a `SELECT` statement in place of a value list, and [Subqueries](#subqueries) covers the placement rules and the one MySQL restriction that governs them. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect. A membership test is an ordinary predicate, so the placement rules in [Aggregates](#aggregates) reach its operands as they reach the operands of a comparison.
+The value list of `query.In` and `query.NotIn` takes expressions, the same freedom the comparison constructors give both of their operands. Each `query.Bind` value becomes its own placeholder, so a list of `N` bound values costs `N` arguments against the dialect's parameter limit. A non-value operand is accepted deliberately and costs no argument: a column such as `orders.UserID()` renders as a quoted identifier, which is how a column-to-column test like `query.In(users.ID(), orders.UserID())` is written. `query.InSelect` and `query.NotInSelect` take a `SELECT` statement in place of a value list, and [Subqueries](#subqueries) covers the placement rules and the one MySQL restriction that governs them. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect. A membership test is an ordinary predicate, so the placement rules in [Aggregates](#aggregates) reach its operands as they reach the operands of a comparison.
 
 ### Operands
 
 | Constructor | Produces |
 | --- | --- |
-| `table.Field` | A generated column field, such as `users.ID`, checked by the compiler. |
+| `table.Field()` | A generated column accessor, such as `users.ID()`, checked by the compiler. |
 | `table.Column(name)` | A column looked up by name and validated against the descriptor. |
 | `query.Bind(value)` | A bound argument, rendered as the dialect's placeholder. |
 | `query.Excluded(column)` | The proposed value of a column in an upsert. |
@@ -180,14 +180,14 @@ Every function above aggregates, so validation accepts one only where SQL does, 
 
 - A `SELECT` projection and a `HAVING` clause may call an aggregate. A `WHERE` clause, a `JOIN ON` condition, a `GROUP BY` clause, and every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — reject one.
 - An aggregate must not contain another, at any depth: `query.Sum(query.Sum(column))` is refused, since no supported dialect runs it.
-- An ungrouped projection set that calls an aggregate must not also read a column outside one, because reconciling the two needs `GROUP BY`. Project `query.CountAll()` on its own, or beside another aggregate, rather than beside `users.ID` — or build the statement with `query.NewGroupedSelect` and group by `users.ID`, which [Group rows](#group-rows) covers.
-- An `ORDER BY` clause follows the projections. A statement that groups explicitly may read its grouping keys freely and may call an aggregate. Otherwise: when no projection aggregates, ordering reads columns freely and may not call an aggregate; when the projection set aggregates, the statement is one implicit group, so ordering may call an aggregate — `query.Asc(query.CountAll())` — and every column it reads has to sit inside one; `query.Asc(users.ID)` beside an aggregate projection is refused for the same `GROUP BY` reason as the projection rule above, unless the statement groups.
-- A `HAVING` clause needs a statement that groups, which means one of two things: an explicit `GROUP BY`, or a projection set that aggregates and reads no column outside an aggregate, which is one group. Not every projection in that second set has to aggregate — a projection that reads no column, such as `query.Bind(7)`, may sit beside `query.CountAll()` and the set still counts as one group. A `HAVING` on a statement with neither is refused, so `Having` over a projection set that reads plain columns needs a `GroupBy` beside it. Without a `GROUP BY` the clause follows the same rule as `ORDER BY` over that one implicit group, so a column it reads has to sit inside an aggregate: `query.GreaterThan(query.CountAll(), query.Bind(1))` is accepted and `query.GreaterThan(users.ID, query.Bind(1))` is refused. A statement that groups explicitly drops that restriction and may read its grouping keys freely.
-- Every rule above applies to the operands of a membership test, because `query.In` and `query.NotIn` are ordinary predicates rather than aggregates. `query.In(users.ID, query.Count(users.ID))` in a `WHERE` clause is refused exactly as `query.Equal(users.ID, query.Count(users.ID))` is, and a column read from an `IN` list counts as a column read outside an aggregate wherever a bare column would.
+- An ungrouped projection set that calls an aggregate must not also read a column outside one, because reconciling the two needs `GROUP BY`. Project `query.CountAll()` on its own, or beside another aggregate, rather than beside `users.ID()` — or build the statement with `query.NewGroupedSelect` and group by `users.ID()`, which [Group rows](#group-rows) covers.
+- An `ORDER BY` clause follows the projections. A statement that groups explicitly may read its grouping keys freely and may call an aggregate. Otherwise: when no projection aggregates, ordering reads columns freely and may not call an aggregate; when the projection set aggregates, the statement is one implicit group, so ordering may call an aggregate — `query.Asc(query.CountAll())` — and every column it reads has to sit inside one; `query.Asc(users.ID())` beside an aggregate projection is refused for the same `GROUP BY` reason as the projection rule above, unless the statement groups.
+- A `HAVING` clause needs a statement that groups, which means one of two things: an explicit `GROUP BY`, or a projection set that aggregates and reads no column outside an aggregate, which is one group. Not every projection in that second set has to aggregate — a projection that reads no column, such as `query.Bind(7)`, may sit beside `query.CountAll()` and the set still counts as one group. A `HAVING` on a statement with neither is refused, so `Having` over a projection set that reads plain columns needs a `GroupBy` beside it. Without a `GROUP BY` the clause follows the same rule as `ORDER BY` over that one implicit group, so a column it reads has to sit inside an aggregate: `query.GreaterThan(query.CountAll(), query.Bind(1))` is accepted and `query.GreaterThan(users.ID(), query.Bind(1))` is refused. A statement that groups explicitly drops that restriction and may read its grouping keys freely.
+- Every rule above applies to the operands of a membership test, because `query.In` and `query.NotIn` are ordinary predicates rather than aggregates. `query.In(users.ID(), query.Count(users.ID()))` in a `WHERE` clause is refused exactly as `query.Equal(users.ID(), query.Count(users.ID()))` is, and a column read from an `IN` list counts as a column read outside an aggregate wherever a bare column would.
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
 
-`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the aggregate constructors above; validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, which only an aggregate does, so validation refuses it on a curated scalar call — [Scalar functions](#scalar-functions) states that rule and what `query.Func` does with the modifier instead. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The derived table or CTE that would express one portably is unsupported. The builder's own `Count` in [Count rows](#count-rows) rejects a distinct builder for a reason of its own, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
+`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID()).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the aggregate constructors above; validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, which only an aggregate does, so validation refuses it on a curated scalar call — [Scalar functions](#scalar-functions) states that rule and what `query.Func` does with the modifier instead. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The derived table or CTE that would express one portably is unsupported. The builder's own `Count` in [Count rows](#count-rows) rejects a distinct builder for a reason of its own, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
 
 ### Scalar functions
 
@@ -207,7 +207,7 @@ A scalar call carries the placement context of wherever it sits unchanged into i
 
 - `query.Coalesce(query.Sum(x), query.Bind(0))` is accepted in a `SELECT` projection or a `HAVING` clause, the same places a bare `query.Sum(x)` is, and refused in a `WHERE` clause or a `JOIN ON` condition for the same reason a bare `query.Sum(x)` is.
 - `query.Sum(query.Coalesce(x, query.Bind(0)))` is accepted: the scalar call inside the aggregate's argument is not itself an aggregate, so it does not trip the "aggregate inside another aggregate" rule. `query.Sum(query.Coalesce(query.Sum(x), query.Bind(0)))` is still refused, because the inner `Sum` is nested two aggregates deep.
-- `query.Lower(users.Email)` counts as reading a bare column, exactly as `users.Email` on its own would: it is refused beside `query.CountAll()` in an ungrouped projection set and accepted once the statement groups, the same rule [Aggregates](#aggregates) states for a plain column.
+- `query.Lower(users.Email())` counts as reading a bare column, exactly as `users.Email()` on its own would: it is refused beside `query.CountAll()` in an ungrouped projection set and accepted once the statement groups, the same rule [Aggregates](#aggregates) states for a plain column.
 - A scalar call reaches `INSERT` values, `SET` assignments, and `RETURNING`, which an aggregate cannot: `SET email = LOWER(email)` and `INSERT … VALUES (COALESCE(?, ?), …)`, from `query.Coalesce(query.Bind("ada@example.com"), query.Bind(""))`, both validate and render. The `SET` half reads the target table's own `email` column, which an `UPDATE` may do because it has a row in hand. An `INSERT` `VALUES` row has no such row, so in SQL it cannot read the target table's columns at all; give a call there bound values or other expressions that read no column of the table being written.
 - `query.Function.WithDistinct()` is the one modifier from [Aggregates](#aggregates) that does not carry over: validation refuses `query.Lower(x).WithDistinct()`, because `LOWER(DISTINCT x)` is a syntax error on all three dialects. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, and only an aggregate combines rows at all.
 
@@ -274,9 +274,9 @@ func Example_rasql_scalar_function() {
 		return
 	}
 
-	// members has no generated column fields, so its columns are looked up by
-	// name. That lookup validates them against the descriptor as the query is
-	// assembled.
+	// members has no generated column accessors, so its columns are looked up
+	// by name. That lookup validates them against the descriptor as the query
+	// is assembled.
 	id, err := members.Column("id")
 	if err != nil {
 		fmt.Printf("failed to find members.id: %s\n", err)
@@ -456,7 +456,7 @@ func Example_rasql_typed_query() {
 	// rows directly, so the loop does not need manual scanning or conversion.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.email ASC LIMIT 2 OFFSET 1
 	rows, err := rasql.SelectFrom(users).
-		OrderAsc(users.Email).
+		OrderAsc(users.Email()).
 		Offset(1).
 		Limit(2).
 		Query(ctx, db)
@@ -486,7 +486,7 @@ source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat
 
 <!-- INCLUDE(examples/rasql_no_rows_example_test.go#no_rows) -->
 ```go
-_, err = rasql.SelectFrom(users).WhereEqual(users.ID, 1).One(ctx, db)
+_, err = rasql.SelectFrom(users).WhereEqual(users.ID(), 1).One(ctx, db)
 if errors.Is(err, rasql.ErrNoRows) {
 	fmt.Println("no such user")
 }
@@ -498,7 +498,7 @@ source: [examples/rasql_no_rows_example_test.go](https://github.com/lestrrat-go/
 
 ## Filter, order, and page
 
-`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.ColumnRef` and cover the common cases without importing the `query` package. Generated tables expose one field per column, so `users.ID` is the whole reference. `Limit` and `Offset` page the result. `dynamic.SelectBuilder` from `dynamic.SelectFrom` also has `Select`, which narrows the projection to named columns. A caller who wants the raw row and full manual control drops to `dynamic.SelectFrom(table.Ref()).Query(ctx, db)` instead.
+`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.ColumnRef` and cover the common cases without importing the `query` package. Generated tables expose one accessor method per column, so `users.ID()` is the whole reference. `Limit` and `Offset` page the result. `dynamic.SelectBuilder` from `dynamic.SelectFrom` also has `Select`, which narrows the projection to named columns. A caller who wants the raw row and full manual control drops to `dynamic.SelectFrom(table.Ref()).Query(ctx, db)` instead.
 
 `WhereIn` covers a membership test the same way. It needs at least one value: an empty list makes `Build`, `Query`, `All`, and `One` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect. A non-empty list binds each value as its own placeholder:
 
@@ -558,8 +558,8 @@ func Example_rasql_where_in() {
 	// Query return an error instead of rendering IN (), which is not valid SQL.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id IN (?, ?) ORDER BY users.id ASC (arguments: 1, 3)
 	rows, err := rasql.SelectFrom(users).
-		WhereIn(users.ID, 1, 3).
-		OrderAsc(users.ID).
+		WhereIn(users.ID(), 1, 3).
+		OrderAsc(users.ID()).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
@@ -587,16 +587,16 @@ For anything richer, `Where` and `Order` accept expressions from the `query` pac
 ```go
 rows, err := rasql.SelectFrom(users).
 	Where(query.And(
-		query.GreaterThan(users.ID, query.Bind(10)),
-		query.IsNotNull(users.ID),
+		query.GreaterThan(users.ID(), query.Bind(10)),
+		query.IsNotNull(users.ID()),
 	)).
-	Order(query.Desc(users.ID)).
+	Order(query.Desc(users.ID())).
 	Query(ctx, db)
 ```
 source: [examples/rasql_where_expressions_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_where_expressions_example_test.go)
 <!-- END INCLUDE -->
 
-A generated field cannot name a column the table does not have, because the field would not exist. A table built at run time has no such fields, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column; a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
+A generated accessor cannot name a column the table does not have, because the method would not exist. A table built at run time has no such accessors, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column; a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
 
 ## Nest a predicate tree
 
@@ -657,15 +657,15 @@ func Example_rasql_nested_predicates() {
 	// call, and the whole tree is one predicate. The builder is immutable, so
 	// the same value below renders the statement and then runs it.
 	selected := rasql.SelectFrom(users).
-		Where(query.Like(users.Email, query.Bind("%@example.com"))).
+		Where(query.Like(users.Email(), query.Bind("%@example.com"))).
 		Where(query.Or(
-			query.LessThan(users.ID, query.Bind(10)),
+			query.LessThan(users.ID(), query.Bind(10)),
 			query.And(
-				query.GreaterThan(users.ID, query.Bind(20)),
-				query.IsNotNull(users.Email),
+				query.GreaterThan(users.ID(), query.Bind(20)),
+				query.IsNotNull(users.Email()),
 			),
 		)).
-		Order(query.Asc(users.ID))
+		Order(query.Asc(users.ID()))
 
 	// Every level of the tree renders its own parentheses, so the SQL groups the
 	// way the Go code nests rather than by the database's operator precedence.
@@ -768,7 +768,7 @@ func Example_rasql_subquery() {
 		return
 	}
 
-	// orders has no generated column fields, so its columns are looked up by name.
+	// orders has no generated column accessors, so its columns are looked up by name.
 	// That lookup validates them against the descriptor as the query is assembled.
 	orderUserID, err := orders.Column("user_id")
 	if err != nil {
@@ -805,12 +805,12 @@ func Example_rasql_subquery() {
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
 	// renders as its own SELECT.
-	domainUsers, err := query.NewSelect(users.Ref(), query.Project(users.ID))
+	domainUsers, err := query.NewSelect(users.Ref(), query.Project(users.ID()))
 	if err != nil {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
 	}
-	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email, query.Bind("%@example.com")))
+	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email(), query.Bind("%@example.com")))
 	if err != nil {
 		fmt.Printf("failed to filter domain-users subquery: %s\n", err)
 		return
@@ -932,7 +932,7 @@ func Example_rasql_count() {
 	fmt.Println("total:", total)
 
 	// SQL: SELECT COUNT(*) FROM users WHERE users.id = ? (argument: 2)
-	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID, 2).Count(ctx, db)
+	filtered, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 2).Count(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
 		return
@@ -1021,8 +1021,8 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	// tasks has no generated column field for status, so it is looked up by
-	// name. That lookup validates it against the descriptor as the query is
+	// tasks has no generated column accessor for status, so it is looked up
+	// by name. That lookup validates it against the descriptor as the query is
 	// assembled.
 	status, err := tasks.Column("status")
 	if err != nil {
@@ -1134,8 +1134,8 @@ func Example_rasql_distinct() {
 		}
 	}
 
-	// orders has no generated column field for user_id, so it is looked up by
-	// name. That lookup validates it against the descriptor as the query is
+	// orders has no generated column accessor for user_id, so it is looked up
+	// by name. That lookup validates it against the descriptor as the query is
 	// assembled.
 	orderUserID, err := orders.Column("user_id")
 	if err != nil {
@@ -1178,7 +1178,7 @@ source: [examples/rasql_distinct_example_test.go](https://github.com/lestrrat-go
 
 ## Alias a table for a self-join
 
-`As` returns the table under an alias with every column field rebound to it, so the alias qualifies the columns reached through the aliased value:
+`As` returns the table under an alias. The column accessors read the table value they are called on, so the alias qualifies the columns reached through the aliased value with nothing to rebind:
 
 <!-- INCLUDE(examples/rasql_self_join_example_test.go#self_join) -->
 ```go
@@ -1188,16 +1188,16 @@ if err != nil {
 	return
 }
 rows, err := rasql.SelectFrom(employees).
-	Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
-	OrderAsc(employees.ID).
+	Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID(), manager.ID()))).
+	OrderAsc(employees.ID()).
 	Query(ctx, db)
 ```
 source: [examples/rasql_self_join_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_self_join_example_test.go)
 <!-- END INCLUDE -->
 
-`employees.ID` still renders as `"employees"."id"`, while `manager.ID` renders as `"manager"."id"`. `As` fails when the alias is not a valid identifier.
+`employees.ID()` still renders as `"employees"."id"`, while `manager.ID()` renders as `"manager"."id"`. `As` fails when the alias is not a valid identifier.
 
-A table whose descriptor names a `Schema` (see [Qualify a table with a schema](02-schema.md#qualify-a-table-with-a-schema)) renders `"schema"."table"` in `FROM` and every write statement's target, and a column reached through it renders `"schema"."table"."column"`. An alias replaces a qualified table's whole name: once `events.As("e")` is taken, `e.ID` renders as `"e"."id"`, not `"audit"."e"."id"`, and this holds for every alias regardless of whether the aliased table was qualified.
+A table whose descriptor names a `Schema` (see [Qualify a table with a schema](02-schema.md#qualify-a-table-with-a-schema)) renders `"schema"."table"` in `FROM` and every write statement's target, and a column reached through it renders `"schema"."table"."column"`. An alias replaces a qualified table's whole name: once `events.As("e")` is taken, `e.ID()` renders as `"e"."id"`, not `"audit"."e"."id"`, and this holds for every alias regardless of whether the aliased table was qualified.
 
 ### Every source of one statement needs its own name
 
@@ -1283,7 +1283,7 @@ func Example_rasql_dynamic_projection() {
 		return
 	}
 
-	// orders has no generated column fields, so its columns are looked up by name.
+	// orders has no generated column accessors, so its columns are looked up by name.
 	// That lookup validates them against the descriptor as the query is assembled.
 	orderUserID, err := orders.Column("user_id")
 	if err != nil {
@@ -1313,8 +1313,8 @@ func Example_rasql_dynamic_projection() {
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
-		Join(rasql.InnerJoin(orders, query.Equal(users.ID, orderUserID))).
-		Project(query.Project(users.ID).As("user_id"), query.Project(users.Email)).
+		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orderUserID))).
+		Project(query.Project(users.ID()).As("user_id"), query.Project(users.Email())).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
 		Query(ctx, db)
@@ -1385,7 +1385,7 @@ func Example_rasql_debug_query() {
 	// users is declared in query_example_tables_test.go with the shape rasqlgen
 	// emits; an application would write store.Users() instead.
 	count := 0
-	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Query(context.Background(), db)
+	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).Query(context.Background(), db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
