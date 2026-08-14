@@ -103,7 +103,13 @@ func generateFromSchemaSource(ctx context.Context, sourceDir, packageName, outpu
 		return fmt.Errorf("schema output %q is not a directory", outputDir)
 	}
 
-	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, sourceDir)
+	// asDirectoryPattern is the same treatment loadExistingDescriptionTables
+	// gives its own directory argument, and for the same reason: a bare
+	// relative path such as "internal/tables" is a valid package pattern on
+	// its own, but go list treats it as an import path to resolve against
+	// the whole module graph rather than as the one directory named, which
+	// this caller's own users type at the command line.
+	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, asDirectoryPattern(sourceDir))
 	if err != nil {
 		return err
 	}
@@ -177,6 +183,14 @@ func resolveSchemaSourcePackage(ctx context.Context, sourceDir string) (string, 
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		message := strings.TrimRight(stderr.String(), "\n")
+		if message == "" {
+			// go list wrote nothing to stderr, which happens when the
+			// child never ran at all -- most commonly because "go" is not
+			// on PATH. err itself names that failure; reporting it instead
+			// of an empty errors.New("") is what keeps this branch from
+			// handing the user a message with nothing after the colon.
+			return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, err)
+		}
 		return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, errors.New(message))
 	}
 

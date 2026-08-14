@@ -109,6 +109,28 @@ func TestRunSchemaSourceSuccess(t *testing.T) {
 	requireNoLeftoverSourceTempDir(t, moduleDir)
 }
 
+// This test spawns a real `go run`. -source is documented (README.md and
+// docs/06-rasqlgen.md) as taking a bare relative directory such as
+// "internal/tables", with no "./" prefix, and that form must resolve the
+// same package a "./"-prefixed one does: go list treats a bare relative
+// path as an import-path pattern rather than a directory, which forces
+// resolution through the whole module graph instead of the one directory
+// named, and fails in this fixture module the same way it would in a fresh
+// consumer module that carries no go.sum for its indirect dependencies.
+func TestRunSchemaSourceBareRelativeDirectory(t *testing.T) {
+	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
+	t.Chdir(moduleDir)
+
+	var buffer bytes.Buffer
+	require.NoError(t, rasqlgen.Run([]string{"schema", "-source", "internal/tables", "-package", "store", "-output", "internal/store"}, &buffer))
+
+	usersSource, err := os.ReadFile(filepath.Join(moduleDir, "internal", "store", "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(usersSource), "func Users() UsersTable {")
+
+	requireNoLeftoverSourceTempDir(t, moduleDir)
+}
+
 // This test spawns a real `go run`. A schema package that does not compile
 // must fail the call and forward the child's own compiler message; the
 // temporary directory must still be removed.
@@ -238,6 +260,24 @@ func TestRunSchemaSourceDirectoryNotAPackage(t *testing.T) {
 	require.ErrorContains(t, err, "directory not found")
 
 	requireNoLeftoverSourceTempDir(t, moduleDir)
+}
+
+// TestRunSchemaSourceMissingGoBinaryReportsExecError points PATH at an
+// empty directory, so `go list` itself never starts and go list writes
+// nothing to stderr. That must not leave the reported error empty: it must
+// still name the actual failure (exec's own "not found in $PATH" message)
+// rather than a bare "resolve schema source ...: " with nothing after the
+// colon.
+func TestRunSchemaSourceMissingGoBinaryReportsExecError(t *testing.T) {
+	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
+	t.Chdir(moduleDir)
+	t.Setenv("PATH", t.TempDir())
+
+	var buffer bytes.Buffer
+	err := rasqlgen.Run([]string{"schema", "-source", "./internal/tables", "-package", "store", "-output", "internal/store"}, &buffer)
+	require.Error(t, err)
+	require.NotEqual(t, "resolve schema source ./internal/tables: ", err.Error())
+	require.ErrorContains(t, err, "executable file not found")
 }
 
 // TestRunSchemaSourceFlagExclusivity needs no fixture module: flag parsing
