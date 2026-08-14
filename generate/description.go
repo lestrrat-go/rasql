@@ -58,34 +58,12 @@ func WriteDescriptionPackage(packageName, directory string, tables ...schema.Tab
 		return err
 	}
 	if len(entries) > 0 {
-		return fmt.Errorf("bootstrap output %q is not empty; refreshing an existing description package is not supported yet, write into an empty directory", directory)
+		return fmt.Errorf("bootstrap output %q is not empty; run bootstrap again with the same -output to refresh it instead", directory)
 	}
 
-	sorted := append([]schema.TableDef(nil), tables...)
-	sort.Slice(sorted, func(left, right int) bool {
-		return sorted[left].Name < sorted[right].Name
-	})
-
-	files := make([]descriptionFile, 0, len(sorted))
-	filenames := make(map[string]string, len(sorted))
-	funcNames := make(map[string]string, len(sorted))
-	for _, table := range sorted {
-		filename := schemaOutputFilename(table.Name)
-		if filename == descriptionAggregatorFilename {
-			return fmt.Errorf("bootstrap table %q generates %q, which collides with the aggregator file", table.Name, filename)
-		}
-		if other, exists := filenames[filename]; exists {
-			return fmt.Errorf("bootstrap tables %q and %q both generate %q", other, table.Name, filename)
-		}
-		filenames[filename] = table.Name
-
-		funcName := schemagen.DescriptionFuncName(table.Name)
-		if other, exists := funcNames[funcName]; exists {
-			return fmt.Errorf("bootstrap tables %q and %q both generate function %s", other, table.Name, funcName)
-		}
-		funcNames[funcName] = table.Name
-
-		files = append(files, descriptionFile{table: table, filename: filename, funcName: funcName})
+	files, err := prepareDescriptionFiles(tables)
+	if err != nil {
+		return err
 	}
 
 	for _, file := range files {
@@ -146,4 +124,40 @@ type descriptionFile struct {
 	table    schema.TableDef
 	filename string
 	funcName string
+}
+
+// prepareDescriptionFiles resolves tables to their filenames and function
+// names, in Name order, checking every collision -- with the aggregator
+// file and between two tables' derived names alike -- before any caller
+// writes anything. WriteDescriptionPackage and a refresh's ApplyDescriptionDiff
+// both call this over the package's whole current table set, so a refresh
+// checks the same collisions a first run would have.
+func prepareDescriptionFiles(tables []schema.TableDef) ([]descriptionFile, error) {
+	sorted := append([]schema.TableDef(nil), tables...)
+	sort.Slice(sorted, func(left, right int) bool {
+		return sorted[left].Name < sorted[right].Name
+	})
+
+	files := make([]descriptionFile, 0, len(sorted))
+	filenames := make(map[string]string, len(sorted))
+	funcNames := make(map[string]string, len(sorted))
+	for _, table := range sorted {
+		filename := schemaOutputFilename(table.Name)
+		if filename == descriptionAggregatorFilename {
+			return nil, fmt.Errorf("bootstrap table %q generates %q, which collides with the aggregator file", table.Name, filename)
+		}
+		if other, exists := filenames[filename]; exists {
+			return nil, fmt.Errorf("bootstrap tables %q and %q both generate %q", other, table.Name, filename)
+		}
+		filenames[filename] = table.Name
+
+		funcName := schemagen.DescriptionFuncName(table.Name)
+		if other, exists := funcNames[funcName]; exists {
+			return nil, fmt.Errorf("bootstrap tables %q and %q both generate function %s", other, table.Name, funcName)
+		}
+		funcNames[funcName] = table.Name
+
+		files = append(files, descriptionFile{table: table, filename: filename, funcName: funcName})
+	}
+	return files, nil
 }
