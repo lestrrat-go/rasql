@@ -5,13 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
-	"strings"
-	"time"
 
+	"github.com/lestrrat-go/rasql/internal/sourcepkg"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -24,60 +20,22 @@ import (
 // Tables() result, since directory's package is not known at this
 // program's own build time.
 func loadExistingDescriptionTables(ctx context.Context, directory string) ([]schema.TableDef, error) {
-	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, asDirectoryPattern(directory))
+	pkg, err := sourcepkg.Resolve(ctx, directory)
 	if err != nil {
 		return nil, err
 	}
 
-	temporaryDir, err := os.MkdirTemp(moduleDir, ".rasqlgen-bootstrap-refresh-")
+	program := descriptionLoaderProgram(pkg.ImportPath)
+	stdout, err := pkg.Capture(ctx, ".rasqlgen-bootstrap-refresh-", program)
 	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = os.RemoveAll(temporaryDir) }()
-
-	program := descriptionLoaderProgram(importPath)
-	if err := os.WriteFile(filepath.Join(temporaryDir, "main.go"), program, 0o600); err != nil {
-		return nil, err
-	}
-
-	cmd := exec.CommandContext(ctx, "go", "run", "./"+filepath.Base(temporaryDir))
-	cmd.Dir = moduleDir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.WaitDelay = 10 * time.Second
-	if err := cmd.Run(); err != nil {
-		message := stderr.String()
-		if message == "" {
-			return nil, fmt.Errorf("load existing description package %s: %w", importPath, err)
-		}
-		return nil, fmt.Errorf("load existing description package %s: %w: %s", importPath, err, message)
+		return nil, fmt.Errorf("load existing description package %s: %w", pkg.ImportPath, err)
 	}
 
 	var tables []schema.TableDef
-	if err := json.Unmarshal(stdout.Bytes(), &tables); err != nil {
-		return nil, fmt.Errorf("decode existing description package %s: %w", importPath, err)
+	if err := json.Unmarshal(stdout, &tables); err != nil {
+		return nil, fmt.Errorf("decode existing description package %s: %w", pkg.ImportPath, err)
 	}
 	return tables, nil
-}
-
-// asDirectoryPattern returns path in the one form `go list` always resolves
-// as a filesystem directory rather than an import-path pattern: unchanged
-// if it is already absolute or already starts with "./" or "../", and
-// prefixed with "./" otherwise. Go's own package-pattern rule (see `go help
-// packages`) treats a bare relative path such as "internal/tables" as an
-// import path to match against the module's declared packages, not as a
-// directory -- which still resolves the right package by coincidence when
-// the two happen to be equal, but takes a different, slower path through
-// the module graph to get there, one that this repository's own indirect
-// dependencies make fail outright in a scratch module that carries no
-// go.sum: resolving an import-path pattern loads the whole module graph,
-// where resolving a directory pattern loads only the one directory named.
-func asDirectoryPattern(path string) string {
-	if filepath.IsAbs(path) || strings.HasPrefix(path, "."+string(filepath.Separator)) || strings.HasPrefix(path, ".."+string(filepath.Separator)) || path == "." || path == ".." {
-		return path
-	}
-	return "." + string(filepath.Separator) + path
 }
 
 // descriptionLoaderProgram builds the temporary package main

@@ -109,6 +109,28 @@ func TestRunSchemaSourceSuccess(t *testing.T) {
 	requireNoLeftoverSourceTempDir(t, moduleDir)
 }
 
+// This test spawns a real `go run`. README.md:39 documents -source with a
+// bare relative directory, no "./" prefix; this is the form that used to
+// take the slower package-pattern path through the whole module graph
+// instead of the directory-pattern path, and must succeed the same way
+// TestRunSchemaSourceSuccess does.
+func TestRunSchemaSourceAcceptsABareRelativeDirectory(t *testing.T) {
+	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
+	t.Chdir(moduleDir)
+
+	var buffer bytes.Buffer
+	require.NoError(t, rasqlgen.Run([]string{"schema", "-source", "internal/tables", "-package", "store", "-output", "internal/store"}, &buffer))
+
+	usersSource, err := os.ReadFile(filepath.Join(moduleDir, "internal", "store", "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(usersSource), "func Users() UsersTable {")
+	ordersSource, err := os.ReadFile(filepath.Join(moduleDir, "internal", "store", "orders_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(ordersSource), "func Orders() OrdersTable {")
+
+	requireNoLeftoverSourceTempDir(t, moduleDir)
+}
+
 // This test spawns a real `go run`. A schema package that does not compile
 // must fail the call and forward the child's own compiler message; the
 // temporary directory must still be removed.

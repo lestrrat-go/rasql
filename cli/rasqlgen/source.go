@@ -3,18 +3,16 @@ package rasqlgen
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
+
+	"github.com/lestrrat-go/rasql/internal/sourcepkg"
 )
 
 // runSchemaSource implements `rasqlgen schema -source`. It handles SIGINT
@@ -103,94 +101,18 @@ func generateFromSchemaSource(ctx context.Context, sourceDir, packageName, outpu
 		return fmt.Errorf("schema output %q is not a directory", outputDir)
 	}
 
-	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, sourceDir)
+	pkg, err := sourcepkg.Resolve(ctx, sourceDir)
 	if err != nil {
 		return err
 	}
 
-	// The dot prefix is load-bearing: go list ./... and a concurrent go
-	// build ./... both skip a dot-prefixed directory, while a plain one
-	// would be picked up mid-write. MkdirTemp guarantees a name no
-	// concurrent run of this command already holds.
-	temporaryDir, err := os.MkdirTemp(moduleDir, ".rasqlgen-source-")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.RemoveAll(temporaryDir) }()
-
-	program := schemaSourceProgram(importPath, packageName, absOutput, tableNames)
-	if err := os.WriteFile(filepath.Join(temporaryDir, "main.go"), program, 0o600); err != nil {
-		return err
-	}
-
-	// The argument is joined with a literal "./" rather than filepath.Join
-	// so it stays a relative package pattern on every platform, built from
-	// only the temporary directory's base name.
-	cmd := exec.CommandContext(ctx, "go", "run", "./"+filepath.Base(temporaryDir))
-	cmd.Dir = moduleDir
-	cmd.Stdout = writer
-	cmd.Stderr = writer
-	// writer is os.Stderr for the command itself, which exec hands to the
-	// child as a file descriptor. Any other writer makes exec create a
-	// pipe and wait for every holder of its write end to close, and a
-	// process the child leaves behind holds one; WaitDelay bounds that
-	// wait so a cancelled run still reaches the cleanup above promptly.
-	cmd.WaitDelay = 10 * time.Second
-	if err := cmd.Run(); err != nil {
+	program := schemaSourceProgram(pkg.ImportPath, packageName, absOutput, tableNames)
+	if err := pkg.Stream(ctx, ".rasqlgen-source-", program, writer); err != nil {
 		// The detail already reached writer through the child's own
 		// stderr; this wrapper stays short rather than repeating it.
-		return fmt.Errorf("schema source %s: %w", importPath, err)
+		return fmt.Errorf("schema source %s: %w", pkg.ImportPath, err)
 	}
 	return nil
-}
-
-// schemaSourcePackageInfo holds the fields `go list -json` reports that
-// resolveSchemaSourcePackage needs: the package's import path and its
-// module's root directory.
-type schemaSourcePackageInfo struct {
-	ImportPath string
-	Module     struct {
-		Path string
-		Dir  string
-	}
-}
-
-// resolveSchemaSourcePackage resolves sourceDir to an import path and its
-// module's root directory, running with the current process's own working
-// directory so a relative sourceDir is read the way the user typed it.
-//
-// go list -json is a resolver only, not an error gate: measured on
-// go1.26.1, it exits 0 on a type error, a truncated file, and an
-// unresolvable import in the package it resolves, reporting those only
-// inside the JSON. Only a missing directory or similarly unresolvable
-// sourceDir exits non-zero with a message on stderr, which is what this
-// reports. A compile failure in the package itself is caught later, when
-// generateFromSchemaSource runs `go run` on the generated program that
-// imports it.
-//
-// It runs under ctx so a signal arriving during resolution stops this
-// command as promptly as one arriving during the child run does.
-func resolveSchemaSourcePackage(ctx context.Context, sourceDir string) (string, string, error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-json", sourceDir)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		message := strings.TrimRight(stderr.String(), "\n")
-		return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, errors.New(message))
-	}
-
-	var pkg schemaSourcePackageInfo
-	if err := json.Unmarshal(stdout.Bytes(), &pkg); err != nil {
-		return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, err)
-	}
-	if pkg.Module.Dir == "" {
-		return "", "", fmt.Errorf("schema source %s is not inside a Go module", sourceDir)
-	}
-	if pkg.ImportPath == "" {
-		return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, errors.New("go list reported no import path"))
-	}
-	return pkg.ImportPath, pkg.Module.Dir, nil
 }
 
 // schemaSourceProgram builds the temporary package main that
