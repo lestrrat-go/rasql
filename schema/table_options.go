@@ -20,6 +20,7 @@ type TableOption interface {
 // has run.
 type tableBuilder struct {
 	schemaName        string
+	rowName           string
 	columns           []ColumnDef
 	primaryKey        []string
 	primaryKeySet     bool
@@ -52,6 +53,7 @@ func NewTableDef(name string, opts ...TableOption) (TableDef, error) {
 	table := TableDef{
 		Schema:            builder.schemaName,
 		Name:              name,
+		RowName:           builder.rowName,
 		Columns:           builder.columns,
 		PrimaryKey:        builder.primaryKey,
 		UniqueConstraints: builder.uniqueConstraints,
@@ -91,6 +93,38 @@ func InSchema(name string) TableOption {
 
 func (o schemaTableOption) applyTable(b *tableBuilder) error {
 	b.schemaName = string(o)
+	return nil
+}
+
+// rowNameTableOption names the generated row type.
+type rowNameTableOption string
+
+// RowNamed overrides the Go row type rasqlgen generates for the table. The
+// default, used when RowNamed is never called, is <Table>Row — a table named
+// users generates UsersRow. RowNamed exists so that a caller can write
+// store.User instead of store.UsersRow, the one generated name a user types
+// in their own code.
+//
+// Nothing is guessed: rasqlgen never singularizes a table name to derive a
+// row name. Stripping a trailing "s" produces "Addresse" from "addresses",
+// "Serie" from "series", and "Bu" from "bus", and the bare table name does
+// not compile as a row type since "type Users" collides with the generated
+// Users() accessor. RowNamed is a code-generation hint only: no renderer
+// reads it, and it never appears in rendered SQL.
+//
+// name must be a valid, exported Go identifier — the generated row type is
+// exported, so a lowercase name would produce a type no importer could
+// name. NewTableDef and MustTableDef reject an empty, unexported, or
+// otherwise invalid name.
+func RowNamed(name string) TableOption {
+	return rowNameTableOption(name)
+}
+
+func (o rowNameTableOption) applyTable(b *tableBuilder) error {
+	if o == "" {
+		return validationError("row_name", "RowNamed name must not be empty")
+	}
+	b.rowName = string(o)
 	return nil
 }
 

@@ -1326,10 +1326,13 @@ func TestDescriptorTestSourceAvoidsHandWrittenNameCollision(t *testing.T) {
 }
 
 // TestGenerationIsIdempotent pins that generating twice from the same input
-// produces identical bytes in all three files, not just PackageSource.
+// produces identical bytes in all three files, not just PackageSource. A
+// table carrying RowName is included so a stated row name does not become a
+// source of nondeterminism the plain default hides.
 func TestGenerationIsIdempotent(t *testing.T) {
 	users := schema.TableDef{
 		Name:       "users",
+		RowName:    "User",
 		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id"},
 	}
@@ -1377,6 +1380,225 @@ func TestSchemaRejectsDefinitionAccessorCollision(t *testing.T) {
 		},
 	)
 	require.ErrorContains(t, err, `duplicates generated name "UsersDef"`)
+}
+
+// renamedRowTypeUsageTest exercises the row type RowNamed renames from
+// inside the temporary module: it is constructed directly, the way a real
+// caller of RowNamed would write it, and passed through both directions of
+// a relationship Load, so a defect in the rename reaching the relationship
+// signatures fails to compile rather than only mismatching text.
+const renamedRowTypeUsageTest = `package generated_test
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"testing"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/stretchr/testify/require"
+)
+
+type recordingHandle struct {
+	query string
+}
+
+func (h *recordingHandle) QueryContext(_ context.Context, statement string, _ ...any) (*sql.Rows, error) {
+	h.query = statement
+	return nil, errors.New("query recorded")
+}
+
+func (h *recordingHandle) ExecContext(_ context.Context, _ string, _ ...any) (sql.Result, error) {
+	return nil, errors.New("exec not supported")
+}
+
+func TestRenamedRowTypeCompilesAndLoads(t *testing.T) {
+	handle := &recordingHandle{}
+	db, err := rasql.New(handle, dialect.PostgreSQL())
+	require.NoError(t, err)
+
+	// The renamed row type appears directly in caller code, exactly the way
+	// RowNamed exists to let store.User read better than store.UsersRow.
+	user := generated.User{ID: 7}
+	require.Equal(t, int64(7), user.ID)
+
+	users := generated.Users()
+	orders := generated.Orders()
+
+	belongsTo := orders.User()
+	_, err = belongsTo.Load(t.Context(), db, []generated.OrdersRow{{UserID: 7}})
+	require.ErrorContains(t, err, "query recorded")
+
+	hasMany := users.Orders()
+	_, err = hasMany.Load(t.Context(), db, []generated.User{user})
+	require.ErrorContains(t, err, "query recorded")
+}
+`
+
+// TestSchemaRenamesRowType covers schema.RowNamed end to end: a users table
+// states RowName "User" and an orders table carries a foreign key to it, so
+// both relationship directions are generated. PackageSource, DescriptorSource
+// and DescriptorTestSource output are checked by text, and the package is
+// then compiled and run in a temporary module, because a text assertion
+// alone cannot catch a relationship signature that names the renamed type on
+// one side and the default on the other.
+func TestSchemaRenamesRowType(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		RowName:    "User",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := schemagen.PackageSource("generated", users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "type User struct")
+	require.Contains(t, string(source), "type UsersTable struct {\n\trasql.Table[User]\n}\n")
+	require.Contains(t, string(source), "func (r *User) ScanRow(src rasql.ScanSource) error {")
+	require.Contains(t, string(source), "func (r *User) ScanDestinations(columns []string) ([]any, error) {")
+	require.Contains(t, string(source), "func (r User) ColumnValue(name string) (any, bool) {")
+	// The untouched default: orders never sets RowName.
+	require.Contains(t, string(source), "type OrdersRow struct")
+	require.NotContains(t, string(source), "type UsersRow struct")
+	// Has-many, on UsersTable.Orders(): the parent is the renamed row type,
+	// the child stays the default.
+	require.Contains(t, string(source), "parents []User) (map[int64][]OrdersRow, error)")
+	// Belongs-to, on OrdersTable.User(): the child stays the default, the
+	// parent is the renamed row type.
+	require.Contains(t, string(source), "children []OrdersRow) (map[int64]User, error)")
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), `RowName: "User"`)
+	require.Contains(t, string(descriptorSource), "rasql.TableFrom[User](usersDef)")
+	// orders never sets RowName, so its literal states no RowName field at all.
+	require.NotContains(t, string(descriptorSource), `RowName: "OrdersRow"`)
+
+	// DescriptorTestSource's shape does not change: it names definition
+	// variables, never a row type, so RowNamed leaves it untouched.
+	descriptorTestSource, err := schemagen.DescriptorTestSource("generated", users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorTestSource), "func TestRasqlgenGeneratedDefinitionsAreValid(t *testing.T) {")
+	require.Contains(t, string(descriptorTestSource), "[]schema.TableDef{ordersDef, usersDef}")
+	require.NotContains(t, string(descriptorTestSource), "RowName")
+	require.NotContains(t, string(descriptorTestSource), "User")
+
+	directory := t.TempDir()
+	// PackageSource already carries every descriptor, so DescriptorSource's
+	// output cannot be written beside it: the two are alternatives, not a
+	// pair. Its text is asserted above instead, and the generated descriptor
+	// test still compiles against the definitions PackageSource declares.
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen_test.go"), descriptorTestSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(renamedRowTypeUsageTest), 0o600))
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
+
+// TestSchemaRowNamedRejections covers every way a stated RowName can be
+// rejected: syntactically invalid, an unexported name, a name reserved
+// for a generated method, a name colliding with this table's own generated
+// accessor/type/definition names, a name colliding with another table's row
+// type, and a name colliding with a relationship type name.
+func TestSchemaRowNamedRejections(t *testing.T) {
+	baseUsers := func(rowName string) schema.TableDef {
+		return schema.TableDef{
+			Name:       "users",
+			RowName:    rowName,
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+			PrimaryKey: []string{"id"},
+		}
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	collidingRelationshipType := schema.TableDef{
+		Name:       "users_table_orders_relation",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	tests := map[string]struct {
+		tables  []schema.TableDef
+		wantErr string
+	}{
+		"not a Go identifier": {
+			tables:  []schema.TableDef{baseUsers("1Bad")},
+			wantErr: "table.row_name",
+		},
+		"unexported": {
+			tables:  []schema.TableDef{baseUsers("user")},
+			wantErr: "table.row_name",
+		},
+		"reserved generated name": {
+			tables:  []schema.TableDef{baseUsers("ScanRow")},
+			wantErr: `RowNamed, which is a reserved generated name`,
+		},
+		"collides with own accessor": {
+			tables:  []schema.TableDef{baseUsers("Users")},
+			wantErr: `RowNamed, which collides with its own generated accessor`,
+		},
+		"collides with own table type": {
+			tables:  []schema.TableDef{baseUsers("UsersTable")},
+			wantErr: `RowNamed, which collides with its own generated table type`,
+		},
+		"collides with own definition accessor": {
+			tables:  []schema.TableDef{baseUsers("UsersDef")},
+			wantErr: `RowNamed, which collides with its own generated definition accessor`,
+		},
+		"collides with another table's row type": {
+			tables:  []schema.TableDef{baseUsers("OrdersRow"), orders},
+			wantErr: `duplicates generated name "OrdersRow"`,
+		},
+		"collides with a relationship type name": {
+			tables:  []schema.TableDef{baseUsers("UsersTableOrdersRelation"), orders, collidingRelationshipType},
+			wantErr: `duplicates generated name "UsersTableOrdersRelation"`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := schemagen.PackageSource("generated", test.tables...)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }
 
 // TestSchemaRejectsGeneratedTestNameCollision pins that the fixed function
