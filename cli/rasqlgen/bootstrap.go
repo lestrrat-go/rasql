@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ func runBootstrap(args []string, writer io.Writer) error {
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "directory for generated Go source files")
+	write := flags.Bool("write", false, "on a refresh, apply the reported changes instead of only reporting them; ignored on a first run into an empty -output")
 	timeout := flags.Duration("timeout", 30*time.Second, "deadline for -dsn metadata inspection")
 	var tables tableNames
 	flags.Var(&tables, "table", "table to describe instead of sweeping every base table; repeat for multiple tables (duplicate values are rejected)")
@@ -101,8 +103,69 @@ func runBootstrap(args []string, writer io.Writer) error {
 		return fmt.Errorf("commit %s inspection transaction: %w", databaseName, err)
 	}
 
-	if err := generate.WriteDescriptionPackage(*packageName, *output, descriptors...); err != nil {
-		return fmt.Errorf("write bootstrap output: %w", err)
+	fresh, err := isEmptyDirectory(*output)
+	if err != nil {
+		return err
+	}
+	if fresh {
+		if err := generate.WriteDescriptionPackage(*packageName, *output, descriptors...); err != nil {
+			return fmt.Errorf("write bootstrap output: %w", err)
+		}
+		return nil
+	}
+	return refreshBootstrapOutput(*packageName, *output, descriptors, *write, writer)
+}
+
+// isEmptyDirectory reports whether directory exists, is a directory, and
+// holds no entries -- the condition that makes a bootstrap run a first
+// write rather than a refresh of a directory bootstrap already owns.
+func isEmptyDirectory(directory string) (bool, error) {
+	info, err := os.Stat(directory)
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("bootstrap output %q is not a directory", directory)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) == 0, nil
+}
+
+// refreshBootstrapOutput implements a bootstrap re-run into a directory
+// bootstrap already wrote to: it validates that directory is one bootstrap
+// recognizes as its own, loads its existing Tables() through a `go run`
+// child the same way `rasqlgen schema -source` reads a schema source
+// package, computes the drift against tables, prints the report to writer,
+// and, only when write is true and the report is non-empty, applies it.
+//
+// Loading the existing package runs with its own background context,
+// separate from the timeout that bounds -dsn metadata inspection above:
+// compiling and running a `go run` child is unrelated work with its own
+// cost, not a database round trip that -timeout was ever meant to bound.
+func refreshBootstrapOutput(packageName, output string, tables []schema.TableDef, write bool, writer io.Writer) error {
+	if err := generate.ValidateDescriptionPackageOwnership(output); err != nil {
+		return err
+	}
+	existing, err := loadExistingDescriptionTables(context.Background(), output)
+	if err != nil {
+		return err
+	}
+
+	diff := generate.DiffDescriptionPackage(existing, tables)
+	report := diff.Report()
+	if report != "" {
+		if _, err := io.WriteString(writer, report); err != nil {
+			return err
+		}
+	}
+	if !write {
+		return nil
+	}
+	if err := generate.ApplyDescriptionDiff(packageName, output, tables, diff); err != nil {
+		return fmt.Errorf("apply bootstrap refresh: %w", err)
 	}
 	return nil
 }

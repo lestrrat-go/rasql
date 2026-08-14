@@ -140,29 +140,22 @@ func TestRunBootstrapErrorsWhenSweepFindsNothing(t *testing.T) {
 	require.Empty(t, mustReadDir(t, directory))
 }
 
-// TestRunBootstrapRefusesNonEmptyOutputDirectory covers both a hand-written
-// file sitting in -output and a directory bootstrap already wrote to:
-// refreshing an existing description package is out of scope for this
-// command, so both refuse rather than overwrite.
-func TestRunBootstrapRefusesNonEmptyOutputDirectory(t *testing.T) {
+// TestRunBootstrapRefusesHandWrittenFileInOutputDirectory covers a
+// hand-written file sitting in -output: bootstrap only ever writes into a
+// directory it started or one it already owns, so a non-empty -output
+// holding a file bootstrap did not write refuses rather than being
+// overwritten or treated as a refresh target. A second run against a
+// directory bootstrap already wrote to is a refresh instead of a refusal;
+// see bootstrap_refresh_test.go.
+func TestRunBootstrapRefusesHandWrittenFileInOutputDirectory(t *testing.T) {
 	databasePath := mustCreateSQLite(t, "CREATE TABLE users (id INTEGER PRIMARY KEY)")
 
-	t.Run("hand-written file", func(t *testing.T) {
-		directory := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(directory, "notes.txt"), []byte("hand-written"), 0o600))
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "notes.txt"), []byte("hand-written"), 0o600))
 
-		err := run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "schemasource", "-output", directory})
-		require.ErrorContains(t, err, "is not empty")
-		require.NoFileExists(t, filepath.Join(directory, "users_gen.go"))
-	})
-
-	t.Run("already bootstrapped", func(t *testing.T) {
-		directory := t.TempDir()
-		require.NoError(t, run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "schemasource", "-output", directory}))
-
-		err := run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "schemasource", "-output", directory})
-		require.ErrorContains(t, err, "is not empty")
-	})
+	err := run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "schemasource", "-output", directory})
+	require.ErrorContains(t, err, `holds "notes.txt"`)
+	require.NoFileExists(t, filepath.Join(directory, "users_gen.go"))
 }
 
 func TestRunBootstrapRejectsMissingOutputDirectory(t *testing.T) {

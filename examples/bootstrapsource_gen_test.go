@@ -17,6 +17,7 @@ import (
 var bootstrapSourceGenerated = []string{
 	"examples/bootstrapsource/internal/tables/users_gen.go",
 	"examples/bootstrapsource/internal/tables/tables_gen.go",
+	"examples/bootstrapsource/internal/tables/hints.go",
 }
 
 // TestBootstrapSourceExampleGenerates runs the example through the very
