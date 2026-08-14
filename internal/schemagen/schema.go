@@ -1367,8 +1367,10 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 		for _, index := range table.Indexes {
 			source.WriteString("{Name: ")
 			source.WriteString(quote(index.Name))
-			source.WriteString(", Columns: ")
-			writeStringLiteralSlice(source, index.Columns)
+			if len(index.Columns) > 0 {
+				source.WriteString(", Columns: ")
+				writeStringLiteralSlice(source, index.Columns)
+			}
 			if index.Unique {
 				source.WriteString(", Unique: true")
 			}
@@ -1376,6 +1378,14 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 				source.WriteString(", Method: schema.IndexMethod(")
 				source.WriteString(quote(string(index.Method)))
 				source.WriteString(")")
+			}
+			if len(index.Expressions) > 0 {
+				source.WriteString(", Expressions: ")
+				writeStringLiteralSlice(source, index.Expressions)
+			}
+			if index.Predicate != "" {
+				source.WriteString(", Predicate: ")
+				source.WriteString(quote(index.Predicate))
 			}
 			source.WriteString("},\n")
 		}

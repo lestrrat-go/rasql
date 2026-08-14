@@ -428,6 +428,75 @@ func TestTableValidateAcceptsNonDefaultIndexMethod(t *testing.T) {
 	require.NoError(t, table.Validate())
 }
 
+// TestTableValidateAcceptsPartialIndex proves that an IndexDef naming a
+// Predicate, such as what inspect now records for a live PostgreSQL or
+// SQLite partial index, is valid input: Validate describes the index, and
+// only render.CreateIndexes and the migrate diff-live path refuse to build
+// DDL for it.
+func TestTableValidateAcceptsPartialIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:      "documents_active_idx",
+			Columns:   []string{"status"},
+			Predicate: "status = 'active'",
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateAcceptsExpressionIndex proves that an IndexDef naming
+// Expressions instead of Columns, such as what inspect now records for a
+// live expression index, is valid input, and that Expressions may mix a
+// bare column name with a real expression: an index's full key order lives
+// in one place instead of being split across Columns and a second list.
+func TestTableValidateAcceptsExpressionIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "title", Type: schema.TextType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:        "documents_lower_title_idx",
+			Expressions: []string{"lower(title)", "created_at"},
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateRejectsIndexWithBothColumnsAndExpressions proves that an
+// IndexDef cannot name both Columns and Expressions: Expressions already
+// carries a plain-column key as its own bare column name, so a non-empty
+// Columns alongside it would leave the index's true key order ambiguous.
+func TestTableValidateRejectsIndexWithBothColumnsAndExpressions(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "title", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:        "documents_bad_idx",
+			Columns:     []string{"title"},
+			Expressions: []string{"lower(title)"},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].columns")
+}
+
 // TestTableValidateUnsignedColumn covers the integer-specific signedness
 // option. Other concrete types cannot carry it in the first place.
 func TestTableValidateUnsignedColumn(t *testing.T) {

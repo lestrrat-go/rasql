@@ -320,12 +320,12 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*NOT index_metadata\\.indisvalid.*index_data\\.reloptions IS NOT NULL.*index_data\\.reltablespace <> 0.*index_metadata\\.indnullsnotdistinct.*index_metadata\\.indisreplident.*operator_class_metadata\\.opcdefault.*index_collation\\.collation_oid <> attribute\\.attcollation.*attribute\\.attcollation <> type_data\\.typcollation").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, access_method\\.amname FROM pg_catalog\\.pg_index.*index_data\\.reloptions IS NULL.*index_data\\.reltablespace = 0.*NOT index_metadata\\.indisreplident").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\) FROM pg_catalog\\.pg_index.*index_data\\.reloptions IS NULL.*index_data\\.reltablespace = 0.*NOT index_metadata\\.indisreplident").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname", "amname"}).
-			AddRow("users_email_idx", false, "email", "btree").
-			AddRow("users_tenant_email_idx", true, "tenant_id", "btree").
-			AddRow("users_tenant_email_idx", true, "email", "btree"))
+		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname", "key_expression", "amname", "predicate"}).
+			AddRow("users_email_idx", false, "email", "email", "btree", nil).
+			AddRow("users_tenant_email_idx", true, "tenant_id", "tenant_id", "btree", nil).
+			AddRow("users_tenant_email_idx", true, "email", "email", "btree", nil))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, referenced_namespace\\.nspname = current_schema\\(\\), constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
@@ -390,11 +390,11 @@ func TestPostgreSQLInspectorRecordsNonDefaultIndexMethod(t *testing.T) {
 	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*NOT index_metadata\\.indisvalid.*index_data\\.reloptions IS NOT NULL.*index_data\\.reltablespace <> 0.*index_metadata\\.indisreplident.*operator_class_metadata\\.opcdefault.*index_collation\\.collation_oid <> attribute\\.attcollation.*attribute\\.attcollation <> type_data\\.typcollation").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, access_method\\.amname FROM pg_catalog\\.pg_index.*index_data\\.reloptions IS NULL.*index_data\\.reltablespace = 0.*NOT index_metadata\\.indisreplident").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\) FROM pg_catalog\\.pg_index.*index_data\\.reloptions IS NULL.*index_data\\.reltablespace = 0.*NOT index_metadata\\.indisreplident").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname", "amname"}).
-			AddRow("users_id_idx", false, "id", "btree").
-			AddRow("users_id_gin_idx", false, "id", "gin"))
+		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname", "key_expression", "amname", "predicate"}).
+			AddRow("users_id_idx", false, "id", "id", "btree", nil).
+			AddRow("users_id_gin_idx", false, "id", "id", "gin", nil))
 	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
 	table, err := inspector.Table(t.Context(), "users")
@@ -402,6 +402,81 @@ func TestPostgreSQLInspectorRecordsNonDefaultIndexMethod(t *testing.T) {
 	require.Equal(t, []schema.IndexDef{
 		{Name: "users_id_idx", Columns: []string{"id"}},
 		{Name: "users_id_gin_idx", Columns: []string{"id"}, Method: "gin"},
+	}, table.Indexes)
+}
+
+// TestPostgreSQLInspectorRecordsPartialIndex proves that a PostgreSQL index
+// with a WHERE predicate is now described rather than rejected: inspect
+// used to fail the whole table on the first partial index, which would
+// abort a sweep over a production schema the moment it reached one. The
+// plain index alongside it keeps IndexDef.Predicate's zero value, proving
+// the field only records a predicate when the index actually has one.
+func TestPostgreSQLInspectorRecordsPartialIndex(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, index_metadata\\.indnkeyatts <> index_metadata\\.indnatts, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname"}))
+	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*NOT index_metadata\\.indisvalid.*index_data\\.reloptions IS NOT NULL.*index_data\\.reltablespace <> 0.*index_metadata\\.indisreplident.*operator_class_metadata\\.opcdefault.*index_collation\\.collation_oid <> attribute\\.attcollation.*attribute\\.attcollation <> type_data\\.typcollation").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\) FROM pg_catalog\\.pg_index.*index_data\\.reloptions IS NULL.*index_data\\.reltablespace = 0.*NOT index_metadata\\.indisreplident").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname", "key_expression", "amname", "predicate"}).
+			AddRow("users_id_idx", false, "id", "id", "btree", nil).
+			AddRow("users_active_id_idx", false, "id", "id", "btree", "id > 0"))
+	expectPostgreSQLForeignKeys(mock, "users", "180000")
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{
+		{Name: "users_id_idx", Columns: []string{"id"}},
+		{Name: "users_active_id_idx", Columns: []string{"id"}, Predicate: "id > 0"},
+	}, table.Indexes)
+}
+
+// TestPostgreSQLInspectorRecordsExpressionIndex proves that a PostgreSQL
+// expression index, and one that mixes a plain column with an expression,
+// are now described rather than rejected. The mixed index proves
+// Expressions carries every key including the plain one, verbatim as its
+// bare column name, and leaves Columns empty rather than splitting the key
+// order across both fields.
+func TestPostgreSQLInspectorRecordsExpressionIndex(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, index_metadata\\.indnkeyatts <> index_metadata\\.indnatts, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname"}))
+	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*NOT index_metadata\\.indisvalid.*index_data\\.reloptions IS NOT NULL.*index_data\\.reltablespace <> 0.*index_metadata\\.indisreplident.*operator_class_metadata\\.opcdefault.*index_collation\\.collation_oid <> attribute\\.attcollation.*attribute\\.attcollation <> type_data\\.typcollation").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\) FROM pg_catalog\\.pg_index.*index_data\\.reloptions IS NULL.*index_data\\.reltablespace = 0.*NOT index_metadata\\.indisreplident").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname", "key_expression", "amname", "predicate"}).
+			AddRow("users_lower_email_idx", false, nil, "lower(email)", "btree", nil).
+			AddRow("users_id_lower_email_idx", false, "id", "id", "btree", nil).
+			AddRow("users_id_lower_email_idx", false, nil, "lower(email)", "btree", nil))
+	expectPostgreSQLForeignKeys(mock, "users", "180000")
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{
+		{Name: "users_lower_email_idx", Expressions: []string{"lower(email)"}},
+		{Name: "users_id_lower_email_idx", Expressions: []string{"id", "lower(email)"}},
 	}, table.Indexes)
 }
 
@@ -439,7 +514,7 @@ func TestPostgreSQLInspectorRejectsReplicaIdentityIndex(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}).AddRow("users_email_replica_identity_idx"))
 
 	_, err = inspector.Table(t.Context(), "users")
-	require.EqualError(t, err, "inspect: index \"users_email_replica_identity_idx\" cannot be represented: rasql supports only valid, non-partial indexes with simple ascending columns, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity")
+	require.EqualError(t, err, "inspect: index \"users_email_replica_identity_idx\" cannot be represented: rasql supports only valid indexes with ascending columns or expressions, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity")
 }
 
 func TestPostgreSQLInspectorRejectsInvalidIndex(t *testing.T) {
@@ -460,7 +535,7 @@ func TestPostgreSQLInspectorRejectsInvalidIndex(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}).AddRow("users_email_invalid_idx"))
 
 	_, err := inspector.Table(t.Context(), "users")
-	require.EqualError(t, err, "inspect: index \"users_email_invalid_idx\" cannot be represented: rasql supports only valid, non-partial indexes with simple ascending columns, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity")
+	require.EqualError(t, err, "inspect: index \"users_email_invalid_idx\" cannot be represented: rasql supports only valid indexes with ascending columns or expressions, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity")
 }
 
 func TestPostgreSQLInspectorRejectsExclusionConstraintBeforeIndexInspection(t *testing.T) {
@@ -510,7 +585,7 @@ func TestPostgreSQLInspectorRejectsIndexWithPersistentStorageOptionsOrTablespace
 				WillReturnRows(sqlmock.NewRows([]string{"relname"}).AddRow(test.indexName))
 
 			_, err := inspector.Table(t.Context(), "users")
-			require.EqualError(t, err, "inspect: index \""+test.indexName+"\" cannot be represented: rasql supports only valid, non-partial indexes with simple ascending columns, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity")
+			require.EqualError(t, err, "inspect: index \""+test.indexName+"\" cannot be represented: rasql supports only valid indexes with ascending columns or expressions, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity")
 		})
 	}
 }
@@ -533,7 +608,7 @@ func TestPostgreSQLInspectorRejectsIndexWithNondefaultColumnCollation(t *testing
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}).AddRow("users_email_collation_idx"))
 
 	_, err := inspector.Table(t.Context(), "users")
-	require.EqualError(t, err, "inspect: index \"users_email_collation_idx\" cannot be represented: rasql supports only valid, non-partial indexes with simple ascending columns, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity")
+	require.EqualError(t, err, "inspect: index \"users_email_collation_idx\" cannot be represented: rasql supports only valid indexes with ascending columns or expressions, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity")
 }
 
 func TestPostgreSQLInspectorUsesPostgreSQL14CatalogQueries(t *testing.T) {
@@ -757,9 +832,9 @@ func expectPostgreSQLMetadataBeforeForeignKeysWithChecks(mock sqlmock.Sqlmock, t
 	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*NOT index_metadata\\.indisvalid.*index_data\\.reloptions IS NOT NULL.*index_data\\.reltablespace <> 0.*" + uniqueNulls + ".*index_metadata\\.indisreplident.*operator_class_metadata\\.opcdefault.*index_collation\\.collation_oid <> attribute\\.attcollation.*attribute\\.attcollation <> type_data\\.typcollation").
 		WithArgs(tableName).
 		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, access_method\\.amname FROM pg_catalog\\.pg_index.*index_data\\.reloptions IS NULL.*index_data\\.reltablespace = 0.*NOT index_metadata\\.indisreplident").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\) FROM pg_catalog\\.pg_index.*index_data\\.reloptions IS NULL.*index_data\\.reltablespace = 0.*NOT index_metadata\\.indisreplident").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname", "amname"}))
+		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "attname", "key_expression", "amname", "predicate"}))
 }
 
 func expectPostgreSQLForeignKeys(mock sqlmock.Sqlmock, tableName string, version string) {
@@ -1115,6 +1190,37 @@ func TestMySQLInspectorRecordsNonDefaultIndexMethod(t *testing.T) {
 	}, table.Indexes)
 }
 
+// TestMySQLInspectorRecordsExpressionIndex proves that a MySQL functional
+// index key is now described rather than rejected: inspect used to fail
+// the whole table on the first functional index part, which would abort a
+// sweep over a production schema the moment it reached one. The plain
+// index alongside it keeps IndexDef.Expressions nil and Columns populated,
+// proving Expressions is only used for an index that actually has an
+// expression key.
+func TestMySQLInspectorRecordsExpressionIndex(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	expectMySQLColumnsAndPrimaryKey(mock, "users")
+	expectMySQLIndexes(mock, "users", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}).
+		AddRow("users_email_uidx", true, "email", nil, nil, "A", "BTREE", int64(1)).
+		AddRow("users_lower_email_idx", false, nil, nil, "lower(`email`)", nil, "BTREE", int64(1)))
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{
+		{Name: "users_email_uidx", Columns: []string{"email"}, Unique: true},
+		{Name: "users_lower_email_idx", Expressions: []string{"lower(`email`)"}},
+	}, table.Indexes)
+}
+
 // TestMySQLInspectorStillRejectsInvisibleNonDefaultMethodUniqueIndex proves
 // that a non-BTREE method no longer short-circuits index inspection before
 // the neighbouring, still-unsupported checks run: an invisible unique
@@ -1149,7 +1255,6 @@ func TestMySQLInspectorRejectsUnsupportedIndexParts(t *testing.T) {
 		reason     string
 	}{
 		{name: "prefix", indexName: "users_email_prefix_uidx", column: "email", prefix: int64(4), reason: "prefix index parts"},
-		{name: "functional", indexName: "users_email_functional_idx", expression: "lower(`email`)", reason: "functional index parts"},
 		{name: "non-column", indexName: "users_email_non_column_idx", reason: "non-column index parts"},
 	}
 
@@ -2118,6 +2223,62 @@ func TestSQLiteInspectorRejectsDescendingIndexes(t *testing.T) {
 	require.NoError(t, err)
 	_, err = inspector.Table(t.Context(), "children")
 	require.ErrorContains(t, err, "descending columns are unsupported")
+}
+
+// TestSQLiteInspectorRecordsPartialIndex proves that a SQLite partial index
+// is now described rather than rejected: inspect used to fail the whole
+// table on the first partial index, which would abort a sweep over a
+// production schema the moment it reached one. The plain index alongside
+// it keeps IndexDef.Predicate's zero value, proving the field only records
+// a predicate when the index actually has one.
+func TestSQLiteInspectorRecordsPartialIndex(t *testing.T) {
+	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "database.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, status TEXT)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE INDEX users_id_idx ON users (id)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE INDEX users_active_idx ON users (status) WHERE status = 'active'")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{
+		{Name: "users_active_idx", Columns: []string{"status"}, Predicate: "status = 'active'"},
+		{Name: "users_id_idx", Columns: []string{"id"}},
+	}, table.Indexes)
+}
+
+// TestSQLiteInspectorRecordsExpressionIndex proves that a SQLite
+// expression index, and one that mixes a plain column with an expression,
+// are now described rather than rejected. The mixed index proves
+// Expressions carries every key including the plain one, verbatim as its
+// bare column name, and leaves Columns empty rather than splitting the key
+// order across both fields.
+func TestSQLiteInspectorRecordsExpressionIndex(t *testing.T) {
+	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "database.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE INDEX users_lower_email_idx ON users (lower(email))")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE INDEX users_id_lower_email_idx ON users (id, lower(email))")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{
+		{Name: "users_id_lower_email_idx", Expressions: []string{"id", "lower(email)"}},
+		{Name: "users_lower_email_idx", Expressions: []string{"lower(email)"}},
+	}, table.Indexes)
 }
 
 func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
