@@ -63,7 +63,7 @@ func WritePackage(packageName, directory string, tables ...schema.TableDef) erro
 	// while writing the third file would leave the first two already
 	// replaced and the rest of the package as it was.
 	for _, destination := range schemaOutputPaths(directory, sorted) {
-		if _, err := genfile.ResolveDestination(destination); err != nil {
+		if _, err := genfile.ResolveDestination(genfile.Schema, destination); err != nil {
 			return err
 		}
 	}
@@ -76,7 +76,7 @@ func WritePackage(packageName, directory string, tables ...schema.TableDef) erro
 			return err
 		}
 		filename := schemaOutputFilename(table.Name)
-		if err := genfile.Write(filepath.Join(directory, filename), source); err != nil {
+		if err := genfile.Write(genfile.Schema, filepath.Join(directory, filename), source); err != nil {
 			return fmt.Errorf("write table %q: %w", table.Name, err)
 		}
 	}
@@ -85,7 +85,7 @@ func WritePackage(packageName, directory string, tables ...schema.TableDef) erro
 	if err != nil {
 		return err
 	}
-	if err := genfile.Write(filepath.Join(directory, schemaDescriptorFilename), descriptorSource); err != nil {
+	if err := genfile.Write(genfile.Schema, filepath.Join(directory, schemaDescriptorFilename), descriptorSource); err != nil {
 		return fmt.Errorf("write %s: %w", schemaDescriptorFilename, err)
 	}
 
@@ -93,7 +93,7 @@ func WritePackage(packageName, directory string, tables ...schema.TableDef) erro
 	if err != nil {
 		return err
 	}
-	if err := genfile.Write(filepath.Join(directory, schemaDescriptorTestFilename), descriptorTestSource); err != nil {
+	if err := genfile.Write(genfile.Schema, filepath.Join(directory, schemaDescriptorTestFilename), descriptorTestSource); err != nil {
 		return fmt.Errorf("write %s: %w", schemaDescriptorTestFilename, err)
 	}
 	return nil

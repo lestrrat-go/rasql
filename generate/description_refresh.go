@@ -18,12 +18,12 @@ import (
 // ValidateDescriptionPackageOwnership reports whether every entry in
 // directory is one `rasqlgen bootstrap` recognizes as its own: either
 // descriptionHintsFilename, which it may or may not have written yet, or an
-// ordinary file whose first line is genfile.Marker -- the same mark every
-// other file bootstrap writes carries. A refresh calls this before reading
-// or changing anything, so it only ever runs against a directory it
-// created, on the same terms WriteDescriptionPackage already enforces for a
-// first run: refusing a hand-written file, or output from another
-// generator, that happens to sit in -output.
+// ordinary file whose first line is genfile.Bootstrap.Marker() -- the same
+// mark every other file bootstrap writes carries. A refresh calls this
+// before reading or changing anything, so it only ever runs against a
+// directory it created, on the same terms WriteDescriptionPackage already
+// enforces for a first run: refusing a hand-written file, or output from
+// another generator, that happens to sit in -output.
 func ValidateDescriptionPackageOwnership(directory string) error {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
@@ -46,7 +46,7 @@ func ValidateDescriptionPackageOwnership(directory string) error {
 }
 
 // requireGeneratedMarker reports an error unless path's first line is
-// exactly genfile.Marker.
+// exactly genfile.Bootstrap.Marker().
 func requireGeneratedMarker(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -60,8 +60,8 @@ func requireGeneratedMarker(path string) error {
 		return err
 	}
 	line = strings.TrimRight(line, "\r\n")
-	if line != genfile.Marker {
-		return fmt.Errorf("its first line is not %q", genfile.Marker)
+	if line != genfile.Bootstrap.Marker() {
+		return fmt.Errorf("its first line is not %q", genfile.Bootstrap.Marker())
 	}
 	return nil
 }
@@ -113,7 +113,7 @@ func ApplyDescriptionDiff(packageName, directory string, tables []schema.TableDe
 		if err != nil {
 			return err
 		}
-		if err := genfile.Write(filepath.Join(directory, file.filename), source); err != nil {
+		if err := genfile.Write(genfile.Bootstrap, filepath.Join(directory, file.filename), source); err != nil {
 			return fmt.Errorf("write table %q: %w", name, err)
 		}
 	}
@@ -136,7 +136,7 @@ func ApplyDescriptionDiff(packageName, directory string, tables []schema.TableDe
 	if err != nil {
 		return err
 	}
-	if err := genfile.Write(filepath.Join(directory, descriptionAggregatorFilename), aggregatorSource); err != nil {
+	if err := genfile.Write(genfile.Bootstrap, filepath.Join(directory, descriptionAggregatorFilename), aggregatorSource); err != nil {
 		return fmt.Errorf("write %s: %w", descriptionAggregatorFilename, err)
 	}
 

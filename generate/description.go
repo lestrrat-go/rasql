@@ -71,7 +71,7 @@ func WriteDescriptionPackage(packageName, directory string, tables ...schema.Tab
 		if err != nil {
 			return err
 		}
-		if err := genfile.Write(filepath.Join(directory, file.filename), source); err != nil {
+		if err := genfile.Write(genfile.Bootstrap, filepath.Join(directory, file.filename), source); err != nil {
 			return fmt.Errorf("write table %q: %w", file.table.Name, err)
 		}
 	}
@@ -84,7 +84,7 @@ func WriteDescriptionPackage(packageName, directory string, tables ...schema.Tab
 	if err != nil {
 		return err
 	}
-	if err := genfile.Write(filepath.Join(directory, descriptionAggregatorFilename), aggregatorSource); err != nil {
+	if err := genfile.Write(genfile.Bootstrap, filepath.Join(directory, descriptionAggregatorFilename), aggregatorSource); err != nil {
 		return fmt.Errorf("write %s: %w", descriptionAggregatorFilename, err)
 	}
 	if err := writeHintsFileIfAbsent(packageName, directory); err != nil {

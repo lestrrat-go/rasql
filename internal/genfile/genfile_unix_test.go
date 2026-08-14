@@ -16,19 +16,19 @@ import (
 // These tests use Unix-only resource limits, signals, and symbolic links.
 // generatedSource, the source they write, lives in genfile_test.go as
 // writtenSource so the portable tests can write it too.
-const generatedSource = writtenSource
+var generatedSource = writtenSource
 
 // staleGeneratedSource stands in for output an earlier run left behind.
 // It carries the generated marker on its first line, because that is what
 // makes Write willing to replace a destination at all: a file without the
 // marker is refused, which is what TestWriteRefusesHandWrittenDestination
 // covers.
-const staleGeneratedSource = Marker + "\n\npackage stale\n"
+var staleGeneratedSource = Schema.Marker() + "\n\npackage stale\n"
 
 func TestWriteGeneratedFilePreservesExistingOutputWhenWriteFails(t *testing.T) {
 	directory := t.TempDir()
 	output := filepath.Join(directory, "output_gen.go")
-	sentinel := []byte(Marker + "\n\n// SENTINEL-DATA-DO-NOT-TRUNCATE\n")
+	sentinel := []byte(Schema.Marker() + "\n\n// SENTINEL-DATA-DO-NOT-TRUNCATE\n")
 	require.NoError(t, os.WriteFile(output, sentinel, 0o600))
 
 	signals := make(chan os.Signal, 1)
@@ -45,7 +45,7 @@ func TestWriteGeneratedFilePreservesExistingOutputWhenWriteFails(t *testing.T) {
 		require.NoError(t, syscall.Setrlimit(syscall.RLIMIT_FSIZE, &original))
 	})
 
-	err := Write(output, []byte(generatedSource))
+	err := Write(Schema, output, []byte(generatedSource))
 	require.Error(t, err)
 	got, err := os.ReadFile(output)
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestWriteGeneratedFileKeepsOutputModeBits(t *testing.T) {
 				require.NoError(t, os.Chmod(output, tc.existing))
 			}
 
-			require.NoError(t, Write(output, []byte(generatedSource)))
+			require.NoError(t, Write(Schema, output, []byte(generatedSource)))
 			info, err := os.Stat(output)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, info.Mode()&(fs.ModePerm|fs.ModeSticky|fs.ModeSetuid|fs.ModeSetgid))
@@ -90,7 +90,7 @@ func TestWriteGeneratedFileAcceptsGenTestSuffix(t *testing.T) {
 	require.NoError(t, os.WriteFile(output, []byte(staleGeneratedSource), 0o644))
 	require.NoError(t, os.Chmod(output, 0o644))
 
-	require.NoError(t, Write(output, []byte(generatedSource)))
+	require.NoError(t, Write(Schema, output, []byte(generatedSource)))
 	source, err := os.ReadFile(output)
 	require.NoError(t, err)
 	require.Equal(t, []byte(generatedSource), source)
@@ -104,7 +104,7 @@ func TestWriteGeneratedFileRejectsDirectory(t *testing.T) {
 	output := filepath.Join(directory, "outdir")
 	require.NoError(t, os.Mkdir(output, 0o700))
 
-	err := Write(output, []byte(generatedSource))
+	err := Write(Schema, output, []byte(generatedSource))
 	require.ErrorContains(t, err, "is a directory")
 	require.Empty(t, mustReadDir(t, output))
 }
@@ -116,7 +116,7 @@ func TestWriteGeneratedFileRejectsSymlinkToDirectory(t *testing.T) {
 	output := filepath.Join(directory, "output_gen.go")
 	require.NoError(t, os.Symlink("target", output))
 
-	err := Write(output, []byte(generatedSource))
+	err := Write(Schema, output, []byte(generatedSource))
 	require.ErrorContains(t, err, "is a directory")
 	info, err := os.Lstat(output)
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestWriteGeneratedFileWritesThroughOutputSymlink(t *testing.T) {
 	require.NoError(t, os.Chmod(target, 0o644))
 	require.NoError(t, os.Symlink("target_gen.go", output))
 
-	require.NoError(t, Write(output, []byte(generatedSource)))
+	require.NoError(t, Write(Schema, output, []byte(generatedSource)))
 	info, err := os.Lstat(output)
 	require.NoError(t, err)
 	require.NotZero(t, info.Mode()&fs.ModeSymlink)
@@ -151,7 +151,7 @@ func TestWriteGeneratedFileRejectsOutputSymlinkCycle(t *testing.T) {
 	require.NoError(t, os.Symlink("other_gen.go", output))
 	require.NoError(t, os.Symlink("output_gen.go", other))
 
-	err := Write(output, []byte(generatedSource))
+	err := Write(Schema, output, []byte(generatedSource))
 	require.ErrorContains(t, err, "too many levels of symbolic links")
 }
 

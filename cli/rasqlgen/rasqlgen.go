@@ -228,7 +228,7 @@ func runQuery(args []string, writer io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := genfile.Write(*output, source); err != nil {
+	if err := genfile.Write(genfile.Query, *output, source); err != nil {
 		return fmt.Errorf("write query output: %w", err)
 	}
 	return nil

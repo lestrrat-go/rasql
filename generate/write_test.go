@@ -421,7 +421,7 @@ func TestWritePackageAllowsARerunThatKeepsEveryTable(t *testing.T) {
 	require.NoError(t, generate.WritePackage("store", directory, users, orders))
 
 	queryFile := filepath.Join(directory, "user_by_id_gen.go")
-	require.NoError(t, os.WriteFile(queryFile, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
+	require.NoError(t, os.WriteFile(queryFile, []byte(genfile.Query.Marker()+"\n\npackage store\n"), 0o600))
 
 	require.NoError(t, generate.WritePackage("store", directory, users, orders))
 	require.NoError(t, generate.WritePackage("store", directory, orders, users))
@@ -435,7 +435,7 @@ func TestWritePackageAllowsARerunThatKeepsEveryTable(t *testing.T) {
 // run stops rather than writing over a package it cannot reason about.
 func TestWritePackageRejectsAnUnreadableDescriptorFile(t *testing.T) {
 	directory := t.TempDir()
-	corrupted := genfile.Marker + "\n\npackage store\n\nvar usersDef = schema.TableDef{\n"
+	corrupted := genfile.Schema.Marker() + "\n\npackage store\n\nvar usersDef = schema.TableDef{\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen.go"), []byte(corrupted), 0o600))
 
 	err := generate.WritePackage("store", directory, usersTableDef())
