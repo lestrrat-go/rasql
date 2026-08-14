@@ -90,6 +90,49 @@ func TestLiveSourcesRejectsExpressionIndex(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsIndexIncludeColumns proves that an inspected table
+// carrying an index's INCLUDE columns does not reach diff-live's generated
+// desired-schema sources as a silently downgraded index without them:
+// LiveSources renders through render.CreateIndexes, which refuses
+// IncludeColumns, so the error surfaces here rather than a Plan going on to
+// emit an index missing its covering columns.
+func TestLiveSourcesRejectsIndexIncludeColumns(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "status", Type: schema.TextType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:           "members_status_idx",
+			Columns:        []string{"status"},
+			IncludeColumns: []string{"name"},
+		}},
+	})
+	require.ErrorContains(t, err, `"members_status_idx"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsIndexKeyDetails proves that an inspected table
+// carrying an index's per-key facts — here, a descending key — does not
+// reach diff-live's generated desired-schema sources as a silently
+// downgraded plain ascending index: LiveSources renders through
+// render.CreateIndexes, which refuses Keys, so the error surfaces here
+// rather than a Plan going on to emit DDL with the wrong key order.
+func TestLiveSourcesRejectsIndexKeyDetails(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "created_at", Type: schema.TimeType{}}},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name: "members_created_at_idx",
+			Keys: []schema.IndexKeyDef{{Expression: "created_at", Descending: true}},
+		}},
+	})
+	require.ErrorContains(t, err, `"members_created_at_idx"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 // TestLiveSourcesRejectsNonDefaultForeignKeyMatch proves that an inspected
 // table carrying a foreign key with a non-default MATCH clause does not
 // reach diff-live's generated desired-schema sources as a silently

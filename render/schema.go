@@ -92,6 +92,89 @@ func (e *UnsupportedExpressionIndexError) Unwrap() error {
 	return ErrUnsupportedExpressionIndex
 }
 
+// ErrUnsupportedIndexIncludeColumns is the sentinel wrapped by every
+// [UnsupportedIndexIncludeColumnsError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexIncludeColumns = errors.New("render: unsupported index include columns")
+
+// UnsupportedIndexIncludeColumnsError reports that an IndexDef names
+// [schema.IndexDef.IncludeColumns]. inspect can describe such an index, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for an INCLUDE clause.
+type UnsupportedIndexIncludeColumnsError struct {
+	// Index is the name of the index that named INCLUDE columns.
+	Index string
+	// IncludeColumns is the ordered list of included column names the
+	// index named.
+	IncludeColumns []string
+}
+
+func (e *UnsupportedIndexIncludeColumnsError) Error() string {
+	return fmt.Sprintf("index %q includes columns %q, which rasql can describe but not yet render", e.Index, e.IncludeColumns)
+}
+
+// Unwrap exposes ErrUnsupportedIndexIncludeColumns so
+// errors.Is(err, ErrUnsupportedIndexIncludeColumns) works alongside
+// errors.As against *UnsupportedIndexIncludeColumnsError.
+func (e *UnsupportedIndexIncludeColumnsError) Unwrap() error {
+	return ErrUnsupportedIndexIncludeColumns
+}
+
+// ErrUnsupportedIndexInvisible is the sentinel wrapped by every
+// [UnsupportedIndexInvisibleError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexInvisible = errors.New("render: unsupported invisible index")
+
+// UnsupportedIndexInvisibleError reports that an IndexDef sets
+// [schema.IndexDef.Invisible]. inspect can describe such an index, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for an INVISIBLE index.
+type UnsupportedIndexInvisibleError struct {
+	// Index is the name of the index marked invisible.
+	Index string
+}
+
+func (e *UnsupportedIndexInvisibleError) Error() string {
+	return fmt.Sprintf("index %q is invisible, which rasql can describe but not yet render", e.Index)
+}
+
+// Unwrap exposes ErrUnsupportedIndexInvisible so
+// errors.Is(err, ErrUnsupportedIndexInvisible) works alongside errors.As
+// against *UnsupportedIndexInvisibleError.
+func (e *UnsupportedIndexInvisibleError) Unwrap() error {
+	return ErrUnsupportedIndexInvisible
+}
+
+// ErrUnsupportedIndexKeyDetails is the sentinel wrapped by every
+// [UnsupportedIndexKeyDetailsError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexKeyDetails = errors.New("render: unsupported index key details")
+
+// UnsupportedIndexKeyDetailsError reports that an IndexDef names
+// [schema.IndexDef.Keys], meaning at least one of its keys carries a
+// per-key fact — DESC order, a non-default collation or operator class, or
+// a MySQL prefix length — beyond a plain ascending expression.
+// inspect can describe such an index, and TableDef.Validate accepts it,
+// but this package does not yet know how to build DDL for any of those
+// per-key facts.
+type UnsupportedIndexKeyDetailsError struct {
+	// Index is the name of the index that named per-key details.
+	Index string
+	// Keys is the ordered list of per-key facts the index named.
+	Keys []schema.IndexKeyDef
+}
+
+func (e *UnsupportedIndexKeyDetailsError) Error() string {
+	return fmt.Sprintf("index %q has per-key details %+v, which rasql can describe but not yet render", e.Index, e.Keys)
+}
+
+// Unwrap exposes ErrUnsupportedIndexKeyDetails so
+// errors.Is(err, ErrUnsupportedIndexKeyDetails) works alongside errors.As
+// against *UnsupportedIndexKeyDetailsError.
+func (e *UnsupportedIndexKeyDetailsError) Unwrap() error {
+	return ErrUnsupportedIndexKeyDetails
+}
+
 // ErrUnsupportedForeignKeyMatch is the sentinel wrapped by every
 // [UnsupportedForeignKeyMatchError], so a caller that only needs a
 // presence check can use errors.Is instead of errors.As.
@@ -747,6 +830,15 @@ func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef
 	}
 	if len(index.Expressions) > 0 {
 		return &UnsupportedExpressionIndexError{Index: index.Name, Expressions: index.Expressions}
+	}
+	if len(index.IncludeColumns) > 0 {
+		return &UnsupportedIndexIncludeColumnsError{Index: index.Name, IncludeColumns: index.IncludeColumns}
+	}
+	if index.Invisible {
+		return &UnsupportedIndexInvisibleError{Index: index.Name}
+	}
+	if len(index.Keys) > 0 {
+		return &UnsupportedIndexKeyDetailsError{Index: index.Name, Keys: index.Keys}
 	}
 	if err := r.rejectUnboundedMySQLText(table, index.Columns, "an index"); err != nil {
 		return err

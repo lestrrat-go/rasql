@@ -506,6 +506,192 @@ func TestTableValidateRejectsIndexWithBothColumnsAndExpressions(t *testing.T) {
 	require.ErrorContains(t, err, "indexes[0].columns")
 }
 
+// TestTableValidateAcceptsIndexKeyDetails proves that an IndexDef naming
+// Keys, such as what inspect now records for a descending key, a
+// non-default per-key collation or operator class, or a MySQL prefix
+// length, is valid input: Validate describes the index, and only
+// render.CreateIndexes and the migrate diff-live path refuse to build DDL
+// for it.
+func TestTableValidateAcceptsIndexKeyDetails(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name: "documents_created_at_idx",
+			Keys: []schema.IndexKeyDef{{Expression: "created_at", Descending: true}},
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateRejectsIndexKeyWithEmptyExpression proves that a Keys
+// element cannot leave Expression empty: unlike Columns and Expressions,
+// where a positional gap would just be an empty string in a flat list, an
+// IndexKeyDef with no Expression names no key at all.
+func TestTableValidateRejectsIndexKeyWithEmptyExpression(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name: "documents_created_at_idx",
+			Keys: []schema.IndexKeyDef{{Descending: true}},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].keys[0].expression")
+}
+
+// TestTableValidateRejectsIndexWithColumnsAndKeys is the Keys counterpart to
+// TestTableValidateRejectsIndexWithBothColumnsAndExpressions: Keys already
+// carries a plain-column key as its own bare column name in
+// IndexKeyDef.Expression, so a non-empty Columns alongside it would leave
+// the index's true key order ambiguous.
+func TestTableValidateRejectsIndexWithColumnsAndKeys(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:    "documents_bad_idx",
+			Columns: []string{"created_at"},
+			Keys:    []schema.IndexKeyDef{{Expression: "created_at", Descending: true}},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].columns")
+}
+
+// TestTableValidateRejectsIndexWithExpressionsAndKeys is the Keys
+// counterpart of TestTableValidateRejectsIndexWithColumnsAndKeys for
+// Expressions: an index states its keys in exactly one of Columns,
+// Expressions, or Keys, never a mix.
+func TestTableValidateRejectsIndexWithExpressionsAndKeys(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "title", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:        "documents_bad_idx",
+			Expressions: []string{"lower(title)"},
+			Keys:        []schema.IndexKeyDef{{Expression: "lower(title)"}},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].expressions")
+}
+
+// TestTableValidateAcceptsIndexIncludeColumns proves that an IndexDef
+// naming IncludeColumns, such as what inspect now records for a live
+// PostgreSQL index with an INCLUDE clause, is valid input: Validate
+// describes the index, and only render.CreateIndexes and the migrate
+// diff-live path refuse to build DDL for it.
+func TestTableValidateAcceptsIndexIncludeColumns(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+			{Name: "title", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:           "documents_status_idx",
+			Columns:        []string{"status"},
+			IncludeColumns: []string{"title"},
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateRejectsIndexIncludeColumnsDuplicatingKeyColumn proves
+// that an index's INCLUDE column cannot repeat one of its own key columns:
+// the same rule TestTableValidatesUniqueConstraintIncludeColumnsOverlapsColumns
+// enforces for a unique constraint's INCLUDE columns.
+func TestTableValidateRejectsIndexIncludeColumnsDuplicatingKeyColumn(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:           "documents_status_idx",
+			Columns:        []string{"status"},
+			IncludeColumns: []string{"status"},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].include_columns[0]")
+	require.ErrorContains(t, err, `duplicates column "status"`)
+}
+
+// TestTableValidateRejectsIndexIncludeColumnsReferencingUnknownColumn
+// proves that an index's INCLUDE column must name a real column, the same
+// way a key column must.
+func TestTableValidateRejectsIndexIncludeColumnsReferencingUnknownColumn(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:           "documents_status_idx",
+			Columns:        []string{"status"},
+			IncludeColumns: []string{"missing"},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].include_columns[0]")
+	require.ErrorContains(t, err, `references unknown column "missing"`)
+}
+
+// TestTableValidateAcceptsInvisibleIndex proves that an IndexDef setting
+// Invisible, such as what inspect now records for a live MySQL invisible
+// index, is valid input: Validate describes the index, and only
+// render.CreateIndexes and the migrate diff-live path refuse to build DDL
+// for it.
+func TestTableValidateAcceptsInvisibleIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:      "documents_status_idx",
+			Columns:   []string{"status"},
+			Invisible: true,
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
 // TestTableValidateUnsignedColumn covers the integer-specific signedness
 // option. Other concrete types cannot carry it in the first place.
 func TestTableValidateUnsignedColumn(t *testing.T) {

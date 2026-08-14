@@ -66,6 +66,44 @@ func TestLiveSourcesRejectsIntegerZeroFill(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsInvisibleIndex proves that an inspected table
+// carrying an invisible index does not reach diff-live's generated
+// desired-schema sources as a silently downgraded visible index:
+// LiveSources renders through render.CreateIndexes, which refuses
+// Invisible, so the error surfaces here rather than a Plan going on to
+// emit a visible index the database does not actually have.
+func TestLiveSourcesRejectsInvisibleIndex(t *testing.T) {
+	analyzer := mysql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:    "members",
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "status", Type: schema.TextType{Width: schema.NewTextWidth(255)}}},
+		Indexes: []schema.IndexDef{{Name: "members_status_idx", Columns: []string{"status"}, Invisible: true}},
+	})
+	require.ErrorContains(t, err, `"members_status_idx"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsIndexKeyPrefixLength proves that an inspected table
+// carrying a MySQL index key over a column prefix does not reach
+// diff-live's generated desired-schema sources as a silently downgraded
+// whole-column index: LiveSources renders through render.CreateIndexes,
+// which refuses Keys, so the error surfaces here rather than a Plan going
+// on to emit an index over more of the column than the database actually
+// indexes.
+func TestLiveSourcesRejectsIndexKeyPrefixLength(t *testing.T) {
+	analyzer := mysql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:    "members",
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}}},
+		Indexes: []schema.IndexDef{{
+			Name: "members_email_prefix_idx",
+			Keys: []schema.IndexKeyDef{{Expression: "email", PrefixLength: 4}},
+		}},
+	})
+	require.ErrorContains(t, err, `"members_email_prefix_idx"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffLiveMatchesInlinePrimaryKeyUnderMySQLIdentifierRules(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (ID bigint PRIMARY KEY);")
