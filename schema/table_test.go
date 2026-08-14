@@ -692,6 +692,102 @@ func TestTableValidateAcceptsInvisibleIndex(t *testing.T) {
 	require.NoError(t, table.Validate())
 }
 
+// TestTableValidateAcceptsIndexValidityStorageAndPlacement proves that an
+// IndexDef setting NotValid, StorageParameters, or Tablespace, such as what
+// inspect now records for a live PostgreSQL index, is valid input: Validate
+// describes the index, and only render.CreateIndexes and the migrate
+// diff-live path refuse to build DDL for it.
+func TestTableValidateAcceptsIndexValidityStorageAndPlacement(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:              "documents_status_idx",
+			Columns:           []string{"status"},
+			NotValid:          true,
+			StorageParameters: map[string]string{"fillfactor": "70"},
+			Tablespace:        "pg_custom",
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateAcceptsReplicaIdentityIndex proves that a unique
+// IndexDef setting ReplicaIdentity, such as what inspect now records for a
+// live PostgreSQL table's replica identity index, is valid input.
+func TestTableValidateAcceptsReplicaIdentityIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:            "documents_status_idx",
+			Columns:         []string{"status"},
+			Unique:          true,
+			ReplicaIdentity: true,
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateRejectsNonUniqueReplicaIdentityIndex proves that Validate
+// rejects a nonsensical ReplicaIdentity: PostgreSQL requires REPLICA
+// IDENTITY USING INDEX to name a unique (and NOT NULL) index, so a
+// non-unique IndexDef setting ReplicaIdentity can never come from a live
+// database and must not be accepted as a descriptor to render either.
+func TestTableValidateRejectsNonUniqueReplicaIdentityIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:            "documents_status_idx",
+			Columns:         []string{"status"},
+			ReplicaIdentity: true,
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].replica_identity")
+	require.ErrorContains(t, err, "must not be set on a non-unique index")
+}
+
+// TestTableValidateRejectsIndexStorageParameterWithEmptyKey proves that
+// Validate rejects an empty StorageParameters key: a live PostgreSQL
+// reloptions entry always has a non-empty name, so an empty key can only
+// come from a hand-built descriptor and is nonsense to render.
+func TestTableValidateRejectsIndexStorageParameterWithEmptyKey(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:              "documents_status_idx",
+			Columns:           []string{"status"},
+			StorageParameters: map[string]string{"": "70"},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].storage_parameters")
+	require.ErrorContains(t, err, "must not have an empty key")
+}
+
 // TestTableValidateUnsignedColumn covers the integer-specific signedness
 // option. Other concrete types cannot carry it in the first place.
 func TestTableValidateUnsignedColumn(t *testing.T) {

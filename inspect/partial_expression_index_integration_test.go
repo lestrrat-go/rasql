@@ -66,6 +66,57 @@ func TestPostgreSQLInspectorRecordsExpressionIndexAgainstLiveDatabase(t *testing
 	}, table.Indexes)
 }
 
+// TestPostgreSQLInspectorNormalizesPartialIndexPredicateAgainstLiveDatabase
+// and TestPostgreSQLInspectorNormalizesExpressionIndexKeyAgainstLiveDatabase
+// prove that PostgreSQL reports a partial index's predicate, and an
+// expression key's text, back through pg_catalog.pg_get_expr and
+// pg_catalog.pg_get_indexdef in the server's own re-serialized form, not
+// necessarily the exact source text a migration wrote.
+// TestPostgreSQLInspectorRecordsPartialIndexAgainstLiveDatabase and
+// TestPostgreSQLInspectorRecordsExpressionIndexAgainstLiveDatabase above use
+// inputs that already happen to match their own re-serialized form (a bare
+// boolean column, a single function call), so neither actually exercises
+// re-parenthesization. This test's predicate is written with no parentheses
+// at all around its arithmetic; the server adds a wrapping pair around it as
+// the left operand of ">" that the original source never had, proving the
+// text is deparsed rather than echoed verbatim. Unlike
+// ColumnDef.GeneratedExpression (see docs/02-schema.md), which is fully
+// parenthesized at every operator, PostgreSQL's index predicate and
+// expression deparse route only adds parentheses where its own deparser
+// judges them needed, so this expression's left-associative "* /" chain
+// gets none between "celsius * 9" and "/ 5".
+func TestPostgreSQLInspectorNormalizesPartialIndexPredicateAgainstLiveDatabase(t *testing.T) {
+	ctx := t.Context()
+	database := dbtest.PostgreSQLDB(t)
+
+	mustExec(t, ctx, database, "CREATE TABLE articles (id integer PRIMARY KEY, celsius integer NOT NULL)")
+	mustExec(t, ctx, database, "CREATE INDEX articles_hot_idx ON articles (id) WHERE celsius * 9 / 5 + 32 > 100")
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	table, err := inspector.Table(ctx, "articles")
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{
+		{Name: "articles_hot_idx", Columns: []string{"id"}, Predicate: "(celsius * 9 / 5 + 32) > 100"},
+	}, table.Indexes)
+}
+
+func TestPostgreSQLInspectorNormalizesExpressionIndexKeyAgainstLiveDatabase(t *testing.T) {
+	ctx := t.Context()
+	database := dbtest.PostgreSQLDB(t)
+
+	mustExec(t, ctx, database, "CREATE TABLE articles (id integer PRIMARY KEY, celsius integer NOT NULL)")
+	mustExec(t, ctx, database, "CREATE INDEX articles_fahrenheit_idx ON articles ((celsius * 9 / 5 + 32))")
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	table, err := inspector.Table(ctx, "articles")
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{
+		{Name: "articles_fahrenheit_idx", Expressions: []string{"(celsius * 9 / 5 + 32)"}},
+	}, table.Indexes)
+}
+
 // TestMySQLInspectorRecordsFunctionalIndexAgainstLiveDatabase pins what a
 // real MySQL server reports back in information_schema.statistics.expression
 // for a functional index key, the same way index_method_integration_test.go

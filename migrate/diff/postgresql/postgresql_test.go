@@ -160,6 +160,40 @@ func TestLiveSourcesRejectsIndexKeyDetails(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsIndexValidityStorageAndPlacement proves that an
+// inspected table carrying an invalid index, one with storage parameters,
+// one on a nondefault tablespace, or one marking the table's replica
+// identity does not reach diff-live's generated desired-schema sources as a
+// silently downgraded plain, default-placement index: LiveSources renders
+// through render.CreateIndexes, which refuses each of these facts, so the
+// error surfaces here rather than a Plan going on to emit the wrong DDL for
+// it.
+func TestLiveSourcesRejectsIndexValidityStorageAndPlacement(t *testing.T) {
+	tests := []struct {
+		name  string
+		index schema.IndexDef
+	}{
+		{name: "not valid", index: schema.IndexDef{Name: "members_status_idx", Columns: []string{"status"}, NotValid: true}},
+		{name: "storage parameters", index: schema.IndexDef{Name: "members_status_idx", Columns: []string{"status"}, StorageParameters: map[string]string{"fillfactor": "70"}}},
+		{name: "tablespace", index: schema.IndexDef{Name: "members_status_idx", Columns: []string{"status"}, Tablespace: "pg_custom"}},
+		{name: "replica identity", index: schema.IndexDef{Name: "members_status_idx", Columns: []string{"status"}, Unique: true, ReplicaIdentity: true}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			analyzer := postgresql.New()
+			_, err := analyzer.LiveSources(schema.TableDef{
+				Name:       "members",
+				Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "status", Type: schema.TextType{}}},
+				PrimaryKey: []string{"id"},
+				Indexes:    []schema.IndexDef{test.index},
+			})
+			require.ErrorContains(t, err, `"members_status_idx"`)
+			require.ErrorContains(t, err, "can describe but not yet render")
+		})
+	}
+}
+
 // TestLiveSourcesRejectsNonDefaultForeignKeyMatch proves that an inspected
 // table carrying a foreign key with a non-default MATCH clause does not
 // reach diff-live's generated desired-schema sources as a silently
