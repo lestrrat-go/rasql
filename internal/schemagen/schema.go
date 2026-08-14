@@ -1565,7 +1565,6 @@ func writeUniqueDefLiteral(source *bytes.Buffer, constraint schema.UniqueDef) {
 		}
 		source.WriteString("Collations: ")
 		writeStringMapLiteral(source, constraint.Collations)
-		first = false
 	}
 	source.WriteString("},\n")
 }
