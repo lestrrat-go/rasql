@@ -2061,6 +2061,17 @@ func sqliteQualifiedPragma(databaseName, pragmaName, identifier string) string {
 // character_maximum_length reports 65535 for an unbounded TEXT column, so
 // reading it there would turn MySQL's already-correct unstated widths into
 // wrongly stated ones.
+//
+// Each dialect's query also carries what it needs to record a generated
+// column, alongside its own authoritative signal for whether the column is
+// generated at all, the same way SQLite trusts PRAGMA table_xinfo's hidden
+// flag over the parsed DDL (see sqliteGeneratedExpression): the MySQL query
+// selects extra and generation_expression, since MySQL's EXTRA column
+// spells "STORED GENERATED" or "VIRTUAL GENERATED" for one; the PostgreSQL
+// query selects is_generated and generation_expression from
+// information_schema.columns, plus pg_catalog.pg_attribute.attgenerated
+// (joined in), since information_schema alone states that a column is
+// generated but not whether it is STORED or, from PostgreSQL 18, VIRTUAL.
 func (i Inspector) readColumns(ctx context.Context, query string, argument any) ([]schema.ColumnDef, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
@@ -2079,12 +2090,16 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		var numericPrecision sql.NullInt64
 		var numericScale sql.NullInt64
 		var characterMaximumLength sql.NullInt64
+		var generationExpression sql.NullString
+		var postgreSQLIsGenerated string
+		var postgreSQLGeneratedKind sql.NullString
+		var mysqlExtra string
 		if postgreSQL {
-			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale, &characterMaximumLength); err != nil {
+			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale, &characterMaximumLength, &postgreSQLIsGenerated, &generationExpression, &postgreSQLGeneratedKind); err != nil {
 				return nil, fmt.Errorf("inspect: scan column: %w", err)
 			}
 		} else {
-			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale); err != nil {
+			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale, &mysqlExtra, &generationExpression); err != nil {
 				return nil, fmt.Errorf("inspect: scan column: %w", err)
 			}
 		}
@@ -2110,12 +2125,69 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 				Scale:     schema.NewDecimalScale(int(numericScale.Int64)),
 			}
 		}
+		if postgreSQL {
+			if postgreSQLIsGenerated == "ALWAYS" {
+				storage, err := postgreSQLGeneratedStorage(postgreSQLGeneratedKind)
+				if err != nil {
+					return nil, fmt.Errorf("inspect: column %q: %w", name, err)
+				}
+				if !generationExpression.Valid || generationExpression.String == "" {
+					return nil, fmt.Errorf("inspect: column %q: generated column has no generation_expression to record", name)
+				}
+				column.GeneratedExpression = generationExpression.String
+				column.GeneratedStorage = storage
+			}
+		} else if storage, generated := mysqlGeneratedColumnStorage(mysqlExtra); generated {
+			if !generationExpression.Valid || generationExpression.String == "" {
+				return nil, fmt.Errorf("inspect: column %q: generated column has no generation_expression to record", name)
+			}
+			column.GeneratedExpression = generationExpression.String
+			column.GeneratedStorage = storage
+		}
 		columns = append(columns, column)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate columns: %w", err)
 	}
 	return columns, nil
+}
+
+// postgreSQLGeneratedStorage maps pg_catalog.pg_attribute.attgenerated,
+// joined into the PostgreSQL columns query, to a schema.GeneratedStorage.
+// PostgreSQL spells a stored generated column 's' and, from PostgreSQL 18, a
+// virtual one 'v'; the join is a LEFT JOIN so a column information_schema
+// already reported is_generated = 'ALWAYS' for but whose pg_attribute row
+// somehow did not match reports an error rather than guessing a storage kind
+// the catalog never actually stated.
+func postgreSQLGeneratedStorage(kind sql.NullString) (schema.GeneratedStorage, error) {
+	if !kind.Valid {
+		return "", fmt.Errorf("generated column has no pg_attribute.attgenerated entry to record its storage kind")
+	}
+	switch kind.String {
+	case "s":
+		return schema.GeneratedStored, nil
+	case "v":
+		return schema.GeneratedVirtual, nil
+	default:
+		return "", fmt.Errorf("unsupported postgresql generated column storage kind %q", kind.String)
+	}
+}
+
+// mysqlGeneratedColumnStorage reports whether extra, MySQL's
+// information_schema.columns.EXTRA value, names a generated column, and
+// which schema.GeneratedStorage it names. MySQL spells the two kinds exactly
+// "STORED GENERATED" and "VIRTUAL GENERATED"; any other EXTRA value, such as
+// "auto_increment", "DEFAULT_GENERATED", or "on update CURRENT_TIMESTAMP",
+// is an ordinary, non-generated column.
+func mysqlGeneratedColumnStorage(extra string) (schema.GeneratedStorage, bool) {
+	switch extra {
+	case "STORED GENERATED":
+		return schema.GeneratedStored, true
+	case "VIRTUAL GENERATED":
+		return schema.GeneratedVirtual, true
+	default:
+		return "", false
+	}
 }
 
 func (i Inspector) readPrimaryKey(ctx context.Context, query string, argument any) ([]string, error) {
@@ -2642,7 +2714,7 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 	switch name {
 	case "mysql":
 		return informationQueries{
-			columns:           "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
+			columns:           "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale, extra, generation_expression FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
 			primaryKey:        "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
 			uniqueConstraints: "SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, NULL, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
 			checks:            "SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name",
@@ -2752,7 +2824,7 @@ func postgreSQLInformationQueries(version int) informationQueries {
 	temporal := postgreSQLCatalogBoolean(version, postgreSQL18Version, "constraint_data.conperiod")
 
 	return informationQueries{
-		columns:              "SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale, character_maximum_length FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
+		columns:              "SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema.columns AS column_data JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.nspname = column_data.table_schema JOIN pg_catalog.pg_class AS table_data ON table_data.relnamespace = table_namespace.oid AND table_data.relname = column_data.table_name LEFT JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = table_data.oid AND attribute.attname = column_data.column_name WHERE column_data.table_schema = current_schema() AND column_data.table_name = $1 ORDER BY column_data.ordinal_position",
 		primaryKey:           "SELECT attribute.attname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'p' ORDER BY key_column.ordinal_position",
 		uniqueConstraints:    "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", (SELECT string_agg(pg_catalog.pg_get_indexdef(index_metadata.indexrelid, included_column.ordinal_position::int, true), ',' ORDER BY included_column.ordinal_position) FROM generate_series(index_metadata.indnkeyatts + 1, index_metadata.indnatts) AS included_column(ordinal_position)), " + temporal + ", index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR index_metadata.indisreplident OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
 		checks:               "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",

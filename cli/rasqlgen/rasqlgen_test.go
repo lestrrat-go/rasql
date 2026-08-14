@@ -160,10 +160,10 @@ func TestRunSchemaInspectsPostgreSQL(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("SHOW server_version_num").
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow("180000"))
-	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale, character_maximum_length FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data\\.column_name, column_data\\.data_type, column_data\\.is_nullable, column_data\\.column_default, column_data\\.numeric_precision, column_data\\.numeric_scale, column_data\\.character_maximum_length, column_data\\.is_generated, column_data\\.generation_expression, attribute\\.attgenerated FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
 	mock.ExpectQuery("SELECT count\\(attribute\\.attnum\\) FROM pg_catalog\\.pg_class AS table_data.*JOIN pg_catalog\\.pg_namespace AS table_namespace.*LEFT JOIN pg_catalog\\.pg_attribute AS attribute.*table_data\\.relkind IN \\('r','p','v','f'\\) GROUP BY table_data\\.oid").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
@@ -244,10 +244,10 @@ func TestRunSchemaInspectsMySQL(t *testing.T) {
 		openDatabase = previousOpenDatabase
 	})
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale, extra, generation_expression FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "extra", "generation_expression"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, "", ""))
 	mock.ExpectQuery("SHOW CREATE TABLE `users`").
 		WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).
 			AddRow("users", "CREATE TABLE `users` (`id` bigint NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB"))
