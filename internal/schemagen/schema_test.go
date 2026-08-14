@@ -1172,6 +1172,8 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 			{Name: "owner_id", Type: schema.IntegerType{}, Nullable: true},
 			{Name: "combo_a", Type: schema.IntegerType{}, Nullable: true},
 			{Name: "combo_b", Type: schema.IntegerType{}, Nullable: true},
+			{Name: "status", Type: schema.TextType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
 		},
 		PrimaryKey:              []string{"id"},
 		Strict:                  true,
@@ -1212,6 +1214,8 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 			{Name: "idx_bio_gin", Columns: []string{"bio"}, Method: "gin"},
 			{Name: "idx_price_active", Columns: []string{"price"}, Predicate: "price > 0"},
 			{Name: "idx_lower_bio", Expressions: []string{"lower(bio)"}},
+			{Name: "idx_price_status", Columns: []string{"price"}, IncludeColumns: []string{"status"}, Invisible: true},
+			{Name: "idx_created_at_desc", Keys: []schema.IndexKeyDef{{Expression: "created_at", Descending: true, Collation: "C", OperatorClass: "text_pattern_ops", PrefixLength: 8}}},
 		},
 		ForeignKeys: []schema.ForeignKeyDef{
 			{
@@ -1275,6 +1279,9 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Name: "idx_bio_gin", Columns: []string{"bio"}, Method: schema.IndexMethod("gin")}`)
 	require.Contains(t, text, `{Name: "idx_price_active", Columns: []string{"price"}, Predicate: "price > 0"}`)
 	require.Contains(t, text, `{Name: "idx_lower_bio", Expressions: []string{"lower(bio)"}}`)
+	require.Contains(t, text, `{Name: "idx_price_status", Columns: []string{"price"}, IncludeColumns: []string{"status"}, Invisible: true}`)
+	require.Contains(t, text, `{Name: "idx_created_at_desc", Keys: []schema.IndexKeyDef{`)
+	require.Contains(t, text, `{Expression: "created_at", Descending: true, Collation: "C", OperatorClass: "text_pattern_ops", PrefixLength: 8}`)
 	require.Contains(t, text, `{Name: "fk_owner", Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, Match: schema.MatchFull, OnDelete: schema.Cascade, OnUpdate: schema.Restrict, Deferrable: schema.DeferrableInitiallyDeferred, NotValid: true, NotEnforced: true}`)
 	require.Contains(t, text, `{Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
 	require.Contains(t, text, `{Name: "Owner", Kind: schema.RelationshipBelongsTo, Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)

@@ -395,6 +395,99 @@ type IndexDef struct {
 	// MySQL has no partial-index concept, so this never comes from a MySQL
 	// descriptor.
 	Predicate string `json:",omitempty"`
+
+	// IncludeColumns lists a PostgreSQL index's INCLUDE columns: columns
+	// carried by the index for covering reads without taking part in its
+	// key. Its zero value, nil, means the index has no INCLUDE clause,
+	// which is what every IndexDef written before this field existed has
+	// always meant.
+	//
+	// A non-empty IncludeColumns is describable but not yet renderable:
+	// inspect records a live PostgreSQL index's included columns, and
+	// TableDef.Validate accepts them, but render.CreateIndexes and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct an INCLUDE clause.
+	IncludeColumns []string `json:",omitempty"`
+
+	// Invisible marks a MySQL index the optimizer ignores for query
+	// planning without dropping it: MySQL still maintains it on every
+	// write and still enforces uniqueness through it. Its zero value,
+	// false, means the index is visible, which is what every IndexDef
+	// written before this field existed has always meant.
+	//
+	// A true Invisible is describable but not yet renderable:
+	// inspect records a live MySQL index's visibility, and
+	// TableDef.Validate accepts it, but render.CreateIndexes and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct an INVISIBLE index. PostgreSQL
+	// and SQLite have no index-visibility concept, so this never comes
+	// from a PostgreSQL or SQLite descriptor.
+	Invisible bool `json:",omitempty"`
+
+	// Keys, when non-empty, is the full ordered list of per-key facts for
+	// an index that has at least one key ordered DESC, using a
+	// non-default collation or operator class, or (MySQL) indexed over a
+	// column prefix — facts that are positional, one per key, and so fit
+	// neither Columns nor Expressions, both flat lists with no room to
+	// attach a second fact to one position. When Keys is set it replaces
+	// both Columns and Expressions as the sole source of the index's key
+	// order, the same way Expressions already replaces Columns for a
+	// mixed or all-expression index: Columns and Expressions are both
+	// left empty, and each IndexKeyDef.Expression carries that key's own
+	// text, a bare column name for a plain-column key or expression text
+	// otherwise, exactly what Expressions's elements already mean. Its
+	// zero value, nil, means every key is a plain ascending column or
+	// expression in the default collation and operator class with no
+	// prefix, described by Columns or Expressions exactly as before this
+	// field existed.
+	//
+	// An IndexDef naming Keys is describable but not yet renderable:
+	// inspect records what a live PostgreSQL, MySQL, or SQLite index's
+	// keys actually use, and TableDef.Validate accepts it, but
+	// render.CreateIndexes and the migrate diff-live path refuse to build
+	// DDL for one, because rasql does not yet know how to construct a
+	// DESC key, a non-default collation or operator class, or a MySQL
+	// prefix part.
+	Keys []IndexKeyDef `json:",omitempty"`
+}
+
+// IndexKeyDef describes one key of an index beyond its expression text:
+// order, per-key collation, operator class, and MySQL prefix length. It
+// exists only so IndexDef.Keys can attach these facts to one key position;
+// an index where every key is a plain ascending column or expression in the
+// default collation and operator class with no prefix continues to
+// describe its keys with IndexDef.Columns or IndexDef.Expressions alone,
+// exactly as before this type existed. See IndexDef.Keys's own doc for when
+// a per-key fact forces an index to use Keys instead.
+type IndexKeyDef struct {
+	// Expression is the key's own text: a bare column name for a
+	// plain-column key, or expression text for an expression key. This is
+	// the same convention IndexDef.Expressions's elements use: a plain
+	// column is itself a valid SQL expression.
+	Expression string
+
+	// Descending marks a key ordered DESC rather than the engine default,
+	// ASC. Its zero value, false, means ASC.
+	Descending bool `json:",omitempty"`
+
+	// Collation names a non-default per-key collation, or empty for the
+	// key's own default collation. Meaningful for PostgreSQL and SQLite;
+	// MySQL has no per-key collation concept, so this never comes from a
+	// MySQL descriptor.
+	Collation string `json:",omitempty"`
+
+	// OperatorClass names a non-default PostgreSQL operator class for
+	// this key, or empty for the default operator class. PostgreSQL only:
+	// MySQL and SQLite have no operator class concept, so this never
+	// comes from a MySQL or SQLite descriptor.
+	OperatorClass string `json:",omitempty"`
+
+	// PrefixLength is a MySQL index part's prefix length in characters
+	// (or bytes, for a binary column) — the N in KEY (col(N)) — or zero
+	// when the key indexes the whole column. MySQL only: PostgreSQL and
+	// SQLite have no index-key-prefix concept, so this never comes from a
+	// PostgreSQL or SQLite descriptor.
+	PrefixLength int `json:",omitempty"`
 }
 
 // ExclusionElementDef describes one element of an ExclusionDef: a column or
@@ -956,18 +1049,51 @@ func validateIndexes(indexes []IndexDef, columns map[string]struct{}) error {
 			return validationError(path+".name", "duplicates index %q", index.Name)
 		}
 		names[index.Name] = struct{}{}
-		if len(index.Expressions) == 0 {
+		switch {
+		case len(index.Keys) > 0:
+			if len(index.Columns) > 0 {
+				return validationError(path+".columns", "must be empty when Keys describes the index's keys instead")
+			}
+			if len(index.Expressions) > 0 {
+				return validationError(path+".expressions", "must be empty when Keys describes the index's keys instead")
+			}
+			for j, key := range index.Keys {
+				keyPath := fmt.Sprintf("%s.keys[%d]", path, j)
+				if key.Expression == "" {
+					return validationError(keyPath+".expression", "must not be empty")
+				}
+				if key.PrefixLength < 0 {
+					return validationError(keyPath+".prefix_length", "must not be negative")
+				}
+			}
+		case len(index.Expressions) > 0:
+			if len(index.Columns) > 0 {
+				return validationError(path+".columns", "must be empty when Expressions describes the index's keys instead")
+			}
+			for j, expression := range index.Expressions {
+				if expression == "" {
+					return validationError(fmt.Sprintf("%s.expressions[%d]", path, j), "must not be empty")
+				}
+			}
+		default:
 			if err := validateColumnList(path+".columns", index.Columns, columns, true); err != nil {
 				return err
 			}
-			continue
 		}
-		if len(index.Columns) > 0 {
-			return validationError(path+".columns", "must be empty when Expressions describes the index's keys instead")
-		}
-		for j, expression := range index.Expressions {
-			if expression == "" {
-				return validationError(fmt.Sprintf("%s.expressions[%d]", path, j), "must not be empty")
+		if len(index.IncludeColumns) > 0 {
+			seen := make(map[string]struct{}, len(index.Columns)+len(index.IncludeColumns))
+			for _, name := range index.Columns {
+				seen[name] = struct{}{}
+			}
+			for j, name := range index.IncludeColumns {
+				includedPath := fmt.Sprintf("%s.include_columns[%d]", path, j)
+				if _, exists := columns[name]; !exists {
+					return validationError(includedPath, "references unknown column %q", name)
+				}
+				if _, exists := seen[name]; exists {
+					return validationError(includedPath, "duplicates column %q", name)
+				}
+				seen[name] = struct{}{}
 			}
 		}
 	}
