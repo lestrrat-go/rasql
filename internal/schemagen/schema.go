@@ -1358,6 +1358,15 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 			}
 			source.WriteString("Expression: ")
 			source.WriteString(quote(check.Expression))
+			if check.NoInherit {
+				source.WriteString(", NoInherit: true")
+			}
+			if check.NotValid {
+				source.WriteString(", NotValid: true")
+			}
+			if check.NotEnforced {
+				source.WriteString(", NotEnforced: true")
+			}
 			source.WriteString("},\n")
 		}
 		source.WriteString("},\n")
@@ -1511,6 +1520,12 @@ func writeForeignKeyDefLiteral(source *bytes.Buffer, key schema.ForeignKeyDef) {
 	if key.Deferrable != "" {
 		source.WriteString(", Deferrable: ")
 		source.WriteString(deferrabilityConstant(key.Deferrable))
+	}
+	if key.NotValid {
+		source.WriteString(", NotValid: true")
+	}
+	if key.NotEnforced {
+		source.WriteString(", NotEnforced: true")
 	}
 	source.WriteString("},\n")
 }

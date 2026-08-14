@@ -160,6 +160,44 @@ type UniqueDef struct {
 type CheckDef struct {
 	Name       string
 	Expression string
+
+	// NoInherit records a PostgreSQL check constraint declared NO
+	// INHERIT: a child table in an inheritance hierarchy neither
+	// inherits nor enforces it. Its zero value, false, means the
+	// constraint is inherited normally, which is what every CheckDef and
+	// every checked-in generated file written before this field existed
+	// has always meant. MySQL and SQLite have no NO INHERIT concept, so
+	// this never comes from a MySQL or SQLite descriptor.
+	//
+	// NoInherit is describable but not yet renderable: inspect records
+	// what a live PostgreSQL check constraint actually declares, and
+	// TableDef.Validate accepts it, but render.CreateTable and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct a NO INHERIT check constraint.
+	NoInherit bool `json:",omitempty"`
+
+	// NotValid records a check constraint declared NOT VALID: existing
+	// rows were never checked against it. Its zero value, false, means
+	// the constraint was validated against existing rows, which is what
+	// every CheckDef and every checked-in generated file written before
+	// this field existed has always meant. MySQL and SQLite have no NOT
+	// VALID concept, so this never comes from a MySQL or SQLite
+	// descriptor.
+	//
+	// NotValid is describable but not yet renderable, on the same terms
+	// as NoInherit.
+	NotValid bool `json:",omitempty"`
+
+	// NotEnforced records a check constraint declared NOT ENFORCED,
+	// which PostgreSQL 18+ and MySQL both support. Its zero value,
+	// false, means the constraint is enforced, which is what every
+	// CheckDef and every checked-in generated file written before this
+	// field existed has always meant. SQLite has no NOT ENFORCED
+	// concept, so this never comes from a SQLite descriptor.
+	//
+	// NotEnforced is describable but not yet renderable, on the same
+	// terms as NoInherit.
+	NotEnforced bool `json:",omitempty"`
 }
 
 // IndexMethod names the index access method (what PostgreSQL calls an
@@ -264,6 +302,32 @@ type ForeignKeyDef struct {
 	// currently accepts it. omitempty keeps a NOT DEFERRABLE ForeignKeyDef's
 	// JSON identical to what it encoded before this field existed.
 	Deferrable Deferrability `json:",omitempty"`
+
+	// NotValid records a foreign key declared NOT VALID: existing rows
+	// were never checked against it. Its zero value, false, means the
+	// foreign key was validated against existing rows, which is what
+	// every ForeignKeyDef and every checked-in generated file written
+	// before this field existed has always meant. MySQL has no NOT VALID
+	// concept for foreign keys, so this never comes from a MySQL
+	// descriptor.
+	//
+	// NotValid is describable but not yet renderable: inspect records
+	// what a live PostgreSQL foreign key actually declares, and
+	// TableDef.Validate accepts it, but render.CreateTable and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct a NOT VALID foreign key.
+	NotValid bool `json:",omitempty"`
+
+	// NotEnforced records a foreign key declared NOT ENFORCED, which
+	// PostgreSQL 18+ supports. Its zero value, false, means the foreign
+	// key is enforced, which is what every ForeignKeyDef and every
+	// checked-in generated file written before this field existed has
+	// always meant. MySQL has no NOT ENFORCED concept for foreign keys,
+	// so this never comes from a MySQL descriptor.
+	//
+	// NotEnforced is describable but not yet renderable, on the same
+	// terms as NotValid.
+	NotEnforced bool `json:",omitempty"`
 }
 
 // TableDef describes a database table and its constraints.

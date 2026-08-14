@@ -149,6 +149,131 @@ func (e *UnsupportedForeignKeyDeferrabilityError) Unwrap() error {
 	return ErrUnsupportedForeignKeyDeferrability
 }
 
+// ErrUnsupportedCheckNoInherit is the sentinel wrapped by every
+// [UnsupportedCheckNoInheritError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedCheckNoInherit = errors.New("render: unsupported check constraint NO INHERIT")
+
+// UnsupportedCheckNoInheritError reports that a CheckDef names
+// [schema.CheckDef.NoInherit]. inspect can describe such a check
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a NO INHERIT check constraint.
+type UnsupportedCheckNoInheritError struct {
+	// Check is the name of the check constraint declared NO INHERIT.
+	Check string
+}
+
+func (e *UnsupportedCheckNoInheritError) Error() string {
+	return fmt.Sprintf("check constraint %q is NO INHERIT, which rasql can describe but not yet render", e.Check)
+}
+
+// Unwrap exposes ErrUnsupportedCheckNoInherit so
+// errors.Is(err, ErrUnsupportedCheckNoInherit) works alongside errors.As
+// against *UnsupportedCheckNoInheritError.
+func (e *UnsupportedCheckNoInheritError) Unwrap() error {
+	return ErrUnsupportedCheckNoInherit
+}
+
+// ErrUnsupportedCheckNotValid is the sentinel wrapped by every
+// [UnsupportedCheckNotValidError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedCheckNotValid = errors.New("render: unsupported check constraint NOT VALID")
+
+// UnsupportedCheckNotValidError reports that a CheckDef names
+// [schema.CheckDef.NotValid]. inspect can describe such a check constraint,
+// and TableDef.Validate accepts it, but this package does not yet know how
+// to build DDL for a NOT VALID check constraint.
+type UnsupportedCheckNotValidError struct {
+	// Check is the name of the check constraint declared NOT VALID.
+	Check string
+}
+
+func (e *UnsupportedCheckNotValidError) Error() string {
+	return fmt.Sprintf("check constraint %q is NOT VALID, which rasql can describe but not yet render", e.Check)
+}
+
+// Unwrap exposes ErrUnsupportedCheckNotValid so
+// errors.Is(err, ErrUnsupportedCheckNotValid) works alongside errors.As
+// against *UnsupportedCheckNotValidError.
+func (e *UnsupportedCheckNotValidError) Unwrap() error {
+	return ErrUnsupportedCheckNotValid
+}
+
+// ErrUnsupportedCheckNotEnforced is the sentinel wrapped by every
+// [UnsupportedCheckNotEnforcedError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedCheckNotEnforced = errors.New("render: unsupported check constraint NOT ENFORCED")
+
+// UnsupportedCheckNotEnforcedError reports that a CheckDef names
+// [schema.CheckDef.NotEnforced]. inspect can describe such a check
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a NOT ENFORCED check constraint.
+type UnsupportedCheckNotEnforcedError struct {
+	// Check is the name of the check constraint declared NOT ENFORCED.
+	Check string
+}
+
+func (e *UnsupportedCheckNotEnforcedError) Error() string {
+	return fmt.Sprintf("check constraint %q is NOT ENFORCED, which rasql can describe but not yet render", e.Check)
+}
+
+// Unwrap exposes ErrUnsupportedCheckNotEnforced so
+// errors.Is(err, ErrUnsupportedCheckNotEnforced) works alongside errors.As
+// against *UnsupportedCheckNotEnforcedError.
+func (e *UnsupportedCheckNotEnforcedError) Unwrap() error {
+	return ErrUnsupportedCheckNotEnforced
+}
+
+// ErrUnsupportedForeignKeyNotValid is the sentinel wrapped by every
+// [UnsupportedForeignKeyNotValidError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedForeignKeyNotValid = errors.New("render: unsupported foreign key NOT VALID")
+
+// UnsupportedForeignKeyNotValidError reports that a ForeignKeyDef names
+// [schema.ForeignKeyDef.NotValid]. inspect can describe such a foreign key,
+// and TableDef.Validate accepts it, but this package does not yet know how
+// to build DDL for a NOT VALID foreign key.
+type UnsupportedForeignKeyNotValidError struct {
+	// ForeignKey is the name of the foreign key declared NOT VALID.
+	ForeignKey string
+}
+
+func (e *UnsupportedForeignKeyNotValidError) Error() string {
+	return fmt.Sprintf("foreign key %q is NOT VALID, which rasql can describe but not yet render", e.ForeignKey)
+}
+
+// Unwrap exposes ErrUnsupportedForeignKeyNotValid so
+// errors.Is(err, ErrUnsupportedForeignKeyNotValid) works alongside
+// errors.As against *UnsupportedForeignKeyNotValidError.
+func (e *UnsupportedForeignKeyNotValidError) Unwrap() error {
+	return ErrUnsupportedForeignKeyNotValid
+}
+
+// ErrUnsupportedForeignKeyNotEnforced is the sentinel wrapped by every
+// [UnsupportedForeignKeyNotEnforcedError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedForeignKeyNotEnforced = errors.New("render: unsupported foreign key NOT ENFORCED")
+
+// UnsupportedForeignKeyNotEnforcedError reports that a ForeignKeyDef names
+// [schema.ForeignKeyDef.NotEnforced]. inspect can describe such a foreign
+// key, and TableDef.Validate accepts it, but this package does not yet know
+// how to build DDL for a NOT ENFORCED foreign key.
+type UnsupportedForeignKeyNotEnforcedError struct {
+	// ForeignKey is the name of the foreign key declared NOT ENFORCED.
+	ForeignKey string
+}
+
+func (e *UnsupportedForeignKeyNotEnforcedError) Error() string {
+	return fmt.Sprintf("foreign key %q is NOT ENFORCED, which rasql can describe but not yet render", e.ForeignKey)
+}
+
+// Unwrap exposes ErrUnsupportedForeignKeyNotEnforced so
+// errors.Is(err, ErrUnsupportedForeignKeyNotEnforced) works alongside
+// errors.As against *UnsupportedForeignKeyNotEnforcedError.
+func (e *UnsupportedForeignKeyNotEnforcedError) Unwrap() error {
+	return ErrUnsupportedForeignKeyNotEnforced
+}
+
 // CreateTable renders a CREATE TABLE statement for table.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
 	if isNilDialect(d) {
@@ -229,6 +354,15 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		definitions = append(definitions, definition)
 	}
 	for _, check := range table.Checks {
+		if check.NoInherit {
+			return &UnsupportedCheckNoInheritError{Check: check.Name}
+		}
+		if check.NotValid {
+			return &UnsupportedCheckNotValidError{Check: check.Name}
+		}
+		if check.NotEnforced {
+			return &UnsupportedCheckNotEnforcedError{Check: check.Name}
+		}
 		definition := "CHECK (" + check.Expression + ")"
 		if check.Name != "" {
 			name, err := r.quoteIdentifier(check.Name)
@@ -417,6 +551,12 @@ func (r *renderer) foreignKeyDefinition(table schema.TableDef, key schema.Foreig
 	}
 	if key.Deferrable != "" {
 		return "", &UnsupportedForeignKeyDeferrabilityError{ForeignKey: key.Name, Deferrable: key.Deferrable}
+	}
+	if key.NotValid {
+		return "", &UnsupportedForeignKeyNotValidError{ForeignKey: key.Name}
+	}
+	if key.NotEnforced {
+		return "", &UnsupportedForeignKeyNotEnforcedError{ForeignKey: key.Name}
 	}
 	columns, err := r.quotedNames(key.Columns)
 	if err != nil {
