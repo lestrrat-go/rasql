@@ -274,6 +274,119 @@ func (e *UnsupportedForeignKeyNotEnforcedError) Unwrap() error {
 	return ErrUnsupportedForeignKeyNotEnforced
 }
 
+// ErrUnsupportedUniqueDeferrability is the sentinel wrapped by every
+// [UnsupportedUniqueDeferrabilityError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueDeferrability = errors.New("render: unsupported unique constraint deferrability")
+
+// UnsupportedUniqueDeferrabilityError reports that a UniqueDef names a
+// non-default [schema.Deferrability]. inspect can describe such a unique
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for anything other than a plain NOT DEFERRABLE
+// unique constraint.
+type UnsupportedUniqueDeferrabilityError struct {
+	// Unique is the name of the unique constraint that named a
+	// non-default deferrability.
+	Unique string
+	// Deferrable is the non-default deferrability the constraint named.
+	Deferrable schema.Deferrability
+}
+
+func (e *UnsupportedUniqueDeferrabilityError) Error() string {
+	return fmt.Sprintf("unique constraint %q is %s, which rasql can describe but not yet render", e.Unique, e.Deferrable)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueDeferrability so
+// errors.Is(err, ErrUnsupportedUniqueDeferrability) works alongside
+// errors.As against *UnsupportedUniqueDeferrabilityError.
+func (e *UnsupportedUniqueDeferrabilityError) Unwrap() error {
+	return ErrUnsupportedUniqueDeferrability
+}
+
+// ErrUnsupportedUniqueNullsNotDistinct is the sentinel wrapped by every
+// [UnsupportedUniqueNullsNotDistinctError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueNullsNotDistinct = errors.New("render: unsupported unique constraint nulls-not-distinct")
+
+// UnsupportedUniqueNullsNotDistinctError reports that a UniqueDef sets
+// [schema.UniqueDef.NullsNotDistinct]. inspect can describe such a unique
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a NULLS NOT DISTINCT clause.
+type UnsupportedUniqueNullsNotDistinctError struct {
+	// Unique is the name of the unique constraint that set
+	// NullsNotDistinct.
+	Unique string
+}
+
+func (e *UnsupportedUniqueNullsNotDistinctError) Error() string {
+	return fmt.Sprintf("unique constraint %q uses NULLS NOT DISTINCT, which rasql can describe but not yet render", e.Unique)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueNullsNotDistinct so
+// errors.Is(err, ErrUnsupportedUniqueNullsNotDistinct) works alongside
+// errors.As against *UnsupportedUniqueNullsNotDistinctError.
+func (e *UnsupportedUniqueNullsNotDistinctError) Unwrap() error {
+	return ErrUnsupportedUniqueNullsNotDistinct
+}
+
+// ErrUnsupportedUniqueIncludeColumns is the sentinel wrapped by every
+// [UnsupportedUniqueIncludeColumnsError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueIncludeColumns = errors.New("render: unsupported unique constraint include columns")
+
+// UnsupportedUniqueIncludeColumnsError reports that a UniqueDef names
+// [schema.UniqueDef.IncludeColumns]. inspect can describe such a unique
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for an INCLUDE clause.
+type UnsupportedUniqueIncludeColumnsError struct {
+	// Unique is the name of the unique constraint that named included
+	// columns.
+	Unique string
+	// IncludeColumns is the ordered list of included column names the
+	// constraint named.
+	IncludeColumns []string
+}
+
+func (e *UnsupportedUniqueIncludeColumnsError) Error() string {
+	return fmt.Sprintf("unique constraint %q includes columns %q, which rasql can describe but not yet render", e.Unique, e.IncludeColumns)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueIncludeColumns so
+// errors.Is(err, ErrUnsupportedUniqueIncludeColumns) works alongside
+// errors.As against *UnsupportedUniqueIncludeColumnsError.
+func (e *UnsupportedUniqueIncludeColumnsError) Unwrap() error {
+	return ErrUnsupportedUniqueIncludeColumns
+}
+
+// ErrUnsupportedUniqueConflictResolution is the sentinel wrapped by every
+// [UnsupportedUniqueConflictResolutionError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueConflictResolution = errors.New("render: unsupported unique constraint conflict resolution")
+
+// UnsupportedUniqueConflictResolutionError reports that a UniqueDef names a
+// non-default [schema.ConflictResolution]. inspect can describe such a
+// unique constraint, and TableDef.Validate accepts it, but this package
+// does not yet know how to build DDL for an ON CONFLICT clause.
+type UnsupportedUniqueConflictResolutionError struct {
+	// Unique is the name of the unique constraint that named a
+	// non-default conflict resolution.
+	Unique string
+	// OnConflict is the non-default conflict resolution the constraint
+	// named.
+	OnConflict schema.ConflictResolution
+}
+
+func (e *UnsupportedUniqueConflictResolutionError) Error() string {
+	return fmt.Sprintf("unique constraint %q uses ON CONFLICT %s, which rasql can describe but not yet render", e.Unique, e.OnConflict)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueConflictResolution so
+// errors.Is(err, ErrUnsupportedUniqueConflictResolution) works alongside
+// errors.As against *UnsupportedUniqueConflictResolutionError.
+func (e *UnsupportedUniqueConflictResolutionError) Unwrap() error {
+	return ErrUnsupportedUniqueConflictResolution
+}
+
 // CreateTable renders a CREATE TABLE statement for table.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
 	if isNilDialect(d) {
@@ -336,6 +449,18 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		definitions = append(definitions, "PRIMARY KEY ("+strings.Join(columns, ", ")+")")
 	}
 	for _, constraint := range table.UniqueConstraints {
+		if constraint.Deferrable != "" {
+			return &UnsupportedUniqueDeferrabilityError{Unique: constraint.Name, Deferrable: constraint.Deferrable}
+		}
+		if constraint.NullsNotDistinct {
+			return &UnsupportedUniqueNullsNotDistinctError{Unique: constraint.Name}
+		}
+		if len(constraint.IncludeColumns) > 0 {
+			return &UnsupportedUniqueIncludeColumnsError{Unique: constraint.Name, IncludeColumns: constraint.IncludeColumns}
+		}
+		if constraint.OnConflict != "" {
+			return &UnsupportedUniqueConflictResolutionError{Unique: constraint.Name, OnConflict: constraint.OnConflict}
+		}
 		if err := r.rejectUnboundedMySQLText(table, constraint.Columns, "a unique constraint"); err != nil {
 			return err
 		}

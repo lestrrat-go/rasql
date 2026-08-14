@@ -621,6 +621,137 @@ func TestCreateTableRejectsForeignKeyNotEnforced(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedForeignKeyNotEnforced)
 }
 
+// TestCreateTableRejectsNonDefaultUniqueDeferrability proves that a
+// UniqueDef naming a non-default schema.Deferrability, such as DEFERRABLE
+// INITIALLY DEFERRED which inspect now describes instead of rejecting, is
+// refused at render time with a typed error rather than silently rendered
+// as a plain NOT DEFERRABLE unique constraint.
+func TestCreateTableRejectsNonDefaultUniqueDeferrability(t *testing.T) {
+	table := schema.TableDef{
+		Name: "accounts",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:       "accounts_email_key",
+			Columns:    []string{"email"},
+			Deferrable: schema.DeferrableInitiallyDeferred,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"accounts_email_key"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var deferrableErr *render.UnsupportedUniqueDeferrabilityError
+	require.ErrorAs(t, err, &deferrableErr)
+	require.Equal(t, "accounts_email_key", deferrableErr.Unique)
+	require.Equal(t, schema.DeferrableInitiallyDeferred, deferrableErr.Deferrable)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueDeferrability)
+
+	var renderErr *render.Error
+	require.ErrorAs(t, err, &renderErr)
+	require.Equal(t, "postgresql", renderErr.Dialect)
+}
+
+// TestCreateTableRejectsUniqueNullsNotDistinct proves that a UniqueDef
+// setting NullsNotDistinct, such as a live PostgreSQL 15+ UNIQUE NULLS NOT
+// DISTINCT constraint inspect now describes instead of rejecting, is
+// refused at render time with a typed error rather than silently rendered
+// as a plain NULLS DISTINCT constraint, which would accept a second NULL
+// the real constraint rejects.
+func TestCreateTableRejectsUniqueNullsNotDistinct(t *testing.T) {
+	table := schema.TableDef{
+		Name: "accounts",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:             "accounts_email_key",
+			Columns:          []string{"email"},
+			NullsNotDistinct: true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"accounts_email_key"`)
+	require.ErrorContains(t, err, "NULLS NOT DISTINCT")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var nullsErr *render.UnsupportedUniqueNullsNotDistinctError
+	require.ErrorAs(t, err, &nullsErr)
+	require.Equal(t, "accounts_email_key", nullsErr.Unique)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueNullsNotDistinct)
+}
+
+// TestCreateTableRejectsUniqueIncludeColumns proves that a UniqueDef naming
+// IncludeColumns, such as a live PostgreSQL INCLUDE clause inspect now
+// describes instead of rejecting, is refused at render time with a typed
+// error rather than silently rendered without the covering columns.
+func TestCreateTableRejectsUniqueIncludeColumns(t *testing.T) {
+	table := schema.TableDef{
+		Name: "accounts",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "name", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:           "accounts_email_key",
+			Columns:        []string{"email"},
+			IncludeColumns: []string{"name"},
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"accounts_email_key"`)
+	require.ErrorContains(t, err, `["name"]`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var includeErr *render.UnsupportedUniqueIncludeColumnsError
+	require.ErrorAs(t, err, &includeErr)
+	require.Equal(t, "accounts_email_key", includeErr.Unique)
+	require.Equal(t, []string{"name"}, includeErr.IncludeColumns)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueIncludeColumns)
+}
+
+// TestCreateTableRejectsUniqueConflictResolution proves that a UniqueDef
+// naming a non-default schema.ConflictResolution, such as a live SQLite ON
+// CONFLICT REPLACE clause inspect now describes instead of rejecting, is
+// refused at render time with a typed error rather than silently rendered
+// as a plain UNIQUE constraint with no conflict resolution.
+func TestCreateTableRejectsUniqueConflictResolution(t *testing.T) {
+	table := schema.TableDef{
+		Name: "accounts",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:       "accounts_email_key",
+			Columns:    []string{"email"},
+			OnConflict: schema.ConflictReplace,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"accounts_email_key"`)
+	require.ErrorContains(t, err, "ON CONFLICT REPLACE")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var conflictErr *render.UnsupportedUniqueConflictResolutionError
+	require.ErrorAs(t, err, &conflictErr)
+	require.Equal(t, "accounts_email_key", conflictErr.Unique)
+	require.Equal(t, schema.ConflictReplace, conflictErr.OnConflict)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueConflictResolution)
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",
