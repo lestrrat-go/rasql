@@ -575,6 +575,31 @@ func (e *UnsupportedIntegerZeroFillError) Unwrap() error {
 	return ErrUnsupportedIntegerZeroFill
 }
 
+// ErrUnsupportedExclusionConstraint is the sentinel wrapped by every
+// [UnsupportedExclusionConstraintError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedExclusionConstraint = errors.New("render: unsupported exclusion constraint")
+
+// UnsupportedExclusionConstraintError reports that a TableDef names an
+// [schema.ExclusionDef]. inspect can describe such a constraint, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for an EXCLUDE clause.
+type UnsupportedExclusionConstraintError struct {
+	// Exclusion is the name of the exclusion constraint.
+	Exclusion string
+}
+
+func (e *UnsupportedExclusionConstraintError) Error() string {
+	return fmt.Sprintf("exclusion constraint %q is an EXCLUDE constraint, which rasql can describe but not yet render", e.Exclusion)
+}
+
+// Unwrap exposes ErrUnsupportedExclusionConstraint so
+// errors.Is(err, ErrUnsupportedExclusionConstraint) works alongside
+// errors.As against *UnsupportedExclusionConstraintError.
+func (e *UnsupportedExclusionConstraintError) Unwrap() error {
+	return ErrUnsupportedExclusionConstraint
+}
+
 // CreateTable renders a CREATE TABLE statement for table.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
 	if isNilDialect(d) {
@@ -697,6 +722,9 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 			definition = "CONSTRAINT " + name + " " + definition
 		}
 		definitions = append(definitions, definition)
+	}
+	for _, exclusion := range table.ExclusionConstraints {
+		return &UnsupportedExclusionConstraintError{Exclusion: exclusion.Name}
 	}
 	for _, key := range table.ForeignKeys {
 		definition, err := r.foreignKeyDefinition(table, key)

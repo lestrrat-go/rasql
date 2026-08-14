@@ -13,6 +13,10 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor := validTable()
 	descriptor.Schema = "audit"
 	descriptor.RowName = "Order"
+	descriptor.ExclusionConstraints = []schema.ExclusionDef{{
+		Name:     "orders_no_overlap",
+		Elements: []schema.ExclusionElementDef{{Expression: "customer_id", Operator: "="}},
+	}}
 	descriptor.Relationships = []schema.RelationshipDef{{
 		Name:              "Customer",
 		Kind:              schema.RelationshipBelongsTo,
@@ -26,6 +30,7 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor.PrimaryKey[0] = "changed"
 	descriptor.Indexes[0].Columns[0] = "changed"
 	descriptor.ForeignKeys[0].ReferencedColumns[0] = "changed"
+	descriptor.ExclusionConstraints[0].Elements[0].Expression = "changed"
 	descriptor.Relationships[0].Columns[0] = "changed"
 	descriptor.Schema = "changed"
 	descriptor.RowName = "changed"
@@ -36,6 +41,7 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	require.Equal(t, "id", table.PrimaryKey[0])
 	require.Equal(t, "customer_id", table.Indexes[0].Columns[0])
 	require.Equal(t, "id", table.ForeignKeys[0].ReferencedColumns[0])
+	require.Equal(t, "customer_id", table.ExclusionConstraints[0].Elements[0].Expression)
 	require.Equal(t, "customer_id", table.Relationships[0].Columns[0])
 
 	amount, ok := table.Column("amount")
@@ -909,6 +915,94 @@ func TestTableValidatesForeignKeyDeferrability(t *testing.T) {
 	var validationErr *schema.ValidationError
 	require.True(t, errors.As(err, &validationErr))
 	require.ErrorContains(t, err, "foreign_keys[0].deferrable")
+}
+
+// TestTableValidateAcceptsExclusionConstraint proves that an ExclusionDef
+// naming a non-default Method, several Elements, a Predicate, and a
+// Deferrable, such as what inspect now records for a live PostgreSQL
+// EXCLUDE constraint, is valid input: Validate describes the constraint,
+// and only render.CreateTable and the migrate diff-live path refuse to
+// build DDL for it.
+func TestTableValidateAcceptsExclusionConstraint(t *testing.T) {
+	table := validTable()
+	table.ExclusionConstraints = []schema.ExclusionDef{{
+		Name:   "orders_no_overlap",
+		Method: "gist",
+		Elements: []schema.ExclusionElementDef{
+			{Expression: "customer_id", Operator: "="},
+			{Expression: "status", Operator: "<>"},
+		},
+		Predicate:  "status <> 'cancelled'",
+		Deferrable: schema.DeferrableInitiallyDeferred,
+	}}
+	require.NoError(t, table.Validate())
+}
+
+func TestTableValidatesExclusionConstraintRequiresElements(t *testing.T) {
+	table := validTable()
+	table.ExclusionConstraints = []schema.ExclusionDef{{Name: "orders_no_overlap"}}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "exclusion_constraints[0].elements")
+}
+
+func TestTableValidatesExclusionConstraintElementExpression(t *testing.T) {
+	table := validTable()
+	table.ExclusionConstraints = []schema.ExclusionDef{{
+		Name:     "orders_no_overlap",
+		Elements: []schema.ExclusionElementDef{{Operator: "="}},
+	}}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "exclusion_constraints[0].elements[0].expression")
+}
+
+func TestTableValidatesExclusionConstraintElementOperator(t *testing.T) {
+	table := validTable()
+	table.ExclusionConstraints = []schema.ExclusionDef{{
+		Name:     "orders_no_overlap",
+		Elements: []schema.ExclusionElementDef{{Expression: "customer_id"}},
+	}}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "exclusion_constraints[0].elements[0].operator")
+}
+
+func TestTableValidatesExclusionConstraintDeferrability(t *testing.T) {
+	table := validTable()
+	table.ExclusionConstraints = []schema.ExclusionDef{{
+		Name:       "orders_no_overlap",
+		Elements:   []schema.ExclusionElementDef{{Expression: "customer_id", Operator: "="}},
+		Deferrable: schema.Deferrability("bogus"),
+	}}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "exclusion_constraints[0].deferrable")
+}
+
+func TestTableValidatesExclusionConstraintDuplicateName(t *testing.T) {
+	table := validTable()
+	table.ExclusionConstraints = []schema.ExclusionDef{{
+		Name:     table.Checks[0].Name,
+		Elements: []schema.ExclusionElementDef{{Expression: "customer_id", Operator: "="}},
+	}}
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "exclusion_constraints[0].name")
+	require.ErrorContains(t, err, "duplicates constraint")
 }
 
 // TestTableValidateAcceptsCheckValidationFacts proves that a CheckDef naming

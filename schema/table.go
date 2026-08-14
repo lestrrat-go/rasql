@@ -397,6 +397,61 @@ type IndexDef struct {
 	Predicate string `json:",omitempty"`
 }
 
+// ExclusionElementDef describes one element of an ExclusionDef: a column or
+// expression paired with the operator checked against the same element on
+// every other row the constraint compares it to.
+type ExclusionElementDef struct {
+	// Expression is the element's key text, exactly as the server reports
+	// it: a bare column name for a plain column element, or the element's
+	// expression text otherwise. This is the same convention
+	// IndexDef.Expressions uses for a mixed or expression index's keys.
+	Expression string
+
+	// Operator is the name of the operator this element is checked with,
+	// exactly as the server reports it, such as "=" or "&&".
+	Operator string
+}
+
+// ExclusionDef describes a PostgreSQL EXCLUDE constraint: a table-level
+// constraint that forbids any two rows from having elements that all
+// satisfy their paired operator against each other, generalizing UniqueDef
+// beyond plain equality. Exclusion constraints are PostgreSQL-only; MySQL
+// and SQLite have no equivalent concept, so this never comes from a MySQL
+// or SQLite descriptor.
+//
+// An ExclusionDef is describable but not yet renderable: inspect records
+// what a live PostgreSQL exclusion constraint actually declares instead of
+// failing the whole table, as it used to, and TableDef.Validate accepts it,
+// but render.CreateTable and the migrate diff-live path refuse to build DDL
+// for one, because rasql does not yet know how to construct an EXCLUDE
+// clause. There is no option-form constructor yet either: today an
+// ExclusionDef only appears on a descriptor inspect produced.
+type ExclusionDef struct {
+	Name string
+
+	// Method names the constraint's backing index access method, such as
+	// "gist". Its zero value, the empty string, means the engine's own
+	// default access method (btree), the same convention IndexMethod uses
+	// on IndexDef.Method.
+	Method IndexMethod `json:",omitempty"`
+
+	// Elements lists the constraint's elements in declaration order. A
+	// valid ExclusionDef always has at least one.
+	Elements []ExclusionElementDef
+
+	// Predicate is the WHERE-clause expression text of a partial
+	// exclusion constraint, exactly as the server reports it, or empty
+	// for a non-partial one. See IndexDef.Predicate for the same
+	// convention on a partial index.
+	Predicate string `json:",omitempty"`
+
+	// Deferrable names when the constraint is checked. See Deferrability's
+	// own doc for what its zero value means and what currently accepts it.
+	// omitempty keeps a NOT DEFERRABLE ExclusionDef's JSON identical to a
+	// clause-free one.
+	Deferrable Deferrability `json:",omitempty"`
+}
+
 // ForeignKeyDef describes a foreign-key constraint.
 type ForeignKeyDef struct {
 	Name    string
@@ -553,9 +608,17 @@ type TableDef struct {
 
 	UniqueConstraints []UniqueDef
 	Checks            []CheckDef
-	Indexes           []IndexDef
-	ForeignKeys       []ForeignKeyDef
-	Relationships     []RelationshipDef
+
+	// ExclusionConstraints lists the table's PostgreSQL EXCLUDE
+	// constraints. Its zero value, nil, means the table has none, which is
+	// what every TableDef and every checked-in generated file written
+	// before this field existed has always meant. See ExclusionDef's own
+	// doc for what recording one currently means for rendering.
+	ExclusionConstraints []ExclusionDef `json:",omitempty"`
+
+	Indexes       []IndexDef
+	ForeignKeys   []ForeignKeyDef
+	Relationships []RelationshipDef
 }
 
 // Qualified reports whether t names a schema.
@@ -586,6 +649,11 @@ func (t TableDef) Clone() TableDef {
 		clone.UniqueConstraints[i].Columns = append([]string(nil), constraint.Columns...)
 	}
 	clone.Checks = append([]CheckDef(nil), t.Checks...)
+	clone.ExclusionConstraints = make([]ExclusionDef, len(t.ExclusionConstraints))
+	for i, exclusion := range t.ExclusionConstraints {
+		clone.ExclusionConstraints[i] = exclusion
+		clone.ExclusionConstraints[i].Elements = append([]ExclusionElementDef(nil), exclusion.Elements...)
+	}
 	clone.Indexes = make([]IndexDef, len(t.Indexes))
 	for i, index := range t.Indexes {
 		clone.Indexes[i] = index
@@ -723,6 +791,9 @@ func (t TableDef) Validate() error {
 	if err := validateChecks(t.Checks, constraintNames); err != nil {
 		return err
 	}
+	if err := validateExclusionConstraints(t.ExclusionConstraints, constraintNames); err != nil {
+		return err
+	}
 	if err := validateIndexes(t.Indexes, columns); err != nil {
 		return err
 	}
@@ -838,6 +909,37 @@ func validateChecks(checks []CheckDef, constraintNames map[string]string) error 
 		}
 		if check.Expression == "" {
 			return validationError(path+".expression", "must not be empty")
+		}
+	}
+	return nil
+}
+
+func validateExclusionConstraints(exclusions []ExclusionDef, constraintNames map[string]string) error {
+	for i, exclusion := range exclusions {
+		path := fmt.Sprintf("exclusion_constraints[%d]", i)
+		if exclusion.Name != "" {
+			if err := ValidateIdentifier(exclusion.Name); err != nil {
+				return validationError(path+".name", "%s", err)
+			}
+			if owner, exists := constraintNames[exclusion.Name]; exists {
+				return validationError(path+".name", "duplicates constraint %q declared at %s", exclusion.Name, owner)
+			}
+			constraintNames[exclusion.Name] = path
+		}
+		if len(exclusion.Elements) == 0 {
+			return validationError(path+".elements", "must not be empty")
+		}
+		for j, element := range exclusion.Elements {
+			elementPath := fmt.Sprintf("%s.elements[%d]", path, j)
+			if element.Expression == "" {
+				return validationError(elementPath+".expression", "must not be empty")
+			}
+			if element.Operator == "" {
+				return validationError(elementPath+".operator", "must not be empty")
+			}
+		}
+		if !exclusion.Deferrable.valid() {
+			return validationError(path+".deferrable", "unsupported exclusion constraint deferrability %q", exclusion.Deferrable)
 		}
 	}
 	return nil

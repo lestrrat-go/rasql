@@ -1377,6 +1377,13 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 		}
 		source.WriteString("},\n")
 	}
+	if len(table.ExclusionConstraints) > 0 {
+		source.WriteString("ExclusionConstraints: []schema.ExclusionDef{\n")
+		for _, exclusion := range table.ExclusionConstraints {
+			writeExclusionDefLiteral(source, exclusion)
+		}
+		source.WriteString("},\n")
+	}
 	if len(table.Indexes) > 0 {
 		source.WriteString("Indexes: []schema.IndexDef{\n")
 		for _, index := range table.Indexes {
@@ -1446,6 +1453,38 @@ func writeUniqueDefLiteral(source *bytes.Buffer, constraint schema.UniqueDef) {
 	if constraint.OnConflict != "" {
 		source.WriteString(", OnConflict: ")
 		source.WriteString(conflictResolutionConstant(constraint.OnConflict))
+	}
+	source.WriteString("},\n")
+}
+
+func writeExclusionDefLiteral(source *bytes.Buffer, exclusion schema.ExclusionDef) {
+	source.WriteString("{")
+	if exclusion.Name != "" {
+		source.WriteString("Name: ")
+		source.WriteString(quote(exclusion.Name))
+		source.WriteString(", ")
+	}
+	if exclusion.Method != "" {
+		source.WriteString("Method: schema.IndexMethod(")
+		source.WriteString(quote(string(exclusion.Method)))
+		source.WriteString("), ")
+	}
+	source.WriteString("Elements: []schema.ExclusionElementDef{\n")
+	for _, element := range exclusion.Elements {
+		source.WriteString("{Expression: ")
+		source.WriteString(quote(element.Expression))
+		source.WriteString(", Operator: ")
+		source.WriteString(quote(element.Operator))
+		source.WriteString("},\n")
+	}
+	source.WriteString("}")
+	if exclusion.Predicate != "" {
+		source.WriteString(", Predicate: ")
+		source.WriteString(quote(exclusion.Predicate))
+	}
+	if exclusion.Deferrable != "" {
+		source.WriteString(", Deferrable: ")
+		source.WriteString(deferrabilityConstant(exclusion.Deferrable))
 	}
 	source.WriteString("},\n")
 }
