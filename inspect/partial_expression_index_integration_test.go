@@ -70,17 +70,21 @@ func TestPostgreSQLInspectorRecordsExpressionIndexAgainstLiveDatabase(t *testing
 // and TestPostgreSQLInspectorNormalizesExpressionIndexKeyAgainstLiveDatabase
 // prove that PostgreSQL reports a partial index's predicate, and an
 // expression key's text, back through pg_catalog.pg_get_expr and
-// pg_catalog.pg_get_indexdef in the server's own re-serialized, normalized
-// form, not the source text a migration wrote — the same normalization
-// docs/02-schema.md already documents for ColumnDef.GeneratedExpression.
+// pg_catalog.pg_get_indexdef in the server's own re-serialized form, not
+// necessarily the exact source text a migration wrote.
 // TestPostgreSQLInspectorRecordsPartialIndexAgainstLiveDatabase and
 // TestPostgreSQLInspectorRecordsExpressionIndexAgainstLiveDatabase above use
-// inputs that already happen to match their own normalized form (a bare
+// inputs that already happen to match their own re-serialized form (a bare
 // boolean column, a single function call), so neither actually exercises
-// re-parenthesization; celsius * 9 / 5 + 32 is the exact expression
-// docs/02-schema.md already pins for GeneratedExpression, reused here so the
-// same normalization is pinned for an index predicate and an expression key
-// too.
+// re-parenthesization. This test's predicate is written with no parentheses
+// at all around its arithmetic; the server adds a wrapping pair around it as
+// the left operand of ">" that the original source never had, proving the
+// text is deparsed rather than echoed verbatim. Unlike
+// ColumnDef.GeneratedExpression (see docs/02-schema.md), which is fully
+// parenthesized at every operator, PostgreSQL's index predicate and
+// expression deparse route only adds parentheses where its own deparser
+// judges them needed, so this expression's left-associative "* /" chain
+// gets none between "celsius * 9" and "/ 5".
 func TestPostgreSQLInspectorNormalizesPartialIndexPredicateAgainstLiveDatabase(t *testing.T) {
 	ctx := t.Context()
 	database := dbtest.PostgreSQLDB(t)
@@ -93,7 +97,7 @@ func TestPostgreSQLInspectorNormalizesPartialIndexPredicateAgainstLiveDatabase(t
 	table, err := inspector.Table(ctx, "articles")
 	require.NoError(t, err)
 	require.Equal(t, []schema.IndexDef{
-		{Name: "articles_hot_idx", Columns: []string{"id"}, Predicate: "(((celsius * 9) / 5) + 32) > 100"},
+		{Name: "articles_hot_idx", Columns: []string{"id"}, Predicate: "(celsius * 9 / 5 + 32) > 100"},
 	}, table.Indexes)
 }
 
@@ -109,7 +113,7 @@ func TestPostgreSQLInspectorNormalizesExpressionIndexKeyAgainstLiveDatabase(t *t
 	table, err := inspector.Table(ctx, "articles")
 	require.NoError(t, err)
 	require.Equal(t, []schema.IndexDef{
-		{Name: "articles_fahrenheit_idx", Expressions: []string{"(((celsius * 9) / 5) + 32)"}},
+		{Name: "articles_fahrenheit_idx", Expressions: []string{"(celsius * 9 / 5 + 32)"}},
 	}, table.Indexes)
 }
 
