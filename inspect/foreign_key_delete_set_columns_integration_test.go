@@ -40,6 +40,7 @@ func TestPostgreSQLInspectorRecordsForeignKeyDeleteSetColumnsAgainstLiveDatabase
 			ReferencedTable:   "customers",
 			ReferencedColumns: []string{"id"},
 			OnDelete:          schema.SetNull,
+			OnUpdate:          schema.NoAction,
 			DeleteSetColumns:  []string{"customer_id"},
 		},
 	}, table.ForeignKeys)
