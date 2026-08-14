@@ -2738,10 +2738,11 @@ func TestSQLiteInspectorFallsBackWhenTableListIsUnavailable(t *testing.T) {
 }
 
 // TestPostgreSQLInspectorReadsTableNames covers TableNames' pg_catalog
-// query: it must scope to current_schema() and sort the returned names, the
-// same shape TestMySQLInspectorReadsTableNames covers for MySQL and
-// TestPostgreSQLInspectorReadsTableNamesAgainstLiveDatabase confirms against
-// a real server.
+// query: it must scope to current_schema(), sort the returned rows, and
+// leave every TableRef.Schema empty (see the TableRef doc comment). The
+// same shape is covered for MySQL by TestMySQLInspectorReadsTableNames and
+// confirmed against a real server by
+// TestPostgreSQLInspectorReadsTableNamesAgainstLiveDatabase.
 func TestPostgreSQLInspectorReadsTableNames(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -2758,14 +2759,15 @@ func TestPostgreSQLInspectorReadsTableNames(t *testing.T) {
 			AddRow("zebras").
 			AddRow("armadillos"))
 
-	names, err := inspector.TableNames(t.Context())
+	refs, err := inspector.TableNames(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, []string{"armadillos", "zebras"}, names)
+	require.Equal(t, []inspect.TableRef{{Name: "armadillos"}, {Name: "zebras"}}, refs)
 }
 
 // TestMySQLInspectorReadsTableNames covers TableNames' information_schema
 // query for MySQL: it must scope to DATABASE(), filter to table_type =
-// 'BASE TABLE', and sort the returned names.
+// 'BASE TABLE', sort the returned rows, and leave every TableRef.Schema
+// empty.
 func TestMySQLInspectorReadsTableNames(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -2782,15 +2784,16 @@ func TestMySQLInspectorReadsTableNames(t *testing.T) {
 			AddRow("zebras").
 			AddRow("armadillos"))
 
-	names, err := inspector.TableNames(t.Context())
+	refs, err := inspector.TableNames(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, []string{"armadillos", "zebras"}, names)
+	require.Equal(t, []inspect.TableRef{{Name: "armadillos"}, {Name: "zebras"}}, refs)
 }
 
 // TestSQLiteInspectorTableNamesFallsBackWhenTableListIsUnavailable mirrors
 // TestSQLiteInspectorFallsBackWhenTableListIsUnavailable for TableNames:
 // when PRAGMA table_list yields no rows, sqliteLegacyTableNames walks
-// PRAGMA database_list and each database's sqlite_master.
+// PRAGMA database_list and each database's sqlite_master, filling
+// TableRef.Schema with the database each row came from.
 func TestSQLiteInspectorTableNamesFallsBackWhenTableListIsUnavailable(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -2812,9 +2815,9 @@ func TestSQLiteInspectorTableNamesFallsBackWhenTableListIsUnavailable(t *testing
 			AddRow("sqlite_sequence").
 			AddRow("armadillos"))
 
-	names, err := inspector.TableNames(t.Context())
+	refs, err := inspector.TableNames(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, []string{"armadillos", "zebras"}, names)
+	require.Equal(t, []inspect.TableRef{{Schema: "main", Name: "armadillos"}, {Schema: "main", Name: "zebras"}}, refs)
 }
 
 // TestSQLiteInspectorReadsTableNames uses a real in-memory SQLite database,
@@ -2822,7 +2825,7 @@ func TestSQLiteInspectorTableNamesFallsBackWhenTableListIsUnavailable(t *testing
 // (e.g. TestSQLiteInspectorMatchesMainTableNamesCaseInsensitively), because
 // SQLite needs no live server. It proves a view and SQLite's own internal
 // sqlite_sequence table (created here by an AUTOINCREMENT column) are both
-// excluded, and the result is sorted.
+// excluded, and that the surviving rows are sorted and scoped to "main".
 func TestSQLiteInspectorReadsTableNames(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -2839,14 +2842,15 @@ func TestSQLiteInspectorReadsTableNames(t *testing.T) {
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	names, err := inspector.TableNames(t.Context())
+	refs, err := inspector.TableNames(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, []string{"armadillos", "zebras"}, names)
+	require.Equal(t, []inspect.TableRef{{Schema: "main", Name: "armadillos"}, {Schema: "main", Name: "zebras"}}, refs)
 }
 
 // TestSQLiteInspectorReadsTableNamesAcrossAttachedDatabases confirms
 // TableNames' default scope matches Table's own default: main, temp, and
-// every attached database, not only main.
+// every attached database, not only main, with each TableRef.Schema naming
+// which database a table came from.
 func TestSQLiteInspectorReadsTableNamesAcrossAttachedDatabases(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -2867,13 +2871,43 @@ func TestSQLiteInspectorReadsTableNamesAcrossAttachedDatabases(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 	inspector, err := inspect.New(connection, dialect.SQLite())
 	require.NoError(t, err)
-	names, err := inspector.TableNames(t.Context())
+	refs, err := inspector.TableNames(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, []string{"armadillos", "zebras"}, names)
+	require.Equal(t, []inspect.TableRef{{Schema: "main", Name: "zebras"}, {Schema: "tenant", Name: "armadillos"}}, refs)
+}
+
+// TestSQLiteInspectorReadsTableNamesDistinguishesDuplicateNamesAcrossDatabases
+// is the scenario TableRef exists for: the same table name in two SQLite
+// databases would collapse into an indistinguishable duplicate if TableNames
+// returned bare strings. TableRef.Schema keeps the two apart.
+func TestSQLiteInspectorReadsTableNamesDistinguishesDuplicateNamesAcrossDatabases(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS tenant")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE main.users (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE tenant.users (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+
+	connection, err := database.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	inspector, err := inspect.New(connection, dialect.SQLite())
+	require.NoError(t, err)
+	refs, err := inspector.TableNames(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []inspect.TableRef{{Schema: "main", Name: "users"}, {Schema: "tenant", Name: "users"}}, refs)
 }
 
 // TestSQLiteInspectorReadsTableNamesIn confirms TableNamesIn scopes to one
-// named database, the enumeration counterpart of TableIn.
+// named database, the enumeration counterpart of TableIn, with every
+// returned TableRef.Schema equal to the requested database name.
 func TestSQLiteInspectorReadsTableNamesIn(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -2895,13 +2929,13 @@ func TestSQLiteInspectorReadsTableNamesIn(t *testing.T) {
 	inspector, err := inspect.New(connection, dialect.SQLite())
 	require.NoError(t, err)
 
-	mainNames, err := inspector.TableNamesIn(t.Context(), "main")
+	mainRefs, err := inspector.TableNamesIn(t.Context(), "main")
 	require.NoError(t, err)
-	require.Equal(t, []string{"zebras"}, mainNames)
+	require.Equal(t, []inspect.TableRef{{Schema: "main", Name: "zebras"}}, mainRefs)
 
-	tenantNames, err := inspector.TableNamesIn(t.Context(), "tenant")
+	tenantRefs, err := inspector.TableNamesIn(t.Context(), "tenant")
 	require.NoError(t, err)
-	require.Equal(t, []string{"armadillos"}, tenantNames)
+	require.Equal(t, []inspect.TableRef{{Schema: "tenant", Name: "armadillos"}}, tenantRefs)
 }
 
 // TestSQLiteInspectorTableNamesInRequiresRetainedConnectionForAttachedDatabase

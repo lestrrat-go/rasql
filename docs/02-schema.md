@@ -557,7 +557,7 @@ func Example_inspect_sqlite_table() {
 source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_example_test.go)
 <!-- END INCLUDE -->
 
-`Inspector.TableNames(ctx)` returns the sorted names of the base tables in the inspected scope, excluding views, so a caller does not need to already know a table name to start inspecting it. PostgreSQL scopes to `current_schema()` and MySQL to `DATABASE()`, the same scope `Table` reads columns from. SQLite has no single equivalent scope: like `Table`'s own default, `TableNames` reports across `main`, `temp`, and every database attached to the connection. `Inspector.TableNamesIn(ctx, databaseName)` scopes SQLite to one database instead, the enumeration counterpart of `TableIn`, and carries the same retained-connection requirement for `temp` or an attached database. `TableNamesIn` is supported only for SQLite.
+`Inspector.TableNames(ctx)` returns the base tables in the inspected scope as `[]inspect.TableRef`, excluding views and sorted by `Schema` then `Name`, so a caller does not need to already know a table name to start inspecting it. PostgreSQL scopes to `current_schema()` and MySQL to `DATABASE()`, the same scope `Table` reads columns from, and both leave every `TableRef.Schema` empty: `Table` itself never fills `schema.TableDef.Schema` for those two dialects, and filling it here would silently qualify SQL that is unqualified today. SQLite has no single equivalent scope: like `Table`'s own default, `TableNames` reports across `main`, `temp`, and every database attached to the connection, with `TableRef.Schema` naming which database each table came from — the field a bare table name cannot carry, and why two databases holding a table of the same name still come back as two distinguishable results. `Inspector.TableNamesIn(ctx, databaseName)` scopes SQLite to one database instead, the enumeration counterpart of `TableIn`, and carries the same retained-connection requirement for `temp` or an attached database; every `TableRef.Schema` it returns equals `databaseName`. `TableNamesIn` is supported only for SQLite.
 
 <!-- INCLUDE(examples/inspect_sqlite_table_names_example_test.go) -->
 ```go
@@ -567,7 +567,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
@@ -575,7 +574,8 @@ import (
 )
 
 func Example_inspect_sqlite_table_names() {
-	// This example enumerates the base tables in a SQLite database.
+	// This example enumerates the base tables across main and an attached
+	// database, including a table name that exists in both.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -583,32 +583,49 @@ func Example_inspect_sqlite_table_names() {
 		return
 	}
 	defer func() { _ = database.Close() }()
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		fmt.Printf("failed to retain SQLite connection: %s\n", err)
+		return
+	}
+	defer func() { _ = connection.Close() }()
+	if _, err := connection.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS tenant"); err != nil {
+		fmt.Printf("failed to attach tenant database: %s\n", err)
+		return
+	}
 	for _, statement := range []string{
-		"CREATE TABLE zebras (id INTEGER PRIMARY KEY)",
-		"CREATE TABLE armadillos (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE main.armadillos (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE main.zebras (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE tenant.zebras (id INTEGER PRIMARY KEY)",
 		// A view is not a base table, so TableNames excludes it.
-		"CREATE VIEW zebra_view AS SELECT id FROM zebras",
+		"CREATE VIEW main.zebra_view AS SELECT id FROM main.zebras",
 	} {
-		if _, err := database.ExecContext(ctx, statement); err != nil {
+		if _, err := connection.ExecContext(ctx, statement); err != nil {
 			fmt.Printf("failed to run %q: %s\n", statement, err)
 			return
 		}
 	}
 
-	inspector, err := inspect.New(database, dialect.SQLite())
+	inspector, err := inspect.New(connection, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
 		return
 	}
-	names, err := inspector.TableNames(ctx)
+	// TableNames reports every database's tables together; TableRef.Schema
+	// is what keeps the two "zebras" tables distinguishable.
+	refs, err := inspector.TableNames(ctx)
 	if err != nil {
 		fmt.Printf("failed to list table names: %s\n", err)
 		return
 	}
-	fmt.Printf("tables: %s\n", strings.Join(names, ", "))
+	for _, ref := range refs {
+		fmt.Printf("%s.%s\n", ref.Schema, ref.Name)
+	}
 
 	// Output:
-	// tables: armadillos, zebras
+	// main.armadillos
+	// main.zebras
+	// tenant.zebras
 }
 ```
 source: [examples/inspect_sqlite_table_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_names_example_test.go)
