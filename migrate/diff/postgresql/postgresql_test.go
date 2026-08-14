@@ -177,6 +177,7 @@ func TestLiveSourcesRejectsIndexValidityStorageAndPlacement(t *testing.T) {
 		{name: "storage parameters", index: schema.IndexDef{Name: "members_status_idx", Columns: []string{"status"}, StorageParameters: map[string]string{"fillfactor": "70"}}},
 		{name: "tablespace", index: schema.IndexDef{Name: "members_status_idx", Columns: []string{"status"}, Tablespace: "pg_custom"}},
 		{name: "replica identity", index: schema.IndexDef{Name: "members_status_idx", Columns: []string{"status"}, Unique: true, ReplicaIdentity: true}},
+		{name: "nulls not distinct", index: schema.IndexDef{Name: "members_status_idx", Columns: []string{"status"}, Unique: true, NullsNotDistinct: true}},
 	}
 
 	for _, test := range tests {
@@ -364,6 +365,47 @@ func TestLiveSourcesRejectsForeignKeyNotEnforced(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsForeignKeyTemporal is the Temporal counterpart to
+// TestLiveSourcesRejectsForeignKeyNotValid.
+func TestLiveSourcesRejectsForeignKeyTemporal(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "orders",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "customer_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			Temporal:          true,
+		}},
+	})
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsForeignKeyDeleteSetColumns is the DeleteSetColumns
+// counterpart to TestLiveSourcesRejectsForeignKeyNotValid.
+func TestLiveSourcesRejectsForeignKeyDeleteSetColumns(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "orders",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "customer_id", Type: schema.IntegerType{}, Nullable: true}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			OnDelete:          schema.SetNull,
+			DeleteSetColumns:  []string{"customer_id"},
+		}},
+	})
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 // TestLiveSourcesRejectsUniqueConstraintDeferrability proves that an
 // inspected table carrying a deferrable unique constraint does not reach
 // diff-live's generated desired-schema sources as a silently downgraded
@@ -441,6 +483,41 @@ func TestLiveSourcesRejectsUniqueConstraintConflictResolution(t *testing.T) {
 	})
 	require.ErrorContains(t, err, `"members_email_key"`)
 	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsUniqueConstraintBackingIndexFacts proves that an
+// inspected table carrying a temporal unique constraint, or one whose
+// backing index carries storage parameters, a nondefault tablespace, a
+// nondefault column collation, or the table's replica identity, does not
+// reach diff-live's generated desired-schema sources as a silently
+// downgraded plain unique constraint: LiveSources renders through
+// render.CreateTable, which refuses each of these facts, so the error
+// surfaces here rather than a Plan going on to emit the wrong DDL for it.
+func TestLiveSourcesRejectsUniqueConstraintBackingIndexFacts(t *testing.T) {
+	tests := []struct {
+		name       string
+		constraint schema.UniqueDef
+	}{
+		{name: "temporal", constraint: schema.UniqueDef{Name: "members_email_key", Columns: []string{"email"}, Temporal: true}},
+		{name: "storage parameters", constraint: schema.UniqueDef{Name: "members_email_key", Columns: []string{"email"}, StorageParameters: map[string]string{"fillfactor": "70"}}},
+		{name: "tablespace", constraint: schema.UniqueDef{Name: "members_email_key", Columns: []string{"email"}, Tablespace: "pg_custom"}},
+		{name: "replica identity", constraint: schema.UniqueDef{Name: "members_email_key", Columns: []string{"email"}, ReplicaIdentity: true}},
+		{name: "collations", constraint: schema.UniqueDef{Name: "members_email_key", Columns: []string{"email"}, Collations: map[string]string{"email": "C"}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			analyzer := postgresql.New()
+			_, err := analyzer.LiveSources(schema.TableDef{
+				Name:              "members",
+				Columns:           []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
+				PrimaryKey:        []string{"id"},
+				UniqueConstraints: []schema.UniqueDef{test.constraint},
+			})
+			require.ErrorContains(t, err, `"members_email_key"`)
+			require.ErrorContains(t, err, "can describe but not yet render")
+		})
+	}
 }
 
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {

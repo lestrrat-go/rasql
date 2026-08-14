@@ -1191,6 +1191,15 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 				IncludeColumns:   []string{"owner_id"},
 				OnConflict:       schema.ConflictReplace,
 			},
+			{
+				Name:              "uq_status_temporal",
+				Columns:           []string{"status"},
+				Temporal:          true,
+				StorageParameters: map[string]string{"fillfactor": "70"},
+				Tablespace:        "pg_custom",
+				ReplicaIdentity:   true,
+				Collations:        map[string]string{"status": "C"},
+			},
 		},
 		Checks: []schema.CheckDef{
 			{Name: "chk_price", Expression: "price >= 0", NoInherit: true, NotValid: true, NotEnforced: true},
@@ -1218,6 +1227,8 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 			{Name: "idx_created_at_desc", Keys: []schema.IndexKeyDef{{Expression: "created_at", Descending: true, Collation: "C", OperatorClass: "text_pattern_ops", PrefixLength: 8}}},
 			{Name: "idx_status_invalid", Columns: []string{"status"}, NotValid: true, StorageParameters: map[string]string{"fillfactor": "70"}, Tablespace: "pg_custom"},
 			{Name: "uidx_status_replident", Columns: []string{"status"}, Unique: true, ReplicaIdentity: true},
+			{Name: "uidx_created_at_nulls", Columns: []string{"created_at"}, Unique: true, NullsNotDistinct: true},
+			{Name: "idx_bio_nulls_first", Keys: []schema.IndexKeyDef{{Expression: "bio", NullsOrder: schema.NullsFirst}}},
 		},
 		ForeignKeys: []schema.ForeignKeyDef{
 			{
@@ -1237,6 +1248,15 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 				ReferencedSchema:  "app",
 				ReferencedTable:   "combos",
 				ReferencedColumns: []string{"a", "b"},
+			},
+			{
+				Name:              "fk_owner_temporal",
+				Columns:           []string{"owner_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+				OnDelete:          schema.SetNull,
+				Temporal:          true,
+				DeleteSetColumns:  []string{"owner_id"},
 			},
 		},
 		Relationships: []schema.RelationshipDef{
@@ -1270,6 +1290,7 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Name: "uq_code", Columns: []string{"code"}}`)
 	require.Contains(t, text, `{Columns: []string{"bio"}}`)
 	require.Contains(t, text, `{Name: "uq_price_owner", Columns: []string{"price"}, Deferrable: schema.DeferrableInitiallyDeferred, NullsNotDistinct: true, IncludeColumns: []string{"owner_id"}, OnConflict: schema.ConflictReplace}`)
+	require.Contains(t, text, `{Name: "uq_status_temporal", Columns: []string{"status"}, Temporal: true, StorageParameters: map[string]string{"fillfactor": "70"}, Tablespace: "pg_custom", ReplicaIdentity: true, Collations: map[string]string{"status": "C"}}`)
 	require.Contains(t, text, `{Name: "chk_price", Expression: "price >= 0", NoInherit: true, NotValid: true, NotEnforced: true}`)
 	require.Contains(t, text, `{Expression: "id > 0"}`)
 	require.Contains(t, text, `{Name: "excl_owner_combo", Method: schema.IndexMethod("gist"), Elements: []schema.ExclusionElementDef{`)
@@ -1286,8 +1307,12 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Expression: "created_at", Descending: true, Collation: "C", OperatorClass: "text_pattern_ops", PrefixLength: 8}`)
 	require.Contains(t, text, `{Name: "idx_status_invalid", Columns: []string{"status"}, NotValid: true, StorageParameters: map[string]string{"fillfactor": "70"}, Tablespace: "pg_custom"}`)
 	require.Contains(t, text, `{Name: "uidx_status_replident", Columns: []string{"status"}, Unique: true, ReplicaIdentity: true}`)
+	require.Contains(t, text, `{Name: "uidx_created_at_nulls", Columns: []string{"created_at"}, Unique: true, NullsNotDistinct: true}`)
+	require.Contains(t, text, `{Name: "idx_bio_nulls_first", Keys: []schema.IndexKeyDef{`)
+	require.Contains(t, text, `{Expression: "bio", NullsOrder: schema.NullsFirst}`)
 	require.Contains(t, text, `{Name: "fk_owner", Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, Match: schema.MatchFull, OnDelete: schema.Cascade, OnUpdate: schema.Restrict, Deferrable: schema.DeferrableInitiallyDeferred, NotValid: true, NotEnforced: true}`)
 	require.Contains(t, text, `{Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
+	require.Contains(t, text, `{Name: "fk_owner_temporal", Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, OnDelete: schema.SetNull, Temporal: true, DeleteSetColumns: []string{"owner_id"}}`)
 	require.Contains(t, text, `{Name: "Owner", Kind: schema.RelationshipBelongsTo, Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)
 	require.Contains(t, text, `{Name: "Combo", Kind: schema.RelationshipBelongsTo, Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
 }
