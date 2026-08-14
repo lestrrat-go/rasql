@@ -453,6 +453,20 @@ func validateVariableNames(tables []schema.TableDef) error {
 			}
 			names[generated] = struct{}{}
 		}
+		// timeScannerTypeName is deliberately absent from this set: a RowName can
+		// never equal one. It derives from the TABLE name and is always unexported,
+		// because descriptorName lowers the leading uppercase run of goName(tableName)
+		// and ValidateIdentifier confines a table name to ASCII [A-Za-z_][A-Za-z0-9_]*,
+		// so that lowered rune is always ASCII a-z. A stated RowName passes
+		// validateExportedGoIdentifier, which requires an uppercase first rune. The two
+		// name spaces are disjoint by exportedness.
+		//
+		// Checked, not assumed: a table with a time column and RowName
+		// "UsersTimeScanner" emits both UsersTimeScanner and usersTimeScanner, which
+		// are distinct Go identifiers, and the generated package builds and vets clean.
+		// Setting RowName to the literal scanner name is rejected, same-table and
+		// cross-table. Falsify this by finding an accepted table name whose
+		// timeScannerTypeName begins with an uppercase rune.
 
 		methods := make(map[string]struct{}, len(table.Columns))
 		for _, column := range table.Columns {
