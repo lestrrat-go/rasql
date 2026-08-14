@@ -1409,6 +1409,37 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 				source.WriteString(", Predicate: ")
 				source.WriteString(quote(index.Predicate))
 			}
+			if len(index.IncludeColumns) > 0 {
+				source.WriteString(", IncludeColumns: ")
+				writeStringLiteralSlice(source, index.IncludeColumns)
+			}
+			if index.Invisible {
+				source.WriteString(", Invisible: true")
+			}
+			if len(index.Keys) > 0 {
+				source.WriteString(", Keys: []schema.IndexKeyDef{\n")
+				for _, key := range index.Keys {
+					source.WriteString("{Expression: ")
+					source.WriteString(quote(key.Expression))
+					if key.Descending {
+						source.WriteString(", Descending: true")
+					}
+					if key.Collation != "" {
+						source.WriteString(", Collation: ")
+						source.WriteString(quote(key.Collation))
+					}
+					if key.OperatorClass != "" {
+						source.WriteString(", OperatorClass: ")
+						source.WriteString(quote(key.OperatorClass))
+					}
+					if key.PrefixLength != 0 {
+						source.WriteString(", PrefixLength: ")
+						source.WriteString(strconv.Itoa(key.PrefixLength))
+					}
+					source.WriteString("},\n")
+				}
+				source.WriteString("}")
+			}
 			source.WriteString("},\n")
 		}
 		source.WriteString("},\n")

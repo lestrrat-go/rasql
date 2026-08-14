@@ -381,6 +381,101 @@ func TestCreateIndexesRejectsExpressionIndex(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedExpressionIndex)
 }
 
+// TestCreateIndexesRejectsIncludeColumns proves that an IndexDef naming
+// IncludeColumns, such as a PostgreSQL INCLUDE index inspect now describes
+// instead of rejecting, is refused at render time with a typed error rather
+// than silently rendered without its covering columns: rasql does not yet
+// know how to build DDL for an INCLUDE clause.
+func TestCreateIndexesRejectsIncludeColumns(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+			{Name: "title", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:           "documents_status_idx",
+			Columns:        []string{"status"},
+			IncludeColumns: []string{"title"},
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_status_idx"`)
+	require.ErrorContains(t, err, `"title"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var includeErr *render.UnsupportedIndexIncludeColumnsError
+	require.ErrorAs(t, err, &includeErr)
+	require.Equal(t, "documents_status_idx", includeErr.Index)
+	require.Equal(t, []string{"title"}, includeErr.IncludeColumns)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexIncludeColumns)
+}
+
+// TestCreateIndexesRejectsInvisibleIndex proves that an IndexDef setting
+// Invisible, such as a MySQL invisible index inspect now describes instead
+// of rejecting, is refused at render time with a typed error rather than
+// silently rendered as a visible index: rasql does not yet know how to
+// build DDL for an INVISIBLE index.
+func TestCreateIndexesRejectsInvisibleIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:      "documents_status_idx",
+			Columns:   []string{"status"},
+			Invisible: true,
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"documents_status_idx"`)
+	require.ErrorContains(t, err, "invisible")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var invisibleErr *render.UnsupportedIndexInvisibleError
+	require.ErrorAs(t, err, &invisibleErr)
+	require.Equal(t, "documents_status_idx", invisibleErr.Index)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexInvisible)
+}
+
+// TestCreateIndexesRejectsKeyDetails proves that an IndexDef naming Keys,
+// such as a descending or non-default-collation key inspect now describes
+// instead of rejecting, is refused at render time with a typed error rather
+// than silently rendered as a plain ascending key: rasql does not yet know
+// how to build DDL for a DESC key, a non-default collation or operator
+// class, or a MySQL prefix part.
+func TestCreateIndexesRejectsKeyDetails(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name: "documents_created_at_idx",
+			Keys: []schema.IndexKeyDef{{Expression: "created_at", Descending: true}},
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_created_at_idx"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var keysErr *render.UnsupportedIndexKeyDetailsError
+	require.ErrorAs(t, err, &keysErr)
+	require.Equal(t, "documents_created_at_idx", keysErr.Index)
+	require.Equal(t, []schema.IndexKeyDef{{Expression: "created_at", Descending: true}}, keysErr.Keys)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexKeyDetails)
+}
+
 // TestCreateTableRejectsNonDefaultForeignKeyMatch proves that a
 // ForeignKeyDef naming a non-default schema.MatchType, such as MATCH FULL
 // which inspect now describes instead of rejecting, is refused at render
