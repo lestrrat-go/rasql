@@ -15,12 +15,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	_ "modernc.org/sqlite"
 )
 
-const outputDirectory = "internal/tables"
+const (
+	outputDirectory = "internal/tables"
+	schemaPath      = "schema.sql"
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -41,9 +45,22 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open throwaway database: %w", err)
 	}
-	if _, err := database.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)"); err != nil {
+	// The schema lives in schema.sql rather than in this file so the
+	// documentation can show the exact DDL the checked-in description
+	// package was generated from, instead of a retyped copy of it.
+	schemaSQL, err := os.ReadFile(schemaPath)
+	if err != nil {
 		_ = database.Close()
-		return fmt.Errorf("create users table: %w", err)
+		return fmt.Errorf("read %s: %w", schemaPath, err)
+	}
+	for _, statement := range strings.Split(string(schemaSQL), ";") {
+		if strings.TrimSpace(statement) == "" {
+			continue
+		}
+		if _, err := database.Exec(statement); err != nil {
+			_ = database.Close()
+			return fmt.Errorf("apply %s: %w", schemaPath, err)
+		}
 	}
 	if err := database.Close(); err != nil {
 		return err

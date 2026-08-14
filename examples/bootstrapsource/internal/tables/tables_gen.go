@@ -8,6 +8,7 @@ import "github.com/lestrrat-go/rasql/schema"
 // bootstrap wrote them, with every entry in Hints applied.
 func Tables() []schema.TableDef {
 	tables := []schema.TableDef{
+		OrdersDef(),
 		UsersDef(),
 	}
 	for index, table := range tables {

@@ -12,7 +12,12 @@ func UsersDef() schema.TableDef {
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
+			{Name: "display_name", Type: schema.TextType{}, Nullable: true},
+			{Name: "is_active", Type: schema.BooleanType{}, Default: "TRUE"},
 		},
 		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{
+			{Columns: []string{"email"}},
+		},
 	}
 }
