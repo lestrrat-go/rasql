@@ -162,11 +162,32 @@ type CheckDef struct {
 	Expression string
 }
 
+// IndexMethod names the index access method (what PostgreSQL calls an
+// access method and MySQL calls an index type) an IndexDef uses, such as
+// PostgreSQL's "gin" or MySQL's "FULLTEXT". Its zero value, the empty
+// string, means the engine's own default method — the plain B-tree every
+// dialect this package renders builds today — so every IndexDef and every
+// checked-in generated file written before this field existed keeps meaning
+// exactly what it always meant.
+//
+// A non-default IndexMethod is describable but not yet renderable: inspect
+// records what a live PostgreSQL or MySQL index actually uses, and
+// TableDef.Validate accepts it, but render.CreateIndexes and the migrate
+// diff-live path refuse to build DDL for one, because rasql does not yet
+// know how to construct anything other than a plain default index.
+type IndexMethod string
+
 // IndexDef describes an index owned by a table.
 type IndexDef struct {
 	Name    string
 	Columns []string
 	Unique  bool
+
+	// Method names a non-default index access method. See IndexMethod's own
+	// doc for what its zero value means and what currently accepts it.
+	// omitempty keeps a default-method IndexDef's JSON identical to what it
+	// encoded before this field existed.
+	Method IndexMethod `json:",omitempty"`
 }
 
 // ForeignKeyDef describes a foreign-key constraint.

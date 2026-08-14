@@ -1,12 +1,40 @@
 package render
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 )
+
+// ErrUnsupportedIndexMethod is the sentinel wrapped by every
+// [UnsupportedIndexMethodError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexMethod = errors.New("render: unsupported index method")
+
+// UnsupportedIndexMethodError reports that an IndexDef names a non-default
+// [schema.IndexMethod]. inspect can describe such an index, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for anything other than a plain default index.
+type UnsupportedIndexMethodError struct {
+	// Index is the name of the index that named a non-default method.
+	Index string
+	// Method is the non-default method the index named.
+	Method schema.IndexMethod
+}
+
+func (e *UnsupportedIndexMethodError) Error() string {
+	return fmt.Sprintf("index %q uses method %q, which rasql can describe but not yet render", e.Index, e.Method)
+}
+
+// Unwrap exposes ErrUnsupportedIndexMethod so
+// errors.Is(err, ErrUnsupportedIndexMethod) works alongside errors.As
+// against *UnsupportedIndexMethodError.
+func (e *UnsupportedIndexMethodError) Unwrap() error {
+	return ErrUnsupportedIndexMethod
+}
 
 // CreateTable renders a CREATE TABLE statement for table.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
@@ -111,6 +139,9 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 }
 
 func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef) error {
+	if index.Method != "" {
+		return &UnsupportedIndexMethodError{Index: index.Name, Method: index.Method}
+	}
 	if err := r.rejectUnboundedMySQLText(table, index.Columns, "an index"); err != nil {
 		return err
 	}

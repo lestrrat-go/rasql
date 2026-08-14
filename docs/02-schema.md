@@ -150,6 +150,12 @@ constraint list. `MustTableDef` and `NewTableDef` validate as well, so a
 separate `Validate` call is only needed for a descriptor built at runtime
 that is not immediately turned into a table.
 
+## Index methods
+
+`IndexDef.Method` names a non-default index access method — what PostgreSQL calls an access method and MySQL calls an index type — such as PostgreSQL's `"gin"` or MySQL's `"FULLTEXT"`. Its zero value, the empty string, means the engine's own default: a plain B-tree, which is what every index built through `schema.Index`, `schema.UniqueIndex`, or a struct literal that leaves `Method` unset has always meant, so no existing descriptor or checked-in generated file changes meaning.
+
+A non-default `Method` is describable but not yet renderable. `inspect.Table` records what a live PostgreSQL GIN index or MySQL FULLTEXT index actually uses instead of failing the whole table, as it used to, and `TableDef.Validate` accepts it. `render.CreateIndexes` and the migrate diff-live path still refuse to build DDL for one, returning a `*render.UnsupportedIndexMethodError` that names the index and its method, since rasql does not yet know how to construct anything other than a plain default index. There is no option-form constructor for a non-default `Method` yet: today it only appears on a descriptor `inspect` produced.
+
 ## Relationships
 
 `ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`; the `schema.RelationshipNamed` foreign-key option states one explicitly, in the option form, instead. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
