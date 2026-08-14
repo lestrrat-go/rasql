@@ -64,6 +64,8 @@ func Run(args []string, writer io.Writer) error {
 	case "-h", "-help", "--help":
 		printUsage(writer)
 		return flag.ErrHelp
+	case "bootstrap":
+		return runBootstrap(args[1:], writer)
 	case "schema":
 		return runSchema(args[1:], writer)
 	case "query":
@@ -77,6 +79,7 @@ func printUsage(output io.Writer) {
 	_, _ = fmt.Fprintln(output, "Usage: rasqlgen <command> [flags]")
 	_, _ = fmt.Fprintln(output)
 	_, _ = fmt.Fprintln(output, "Commands:")
+	_, _ = fmt.Fprintln(output, "  bootstrap Describe a live database as a checked-in schema package")
 	_, _ = fmt.Fprintln(output, "  schema    Generate Go source from a schema")
 	_, _ = fmt.Fprintln(output, "  query     Generate Go source from a SQL template")
 	_, _ = fmt.Fprintln(output)
