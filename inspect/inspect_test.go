@@ -2736,3 +2736,187 @@ func TestSQLiteInspectorFallsBackWhenTableListIsUnavailable(t *testing.T) {
 	require.Equal(t, "Events", table.Name)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 }
+
+// TestPostgreSQLInspectorReadsTableNames covers TableNames' pg_catalog
+// query: it must scope to current_schema() and sort the returned names, the
+// same shape TestMySQLInspectorReadsTableNames covers for MySQL and
+// TestPostgreSQLInspectorReadsTableNamesAgainstLiveDatabase confirms against
+// a real server.
+func TestPostgreSQLInspectorReadsTableNames(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT table_data\\.relname FROM pg_catalog\\.pg_class.*relkind IN \\('r','p'\\)").
+		WillReturnRows(sqlmock.NewRows([]string{"relname"}).
+			AddRow("zebras").
+			AddRow("armadillos"))
+
+	names, err := inspector.TableNames(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"armadillos", "zebras"}, names)
+}
+
+// TestMySQLInspectorReadsTableNames covers TableNames' information_schema
+// query for MySQL: it must scope to DATABASE(), filter to table_type =
+// 'BASE TABLE', and sort the returned names.
+func TestMySQLInspectorReadsTableNames(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT table_name FROM information_schema\\.tables WHERE table_schema = DATABASE\\(\\) AND table_type = 'BASE TABLE'").
+		WillReturnRows(sqlmock.NewRows([]string{"table_name"}).
+			AddRow("zebras").
+			AddRow("armadillos"))
+
+	names, err := inspector.TableNames(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"armadillos", "zebras"}, names)
+}
+
+// TestSQLiteInspectorTableNamesFallsBackWhenTableListIsUnavailable mirrors
+// TestSQLiteInspectorFallsBackWhenTableListIsUnavailable for TableNames:
+// when PRAGMA table_list yields no rows, sqliteLegacyTableNames walks
+// PRAGMA database_list and each database's sqlite_master.
+func TestSQLiteInspectorTableNamesFallsBackWhenTableListIsUnavailable(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectQuery("PRAGMA table_list").
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}))
+	mock.ExpectQuery("PRAGMA database_list").
+		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "file"}).AddRow(0, "main", ""))
+	mock.ExpectQuery(`SELECT name FROM "main".sqlite_master WHERE type = 'table'`).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).
+			AddRow("zebras").
+			AddRow("sqlite_sequence").
+			AddRow("armadillos"))
+
+	names, err := inspector.TableNames(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"armadillos", "zebras"}, names)
+}
+
+// TestSQLiteInspectorReadsTableNames uses a real in-memory SQLite database,
+// like the other SQLite tests that exercise PRAGMA table_list end to end
+// (e.g. TestSQLiteInspectorMatchesMainTableNamesCaseInsensitively), because
+// SQLite needs no live server. It proves a view and SQLite's own internal
+// sqlite_sequence table (created here by an AUTOINCREMENT column) are both
+// excluded, and the result is sorted.
+func TestSQLiteInspectorReadsTableNames(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE zebras (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE armadillos (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE VIEW zebra_view AS SELECT id FROM zebras")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	names, err := inspector.TableNames(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"armadillos", "zebras"}, names)
+}
+
+// TestSQLiteInspectorReadsTableNamesAcrossAttachedDatabases confirms
+// TableNames' default scope matches Table's own default: main, temp, and
+// every attached database, not only main.
+func TestSQLiteInspectorReadsTableNamesAcrossAttachedDatabases(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS tenant")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE main.zebras (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE tenant.armadillos (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+
+	connection, err := database.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	inspector, err := inspect.New(connection, dialect.SQLite())
+	require.NoError(t, err)
+	names, err := inspector.TableNames(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"armadillos", "zebras"}, names)
+}
+
+// TestSQLiteInspectorReadsTableNamesIn confirms TableNamesIn scopes to one
+// named database, the enumeration counterpart of TableIn.
+func TestSQLiteInspectorReadsTableNamesIn(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	_, err = database.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS tenant")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE main.zebras (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE tenant.armadillos (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+
+	connection, err := database.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	inspector, err := inspect.New(connection, dialect.SQLite())
+	require.NoError(t, err)
+
+	mainNames, err := inspector.TableNamesIn(t.Context(), "main")
+	require.NoError(t, err)
+	require.Equal(t, []string{"zebras"}, mainNames)
+
+	tenantNames, err := inspector.TableNamesIn(t.Context(), "tenant")
+	require.NoError(t, err)
+	require.Equal(t, []string{"armadillos"}, tenantNames)
+}
+
+// TestSQLiteInspectorTableNamesInRequiresRetainedConnectionForAttachedDatabase
+// mirrors sqliteTable's own retained-connection requirement: an attached (or
+// temp) database's ATTACH state lives on one physical connection, so a plain
+// *sql.DB pool handle cannot be trusted to reach it.
+func TestSQLiteInspectorTableNamesInRequiresRetainedConnectionForAttachedDatabase(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = inspector.TableNamesIn(t.Context(), "tenant")
+	require.ErrorContains(t, err, "retained")
+}

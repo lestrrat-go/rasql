@@ -153,6 +153,43 @@ func (i Inspector) TableIn(ctx context.Context, databaseName string, tableName s
 	return i.table(ctx, databaseName, tableName)
 }
 
+// TableNames returns the sorted names of the base tables in the inspected
+// scope, excluding views. PostgreSQL scopes to current_schema() and MySQL to
+// DATABASE(), the same scope Table reads columns from. SQLite has no single
+// equivalent scope: like Table's own default, it reports across main, temp,
+// and every database attached to the connection. Use TableNamesIn to scope
+// SQLite to one database.
+func (i Inspector) TableNames(ctx context.Context) ([]string, error) {
+	return i.tableNames(ctx, "")
+}
+
+// TableNamesIn returns the sorted names of the base tables in a SQLite
+// database, excluding views, using a retained connection or transaction for
+// temp or an attached database. See TableIn for the same retained-connection
+// requirement. TableNamesIn is supported only for SQLite.
+func (i Inspector) TableNamesIn(ctx context.Context, databaseName string) ([]string, error) {
+	if err := schema.ValidateIdentifier(databaseName); err != nil {
+		return nil, fmt.Errorf("inspect: invalid SQLite database name: %w", err)
+	}
+	if isNil(i.queryer) || isNil(i.dialect) {
+		return nil, fmt.Errorf("inspect: invalid inspector")
+	}
+	if i.dialect.Name() != "sqlite" {
+		return nil, fmt.Errorf("inspect: scoped table enumeration is only supported for SQLite")
+	}
+	return i.sqliteTableNames(ctx, databaseName)
+}
+
+func (i Inspector) tableNames(ctx context.Context, databaseName string) ([]string, error) {
+	if isNil(i.queryer) || isNil(i.dialect) {
+		return nil, fmt.Errorf("inspect: invalid inspector")
+	}
+	if i.dialect.Name() == "sqlite" {
+		return i.sqliteTableNames(ctx, databaseName)
+	}
+	return i.informationSchemaTableNames(ctx)
+}
+
 func (i Inspector) table(ctx context.Context, databaseName string, tableName string) (schema.TableDef, error) {
 	if err := schema.ValidateIdentifier(tableName); err != nil {
 		return schema.TableDef{}, fmt.Errorf("inspect: invalid table name: %w", err)
@@ -859,6 +896,146 @@ func resolveSQLiteTableOptions(databaseName string, tableName string, matches []
 		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: %w", matches[0].name, err)
 	}
 	return matches[0], nil
+}
+
+// sqliteTableNames enumerates SQLite base table names, excluding views. An
+// empty databaseName matches TableNames' own scope: main, temp, and every
+// database attached to the connection. A non-empty databaseName scopes to
+// that one database, as TableIn does for a single table lookup, and carries
+// the same retained-connection requirement for temp or an attached database.
+func (i Inspector) sqliteTableNames(ctx context.Context, databaseName string) ([]string, error) {
+	if databaseName != "" && databaseName != "main" && !sqliteRetainedQueryer(i.queryer) {
+		return nil, sqliteRetainedHandleError()
+	}
+	queryer := i.queryer
+	if database, ok := queryer.(*sql.DB); ok {
+		connection, err := database.Conn(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: acquire SQLite connection: %w", err)
+		}
+		defer func() { _ = connection.Close() }()
+		queryer = connection
+	}
+	inspector := i
+	inspector.queryer = queryer
+	return inspector.sqliteTableNamesOnConnection(ctx, databaseName)
+}
+
+func (i Inspector) sqliteTableNamesOnConnection(ctx context.Context, databaseName string) ([]string, error) {
+	query := "PRAGMA table_list"
+	if databaseName != "" {
+		query = `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".table_list`
+	}
+	names, tableListErr := i.sqliteTableListNames(ctx, query)
+	if tableListErr == nil && len(names) > 0 {
+		sort.Strings(names)
+		return names, nil
+	}
+
+	// PRAGMA table_list is unavailable before SQLite 3.37; sqlite_master keeps those engines supported.
+	legacyNames, err := i.sqliteLegacyTableNames(ctx, databaseName)
+	if err != nil {
+		if tableListErr != nil {
+			return nil, errors.Join(tableListErr, err)
+		}
+		return nil, err
+	}
+	sort.Strings(legacyNames)
+	return legacyNames, nil
+}
+
+// sqliteTableListNames reads PRAGMA table_list rows, keeping only base
+// tables (kind "table", not "view") and dropping SQLite's own internal
+// sqlite_% tables such as sqlite_schema and sqlite_sequence.
+func (i Inspector) sqliteTableListNames(ctx context.Context, query string) ([]string, error) {
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read SQLite table scope: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	names := make([]string, 0)
+	for rows.Next() {
+		var databaseName, name, kind string
+		var columnCount, withoutRowID, strict int64
+		if err := rows.Scan(&databaseName, &name, &kind, &columnCount, &withoutRowID, &strict); err != nil {
+			return nil, fmt.Errorf("inspect: scan SQLite table scope: %w", err)
+		}
+		if !strings.EqualFold(kind, "table") || sqliteIsInternalTableName(name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate SQLite table scope: %w", err)
+	}
+	return names, nil
+}
+
+// sqliteLegacyTableNames is the sqlite_master fallback for engines older
+// than SQLite 3.37, mirroring sqliteLegacyTableOptions: an empty databaseName
+// walks every database PRAGMA database_list reports.
+func (i Inspector) sqliteLegacyTableNames(ctx context.Context, databaseName string) ([]string, error) {
+	databases := []string{databaseName}
+	if databaseName == "" {
+		rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
+		if err != nil {
+			return nil, fmt.Errorf("inspect: read SQLite databases: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+
+		databases = nil
+		for rows.Next() {
+			var sequence int64
+			var name, file string
+			if err := rows.Scan(&sequence, &name, &file); err != nil {
+				return nil, fmt.Errorf("inspect: scan SQLite database: %w", err)
+			}
+			databases = append(databases, name)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("inspect: iterate SQLite databases: %w", err)
+		}
+	}
+
+	var names []string
+	for _, database := range databases {
+		if err := schema.ValidateIdentifier(database); err != nil {
+			return nil, fmt.Errorf("inspect: SQLite database %q cannot be represented: %w", database, err)
+		}
+		query := `SELECT name FROM "` + sqlitePragmaIdentifier(database) + `".sqlite_master WHERE type = 'table'`
+		rows, err := i.queryer.QueryContext(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: read SQLite database %q tables: %w", database, err)
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("inspect: scan SQLite database %q table: %w", database, err)
+			}
+			if sqliteIsInternalTableName(name) {
+				continue
+			}
+			names = append(names, name)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("inspect: iterate SQLite database %q tables: %w", database, err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("inspect: close SQLite database %q tables: %w", database, err)
+		}
+	}
+	return names, nil
+}
+
+// sqliteIsInternalTableName reports whether name is one of SQLite's own
+// catalog tables, such as sqlite_schema, sqlite_master, or sqlite_sequence.
+// SQLite reserves the sqlite_ prefix for its own use, so no user table can
+// collide with this check.
+func sqliteIsInternalTableName(name string) bool {
+	return strings.HasPrefix(name, "sqlite_")
 }
 
 func sqliteRetainedQueryer(queryer Queryer) bool {
@@ -1949,6 +2126,55 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 	default:
 		return informationQueries{}, fmt.Errorf("inspect: unsupported dialect %q", name)
 	}
+}
+
+// mysqlTableNamesQuery lists base tables in the current database, excluding
+// views: table_type = 'BASE TABLE' is what distinguishes the two in MySQL's
+// information_schema.tables.
+const mysqlTableNamesQuery = "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' ORDER BY table_name"
+
+// postgreSQLTableNamesQuery lists ordinary and partitioned tables
+// (relkind IN ('r','p')) in current_schema(), the same pg_catalog route
+// postgreSQLCatalogColumnCountQuery documents: pg_class and pg_namespace
+// carry no per-row privilege filter, unlike information_schema.tables.
+// Restricting relkind to 'r' and 'p' excludes views ('v'), foreign tables
+// ('f'), sequences, and indexes, which information_schema.tables's own
+// table_type = 'BASE TABLE' filter would otherwise have to do instead.
+const postgreSQLTableNamesQuery = "SELECT table_data.relname FROM pg_catalog.pg_class AS table_data JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relkind IN ('r','p') ORDER BY table_data.relname"
+
+// informationSchemaTableNames enumerates base tables for MySQL and
+// PostgreSQL in the scope [Inspector.Table] itself reads from. The result is
+// sorted again in Go, on top of each query's own ORDER BY, so ordering does
+// not depend on the server's collation.
+func (i Inspector) informationSchemaTableNames(ctx context.Context) ([]string, error) {
+	var query string
+	switch i.dialect.Name() {
+	case "mysql":
+		query = mysqlTableNamesQuery
+	case "postgresql":
+		query = postgreSQLTableNamesQuery
+	default:
+		return nil, fmt.Errorf("inspect: unsupported dialect %q", i.dialect.Name())
+	}
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read table names: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	names := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("inspect: scan table name: %w", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate table names: %w", err)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func mysqlStatisticsIndexesQuery(hasExpression bool, hasVisibility bool) string {
