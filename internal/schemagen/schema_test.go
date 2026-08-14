@@ -847,11 +847,14 @@ func TestSchemaGeneratesIntegerDisplayWidthAndZeroFillColumns(t *testing.T) {
 // in the generated descriptor literal, so regenerating from the generated
 // source reproduces the same generated column rather than silently turning
 // it into a plain writable one. The row type still gets an ordinary field
-// for it, since a generated column is read like any other column; only
-// writing to it is the caller's concern, and the existing
-// rasql.DefaultColumns / rasql.UpdateColumns options already let a caller
-// omit a column from an INSERT or UPDATE, the same mechanism a database
-// default or auto-increment column already relies on.
+// for it, since a generated column is read like any other column; the two
+// restated fields are also what typedInsertMany and typedUpdateWithOptions
+// in the root package read to leave the column out of the default INSERT
+// and UPDATE column lists automatically, and to refuse an explicit
+// rasql.UpdateColumns naming it outright (see TestInsertOmitsGeneratedColumn,
+// TestUpdateOmitsGeneratedColumn, and TestUpdateColumnsRejectsGeneratedColumn
+// in the root package), so nothing built through the typed write path ever
+// writes to the generated field.
 func TestSchemaGeneratesGeneratedColumns(t *testing.T) {
 	measurements := schema.TableDef{
 		Name: "measurements",
