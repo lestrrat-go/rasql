@@ -179,7 +179,17 @@ type IndexMethod string
 
 // IndexDef describes an index owned by a table.
 type IndexDef struct {
-	Name    string
+	// Name is the index's own identifier.
+	Name string
+
+	// Columns lists the plain column names that key a column-only index, in
+	// key order. This is the only meaning Columns has ever had: an index
+	// whose keys are not all plain columns describes its full key order in
+	// Expressions instead and leaves Columns empty, rather than
+	// repurposing Columns to hold a subset of those keys. A checked-in
+	// descriptor written before expression indexes existed always leaves
+	// Expressions empty, so Columns keeps meaning exactly what it always
+	// meant.
 	Columns []string
 	Unique  bool
 
@@ -188,6 +198,41 @@ type IndexDef struct {
 	// omitempty keeps a default-method IndexDef's JSON identical to what it
 	// encoded before this field existed.
 	Method IndexMethod `json:",omitempty"`
+
+	// Expressions, when non-empty, is the full ordered list of key
+	// expressions for an index that has at least one key that is not a
+	// plain column reference: an expression index, or one that mixes plain
+	// columns with expressions. A plain-column key inside it is recorded as
+	// its bare column name, which is itself a valid SQL expression, so an
+	// index's full key order always lives in one place instead of being
+	// reconstructed by interleaving Columns with a second, position-keyed
+	// list. Columns is left empty whenever Expressions is set, preserving
+	// what Columns has always meant rather than letting it hold an
+	// ambiguous subset of a mixed index's keys. Its zero value, nil,
+	// means every key is a plain column, described by Columns as before.
+	//
+	// An IndexDef naming Expressions is describable but not yet
+	// renderable: inspect records the expression text a live PostgreSQL,
+	// MySQL, or SQLite expression index actually uses, and
+	// TableDef.Validate accepts it, but render.CreateIndexes and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct an expression key.
+	Expressions []string `json:",omitempty"`
+
+	// Predicate is the WHERE-clause expression text of a partial index,
+	// exactly as the server reports it, or empty for a non-partial index.
+	// Its zero value, the empty string, means the index is not partial,
+	// which is what every IndexDef and every checked-in generated file
+	// written before this field existed has always meant.
+	//
+	// A non-empty Predicate is describable but not yet renderable: inspect
+	// records a live PostgreSQL or SQLite partial index's predicate, and
+	// TableDef.Validate accepts it, but render.CreateIndexes and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct a WHERE clause on an index.
+	// MySQL has no partial-index concept, so this never comes from a MySQL
+	// descriptor.
+	Predicate string `json:",omitempty"`
 }
 
 // ForeignKeyDef describes a foreign-key constraint.
@@ -288,6 +333,7 @@ func (t TableDef) Clone() TableDef {
 	for i, index := range t.Indexes {
 		clone.Indexes[i] = index
 		clone.Indexes[i].Columns = append([]string(nil), index.Columns...)
+		clone.Indexes[i].Expressions = append([]string(nil), index.Expressions...)
 	}
 	clone.ForeignKeys = make([]ForeignKeyDef, len(t.ForeignKeys))
 	for i, key := range t.ForeignKeys {
@@ -505,8 +551,19 @@ func validateIndexes(indexes []IndexDef, columns map[string]struct{}) error {
 			return validationError(path+".name", "duplicates index %q", index.Name)
 		}
 		names[index.Name] = struct{}{}
-		if err := validateColumnList(path+".columns", index.Columns, columns, true); err != nil {
-			return err
+		if len(index.Expressions) == 0 {
+			if err := validateColumnList(path+".columns", index.Columns, columns, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(index.Columns) > 0 {
+			return validationError(path+".columns", "must be empty when Expressions describes the index's keys instead")
+		}
+		for j, expression := range index.Expressions {
+			if expression == "" {
+				return validationError(fmt.Sprintf("%s.expressions[%d]", path, j), "must not be empty")
+			}
 		}
 	}
 	return nil

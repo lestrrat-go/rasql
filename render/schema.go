@@ -36,6 +36,62 @@ func (e *UnsupportedIndexMethodError) Unwrap() error {
 	return ErrUnsupportedIndexMethod
 }
 
+// ErrUnsupportedPartialIndex is the sentinel wrapped by every
+// [UnsupportedPartialIndexError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedPartialIndex = errors.New("render: unsupported partial index")
+
+// UnsupportedPartialIndexError reports that an IndexDef names a
+// [schema.IndexDef.Predicate], making it a partial index. inspect can
+// describe such an index, and TableDef.Validate accepts it, but this
+// package does not yet know how to build DDL for a WHERE clause on an
+// index.
+type UnsupportedPartialIndexError struct {
+	// Index is the name of the index that named a predicate.
+	Index string
+	// Predicate is the WHERE-clause expression text the index named.
+	Predicate string
+}
+
+func (e *UnsupportedPartialIndexError) Error() string {
+	return fmt.Sprintf("index %q has predicate %q, which rasql can describe but not yet render", e.Index, e.Predicate)
+}
+
+// Unwrap exposes ErrUnsupportedPartialIndex so
+// errors.Is(err, ErrUnsupportedPartialIndex) works alongside errors.As
+// against *UnsupportedPartialIndexError.
+func (e *UnsupportedPartialIndexError) Unwrap() error {
+	return ErrUnsupportedPartialIndex
+}
+
+// ErrUnsupportedExpressionIndex is the sentinel wrapped by every
+// [UnsupportedExpressionIndexError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedExpressionIndex = errors.New("render: unsupported expression index")
+
+// UnsupportedExpressionIndexError reports that an IndexDef names
+// [schema.IndexDef.Expressions], meaning at least one of its keys is not a
+// plain column reference. inspect can describe such an index, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for an expression key.
+type UnsupportedExpressionIndexError struct {
+	// Index is the name of the index that named expression keys.
+	Index string
+	// Expressions is the ordered list of key expressions the index named.
+	Expressions []string
+}
+
+func (e *UnsupportedExpressionIndexError) Error() string {
+	return fmt.Sprintf("index %q has expression keys %q, which rasql can describe but not yet render", e.Index, e.Expressions)
+}
+
+// Unwrap exposes ErrUnsupportedExpressionIndex so
+// errors.Is(err, ErrUnsupportedExpressionIndex) works alongside errors.As
+// against *UnsupportedExpressionIndexError.
+func (e *UnsupportedExpressionIndexError) Unwrap() error {
+	return ErrUnsupportedExpressionIndex
+}
+
 // CreateTable renders a CREATE TABLE statement for table.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
 	if isNilDialect(d) {
@@ -141,6 +197,12 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef) error {
 	if index.Method != "" {
 		return &UnsupportedIndexMethodError{Index: index.Name, Method: index.Method}
+	}
+	if index.Predicate != "" {
+		return &UnsupportedPartialIndexError{Index: index.Name, Predicate: index.Predicate}
+	}
+	if len(index.Expressions) > 0 {
+		return &UnsupportedExpressionIndexError{Index: index.Name, Expressions: index.Expressions}
 	}
 	if err := r.rejectUnboundedMySQLText(table, index.Columns, "an index"); err != nil {
 		return err
