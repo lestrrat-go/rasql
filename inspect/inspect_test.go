@@ -3101,13 +3101,10 @@ func TestSQLiteInspectorRecordsVirtualTable(t *testing.T) {
 // described the same way an ordinary table is, rather than rejected for
 // its PRAGMA table_list kind, "shadow": a shadow table's own CREATE TABLE
 // text is an entirely ordinary table definition with no virtual-table
-// facts of its own. R-Tree is used here rather than FTS5 because FTS5's
-// own shadow tables quote their name with single quotes in their CREATE
-// TABLE text (sqlite_master.sql for FTS5's own "_data" table, for
-// instance, reads CREATE TABLE 'posts_fts_data'(...)), a form
-// rasql-sqlite's parser cannot parse — a pre-existing parser limit
-// unrelated to shadow tables specifically, listed among what still
-// rejects in this package's own documentation.
+// facts of its own. R-Tree is used here rather than FTS5 so this test does
+// not depend on the single-quoted table name FTS5's own shadow tables use
+// in their CREATE TABLE text; TestSQLiteInspectorRecordsFTS5ShadowTables
+// covers that form specifically.
 func TestSQLiteInspectorRecordsShadowTable(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -3126,6 +3123,64 @@ func TestSQLiteInspectorRecordsShadowTable(t *testing.T) {
 		{Name: "nodeno", Type: schema.IntegerType{}},
 		{Name: "data", Type: schema.BytesType{}, Nullable: true},
 	}, table.Columns)
+}
+
+// TestSQLiteInspectorRecordsFTS5ShadowTables proves that every table an
+// fts5 virtual table creates — the virtual table itself and its five shadow
+// tables — describes successfully against the embedded modernc.org/sqlite
+// driver actually used at runtime, not only against a hand-written sqlmock
+// fixture. FTS5 persists each shadow table's own CREATE TABLE text with its
+// table name single-quoted (sqlite_master.sql for the "_data" table, for
+// instance, reads CREATE TABLE 'posts_fts_data'(...)), a form
+// rasql-sqlite's parser previously rejected.
+func TestSQLiteInspectorRecordsFTS5ShadowTables(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE VIRTUAL TABLE posts_fts USING fts5(title, body)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+
+	table, err := inspector.Table(t.Context(), "posts_fts")
+	require.NoError(t, err)
+	require.Equal(t, "fts5", table.VirtualTableModule)
+
+	for _, shadowTable := range []string{"posts_fts_data", "posts_fts_idx", "posts_fts_content", "posts_fts_docsize", "posts_fts_config"} {
+		shadow, err := inspector.Table(t.Context(), shadowTable)
+		require.NoErrorf(t, err, "Table(%q)", shadowTable)
+		require.Emptyf(t, shadow.VirtualTableModule, "Table(%q).VirtualTableModule", shadowTable)
+		require.NotEmptyf(t, shadow.Columns, "Table(%q).Columns", shadowTable)
+	}
+}
+
+// TestSQLiteInspectorSweepsFTS5Database proves the user-visible point of the
+// single-quoted-table-name parser fix: TableNames, the same enumeration a
+// full rasqlgen sweep drives, lists an fts5 virtual table's shadow tables
+// alongside the virtual table itself, and every one of them describes
+// without error, so a sweep over a database that uses full-text search now
+// completes.
+func TestSQLiteInspectorSweepsFTS5Database(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE VIRTUAL TABLE posts_fts USING fts5(title, body)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+
+	names, err := inspector.TableNames(t.Context())
+	require.NoError(t, err)
+	require.Len(t, names, 6) // posts_fts itself plus its five FTS5 shadow tables
+
+	for _, name := range names {
+		_, err := inspector.Table(t.Context(), name.Name)
+		require.NoErrorf(t, err, "Table(%q)", name.Name)
+	}
 }
 
 func TestSQLiteInspectorMarksTableLevelIntegerPrimaryKeysAsNonNullable(t *testing.T) {

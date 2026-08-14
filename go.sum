@@ -33,8 +33,8 @@ github.com/lestrrat-go/rasql-mysql v0.0.0-20260803090041-496b40acb82a h1:YHaCjhk
 github.com/lestrrat-go/rasql-mysql v0.0.0-20260803090041-496b40acb82a/go.mod h1:yMUVg3dSi0Mgt2sS2ttbq3N6bAfnEpX0byTaE6VLiHM=
 github.com/lestrrat-go/rasql-pg v0.0.0-20260803045404-7e3faf0c19bd h1:wKo6GB3kqJ68PkB+ZbUePM0Zm8USyaKRh8adCLQGJXw=
 github.com/lestrrat-go/rasql-pg v0.0.0-20260803045404-7e3faf0c19bd/go.mod h1:WetxYJmSOZCJZYiwGFgrfU79DbgsoGyqTX5Y1G69NlY=
-github.com/lestrrat-go/rasql-sqlite v0.0.0-20260811104459-ee943b3c3228 h1:bOF9O5A1fp8IkodbkVTaQQYOacVXYEt+uvwOa/ap81w=
-github.com/lestrrat-go/rasql-sqlite v0.0.0-20260811104459-ee943b3c3228/go.mod h1:Xxk7xf9BCdnNVU7uuaRlzdaAOoPOSjfu2XukUVozfWg=
+github.com/lestrrat-go/rasql-sqlite v0.0.0-20260814113622-515430720d82 h1:8EO2lQ0vq1SM68R0fyp8VMnOto90WCZlJAlPf4nr7Gc=
+github.com/lestrrat-go/rasql-sqlite v0.0.0-20260814113622-515430720d82/go.mod h1:Xxk7xf9BCdnNVU7uuaRlzdaAOoPOSjfu2XukUVozfWg=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
