@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/stretchr/testify/require"
 )
@@ -88,10 +90,17 @@ func TestRunBootstrapSweepsLiveMySQLDatabase(t *testing.T) {
 // lives in the external rasqlgen_test package and cannot be reused here,
 // where openDatabase's override requires this package's own internal
 // visibility.
-func bootstrapLiveRefreshModule(t *testing.T, database *sql.DB) string {
+//
+// open is called fresh every time runBootstrap resolves -dsn, rather than
+// handing back one already-open *sql.DB the way bootstrapLiveSweep's
+// override does: runBootstrap closes whatever openDatabase returns to it
+// when the command finishes, and a live refresh test runs the command more
+// than once against the same database, so reusing a single *sql.DB across
+// calls would hand the second run an already-closed connection.
+func bootstrapLiveRefreshModule(t *testing.T, open func() (*sql.DB, error)) string {
 	t.Helper()
 	previousOpenDatabase := openDatabase
-	openDatabase = func(driverName, dsn string) (*sql.DB, error) { return database, nil }
+	openDatabase = func(driverName, dsn string) (*sql.DB, error) { return open() }
 	t.Cleanup(func() { openDatabase = previousOpenDatabase })
 
 	moduleDir := t.TempDir()
@@ -127,12 +136,13 @@ func runBootstrapCapturingOutput(t *testing.T, args []string) string {
 // in a report-only run's output, and -write applies exactly that, deleting
 // the dropped table's file and dropping it from the aggregator.
 func TestRunBootstrapRefreshLivePostgreSQLDatabase(t *testing.T) {
+	config := dbtest.PostgreSQLConfig(t)
 	database := dbtest.PostgreSQLDB(t)
 	ctx := t.Context()
 	mustExecLive(t, ctx, database, "CREATE TABLE users (id integer PRIMARY KEY, email text NOT NULL)")
 	mustExecLive(t, ctx, database, "CREATE TABLE legacy_users (id integer PRIMARY KEY)")
 
-	moduleDir := bootstrapLiveRefreshModule(t, database)
+	moduleDir := bootstrapLiveRefreshModule(t, func() (*sql.DB, error) { return stdlib.OpenDB(*config), nil })
 	require.NoError(t, run([]string{"bootstrap", "-dsn", "placeholder", "-dialect", "postgresql", "-package", "tables", "-output", "internal/tables"}))
 	outputDir := filepath.Join(moduleDir, "internal", "tables")
 	require.FileExists(t, filepath.Join(outputDir, "legacy_users_gen.go"))
@@ -156,12 +166,19 @@ func TestRunBootstrapRefreshLivePostgreSQLDatabase(t *testing.T) {
 // TestRunBootstrapRefreshLiveMySQLDatabase is
 // TestRunBootstrapRefreshLivePostgreSQLDatabase's MySQL counterpart.
 func TestRunBootstrapRefreshLiveMySQLDatabase(t *testing.T) {
+	config := dbtest.MySQLConfig(t)
 	database := dbtest.MySQLDB(t)
 	ctx := t.Context()
 	mustExecLive(t, ctx, database, "CREATE TABLE users (id integer PRIMARY KEY, email varchar(255) NOT NULL)")
 	mustExecLive(t, ctx, database, "CREATE TABLE legacy_users (id integer PRIMARY KEY)")
 
-	moduleDir := bootstrapLiveRefreshModule(t, database)
+	moduleDir := bootstrapLiveRefreshModule(t, func() (*sql.DB, error) {
+		connector, err := mysql.NewConnector(config)
+		if err != nil {
+			return nil, err
+		}
+		return sql.OpenDB(connector), nil
+	})
 	require.NoError(t, run([]string{"bootstrap", "-dsn", "placeholder", "-dialect", "mysql", "-package", "tables", "-output", "internal/tables"}))
 	outputDir := filepath.Join(moduleDir, "internal", "tables")
 	require.FileExists(t, filepath.Join(outputDir, "legacy_users_gen.go"))
