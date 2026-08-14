@@ -2596,9 +2596,6 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 
 	for _, statement := range []string{
 		"CREATE TABLE generated (value INTEGER, doubled INTEGER GENERATED ALWAYS AS (value * 2) STORED)",
-		"CREATE TABLE autoincremented (id INTEGER PRIMARY KEY AUTOINCREMENT)",
-		"CREATE TABLE strict_table (id INTEGER PRIMARY KEY) STRICT",
-		"CREATE TABLE without_rowid (id INTEGER PRIMARY KEY) WITHOUT ROWID",
 		"CREATE VIRTUAL TABLE virtual_table USING rtree(id, minx, maxx, miny, maxy)",
 	} {
 		_, err = database.ExecContext(t.Context(), statement)
@@ -2612,9 +2609,6 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 		want  string
 	}{
 		{table: "generated", want: "generated column"},
-		{table: "autoincremented", want: "AUTOINCREMENT"},
-		{table: "strict_table", want: "STRICT"},
-		{table: "without_rowid", want: "WITHOUT ROWID"},
 		{table: "virtual_table", want: `table kind "virtual" is unsupported`},
 	} {
 		t.Run(test.table, func(t *testing.T) {
@@ -2622,6 +2616,116 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 			require.ErrorContains(t, err, test.want)
 		})
 	}
+}
+
+// TestSQLiteInspectorRecordsStrictTable proves that a SQLite STRICT table
+// is now described rather than rejected: STRICT and WITHOUT ROWID used to
+// fail the whole table together, at the same check
+// TestSQLiteInspectorRejectsUnrepresentableTableMetadata used to cover.
+// Every column here uses one of STRICT's own allowed type names (INTEGER,
+// TEXT) so the CREATE TABLE itself succeeds under SQLite's stricter column
+// rules, and each also maps to a logical type rasql already models.
+func TestSQLiteInspectorRecordsStrictTable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT) STRICT")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.True(t, table.Strict)
+	require.False(t, table.WithoutRowID)
+}
+
+// TestSQLiteInspectorRecordsWithoutRowIDTable is the WithoutRowID
+// counterpart to TestSQLiteInspectorRecordsStrictTable.
+func TestSQLiteInspectorRecordsWithoutRowIDTable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT) WITHOUT ROWID")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.True(t, table.WithoutRowID)
+	require.False(t, table.Strict)
+}
+
+// TestSQLiteInspectorRecordsPrimaryKeyAutoincrement proves that a SQLite
+// primary key declared AUTOINCREMENT is now described rather than
+// rejected, the AUTOINCREMENT counterpart to
+// TestSQLiteInspectorRecordsStrictTable.
+func TestSQLiteInspectorRecordsPrimaryKeyAutoincrement(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.True(t, table.PrimaryKeyAutoincrement)
+	require.Equal(t, schema.ConflictResolution(""), table.PrimaryKeyOnConflict)
+}
+
+// TestSQLiteInspectorRecordsPrimaryKeyConflictResolution proves that a
+// SQLite primary key naming an ON CONFLICT resolution, on either the
+// column-level or table-level PRIMARY KEY form, is now described rather
+// than rejected.
+func TestSQLiteInspectorRecordsPrimaryKeyConflictResolution(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY ON CONFLICT REPLACE, name TEXT)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE orders (id INTEGER, name TEXT, PRIMARY KEY (id) ON CONFLICT IGNORE)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+
+	users, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.False(t, users.PrimaryKeyAutoincrement)
+	require.Equal(t, schema.ConflictReplace, users.PrimaryKeyOnConflict)
+
+	orders, err := inspector.Table(t.Context(), "orders")
+	require.NoError(t, err)
+	require.False(t, orders.PrimaryKeyAutoincrement)
+	require.Equal(t, schema.ConflictIgnore, orders.PrimaryKeyOnConflict)
+}
+
+// TestSQLiteInspectorRecordsDefaultPrimaryKeyConflictResolution proves that
+// an explicit ON CONFLICT ABORT clause on a primary key, and an omitted
+// one, both name schema.ConflictResolution's zero value, the same fold
+// TestSQLiteInspectorRecordsDefaultConflictResolution proves for a unique
+// constraint's ON CONFLICT clause.
+func TestSQLiteInspectorRecordsDefaultPrimaryKeyConflictResolution(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY ON CONFLICT ABORT, name TEXT)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, schema.ConflictResolution(""), table.PrimaryKeyOnConflict)
 }
 
 func TestSQLiteInspectorMarksTableLevelIntegerPrimaryKeysAsNonNullable(t *testing.T) {

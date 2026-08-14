@@ -1111,7 +1111,11 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 			{Name: "combo_a", Type: schema.IntegerType{}, Nullable: true},
 			{Name: "combo_b", Type: schema.IntegerType{}, Nullable: true},
 		},
-		PrimaryKey: []string{"id"},
+		PrimaryKey:              []string{"id"},
+		Strict:                  true,
+		WithoutRowID:            true,
+		PrimaryKeyAutoincrement: true,
+		PrimaryKeyOnConflict:    schema.ConflictReplace,
 		UniqueConstraints: []schema.UniqueDef{
 			{Name: "uq_code", Columns: []string{"code"}},
 			{Columns: []string{"bio"}},
@@ -1179,6 +1183,10 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.NoError(t, err)
 	text := string(source)
 	require.Contains(t, text, `Schema: "app"`)
+	require.Contains(t, text, "Strict:                  true,\n")
+	require.Contains(t, text, "WithoutRowID:            true,\n")
+	require.Contains(t, text, "PrimaryKeyAutoincrement: true,\n")
+	require.Contains(t, text, "PrimaryKeyOnConflict:    schema.ConflictReplace,\n")
 	require.Contains(t, text, `{Name: "uq_code", Columns: []string{"code"}}`)
 	require.Contains(t, text, `{Columns: []string{"bio"}}`)
 	require.Contains(t, text, `{Name: "uq_price_owner", Columns: []string{"price"}, Deferrable: schema.DeferrableInitiallyDeferred, NullsNotDistinct: true, IncludeColumns: []string{"owner_id"}, OnConflict: schema.ConflictReplace}`)

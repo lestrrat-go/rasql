@@ -387,6 +387,112 @@ func (e *UnsupportedUniqueConflictResolutionError) Unwrap() error {
 	return ErrUnsupportedUniqueConflictResolution
 }
 
+// ErrUnsupportedTableStrict is the sentinel wrapped by every
+// [UnsupportedTableStrictError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedTableStrict = errors.New("render: unsupported STRICT table")
+
+// UnsupportedTableStrictError reports that a TableDef sets
+// [schema.TableDef.Strict]. inspect can describe such a table, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for a STRICT table.
+type UnsupportedTableStrictError struct {
+	// Table is the name of the table declared STRICT.
+	Table string
+}
+
+func (e *UnsupportedTableStrictError) Error() string {
+	return fmt.Sprintf("table %q is STRICT, which rasql can describe but not yet render", e.Table)
+}
+
+// Unwrap exposes ErrUnsupportedTableStrict so errors.Is(err,
+// ErrUnsupportedTableStrict) works alongside errors.As against
+// *UnsupportedTableStrictError.
+func (e *UnsupportedTableStrictError) Unwrap() error {
+	return ErrUnsupportedTableStrict
+}
+
+// ErrUnsupportedTableWithoutRowID is the sentinel wrapped by every
+// [UnsupportedTableWithoutRowIDError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedTableWithoutRowID = errors.New("render: unsupported WITHOUT ROWID table")
+
+// UnsupportedTableWithoutRowIDError reports that a TableDef sets
+// [schema.TableDef.WithoutRowID]. inspect can describe such a table, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for a WITHOUT ROWID table.
+type UnsupportedTableWithoutRowIDError struct {
+	// Table is the name of the table declared WITHOUT ROWID.
+	Table string
+}
+
+func (e *UnsupportedTableWithoutRowIDError) Error() string {
+	return fmt.Sprintf("table %q is WITHOUT ROWID, which rasql can describe but not yet render", e.Table)
+}
+
+// Unwrap exposes ErrUnsupportedTableWithoutRowID so errors.Is(err,
+// ErrUnsupportedTableWithoutRowID) works alongside errors.As against
+// *UnsupportedTableWithoutRowIDError.
+func (e *UnsupportedTableWithoutRowIDError) Unwrap() error {
+	return ErrUnsupportedTableWithoutRowID
+}
+
+// ErrUnsupportedPrimaryKeyAutoincrement is the sentinel wrapped by every
+// [UnsupportedPrimaryKeyAutoincrementError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedPrimaryKeyAutoincrement = errors.New("render: unsupported primary key AUTOINCREMENT")
+
+// UnsupportedPrimaryKeyAutoincrementError reports that a TableDef sets
+// [schema.TableDef.PrimaryKeyAutoincrement]. inspect can describe such a
+// primary key, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for an AUTOINCREMENT primary key.
+type UnsupportedPrimaryKeyAutoincrementError struct {
+	// Table is the name of the table whose primary key named
+	// AUTOINCREMENT.
+	Table string
+}
+
+func (e *UnsupportedPrimaryKeyAutoincrementError) Error() string {
+	return fmt.Sprintf("table %q's primary key is AUTOINCREMENT, which rasql can describe but not yet render", e.Table)
+}
+
+// Unwrap exposes ErrUnsupportedPrimaryKeyAutoincrement so errors.Is(err,
+// ErrUnsupportedPrimaryKeyAutoincrement) works alongside errors.As against
+// *UnsupportedPrimaryKeyAutoincrementError.
+func (e *UnsupportedPrimaryKeyAutoincrementError) Unwrap() error {
+	return ErrUnsupportedPrimaryKeyAutoincrement
+}
+
+// ErrUnsupportedPrimaryKeyConflictResolution is the sentinel wrapped by
+// every [UnsupportedPrimaryKeyConflictResolutionError], so a caller that
+// only needs a presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedPrimaryKeyConflictResolution = errors.New("render: unsupported primary key conflict resolution")
+
+// UnsupportedPrimaryKeyConflictResolutionError reports that a TableDef
+// names a non-default [schema.ConflictResolution] on its primary key via
+// [schema.TableDef.PrimaryKeyOnConflict]. inspect can describe such a
+// primary key, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for an ON CONFLICT clause on a primary key.
+type UnsupportedPrimaryKeyConflictResolutionError struct {
+	// Table is the name of the table whose primary key named a non-default
+	// conflict resolution.
+	Table string
+	// OnConflict is the non-default conflict resolution the primary key
+	// named.
+	OnConflict schema.ConflictResolution
+}
+
+func (e *UnsupportedPrimaryKeyConflictResolutionError) Error() string {
+	return fmt.Sprintf("table %q's primary key uses ON CONFLICT %s, which rasql can describe but not yet render", e.Table, e.OnConflict)
+}
+
+// Unwrap exposes ErrUnsupportedPrimaryKeyConflictResolution so
+// errors.Is(err, ErrUnsupportedPrimaryKeyConflictResolution) works
+// alongside errors.As against *UnsupportedPrimaryKeyConflictResolutionError.
+func (e *UnsupportedPrimaryKeyConflictResolutionError) Unwrap() error {
+	return ErrUnsupportedPrimaryKeyConflictResolution
+}
+
 // CreateTable renders a CREATE TABLE statement for table.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
 	if isNilDialect(d) {
@@ -422,6 +528,12 @@ func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]Statement, error
 }
 
 func (r *renderer) writeCreateTable(table schema.TableDef) error {
+	if table.Strict {
+		return &UnsupportedTableStrictError{Table: table.Name}
+	}
+	if table.WithoutRowID {
+		return &UnsupportedTableWithoutRowIDError{Table: table.Name}
+	}
 	name, err := r.quoteQualified(table.Schema, table.Name)
 	if err != nil {
 		return err
@@ -439,6 +551,12 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		definitions = append(definitions, definition)
 	}
 	if len(table.PrimaryKey) > 0 {
+		if table.PrimaryKeyAutoincrement {
+			return &UnsupportedPrimaryKeyAutoincrementError{Table: table.Name}
+		}
+		if table.PrimaryKeyOnConflict != "" {
+			return &UnsupportedPrimaryKeyConflictResolutionError{Table: table.Name, OnConflict: table.PrimaryKeyOnConflict}
+		}
 		if err := r.rejectUnboundedMySQLText(table, table.PrimaryKey, "a primary key"); err != nil {
 			return err
 		}
