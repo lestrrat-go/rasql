@@ -188,6 +188,39 @@ func (g GeneratedStorage) valid() bool {
 	}
 }
 
+// NullsOrder names a PostgreSQL index key's NULLS FIRST/NULLS LAST
+// placement when it overrides the placement its own ASC/DESC direction
+// already implies: NULLS LAST for an ascending key, NULLS FIRST for a
+// descending key. Its zero value, the empty string, means the key uses
+// that implied default, which is what every IndexKeyDef written before
+// this field existed has always meant.
+//
+// A non-default NullsOrder is describable but not yet renderable: inspect
+// records what a live PostgreSQL index key's own nulls placement actually
+// is, and TableDef.Validate accepts it, but render.CreateIndexes and the
+// migrate diff-live path refuse to build DDL for one, because rasql does
+// not yet know how to construct a NULLS FIRST/NULLS LAST clause.
+type NullsOrder string
+
+const (
+	// NullsFirst places NULLs ahead of every non-NULL value: the default
+	// for a descending key, and an override when stated on an ascending
+	// one.
+	NullsFirst NullsOrder = "FIRST"
+	// NullsLast places NULLs after every non-NULL value: the default for
+	// an ascending key, and an override when stated on a descending one.
+	NullsLast NullsOrder = "LAST"
+)
+
+func (n NullsOrder) valid() bool {
+	switch n {
+	case "", NullsFirst, NullsLast:
+		return true
+	default:
+		return false
+	}
+}
+
 // RelationshipKind identifies the relationship shape represented by a
 // descriptor.
 type RelationshipKind string

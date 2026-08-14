@@ -279,6 +279,31 @@ func (e *UnsupportedIndexReplicaIdentityError) Unwrap() error {
 	return ErrUnsupportedIndexReplicaIdentity
 }
 
+// ErrUnsupportedIndexNullsNotDistinct is the sentinel wrapped by every
+// [UnsupportedIndexNullsNotDistinctError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexNullsNotDistinct = errors.New("render: unsupported index nulls-not-distinct")
+
+// UnsupportedIndexNullsNotDistinctError reports that an IndexDef sets
+// [schema.IndexDef.NullsNotDistinct]. inspect can describe such a plain
+// unique index, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a NULLS NOT DISTINCT clause.
+type UnsupportedIndexNullsNotDistinctError struct {
+	// Index is the name of the index that set NullsNotDistinct.
+	Index string
+}
+
+func (e *UnsupportedIndexNullsNotDistinctError) Error() string {
+	return fmt.Sprintf("index %q uses NULLS NOT DISTINCT, which rasql can describe but not yet render", e.Index)
+}
+
+// Unwrap exposes ErrUnsupportedIndexNullsNotDistinct so
+// errors.Is(err, ErrUnsupportedIndexNullsNotDistinct) works alongside
+// errors.As against *UnsupportedIndexNullsNotDistinctError.
+func (e *UnsupportedIndexNullsNotDistinctError) Unwrap() error {
+	return ErrUnsupportedIndexNullsNotDistinct
+}
+
 // ErrUnsupportedForeignKeyMatch is the sentinel wrapped by every
 // [UnsupportedForeignKeyMatchError], so a caller that only needs a
 // presence check can use errors.Is instead of errors.As.
@@ -461,6 +486,60 @@ func (e *UnsupportedForeignKeyNotEnforcedError) Unwrap() error {
 	return ErrUnsupportedForeignKeyNotEnforced
 }
 
+// ErrUnsupportedForeignKeyTemporal is the sentinel wrapped by every
+// [UnsupportedForeignKeyTemporalError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedForeignKeyTemporal = errors.New("render: unsupported temporal foreign key")
+
+// UnsupportedForeignKeyTemporalError reports that a ForeignKeyDef sets
+// [schema.ForeignKeyDef.Temporal]. inspect can describe such a foreign key,
+// and TableDef.Validate accepts it, but this package does not yet know how
+// to build DDL for a PERIOD foreign key.
+type UnsupportedForeignKeyTemporalError struct {
+	// ForeignKey is the name of the foreign key marked Temporal.
+	ForeignKey string
+}
+
+func (e *UnsupportedForeignKeyTemporalError) Error() string {
+	return fmt.Sprintf("foreign key %q is temporal, which rasql can describe but not yet render", e.ForeignKey)
+}
+
+// Unwrap exposes ErrUnsupportedForeignKeyTemporal so
+// errors.Is(err, ErrUnsupportedForeignKeyTemporal) works alongside
+// errors.As against *UnsupportedForeignKeyTemporalError.
+func (e *UnsupportedForeignKeyTemporalError) Unwrap() error {
+	return ErrUnsupportedForeignKeyTemporal
+}
+
+// ErrUnsupportedForeignKeyDeleteSetColumns is the sentinel wrapped by every
+// [UnsupportedForeignKeyDeleteSetColumnsError], so a caller that only needs
+// a presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedForeignKeyDeleteSetColumns = errors.New("render: unsupported foreign key delete set columns")
+
+// UnsupportedForeignKeyDeleteSetColumnsError reports that a ForeignKeyDef
+// names [schema.ForeignKeyDef.DeleteSetColumns]. inspect can describe such
+// a foreign key, and TableDef.Validate accepts it, but this package does
+// not yet know how to build DDL for an ON DELETE SET NULL/SET DEFAULT
+// column list.
+type UnsupportedForeignKeyDeleteSetColumnsError struct {
+	// ForeignKey is the name of the foreign key that named delete-set
+	// columns.
+	ForeignKey string
+	// DeleteSetColumns is the column list the foreign key named.
+	DeleteSetColumns []string
+}
+
+func (e *UnsupportedForeignKeyDeleteSetColumnsError) Error() string {
+	return fmt.Sprintf("foreign key %q names ON DELETE SET columns %v, which rasql can describe but not yet render", e.ForeignKey, e.DeleteSetColumns)
+}
+
+// Unwrap exposes ErrUnsupportedForeignKeyDeleteSetColumns so
+// errors.Is(err, ErrUnsupportedForeignKeyDeleteSetColumns) works alongside
+// errors.As against *UnsupportedForeignKeyDeleteSetColumnsError.
+func (e *UnsupportedForeignKeyDeleteSetColumnsError) Unwrap() error {
+	return ErrUnsupportedForeignKeyDeleteSetColumns
+}
+
 // ErrUnsupportedUniqueDeferrability is the sentinel wrapped by every
 // [UnsupportedUniqueDeferrabilityError], so a caller that only needs a
 // presence check can use errors.Is instead of errors.As.
@@ -600,6 +679,142 @@ func (e *UnsupportedUniqueKeyDetailsError) Error() string {
 // *UnsupportedUniqueKeyDetailsError.
 func (e *UnsupportedUniqueKeyDetailsError) Unwrap() error {
 	return ErrUnsupportedUniqueKeyDetails
+}
+
+// ErrUnsupportedUniqueTemporal is the sentinel wrapped by every
+// [UnsupportedUniqueTemporalError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueTemporal = errors.New("render: unsupported temporal unique constraint")
+
+// UnsupportedUniqueTemporalError reports that a UniqueDef sets
+// [schema.UniqueDef.Temporal]. inspect can describe such a unique
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a WITHOUT OVERLAPS clause.
+type UnsupportedUniqueTemporalError struct {
+	// Unique is the name of the unique constraint marked Temporal.
+	Unique string
+}
+
+func (e *UnsupportedUniqueTemporalError) Error() string {
+	return fmt.Sprintf("unique constraint %q is temporal, which rasql can describe but not yet render", e.Unique)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueTemporal so
+// errors.Is(err, ErrUnsupportedUniqueTemporal) works alongside errors.As
+// against *UnsupportedUniqueTemporalError.
+func (e *UnsupportedUniqueTemporalError) Unwrap() error {
+	return ErrUnsupportedUniqueTemporal
+}
+
+// ErrUnsupportedUniqueStorageParameters is the sentinel wrapped by every
+// [UnsupportedUniqueStorageParametersError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueStorageParameters = errors.New("render: unsupported unique constraint storage parameters")
+
+// UnsupportedUniqueStorageParametersError reports that a UniqueDef names
+// [schema.UniqueDef.StorageParameters]. inspect can describe such a unique
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a WITH (...) storage-parameters clause.
+type UnsupportedUniqueStorageParametersError struct {
+	// Unique is the name of the unique constraint that named storage
+	// parameters.
+	Unique string
+	// StorageParameters is the storage parameters the constraint named.
+	StorageParameters map[string]string
+}
+
+func (e *UnsupportedUniqueStorageParametersError) Error() string {
+	return fmt.Sprintf("unique constraint %q has storage parameters %v, which rasql can describe but not yet render", e.Unique, e.StorageParameters)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueStorageParameters so
+// errors.Is(err, ErrUnsupportedUniqueStorageParameters) works alongside
+// errors.As against *UnsupportedUniqueStorageParametersError.
+func (e *UnsupportedUniqueStorageParametersError) Unwrap() error {
+	return ErrUnsupportedUniqueStorageParameters
+}
+
+// ErrUnsupportedUniqueTablespace is the sentinel wrapped by every
+// [UnsupportedUniqueTablespaceError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueTablespace = errors.New("render: unsupported unique constraint tablespace")
+
+// UnsupportedUniqueTablespaceError reports that a UniqueDef names a
+// [schema.UniqueDef.Tablespace]. inspect can describe such a unique
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a TABLESPACE clause.
+type UnsupportedUniqueTablespaceError struct {
+	// Unique is the name of the unique constraint that named a
+	// tablespace.
+	Unique string
+	// Tablespace is the tablespace the constraint named.
+	Tablespace string
+}
+
+func (e *UnsupportedUniqueTablespaceError) Error() string {
+	return fmt.Sprintf("unique constraint %q uses tablespace %q, which rasql can describe but not yet render", e.Unique, e.Tablespace)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueTablespace so
+// errors.Is(err, ErrUnsupportedUniqueTablespace) works alongside errors.As
+// against *UnsupportedUniqueTablespaceError.
+func (e *UnsupportedUniqueTablespaceError) Unwrap() error {
+	return ErrUnsupportedUniqueTablespace
+}
+
+// ErrUnsupportedUniqueReplicaIdentity is the sentinel wrapped by every
+// [UnsupportedUniqueReplicaIdentityError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueReplicaIdentity = errors.New("render: unsupported unique constraint replica identity")
+
+// UnsupportedUniqueReplicaIdentityError reports that a UniqueDef sets
+// [schema.UniqueDef.ReplicaIdentity]. inspect can describe such a unique
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a REPLICA IDENTITY USING INDEX declaration.
+type UnsupportedUniqueReplicaIdentityError struct {
+	// Unique is the name of the unique constraint marked as the replica
+	// identity.
+	Unique string
+}
+
+func (e *UnsupportedUniqueReplicaIdentityError) Error() string {
+	return fmt.Sprintf("unique constraint %q is the replica identity, which rasql can describe but not yet render", e.Unique)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueReplicaIdentity so
+// errors.Is(err, ErrUnsupportedUniqueReplicaIdentity) works alongside
+// errors.As against *UnsupportedUniqueReplicaIdentityError.
+func (e *UnsupportedUniqueReplicaIdentityError) Unwrap() error {
+	return ErrUnsupportedUniqueReplicaIdentity
+}
+
+// ErrUnsupportedUniqueCollations is the sentinel wrapped by every
+// [UnsupportedUniqueCollationsError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueCollations = errors.New("render: unsupported unique constraint column collations")
+
+// UnsupportedUniqueCollationsError reports that a UniqueDef names
+// [schema.UniqueDef.Collations]. inspect can describe such a unique
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for a non-default COLLATE clause on a unique
+// constraint's column.
+type UnsupportedUniqueCollationsError struct {
+	// Unique is the name of the unique constraint that named a
+	// non-default collation.
+	Unique string
+	// Collations is the per-column collations the constraint named.
+	Collations map[string]string
+}
+
+func (e *UnsupportedUniqueCollationsError) Error() string {
+	return fmt.Sprintf("unique constraint %q has column collations %v, which rasql can describe but not yet render", e.Unique, e.Collations)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueCollations so
+// errors.Is(err, ErrUnsupportedUniqueCollations) works alongside errors.As
+// against *UnsupportedUniqueCollationsError.
+func (e *UnsupportedUniqueCollationsError) Unwrap() error {
+	return ErrUnsupportedUniqueCollations
 }
 
 // ErrUnsupportedTableStrict is the sentinel wrapped by every
@@ -934,6 +1149,21 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		if len(constraint.Keys) > 0 {
 			return &UnsupportedUniqueKeyDetailsError{Unique: constraint.Name, Keys: constraint.Keys}
 		}
+		if constraint.Temporal {
+			return &UnsupportedUniqueTemporalError{Unique: constraint.Name}
+		}
+		if len(constraint.StorageParameters) > 0 {
+			return &UnsupportedUniqueStorageParametersError{Unique: constraint.Name, StorageParameters: constraint.StorageParameters}
+		}
+		if constraint.Tablespace != "" {
+			return &UnsupportedUniqueTablespaceError{Unique: constraint.Name, Tablespace: constraint.Tablespace}
+		}
+		if constraint.ReplicaIdentity {
+			return &UnsupportedUniqueReplicaIdentityError{Unique: constraint.Name}
+		}
+		if len(constraint.Collations) > 0 {
+			return &UnsupportedUniqueCollationsError{Unique: constraint.Name, Collations: constraint.Collations}
+		}
 		if err := r.rejectUnboundedMySQLText(table, constraint.Columns, "a unique constraint"); err != nil {
 			return err
 		}
@@ -1016,6 +1246,9 @@ func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef
 	}
 	if index.ReplicaIdentity {
 		return &UnsupportedIndexReplicaIdentityError{Index: index.Name}
+	}
+	if index.NullsNotDistinct {
+		return &UnsupportedIndexNullsNotDistinctError{Index: index.Name}
 	}
 	if err := r.rejectUnboundedMySQLText(table, index.Columns, "an index"); err != nil {
 		return err
@@ -1190,6 +1423,12 @@ func (r *renderer) foreignKeyDefinition(table schema.TableDef, key schema.Foreig
 	}
 	if key.NotEnforced {
 		return "", &UnsupportedForeignKeyNotEnforcedError{ForeignKey: key.Name}
+	}
+	if key.Temporal {
+		return "", &UnsupportedForeignKeyTemporalError{ForeignKey: key.Name}
+	}
+	if len(key.DeleteSetColumns) > 0 {
+		return "", &UnsupportedForeignKeyDeleteSetColumnsError{ForeignKey: key.Name, DeleteSetColumns: key.DeleteSetColumns}
 	}
 	columns, err := r.quotedNames(key.Columns)
 	if err != nil {

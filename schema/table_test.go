@@ -788,6 +788,73 @@ func TestTableValidateRejectsIndexStorageParameterWithEmptyKey(t *testing.T) {
 	require.ErrorContains(t, err, "must not have an empty key")
 }
 
+// TestTableValidateAcceptsIndexNullsNotDistinct proves that Validate accepts
+// a plain unique index declared NullsNotDistinct.
+func TestTableValidateAcceptsIndexNullsNotDistinct(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:             "documents_status_idx",
+			Columns:          []string{"status"},
+			Unique:           true,
+			NullsNotDistinct: true,
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateRejectsNonUniqueIndexNullsNotDistinct proves that
+// Validate rejects a nonsensical NullsNotDistinct: NULLS NOT DISTINCT only
+// applies to a unique index, so a non-unique IndexDef setting it can never
+// come from a live database and must not be accepted as a descriptor to
+// render either.
+func TestTableValidateRejectsNonUniqueIndexNullsNotDistinct(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:             "documents_status_idx",
+			Columns:          []string{"status"},
+			NullsNotDistinct: true,
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].nulls_not_distinct")
+	require.ErrorContains(t, err, "must not be set on a non-unique index")
+}
+
+// TestTableValidatesIndexKeyNullsOrder proves that Validate rejects an
+// IndexKeyDef.NullsOrder value other than the ones NullsOrder itself names.
+func TestTableValidatesIndexKeyNullsOrder(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name: "documents_status_idx",
+			Keys: []schema.IndexKeyDef{{Expression: "status", NullsOrder: schema.NullsOrder("SIDEWAYS")}},
+		}},
+	}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "indexes[0].keys[0].nulls_order")
+	require.ErrorContains(t, err, `unsupported nulls order "SIDEWAYS"`)
+}
+
 // TestTableValidateUnsignedColumn covers the integer-specific signedness
 // option. Other concrete types cannot carry it in the first place.
 func TestTableValidateUnsignedColumn(t *testing.T) {
@@ -1310,6 +1377,63 @@ func TestTableValidateAcceptsForeignKeyValidationFacts(t *testing.T) {
 	require.NoError(t, table.Validate())
 }
 
+// TestTableValidateAcceptsForeignKeyTemporal proves that Validate accepts a
+// ForeignKeyDef.Temporal foreign key.
+func TestTableValidateAcceptsForeignKeyTemporal(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].Temporal = true
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateAcceptsForeignKeyDeleteSetColumns proves that Validate
+// accepts a ForeignKeyDef.DeleteSetColumns naming a subset of the foreign
+// key's own Columns when OnDelete is SetNull.
+func TestTableValidateAcceptsForeignKeyDeleteSetColumns(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].OnDelete = schema.SetNull
+	table.ForeignKeys[0].DeleteSetColumns = []string{"customer_id"}
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidatesForeignKeyDeleteSetColumnsRequiresSetAction proves that
+// Validate rejects DeleteSetColumns unless OnDelete is SetNull or
+// SetDefault: a live PostgreSQL ON DELETE SET NULL/SET DEFAULT column list
+// is meaningless on any other delete action.
+func TestTableValidatesForeignKeyDeleteSetColumnsRequiresSetAction(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].DeleteSetColumns = []string{"customer_id"}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "foreign_keys[0].delete_set_columns")
+	require.ErrorContains(t, err, "must not be set unless OnDelete is SetNull or SetDefault")
+}
+
+// TestTableValidatesForeignKeyDeleteSetColumnsUnknownColumn proves that
+// Validate rejects a DeleteSetColumns entry naming a column outside the
+// foreign key's own Columns.
+func TestTableValidatesForeignKeyDeleteSetColumnsUnknownColumn(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].OnDelete = schema.SetNull
+	table.ForeignKeys[0].DeleteSetColumns = []string{"amount"}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "foreign_keys[0].delete_set_columns[0]")
+	require.ErrorContains(t, err, `names column "amount", which is not part of the foreign key`)
+}
+
+// TestTableValidatesForeignKeyDeleteSetColumnsDuplicate proves that
+// Validate rejects a DeleteSetColumns entry repeated within the same
+// foreign key.
+func TestTableValidatesForeignKeyDeleteSetColumnsDuplicate(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].OnDelete = schema.SetNull
+	table.ForeignKeys[0].DeleteSetColumns = []string{"customer_id", "customer_id"}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "foreign_keys[0].delete_set_columns[1]")
+	require.ErrorContains(t, err, `duplicates column "customer_id"`)
+}
+
 // TestTableValidateAcceptsUniqueConstraintFacts proves that a UniqueDef
 // naming a non-default schema.Deferrability, NullsNotDistinct, non-empty
 // IncludeColumns, or a non-default schema.ConflictResolution, such as what
@@ -1392,6 +1516,57 @@ func TestTableValidatesUniqueConstraintIncludeColumnsDuplicate(t *testing.T) {
 	require.True(t, errors.As(err, &validationErr))
 	require.ErrorContains(t, err, "unique_constraints[0].include_columns[1]")
 	require.ErrorContains(t, err, `duplicates column "id"`)
+}
+
+// TestTableValidateAcceptsUniqueConstraintBackingIndexFacts proves that
+// Validate accepts a UniqueDef's Temporal, StorageParameters, Tablespace,
+// ReplicaIdentity, and Collations facts together.
+func TestTableValidateAcceptsUniqueConstraintBackingIndexFacts(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].Temporal = true
+	table.UniqueConstraints[0].StorageParameters = map[string]string{"fillfactor": "70"}
+	table.UniqueConstraints[0].Tablespace = "pg_custom"
+	table.UniqueConstraints[0].ReplicaIdentity = true
+	table.UniqueConstraints[0].Collations = map[string]string{"customer_id": "C"}
+
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidatesUniqueConstraintStorageParameterEmptyKey proves that
+// Validate rejects an empty StorageParameters key, the same terms as
+// IndexDef.StorageParameters.
+func TestTableValidatesUniqueConstraintStorageParameterEmptyKey(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].StorageParameters = map[string]string{"": "70"}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "unique_constraints[0].storage_parameters")
+	require.ErrorContains(t, err, "must not have an empty key")
+}
+
+// TestTableValidatesUniqueConstraintCollationsUnknownColumn proves that
+// Validate rejects a Collations key naming a column outside the
+// constraint's own Columns: a live PostgreSQL unique constraint's backing
+// index only ever carries a per-column collation for the constraint's own
+// columns.
+func TestTableValidatesUniqueConstraintCollationsUnknownColumn(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].Collations = map[string]string{"amount": "C"}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "unique_constraints[0].collations")
+	require.ErrorContains(t, err, `names column "amount", which is not part of the constraint`)
+}
+
+// TestTableValidatesUniqueConstraintCollationsEmptyValue proves that
+// Validate rejects a Collations entry with an empty collation name.
+func TestTableValidatesUniqueConstraintCollationsEmptyValue(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].Collations = map[string]string{"customer_id": ""}
+
+	err := table.Validate()
+	require.ErrorContains(t, err, "unique_constraints[0].collations")
+	require.ErrorContains(t, err, `must not have an empty value for column "customer_id"`)
 }
 
 // TestTableValidateAcceptsSQLiteTableOptions proves that Strict,

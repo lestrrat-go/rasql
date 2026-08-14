@@ -329,6 +329,74 @@ type UniqueDef struct {
 	// DDL for one, because rasql does not yet know how to construct a
 	// DESC key or a non-default collation inside a UNIQUE constraint.
 	Keys []IndexKeyDef `json:",omitempty"`
+
+	// Temporal marks a PostgreSQL 18+ temporal unique constraint, declared
+	// with WITHOUT OVERLAPS on its last column. Its zero value, false,
+	// means the constraint is an ordinary, non-temporal UNIQUE constraint,
+	// which is what every UniqueDef written before this field existed has
+	// always meant. MySQL and SQLite have no temporal-constraint concept,
+	// so this never comes from a MySQL or SQLite descriptor.
+	//
+	// A true Temporal is describable but not yet renderable: inspect
+	// records what a live PostgreSQL unique constraint actually declares,
+	// and TableDef.Validate accepts it, but render.CreateTable and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct a WITHOUT OVERLAPS clause.
+	Temporal bool `json:",omitempty"`
+
+	// StorageParameters holds a named PostgreSQL unique constraint's
+	// backing index's storage parameters — settings such as fillfactor
+	// that a CREATE INDEX ... WITH (...) clause attaches to an index —
+	// keyed and valued exactly as the server reports them. Its zero
+	// value, nil, means the backing index carries no storage parameters,
+	// PostgreSQL's own default, which is what every UniqueDef written
+	// before this field existed has always meant. See
+	// IndexDef.StorageParameters for the same fact on a plain index.
+	//
+	// A non-empty StorageParameters is describable but not yet
+	// renderable, on the same terms as IndexDef.StorageParameters.
+	StorageParameters map[string]string `json:",omitempty"`
+
+	// Tablespace names the PostgreSQL tablespace holding a named unique
+	// constraint's backing index, or the empty string for the database's
+	// default tablespace. Its zero value, "", means the default
+	// tablespace, which is what every UniqueDef written before this field
+	// existed has always meant. See IndexDef.Tablespace for the same fact
+	// on a plain index.
+	//
+	// A non-empty Tablespace is describable but not yet renderable, on
+	// the same terms as IndexDef.Tablespace.
+	Tablespace string `json:",omitempty"`
+
+	// ReplicaIdentity marks a named unique constraint's backing index as
+	// the PostgreSQL table's REPLICA IDENTITY USING INDEX for logical
+	// replication, in place of the primary key. Its zero value, false,
+	// means the backing index is not the replica identity, which is what
+	// every UniqueDef written before this field existed has always
+	// meant. See IndexDef.ReplicaIdentity for the same fact on a plain
+	// index.
+	//
+	// A true ReplicaIdentity is describable but not yet renderable, on
+	// the same terms as IndexDef.ReplicaIdentity.
+	ReplicaIdentity bool `json:",omitempty"`
+
+	// Collations records a named PostgreSQL unique constraint's backing
+	// index's non-default per-column collation, keyed by column name and
+	// valued by the collation exactly as the server reports it. A column
+	// missing from the map uses its own default collation. Its zero
+	// value, nil, means every column of the constraint uses its own
+	// default collation, which is what every UniqueDef written before
+	// this field existed has always meant. See IndexKeyDef.Collation for
+	// the same fact on a plain index's key.
+	//
+	// A non-empty Collations is describable but not yet renderable:
+	// inspect records a live PostgreSQL unique constraint's backing
+	// index's per-column collations, and TableDef.Validate accepts them,
+	// but render.CreateTable and the migrate diff-live path refuse to
+	// build DDL for one, because rasql does not yet know how to
+	// construct a non-default COLLATE clause on a unique constraint's
+	// column.
+	Collations map[string]string `json:",omitempty"`
 }
 
 // CheckDef requires Expression to evaluate to true for each row.
@@ -564,6 +632,22 @@ type IndexDef struct {
 	// DESC key, a non-default collation or operator class, or a MySQL
 	// prefix part.
 	Keys []IndexKeyDef `json:",omitempty"`
+
+	// NullsNotDistinct marks a PostgreSQL 15+ plain (non-constraint)
+	// unique index declared NULLS NOT DISTINCT, under which two NULLs in
+	// the indexed columns conflict with each other instead of coexisting.
+	// Its zero value, false, means NULLS DISTINCT, the SQL default and
+	// the only behavior every IndexDef written before this field existed
+	// has always meant. See UniqueDef.NullsNotDistinct for the same fact
+	// on a named unique constraint.
+	//
+	// A true NullsNotDistinct is describable but not yet renderable:
+	// inspect records what a live PostgreSQL unique index actually
+	// declares, and TableDef.Validate accepts it, but render.CreateIndexes
+	// and the migrate diff-live path refuse to build DDL for one, because
+	// rasql does not yet know how to construct a NULLS NOT DISTINCT
+	// clause.
+	NullsNotDistinct bool `json:",omitempty"`
 }
 
 // IndexKeyDef describes one key of an index beyond its expression text:
@@ -603,6 +687,13 @@ type IndexKeyDef struct {
 	// SQLite have no index-key-prefix concept, so this never comes from a
 	// PostgreSQL or SQLite descriptor.
 	PrefixLength int `json:",omitempty"`
+
+	// NullsOrder names a non-default NULLS FIRST/NULLS LAST placement for
+	// this key. See NullsOrder's own doc for what its zero value means.
+	// PostgreSQL only: MySQL and SQLite have no independent nulls-
+	// placement concept, so this never comes from a MySQL or SQLite
+	// descriptor.
+	NullsOrder NullsOrder `json:",omitempty"`
 }
 
 // ExclusionElementDef describes one element of an ExclusionDef: a column or
@@ -715,6 +806,38 @@ type ForeignKeyDef struct {
 	// NotEnforced is describable but not yet renderable, on the same
 	// terms as NotValid.
 	NotEnforced bool `json:",omitempty"`
+
+	// Temporal marks a PostgreSQL 18+ temporal foreign key, declared with
+	// PERIOD on both the referencing and referenced columns. Its zero
+	// value, false, means the foreign key is an ordinary, non-temporal
+	// FOREIGN KEY, which is what every ForeignKeyDef written before this
+	// field existed has always meant. MySQL has no temporal-foreign-key
+	// concept, so this never comes from a MySQL descriptor.
+	//
+	// A true Temporal is describable but not yet renderable: inspect
+	// records what a live PostgreSQL foreign key actually declares, and
+	// TableDef.Validate accepts it, but render.CreateTable and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct a PERIOD foreign key.
+	Temporal bool `json:",omitempty"`
+
+	// DeleteSetColumns lists the subset of Columns a PostgreSQL 15+ ON
+	// DELETE SET NULL (columns) or ON DELETE SET DEFAULT (columns) clause
+	// names, in the order the server reports them. Its zero value, nil,
+	// means OnDelete's SET NULL or SET DEFAULT action, if stated, applies
+	// to every column in Columns, the SQL default and what every
+	// ForeignKeyDef written before this field existed has always meant.
+	// DeleteSetColumns is meaningless, and always nil, unless OnDelete is
+	// SetNull or SetDefault. MySQL has no column-list concept for these
+	// actions, so this never comes from a MySQL descriptor.
+	//
+	// A non-empty DeleteSetColumns is describable but not yet renderable:
+	// inspect records what a live PostgreSQL foreign key actually
+	// declares, and TableDef.Validate accepts it, but render.CreateTable
+	// and the migrate diff-live path refuse to build DDL for one, because
+	// rasql does not yet know how to construct an ON DELETE SET NULL/SET
+	// DEFAULT column list.
+	DeleteSetColumns []string `json:",omitempty"`
 }
 
 // TableDef describes a database table and its constraints.
@@ -1181,6 +1304,30 @@ func validateNamedColumnLists(path string, constraints []UniqueDef, columns map[
 				seen[name] = struct{}{}
 			}
 		}
+		for key := range constraint.StorageParameters {
+			if key == "" {
+				return validationError(itemPath+".storage_parameters", "must not have an empty key")
+			}
+		}
+		if constraint.Tablespace != "" {
+			if err := ValidateIdentifier(constraint.Tablespace); err != nil {
+				return validationError(itemPath+".tablespace", "%s", err)
+			}
+		}
+		if len(constraint.Collations) > 0 {
+			constraintColumns := make(map[string]struct{}, len(constraint.Columns))
+			for _, name := range constraint.Columns {
+				constraintColumns[name] = struct{}{}
+			}
+			for name, collation := range constraint.Collations {
+				if _, exists := constraintColumns[name]; !exists {
+					return validationError(itemPath+".collations", "names column %q, which is not part of the constraint", name)
+				}
+				if collation == "" {
+					return validationError(itemPath+".collations", "must not have an empty value for column %q", name)
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -1262,6 +1409,9 @@ func validateIndexes(indexes []IndexDef, columns map[string]struct{}) error {
 				if key.PrefixLength < 0 {
 					return validationError(keyPath+".prefix_length", "must not be negative")
 				}
+				if !key.NullsOrder.valid() {
+					return validationError(keyPath+".nulls_order", "unsupported nulls order %q", key.NullsOrder)
+				}
 			}
 		case len(index.Expressions) > 0:
 			if len(index.Columns) > 0 {
@@ -1305,6 +1455,9 @@ func validateIndexes(indexes []IndexDef, columns map[string]struct{}) error {
 		}
 		if index.ReplicaIdentity && !index.Unique {
 			return validationError(path+".replica_identity", "must not be set on a non-unique index: PostgreSQL requires a unique index to serve as REPLICA IDENTITY USING INDEX")
+		}
+		if index.NullsNotDistinct && !index.Unique {
+			return validationError(path+".nulls_not_distinct", "must not be set on a non-unique index: NULLS NOT DISTINCT only applies to a unique index")
 		}
 	}
 	return nil
@@ -1350,6 +1503,26 @@ func validateForeignKeys(keys []ForeignKeyDef, columns map[string]struct{}, cons
 		}
 		if !key.Deferrable.valid() {
 			return validationError(path+".deferrable", "unsupported foreign key deferrability %q", key.Deferrable)
+		}
+		if len(key.DeleteSetColumns) > 0 {
+			if key.OnDelete != SetNull && key.OnDelete != SetDefault {
+				return validationError(path+".delete_set_columns", "must not be set unless OnDelete is SetNull or SetDefault")
+			}
+			referencing := make(map[string]struct{}, len(key.Columns))
+			for _, name := range key.Columns {
+				referencing[name] = struct{}{}
+			}
+			seen := make(map[string]struct{}, len(key.DeleteSetColumns))
+			for j, name := range key.DeleteSetColumns {
+				itemPath := fmt.Sprintf("%s.delete_set_columns[%d]", path, j)
+				if _, exists := referencing[name]; !exists {
+					return validationError(itemPath, "names column %q, which is not part of the foreign key", name)
+				}
+				if _, exists := seen[name]; exists {
+					return validationError(itemPath, "duplicates column %q", name)
+				}
+				seen[name] = struct{}{}
+			}
 		}
 	}
 	return nil
