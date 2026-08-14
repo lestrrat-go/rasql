@@ -23,7 +23,13 @@ func TestPostgreSQLInspectorRecordsGINIndexMethodAgainstLiveDatabase(t *testing.
 	ctx := t.Context()
 	database := dbtest.PostgreSQLDB(t)
 
-	mustExec(t, ctx, database, "CREATE TABLE articles (id integer PRIMARY KEY, tags text[] NOT NULL)")
+	// tags is jsonb rather than a PostgreSQL array: rasql has no column type
+	// for ARRAY, and inspecting an array column fails on the column itself
+	// before inspection ever reaches the index, which is unrelated to what
+	// this test pins. GIN over jsonb uses the default jsonb_ops operator
+	// class, so no other rejection in the unsupported-index query trips
+	// either.
+	mustExec(t, ctx, database, "CREATE TABLE articles (id integer PRIMARY KEY, tags jsonb NOT NULL)")
 	mustExec(t, ctx, database, "CREATE INDEX articles_tags_gin_idx ON articles USING GIN (tags)")
 
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
