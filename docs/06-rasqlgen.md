@@ -35,7 +35,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen bootstrap \
 
 With no `-table`, `bootstrap` sweeps every base table `inspect.Inspector.TableNames` reports for the inspected scope; a view is never swept, since that enumeration already excludes one. By default the sweep also skips `rasql_schema_migrations`, the migration history table's default name (see [`rasqlmigrate`](07-migrations.md)). That is a default, not a rule: an application that renamed its history table with `migrate.NewWithHistoryTable` passes that name to `-exclude` to skip it too. `-table` bypasses the sweep and the default skip alike, so naming the history table explicitly still describes it.
 
-`bootstrap` writes one file per table, named `<table>_gen.go` in lowercase -- the same naming `schema` itself uses for its own per-table files -- each exporting a function that returns that table's `schema.TableDef`, plus `tables_gen.go`, exporting `func Tables() []schema.TableDef` in table-name order. The result is immediately valid `rasqlgen schema -source` input. This is what it writes for a single `users` table of `id` and `email`:
+`bootstrap` writes one file per table, named `<table>_gen.go` in lowercase -- the same naming `schema` itself uses for its own per-table files -- each exporting a function that returns that table's `schema.TableDef`, plus `tables_gen.go`, exporting `func Tables() []schema.TableDef` in table-name order. The result is immediately valid `rasqlgen schema -source` input. This is what it writes for the `users` table of the two-table SQLite database in [`examples/bootstrapsource/schema.sql`](https://github.com/lestrrat-go/rasql/blob/main/examples/bootstrapsource/schema.sql), whose `NOT NULL`, `UNIQUE` and `DEFAULT` clauses all reach the descriptor:
 
 <!-- INCLUDE(examples/bootstrapsource/internal/tables/users_gen.go) -->
 ```go
@@ -53,8 +53,13 @@ func UsersDef() schema.TableDef {
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{}},
+			{Name: "display_name", Type: schema.TextType{}, Nullable: true},
+			{Name: "is_active", Type: schema.BooleanType{}, Default: "TRUE"},
 		},
 		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{
+			{Columns: []string{"email"}},
+		},
 	}
 }
 ```
@@ -73,6 +78,7 @@ import "github.com/lestrrat-go/rasql/schema"
 // bootstrap wrote them, with every entry in Hints applied.
 func Tables() []schema.TableDef {
 	tables := []schema.TableDef{
+		OrdersDef(),
 		UsersDef(),
 	}
 	for index, table := range tables {
