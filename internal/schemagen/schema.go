@@ -1728,6 +1728,12 @@ func writeColumnTypeLiteral(source *bytes.Buffer, columnType schema.ColumnType) 
 			source.WriteString(strconv.Itoa(scale))
 			source.WriteString(")")
 		}
+		if typed.Unsigned {
+			source.WriteString(", Unsigned: true")
+		}
+		if typed.ZeroFill {
+			source.WriteString(", ZeroFill: true")
+		}
 		source.WriteString("}")
 	case schema.BooleanType:
 		source.WriteString("schema.BooleanType{}")

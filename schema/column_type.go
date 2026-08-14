@@ -110,9 +110,26 @@ func (UUIDType) Kind() TypeKind { return KindUUID }
 func (UUIDType) columnType()    {}
 
 // DecimalType describes an exact decimal column.
+//
+// Unsigned and ZeroFill are both MySQL-only facts, on the same terms as
+// IntegerType's own fields of the same name: Unsigned records MySQL's
+// UNSIGNED attribute on a DECIMAL or NUMERIC column, which narrows the
+// values the column permits to non-negative ones, and ZeroFill records
+// MySQL's ZEROFILL attribute, which left-pads a displayed value with zeros
+// and implies UNSIGNED. Their zero value, false, means the column carries
+// neither, which is what every DecimalType and every checked-in generated
+// file written before these fields existed has always meant.
+//
+// A true Unsigned or ZeroFill is describable but not yet renderable: inspect
+// records what a live MySQL decimal column actually declares, and
+// TableDef.Validate accepts it, but render.CreateTable and the migrate
+// diff-live path refuse to build DDL for one, because rasql does not yet
+// know how to construct an UNSIGNED or ZEROFILL decimal declaration.
 type DecimalType struct {
 	Precision int
 	Scale     DecimalScale
+	Unsigned  bool
+	ZeroFill  bool
 }
 
 func (DecimalType) Kind() TypeKind { return KindDecimal }
@@ -159,6 +176,8 @@ func marshalColumnType(columnType ColumnType) ([]byte, error) {
 		} else {
 			fields["Scale"] = nil
 		}
+		fields["Unsigned"] = typed.Unsigned
+		fields["ZeroFill"] = typed.ZeroFill
 	}
 	return json.Marshal(fields)
 }
@@ -263,7 +282,7 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 		}
 		return UUIDType{}, nil
 	case KindDecimal:
-		if err := allow("Precision", "Scale"); err != nil {
+		if err := allow("Precision", "Scale", "Unsigned", "ZeroFill"); err != nil {
 			return nil, err
 		}
 		var precision int
@@ -278,7 +297,19 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 				return nil, fmt.Errorf("schema: decode decimal scale: %w", err)
 			}
 		}
-		return DecimalType{Precision: precision, Scale: scale}, nil
+		var unsigned bool
+		if value, ok := fields["Unsigned"]; ok {
+			if err := json.Unmarshal(value, &unsigned); err != nil {
+				return nil, fmt.Errorf("schema: decode decimal unsigned: %w", err)
+			}
+		}
+		var zeroFill bool
+		if value, ok := fields["ZeroFill"]; ok {
+			if err := json.Unmarshal(value, &zeroFill); err != nil {
+				return nil, fmt.Errorf("schema: decode decimal zerofill: %w", err)
+			}
+		}
+		return DecimalType{Precision: precision, Scale: scale, Unsigned: unsigned, ZeroFill: zeroFill}, nil
 	default:
 		return nil, fmt.Errorf("schema: decode column type: unsupported kind %q", kind)
 	}

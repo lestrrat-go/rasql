@@ -2369,7 +2369,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			Nullable: strings.EqualFold(nullable, "YES"),
 			Default:  text(defaultValue),
 		}
-		if _, ok := columnType.(schema.DecimalType); ok {
+		if decimalType, ok := columnType.(schema.DecimalType); ok {
 			if !numericPrecision.Valid {
 				return nil, fmt.Errorf("inspect: column %q: unconstrained NUMERIC has no precision to record: declare it as NUMERIC(precision, scale)", name)
 			}
@@ -2379,6 +2379,8 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			column.Type = schema.DecimalType{
 				Precision: int(numericPrecision.Int64),
 				Scale:     schema.NewDecimalScale(int(numericScale.Int64)),
+				Unsigned:  decimalType.Unsigned,
+				ZeroFill:  decimalType.ZeroFill,
 			}
 		}
 		if postgreSQL {
@@ -3224,12 +3226,12 @@ func postgreSQLTextWidth(characterMaximumLength sql.NullInt64) schema.TextWidth 
 // typeName, to a logical type and its signedness. databaseType is the original
 // catalog text, quoted back in errors.
 func normalizeMySQLType(typeName string, databaseType string) (schema.ColumnType, error) {
-	decimal, err := mysqlDecimalDeclaration(typeName, databaseType)
+	decimal, decimalUnsigned, decimalZeroFill, err := mysqlDecimalDeclaration(typeName, databaseType)
 	if err != nil {
 		return nil, err
 	}
 	if decimal {
-		return schema.DecimalType{}, nil
+		return schema.DecimalType{Unsigned: decimalUnsigned, ZeroFill: decimalZeroFill}, nil
 	}
 	// BOOLEAN, BOOL and TINYINT(1) are the same MySQL column, and the catalog
 	// spells it TINYINT(1). It is matched before the integer declaration so
@@ -3300,38 +3302,48 @@ func mysqlTextWidth(typeName string, databaseType string) (schema.TextWidth, boo
 }
 
 // mysqlDecimalDeclaration reports whether typeName, an upper-cased MySQL
-// COLUMN_TYPE, declares an exact decimal column this package can represent.
-// COLUMN_TYPE is a whole type declaration rather than a bare type name, so it
-// is matched as a whole: a substring test would accept catalog text such as
-// FOODECIMALBAR, and the catalog is read from a server the application may not
-// control. Only DECIMAL or NUMERIC, optionally followed by (precision) or
-// (precision, scale), is a decimal.
+// COLUMN_TYPE, declares an exact decimal column this package can represent,
+// and whether it carries UNSIGNED or ZEROFILL. The results are, in order,
+// whether the declaration is a decimal at all, whether it is UNSIGNED, and
+// whether it carries ZEROFILL; a declaration that is not a decimal reports
+// false, false, false and no error, leaving the caller's remaining type
+// matches to run. COLUMN_TYPE is a whole type declaration rather than a bare
+// type name, so it is matched as a whole: a substring test would accept
+// catalog text such as FOODECIMALBAR, and the catalog is read from a server
+// the application may not control. Only DECIMAL or NUMERIC, optionally
+// followed by (precision) or (precision, scale), is a decimal.
 //
-// A DECIMAL or NUMERIC declaration carrying UNSIGNED, ZEROFILL or any other
-// trailing modifier returns an error instead of a logical type.
-// schema.IntegerType.Unsigned states the signedness of an integer column only, so a
-// decimal's UNSIGNED still has nowhere to be recorded, and it narrows the
-// values the column permits, so a descriptor that dropped it would re-render as
-// a column with a different meaning. Anything that is not a decimal declaration
-// at all reports false with no error, leaving the caller's remaining type
-// matches to run.
-func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, error) {
+// ZEROFILL always implies UNSIGNED in MySQL, and the catalog always spells
+// the two together in that order, on the same terms
+// mysqlIntegerDeclaration's own doc comment states for the integer case; only
+// "", "UNSIGNED" and "UNSIGNED ZEROFILL" are shapes MySQL's own catalog
+// produces here. Any other trailing modifier returns an error instead of a
+// logical type, because rasql cannot represent a column whose declaration it
+// does not recognize and a descriptor that dropped an unrecognized modifier
+// would re-render as a column with a different meaning.
+func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, bool, bool, error) {
 	base, rest := splitMySQLDeclaration(typeName)
 	if base != "DECIMAL" && base != "NUMERIC" {
-		return false, nil
+		return false, false, false, nil
 	}
 
 	if strings.HasPrefix(rest, "(") {
 		end := strings.Index(rest, ")")
 		if end < 0 || !validDecimalArguments(rest[1:end]) {
-			return false, fmt.Errorf("unsupported mysql type %q: a decimal column must be declared %s(precision, scale)", databaseType, base)
+			return false, false, false, fmt.Errorf("unsupported mysql type %q: a decimal column must be declared %s(precision, scale)", databaseType, base)
 		}
 		rest = strings.TrimSpace(rest[end+1:])
 	}
-	if rest != "" {
-		return false, fmt.Errorf("mysql type %q cannot be represented: a decimal column must carry no %s modifier, because rasql cannot record one and re-rendering the column without it would change the values it permits", databaseType, rest)
+	switch rest {
+	case "":
+		return true, false, false, nil
+	case "UNSIGNED":
+		return true, true, false, nil
+	case "UNSIGNED ZEROFILL":
+		return true, true, true, nil
+	default:
+		return false, false, false, fmt.Errorf("mysql type %q cannot be represented: a decimal column must carry no %s modifier, because rasql cannot record one and re-rendering the column without it would change the values it permits", databaseType, rest)
 	}
-	return true, nil
 }
 
 // mysqlIntegerDeclaration reports whether typeName, an upper-cased MySQL
