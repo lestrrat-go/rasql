@@ -368,12 +368,12 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}).
-			AddRow("uq_users_email", "email", false, false, false, nil, false, false).
-			AddRow("uq_users_tenant_email", "tenant_id", false, false, false, nil, false, false).
-			AddRow("uq_users_tenant_email", "email", false, false, false, nil, false, false))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}).
+			AddRow("uq_users_email", "email", false, false, false, nil, false, nil, nil, false, nil).
+			AddRow("uq_users_tenant_email", "tenant_id", false, false, false, nil, false, nil, nil, false, nil).
+			AddRow("uq_users_tenant_email", "email", false, false, false, nil, false, nil, nil, false, nil))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}).
@@ -381,20 +381,17 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident.*FROM pg_catalog\\.pg_index.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns).
-			AddRow("users_email_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, false).
-			AddRow("users_tenant_email_idx", true, "tenant_id", "tenant_id", "btree", nil, false, nil, nil, nil, false, nil, nil, false).
-			AddRow("users_tenant_email_idx", true, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, false))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+			AddRow("users_email_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false).
+			AddRow("users_tenant_email_idx", true, "tenant_id", "tenant_id", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false).
+			AddRow("users_tenant_email_idx", true, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, \\(SELECT string_agg\\(delete_set_attribute\\.attname, ',' ORDER BY delete_set_key\\.ordinal_position\\) FROM unnest\\(constraint_data\\.confdelsetcols\\) WITH ORDINALITY AS delete_set_key\\(attribute_number, ordinal_position\\) JOIN pg_catalog\\.pg_attribute AS delete_set_attribute ON delete_set_attribute\\.attrelid = constraint_data\\.conrelid AND delete_set_attribute\\.attnum = delete_set_key\\.attribute_number\\), constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-			AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", "", false, false, false, true, true, false).
-			AddRow("fk_users_account", "tenant_id", "accounts", "tenant_id", "c", "a", "s", "", false, false, false, true, true, false))
+			AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", "", false, false, nil, true, true, false).
+			AddRow("fk_users_account", "tenant_id", "accounts", "tenant_id", "c", "a", "s", "", false, false, nil, true, true, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -442,23 +439,20 @@ func TestPostgreSQLInspectorRecordsNonDefaultIndexMethod(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
 	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident.*FROM pg_catalog\\.pg_index.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns).
-			AddRow("users_id_idx", false, "id", "id", "btree", nil, false, nil, nil, nil, false, nil, nil, false).
-			AddRow("users_id_gin_idx", false, "id", "id", "gin", nil, false, nil, nil, nil, false, nil, nil, false))
+			AddRow("users_id_idx", false, "id", "id", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false).
+			AddRow("users_id_gin_idx", false, "id", "id", "gin", nil, false, nil, nil, nil, false, nil, nil, false, false, false))
 	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
 	table, err := inspector.Table(t.Context(), "users")
@@ -479,23 +473,20 @@ func TestPostgreSQLInspectorRecordsPartialIndex(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
 	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident.*FROM pg_catalog\\.pg_index.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns).
-			AddRow("users_id_idx", false, "id", "id", "btree", nil, false, nil, nil, nil, false, nil, nil, false).
-			AddRow("users_active_id_idx", false, "id", "id", "btree", "id > 0", false, nil, nil, nil, false, nil, nil, false))
+			AddRow("users_id_idx", false, "id", "id", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false).
+			AddRow("users_active_id_idx", false, "id", "id", "btree", "id > 0", false, nil, nil, nil, false, nil, nil, false, false, false))
 	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
 	table, err := inspector.Table(t.Context(), "users")
@@ -516,24 +507,21 @@ func TestPostgreSQLInspectorRecordsExpressionIndex(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
 	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident.*FROM pg_catalog\\.pg_index.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns).
-			AddRow("users_lower_email_idx", false, nil, "lower(email)", "btree", nil, false, nil, nil, nil, false, nil, nil, false).
-			AddRow("users_id_lower_email_idx", false, "id", "id", "btree", nil, false, nil, nil, nil, false, nil, nil, false).
-			AddRow("users_id_lower_email_idx", false, nil, "lower(email)", "btree", nil, false, nil, nil, nil, false, nil, nil, false))
+			AddRow("users_lower_email_idx", false, nil, "lower(email)", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false).
+			AddRow("users_id_lower_email_idx", false, "id", "id", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false).
+			AddRow("users_id_lower_email_idx", false, nil, "lower(email)", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false))
 	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
 	table, err := inspector.Table(t.Context(), "users")
@@ -567,26 +555,23 @@ func TestPostgreSQLInspectorRecordsIndexValidityStorageAndPlacement(t *testing.T
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident.*FROM pg_catalog\\.pg_index.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns).
-			AddRow("users_email_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, false).
-			AddRow("users_email_invalid_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, true, nil, nil, false).
-			AddRow("users_email_options_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, "fillfactor=70", nil, false).
-			AddRow("users_email_tablespace_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, "pg_custom", false).
-			AddRow("users_email_replident_idx", true, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, true))
+			AddRow("users_email_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, false).
+			AddRow("users_email_invalid_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, true, nil, nil, false, false, false).
+			AddRow("users_email_options_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, "fillfactor=70", nil, false, false, false).
+			AddRow("users_email_tablespace_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, "pg_custom", false, false, false).
+			AddRow("users_email_replident_idx", true, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, true, false, false))
 	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
 	table, err := inspector.Table(t.Context(), "users")
@@ -600,56 +585,48 @@ func TestPostgreSQLInspectorRecordsIndexValidityStorageAndPlacement(t *testing.T
 	}, table.Indexes)
 }
 
-// TestPostgreSQLInspectorRejectsIndexWithNondefaultNullsOrdering and
-// TestPostgreSQLInspectorRejectsUniqueIndexWithNullsNotDistinct cover the two
-// index conditions inspect still rejects outright after
-// TestPostgreSQLInspectorRecordsIndexValidityStorageAndPlacement: rasql
-// models a key's ASC/DESC direction with IndexKeyDef.Descending but not an
-// independent NULLS FIRST/LAST placement, and models NULLS NOT DISTINCT only
-// on a named unique constraint's schema.UniqueDef, not on a plain index. Both
-// route through the same unsupportedIndexes query, so the exact index name
-// and which condition tripped it are immaterial to what inspect reports.
-
-func TestPostgreSQLInspectorRejectsIndexWithNondefaultNullsOrdering(t *testing.T) {
+// TestPostgreSQLInspectorRecordsIndexNullsFacts proves that a plain
+// (non-constraint) unique index declared NULLS NOT DISTINCT and a key whose
+// NULLS FIRST/NULLS LAST placement overrides the default its own ASC/DESC
+// direction implies are now described rather than rejected: inspect used to
+// fail the whole table on the first index carrying either, which would abort
+// a sweep over a production schema the moment it reached one. The nulls-
+// first key forces the index onto Keys, the same way any other per-key fact
+// does; the plain-column index carries IndexDef.NullsNotDistinct alone.
+func TestPostgreSQLInspectorRecordsIndexNullsFacts(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
+			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}).AddRow("users_email_nulls_first_idx"))
+		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns).
+			AddRow("users_email_nulls_first_idx", false, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, false, false, true).
+			AddRow("users_email_nulls_not_distinct_idx", true, "email", "email", "btree", nil, false, nil, nil, nil, false, nil, nil, false, true, false))
+	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
-	_, err := inspector.Table(t.Context(), "users")
-	require.EqualError(t, err, "inspect: index \"users_email_nulls_first_idx\" cannot be represented: rasql supports only indexes with default nulls ordering and, outside a named unique constraint, distinct nulls")
-}
-
-func TestPostgreSQLInspectorRejectsUniqueIndexWithNullsNotDistinct(t *testing.T) {
-	inspector, mock := newPostgreSQLInspector(t)
-	expectPostgreSQLServerVersion(mock, "180000")
-	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}).AddRow("users_email_nulls_not_distinct_idx"))
-
-	_, err := inspector.Table(t.Context(), "users")
-	require.EqualError(t, err, "inspect: index \"users_email_nulls_not_distinct_idx\" cannot be represented: rasql supports only indexes with default nulls ordering and, outside a named unique constraint, distinct nulls")
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.IndexDef{
+		{Name: "users_email_nulls_first_idx", Keys: []schema.IndexKeyDef{{Expression: "email", NullsOrder: schema.NullsFirst}}},
+		{Name: "users_email_nulls_not_distinct_idx", Columns: []string{"email"}, Unique: true, NullsNotDistinct: true},
+	}, table.Indexes)
 }
 
 // TestPostgreSQLInspectorRecordsIndexKeyDetails proves that a descending
@@ -675,25 +652,22 @@ func TestPostgreSQLInspectorRecordsIndexKeyDetails(t *testing.T) {
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident.*FROM pg_catalog\\.pg_index.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns).
-			AddRow("users_id_desc_idx", false, "id", "id", "btree", nil, true, nil, nil, nil, false, nil, nil, false).
-			AddRow("users_bio_opclass_idx", false, "bio", "bio", "btree", nil, false, "text_pattern_ops", nil, nil, false, nil, nil, false).
-			AddRow("users_name_collation_idx", false, "name", "name", "btree", nil, false, nil, "C", nil, false, nil, nil, false).
-			AddRow("users_id_status_idx", false, "id", "id", "btree", nil, false, nil, nil, "status", false, nil, nil, false))
+			AddRow("users_id_desc_idx", false, "id", "id", "btree", nil, true, nil, nil, nil, false, nil, nil, false, false, true).
+			AddRow("users_bio_opclass_idx", false, "bio", "bio", "btree", nil, false, "text_pattern_ops", nil, nil, false, nil, nil, false, false, false).
+			AddRow("users_name_collation_idx", false, "name", "name", "btree", nil, false, nil, "C", nil, false, nil, nil, false, false, false).
+			AddRow("users_id_status_idx", false, "id", "id", "btree", nil, false, nil, nil, "status", false, nil, nil, false, false, false))
 	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
 	table, err := inspector.Table(t.Context(), "users")
@@ -713,7 +687,7 @@ func TestPostgreSQLInspectorUsesPostgreSQL14CatalogQueries(t *testing.T) {
 	expectPostgreSQLMetadataBeforeForeignKeysWithChecks(mock, "users", "140000", sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}).
 		AddRow("chk_users_email", "email <> ''", false, true, true))
 	expectPostgreSQLForeignKeysWithRows(mock, "users", "140000", sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-		AddRow("fk_users_account", "id", "accounts", "id", "a", "a", "s", "", false, false, false, true, true, false))
+		AddRow("fk_users_account", "id", "accounts", "id", "a", "a", "s", "", false, false, nil, true, true, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -728,54 +702,54 @@ func TestPostgreSQLInspectorUsesPostgreSQL14CatalogQueries(t *testing.T) {
 	}}, table.ForeignKeys)
 }
 
-func TestPostgreSQL12InspectorRejectsUniqueConstraintWithNondefaultIndexCollation(t *testing.T) {
+// TestPostgreSQLInspectorRecordsUniqueConstraintBackingIndexFacts proves that
+// a temporal unique constraint and a unique constraint whose backing index
+// carries storage parameters, a nondefault tablespace, a nondefault column
+// collation, or the table's replica identity are now described rather than
+// rejected: inspect used to fail the whole table on any of these, which
+// would abort a sweep over a production schema the moment it reached one
+// such unique constraint.
+func TestPostgreSQLInspectorRecordsUniqueConstraintBackingIndexFacts(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
-	expectPostgreSQLServerVersion(mock, "120000")
-	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, FALSE, .*, FALSE, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint.*JOIN LATERAL unnest\\(index_metadata\\.indcollation::oid\\[\\]\\) WITH ORDINALITY AS index_collation\\(collation_oid, ordinal_position\\) ON index_collation\\.ordinal_position = key_column\\.ordinal_position").
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}).
-			AddRow("uq_users_email", "email", false, false, false, false, false, true))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
+			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "").
+			AddRow("status", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "").
+			AddRow("slug", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "").
+			AddRow("code", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+	expectPostgreSQLCatalogColumnCount(mock, "users", 5)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}).
+			AddRow("uq_users_email", "email", false, false, false, nil, true, nil, nil, false, nil).
+			AddRow("uq_users_status", "status", false, false, false, nil, false, "fillfactor=70", nil, false, nil).
+			AddRow("uq_users_slug", "slug", false, false, false, nil, false, nil, "pg_custom", false, "C").
+			AddRow("uq_users_code", "code", false, false, false, nil, false, nil, nil, true, nil))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
+	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns))
+	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
-	_, err := inspector.Table(t.Context(), "users")
-	require.EqualError(t, err, "inspect: unique constraint \"uq_users_email\" cannot be represented: rasql does not support unique constraints whose backing indexes use nondefault collations, storage options or tablespaces, or replica identity")
-}
-
-// TestPostgreSQLInspectorRejectsUnsupportedUniqueConstraint covers the two
-// unique-constraint facts inspect still rejects outright: a temporal unique
-// constraint, and one whose backing index uses a nondefault collation,
-// storage option, tablespace, or replica identity. Every row fixes
-// deferrability, NULLS NOT DISTINCT, and included columns at their default,
-// non-rejecting values, since inspect now describes those three facts
-// instead of rejecting them; see
-// TestPostgreSQLInspectorRecordsUniqueConstraintFacts.
-func TestPostgreSQLInspectorRejectsUnsupportedUniqueConstraint(t *testing.T) {
-	tests := []struct {
-		name                     string
-		temporal                 bool
-		unsupportedIndexMetadata bool
-		want                     string
-	}{
-		{name: "temporal", temporal: true, want: "inspect: unique constraint \"uq_users_email\" cannot be represented: rasql does not support temporal unique constraints"},
-		{name: "backing index persistent storage options", unsupportedIndexMetadata: true, want: "inspect: unique constraint \"uq_users_email\" cannot be represented: rasql does not support unique constraints whose backing indexes use nondefault collations, storage options or tablespaces, or replica identity"},
-		{name: "backing index nondefault tablespace", unsupportedIndexMetadata: true, want: "inspect: unique constraint \"uq_users_email\" cannot be represented: rasql does not support unique constraints whose backing indexes use nondefault collations, storage options or tablespaces, or replica identity"},
-		{name: "backing index replica identity", unsupportedIndexMetadata: true, want: "inspect: unique constraint \"uq_users_email\" cannot be represented: rasql does not support unique constraints whose backing indexes use nondefault collations, storage options or tablespaces, or replica identity"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			inspector, mock := newPostgreSQLInspector(t)
-			expectPostgreSQLServerVersion(mock, "180000")
-			expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-			mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
-				WithArgs("users").
-				WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}).
-					AddRow("uq_users_email", "email", false, false, false, nil, test.temporal, test.unsupportedIndexMetadata))
-
-			_, err := inspector.Table(t.Context(), "users")
-			require.EqualError(t, err, test.want)
-		})
-	}
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.UniqueDef{
+		{Name: "uq_users_email", Columns: []string{"email"}, Temporal: true},
+		{Name: "uq_users_status", Columns: []string{"status"}, StorageParameters: map[string]string{"fillfactor": "70"}},
+		{Name: "uq_users_slug", Columns: []string{"slug"}, Tablespace: "pg_custom", Collations: map[string]string{"slug": "C"}},
+		{Name: "uq_users_code", Columns: []string{"code"}, ReplicaIdentity: true},
+	}, table.UniqueConstraints)
 }
 
 // TestPostgreSQLInspectorRecordsUniqueConstraintFacts proves that a
@@ -798,22 +772,19 @@ func TestPostgreSQLInspectorRecordsUniqueConstraintFacts(t *testing.T) {
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}).
-			AddRow("uq_users_email", "email", true, false, false, nil, false, false).
-			AddRow("uq_users_status", "status", false, false, true, nil, false, false).
-			AddRow("uq_users_slug", "slug", false, false, false, "email,status", false, false))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}).
+			AddRow("uq_users_email", "email", true, false, false, nil, false, nil, nil, false, nil).
+			AddRow("uq_users_status", "status", false, false, true, nil, false, nil, nil, false, nil).
+			AddRow("uq_users_slug", "slug", false, false, false, "email,status", false, nil, nil, false, nil))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}))
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "amname", "key_expression", "operator", "predicate", "condeferrable", "condeferred"}))
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*index_metadata\\.indnullsnotdistinct.*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident.*FROM pg_catalog\\.pg_index.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, index_metadata\\.indnullsnotdistinct, \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns))
 	expectPostgreSQLForeignKeys(mock, "users", "180000")
@@ -825,19 +796,6 @@ func TestPostgreSQLInspectorRecordsUniqueConstraintFacts(t *testing.T) {
 		{Name: "uq_users_status", Columns: []string{"status"}, NullsNotDistinct: true},
 		{Name: "uq_users_slug", Columns: []string{"slug"}, IncludeColumns: []string{"email", "status"}},
 	}, table.UniqueConstraints)
-}
-
-func TestPostgreSQLInspectorRejectsUniqueConstraintWithNondefaultColumnCollation(t *testing.T) {
-	inspector, mock := newPostgreSQLInspector(t)
-	expectPostgreSQLServerVersion(mock, "180000")
-	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, .*, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint.*JOIN pg_catalog\\.pg_type AS type_data ON type_data\\.oid = attribute\\.atttypid").
-		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}).
-			AddRow("uq_users_email", "email", false, false, false, false, false, true))
-
-	_, err := inspector.Table(t.Context(), "users")
-	require.EqualError(t, err, "inspect: unique constraint \"uq_users_email\" cannot be represented: rasql does not support unique constraints whose backing indexes use nondefault collations, storage options or tablespaces, or replica identity")
 }
 
 // TestPostgreSQLInspectorRecordsCheckFacts proves that a check constraint
@@ -866,41 +824,37 @@ func TestPostgreSQLInspectorRecordsCheckFacts(t *testing.T) {
 	}, table.Checks)
 }
 
-// TestPostgreSQLInspectorRejectsUnsupportedForeignKey covers the foreign-key
-// facts inspect still rejects outright: a column list on ON DELETE SET NULL
-// or SET DEFAULT, and temporal foreign keys. Every row fixes match type,
-// referenced schema, deferrability, validation, and enforcement at their
-// default, non-rejecting values, since inspect now describes those facts
-// instead of rejecting them; see TestPostgreSQLInspectorRecordsForeignKeyFacts
-// and TestPostgreSQLInspectorRecordsForeignKeyValidationFacts.
-func TestPostgreSQLInspectorRejectsUnsupportedForeignKey(t *testing.T) {
-	tests := []struct {
-		name             string
-		deleteSetColumns bool
-		validated        bool
-		enforced         bool
-		temporal         bool
-		want             string
-	}{
-		{name: "partial delete set columns", deleteSetColumns: true, validated: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support column lists for ON DELETE SET NULL or SET DEFAULT"},
-		{name: "temporal", validated: true, enforced: true, temporal: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support temporal foreign keys"},
-	}
+// TestPostgreSQLInspectorRecordsForeignKeyTemporalAndDeleteSetColumns proves
+// that a foreign key's ON DELETE SET NULL column list and a temporal
+// (PERIOD) foreign key are now described rather than rejected: inspect used
+// to fail the whole table on either, which would abort a sweep over a
+// production schema the moment it reached one such foreign key.
+func TestPostgreSQLInspectorRecordsForeignKeyTemporalAndDeleteSetColumns(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
+			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
+			AddRow("period_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+	expectPostgreSQLCatalogColumnCount(mock, "users", 3)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
+	expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, \\(SELECT string_agg\\(delete_set_attribute\\.attname, ',' ORDER BY delete_set_key\\.ordinal_position\\) FROM unnest\\(constraint_data\\.confdelsetcols\\) WITH ORDINALITY AS delete_set_key\\(attribute_number, ordinal_position\\) JOIN pg_catalog\\.pg_attribute AS delete_set_attribute ON delete_set_attribute\\.attrelid = constraint_data\\.conrelid AND delete_set_attribute\\.attnum = delete_set_key\\.attribute_number\\), constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
+			AddRow("fk_users_account", "account_id", "accounts", "id", "n", "a", "s", "", false, false, "account_id", true, true, false).
+			AddRow("fk_users_period", "period_id", "periods", "id", "a", "a", "s", "", false, false, nil, true, true, true))
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			inspector, mock := newPostgreSQLInspector(t)
-			expectPostgreSQLServerVersion(mock, "180000")
-			expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-			expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
-			mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
-				WithArgs("users").
-				WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-					AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "s", "", false, false, test.deleteSetColumns, test.validated, test.enforced, test.temporal))
-
-			_, err := inspector.Table(t.Context(), "users")
-			require.EqualError(t, err, test.want)
-		})
-	}
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.ForeignKeyDef{
+		{Name: "fk_users_account", Columns: []string{"account_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id"}, OnDelete: schema.SetNull, OnUpdate: schema.NoAction, DeleteSetColumns: []string{"account_id"}},
+		{Name: "fk_users_period", Columns: []string{"period_id"}, ReferencedTable: "periods", ReferencedColumns: []string{"id"}, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, Temporal: true},
+	}, table.ForeignKeys)
 }
 
 // TestPostgreSQLInspectorRejectsUnsupportedForeignKeyMatchType proves that
@@ -913,10 +867,10 @@ func TestPostgreSQLInspectorRejectsUnsupportedForeignKeyMatchType(t *testing.T) 
 	expectPostgreSQLServerVersion(mock, "180000")
 	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
 	expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, \\(SELECT string_agg\\(delete_set_attribute\\.attname, ',' ORDER BY delete_set_key\\.ordinal_position\\) FROM unnest\\(constraint_data\\.confdelsetcols\\) WITH ORDINALITY AS delete_set_key\\(attribute_number, ordinal_position\\) JOIN pg_catalog\\.pg_attribute AS delete_set_attribute ON delete_set_attribute\\.attrelid = constraint_data\\.conrelid AND delete_set_attribute\\.attnum = delete_set_key\\.attribute_number\\), constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "x", "", false, false, false, true, true, false))
+			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "x", "", false, false, nil, true, true, false))
 
 	_, err := inspector.Table(t.Context(), "users")
 	require.EqualError(t, err, `inspect: foreign key "fk_users_account": unsupported match type "x"`)
@@ -943,12 +897,12 @@ func TestPostgreSQLInspectorRecordsForeignKeyFacts(t *testing.T) {
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
 	expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, \\(SELECT string_agg\\(delete_set_attribute\\.attname, ',' ORDER BY delete_set_key\\.ordinal_position\\) FROM unnest\\(constraint_data\\.confdelsetcols\\) WITH ORDINALITY AS delete_set_key\\(attribute_number, ordinal_position\\) JOIN pg_catalog\\.pg_attribute AS delete_set_attribute ON delete_set_attribute\\.attrelid = constraint_data\\.conrelid AND delete_set_attribute\\.attnum = delete_set_key\\.attribute_number\\), constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "s", "billing", false, false, false, true, true, false).
-			AddRow("fk_users_owner", "owner_id", "owners", "id", "a", "a", "f", "", true, false, false, true, true, false).
-			AddRow("fk_users_group", "group_id", "groups", "id", "a", "a", "p", "", true, true, false, true, true, false))
+			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "s", "billing", false, false, nil, true, true, false).
+			AddRow("fk_users_owner", "owner_id", "owners", "id", "a", "a", "f", "", true, false, nil, true, true, false).
+			AddRow("fk_users_group", "group_id", "groups", "id", "a", "a", "p", "", true, true, nil, true, true, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -1030,11 +984,11 @@ func TestPostgreSQLInspectorRecordsForeignKeyValidationFacts(t *testing.T) {
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
 	expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
-	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, \\(SELECT string_agg\\(delete_set_attribute\\.attname, ',' ORDER BY delete_set_key\\.ordinal_position\\) FROM unnest\\(constraint_data\\.confdelsetcols\\) WITH ORDINALITY AS delete_set_key\\(attribute_number, ordinal_position\\) JOIN pg_catalog\\.pg_attribute AS delete_set_attribute ON delete_set_attribute\\.attrelid = constraint_data\\.conrelid AND delete_set_attribute\\.attnum = delete_set_key\\.attribute_number\\), constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "s", "", false, false, false, false, true, false).
-			AddRow("fk_users_owner", "owner_id", "owners", "id", "a", "a", "s", "", false, false, false, true, false, false))
+			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "s", "", false, false, nil, false, true, false).
+			AddRow("fk_users_owner", "owner_id", "owners", "id", "a", "a", "s", "", false, false, nil, true, false, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -1096,9 +1050,9 @@ func expectPostgreSQLMetadataBeforeForeignKeysWithChecksAndExclusions(mock sqlmo
 		uniqueNulls = "FALSE"
 		temporal = "FALSE"
 	}
-	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, " + uniqueNulls + ", .*, " + temporal + ", index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, " + uniqueNulls + ", .*, " + temporal + ", array_to_string\\(index_data\\.reloptions, ','\\), index_tablespace\\.spcname, index_metadata\\.indisreplident, CASE WHEN \\(index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation\\) THEN collation_metadata\\.collname ELSE NULL END FROM pg_catalog\\.pg_constraint").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	enforced := "constraint_data\\.conenforced"
 	if version == "140000" {
 		enforced = "TRUE"
@@ -1109,10 +1063,7 @@ func expectPostgreSQLMetadataBeforeForeignKeysWithChecksAndExclusions(mock sqlmo
 	mock.ExpectQuery("SELECT constraint_data\\.conname, access_method\\.amname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), operator_data\\.oprname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\), constraint_data\\.condeferrable, constraint_data\\.condeferred FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'x'").
 		WithArgs(tableName).
 		WillReturnRows(exclusions)
-	mock.ExpectQuery("SELECT index_data\\.relname FROM pg_catalog\\.pg_index.*" + uniqueNulls + ".*index_option\\.value NOT IN \\(0, 3\\)").
-		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"relname"}))
-	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident.*FROM pg_catalog\\.pg_index.*index_option\\.value NOT IN \\(0, 3\\)").
+	mock.ExpectQuery("SELECT index_data\\.relname, index_metadata\\.indisunique, attribute\\.attname, pg_catalog\\.pg_get_indexdef\\(index_metadata\\.indexrelid, key_column\\.ordinal_position::int, true\\), access_method\\.amname, pg_catalog\\.pg_get_expr\\(index_metadata\\.indpred, index_metadata\\.indrelid, true\\).*NOT index_metadata\\.indisvalid.*array_to_string\\(index_data\\.reloptions, ','\\).*index_tablespace\\.spcname.*index_metadata\\.indisreplident, " + uniqueNulls + ", \\(key_option\\.value & 2\\) <> 0 FROM pg_catalog\\.pg_index").
 		WithArgs(tableName).
 		WillReturnRows(sqlmock.NewRows(postgreSQLIndexColumns))
 }
@@ -1123,17 +1074,17 @@ func expectPostgreSQLMetadataBeforeForeignKeysWithChecksAndExclusions(mock sqlmo
 // collation), then the per-index include_columns list, and finally the
 // index's own validity, storage parameters, tablespace, and replica
 // identity facts.
-var postgreSQLIndexColumns = []string{"relname", "indisunique", "attname", "key_expression", "amname", "predicate", "descending", "operator_class", "collation", "include_columns", "not_valid", "storage_parameters", "tablespace", "replica_identity"}
+var postgreSQLIndexColumns = []string{"relname", "indisunique", "attname", "key_expression", "amname", "predicate", "descending", "operator_class", "collation", "include_columns", "not_valid", "storage_parameters", "tablespace", "replica_identity", "nulls_not_distinct", "nulls_first"}
 
 func expectPostgreSQLForeignKeys(mock sqlmock.Sqlmock, tableName string, version string) {
 	expectPostgreSQLForeignKeysWithRows(mock, tableName, version, sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}))
 }
 
 func expectPostgreSQLForeignKeysWithRows(mock sqlmock.Sqlmock, tableName string, version string, foreignKeys *sqlmock.Rows) {
-	deleteSetColumns := "constraint_data\\.confdelsetcols IS NOT NULL"
+	deleteSetColumns := "\\(SELECT string_agg\\(delete_set_attribute\\.attname, ',' ORDER BY delete_set_key\\.ordinal_position\\) FROM unnest\\(constraint_data\\.confdelsetcols\\) WITH ORDINALITY AS delete_set_key\\(attribute_number, ordinal_position\\) JOIN pg_catalog\\.pg_attribute AS delete_set_attribute ON delete_set_attribute\\.attrelid = constraint_data\\.conrelid AND delete_set_attribute\\.attnum = delete_set_key\\.attribute_number\\)"
 	temporal := "constraint_data\\.conperiod"
 	if version == "140000" {
-		deleteSetColumns = "FALSE"
+		deleteSetColumns = "NULL"
 		temporal = "FALSE"
 	}
 	enforced := "constraint_data\\.conenforced"
@@ -1337,9 +1288,9 @@ func expectMySQLColumnsAndPrimaryKey(mock sqlmock.Sqlmock, tableName string) {
 }
 
 func expectMySQLEmptyMetadata(mock sqlmock.Sqlmock, tableName string) {
-	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, NULL, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
+	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, NULL, FALSE, NULL, NULL, FALSE, NULL FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	mock.ExpectQuery("SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name").
 		WithArgs(tableName).
 		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "check_clause", "no_inherit", "validated", "enforced"}))
@@ -1358,7 +1309,7 @@ func expectMySQLIndexesOnly(mock sqlmock.Sqlmock, tableName string) {
 }
 
 func expectMySQLEmptyForeignKeys(mock sqlmock.Sqlmock, tableName string) {
-	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, CASE WHEN key_column_usage.referenced_table_schema = DATABASE() THEN '' ELSE key_column_usage.referenced_table_schema END, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
+	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, CASE WHEN key_column_usage.referenced_table_schema = DATABASE() THEN '' ELSE key_column_usage.referenced_table_schema END, FALSE, FALSE, NULL, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
 		WithArgs(tableName).
 		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}))
 }
@@ -1376,16 +1327,16 @@ func TestMySQLInspectorReadsConstraints(t *testing.T) {
 	require.NoError(t, err)
 	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale, extra, generation_expression FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
 	primaryKeyQuery := "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position"
-	uniqueQuery := "SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, NULL, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position"
+	uniqueQuery := "SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, NULL, FALSE, NULL, NULL, FALSE, NULL FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position"
 	checksQuery := "SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name"
-	foreignKeysQuery := "SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, CASE WHEN key_column_usage.referenced_table_schema = DATABASE() THEN '' ELSE key_column_usage.referenced_table_schema END, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position"
+	foreignKeysQuery := "SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, CASE WHEN key_column_usage.referenced_table_schema = DATABASE() THEN '' ELSE key_column_usage.referenced_table_schema END, FALSE, FALSE, NULL, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position"
 	mock.ExpectQuery(columnsQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "extra", "generation_expression"}).AddRow("id", "bigint", "NO", nil, nil, nil, "", "").AddRow("email", "varchar(255)", "NO", nil, nil, nil, "", "").AddRow("account_id", "bigint", "NO", nil, nil, nil, "", ""))
 	expectMySQLCreateTable(mock, "users", "CREATE TABLE `users` (`id` bigint NOT NULL, `email` varchar(255) NOT NULL, `account_id` bigint NOT NULL) ENGINE=InnoDB")
 	mock.ExpectQuery(primaryKeyQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-	mock.ExpectQuery(uniqueQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "unsupported_index_metadata"}).AddRow("uq_users_email", "email", false, false, false, nil, false, false))
+	mock.ExpectQuery(uniqueQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "storage_parameters", "tablespace", "replica_identity", "collation"}).AddRow("uq_users_email", "email", false, false, false, nil, false, nil, nil, false, nil))
 	mock.ExpectQuery(checksQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "check_clause", "no_inherit", "validated", "enforced"}).AddRow("chk_users_email", "email <> ''", false, true, true))
 	expectMySQLIndexesOnly(mock, "users")
-	mock.ExpectQuery(foreignKeysQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}).AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", "", false, false, false, true, true, false))
+	mock.ExpectQuery(foreignKeysQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}).AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", "", false, false, nil, true, true, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -1420,9 +1371,9 @@ func TestMySQLInspectorRecordsCheckNotEnforced(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	expectMySQLColumnsAndPrimaryKey(mock, "users")
-	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, NULL, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
+	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, NULL, FALSE, NULL, NULL, FALSE, NULL FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "unsupported_index_metadata"}))
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "storage_parameters", "tablespace", "replica_identity", "collation"}))
 	mock.ExpectQuery("SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name").
 		WithArgs("users").
 		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "check_clause", "no_inherit", "validated", "enforced"}).AddRow("chk_users_email", "email <> ''", false, true, false))

@@ -1440,6 +1440,9 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 			if index.ReplicaIdentity {
 				source.WriteString(", ReplicaIdentity: true")
 			}
+			if index.NullsNotDistinct {
+				source.WriteString(", NullsNotDistinct: true")
+			}
 			if len(index.Keys) > 0 {
 				source.WriteString(", Keys: []schema.IndexKeyDef{\n")
 				for _, key := range index.Keys {
@@ -1524,6 +1527,45 @@ func writeUniqueDefLiteral(source *bytes.Buffer, constraint schema.UniqueDef) {
 			writeIndexKeyDefLiteral(source, key)
 		}
 		source.WriteString("}")
+		first = false
+	}
+	if constraint.Temporal {
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("Temporal: true")
+		first = false
+	}
+	if len(constraint.StorageParameters) > 0 {
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("StorageParameters: ")
+		writeStringMapLiteral(source, constraint.StorageParameters)
+		first = false
+	}
+	if constraint.Tablespace != "" {
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("Tablespace: ")
+		source.WriteString(quote(constraint.Tablespace))
+		first = false
+	}
+	if constraint.ReplicaIdentity {
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("ReplicaIdentity: true")
+		first = false
+	}
+	if len(constraint.Collations) > 0 {
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("Collations: ")
+		writeStringMapLiteral(source, constraint.Collations)
+		first = false
 	}
 	source.WriteString("},\n")
 }
@@ -1548,6 +1590,10 @@ func writeIndexKeyDefLiteral(source *bytes.Buffer, key schema.IndexKeyDef) {
 	if key.PrefixLength != 0 {
 		source.WriteString(", PrefixLength: ")
 		source.WriteString(strconv.Itoa(key.PrefixLength))
+	}
+	if key.NullsOrder != "" {
+		source.WriteString(", NullsOrder: ")
+		source.WriteString(nullsOrderConstant(key.NullsOrder))
 	}
 	source.WriteString("},\n")
 }
@@ -1738,6 +1784,13 @@ func writeForeignKeyDefLiteral(source *bytes.Buffer, key schema.ForeignKeyDef) {
 	if key.NotEnforced {
 		source.WriteString(", NotEnforced: true")
 	}
+	if key.Temporal {
+		source.WriteString(", Temporal: true")
+	}
+	if len(key.DeleteSetColumns) > 0 {
+		source.WriteString(", DeleteSetColumns: ")
+		writeStringLiteralSlice(source, key.DeleteSetColumns)
+	}
 	source.WriteString("},\n")
 }
 
@@ -1839,6 +1892,17 @@ func deferrabilityConstant(deferrable schema.Deferrability) string {
 		return "schema.DeferrableInitiallyDeferred"
 	default:
 		return "schema.Deferrability(" + quote(string(deferrable)) + ")"
+	}
+}
+
+func nullsOrderConstant(order schema.NullsOrder) string {
+	switch order {
+	case schema.NullsFirst:
+		return "schema.NullsFirst"
+	case schema.NullsLast:
+		return "schema.NullsLast"
+	default:
+		return "schema.NullsOrder(" + quote(string(order)) + ")"
 	}
 }
 

@@ -1604,6 +1604,263 @@ func TestSQLiteExecutesQualifiedDDL(t *testing.T) {
 	require.Zero(t, mainCount)
 }
 
+// TestCreateIndexesRejectsNullsNotDistinct proves that an IndexDef setting
+// NullsNotDistinct, such as a live PostgreSQL plain unique index declared
+// NULLS NOT DISTINCT inspect now describes instead of rejecting outright, is
+// refused at render time with a typed error rather than silently rendered
+// as an ordinary NULLS DISTINCT index.
+func TestCreateIndexesRejectsNullsNotDistinct(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:             "documents_status_idx",
+			Columns:          []string{"status"},
+			Unique:           true,
+			NullsNotDistinct: true,
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_status_idx"`)
+	require.ErrorContains(t, err, "NULLS NOT DISTINCT")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var nullsErr *render.UnsupportedIndexNullsNotDistinctError
+	require.ErrorAs(t, err, &nullsErr)
+	require.Equal(t, "documents_status_idx", nullsErr.Index)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexNullsNotDistinct)
+}
+
+// TestCreateTableRejectsUniqueTemporal proves that a UniqueDef setting
+// Temporal, such as a live PostgreSQL 18 WITHOUT OVERLAPS constraint
+// inspect now describes instead of rejecting outright, is refused at
+// render time with a typed error rather than silently rendered as an
+// ordinary, non-temporal UNIQUE constraint.
+func TestCreateTableRejectsUniqueTemporal(t *testing.T) {
+	table := schema.TableDef{
+		Name: "reservations",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "room", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:     "reservations_room_key",
+			Columns:  []string{"room"},
+			Temporal: true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"reservations_room_key"`)
+	require.ErrorContains(t, err, "temporal")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var temporalErr *render.UnsupportedUniqueTemporalError
+	require.ErrorAs(t, err, &temporalErr)
+	require.Equal(t, "reservations_room_key", temporalErr.Unique)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueTemporal)
+}
+
+// TestCreateTableRejectsUniqueStorageParameters proves that a UniqueDef
+// naming StorageParameters, such as a live PostgreSQL fillfactor on a
+// unique constraint's backing index inspect now describes instead of
+// rejecting outright, is refused at render time with a typed error rather
+// than silently rendered without its WITH (...) clause.
+func TestCreateTableRejectsUniqueStorageParameters(t *testing.T) {
+	table := schema.TableDef{
+		Name: "accounts",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:              "accounts_email_key",
+			Columns:           []string{"email"},
+			StorageParameters: map[string]string{"fillfactor": "70"},
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"accounts_email_key"`)
+	require.ErrorContains(t, err, "storage parameters")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var storageErr *render.UnsupportedUniqueStorageParametersError
+	require.ErrorAs(t, err, &storageErr)
+	require.Equal(t, "accounts_email_key", storageErr.Unique)
+	require.Equal(t, map[string]string{"fillfactor": "70"}, storageErr.StorageParameters)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueStorageParameters)
+}
+
+// TestCreateTableRejectsUniqueTablespace proves that a UniqueDef naming a
+// Tablespace, which inspect now describes instead of rejecting outright,
+// is refused at render time with a typed error rather than silently
+// rendered into the database's default tablespace.
+func TestCreateTableRejectsUniqueTablespace(t *testing.T) {
+	table := schema.TableDef{
+		Name: "accounts",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:       "accounts_email_key",
+			Columns:    []string{"email"},
+			Tablespace: "pg_custom",
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"accounts_email_key"`)
+	require.ErrorContains(t, err, `"pg_custom"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var tablespaceErr *render.UnsupportedUniqueTablespaceError
+	require.ErrorAs(t, err, &tablespaceErr)
+	require.Equal(t, "accounts_email_key", tablespaceErr.Unique)
+	require.Equal(t, "pg_custom", tablespaceErr.Tablespace)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueTablespace)
+}
+
+// TestCreateTableRejectsUniqueReplicaIdentity proves that a UniqueDef
+// setting ReplicaIdentity, which inspect now describes instead of
+// rejecting outright, is refused at render time with a typed error rather
+// than silently rendered as a plain constraint with no bearing on logical
+// replication.
+func TestCreateTableRejectsUniqueReplicaIdentity(t *testing.T) {
+	table := schema.TableDef{
+		Name: "accounts",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:            "accounts_email_key",
+			Columns:         []string{"email"},
+			ReplicaIdentity: true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"accounts_email_key"`)
+	require.ErrorContains(t, err, "replica identity")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var replicaIdentityErr *render.UnsupportedUniqueReplicaIdentityError
+	require.ErrorAs(t, err, &replicaIdentityErr)
+	require.Equal(t, "accounts_email_key", replicaIdentityErr.Unique)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueReplicaIdentity)
+}
+
+// TestCreateTableRejectsUniqueCollations proves that a UniqueDef naming
+// Collations, which inspect now describes instead of rejecting outright,
+// is refused at render time with a typed error rather than silently
+// rendered with each column's own default collation.
+func TestCreateTableRejectsUniqueCollations(t *testing.T) {
+	table := schema.TableDef{
+		Name: "accounts",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:       "accounts_email_key",
+			Columns:    []string{"email"},
+			Collations: map[string]string{"email": "C"},
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"accounts_email_key"`)
+	require.ErrorContains(t, err, "column collations")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var collationsErr *render.UnsupportedUniqueCollationsError
+	require.ErrorAs(t, err, &collationsErr)
+	require.Equal(t, "accounts_email_key", collationsErr.Unique)
+	require.Equal(t, map[string]string{"email": "C"}, collationsErr.Collations)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueCollations)
+}
+
+// TestCreateTableRejectsForeignKeyTemporal proves that a ForeignKeyDef
+// setting Temporal, such as a live PostgreSQL 18 PERIOD foreign key
+// inspect now describes instead of rejecting outright, is refused at
+// render time with a typed error rather than silently rendered as an
+// ordinary, non-temporal FOREIGN KEY.
+func TestCreateTableRejectsForeignKeyTemporal(t *testing.T) {
+	table := schema.TableDef{
+		Name: "bookings",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "room_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "fk_bookings_room",
+			Columns:           []string{"room_id"},
+			ReferencedTable:   "rooms",
+			ReferencedColumns: []string{"id"},
+			Temporal:          true,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"fk_bookings_room"`)
+	require.ErrorContains(t, err, "temporal")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var temporalErr *render.UnsupportedForeignKeyTemporalError
+	require.ErrorAs(t, err, &temporalErr)
+	require.Equal(t, "fk_bookings_room", temporalErr.ForeignKey)
+	require.ErrorIs(t, err, render.ErrUnsupportedForeignKeyTemporal)
+}
+
+// TestCreateTableRejectsForeignKeyDeleteSetColumns proves that a
+// ForeignKeyDef naming DeleteSetColumns, such as a live PostgreSQL ON
+// DELETE SET NULL (columns) clause inspect now describes instead of
+// rejecting outright, is refused at render time with a typed error rather
+// than silently rendered as a plain ON DELETE SET NULL applying to every
+// referencing column.
+func TestCreateTableRejectsForeignKeyDeleteSetColumns(t *testing.T) {
+	table := schema.TableDef{
+		Name: "bookings",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "room_id", Type: schema.IntegerType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "fk_bookings_room",
+			Columns:           []string{"room_id"},
+			ReferencedTable:   "rooms",
+			ReferencedColumns: []string{"id"},
+			OnDelete:          schema.SetNull,
+			DeleteSetColumns:  []string{"room_id"},
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"fk_bookings_room"`)
+	require.ErrorContains(t, err, "[room_id]")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var deleteSetErr *render.UnsupportedForeignKeyDeleteSetColumnsError
+	require.ErrorAs(t, err, &deleteSetErr)
+	require.Equal(t, "fk_bookings_room", deleteSetErr.ForeignKey)
+	require.Equal(t, []string{"room_id"}, deleteSetErr.DeleteSetColumns)
+	require.ErrorIs(t, err, render.ErrUnsupportedForeignKeyDeleteSetColumns)
+}
+
 func sqls(statements []render.Statement) []string {
 	sql := make([]string, len(statements))
 	for i, statement := range statements {
