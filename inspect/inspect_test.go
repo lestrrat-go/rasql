@@ -326,11 +326,11 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 			AddRow("users_email_idx", false, "email", "email", "btree", nil).
 			AddRow("users_tenant_email_idx", true, "tenant_id", "tenant_id", "btree", nil).
 			AddRow("users_tenant_email_idx", true, "email", "email", "btree", nil))
-	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, referenced_namespace\\.nspname = current_schema\\(\\), constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-			AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", true, false, false, false, true, true, false).
-			AddRow("fk_users_account", "tenant_id", "accounts", "tenant_id", "c", "a", "s", true, false, false, false, true, true, false))
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
+			AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", "", false, false, false, true, true, false).
+			AddRow("fk_users_account", "tenant_id", "accounts", "tenant_id", "c", "a", "s", "", false, false, false, true, true, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -617,8 +617,8 @@ func TestPostgreSQLInspectorUsesPostgreSQL14CatalogQueries(t *testing.T) {
 	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
 	expectPostgreSQLMetadataBeforeForeignKeysWithChecks(mock, "users", "140000", sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}).
 		AddRow("chk_users_email", "email <> ''", false, true, true))
-	expectPostgreSQLForeignKeysWithRows(mock, "users", "140000", sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-		AddRow("fk_users_account", "id", "accounts", "id", "a", "a", "s", true, false, false, false, true, true, false))
+	expectPostgreSQLForeignKeysWithRows(mock, "users", "140000", sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
+		AddRow("fk_users_account", "id", "accounts", "id", "a", "a", "s", "", false, false, false, true, true, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -728,27 +728,26 @@ func TestPostgreSQLInspectorRejectsUnsupportedCheck(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLInspectorRejectsUnsupportedForeignKey covers the foreign-key
+// facts inspect still rejects outright: a column list on ON DELETE SET NULL
+// or SET DEFAULT, NOT VALID, NOT ENFORCED, and temporal foreign keys. Every
+// row fixes match type, referenced schema, and deferrability at their
+// default, non-rejecting values, since inspect now describes those three
+// facts instead of rejecting them; see
+// TestPostgreSQLInspectorRecordsForeignKeyFacts.
 func TestPostgreSQLInspectorRejectsUnsupportedForeignKey(t *testing.T) {
 	tests := []struct {
-		name              string
-		matchType         string
-		inCurrentSchema   bool
-		deferrable        bool
-		initiallyDeferred bool
-		deleteSetColumns  bool
-		validated         bool
-		enforced          bool
-		temporal          bool
-		want              string
+		name             string
+		deleteSetColumns bool
+		validated        bool
+		enforced         bool
+		temporal         bool
+		want             string
 	}{
-		{name: "match full", matchType: "f", inCurrentSchema: true, validated: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql supports only MATCH SIMPLE foreign keys"},
-		{name: "referenced table outside current schema", matchType: "s", validated: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql supports references only in the current schema"},
-		{name: "deferrable", matchType: "s", inCurrentSchema: true, deferrable: true, validated: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql supports only non-deferrable foreign keys"},
-		{name: "initially deferred", matchType: "s", inCurrentSchema: true, deferrable: true, initiallyDeferred: true, validated: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql supports only non-deferrable foreign keys"},
-		{name: "partial delete set columns", matchType: "s", inCurrentSchema: true, deleteSetColumns: true, validated: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support column lists for ON DELETE SET NULL or SET DEFAULT"},
-		{name: "not valid", matchType: "s", inCurrentSchema: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support NOT VALID foreign keys"},
-		{name: "not enforced", matchType: "s", inCurrentSchema: true, validated: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support NOT ENFORCED foreign keys"},
-		{name: "temporal", matchType: "s", inCurrentSchema: true, validated: true, enforced: true, temporal: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support temporal foreign keys"},
+		{name: "partial delete set columns", deleteSetColumns: true, validated: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support column lists for ON DELETE SET NULL or SET DEFAULT"},
+		{name: "not valid", enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support NOT VALID foreign keys"},
+		{name: "not enforced", validated: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support NOT ENFORCED foreign keys"},
+		{name: "temporal", validated: true, enforced: true, temporal: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support temporal foreign keys"},
 	}
 
 	for _, test := range tests {
@@ -757,15 +756,71 @@ func TestPostgreSQLInspectorRejectsUnsupportedForeignKey(t *testing.T) {
 			expectPostgreSQLServerVersion(mock, "180000")
 			expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
 			expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
-			mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, referenced_namespace\\.nspname = current_schema\\(\\), constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+			mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
 				WithArgs("users").
-				WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
-					AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", test.matchType, test.inCurrentSchema, test.deferrable, test.initiallyDeferred, test.deleteSetColumns, test.validated, test.enforced, test.temporal))
+				WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
+					AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "s", "", false, false, test.deleteSetColumns, test.validated, test.enforced, test.temporal))
 
 			_, err := inspector.Table(t.Context(), "users")
 			require.EqualError(t, err, test.want)
 		})
 	}
+}
+
+// TestPostgreSQLInspectorRejectsUnsupportedForeignKeyMatchType proves that
+// an unrecognized MATCH code (anything other than PostgreSQL's own "s",
+// "f", or "p") is still rejected, distinct from a MATCH FULL or MATCH
+// PARTIAL foreign key, which TestPostgreSQLInspectorRecordsForeignKeyFacts
+// proves inspect now describes.
+func TestPostgreSQLInspectorRejectsUnsupportedForeignKeyMatchType(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
+	expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
+			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "x", "", false, false, false, true, true, false))
+
+	_, err := inspector.Table(t.Context(), "users")
+	require.EqualError(t, err, `inspect: foreign key "fk_users_account": unsupported match type "x"`)
+}
+
+// TestPostgreSQLInspectorRecordsForeignKeyFacts proves that a foreign key
+// referencing another schema, a deferrable foreign key, and a foreign key
+// with a MATCH FULL or MATCH PARTIAL clause are now described rather than
+// rejected: inspect used to fail the whole table on any of these, which
+// would abort a sweep over a production schema the moment it reached one
+// such foreign key.
+func TestPostgreSQLInspectorRecordsForeignKeyFacts(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale, character_maximum_length FROM information_schema\\.columns").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil).
+			AddRow("owner_id", "bigint", "NO", nil, nil, nil, nil).
+			AddRow("group_id", "bigint", "NO", nil, nil, nil, nil))
+	expectPostgreSQLCatalogColumnCount(mock, "users", 4)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
+	expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
+			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "s", "billing", false, false, false, true, true, false).
+			AddRow("fk_users_owner", "owner_id", "owners", "id", "a", "a", "f", "", true, false, false, true, true, false).
+			AddRow("fk_users_group", "group_id", "groups", "id", "a", "a", "p", "", true, true, false, true, true, false))
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.ForeignKeyDef{
+		{Name: "fk_users_account", Columns: []string{"account_id"}, ReferencedSchema: "billing", ReferencedTable: "accounts", ReferencedColumns: []string{"id"}, OnDelete: schema.NoAction, OnUpdate: schema.NoAction},
+		{Name: "fk_users_owner", Columns: []string{"owner_id"}, ReferencedTable: "owners", ReferencedColumns: []string{"id"}, Match: schema.MatchFull, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, Deferrable: schema.DeferrableInitiallyImmediate},
+		{Name: "fk_users_group", Columns: []string{"group_id"}, ReferencedTable: "groups", ReferencedColumns: []string{"id"}, Match: schema.MatchPartial, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, Deferrable: schema.DeferrableInitiallyDeferred},
+	}, table.ForeignKeys)
 }
 
 func newPostgreSQLInspector(t *testing.T) (inspect.Inspector, sqlmock.Sqlmock) {
@@ -838,7 +893,7 @@ func expectPostgreSQLMetadataBeforeForeignKeysWithChecks(mock sqlmock.Sqlmock, t
 }
 
 func expectPostgreSQLForeignKeys(mock sqlmock.Sqlmock, tableName string, version string) {
-	expectPostgreSQLForeignKeysWithRows(mock, tableName, version, sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_in_current_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}))
+	expectPostgreSQLForeignKeysWithRows(mock, tableName, version, sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}))
 }
 
 func expectPostgreSQLForeignKeysWithRows(mock sqlmock.Sqlmock, tableName string, version string, foreignKeys *sqlmock.Rows) {
@@ -852,7 +907,7 @@ func expectPostgreSQLForeignKeysWithRows(mock sqlmock.Sqlmock, tableName string,
 	if version == "140000" {
 		enforced = "TRUE"
 	}
-	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, referenced_namespace\\.nspname = current_schema\\(\\), constraint_data\\.condeferrable, constraint_data\\.condeferred, " + deleteSetColumns + ", constraint_data\\.convalidated, " + enforced + ", " + temporal + " FROM pg_catalog\\.pg_constraint").
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, " + deleteSetColumns + ", constraint_data\\.convalidated, " + enforced + ", " + temporal + " FROM pg_catalog\\.pg_constraint").
 		WithArgs(tableName).
 		WillReturnRows(foreignKeys)
 }
@@ -1070,9 +1125,9 @@ func expectMySQLIndexesOnly(mock sqlmock.Sqlmock, tableName string) {
 }
 
 func expectMySQLEmptyForeignKeys(mock sqlmock.Sqlmock, tableName string) {
-	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, key_column_usage.referenced_table_schema = DATABASE(), FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
+	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, CASE WHEN key_column_usage.referenced_table_schema = DATABASE() THEN '' ELSE key_column_usage.referenced_table_schema END, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_in_current_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}))
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}))
 }
 
 func TestMySQLInspectorReadsConstraints(t *testing.T) {
@@ -1090,14 +1145,14 @@ func TestMySQLInspectorReadsConstraints(t *testing.T) {
 	primaryKeyQuery := "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position"
 	uniqueQuery := "SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position"
 	checksQuery := "SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name"
-	foreignKeysQuery := "SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, key_column_usage.referenced_table_schema = DATABASE(), FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position"
+	foreignKeysQuery := "SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, CASE WHEN key_column_usage.referenced_table_schema = DATABASE() THEN '' ELSE key_column_usage.referenced_table_schema END, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position"
 	mock.ExpectQuery(columnsQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).AddRow("id", "bigint", "NO", nil, nil, nil).AddRow("email", "varchar(255)", "NO", nil, nil, nil).AddRow("account_id", "bigint", "NO", nil, nil, nil))
 	expectMySQLCreateTable(mock, "users", "CREATE TABLE `users` (`id` bigint NOT NULL, `email` varchar(255) NOT NULL, `account_id` bigint NOT NULL) ENGINE=InnoDB")
 	mock.ExpectQuery(primaryKeyQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
 	mock.ExpectQuery(uniqueQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "unsupported_index_metadata"}).AddRow("uq_users_email", "email", false, false, false, false, false, false))
 	mock.ExpectQuery(checksQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "check_clause", "no_inherit", "validated", "enforced"}).AddRow("chk_users_email", "email <> ''", false, true, true))
 	expectMySQLIndexesOnly(mock, "users")
-	mock.ExpectQuery(foreignKeysQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_in_current_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}).AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", true, false, false, false, true, true, false))
+	mock.ExpectQuery(foreignKeysQuery).WithArgs("users").WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "referenced_table_name", "referenced_column_name", "delete_rule", "update_rule", "match_option", "referenced_schema", "deferrable", "initially_deferred", "delete_set_columns", "validated", "enforced", "temporal"}).AddRow("fk_users_account", "account_id", "accounts", "id", "c", "a", "s", "", false, false, false, true, true, false))
 
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
@@ -2192,7 +2247,17 @@ func TestSQLiteInspectorReadsConstraintsWithForeignKeyActions(t *testing.T) {
 	}}, table.ForeignKeys)
 }
 
-func TestSQLiteInspectorRejectsDeferrableForeignKeys(t *testing.T) {
+// TestSQLiteInspectorRecordsForeignKeyFacts proves that a deferrable
+// foreign key and one with a MATCH clause are now described rather than
+// rejected: inspect used to fail the whole table on a DEFERRABLE or
+// INITIALLY clause anywhere in the CREATE TABLE definition, which would
+// abort a sweep over a production schema the moment it reached one such
+// foreign key. It also proves the PRAGMA foreign_key_list id order (last
+// declared first) is correctly reversed back to declaration order when
+// zipping in the MATCH and deferrability clauses read from the table's own
+// CREATE TABLE text, and that a bare DEFERRABLE with no INITIALLY clause
+// defaults to INITIALLY IMMEDIATE.
+func TestSQLiteInspectorRecordsForeignKeyFacts(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	database.SetMaxOpenConns(1)
@@ -2200,13 +2265,72 @@ func TestSQLiteInspectorRejectsDeferrableForeignKeys(t *testing.T) {
 
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE parents (id INTEGER PRIMARY KEY)")
 	require.NoError(t, err)
-	_, err = database.ExecContext(t.Context(), "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED)")
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE owners (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE children (
+		id INTEGER PRIMARY KEY,
+		parent_id INTEGER REFERENCES parents(id) MATCH FULL DEFERRABLE INITIALLY DEFERRED,
+		owner_id INTEGER,
+		FOREIGN KEY (owner_id) REFERENCES owners(id) MATCH PARTIAL DEFERRABLE
+	)`)
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "children")
+	require.NoError(t, err)
+	require.Equal(t, []schema.ForeignKeyDef{
+		{Columns: []string{"owner_id"}, ReferencedTable: "owners", ReferencedColumns: []string{"id"}, Match: schema.MatchPartial, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, Deferrable: schema.DeferrableInitiallyImmediate},
+		{Columns: []string{"parent_id"}, ReferencedTable: "parents", ReferencedColumns: []string{"id"}, Match: schema.MatchFull, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, Deferrable: schema.DeferrableInitiallyDeferred},
+	}, table.ForeignKeys)
+}
+
+// TestSQLiteInspectorRecordsNotDeferrableForeignKey proves that an explicit
+// NOT DEFERRABLE clause, and an omitted one, both name
+// schema.Deferrability's zero value, since they mean the same thing.
+func TestSQLiteInspectorRecordsNotDeferrableForeignKey(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) NOT DEFERRABLE INITIALLY IMMEDIATE)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "children")
+	require.NoError(t, err)
+	require.Equal(t, []schema.ForeignKeyDef{{
+		Columns:           []string{"parent_id"},
+		ReferencedTable:   "parents",
+		ReferencedColumns: []string{"id"},
+		OnDelete:          schema.NoAction,
+		OnUpdate:          schema.NoAction,
+	}}, table.ForeignKeys)
+}
+
+// TestSQLiteInspectorRejectsUnsupportedForeignKeyMatchType proves that an
+// unrecognized MATCH name is still rejected, distinct from MATCH FULL or
+// MATCH PARTIAL, which TestSQLiteInspectorRecordsForeignKeyFacts proves
+// inspect now describes.
+func TestSQLiteInspectorRejectsUnsupportedForeignKeyMatchType(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) MATCH BOGUS)")
 	require.NoError(t, err)
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	_, err = inspector.Table(t.Context(), "children")
-	require.ErrorContains(t, err, "DEFERRABLE and INITIALLY foreign-key clauses are unsupported")
+	require.ErrorContains(t, err, "MATCH BOGUS is unsupported")
 }
 
 func TestSQLiteInspectorRejectsDescendingIndexes(t *testing.T) {

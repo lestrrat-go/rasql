@@ -787,6 +787,41 @@ func TestTableValidatesForeignKeyReferencedSchema(t *testing.T) {
 	require.ErrorContains(t, err, "foreign_keys[0].referenced_schema")
 }
 
+// TestTableValidateAcceptsForeignKeyMatchAndDeferrability proves that a
+// ForeignKeyDef naming a non-default schema.MatchType or
+// schema.Deferrability, such as what inspect now records for a live
+// PostgreSQL MATCH FULL or DEFERRABLE foreign key, is valid input: Validate
+// describes the foreign key, and only render.CreateTable and the migrate
+// diff-live path refuse to build DDL for it.
+func TestTableValidateAcceptsForeignKeyMatchAndDeferrability(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].Match = schema.MatchPartial
+	table.ForeignKeys[0].Deferrable = schema.DeferrableInitiallyDeferred
+	require.NoError(t, table.Validate())
+}
+
+func TestTableValidatesForeignKeyMatch(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].Match = schema.MatchType("bogus")
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "foreign_keys[0].match")
+}
+
+func TestTableValidatesForeignKeyDeferrability(t *testing.T) {
+	table := validTable()
+	table.ForeignKeys[0].Deferrable = schema.Deferrability("bogus")
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "foreign_keys[0].deferrable")
+}
+
 // TestTableQualifiedName pins QualifiedName and Qualified for both an
 // unqualified and a qualified table.
 func TestTableQualifiedName(t *testing.T) {

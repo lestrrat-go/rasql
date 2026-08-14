@@ -44,6 +44,75 @@ func (a ReferenceAction) valid() bool {
 	}
 }
 
+// MatchType names a foreign key's MATCH clause, which controls how a
+// composite key with some NULL columns is checked. Its zero value, the
+// empty string, means MATCH SIMPLE, the SQL default and the only form
+// every dialect this package renders builds today, so every ForeignKeyDef
+// and every checked-in generated file written before this field existed
+// keeps meaning exactly what it always meant.
+//
+// A non-default MatchType is describable but not yet renderable: inspect
+// records what a live PostgreSQL or SQLite foreign key actually declares,
+// and TableDef.Validate accepts it, but render.CreateTable and the migrate
+// diff-live path refuse to build DDL for one, because rasql does not yet
+// know how to construct anything other than a plain MATCH SIMPLE foreign
+// key.
+type MatchType string
+
+const (
+	// MatchFull requires every column in a composite key to be NULL or
+	// every column to be non-NULL.
+	MatchFull MatchType = "FULL"
+	// MatchPartial permits some columns in a composite key to be NULL as
+	// long as a matching referenced row could still exist.
+	MatchPartial MatchType = "PARTIAL"
+)
+
+func (m MatchType) valid() bool {
+	switch m {
+	case "", MatchFull, MatchPartial:
+		return true
+	default:
+		return false
+	}
+}
+
+// Deferrability names when PostgreSQL or SQLite checks a foreign key's
+// constraint: immediately after each statement, or deferred until the
+// enclosing transaction commits. Its zero value, the empty string, means
+// NOT DEFERRABLE, the only form every dialect this package renders builds
+// today, so every ForeignKeyDef and every checked-in generated file
+// written before this field existed keeps meaning exactly what it always
+// meant.
+//
+// A non-default Deferrability is describable but not yet renderable:
+// inspect records what a live PostgreSQL or SQLite foreign key actually
+// declares, and TableDef.Validate accepts it, but render.CreateTable and
+// the migrate diff-live path refuse to build DDL for one, because rasql
+// does not yet know how to construct anything other than a plain NOT
+// DEFERRABLE foreign key.
+type Deferrability string
+
+const (
+	// DeferrableInitiallyImmediate marks a foreign key DEFERRABLE INITIALLY
+	// IMMEDIATE: checked at the end of each statement by default, but
+	// deferrable to transaction commit with SET CONSTRAINTS.
+	DeferrableInitiallyImmediate Deferrability = "DEFERRABLE INITIALLY IMMEDIATE"
+	// DeferrableInitiallyDeferred marks a foreign key DEFERRABLE INITIALLY
+	// DEFERRED: checked at transaction commit unless SET CONSTRAINTS moves
+	// it earlier.
+	DeferrableInitiallyDeferred Deferrability = "DEFERRABLE INITIALLY DEFERRED"
+)
+
+func (d Deferrability) valid() bool {
+	switch d {
+	case "", DeferrableInitiallyImmediate, DeferrableInitiallyDeferred:
+		return true
+	default:
+		return false
+	}
+}
+
 // RelationshipKind identifies the relationship shape represented by a
 // descriptor.
 type RelationshipKind string

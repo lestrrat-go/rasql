@@ -720,7 +720,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 	if options.withoutRowID || options.strict {
 		return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: STRICT and WITHOUT ROWID table options are unsupported", tableName)
 	}
-	definition, err := i.sqliteTableDefinition(ctx, options.database, tableName)
+	definition, foreignKeyClauses, err := i.sqliteTableDefinition(ctx, options.database, tableName)
 	if err != nil {
 		return schema.TableDef{}, err
 	}
@@ -772,7 +772,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 	if err != nil {
 		return schema.TableDef{}, err
 	}
-	foreignKeys, err := i.sqliteForeignKeys(ctx, options.database, tableName)
+	foreignKeys, err := i.sqliteForeignKeys(ctx, options.database, tableName, foreignKeyClauses)
 	if err != nil {
 		return schema.TableDef{}, err
 	}
@@ -1084,50 +1084,52 @@ func sqliteRetainedHandleError() error {
 	return fmt.Errorf("inspect: SQLite inspection requires a retained *sql.Conn or *sql.Tx for temporary or attached databases")
 }
 
-func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tableName string) (*sqlitequery.CreateTableStatement, error) {
+// sqliteTableDefinition returns the table's parsed CREATE TABLE statement
+// and the MATCH and deferrability clauses sqlitequery's parser cannot
+// represent, one per REFERENCES clause the definition declared, in
+// declaration order. See sqliteNormalizeForeignKeyClauses.
+func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tableName string) (*sqlitequery.CreateTableStatement, []sqliteForeignKeyClause, error) {
 	query := `SELECT sql FROM "` + sqlitePragmaIdentifier(databaseName) + `".sqlite_master WHERE type = 'table' AND name = ?`
 	rows, err := i.queryer.QueryContext(ctx, query, tableName)
 	if err != nil {
-		return nil, fmt.Errorf("inspect: read SQLite table definition: %w", err)
+		return nil, nil, fmt.Errorf("inspect: read SQLite table definition: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
+			return nil, nil, fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
 		}
-		return nil, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
+		return nil, nil, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
 	var definition sql.NullString
 	if err := rows.Scan(&definition); err != nil {
-		return nil, fmt.Errorf("inspect: scan SQLite table definition: %w", err)
+		return nil, nil, fmt.Errorf("inspect: scan SQLite table definition: %w", err)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
+		return nil, nil, fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
 	}
 	if !definition.Valid || definition.String == "" {
-		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unavailable", tableName)
+		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unavailable", tableName)
 	}
 	if sqliteDefinitionContainsVirtualTableKeyword(definition.String) {
-		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE VIRTUAL TABLE definitions are unsupported", tableName)
+		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE VIRTUAL TABLE definitions are unsupported", tableName)
 	}
-	if sqliteDefinitionContainsForeignKeyKeyword(definition.String) {
-		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: DEFERRABLE and INITIALLY foreign-key clauses are unsupported", tableName)
-	}
-	statement, err := sqlitequery.ParseStatement(sqliteNormalizeForeignKeyActions(definition.String))
+	normalized, clauses := sqliteNormalizeForeignKeyClauses(definition.String)
+	statement, err := sqlitequery.ParseStatement(normalized)
 	if err != nil {
 		if strings.Contains(strings.ToUpper(definition.String), "CHECK") {
-			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition contains an unsupported CHECK form: %w", tableName, err)
+			return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition contains an unsupported CHECK form: %w", tableName, err)
 		}
-		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unsupported: %w", tableName, err)
+		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unsupported: %w", tableName, err)
 	}
 	createTable, ok := statement.(*sqlitequery.CreateTableStatement)
 	if !ok || !strings.EqualFold(createTable.Name.String(), tableName) {
-		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
+		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
 	}
 	if createTable.As != nil {
-		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE TABLE AS SELECT definitions are unsupported", tableName)
+		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE TABLE AS SELECT definitions are unsupported", tableName)
 	}
-	return createTable, nil
+	return createTable, clauses, nil
 }
 
 func sqliteDefinitionContainsVirtualTableKeyword(definition string) bool {
@@ -1143,12 +1145,37 @@ func sqliteDefinitionContainsVirtualTableKeyword(definition string) bool {
 	return ok
 }
 
-func sqliteNormalizeForeignKeyActions(definition string) string {
+// sqliteForeignKeyClause records the MATCH and deferrability that
+// sqliteNormalizeForeignKeyClauses stripped from one REFERENCES clause,
+// since neither is exposed by PRAGMA foreign_key_list: SQLite's PRAGMA
+// always reports match as "NONE" regardless of what a REFERENCES clause
+// actually declared, and reports no deferrability at all.
+type sqliteForeignKeyClause struct {
+	match      string
+	deferrable schema.Deferrability
+}
+
+// sqliteNormalizeForeignKeyClauses strips the parts of a SQLite
+// foreign-key-clause rasql's own parser does not understand — ON DELETE/ON
+// UPDATE actions, MATCH clauses, and [NOT] DEFERRABLE [INITIALLY
+// (DEFERRED|IMMEDIATE)] clauses — from definition, replacing each with a
+// single space so sqlitequery.ParseStatement can parse the rest of the
+// table. ON DELETE and ON UPDATE are read reliably afterward from PRAGMA
+// foreign_key_list, so their stripped text is discarded; MATCH and
+// deferrability are not (see sqliteForeignKeyClause), so this also returns
+// one sqliteForeignKeyClause per REFERENCES clause it strips, in the same
+// left-to-right declaration order sqlitequery's own parser assigns to a
+// table's foreign keys: every column-level REFERENCES constraint in
+// column order, then every table-level FOREIGN KEY constraint in
+// constraint order.
+func sqliteNormalizeForeignKeyClauses(definition string) (string, []sqliteForeignKeyClause) {
 	var normalized strings.Builder
 	normalized.Grow(len(definition))
 	references := false
 	parentheses := 0
 	copied := 0
+	var clauses []sqliteForeignKeyClause
+	currentClause := -1
 	for index := 0; index < len(definition); {
 		switch definition[index] {
 		case '\'', '"', '`':
@@ -1196,6 +1223,7 @@ func sqliteNormalizeForeignKeyActions(definition string) string {
 		case ',':
 			if parentheses == 1 {
 				references = false
+				currentClause = -1
 			}
 			index++
 			continue
@@ -1210,21 +1238,122 @@ func sqliteNormalizeForeignKeyActions(definition string) string {
 			index++
 		}
 		token := definition[start:index]
-		if references && strings.EqualFold(token, "ON") {
-			if end, ok := sqliteForeignKeyActionEnd(definition, start); ok {
-				normalized.WriteString(definition[copied:start])
-				normalized.WriteByte(' ')
-				index = end
-				copied = index
-				continue
+		if references {
+			if strings.EqualFold(token, "ON") {
+				if end, ok := sqliteForeignKeyActionEnd(definition, start); ok {
+					normalized.WriteString(definition[copied:start])
+					normalized.WriteByte(' ')
+					index = end
+					copied = index
+					continue
+				}
+			}
+			if strings.EqualFold(token, "MATCH") {
+				if end, name, ok := sqliteMatchClauseEnd(definition, start); ok {
+					normalized.WriteString(definition[copied:start])
+					normalized.WriteByte(' ')
+					index = end
+					copied = index
+					if currentClause >= 0 {
+						clauses[currentClause].match = name
+					}
+					continue
+				}
+			}
+			if strings.EqualFold(token, "DEFERRABLE") || strings.EqualFold(token, "NOT") {
+				if end, deferrable, ok := sqliteDeferrableClauseEnd(definition, start); ok {
+					normalized.WriteString(definition[copied:start])
+					normalized.WriteByte(' ')
+					index = end
+					copied = index
+					if currentClause >= 0 {
+						clauses[currentClause].deferrable = deferrable
+					}
+					continue
+				}
 			}
 		}
 		if strings.EqualFold(token, "REFERENCES") && parentheses == 1 {
 			references = true
+			clauses = append(clauses, sqliteForeignKeyClause{})
+			currentClause = len(clauses) - 1
 		}
 	}
 	normalized.WriteString(definition[copied:])
-	return normalized.String()
+	return normalized.String(), clauses
+}
+
+// sqliteMatchClauseEnd matches a "MATCH name" clause starting at index (the
+// start of the "MATCH" token) and returns the end of the clause and the
+// name that followed it.
+func sqliteMatchClauseEnd(definition string, index int) (int, string, bool) {
+	index, ok := sqliteMatchKeyword(definition, index, "MATCH")
+	if !ok {
+		return 0, "", false
+	}
+	index = sqliteSkipSpaceAndComments(definition, index)
+	if index >= len(definition) || !sqliteIdentifierStart(definition[index]) {
+		return 0, "", false
+	}
+	start := index
+	index++
+	for index < len(definition) && sqliteIdentifierPart(definition[index]) {
+		index++
+	}
+	return index, definition[start:index], true
+}
+
+// sqliteDeferrableClauseEnd matches a "[NOT] DEFERRABLE [INITIALLY
+// (DEFERRED|IMMEDIATE)]" clause starting at index (the start of "NOT" or
+// "DEFERRABLE") and returns the end of the clause and the schema.
+// Deferrability it names. "NOT DEFERRABLE" and an omitted clause both name
+// the zero value, since they mean the same thing, and SQLite's grammar
+// permits a trailing INITIALLY clause after NOT DEFERRABLE too, even
+// though it has no effect; a bare "DEFERRABLE" with no INITIALLY clause
+// defaults to INITIALLY IMMEDIATE, same as SQL.
+func sqliteDeferrableClauseEnd(definition string, index int) (int, schema.Deferrability, bool) {
+	if next, ok := sqliteMatchKeyword(definition, index, "NOT"); ok {
+		next, ok = sqliteMatchKeyword(definition, next, "DEFERRABLE")
+		if !ok {
+			return 0, "", false
+		}
+		end, _, ok := sqliteConsumeInitiallyClause(definition, next)
+		if !ok {
+			return 0, "", false
+		}
+		return end, "", true
+	}
+	next, ok := sqliteMatchKeyword(definition, index, "DEFERRABLE")
+	if !ok {
+		return 0, "", false
+	}
+	end, word, ok := sqliteConsumeInitiallyClause(definition, next)
+	if !ok {
+		return 0, "", false
+	}
+	if word == "DEFERRED" {
+		return end, schema.DeferrableInitiallyDeferred, true
+	}
+	return end, schema.DeferrableInitiallyImmediate, true
+}
+
+// sqliteConsumeInitiallyClause consumes an optional "INITIALLY
+// (DEFERRED|IMMEDIATE)" clause starting at index, returning the end index,
+// which of DEFERRED or IMMEDIATE was named ("" if the clause was absent),
+// and whether the text was well-formed: an "INITIALLY" not followed by a
+// recognized keyword is not.
+func sqliteConsumeInitiallyClause(definition string, index int) (int, string, bool) {
+	initially, ok := sqliteMatchKeyword(definition, index, "INITIALLY")
+	if !ok {
+		return index, "", true
+	}
+	if end, ok := sqliteMatchKeyword(definition, initially, "IMMEDIATE"); ok {
+		return end, "IMMEDIATE", true
+	}
+	if end, ok := sqliteMatchKeyword(definition, initially, "DEFERRED"); ok {
+		return end, "DEFERRED", true
+	}
+	return 0, "", false
 }
 
 func sqliteForeignKeyActionEnd(definition string, index int) (int, bool) {
@@ -1300,80 +1429,6 @@ func sqliteSkipSpaceAndComments(value string, index int) int {
 			return index
 		}
 	}
-}
-
-func sqliteDefinitionContainsForeignKeyKeyword(definition string) bool {
-	references := false
-	parentheses := 0
-	for index := 0; index < len(definition); {
-		switch definition[index] {
-		case '\'', '"', '`':
-			index = skipSQLiteQuoted(definition, index, definition[index])
-			continue
-		case '[':
-			index++
-			for index < len(definition) {
-				if definition[index] == ']' {
-					index++
-					break
-				}
-				index++
-			}
-			continue
-		case '-':
-			if index+1 < len(definition) && definition[index+1] == '-' {
-				index += 2
-				for index < len(definition) && definition[index] != '\n' {
-					index++
-				}
-				continue
-			}
-		case '/':
-			if index+1 < len(definition) && definition[index+1] == '*' {
-				index += 2
-				for index+1 < len(definition) && (definition[index] != '*' || definition[index+1] != '/') {
-					index++
-				}
-				if index+1 < len(definition) {
-					index += 2
-				}
-				continue
-			}
-		case '(':
-			parentheses++
-			index++
-			continue
-		case ')':
-			if parentheses > 0 {
-				parentheses--
-			}
-			index++
-			continue
-		case ',':
-			if parentheses == 1 {
-				references = false
-			}
-			index++
-			continue
-		}
-		if !sqliteIdentifierStart(definition[index]) {
-			index++
-			continue
-		}
-		start := index
-		index++
-		for index < len(definition) && sqliteIdentifierPart(definition[index]) {
-			index++
-		}
-		token := definition[start:index]
-		if strings.EqualFold(token, "REFERENCES") {
-			references = true
-		}
-		if references && (strings.EqualFold(token, "DEFERRABLE") || strings.EqualFold(token, "INITIALLY")) {
-			return true
-		}
-	}
-	return false
 }
 
 func skipSQLiteQuoted(value string, index int, quote byte) int {
@@ -1546,7 +1601,12 @@ func sqliteIdentifierName(identifier *sqlitequery.Identifier) string {
 	return identifier.Name
 }
 
-func (i Inspector) sqliteForeignKeys(ctx context.Context, databaseName, tableName string) ([]schema.ForeignKeyDef, error) {
+// sqliteForeignKeys reads a SQLite table's foreign keys from PRAGMA
+// foreign_key_list and layers in the MATCH and deferrability clauses
+// extracted from the table's own CREATE TABLE text, since PRAGMA
+// foreign_key_list always reports match as "NONE" regardless of what a
+// REFERENCES clause actually declared and reports no deferrability at all.
+func (i Inspector) sqliteForeignKeys(ctx context.Context, databaseName, tableName string, clauses []sqliteForeignKeyClause) ([]schema.ForeignKeyDef, error) {
 	query := sqliteQualifiedPragma(databaseName, "foreign_key_list", tableName)
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
@@ -1563,12 +1623,14 @@ func (i Inspector) sqliteForeignKeys(ctx context.Context, databaseName, tableNam
 		var id, sequence int64
 		var referencedTable, column string
 		var referencedColumn sql.NullString
-		var onUpdate, onDelete, match string
+		var onUpdate, onDelete string
+		// match is scanned but discarded: SQLite's PRAGMA always reports it
+		// as "NONE" regardless of what a REFERENCES clause actually
+		// declared, so the real value comes from clauses instead, read
+		// from the table's own CREATE TABLE text.
+		var match string
 		if err := rows.Scan(&id, &sequence, &referencedTable, &column, &referencedColumn, &onUpdate, &onDelete, &match); err != nil {
 			return nil, fmt.Errorf("inspect: scan SQLite foreign key: %w", err)
-		}
-		if match != "" && !strings.EqualFold(match, "NONE") && !strings.EqualFold(match, "SIMPLE") {
-			return nil, fmt.Errorf("inspect: SQLite foreign key on table %q cannot be represented: MATCH %s is unsupported", tableName, match)
 		}
 		deleteAction, err := sqliteReferenceAction(onDelete)
 		if err != nil {
@@ -1610,11 +1672,43 @@ func (i Inspector) sqliteForeignKeys(ctx context.Context, databaseName, tableNam
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate SQLite foreign keys: %w", err)
 	}
+	if len(keys) != len(clauses) {
+		return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: could not match its declared foreign keys to PRAGMA foreign_key_list", tableName)
+	}
+	// PRAGMA foreign_key_list assigns each foreign key an id in the
+	// reverse of the order the CREATE TABLE definition declared them, so
+	// the first key this loop assembled (id 0) is the last one the
+	// definition declared.
+	for index := range keys {
+		declared := clauses[len(clauses)-1-index]
+		match, err := sqliteMatchType(declared.match)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: SQLite foreign key on table %q cannot be represented: %w", tableName, err)
+		}
+		keys[index].key.Match = match
+		keys[index].key.Deferrable = declared.deferrable
+	}
 	result := make([]schema.ForeignKeyDef, len(keys))
 	for index := range keys {
 		result[index] = keys[index].key
 	}
 	return result, nil
+}
+
+// sqliteMatchType maps the name a REFERENCES clause's MATCH keyword
+// declared to a schema.MatchType. An omitted MATCH clause and MATCH SIMPLE
+// both name the zero value, since they mean the same thing.
+func sqliteMatchType(name string) (schema.MatchType, error) {
+	switch {
+	case name == "" || strings.EqualFold(name, "SIMPLE"):
+		return "", nil
+	case strings.EqualFold(name, "FULL"):
+		return schema.MatchFull, nil
+	case strings.EqualFold(name, "PARTIAL"):
+		return schema.MatchPartial, nil
+	default:
+		return "", fmt.Errorf("MATCH %s is unsupported", name)
+	}
 }
 
 func sqliteReferenceAction(action string) (schema.ReferenceAction, error) {
@@ -2188,24 +2282,19 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 		var deleteAction string
 		var updateAction string
 		var matchType string
-		var referencedInCurrentSchema bool
+		var referencedSchema string
 		var deferrable bool
 		var initiallyDeferred bool
 		var deleteSetColumns bool
 		var validated bool
 		var enforced bool
 		var temporal bool
-		if err := rows.Scan(&name, &column, &referencedTable, &referencedColumn, &deleteAction, &updateAction, &matchType, &referencedInCurrentSchema, &deferrable, &initiallyDeferred, &deleteSetColumns, &validated, &enforced, &temporal); err != nil {
+		if err := rows.Scan(&name, &column, &referencedTable, &referencedColumn, &deleteAction, &updateAction, &matchType, &referencedSchema, &deferrable, &initiallyDeferred, &deleteSetColumns, &validated, &enforced, &temporal); err != nil {
 			return nil, fmt.Errorf("inspect: scan foreign key: %w", err)
 		}
-		if matchType != "s" {
-			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql supports only MATCH SIMPLE foreign keys", name)
-		}
-		if !referencedInCurrentSchema {
-			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql supports references only in the current schema", name)
-		}
-		if deferrable || initiallyDeferred {
-			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql supports only non-deferrable foreign keys", name)
+		match, err := postgreSQLMatchType(matchType)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: foreign key %q: %w", name, err)
 		}
 		if deleteSetColumns {
 			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support column lists for ON DELETE SET NULL or SET DEFAULT", name)
@@ -2227,16 +2316,20 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 		if err != nil {
 			return nil, fmt.Errorf("inspect: foreign key %q: %w", name, err)
 		}
+		deferrability := foreignKeyDeferrability(deferrable, initiallyDeferred)
 		if len(keys) == 0 || keys[len(keys)-1].Name != name {
 			keys = append(keys, schema.ForeignKeyDef{
-				Name:            name,
-				ReferencedTable: referencedTable,
-				OnDelete:        onDelete,
-				OnUpdate:        onUpdate,
+				Name:             name,
+				ReferencedSchema: referencedSchema,
+				ReferencedTable:  referencedTable,
+				Match:            match,
+				OnDelete:         onDelete,
+				OnUpdate:         onUpdate,
+				Deferrable:       deferrability,
 			})
 		}
 		key := &keys[len(keys)-1]
-		if key.ReferencedTable != referencedTable || key.OnDelete != onDelete || key.OnUpdate != onUpdate {
+		if key.ReferencedSchema != referencedSchema || key.ReferencedTable != referencedTable || key.Match != match || key.OnDelete != onDelete || key.OnUpdate != onUpdate || key.Deferrable != deferrability {
 			return nil, fmt.Errorf("inspect: foreign key %q has inconsistent metadata", name)
 		}
 		key.Columns = append(key.Columns, column)
@@ -2246,6 +2339,37 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 		return nil, fmt.Errorf("inspect: iterate foreign keys: %w", err)
 	}
 	return keys, nil
+}
+
+// postgreSQLMatchType maps a pg_constraint.confmatchtype or MySQL
+// referential_constraints.match_option code to a schema.MatchType: "s" (or
+// MySQL's normalized "s" for "NONE") is MATCH SIMPLE, the SQL default and
+// schema.MatchType's zero value.
+func postgreSQLMatchType(code string) (schema.MatchType, error) {
+	switch code {
+	case "s":
+		return "", nil
+	case "f":
+		return schema.MatchFull, nil
+	case "p":
+		return schema.MatchPartial, nil
+	default:
+		return "", fmt.Errorf("unsupported match type %q", code)
+	}
+}
+
+// foreignKeyDeferrability maps PostgreSQL's condeferrable/condeferred pair
+// (mirrored by MySQL's hardcoded FALSE, FALSE, since MySQL has no
+// deferrable foreign keys) to a schema.Deferrability.
+func foreignKeyDeferrability(deferrable, initiallyDeferred bool) schema.Deferrability {
+	switch {
+	case !deferrable:
+		return ""
+	case initiallyDeferred:
+		return schema.DeferrableInitiallyDeferred
+	default:
+		return schema.DeferrableInitiallyImmediate
+	}
 }
 
 func referenceAction(code string) (schema.ReferenceAction, error) {
@@ -2295,7 +2419,7 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 			uniqueConstraints: "SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
 			checks:            "SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name",
 			indexes:           "SELECT index_name, 0, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' AND non_unique = 1 ORDER BY index_name, seq_in_index",
-			foreignKeys:       "SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, key_column_usage.referenced_table_schema = DATABASE(), FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
+			foreignKeys:       "SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, CASE WHEN key_column_usage.referenced_table_schema = DATABASE() THEN '' ELSE key_column_usage.referenced_table_schema END, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
 		}, nil
 	default:
 		return informationQueries{}, fmt.Errorf("inspect: unsupported dialect %q", name)
@@ -2407,7 +2531,7 @@ func postgreSQLInformationQueries(version int) informationQueries {
 		unsupportedExclusionConstraints: "SELECT constraint_data.conname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'x' ORDER BY constraint_data.conname",
 		unsupportedIndexes:              "SELECT index_data.relname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND (NOT index_metadata.indisvalid OR index_metadata.indnkeyatts <> index_metadata.indnatts OR index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR " + nullsNotDistinct + " OR index_metadata.indisreplident OR EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) OR EXISTS (SELECT 1 FROM unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indclass::oid[]) WITH ORDINALITY AS operator_class(operator_class_oid, ordinal_position) ON operator_class.ordinal_position = key_column.ordinal_position JOIN pg_catalog.pg_opclass AS operator_class_metadata ON operator_class_metadata.oid = operator_class.operator_class_oid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE NOT operator_class_metadata.opcdefault OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation)) ORDER BY index_data.relname",
 		indexes:                         "SELECT index_data.relname, index_metadata.indisunique, attribute.attname, pg_catalog.pg_get_indexdef(index_metadata.indexrelid, key_column.ordinal_position::int, true), access_method.amname, pg_catalog.pg_get_expr(index_metadata.indpred, index_metadata.indrelid, true) FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam JOIN LATERAL unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE LEFT JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND index_metadata.indisvalid AND index_metadata.indnkeyatts = index_metadata.indnatts AND index_data.reloptions IS NULL AND index_data.reltablespace = 0 AND NOT index_metadata.indisreplident AND NOT EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) ORDER BY index_data.relname, key_column.ordinal_position",
-		foreignKeys:                     "SELECT constraint_data.conname, local_attribute.attname, referenced_table.relname, referenced_attribute.attname, constraint_data.confdeltype, constraint_data.confupdtype, constraint_data.confmatchtype, referenced_namespace.nspname = current_schema(), constraint_data.condeferrable, constraint_data.condeferred, " + deleteSetColumns + ", constraint_data.convalidated, " + enforced + ", " + temporal + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS referenced_table ON referenced_table.oid = constraint_data.confrelid JOIN pg_catalog.pg_namespace AS referenced_namespace ON referenced_namespace.oid = referenced_table.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS local_key(attribute_number, ordinal_position) ON TRUE JOIN LATERAL unnest(constraint_data.confkey) WITH ORDINALITY AS referenced_key(attribute_number, ordinal_position) ON referenced_key.ordinal_position = local_key.ordinal_position JOIN pg_catalog.pg_attribute AS local_attribute ON local_attribute.attrelid = constraint_data.conrelid AND local_attribute.attnum = local_key.attribute_number JOIN pg_catalog.pg_attribute AS referenced_attribute ON referenced_attribute.attrelid = constraint_data.confrelid AND referenced_attribute.attnum = referenced_key.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'f' ORDER BY constraint_data.conname, local_key.ordinal_position",
+		foreignKeys:                     "SELECT constraint_data.conname, local_attribute.attname, referenced_table.relname, referenced_attribute.attname, constraint_data.confdeltype, constraint_data.confupdtype, constraint_data.confmatchtype, CASE WHEN referenced_namespace.nspname = current_schema() THEN '' ELSE referenced_namespace.nspname END, constraint_data.condeferrable, constraint_data.condeferred, " + deleteSetColumns + ", constraint_data.convalidated, " + enforced + ", " + temporal + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS referenced_table ON referenced_table.oid = constraint_data.confrelid JOIN pg_catalog.pg_namespace AS referenced_namespace ON referenced_namespace.oid = referenced_table.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS local_key(attribute_number, ordinal_position) ON TRUE JOIN LATERAL unnest(constraint_data.confkey) WITH ORDINALITY AS referenced_key(attribute_number, ordinal_position) ON referenced_key.ordinal_position = local_key.ordinal_position JOIN pg_catalog.pg_attribute AS local_attribute ON local_attribute.attrelid = constraint_data.conrelid AND local_attribute.attnum = local_key.attribute_number JOIN pg_catalog.pg_attribute AS referenced_attribute ON referenced_attribute.attrelid = constraint_data.confrelid AND referenced_attribute.attnum = referenced_key.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'f' ORDER BY constraint_data.conname, local_key.ordinal_position",
 	}
 }
 
