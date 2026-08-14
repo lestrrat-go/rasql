@@ -1,0 +1,1465 @@
+package schemagen_test
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/lestrrat-go/rasql/internal/schemagen"
+	"github.com/lestrrat-go/rasql/schema"
+	"github.com/stretchr/testify/require"
+)
+
+// generatedUsageTest exercises the emitted column accessors and As method
+// from inside the temporary module, so a defect in the generated source
+// fails here rather than in a consumer.
+const generatedUsageTest = `package generated_test
+
+import (
+	"testing"
+	"time"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/dynamic"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
+	"github.com/stretchr/testify/require"
+)
+
+var _ rasql.Scanner = (*generated.UsersRow)(nil)
+var _ rasql.DestinationScanner = (*generated.UsersRow)(nil)
+
+func TestGeneratedRowDecodesByFieldName(t *testing.T) {
+	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
+	result, err := dynamic.NewRow(
+		[]string{"id", "email", "created_at"},
+		[]any{int64(7), "ada@example.com", createdAt},
+	)
+	require.NoError(t, err)
+
+	// UsersRow carries no rasql tags, so dynamic.Decode's field-mapping
+	// fallback snake-cases ID, Email and CreatedAt onto id, email and created_at.
+	decoded, err := dynamic.Decode[generated.UsersRow](result)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), decoded.ID)
+	require.NotNil(t, decoded.Email)
+	require.Equal(t, "ada@example.com", *decoded.Email)
+	require.Equal(t, createdAt, decoded.CreatedAt)
+
+	// A nullable column decodes into a nil pointer rather than failing.
+	nullEmail, err := dynamic.NewRow(
+		[]string{"id", "email", "created_at"},
+		[]any{int64(7), nil, createdAt},
+	)
+	require.NoError(t, err)
+	decoded, err = dynamic.Decode[generated.UsersRow](nullEmail)
+	require.NoError(t, err)
+	require.Nil(t, decoded.Email)
+
+	// A missing column is reported by the field-mapping fallback.
+	partial, err := dynamic.NewRow([]string{"id"}, []any{int64(7)})
+	require.NoError(t, err)
+	_, err = dynamic.Decode[generated.UsersRow](partial)
+	require.ErrorContains(t, err, ` + "`" + `column "email" is not present` + "`" + `)
+}
+
+func TestGeneratedRowSuppliesItsOwnColumnValues(t *testing.T) {
+	var valuer rasql.ColumnValuer = generated.UsersRow{ID: 7}
+	value, ok := valuer.ColumnValue("id")
+	require.True(t, ok)
+	require.Equal(t, int64(7), value)
+	_, ok = valuer.ColumnValue("nickname")
+	require.False(t, ok)
+}
+
+func TestGeneratedRowScansDirectly(t *testing.T) {
+	var scanner rasql.Scanner = &generated.UsersRow{}
+
+	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
+	err := scanner.ScanRow(scanSource{id: 7, email: "ada@example.com", createdAt: createdAt})
+	require.NoError(t, err)
+	decoded := scanner.(*generated.UsersRow)
+	require.Equal(t, int64(7), decoded.ID)
+	require.NotNil(t, decoded.Email)
+	require.Equal(t, "ada@example.com", *decoded.Email)
+	require.Equal(t, createdAt, decoded.CreatedAt)
+}
+
+func TestGeneratedRowScansTextTimes(t *testing.T) {
+	for _, value := range []any{
+		"2026-08-01 12:30:00",
+		[]byte("2026-08-01 12:30:00"),
+	} {
+		row := &generated.UsersRow{}
+		require.NoError(t, row.ScanRow(scanSource{id: 7, email: "ada@example.com", createdAt: value}))
+		require.Equal(t, time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC), row.CreatedAt)
+
+		destinations, err := row.ScanDestinations([]string{"created_at"})
+		require.NoError(t, err)
+		require.NoError(t, destinations[0].(interface{ Scan(any) error }).Scan(value))
+		require.Equal(t, time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC), row.CreatedAt)
+	}
+}
+
+func TestGeneratedRowMapsResultColumns(t *testing.T) {
+	var decoded generated.UsersRow
+	destinations, err := decoded.ScanDestinations([]string{"created_at", "id"})
+	require.NoError(t, err)
+
+	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
+	require.NoError(t, destinations[0].(interface{ Scan(any) error }).Scan(createdAt))
+	*destinations[1].(*int64) = 7
+	require.Equal(t, int64(7), decoded.ID)
+	require.Nil(t, decoded.Email)
+	require.Equal(t, createdAt, decoded.CreatedAt)
+
+	_, err = decoded.ScanDestinations([]string{"id", "id"})
+	require.EqualError(t, err, "duplicate result column \"id\"")
+}
+
+type scanSource struct {
+	id        int64
+	email     string
+	createdAt any
+}
+
+func (s scanSource) Scan(destinations ...any) error {
+	*destinations[0].(*int64) = s.id
+	*destinations[1].(**string) = &s.email
+	if scanner, ok := destinations[2].(interface{ Scan(any) error }); ok {
+		return scanner.Scan(s.createdAt)
+	}
+	*destinations[2].(*time.Time) = s.createdAt.(time.Time)
+	return nil
+}
+
+func TestGeneratedColumnFields(t *testing.T) {
+	users := generated.Users()
+	require.Equal(t, "id", users.ID().Name())
+	require.Equal(t, "email", users.Email().Name())
+	require.Equal(t, "created_at", users.CreatedAt().Name())
+	require.Equal(t, "users", users.ID().Source().Qualifier())
+	require.Equal(t, "users", users.Ref().Name())
+}
+
+func TestGeneratedAsQualifiesColumns(t *testing.T) {
+	users := generated.Users()
+	manager, err := users.As("manager")
+	require.NoError(t, err)
+	require.Equal(t, "manager", manager.Ref().Qualifier())
+	require.Equal(t, "manager", manager.ID().Source().Qualifier())
+	require.Equal(t, "manager", manager.Email().Source().Qualifier())
+
+	_, err = users.As("not an identifier")
+	require.Error(t, err)
+}
+
+func TestGeneratedSelfJoinRendersAlias(t *testing.T) {
+	users := generated.Users()
+	manager, err := users.As("manager")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users.Ref(), query.Project(users.ID()))
+	require.NoError(t, err)
+	statement, err = statement.WithJoin(rasql.InnerJoin(manager, query.Equal(users.ID(), manager.ID())))
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		` + "`" + `SELECT "users"."id" FROM "users" INNER JOIN "users" AS "manager" ON ("users"."id" = "manager"."id")` + "`" + `,
+		rendered.SQL(),
+	)
+}
+
+func TestGeneratedRelationships(t *testing.T) {
+	orders := generated.Orders()
+	belongsTo := orders.User()
+	require.Equal(t, "users", belongsTo.Parent.Ref().Name())
+	require.Equal(t, "orders", belongsTo.Child.Ref().Name())
+	require.Equal(t, "id", belongsTo.ParentKey.Name())
+	require.Equal(t, "user_id", belongsTo.ChildKey.Name())
+
+	hasMany := generated.Users().Orders()
+	require.Equal(t, "users", hasMany.Parent.Ref().Name())
+	require.Equal(t, "orders", hasMany.Child.Ref().Name())
+}
+`
+
+// rejectedUsageSource must not compile. It names a column field that does not
+// exist and passes a column name where a query.ColumnRef is required.
+const rejectedUsageSource = `package rejected
+
+import (
+	"context"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+)
+
+func Rejected(ctx context.Context, db rasql.DB) {
+	users := generated.Users()
+	_, _ = rasql.SelectFrom(users).WhereEqual(users.Emial, 42).One(ctx, db)
+	_, _ = rasql.SelectFrom(users).WhereEqual("id", 42).One(ctx, db)
+}
+`
+
+func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
+	users := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}, Nullable: true},
+			{Name: "created_at", Type: schema.TimeType{}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	invoices := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
+			{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := schemagen.PackageSource("generated", users, orders, invoices)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "type OrdersRow struct")
+	require.Contains(t, string(source), "type UsersRow struct")
+	require.Contains(t, string(source), "type InvoicesRow struct")
+	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
+	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
+	require.Contains(t, string(source), "Email")
+	require.Contains(t, string(source), "CreatedAt")
+	require.NotContains(t, string(source), "rasql:\"", "generated row types state their mapping in methods, not tags")
+	require.Contains(t, string(source), "type usersTimeScanner func(any) error")
+	require.Contains(t, string(source), "func (r *UsersRow) ScanRow(src rasql.ScanSource) error {")
+	require.Contains(t, string(source), "timeScanner2 := usersTimeScanner(func(value any) error {")
+	require.Contains(t, string(source), "\t\treturn rasql.ScanValue(&r.CreatedAt, value)\n")
+	require.NotContains(t, string(source), "row.NewDynamic")
+	require.Contains(t, string(source), "return src.Scan(&r.ID, &r.Email, &timeScanner2)")
+	require.Contains(t, string(source), "func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {")
+	require.Contains(t, string(source), "\tscanned := rasql.NewScanMask(3)\n")
+	require.Contains(t, string(source), "\t\tscanIndexID = iota\n\t\tscanIndexEmail\n\t\tscanIndexCreatedAt\n")
+	require.Contains(t, string(source), "if !scanned.Mark(scanIndexID) {")
+	require.Contains(t, string(source), "\t\tcase \"created_at\":")
+	require.Contains(t, string(source), "\t\t\tdestinations[index] = &timeScanner2")
+	require.Contains(t, string(source), "func (r UsersRow) ColumnValue(name string) (any, bool) {")
+	require.Contains(t, string(source), "\tcase \"created_at\":\n\t\treturn r.CreatedAt, true\n")
+	require.Contains(t, string(source), "\treturn nil, false\n")
+	// A nullable column is a pointer field, and the generated scan methods
+	// assign through it.
+	require.Contains(t, string(source), "\tEmail     *string\n")
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
+	require.NotContains(t, string(source), "github.com/lestrrat-go/rasql/row")
+	// PackageSource returns a whole package, descriptors included, so it
+	// names the schema package its descriptor literals are written in.
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/schema\"")
+	require.Contains(t, string(source), "var usersDef = schema.TableDef{")
+	require.Contains(t, string(source), "var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}")
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql\"")
+	require.Contains(t, string(source), "type UsersTable struct {\n\trasql.Table[UsersRow]\n}\n")
+	require.Contains(t, string(source), `func (t UsersTable) CreatedAt() query.ColumnRef { return rasql.ColumnOf(t.Table, "created_at") }`)
+	require.NotContains(t, string(source), "newUsersTable")
+	require.Contains(t, string(source), "func Orders() OrdersTable {")
+	require.Contains(t, string(source), "func Users() UsersTable {")
+	require.Contains(t, string(source), "type OrdersTableUserRelation struct {")
+	require.Contains(t, string(source), "func (t OrdersTable) User() OrdersTableUserRelation {")
+	require.Contains(t, string(source), "func (t UsersTable) Orders() UsersTableOrdersRelation {")
+	require.Contains(t, string(source), "func (t UsersTable) As(alias string) (UsersTable, error) {")
+	require.NotContains(t, string(source), "var Users =")
+
+	repeated, err := schemagen.PackageSource("generated", invoices, orders, users)
+	require.NoError(t, err)
+	require.Equal(t, string(source), string(repeated), "generated source must not depend on input order")
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", users, orders, invoices)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), "var usersDef = schema.TableDef{")
+	require.Contains(t, string(descriptorSource), "var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}")
+	require.Contains(t, string(descriptorSource), "var ordersDef = schema.TableDef{")
+	require.Contains(t, string(descriptorSource), "var ordersTable = OrdersTable{rasql.TableFrom[OrdersRow](ordersDef)}")
+	require.Contains(t, string(descriptorSource), `{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}}`)
+	require.Contains(t, string(descriptorSource), `{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true}`)
+	require.NotContains(t, string(descriptorSource), "\"fmt\"")
+	require.NotContains(t, string(descriptorSource), "\"github.com/lestrrat-go/rasql/query\"")
+	require.Less(t, stringIndex(t, descriptorSource, "var ordersDef"), stringIndex(t, descriptorSource, "var usersDef"))
+
+	descriptorTestSource, err := schemagen.DescriptorTestSource("generated", users, orders, invoices)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorTestSource), "func TestRasqlgenGeneratedDefinitionsAreValid(t *testing.T) {")
+
+	directory := t.TempDir()
+	// PackageSource's output is the whole package here. Adding
+	// DescriptorSource's output beside it would declare every descriptor a
+	// second time, which is what makes the two alternatives rather than a
+	// pair; the generated descriptor test still compiles against the
+	// definitions PackageSource declares.
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen_test.go"), descriptorTestSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedUsageTest), 0o600))
+	// The replace directive must be absolute: t.TempDir() no longer nests the
+	// scratch module under this package directory, so a relative path would
+	// resolve against the temp directory's own location instead of the repo.
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+
+	// docs/06-rasqlgen.md promises that a misspelled column accessor and a
+	// column named by string both fail to compile. Build a package that does
+	// each and require the compiler to say so, so the documentation cannot
+	// drift.
+	rejected := filepath.Join(directory, "rejected")
+	require.NoError(t, os.MkdirAll(rejected, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(rejected, "rejected.go"), []byte(rejectedUsageSource), 0o600))
+
+	command = exec.CommandContext(t.Context(), "go", "build", "./rejected")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.Errorf(t, err, "misspelled column accessor compiled:\n%s", output)
+	require.Contains(t, string(output), "users.Emial undefined")
+	require.Contains(t, string(output), "as query.ColumnRef value")
+}
+
+func TestSchemaSizesScanMaskForWideRows(t *testing.T) {
+	columns := make([]schema.ColumnDef, 65)
+	for index := range columns {
+		columns[index] = schema.ColumnDef{Name: "column_" + strconv.Itoa(index), Type: schema.IntegerType{}}
+	}
+
+	source, err := schemagen.PackageSource("generated", schema.TableDef{
+		Name:       "wide",
+		Columns:    columns,
+		PrimaryKey: []string{"column_0"},
+	})
+	require.NoError(t, err)
+	// A table wider than one mask word states its column count and nothing
+	// else. Splitting that count across words is rasql.ScanMask's job, so no
+	// bit arithmetic reaches the generated file.
+	require.Contains(t, string(source), "\tscanned := rasql.NewScanMask(65)\n")
+	require.Contains(t, string(source), "if !scanned.Mark(scanIndexColumn64) {")
+	require.NotContains(t, string(source), "uint64(1)<<")
+}
+
+const generatedRelationshipUsageTest = `package generated_test
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"testing"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/stretchr/testify/require"
+)
+
+// recordingHandle is a rasql.Handle that keeps the SQL it was asked to run and
+// refuses to run it, so a generated Load can be checked against the statement
+// it renders without a database behind it.
+type recordingHandle struct {
+	query string
+}
+
+func (h *recordingHandle) QueryContext(_ context.Context, statement string, _ ...any) (*sql.Rows, error) {
+	h.query = statement
+	return nil, errors.New("query recorded")
+}
+
+func (h *recordingHandle) ExecContext(_ context.Context, _ string, _ ...any) (sql.Result, error) {
+	return nil, errors.New("exec not supported")
+}
+
+// recordingDB pairs a recordingHandle with the dialect the generated fixtures
+// are rendered for.
+func recordingDB(t *testing.T) (rasql.DB, *recordingHandle) {
+	t.Helper()
+
+	handle := &recordingHandle{}
+	db, err := rasql.New(handle, dialect.PostgreSQL())
+	require.NoError(t, err)
+	return db, handle
+}
+
+func TestGeneratedRelationships(t *testing.T) {
+	users := generated.Users()
+	orders := generated.Orders()
+	require.Equal(t, "tenant", users.Ref().Schema())
+	require.Equal(t, "tenant", orders.Ref().Schema())
+
+	belongsTo := orders.User()
+	require.Equal(t, "tenant", belongsTo.Parent.Ref().Schema())
+	require.Equal(t, "tenant", belongsTo.Child.Ref().Schema())
+	require.Equal(t, "id", belongsTo.ParentKey.Name())
+	require.Equal(t, "user_id", belongsTo.ChildKey.Name())
+	require.Equal(t, query.JoinInner, belongsTo.Join().Type())
+	require.Equal(t, "tenant", belongsTo.Join().Source().Schema())
+
+	belongsToDB, belongsToHandle := recordingDB(t)
+	_, err := belongsTo.Load(t.Context(), belongsToDB, []generated.OrdersRow{{UserID: 7}})
+	require.ErrorContains(t, err, "query recorded")
+	require.Equal(t, "SELECT \"tenant\".\"users\".\"id\" FROM \"tenant\".\"users\" WHERE (\"tenant\".\"users\".\"id\" IN ($1))", belongsToHandle.query)
+
+	hasMany := users.Orders()
+	require.Equal(t, "id", hasMany.ParentKey.Name())
+	require.Equal(t, "user_id", hasMany.ChildKey.Name())
+	require.Equal(t, query.JoinInner, hasMany.Join().Type())
+	require.Equal(t, "tenant", hasMany.Join().Source().Schema())
+
+	hasManyDB, hasManyHandle := recordingDB(t)
+	_, err = hasMany.Load(t.Context(), hasManyDB, []generated.UsersRow{{ID: 7}})
+	require.ErrorContains(t, err, "query recorded")
+	require.Equal(t, "SELECT \"tenant\".\"orders\".\"id\", \"tenant\".\"orders\".\"user_id\" FROM \"tenant\".\"orders\" WHERE (\"tenant\".\"orders\".\"user_id\" IN ($1))", hasManyHandle.query)
+
+	aliasedUsers, err := users.As("u")
+	require.NoError(t, err)
+	require.Equal(t, "u", aliasedUsers.Orders().ParentKey.Source().Qualifier())
+	aliasedOrders, err := orders.As("o")
+	require.NoError(t, err)
+	require.Equal(t, "o", aliasedOrders.User().ChildKey.Source().Qualifier())
+}
+`
+
+const generatedSelfReferentialRelationshipUsageTest = `package generated_test
+
+import (
+	"testing"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/stretchr/testify/require"
+)
+
+func TestGeneratedSelfReferentialRelationshipsRender(t *testing.T) {
+	employees := generated.Employees()
+	manager := employees.Manager()
+	statement, err := rasql.SelectFrom(employees).Join(manager.Join()).Build(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, ` + "`" + `SELECT "employees"."id", "employees"."manager_id" FROM "employees" INNER JOIN "employees" AS "employees_manager_parent" ON ("employees_manager_parent"."id" = "employees"."manager_id")` + "`" + `, statement.SQL())
+
+	children := employees.Employees()
+	statement, err = rasql.SelectFrom(employees).Join(children.Join()).Build(dialect.PostgreSQL())
+	require.NoError(t, err)
+	require.Equal(t, ` + "`" + `SELECT "employees"."id", "employees"."manager_id" FROM "employees" INNER JOIN "employees" AS "employees_employees_child" ON ("employees"."id" = "employees_employees_child"."manager_id")` + "`" + `, statement.SQL())
+}
+`
+
+func TestSchemaGeneratesTypedRelationships(t *testing.T) {
+	users := schema.TableDef{
+		Schema:     "tenant",
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.TableDef{
+		Schema: "tenant",
+		Name:   "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_user_id_fkey",
+			Columns:           []string{"user_id"},
+			ReferencedSchema:  "tenant",
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := schemagen.PackageSource("generated", users, orders)
+	require.NoError(t, err)
+	usersSource, err := schemagen.TableSurfaceSource("generated", users, users, orders)
+	require.NoError(t, err)
+	ordersSource, err := schemagen.TableSurfaceSource("generated", orders, users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func (t OrdersTable) User() OrdersTableUserRelation")
+	require.Contains(t, string(source), "func (t UsersTable) Orders() UsersTableOrdersRelation")
+	require.Contains(t, string(source), "func (r UsersTableOrdersRelation) Load")
+	require.Contains(t, string(usersSource), "func (t UsersTable) Orders() UsersTableOrdersRelation")
+	// The split-file surface leaves every descriptor to DescriptorSource,
+	// which is the whole difference between it and TableSource.
+	require.NotContains(t, string(usersSource), "var usersDef = schema.TableDef{")
+	require.NotContains(t, string(ordersSource), "var ordersDef = schema.TableDef{")
+	require.Contains(t, string(ordersSource), "func (t OrdersTable) User() OrdersTableUserRelation")
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), `Relationships: []schema.RelationshipDef{`)
+	require.Contains(t, string(descriptorSource), `{Name: "User", Kind: schema.RelationshipBelongsTo, Columns: []string{"user_id"}, ReferencedSchema: "tenant", ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)
+
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "users_gen.go"), usersSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "orders_gen.go"), ordersSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen.go"), descriptorSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedRelationshipUsageTest), 0o600))
+	// The replace directive must be absolute: t.TempDir() no longer nests the
+	// scratch module under this package directory, so a relative path would
+	// resolve against the temp directory's own location instead of the repo.
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
+
+func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	memberships := schema.TableDef{
+		Name: "memberships",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "billing_user_id", Type: schema.IntegerType{}},
+			{Name: "shipping_user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+	}
+
+	source, err := schemagen.PackageSource("generated", users, memberships)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+	require.Contains(t, text, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
+	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Join() query.Join")
+	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
+	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Join() query.Join")
+	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
+}
+
+func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	generateSource := func(foreignKeys []schema.ForeignKeyDef) string {
+		memberships := schema.TableDef{
+			Name: "memberships",
+			Columns: []schema.ColumnDef{
+				{Name: "id", Type: schema.IntegerType{}},
+				{Name: "billing_user_id", Type: schema.IntegerType{}},
+				{Name: "shipping_user_id", Type: schema.IntegerType{}},
+			},
+			PrimaryKey:  []string{"id"},
+			ForeignKeys: foreignKeys,
+		}
+		source, err := schemagen.PackageSource("generated", users, memberships)
+		require.NoError(t, err)
+		return string(source)
+	}
+	foreignKeys := []schema.ForeignKeyDef{
+		{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+	}
+
+	for _, source := range []string{
+		generateSource(foreignKeys),
+		generateSource([]schema.ForeignKeyDef{foreignKeys[1], foreignKeys[0]}),
+	} {
+		memberships := generatedMethodBlock(t, source, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+		require.Contains(t, memberships, "ChildKey: child.BillingUserID")
+		shipping := generatedMethodBlock(t, source, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
+		require.Contains(t, shipping, "ChildKey: child.ShippingUserID")
+	}
+}
+
+func TestSchemaGeneratesSelfReferentialInverseRelationship(t *testing.T) {
+	employees := schema.TableDef{
+		Name: "employees",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "manager_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"manager_id"},
+			ReferencedTable:   "employees",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := schemagen.PackageSource("generated", employees)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t EmployeesTable) Manager() EmployeesTableManagerRelation")
+	require.Contains(t, text, "func (t EmployeesTable) Employees() EmployeesTableEmployeesRelation")
+	require.Contains(t, text, "func (r EmployeesTableEmployeesRelation) Load(ctx context.Context, db rasql.DB, parents []EmployeesRow)")
+}
+
+func TestSchemaGeneratesSelfReferentialRenderedJoins(t *testing.T) {
+	employees := schema.TableDef{
+		Name: "employees",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "manager_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"manager_id"},
+			ReferencedTable:   "employees",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := schemagen.PackageSource("generated", employees)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedSelfReferentialRelationshipUsageTest), 0o600))
+	// The replace directive must be absolute: t.TempDir() no longer nests the
+	// scratch module under this package directory, so a relative path would
+	// resolve against the temp directory's own location instead of the repo.
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
+
+func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	aliases := schema.TableDef{
+		Name: "as",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := schemagen.PackageSource("generated", users, aliases)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) UserAs() UsersTableUserAsRelation")
+	require.Contains(t, text, "func (r UsersTableUserAsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
+}
+
+func generatedMethodBlock(t *testing.T, source, signature string) string {
+	t.Helper()
+	start := strings.Index(source, signature)
+	require.GreaterOrEqual(t, start, 0)
+	rest := source[start:]
+	next := strings.Index(rest[len(signature):], "\nfunc ")
+	if next < 0 {
+		return rest
+	}
+	return rest[:len(signature)+next]
+}
+
+func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	memberships := schema.TableDef{
+		Name: "memberships",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "billing_user_id", Type: schema.IntegerType{}},
+			{Name: "shipping_user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+		Relationships: []schema.RelationshipDef{{
+			Name:              "BillingUser",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"billing_user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := schemagen.PackageSource("generated", users, memberships)
+	require.NoError(t, err)
+	text := string(source)
+	for _, expected := range []string{
+		"func (t MembershipsTable) BillingUser() MembershipsTableBillingUserRelation",
+		"func (t MembershipsTable) ShippingUser() MembershipsTableShippingUserRelation",
+		"func (t UsersTable) Memberships() UsersTableMembershipsRelation",
+		"func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation",
+		"func (r MembershipsTableBillingUserRelation) Load(ctx context.Context, db rasql.DB, children []MembershipsRow)",
+		"func (r MembershipsTableShippingUserRelation) Load(ctx context.Context, db rasql.DB, children []MembershipsRow)",
+	} {
+		require.Contains(t, text, expected)
+	}
+}
+
+// TestSchemaGeneratesDecimalColumns pins the generator's decimal mapping in
+// isolation: a DecimalType column becomes a Go string field in the row type,
+// and the generated descriptor literal restates precision and scale as a
+// schema.DecimalType{...} value.
+func TestSchemaGeneratesDecimalColumns(t *testing.T) {
+	invoices := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
+			{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true},
+			{Name: "quantity", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(0)}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := schemagen.PackageSource("generated", invoices)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*Amount\s+string$`, string(source))
+	require.Regexp(t, `(?m)^\s*TaxRate\s+\*string$`, string(source))
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", invoices)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), `{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}}`)
+	require.Contains(t, string(descriptorSource), `{Name: "tax_rate", Type: schema.DecimalType{Precision: 5, Scale: schema.NewDecimalScale(4)}, Nullable: true}`)
+	// A stated scale of zero must survive generation: emitting nothing would
+	// leave the regenerated descriptor stating no scale at all.
+	require.Contains(t, string(descriptorSource), `{Name: "quantity", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(0)}}`)
+}
+
+// TestSchemaGeneratesUnsignedIntegerColumns pins the generator's signedness
+// mapping. An unsigned integer column reaches 18446744073709551615, which
+// int64 cannot hold, so its row field is a uint64; a signed one keeps int64.
+// The generated descriptor literal restates Unsigned: true, so regenerating
+// from the generated source produces the same column rather than a signed
+// one.
+func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
+	events := schema.TableDef{
+		Name: "events",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
+			{Name: "sequence", Type: schema.IntegerType{}},
+			{Name: "parent_id", Type: schema.IntegerType{Unsigned: true}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := schemagen.PackageSource("generated", events)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
+	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
+	require.Regexp(t, `(?m)^\s*ParentID\s+\*uint64$`, string(source))
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", events)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), `{Name: "id", Type: schema.IntegerType{Unsigned: true}}`)
+	require.Contains(t, string(descriptorSource), `{Name: "sequence", Type: schema.IntegerType{}}`)
+	require.Contains(t, string(descriptorSource), `{Name: "parent_id", Type: schema.IntegerType{Unsigned: true}, Nullable: true}`)
+}
+
+// TestSchemaGeneratesTextWidthColumns pins the generator's text-width
+// mapping. A stated width restates schema.NewTextWidth(n) in the generated
+// descriptor literal, so regenerating from the generated source produces the
+// same column rather than an unbounded one; an unstated width emits a plain
+// schema.TextType{}, exactly as it did before TextType had a width.
+func TestSchemaGeneratesTextWidthColumns(t *testing.T) {
+	users := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}},
+			{Name: "bio", Type: schema.TextType{}, Nullable: true},
+			{Name: "flag", Type: schema.TextType{Width: schema.NewTextWidth(0)}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", users)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), `{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(255)}}`)
+	require.Contains(t, string(descriptorSource), `{Name: "bio", Type: schema.TextType{}, Nullable: true}`)
+	// A stated width of zero must survive generation the same way a stated
+	// decimal scale of zero does: emitting nothing would leave the
+	// regenerated descriptor stating no width at all.
+	require.Contains(t, string(descriptorSource), `{Name: "flag", Type: schema.TextType{Width: schema.NewTextWidth(0)}}`)
+}
+
+// TestSchemaGeneratesFixedWidthTextColumns pins the generator's Fixed
+// mapping, the counterpart to TestSchemaGeneratesTextWidthColumns: a
+// fixed-width column restates Fixed: true alongside Width in the generated
+// descriptor literal, so regenerating from the generated source keeps
+// rendering CHAR(n) rather than silently reverting to VARCHAR(n) and
+// reintroducing the diff this package's Fixed support fixes.
+func TestSchemaGeneratesFixedWidthTextColumns(t *testing.T) {
+	events := schema.TableDef{
+		Name: "events",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "code", Type: schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", events)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), `{Name: "code", Type: schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}}`)
+}
+
+func TestSchemaRejectsInvalidPackageName(t *testing.T) {
+	_, err := schemagen.PackageSource("not-valid")
+	require.Error(t, err)
+}
+
+func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {
+	for _, columnName := range []string{"table", "as", "ref", "column", "scan_row", "scan_destinations", "column_value"} {
+		t.Run(columnName, func(t *testing.T) {
+			_, err := schemagen.PackageSource("generated", schema.TableDef{
+				Name: "users",
+				Columns: []schema.ColumnDef{
+					{Name: "id", Type: schema.IntegerType{}},
+					{Name: columnName, Type: schema.TextType{}},
+				},
+				PrimaryKey: []string{"id"},
+			})
+			require.ErrorContains(t, err, "reserved generated method")
+			require.ErrorContains(t, err, columnName)
+			require.ErrorContains(t, err, "users")
+		})
+	}
+}
+
+func TestSchemaRejectsCollidingRelationshipMethodNames(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.RelationshipDef{
+			{
+				Name:              "BillingUser",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+			{
+				Name:              "billing_user",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+		},
+	}
+
+	_, err := schemagen.PackageSource("generated", users, orders)
+	require.ErrorContains(t, err, `relationships[0] "BillingUser"`)
+	require.ErrorContains(t, err, `relationships[1] "billing_user"`)
+	require.ErrorContains(t, err, `duplicate generated method "BillingUser"`)
+}
+
+func TestSchemaAllowsScanColumns(t *testing.T) {
+	source, err := schemagen.PackageSource("generated", schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "scan_columns", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(source), "ScanColumns string")
+}
+
+func TestSchemaRejectsCollidingGeneratedNames(t *testing.T) {
+	_, err := schemagen.PackageSource("generated",
+		schema.TableDef{
+			Name:       "users",
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+			PrimaryKey: []string{"id"},
+		},
+		schema.TableDef{
+			Name:       "users_table",
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+			PrimaryKey: []string{"id"},
+		},
+	)
+	require.ErrorContains(t, err, "duplicates generated name")
+	require.ErrorContains(t, err, "UsersTable")
+}
+
+func TestSchemaRejectsRelationshipTypeCollisions(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	collision := schema.TableDef{
+		Name:       "users_table_orders_relation",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := schemagen.PackageSource("generated", users, orders, collision)
+	require.ErrorContains(t, err, `relationship "Orders" on table "users"`)
+	require.ErrorContains(t, err, `UsersTableOrdersRelation`)
+}
+
+func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.RelationshipDef{{
+			Name:              "as",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	err := schemagen.Validate("generated", users, orders)
+	require.ErrorContains(t, err, `relationship "as" on table "orders" uses reserved generated method "As"`)
+}
+
+func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "as_id", Type: schema.IntegerType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"as_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+
+	source, err := schemagen.PackageSource("generated", users, orders)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "AsID *int64")
+	require.NotContains(t, string(source), "func (t OrdersTable) As() OrdersTableAsRelation")
+}
+
+func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
+	apiKeys := schema.TableDef{
+		Name: "api_keys",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "api_key", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := schemagen.PackageSource("generated", apiKeys)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func APIKeys() APIKeysTable {")
+	require.Contains(t, string(source), "type APIKeysRow struct {")
+
+	// The api_key column must spell "API" the same way the api_keys table
+	// does, so the package does not expose the same word two ways.
+	require.Contains(t, string(source), "\tAPIKey string\n")
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", apiKeys)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), "var apiKeysDef = schema.TableDef{")
+	require.Contains(t, string(descriptorSource), "var apiKeysTable = APIKeysTable{rasql.TableFrom[APIKeysRow](apiKeysDef)}")
+	require.Contains(t, string(descriptorSource), "func APIKeysDef() schema.TableDef { return apiKeysDef.Clone() }")
+}
+
+func TestSchemaRejectsCollidingInitialismNames(t *testing.T) {
+	_, err := schemagen.PackageSource("generated",
+		schema.TableDef{
+			Name:       "api_keys",
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+			PrimaryKey: []string{"id"},
+		},
+		schema.TableDef{
+			Name:       "APIKeys",
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+			PrimaryKey: []string{"id"},
+		},
+	)
+	require.ErrorContains(t, err, "duplicates generated name")
+	require.ErrorContains(t, err, "APIKeys")
+}
+
+// TestDescriptorSourceStatesEveryOptionKind checks that the literal writer
+// covers every field the option form used to fold into a constructor call:
+// a named schema, unique constraints named and unnamed, checks named and
+// unnamed, a plain and a unique index, a single-column and a composite
+// foreign key with OnDelete and OnUpdate, and a relationship. Compilability
+// of a definition with foreign keys and relationships is already pinned by
+// TestSchemaIsDeterministicAndCompiles and TestSchemaGeneratesTypedRelationships;
+// this test pins the literal text those constructs produce.
+func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
+	widgets := schema.TableDef{
+		Schema: "app",
+		Name:   "widgets",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{Unsigned: true}},
+			{Name: "code", Type: schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}},
+			{Name: "bio", Type: schema.TextType{}, Nullable: true},
+			{Name: "price", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
+			{Name: "owner_id", Type: schema.IntegerType{}, Nullable: true},
+			{Name: "combo_a", Type: schema.IntegerType{}, Nullable: true},
+			{Name: "combo_b", Type: schema.IntegerType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{
+			{Name: "uq_code", Columns: []string{"code"}},
+			{Columns: []string{"bio"}},
+		},
+		Checks: []schema.CheckDef{
+			{Name: "chk_price", Expression: "price >= 0"},
+			{Expression: "id > 0"},
+		},
+		Indexes: []schema.IndexDef{
+			{Name: "idx_owner", Columns: []string{"owner_id"}},
+			{Name: "uidx_code", Columns: []string{"code"}, Unique: true},
+		},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{
+				Name:              "fk_owner",
+				Columns:           []string{"owner_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+				OnDelete:          schema.Cascade,
+				OnUpdate:          schema.Restrict,
+			},
+			{
+				Columns:           []string{"combo_a", "combo_b"},
+				ReferencedSchema:  "app",
+				ReferencedTable:   "combos",
+				ReferencedColumns: []string{"a", "b"},
+			},
+		},
+		Relationships: []schema.RelationshipDef{
+			{
+				Name:              "Owner",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"owner_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+			{
+				Name:              "Combo",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"combo_a", "combo_b"},
+				ReferencedSchema:  "app",
+				ReferencedTable:   "combos",
+				ReferencedColumns: []string{"a", "b"},
+			},
+		},
+	}
+	require.NoError(t, widgets.Validate())
+
+	source, err := schemagen.DescriptorSource("generated", widgets)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, `Schema: "app"`)
+	require.Contains(t, text, `{Name: "uq_code", Columns: []string{"code"}}`)
+	require.Contains(t, text, `{Columns: []string{"bio"}}`)
+	require.Contains(t, text, `{Name: "chk_price", Expression: "price >= 0"}`)
+	require.Contains(t, text, `{Expression: "id > 0"}`)
+	require.Contains(t, text, `{Name: "idx_owner", Columns: []string{"owner_id"}}`)
+	require.Contains(t, text, `{Name: "uidx_code", Columns: []string{"code"}, Unique: true}`)
+	require.Contains(t, text, `{Name: "fk_owner", Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade, OnUpdate: schema.Restrict}`)
+	require.Contains(t, text, `{Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
+	require.Contains(t, text, `{Name: "Owner", Kind: schema.RelationshipBelongsTo, Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)
+	require.Contains(t, text, `{Name: "Combo", Kind: schema.RelationshipBelongsTo, Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
+}
+
+// TestDescriptorSourceKeepsEveryMatchingRelationship pins the case where the
+// old option form lost information: two relationships that both match one
+// foreign key. writeForeignKeyOptions's RelationshipNamed option could carry
+// only one name, so matchingRelationshipName kept the first and silently
+// dropped the second. The literal writer states table.Relationships
+// directly, so both survive.
+func TestDescriptorSourceKeepsEveryMatchingRelationship(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.RelationshipDef{
+			{
+				Name:              "Buyer",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+			{
+				Name:              "Account",
+				Kind:              schema.RelationshipBelongsTo,
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+			},
+		},
+	}
+
+	source, err := schemagen.DescriptorSource("generated", users, orders)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, `Name: "Buyer"`)
+	require.Contains(t, text, `Name: "Account"`)
+}
+
+// TestDescriptorTestSourceFailsAnEditedDefinition pins the promise that
+// hand-editing a generated definition to be invalid fails in the caller's
+// own test run rather than surfacing only against a database.
+func TestDescriptorTestSourceFailsAnEditedDefinition(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	tableSource, err := schemagen.TableSurfaceSource("generated", users, users)
+	require.NoError(t, err)
+	descriptorSource, err := schemagen.DescriptorSource("generated", users)
+	require.NoError(t, err)
+	descriptorTestSource, err := schemagen.DescriptorTestSource("generated", users)
+	require.NoError(t, err)
+
+	// Corrupt the descriptor after generation, the same way a hand-edit of a
+	// DO-NOT-EDIT file would: blank the table name, which Validate rejects
+	// as an invalid identifier.
+	corrupted := strings.Replace(string(descriptorSource), `Name: "users",`, `Name: "",`, 1)
+	require.NotEqual(t, string(descriptorSource), corrupted, "the replacement must actually find something to corrupt")
+
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "users_gen.go"), tableSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen.go"), []byte(corrupted), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen_test.go"), descriptorTestSource, 0o600))
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.Errorf(t, err, "corrupted descriptor passed the generated test:\n%s", output)
+	require.Contains(t, string(output), "TestRasqlgenGeneratedDefinitionsAreValid")
+}
+
+// handWrittenDefinitionsTest is a test file somebody wrote by hand under the
+// name the generated test used to take. It is the name that mattered: a
+// generated test declaring it too would redeclare it in the same package and
+// stop the package compiling, and nothing in rasqlgen would notice, because
+// rasqlgen inspects only the path it writes and this declaration lives
+// somewhere else.
+const handWrittenDefinitionsTest = `package generated
+
+import "testing"
+
+func TestGeneratedDefinitionsAreValid(t *testing.T) {
+	t.Log("written by hand, and here first")
+}
+`
+
+// TestDescriptorTestSourceAvoidsHandWrittenNameCollision pins that the
+// generated test can be written into a package that already declares a test
+// under the generator's former name, and that the package still builds and
+// runs both tests.
+func TestDescriptorTestSourceAvoidsHandWrittenNameCollision(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	tableSource, err := schemagen.TableSurfaceSource("generated", users, users)
+	require.NoError(t, err)
+	descriptorSource, err := schemagen.DescriptorSource("generated", users)
+	require.NoError(t, err)
+	descriptorTestSource, err := schemagen.DescriptorTestSource("generated", users)
+	require.NoError(t, err)
+	require.NotContains(t, string(descriptorTestSource), "func TestGeneratedDefinitionsAreValid(",
+		"the generated test must not take a name a person could reasonably write")
+
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "users_gen.go"), tableSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen.go"), descriptorSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen_test.go"), descriptorTestSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "hand_written_test.go"), []byte(handWrittenDefinitionsTest), 0o600))
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+
+	command = exec.CommandContext(t.Context(), "go", "test", "-run", "DefinitionsAreValid", "-v", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+	require.Contains(t, string(output), "TestGeneratedDefinitionsAreValid", "go test output:\n%s", output)
+	require.Contains(t, string(output), "TestRasqlgenGeneratedDefinitionsAreValid", "go test output:\n%s", output)
+}
+
+// TestGenerationIsIdempotent pins that generating twice from the same input
+// produces identical bytes in all three files, not just PackageSource.
+func TestGenerationIsIdempotent(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	firstTable, err := schemagen.TableSource("generated", users, users)
+	require.NoError(t, err)
+	secondTable, err := schemagen.TableSource("generated", users, users)
+	require.NoError(t, err)
+	require.Equal(t, string(firstTable), string(secondTable))
+
+	firstSurface, err := schemagen.TableSurfaceSource("generated", users, users)
+	require.NoError(t, err)
+	secondSurface, err := schemagen.TableSurfaceSource("generated", users, users)
+	require.NoError(t, err)
+	require.Equal(t, string(firstSurface), string(secondSurface))
+
+	firstDescriptor, err := schemagen.DescriptorSource("generated", users)
+	require.NoError(t, err)
+	secondDescriptor, err := schemagen.DescriptorSource("generated", users)
+	require.NoError(t, err)
+	require.Equal(t, string(firstDescriptor), string(secondDescriptor))
+
+	firstTest, err := schemagen.DescriptorTestSource("generated", users)
+	require.NoError(t, err)
+	secondTest, err := schemagen.DescriptorTestSource("generated", users)
+	require.NoError(t, err)
+	require.Equal(t, string(firstTest), string(secondTest))
+}
+
+// TestSchemaRejectsDefinitionAccessorCollision pins correction 5: the
+// generated exported accessor UsersDef collides with the accessor a table
+// literally named users_def generates, so validateVariableNames must
+// register both.
+func TestSchemaRejectsDefinitionAccessorCollision(t *testing.T) {
+	_, err := schemagen.PackageSource("generated",
+		schema.TableDef{
+			Name:       "users",
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+			PrimaryKey: []string{"id"},
+		},
+		schema.TableDef{
+			Name:       "users_def",
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+			PrimaryKey: []string{"id"},
+		},
+	)
+	require.ErrorContains(t, err, `duplicates generated name "UsersDef"`)
+}
+
+// TestSchemaRejectsGeneratedTestNameCollision pins that the fixed function
+// name rasqlgen writes into schema_gen_test.go takes part in the collision
+// check like every derived name does. A table named
+// test_rasqlgen_generated_definitions_are_valid derives exactly that
+// identifier for its accessor, so without the reservation rasqlgen would
+// write both declarations itself and the package would fail to build under
+// go test while still passing go build.
+func TestSchemaRejectsGeneratedTestNameCollision(t *testing.T) {
+	const reservedTable = "test_rasqlgen_generated_definitions_are_valid"
+	reserved := schema.TableDef{
+		Name:       reservedTable,
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	nearMiss := schema.TableDef{
+		Name:       "test_rasqlgen_generated_definitions",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	// The two sides of the collision: the name the generated test declares,
+	// and the accessor the table name derives. Renaming either without the
+	// other fails here rather than in a caller's build.
+	generatedTest, err := schemagen.DescriptorTestSource("generated", users)
+	require.NoError(t, err)
+	require.Contains(t, string(generatedTest), "func TestRasqlgenGeneratedDefinitionsAreValid(t *testing.T) {")
+
+	for name, generate := range map[string]func(tables ...schema.TableDef) error{
+		"Validate": func(tables ...schema.TableDef) error {
+			return schemagen.Validate("generated", tables...)
+		},
+		"PackageSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.PackageSource("generated", tables...)
+			return err
+		},
+		"TableSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.TableSource("generated", tables[0], tables...)
+			return err
+		},
+		"TableSurfaceSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.TableSurfaceSource("generated", tables[0], tables...)
+			return err
+		},
+		"DescriptorSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.DescriptorSource("generated", tables...)
+			return err
+		},
+		"DescriptorTestSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.DescriptorTestSource("generated", tables...)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := generate(reserved)
+			require.ErrorContains(t, err, `table "`+reservedTable+`"`)
+			require.ErrorContains(t, err, `duplicates generated name "TestRasqlgenGeneratedDefinitionsAreValid"`)
+			require.ErrorContains(t, err, "rasqlgen reserves")
+
+			// The reservation must cost nothing to an ordinary table. The
+			// same entry point still accepts a plain name and a near miss
+			// whose accessor is a prefix of the reserved identifier.
+			require.NoError(t, generate(users))
+			require.NoError(t, generate(nearMiss))
+		})
+	}
+}
+
+func stringIndex(t *testing.T, source []byte, value string) int {
+	t.Helper()
+	index := len(source)
+	for offset := 0; offset+len(value) <= len(source); offset++ {
+		if string(source[offset:offset+len(value)]) == value {
+			index = offset
+			break
+		}
+	}
+	require.NotEqual(t, len(source), index)
+	return index
+}

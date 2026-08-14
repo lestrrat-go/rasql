@@ -17,29 +17,21 @@ type staffRow struct {
 }
 
 // staffTable mirrors the wrapper type rasqlgen emits: the typed table is
-// embedded and every column is reachable as a field.
+// embedded and every column is reachable through an accessor method.
 type staffTable struct {
 	rasql.Table[staffRow]
-	ID        query.ColumnRef
-	ManagerID query.ColumnRef
-	Email     query.ColumnRef
 }
 
-func newStaffTable(table rasql.Table[staffRow]) staffTable {
-	return staffTable{
-		Table:     table,
-		ID:        rasql.MustColumn(table, "id"),
-		ManagerID: rasql.MustColumn(table, "manager_id"),
-		Email:     rasql.MustColumn(table, "email"),
-	}
-}
+func (t staffTable) ID() query.ColumnRef        { return rasql.ColumnOf(t.Table, "id") }
+func (t staffTable) ManagerID() query.ColumnRef { return rasql.ColumnOf(t.Table, "manager_id") }
+func (t staffTable) Email() query.ColumnRef     { return rasql.ColumnOf(t.Table, "email") }
 
 func (t staffTable) As(alias string) (staffTable, error) {
 	aliased, err := rasql.As(t.Table, alias)
 	if err != nil {
 		return staffTable{}, err
 	}
-	return newStaffTable(aliased), nil
+	return staffTable{Table: aliased}, nil
 }
 
 // auditedStaffTable mirrors a wrapper around a wrapper: it reaches
@@ -182,7 +174,7 @@ func staff(t *testing.T) staffTable {
 
 	table, err := rasql.TableOf[staffRow](staffDefinition())
 	require.NoError(t, err)
-	return newStaffTable(table)
+	return staffTable{Table: table}
 }
 
 // contractors is a second table, so a statement can take a staff table under
@@ -240,15 +232,58 @@ func TestMustColumn(t *testing.T) {
 	})
 }
 
+func TestColumnOf(t *testing.T) {
+	t.Run("zero ColumnRef for a nil table", func(t *testing.T) {
+		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](nil, "id"))
+	})
+
+	// A wrapper reaches every Table method through its embedded Table[T], so
+	// neither of the next two values is the nil interface, and both would
+	// dereference a nil embedded field if ColumnOf compared against nil.
+	// The zero wrapper is also what a generated As returns beside its error,
+	// so a caller who ignores that error and takes a column reference lands
+	// here.
+	t.Run("zero ColumnRef for a typed nil wrapper pointer", func(t *testing.T) {
+		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow]((*staffTable)(nil), "id"))
+	})
+
+	t.Run("zero ColumnRef for a zero wrapper value", func(t *testing.T) {
+		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](staffTable{}, "id"))
+	})
+
+	t.Run("zero ColumnRef for a column the table does not have", func(t *testing.T) {
+		table, err := rasql.TableOf[staffRow](staffDefinition())
+		require.NoError(t, err)
+
+		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf(table, "missing"))
+	})
+
+	t.Run("same ColumnRef as MustColumn on a valid table", func(t *testing.T) {
+		table, err := rasql.TableOf[staffRow](staffDefinition())
+		require.NoError(t, err)
+
+		require.Equal(t, rasql.MustColumn(table, "id"), rasql.ColumnOf(table, "id"))
+	})
+
+	t.Run("a zero generated-shape wrapper's accessor fails at Build, not a panic", func(t *testing.T) {
+		var zero staffTable
+		var err error
+		require.NotPanics(t, func() {
+			_, err = rasql.SelectFrom(staff(t)).WhereEqual(zero.ID(), 1).Build(dbForBuild(t).Dialect())
+		})
+		require.ErrorContains(t, err, "query table: table must not be nil")
+	})
+}
+
 func TestAs(t *testing.T) {
-	t.Run("rebinds every column field", func(t *testing.T) {
+	t.Run("qualifies every column accessor under the alias", func(t *testing.T) {
 		manager, err := staff(t).As("manager")
 		require.NoError(t, err)
 
 		require.Equal(t, "manager", manager.Ref().Qualifier())
-		require.Equal(t, "manager", manager.ID.Source().Qualifier())
-		require.Equal(t, "manager", manager.ManagerID.Source().Qualifier())
-		require.Equal(t, "manager", manager.Email.Source().Qualifier())
+		require.Equal(t, "manager", manager.ID().Source().Qualifier())
+		require.Equal(t, "manager", manager.ManagerID().Source().Qualifier())
+		require.Equal(t, "manager", manager.Email().Source().Qualifier())
 	})
 
 	t.Run("rejects an invalid alias", func(t *testing.T) {
@@ -262,8 +297,8 @@ func TestAs(t *testing.T) {
 		require.NoError(t, err)
 
 		statement, err := rasql.SelectFrom(employees).
-			Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
-			OrderAsc(manager.Email).
+			Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID(), manager.ID()))).
+			OrderAsc(manager.Email()).
 			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Equal(
@@ -281,7 +316,7 @@ func TestAs(t *testing.T) {
 		require.NoError(t, err)
 
 		statement, err := rasql.SelectFrom(employees).
-			Join(rasql.LeftJoin(manager, query.Equal(employees.ManagerID, manager.ID))).
+			Join(rasql.LeftJoin(manager, query.Equal(employees.ManagerID(), manager.ID()))).
 			Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, statement.SQL(), `LEFT JOIN "staff" AS "manager" ON ("staff"."manager_id" = "manager"."id")`)
@@ -383,7 +418,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			run: func(t *testing.T, table Wrapper) error {
 				employees := staff(t)
 				_, err := rasql.SelectFrom(employees).
-					Join(rasql.InnerJoin[staffRow](table, query.Equal(employees.ID, query.Bind(1)))).
+					Join(rasql.InnerJoin[staffRow](table, query.Equal(employees.ID(), query.Bind(1)))).
 					Build(dbForBuild(t).Dialect())
 				return err
 			},
@@ -394,7 +429,7 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			run: func(t *testing.T, table Wrapper) error {
 				employees := staff(t)
 				_, err := rasql.SelectFrom(employees).
-					Join(rasql.LeftJoin[staffRow](table, query.Equal(employees.ID, query.Bind(1)))).
+					Join(rasql.LeftJoin[staffRow](table, query.Equal(employees.ID(), query.Bind(1)))).
 					Build(dbForBuild(t).Dialect())
 				return err
 			},

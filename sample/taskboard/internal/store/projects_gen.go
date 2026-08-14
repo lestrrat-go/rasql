@@ -7,7 +7,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 type ProjectsRow struct {
@@ -80,42 +79,30 @@ func (r ProjectsRow) ColumnValue(name string) (any, bool) {
 // ProjectsTable is the generated table type for the "projects" table.
 type ProjectsTable struct {
 	rasql.Table[ProjectsRow]
-	ID       query.ColumnRef
-	OwnerID  query.ColumnRef
-	Name     query.ColumnRef
-	Archived query.ColumnRef
 }
 
-func newProjectsTable(table rasql.Table[ProjectsRow]) ProjectsTable {
-	return ProjectsTable{
-		Table:    table,
-		ID:       rasql.MustColumn(table, "id"),
-		OwnerID:  rasql.MustColumn(table, "owner_id"),
-		Name:     rasql.MustColumn(table, "name"),
-		Archived: rasql.MustColumn(table, "archived"),
-	}
-}
+// ID returns a reference to the "id" column.
+func (t ProjectsTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
-var projectsTable = newProjectsTable(rasql.MustTableOf[ProjectsRow](schema.MustTableDef("projects",
-	schema.InSchema("main"),
-	schema.Integer("id"),
-	schema.Integer("owner_id"),
-	schema.Text("name"),
-	schema.Boolean("archived", schema.Default("FALSE")),
-	schema.PrimaryKey("id"),
-	schema.ForeignKey("owner_id", schema.References("members", "id"), schema.OnDelete(schema.NoAction), schema.OnUpdate(schema.NoAction), schema.RelationshipNamed("Owner")),
-)))
+// OwnerID returns a reference to the "owner_id" column.
+func (t ProjectsTable) OwnerID() query.ColumnRef { return rasql.ColumnOf(t.Table, "owner_id") }
+
+// Name returns a reference to the "name" column.
+func (t ProjectsTable) Name() query.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
+
+// Archived returns a reference to the "archived" column.
+func (t ProjectsTable) Archived() query.ColumnRef { return rasql.ColumnOf(t.Table, "archived") }
 
 // Projects returns the descriptor for the "projects" table.
 func Projects() ProjectsTable {
 	return projectsTable
 }
 
-// As returns the table under alias, with every column rebound to it.
+// As returns the table under alias.
 func (t ProjectsTable) As(alias string) (ProjectsTable, error) {
 	aliased, err := rasql.As(t.Table, alias)
 	if err != nil {
 		return ProjectsTable{}, err
 	}
-	return newProjectsTable(aliased), nil
+	return ProjectsTable{Table: aliased}, nil
 }

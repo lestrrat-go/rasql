@@ -28,11 +28,11 @@ Write the example first, under `examples/`, as an `Example*` function with an `/
 go test ./examples/ -update-docs
 ```
 
-The same flag rewrites the checked-in generated files the documentation shows, `examples/store/users_gen.go` and `examples/store/user_by_email_gen.go`, which `TestGeneratedStoreIsCurrent` and `TestGeneratedQueryIsCurrent` otherwise fail on when `rasqlgen` output changes. It also rewrites `examples/schemasource/internal/store/users_gen.go`, which no page shows but `TestSchemaSourceExampleGenerates` checks the same way, by running the schemasource example through its own `go:generate` directive. The three files under `sample/taskboard/internal/store` are generated too, and no test checks them, so a generator change must also run `rm -f sample/taskboard/internal/store/.taskboard-schema.db && cd sample/taskboard/internal/store && go generate ./...`, which applies the SQLite migrations to a throwaway database and regenerates from it.
+The same flag rewrites the checked-in generated files the documentation shows, `examples/store/users_gen.go`, `examples/store/schema_gen.go`, `examples/store/schema_gen_test.go`, and `examples/store/user_by_email_gen.go`, which `TestGeneratedStoreIsCurrent` and `TestGeneratedQueryIsCurrent` otherwise fail on when `rasqlgen` output changes. It also rewrites the files under `examples/schemasource/internal/store`, which no page shows but `TestSchemaSourceExampleGenerates` checks the same way, by running the schemasource example through its own `go:generate` directive. The five files under `sample/taskboard/internal/store` are generated too, and no test checks them, so a generator change must also run `rm -f sample/taskboard/internal/store/.taskboard-schema.db && cd sample/taskboard/internal/store && go generate ./...`, which applies the SQLite migrations to a throwaway database and regenerates from it.
 
 ### Generated files outside the root module
 
-`sample/taskboard` is a separate module with its own checked-in `rasqlgen` output, and nothing in `go test ./...` regenerates or checks it. A change to the generator therefore leaves `sample/taskboard/internal/store/{members,projects,tasks}_gen.go` stale with a fully green root test run. Refresh them in the same commit:
+`sample/taskboard` is a separate module with its own checked-in `rasqlgen` output, and nothing in `go test ./...` regenerates or checks it. A change to the generator therefore leaves `sample/taskboard/internal/store/{members,projects,tasks}_gen.go`, `schema_gen.go`, and `schema_gen_test.go` stale with a fully green root test run. Refresh them in the same commit:
 
 ```sh
 cd sample/taskboard/internal/store && go generate ./...

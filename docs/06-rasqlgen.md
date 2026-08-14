@@ -35,7 +35,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 
 Supply exactly one of `-dsn` or `-source`. Direct inspection supports PostgreSQL, MySQL, and SQLite; the command bundles their `pgx`, `mysql`, and `sqlite` drivers, so nothing needs importing to use `-dsn`. PostgreSQL inspection preserves supported columns, primary keys, named unique constraints, checks, ordinary B-tree indexes, and foreign keys, including exact decimal columns (`NUMERIC`/`DECIMAL`), which generate a Go `string` field and whose generated descriptor restates the column's `Precision` and `Scale`. MySQL inspection preserves supported columns, primary keys, and ordinary indexes; SQLite inspection currently preserves supported columns and primary keys. <!-- MySQL includes ordinary indexes here; SQLite does not, and no later clause contradicts that distinction. --> A generated `schema.Decimal` call restates precision and scale positionally, and states scale even when it is `0`, because the zero value of `schema.DecimalScale` means no scale was stated and `TableDef.Validate` rejects a decimal column that states none. It reports an error when an inspected type, index, or constraint has metadata that the schema descriptor cannot reproduce, and when a PostgreSQL column is a bare, unconstrained `NUMERIC`, since PostgreSQL reports no precision for it to record.
 
-`schema` writes one file per table, named `<table>_gen.go` in lowercase. The example writes `users_gen.go` and `orders_gen.go` in `internal/store`.
+`schema` writes one file per table, named `<table>_gen.go` in lowercase, plus two files shared by the whole package: `schema_gen.go`, holding every table's runtime descriptor, and `schema_gen_test.go`, a generated test that validates them. The example writes `users_gen.go`, `orders_gen.go`, `schema_gen.go`, and `schema_gen_test.go` in `internal/store`. A rerun into the same output directory that would leave one of those per-table files behind without rewriting it is refused rather than written, on the terms [Keeping generated files current](#keeping-generated-files-current) states.
 
 When selected tables contain supported foreign keys, `rasqlgen` also emits typed relationship descriptors in those files. It uses the complete selected-table set to connect each generated file to its target, so a relationship method is emitted only when the target table is selected too. See [Relationships](02-schema.md#relationships) for the supported slice and its eager-loading behavior.
 
@@ -109,7 +109,7 @@ Both routes call the same exported entry point, `generate.WritePackage(packageNa
 
 ### What it generates
 
-For a `users` table of `id` and `email` the file declares a row type with its scan methods and its column-value method, a table type with one field per column, the descriptor, and a table accessor:
+For a `users` table of `id` and `email` the per-table file declares a row type with its scan methods and its column-value method, a table type with one accessor method per column, and a table accessor:
 
 <!-- INCLUDE(examples/store/users_gen.go) -->
 ```go
@@ -122,7 +122,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 type UsersRow struct {
@@ -177,42 +176,62 @@ func (r UsersRow) ColumnValue(name string) (any, bool) {
 // UsersTable is the generated table type for the "users" table.
 type UsersTable struct {
 	rasql.Table[UsersRow]
-	ID    query.ColumnRef
-	Email query.ColumnRef
 }
 
-func newUsersTable(table rasql.Table[UsersRow]) UsersTable {
-	return UsersTable{
-		Table: table,
-		ID:    rasql.MustColumn(table, "id"),
-		Email: rasql.MustColumn(table, "email"),
-	}
-}
+// ID returns a reference to the "id" column.
+func (t UsersTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
-var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef("users",
-	schema.Integer("id"),
-	schema.Text("email"),
-	schema.PrimaryKey("id"),
-)))
+// Email returns a reference to the "email" column.
+func (t UsersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {
 	return usersTable
 }
 
-// As returns the table under alias, with every column rebound to it.
+// As returns the table under alias.
 func (t UsersTable) As(alias string) (UsersTable, error) {
 	aliased, err := rasql.As(t.Table, alias)
 	if err != nil {
 		return UsersTable{}, err
 	}
-	return newUsersTable(aliased), nil
+	return UsersTable{Table: aliased}, nil
 }
 ```
 source: [examples/store/users_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/users_gen.go)
 <!-- END INCLUDE -->
 
-`store.Users()` returns a `store.UsersTable`, ready for `rasql.SelectFrom`, `rasql.Insert`, and `rasql.Update` because it embeds `rasql.Table[store.UsersRow]`. Its column fields are what the typed builders take: `store.Users().ID` is a `query.ColumnRef`, so `WhereEqual(users.ID, 1)` cannot name a column the table does not have. `store.Users().Ref()` gives the `query.TableRef` the lower-level API takes.
+The package's `schema_gen.go` holds every table's runtime descriptor:
+
+<!-- INCLUDE(examples/store/schema_gen.go) -->
+```go
+// Code generated by rasqlgen; DO NOT EDIT.
+
+package store
+
+import (
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/schema"
+)
+
+var usersDef = schema.TableDef{
+	Name: "users",
+	Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "email", Type: schema.TextType{}},
+	},
+	PrimaryKey: []string{"id"},
+}
+
+var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}
+
+// UsersDef returns a copy of the descriptor for the "users" table.
+func UsersDef() schema.TableDef { return usersDef.Clone() }
+```
+source: [examples/store/schema_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/schema_gen.go)
+<!-- END INCLUDE -->
+
+`store.Users()` returns a `store.UsersTable`, ready for `rasql.SelectFrom`, `rasql.Insert`, and `rasql.Update` because it embeds `rasql.Table[store.UsersRow]`. Its column accessors are what the typed builders take: `store.Users().ID()` is a `query.ColumnRef`, so `WhereEqual(users.ID(), 1)` cannot name a column the table does not have. `store.Users().Ref()` gives the `query.TableRef` the lower-level API takes, and `store.UsersDef()` hands back a copy of the descriptor.
 
 ### Generated relationships
 
@@ -311,7 +330,7 @@ A `userWithRole` satisfies `rasql.DestinationScanner` through the promoted `Scan
 
 Embedding promotes `ColumnValue` in the same way, and the write side reads it differently. `Insert` and `Update` map a struct that embeds a `ColumnValuer`, carries `rasql` tags of its own, and declares no `ColumnValue` by those tags, because a promoted `ColumnValue` reports the embedded values and knows nothing about the tagged fields around them. A wrapper that tags nothing is still mapped by its promoted `ColumnValue`. Declaring `ColumnValue` on the outer type maps such a wrapper by method again.
 
-### What the column fields catch
+### What the column accessors catch
 
 A column named by a string is checked when the statement is built, so these two lines are indistinguishable until then:
 
@@ -330,27 +349,27 @@ The typed builder takes a `query.ColumnRef` instead, so the same typo stops at t
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#typed_column) -->
 ```go
 users := store.Users()
-built, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Build(dialect.PostgreSQL())
+built, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).Build(dialect.PostgreSQL())
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->
 
-Writing `users.Emial` in place of `users.ID` there does not reach a build at all:
+Writing `users.Emial()` in place of `users.ID()` there does not reach a build at all:
 
 ```
 users.Emial undefined (type UsersTable has no field or method Emial)
 ```
 
-Passing a name instead of a field does not compile either:
+Passing a name instead of an accessor call does not compile either:
 
 ```
 cannot use "id" (untyped string constant) as query.ColumnRef value in argument to
 rasql.SelectFrom(users).WhereEqual
 ```
 
-Three things make that work. The generator derives each field from the same descriptor it renders SQL from, so the field list and the table cannot drift apart. The builders accept a `query.ColumnRef` rather than a name, so there is no string left to misspell. Each field is bound to its table once, when the table value is built, which is why `As` rebuilds them and an aliased table qualifies its columns correctly.
+Three things make that work. The generator derives each accessor from the same descriptor it renders SQL from, so the accessor list and the table cannot drift apart. The builders accept a `query.ColumnRef` rather than a name, so there is no string left to misspell. Each accessor reads the table value it is called on, rather than a value bound once when the table was built, which is why an aliased table's accessors qualify its columns correctly with nothing to rebind.
 
-The payoff arrives at the next migration. Drop or rename a column, regenerate, and every use of the old field stops compiling, instead of failing one query at a time in production.
+The payoff arrives at the next migration. Drop or rename a column, regenerate, and every call to the old accessor method stops compiling, instead of failing one query at a time in production.
 
 Three mistakes still reach run time. A column of another table is a valid `query.ColumnRef`, so it compiles and fails when the statement is built:
 
@@ -390,7 +409,7 @@ An `integer` column that sets `Unsigned` generates a `uint64` field rather than 
 
 A `text` column that states a `Width` still generates a plain `string` field, but the generated descriptor restates `schema.Width(n)`, so regenerating keeps the same bound instead of an unbounded column. A fixed-width column restates `schema.Fixed()` alongside it, so regenerating a column inspected from a live `CHAR(n)`/`CHARACTER(n)` column keeps rendering `CHAR(n)` instead of reverting to `VARCHAR(n)`. See [Text column width](02-schema.md#text-column-width) for how MySQL and PostgreSQL inspection preserve both, and why MySQL needs a width to index such a column at all.
 
-The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because those belong to the row type's own scan and mapping methods.
+The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods. A table also fails when its accessor would spell the fixed function name `schema_gen_test.go` declares, since one run would otherwise write that identifier into two files of the same package; the error names the identifier.
 
 ## `rasqlgen query`
 
@@ -403,7 +422,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen query \
   -output internal/store/user_by_email_gen.go
 ```
 
-Every flag is required. `-dialect` accepts `postgresql` (or `postgres`), `mysql`, and `sqlite`. The package, function, and bind names must be usable Go identifiers. The function name cannot be `init`, and `main` cannot be generated in package `main`. `-output` must end in `_gen.go`. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
+Every flag is required. `-dialect` accepts `postgresql` (or `postgres`), `mysql`, and `sqlite`. The package, function, and bind names must be usable Go identifiers. The function name cannot be `init`, and `main` cannot be generated in package `main`. `-output` must end in `_gen.go`, and must name a file `rasqlgen` itself wrote if it exists at all, on the terms [Keeping generated files current](#keeping-generated-files-current) states. `-input` is capped at 64 MiB; a larger file is rejected before it is parsed.
 
 The input is a static template, so it holds SQL text plus `{{bind "name"}}` actions and nothing else:
 
@@ -444,6 +463,12 @@ Put the command in a `go:generate` line beside the package it writes into. The s
 ```
 source: [sample/taskboard/internal/store/generate.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/generate.go)
 <!-- END INCLUDE -->
+
+`rasqlgen` replaces only files it wrote itself. Every file it writes opens with the line `// Code generated by rasqlgen; DO NOT EDIT.`, and a destination that already exists must open with that same line. A destination holding anything else stops the run with an error naming the file, so a hand-written file that happens to sit where generated output lands is never destroyed. A `schema` run checks every file it is about to write before it writes the first one, so that refusal cannot leave a package with some files regenerated and the rest as they were. Regenerating output from an earlier run is unaffected, since that output carries the line.
+
+One `schema` run has to write every `<table>_gen.go` file the package already holds. The run rewrites `schema_gen.go` from the tables it was given, so a table left out loses its descriptor there while the `<table>_gen.go` file generated for it earlier stays behind reading it, and the package stops compiling. A run that would end that way refuses before writing anything, naming the file it would strand: generate every table the package needs in one run, or delete that file first. `rasqlgen` never deletes a file itself. A query file generated into the same directory is unaffected, since it declares no descriptor and reads none.
+
+What the run has to match is the file an earlier table generated, not the name it was generated under. A file is named after the table in lowercase, so a table renamed only in its case — `Users` to `users` — still generates `users_gen.go` and still declares `usersTable`: the rerun rewrites what is already there and is allowed. A rename that changes the file is not, even when the two names share a descriptor value: `APIKeys` generates `apikeys_gen.go` and `api_keys` generates `api_keys_gen.go`, so a rerun under the second name would leave both files declaring the same types. It is refused with the older file named, and deleting that file is what lets the rename through.
 
 `rasqlgen` never writes a generated file in place. It writes a temporary file beside each table or query file and renames it over the destination only after the write succeeds, so a failed run leaves an existing file untouched. Existing files keep their permission bits and sticky bit. On Unix platforms that replacement is atomic. Schema output directories must already exist; a symbolic link to a directory is allowed.
 

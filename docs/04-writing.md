@@ -137,26 +137,18 @@ func (r defaultUserRow) ColumnValue(name string) (any, bool) {
 
 type defaultUsersTable struct {
 	rasql.Table[defaultUserRow]
-	ID     query.ColumnRef
-	Email  query.ColumnRef
-	Status query.ColumnRef
 }
 
-func newDefaultUsersTable(table rasql.Table[defaultUserRow]) defaultUsersTable {
-	return defaultUsersTable{
-		Table:  table,
-		ID:     rasql.MustColumn(table, "id"),
-		Email:  rasql.MustColumn(table, "email"),
-		Status: rasql.MustColumn(table, "status"),
-	}
-}
+func (t defaultUsersTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
+func (t defaultUsersTable) Email() query.ColumnRef  { return rasql.ColumnOf(t.Table, "email") }
+func (t defaultUsersTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
 
-var defaultUsers = newDefaultUsersTable(rasql.MustTableOf[defaultUserRow](schema.MustTableDef("default_users",
+var defaultUsers = defaultUsersTable{rasql.MustTableOf[defaultUserRow](schema.MustTableDef("default_users",
 	schema.Integer("id"),
 	schema.Text("email"),
 	schema.Text("status", schema.Default("'pending'")),
 	schema.PrimaryKey("id"),
-)))
+))}
 
 func Example_rasql_insert_defaults() {
 	ctx := context.Background()
@@ -187,7 +179,7 @@ func Example_rasql_insert_defaults() {
 	}
 
 	// SQL: SELECT default_users.id, default_users.email, default_users.status FROM default_users WHERE default_users.id = ? (argument: 1)
-	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx, db)
+	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID(), 1).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query default user: %s\n", err)
 		return
@@ -259,7 +251,7 @@ func Example_rasql_update() {
 	}
 
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).One(ctx, db)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
@@ -335,7 +327,7 @@ func Example_rasql_delete() {
 
 	// WhereEqual takes a column of the target table and binds the value.
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, db)
+	result, err := rasql.DeleteFrom(users).WhereEqual(users.ID(), 1).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -349,7 +341,7 @@ func Example_rasql_delete() {
 
 	// Where takes any predicate built through the query package.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID, query.Bind(2))).Exec(ctx, db)
+	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID(), query.Bind(2))).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return
@@ -398,12 +390,12 @@ A delete matches whatever the predicate matches, so it is not tied to a primary 
 
 <!-- INCLUDE(examples/rasql_partial_update_example_test.go#partial_update) -->
 ```go
-statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email, query.Bind("ada@example.com")))
+statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email(), query.Bind("ada@example.com")))
 if err != nil {
 	fmt.Printf("failed to build update: %s\n", err)
 	return
 }
-statement, err = statement.WithWhere(query.LessThan(users.ID, query.Bind(100)))
+statement, err = statement.WithWhere(query.LessThan(users.ID(), query.Bind(100)))
 if err != nil {
 	fmt.Printf("failed to filter update: %s\n", err)
 	return
@@ -473,12 +465,12 @@ func Example_rasql_returning() {
 
 	// id is assigned by the database and status by its column default, so both
 	// are named in the RETURNING clause alongside the column that was set.
-	statement, err := query.NewInsert(defaultUsers.Ref(), []query.ColumnRef{defaultUsers.Email}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(defaultUsers.Ref(), []query.ColumnRef{defaultUsers.Email()}, []query.Expression{query.Bind("ada@example.com")})
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	statement, err = statement.WithReturning(query.Project(defaultUsers.ID), query.Project(defaultUsers.Email), query.Project(defaultUsers.Status))
+	statement, err = statement.WithReturning(query.Project(defaultUsers.ID()), query.Project(defaultUsers.Email()), query.Project(defaultUsers.Status()))
 	if err != nil {
 		fmt.Printf("failed to add RETURNING clause: %s\n", err)
 		return
@@ -508,8 +500,8 @@ A fluent delete uses the same dynamic and typed terminals:
 <!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_dynamic) -->
 ```go
 builder := dynamic.DeleteFrom(users.Ref()).
-	WhereEqual(users.ID, 42).
-	Returning(query.Project(users.ID), query.Project(users.Email))
+	WhereEqual(users.ID(), 42).
+	Returning(query.Project(users.ID()), query.Project(users.Email()))
 
 rows, err := builder.Query(ctx, db)
 ```
@@ -524,8 +516,8 @@ and `QueryWriteOne[T]`. Use one terminal per builder:
 <!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_typed) -->
 ```go
 typed := rasql.DeleteFrom(users).
-	WhereEqual(users.ID, 43).
-	Returning(query.Project(users.ID), query.Project(users.Email))
+	WhereEqual(users.ID(), 43).
+	Returning(query.Project(users.ID()), query.Project(users.Email()))
 
 deleted, err := rasql.QueryDeleteOne[UserRow](ctx, db, typed)
 ```
@@ -643,7 +635,7 @@ func Example_rasql_transaction() {
 	// The same builder shape that runs against db also runs against tx: it
 	// reads the two rows written above, before they are committed.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, tx)
+	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID()).All(ctx, tx)
 	if err != nil {
 		fmt.Printf("failed to query users in transaction: %s\n", err)
 		return
@@ -660,7 +652,7 @@ func Example_rasql_transaction() {
 	// connection, and the transaction holds it until Commit or Rollback
 	// releases it back to the pool.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID).All(ctx, db)
+	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID()).All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users after commit: %s\n", err)
 		return

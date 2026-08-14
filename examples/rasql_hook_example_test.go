@@ -61,7 +61,7 @@ func Example_rasql_hook() {
 	}
 
 	// A delete carrying a predicate renders different SQL, so the hook lets it through.
-	if _, err := rasql.DeleteFrom(users).WhereEqual(users.ID, 1).Exec(ctx, db); err != nil {
+	if _, err := rasql.DeleteFrom(users).WhereEqual(users.ID(), 1).Exec(ctx, db); err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
 	}

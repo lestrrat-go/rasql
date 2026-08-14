@@ -7,7 +7,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 type MembersRow struct {
@@ -71,39 +70,27 @@ func (r MembersRow) ColumnValue(name string) (any, bool) {
 // MembersTable is the generated table type for the "members" table.
 type MembersTable struct {
 	rasql.Table[MembersRow]
-	ID    query.ColumnRef
-	Name  query.ColumnRef
-	Email query.ColumnRef
 }
 
-func newMembersTable(table rasql.Table[MembersRow]) MembersTable {
-	return MembersTable{
-		Table: table,
-		ID:    rasql.MustColumn(table, "id"),
-		Name:  rasql.MustColumn(table, "name"),
-		Email: rasql.MustColumn(table, "email"),
-	}
-}
+// ID returns a reference to the "id" column.
+func (t MembersTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
-var membersTable = newMembersTable(rasql.MustTableOf[MembersRow](schema.MustTableDef("members",
-	schema.InSchema("main"),
-	schema.Integer("id"),
-	schema.Text("name"),
-	schema.Text("email"),
-	schema.PrimaryKey("id"),
-	schema.Unique("email"),
-)))
+// Name returns a reference to the "name" column.
+func (t MembersTable) Name() query.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
+
+// Email returns a reference to the "email" column.
+func (t MembersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
 
 // Members returns the descriptor for the "members" table.
 func Members() MembersTable {
 	return membersTable
 }
 
-// As returns the table under alias, with every column rebound to it.
+// As returns the table under alias.
 func (t MembersTable) As(alias string) (MembersTable, error) {
 	aliased, err := rasql.As(t.Table, alias)
 	if err != nil {
 		return MembersTable{}, err
 	}
-	return newMembersTable(aliased), nil
+	return MembersTable{Table: aliased}, nil
 }

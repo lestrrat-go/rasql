@@ -35,26 +35,18 @@ func (r defaultUserRow) ColumnValue(name string) (any, bool) {
 
 type defaultUsersTable struct {
 	rasql.Table[defaultUserRow]
-	ID     query.ColumnRef
-	Email  query.ColumnRef
-	Status query.ColumnRef
 }
 
-func newDefaultUsersTable(table rasql.Table[defaultUserRow]) defaultUsersTable {
-	return defaultUsersTable{
-		Table:  table,
-		ID:     rasql.MustColumn(table, "id"),
-		Email:  rasql.MustColumn(table, "email"),
-		Status: rasql.MustColumn(table, "status"),
-	}
-}
+func (t defaultUsersTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
+func (t defaultUsersTable) Email() query.ColumnRef  { return rasql.ColumnOf(t.Table, "email") }
+func (t defaultUsersTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
 
-var defaultUsers = newDefaultUsersTable(rasql.MustTableOf[defaultUserRow](schema.MustTableDef("default_users",
+var defaultUsers = defaultUsersTable{rasql.MustTableOf[defaultUserRow](schema.MustTableDef("default_users",
 	schema.Integer("id"),
 	schema.Text("email"),
 	schema.Text("status", schema.Default("'pending'")),
 	schema.PrimaryKey("id"),
-)))
+))}
 
 func Example_rasql_insert_defaults() {
 	ctx := context.Background()
@@ -85,7 +77,7 @@ func Example_rasql_insert_defaults() {
 	}
 
 	// SQL: SELECT default_users.id, default_users.email, default_users.status FROM default_users WHERE default_users.id = ? (argument: 1)
-	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID, 1).One(ctx, db)
+	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID(), 1).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query default user: %s\n", err)
 		return

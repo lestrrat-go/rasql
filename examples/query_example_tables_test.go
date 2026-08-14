@@ -13,34 +13,28 @@ type UserRow struct {
 	Email string `rasql:"email"`
 }
 
-// UsersTable embeds the typed table and exposes one field per column, so a
-// mistyped column name fails to compile instead of failing at run time.
+// UsersTable embeds the typed table and exposes one accessor method per
+// column, so a mistyped column name fails to compile instead of failing at
+// run time.
 type UsersTable struct {
 	rasql.Table[UserRow]
-	ID    query.ColumnRef
-	Email query.ColumnRef
 }
 
-func newUsersTable(table rasql.Table[UserRow]) UsersTable {
-	return UsersTable{
-		Table: table,
-		ID:    rasql.MustColumn(table, "id"),
-		Email: rasql.MustColumn(table, "email"),
-	}
-}
+func (t UsersTable) ID() query.ColumnRef    { return rasql.ColumnOf(t.Table, "id") }
+func (t UsersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
 
-// users keeps the generated row type and its column references together.
-var users = newUsersTable(rasql.MustTableOf[UserRow](schema.MustTableDef("users",
+// users keeps the generated row type and its table value together.
+var users = UsersTable{rasql.MustTableOf[UserRow](schema.MustTableDef("users",
 	schema.Integer("id"),
 	schema.Text("email"),
 	schema.PrimaryKey("id"),
-)))
+))}
 
-// As returns the table under alias, with every column rebound to it.
+// As returns the table under alias.
 func (t UsersTable) As(alias string) (UsersTable, error) {
 	aliased, err := rasql.As(t.Table, alias)
 	if err != nil {
 		return UsersTable{}, err
 	}
-	return newUsersTable(aliased), nil
+	return UsersTable{Table: aliased}, nil
 }

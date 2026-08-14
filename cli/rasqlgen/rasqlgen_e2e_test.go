@@ -10,6 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestGoRunSchemaGeneratesCompilableSource runs the command the way a
+// consumer does, through go run against a module that replaces rasql, and
+// requires the package it writes to build and test. The second half requires
+// the same of the package a narrowed rerun leaves behind, which is the case
+// the orphan guard exists for.
 func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
 	directory := t.TempDir()
 	repository, err := filepath.Abs(filepath.Join("..", ".."))
@@ -43,14 +48,72 @@ func TestGoRunSchemaGeneratesCompilableSource(t *testing.T) {
 
 	source, err := os.ReadFile(usersOutput)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "var usersTable = newUsersTable(rasql.MustTableOf[UsersRow](schema.MustTableDef(\"users\",")
 	require.Contains(t, string(source), "func Users() UsersTable {")
-	require.Contains(t, string(source), "\tID query.ColumnRef\n")
+	require.Contains(t, string(source), `func (t UsersTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }`)
 	require.Contains(t, string(source), "func (t UsersTable) As(alias string) (UsersTable, error) {")
 	orders, err := os.ReadFile(ordersOutput)
 	require.NoError(t, err)
 	require.Contains(t, string(orders), "func Orders() OrdersTable {")
 	require.NotContains(t, string(orders), "func Users() UsersTable {")
+	descriptor, err := os.ReadFile(filepath.Join(outputDirectory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), "var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}")
+
+	command = exec.CommandContext(t.Context(), "go", "test", "./...")
+	command.Dir = consumer
+	commandOutput, err = command.CombinedOutput()
+	require.NoError(t, err, string(commandOutput))
+
+	// Rerunning for one of the two tables would rewrite schema_gen.go
+	// without the orders descriptor and leave orders_gen.go reading it, so
+	// the run refuses and the package the first run produced still builds.
+	command = exec.CommandContext(t.Context(), "go", "run", "github.com/lestrrat-go/rasql/cmd/rasqlgen", "schema", "-dsn", databasePath, "-dialect", "sqlite", "-table", "users", "-package", "store", "-output", outputDirectory)
+	command.Dir = consumer
+	commandOutput, err = command.CombinedOutput()
+	require.Error(t, err, string(commandOutput))
+	require.Contains(t, string(commandOutput), "orders_gen.go was generated for table \"orders\"")
+
+	command = exec.CommandContext(t.Context(), "go", "test", "./...")
+	command.Dir = consumer
+	commandOutput, err = command.CombinedOutput()
+	require.NoError(t, err, string(commandOutput))
+
+	// The same rerun succeeds once the file it named is gone, and what it
+	// leaves compiles as well.
+	require.NoError(t, os.Remove(ordersOutput))
+	command = exec.CommandContext(t.Context(), "go", "run", "github.com/lestrrat-go/rasql/cmd/rasqlgen", "schema", "-dsn", databasePath, "-dialect", "sqlite", "-table", "users", "-package", "store", "-output", outputDirectory)
+	command.Dir = consumer
+	commandOutput, err = command.CombinedOutput()
+	require.NoError(t, err, string(commandOutput))
+
+	command = exec.CommandContext(t.Context(), "go", "test", "./...")
+	command.Dir = consumer
+	commandOutput, err = command.CombinedOutput()
+	require.NoError(t, err, string(commandOutput))
+
+	// A table whose only change is its case generates the same users_gen.go
+	// and the same usersTable value, so the run rewrites what is there
+	// rather than stranding it, and the guard has to let it through. This is
+	// what a migration that recased a table leaves behind, and the package
+	// it produces has to build like any other.
+	renamedPath := filepath.Join(consumer, "renamed.db")
+	database, err = sql.Open("sqlite", renamedPath)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE Users (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	command = exec.CommandContext(t.Context(), "go", "run", "github.com/lestrrat-go/rasql/cmd/rasqlgen", "schema", "-dsn", renamedPath, "-dialect", "sqlite", "-table", "Users", "-package", "store", "-output", outputDirectory)
+	command.Dir = consumer
+	commandOutput, err = command.CombinedOutput()
+	require.NoError(t, err, string(commandOutput))
+
+	descriptor, err = os.ReadFile(filepath.Join(outputDirectory, "schema_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(descriptor), `func UsersDef() schema.TableDef`)
+	require.Contains(t, string(descriptor), `"Users"`)
+	require.Contains(t, string(descriptor), "var usersTable = UsersTable{")
+	require.NoFileExists(t, ordersOutput)
 
 	command = exec.CommandContext(t.Context(), "go", "test", "./...")
 	command.Dir = consumer

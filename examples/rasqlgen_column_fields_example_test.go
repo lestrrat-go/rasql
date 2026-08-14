@@ -11,8 +11,8 @@ import (
 
 // Example_rasqlgen_column_fields contrasts the two ways to name a column. A
 // string is checked when the statement is rendered, so a typo survives until
-// then; a generated column field is checked by the compiler, so the same typo
-// never builds.
+// then; a generated column accessor is checked by the compiler, so the same
+// typo never builds.
 func Example_rasqlgen_column_fields() {
 	// BEGIN(string_column)
 	correct := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("id", 42)
@@ -32,7 +32,7 @@ func Example_rasqlgen_column_fields() {
 
 	// BEGIN(typed_column)
 	users := store.Users()
-	built, err := rasql.SelectFrom(users).WhereEqual(users.ID, 42).Build(dialect.PostgreSQL())
+	built, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).Build(dialect.PostgreSQL())
 	// END(typed_column)
 	if err != nil {
 		fmt.Printf("failed to build the typed select: %s\n", err)
