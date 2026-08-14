@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -14,6 +15,32 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+// postgreSQLNormalizedFahrenheitExpression and
+// mysqlNormalizedFahrenheitExpression are what PostgreSQL and MySQL
+// actually report back for "celsius * 9 / 5 + 32", not the text as typed:
+// both engines re-serialize a generated column's expression from its own
+// parsed, normalized internal form rather than echoing the source. See the
+// "server-normalized" note in docs/02-schema.md's Generated columns section
+// for why an exact string match, not a substring or non-empty check, is the
+// right assertion here -- these two constants are precisely the fact that
+// note exists to document.
+const (
+	postgreSQLNormalizedFahrenheitExpression = "(((celsius * 9) / 5) + 32)"
+	mysqlNormalizedFahrenheitExpression      = "(((`celsius` * 9) / 5) + 32)"
+)
+
+// requireMentionsCelsius is the engine-neutral property both normalized
+// forms above still satisfy: the recorded expression is non-empty and still
+// names the column it derives from, whatever punctuation the server wrapped
+// around it. It supplements, rather than replaces, the exact per-engine
+// assertions: a property check alone would not catch a server silently
+// starting to report a different expression.
+func requireMentionsCelsius(t *testing.T, expression string) {
+	t.Helper()
+	require.NotEmpty(t, expression, "a generated column's expression must not be recorded as empty")
+	require.True(t, strings.Contains(expression, "celsius"), "expression %q must mention the celsius column it derives from", expression)
+}
 
 // postgreSQLLiveServerVersion reads the live server's server_version_num,
 // the same integer form inspect.go itself parses (see
@@ -56,8 +83,9 @@ func TestPostgreSQLInspectorRecordsGeneratedColumnAgainstLiveDatabase(t *testing
 
 	fahrenheit, ok := columnNamed(table.Columns, "fahrenheit")
 	require.True(t, ok, "inspected table has a fahrenheit column")
-	require.Equal(t, "celsius * 9 / 5 + 32", fahrenheit.GeneratedExpression,
-		"the live catalog's generation_expression must round-trip verbatim")
+	requireMentionsCelsius(t, fahrenheit.GeneratedExpression)
+	require.Equal(t, postgreSQLNormalizedFahrenheitExpression, fahrenheit.GeneratedExpression,
+		"generation_expression comes back as PostgreSQL's own normalized, fully parenthesized form, not the source text")
 	require.Equal(t, schema.GeneratedStored, fahrenheit.GeneratedStorage,
 		"pg_catalog.pg_attribute.attgenerated must report a STORED column as such")
 	require.Empty(t, fahrenheit.Default,
@@ -75,7 +103,9 @@ func TestPostgreSQLInspectorRecordsGeneratedColumnAgainstLiveDatabase(t *testing
 
 	virtualFahrenheit, ok := columnNamed(virtualTable.Columns, "fahrenheit")
 	require.True(t, ok, "inspected virtual table has a fahrenheit column")
-	require.Equal(t, "celsius * 9 / 5 + 32", virtualFahrenheit.GeneratedExpression)
+	requireMentionsCelsius(t, virtualFahrenheit.GeneratedExpression)
+	require.Equal(t, postgreSQLNormalizedFahrenheitExpression, virtualFahrenheit.GeneratedExpression,
+		"a VIRTUAL column's generation_expression is normalized the same way a STORED one's is")
 	require.Equal(t, schema.GeneratedVirtual, virtualFahrenheit.GeneratedStorage,
 		"pg_catalog.pg_attribute.attgenerated must report a VIRTUAL column as such on PostgreSQL 18+")
 }
@@ -106,14 +136,17 @@ func TestMySQLInspectorRecordsGeneratedColumnsAgainstLiveDatabase(t *testing.T) 
 
 	stored, ok := columnNamed(table.Columns, "fahrenheit_stored")
 	require.True(t, ok, "inspected table has a fahrenheit_stored column")
-	require.Equal(t, "celsius * 9 / 5 + 32", stored.GeneratedExpression,
-		"the live catalog's GENERATION_EXPRESSION must round-trip verbatim")
+	requireMentionsCelsius(t, stored.GeneratedExpression)
+	require.Equal(t, mysqlNormalizedFahrenheitExpression, stored.GeneratedExpression,
+		"GENERATION_EXPRESSION comes back as MySQL's own normalized, fully parenthesized, backtick-quoted form, not the source text")
 	require.Equal(t, schema.GeneratedStored, stored.GeneratedStorage,
 		"EXTRA reporting \"STORED GENERATED\" must map to schema.GeneratedStored")
 
 	virtual, ok := columnNamed(table.Columns, "fahrenheit_virtual")
 	require.True(t, ok, "inspected table has a fahrenheit_virtual column")
-	require.Equal(t, "celsius * 9 / 5 + 32", virtual.GeneratedExpression)
+	requireMentionsCelsius(t, virtual.GeneratedExpression)
+	require.Equal(t, mysqlNormalizedFahrenheitExpression, virtual.GeneratedExpression,
+		"a VIRTUAL column's GENERATION_EXPRESSION is normalized the same way a STORED one's is")
 	require.Equal(t, schema.GeneratedVirtual, virtual.GeneratedStorage,
 		"EXTRA reporting \"VIRTUAL GENERATED\" must map to schema.GeneratedVirtual")
 }
