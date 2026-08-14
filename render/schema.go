@@ -92,6 +92,63 @@ func (e *UnsupportedExpressionIndexError) Unwrap() error {
 	return ErrUnsupportedExpressionIndex
 }
 
+// ErrUnsupportedForeignKeyMatch is the sentinel wrapped by every
+// [UnsupportedForeignKeyMatchError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedForeignKeyMatch = errors.New("render: unsupported foreign key match type")
+
+// UnsupportedForeignKeyMatchError reports that a ForeignKeyDef names a
+// non-default [schema.MatchType]. inspect can describe such a foreign key,
+// and TableDef.Validate accepts it, but this package does not yet know how
+// to build DDL for anything other than a plain MATCH SIMPLE foreign key.
+type UnsupportedForeignKeyMatchError struct {
+	// ForeignKey is the name of the foreign key that named a non-default
+	// match type.
+	ForeignKey string
+	// Match is the non-default match type the foreign key named.
+	Match schema.MatchType
+}
+
+func (e *UnsupportedForeignKeyMatchError) Error() string {
+	return fmt.Sprintf("foreign key %q uses MATCH %s, which rasql can describe but not yet render", e.ForeignKey, e.Match)
+}
+
+// Unwrap exposes ErrUnsupportedForeignKeyMatch so
+// errors.Is(err, ErrUnsupportedForeignKeyMatch) works alongside errors.As
+// against *UnsupportedForeignKeyMatchError.
+func (e *UnsupportedForeignKeyMatchError) Unwrap() error {
+	return ErrUnsupportedForeignKeyMatch
+}
+
+// ErrUnsupportedForeignKeyDeferrability is the sentinel wrapped by every
+// [UnsupportedForeignKeyDeferrabilityError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedForeignKeyDeferrability = errors.New("render: unsupported foreign key deferrability")
+
+// UnsupportedForeignKeyDeferrabilityError reports that a ForeignKeyDef
+// names a non-default [schema.Deferrability]. inspect can describe such a
+// foreign key, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for anything other than a plain NOT DEFERRABLE
+// foreign key.
+type UnsupportedForeignKeyDeferrabilityError struct {
+	// ForeignKey is the name of the foreign key that named a non-default
+	// deferrability.
+	ForeignKey string
+	// Deferrable is the non-default deferrability the foreign key named.
+	Deferrable schema.Deferrability
+}
+
+func (e *UnsupportedForeignKeyDeferrabilityError) Error() string {
+	return fmt.Sprintf("foreign key %q is %s, which rasql can describe but not yet render", e.ForeignKey, e.Deferrable)
+}
+
+// Unwrap exposes ErrUnsupportedForeignKeyDeferrability so
+// errors.Is(err, ErrUnsupportedForeignKeyDeferrability) works alongside
+// errors.As against *UnsupportedForeignKeyDeferrabilityError.
+func (e *UnsupportedForeignKeyDeferrabilityError) Unwrap() error {
+	return ErrUnsupportedForeignKeyDeferrability
+}
+
 // CreateTable renders a CREATE TABLE statement for table.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
 	if isNilDialect(d) {
@@ -355,6 +412,12 @@ func (r *renderer) qualifiedReferencedTable(table schema.TableDef, key schema.Fo
 }
 
 func (r *renderer) foreignKeyDefinition(table schema.TableDef, key schema.ForeignKeyDef) (string, error) {
+	if key.Match != "" {
+		return "", &UnsupportedForeignKeyMatchError{ForeignKey: key.Name, Match: key.Match}
+	}
+	if key.Deferrable != "" {
+		return "", &UnsupportedForeignKeyDeferrabilityError{ForeignKey: key.Name, Deferrable: key.Deferrable}
+	}
 	columns, err := r.quotedNames(key.Columns)
 	if err != nil {
 		return "", err
