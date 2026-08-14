@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -169,59 +168,28 @@ func TestGeneratedStorePackageCompilesAndRuns(t *testing.T) {
 	// than the ambient one, so an offline build is what this test enforces
 	// instead of what it happens to inherit: GOPROXY=off makes a fetch fail
 	// instead of silently succeeding against whatever proxy the developer or
-	// CI has configured, and a scratch GOMODCACHE and GOCACHE stop a warm
-	// host cache from standing in for a dependency the fixture never
-	// resolved. Everything else is inherited, because the toolchain still
-	// needs PATH, HOME and the rest of its ambient environment. -modcacherw
-	// leaves the scratch module cache writable, which is what lets
-	// t.TempDir's own cleanup remove it.
-	cacheRoot := t.TempDir()
-	offlineEnvironment := append(os.Environ(),
-		"GOPROXY=off",
-		"GOMODCACHE="+filepath.Join(cacheRoot, "modcache"),
-		"GOCACHE="+filepath.Join(cacheRoot, "buildcache"),
-		"GOFLAGS=-modcacherw",
-	)
-
-	// That scratch module cache starts empty, and GOPROXY=off can never
-	// fill it, so it is populated first from this machine's own module
-	// cache, served as a file:// proxy. That step reaches no network
-	// either: a module this repository has not already downloaded is simply
-	// absent from the file proxy, so a fixture that grew a dependency the
-	// repository does not have fails here rather than fetching it.
-	download := exec.CommandContext(t.Context(), "go", "mod", "download")
-	download.Dir = moduleDir
-	downloadEnvironment := slices.Clone(offlineEnvironment)
-	downloadEnvironment = append(downloadEnvironment, "GOPROXY="+localModuleProxy(t))
-	download.Env = downloadEnvironment
-	downloadOutput, err := download.CombinedOutput()
-	require.NoErrorf(t, err, "go mod download output:\n%s", downloadOutput)
-
+	// CI has configured. Everything else is inherited, because the toolchain
+	// still needs PATH, HOME and the rest of its ambient environment.
+	//
+	// The module cache is inherited too, deliberately. A scratch GOMODCACHE
+	// would have to be filled before the offline run, and the step that
+	// fills it, "go mod download", resolves every module the copied go.mod
+	// requires rather than the ones the fixture imports. That reaches for
+	// indirect and test-only modules no package here imports, which a
+	// machine that only ever built and tested this repository never had to
+	// download, so filling the scratch cache fails there even though the
+	// fixture itself builds. Reading the inherited cache resolves only what
+	// the fixture imports, and gives up no guarantee: GOPROXY=off is what
+	// makes an unavailable module a failure, and a warm build cache cannot
+	// stand in for one, because the toolchain has to read a module's source
+	// to key the cache at all.
 	command := exec.CommandContext(t.Context(), "go", "test", "./...")
 	command.Dir = moduleDir
-	command.Env = offlineEnvironment
+	command.Env = append(os.Environ(), "GOPROXY=off")
 	output, err := command.CombinedOutput()
 	require.NoErrorf(t, err, "go test output:\n%s", output)
 	// A run that reached for a module prints "go: downloading" before
 	// GOPROXY=off refuses it, so the absence of that line is what shows the
-	// scratch cache alone satisfied the build.
+	// modules already on this machine alone satisfied the build.
 	require.NotContainsf(t, string(output), "go: downloading", "go test output:\n%s", output)
-}
-
-// localModuleProxy returns a file:// module proxy URL for this machine's own
-// Go module cache. Serving the already-downloaded cache to the scratch module
-// is what makes an offline resolve possible at all: the scratch cache can be
-// filled from it without a network fetch, and a module the cache does not hold
-// is a failure rather than a download.
-func localModuleProxy(t *testing.T) string {
-	t.Helper()
-	reported, err := exec.CommandContext(t.Context(), "go", "env", "GOMODCACHE").Output()
-	require.NoError(t, err)
-	downloadDir := filepath.ToSlash(filepath.Join(strings.TrimSpace(string(reported)), "cache", "download"))
-	// A file:// URL needs a rooted, slash-separated path, and GOMODCACHE
-	// starts with a drive letter rather than a slash on Windows.
-	if !strings.HasPrefix(downloadDir, "/") {
-		downloadDir = "/" + downloadDir
-	}
-	return "file://" + downloadDir
 }
