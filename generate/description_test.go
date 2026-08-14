@@ -37,6 +37,12 @@ func TestWriteDescriptionPackageWritesTableSourceBytes(t *testing.T) {
 	gotAggregator, err := os.ReadFile(filepath.Join(directory, "tables_gen.go"))
 	require.NoError(t, err)
 	require.Equal(t, wantAggregator, gotAggregator)
+
+	wantHints, err := schemagen.HintsSource("schemasource")
+	require.NoError(t, err)
+	gotHints, err := os.ReadFile(filepath.Join(directory, "hints.go"))
+	require.NoError(t, err)
+	require.Equal(t, wantHints, gotHints)
 }
 
 func TestWriteDescriptionPackageRejectsNoTables(t *testing.T) {

@@ -5,9 +5,15 @@ package tables
 import "github.com/lestrrat-go/rasql/schema"
 
 // Tables returns every table this package describes, in the order
-// bootstrap wrote them.
+// bootstrap wrote them, with every entry in Hints applied.
 func Tables() []schema.TableDef {
-	return []schema.TableDef{
+	tables := []schema.TableDef{
 		UsersDef(),
 	}
+	for index, table := range tables {
+		if hint, ok := Hints[table.Name]; ok {
+			tables[index] = hint.Apply(table)
+		}
+	}
+	return tables
 }
