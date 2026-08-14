@@ -1564,9 +1564,9 @@ func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
 	mock.ExpectQuery(columnsQuery).
 		WithArgs("events").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
-			AddRow("id", "bigint(20) unsigned", "NO", nil, int64(20), int64(0)).
+			AddRow("id", "bigint unsigned", "NO", nil, int64(20), int64(0)).
 			AddRow("sequence", "bigint", "NO", nil, int64(19), int64(0)))
-	expectMySQLCreateTable(mock, "events", "CREATE TABLE `events` (`id` bigint(20) unsigned NOT NULL, `sequence` bigint NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB")
+	expectMySQLCreateTable(mock, "events", "CREATE TABLE `events` (`id` bigint unsigned NOT NULL, `sequence` bigint NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB")
 	mock.ExpectQuery(primaryKeyQuery).
 		WithArgs("events").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
@@ -1590,6 +1590,67 @@ func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
 	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
 }
 
+// TestMySQLInspectorRecordsIntegerDisplayWidthAndZeroFill covers the two
+// integer modifiers inspection used to reject outright: a stated display
+// width, such as the 11 in int(11), and ZEROFILL, which implies UNSIGNED.
+// Both now round-trip through inspection instead of making the whole table
+// unrepresentable, but render.CreateTable still refuses to build DDL for
+// either: see TestCreateTableRejectsIntegerDisplayWidth and
+// TestCreateTableRejectsIntegerZeroFill in the render package for that
+// refusal.
+func TestMySQLInspectorRecordsIntegerDisplayWidthAndZeroFill(t *testing.T) {
+	tests := map[string]struct {
+		columnType string
+		want       schema.ColumnType
+	}{
+		"display width alone": {
+			columnType: "int(11)",
+			want:       schema.IntegerType{DisplayWidth: schema.NewIntegerDisplayWidth(11)},
+		},
+		"display width with unsigned": {
+			columnType: "bigint(20) unsigned",
+			want:       schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(20)},
+		},
+		"unsigned zerofill states its display width": {
+			columnType: "int(10) unsigned zerofill",
+			want:       schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(10), ZeroFill: true},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("events").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale"}).
+					AddRow("id", test.columnType, "NO", nil, int64(20), int64(0)))
+			expectMySQLCreateTable(mock, "events", "CREATE TABLE `events` (`id` "+test.columnType+" NOT NULL) ENGINE=InnoDB")
+			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+				WithArgs("events").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+			expectMySQLIndexes(mock, "events", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}))
+
+			table, err := inspector.Table(t.Context(), "events")
+			require.NoError(t, err)
+			require.Equal(t, []schema.ColumnDef{{Name: "id", Type: test.want}}, table.Columns)
+
+			_, err = render.CreateTable(dialect.MySQL(), table)
+			require.Error(t, err, "render still refuses DDL for a display width or ZEROFILL until it can build one")
+			require.ErrorContains(t, err, `"id"`)
+			require.ErrorContains(t, err, "can describe but not yet render")
+		})
+	}
+}
+
 // TestMySQLInspectorMatchesIntegerColumnTypeExactly covers the declarations
 // that look like an integer without being one this package can represent. A
 // substring test on "INT" accepted MySQL's own POINT, and it could not see the
@@ -1602,10 +1663,6 @@ func TestMySQLInspectorMatchesIntegerColumnTypeExactly(t *testing.T) {
 		"integer as a substring": {
 			columnType: "POINT",
 			wantErr:    `unsupported mysql type "POINT"`,
-		},
-		"zerofill integer": {
-			columnType: "bigint(20) unsigned zerofill",
-			wantErr:    "must carry no UNSIGNED ZEROFILL modifier",
 		},
 		"signed zerofill integer": {
 			columnType: "int(11) zerofill",
@@ -1652,16 +1709,16 @@ func TestMySQLInspectorAcceptsDocumentedIntegerSpellings(t *testing.T) {
 		want       schema.ColumnDef
 	}{
 		"bigint":                            {columnType: "bigint", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
-		"bigint with width":                 {columnType: "bigint(20)", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
+		"bigint with width":                 {columnType: "bigint(20)", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{DisplayWidth: schema.NewIntegerDisplayWidth(20)}}},
 		"bigint unsigned":                   {columnType: "bigint unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
-		"bigint width unsigned":             {columnType: "bigint(20) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
-		"int unsigned":                      {columnType: "int(10) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"bigint width unsigned":             {columnType: "bigint(20) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(20)}}},
+		"int unsigned":                      {columnType: "int(10) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(10)}}},
 		"integer alias":                     {columnType: "integer", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
 		"smallint unsigned":                 {columnType: "smallint unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
 		"mediumint":                         {columnType: "mediumint", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
 		"tinyint":                           {columnType: "tinyint", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{}}},
 		"tinyint(1) is a boolean":           {columnType: "tinyint(1)", want: schema.ColumnDef{Name: "id", Type: schema.BooleanType{}}},
-		"unsigned tinyint(1) is an integer": {columnType: "tinyint(1) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true}}},
+		"unsigned tinyint(1) is an integer": {columnType: "tinyint(1) unsigned", want: schema.ColumnDef{Name: "id", Type: schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(1)}}},
 	}
 
 	for name, test := range tests {
@@ -2595,7 +2652,6 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
 	for _, statement := range []string{
-		"CREATE TABLE generated (value INTEGER, doubled INTEGER GENERATED ALWAYS AS (value * 2) STORED)",
 		"CREATE VIRTUAL TABLE virtual_table USING rtree(id, minx, maxx, miny, maxy)",
 	} {
 		_, err = database.ExecContext(t.Context(), statement)
@@ -2608,7 +2664,6 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 		table string
 		want  string
 	}{
-		{table: "generated", want: "generated column"},
 		{table: "virtual_table", want: `table kind "virtual" is unsupported`},
 	} {
 		t.Run(test.table, func(t *testing.T) {
@@ -2726,6 +2781,66 @@ func TestSQLiteInspectorRecordsDefaultPrimaryKeyConflictResolution(t *testing.T)
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
 	require.Equal(t, schema.ConflictResolution(""), table.PrimaryKeyOnConflict)
+}
+
+// TestSQLiteInspectorRecordsGeneratedColumns covers both SQLite generated
+// column storage kinds against a real table: STORED, which SQLite writes
+// into the table, and VIRTUAL (both the explicit spelling and the implicit
+// one a bare "AS (expr)" states), which SQLite computes each time the
+// column is read. Before this feature existed, PRAGMA table_xinfo's hidden
+// flag made the whole table unrepresentable the moment it carried any
+// generated column, which is the exact failure this test proves no longer
+// happens.
+func TestSQLiteInspectorRecordsGeneratedColumns(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE measurements (
+		id INTEGER PRIMARY KEY,
+		celsius INTEGER,
+		fahrenheit_stored INTEGER GENERATED ALWAYS AS (celsius * 9 / 5 + 32) STORED,
+		fahrenheit_virtual INTEGER GENERATED ALWAYS AS (celsius * 9 / 5 + 32) VIRTUAL,
+		fahrenheit_implicit INTEGER AS (celsius * 9 / 5 + 32)
+	)`)
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "measurements")
+	require.NoError(t, err)
+	require.Equal(t, []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "celsius", Type: schema.IntegerType{}, Nullable: true},
+		{
+			Name:                "fahrenheit_stored",
+			Type:                schema.IntegerType{},
+			Nullable:            true,
+			GeneratedExpression: "celsius * 9 / 5 + 32",
+			GeneratedStorage:    schema.GeneratedStored,
+		},
+		{
+			Name:                "fahrenheit_virtual",
+			Type:                schema.IntegerType{},
+			Nullable:            true,
+			GeneratedExpression: "celsius * 9 / 5 + 32",
+			GeneratedStorage:    schema.GeneratedVirtual,
+		},
+		{
+			Name:                "fahrenheit_implicit",
+			Type:                schema.IntegerType{},
+			Nullable:            true,
+			GeneratedExpression: "celsius * 9 / 5 + 32",
+			GeneratedStorage:    schema.GeneratedVirtual,
+		},
+	}, table.Columns)
+
+	// render still refuses DDL for a generated column until it can build a
+	// GENERATED ALWAYS AS clause; see TestCreateTableRejectsGeneratedColumn
+	// in the render package for that refusal.
+	_, err = render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"fahrenheit_stored"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
 func TestSQLiteInspectorMarksTableLevelIntegerPrimaryKeysAsNonNullable(t *testing.T) {

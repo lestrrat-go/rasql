@@ -862,6 +862,90 @@ func TestCreateTableRejectsPrimaryKeyConflictResolution(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedPrimaryKeyConflictResolution)
 }
 
+// TestCreateTableRejectsGeneratedColumn proves that a ColumnDef naming a
+// GeneratedExpression, such as a live SQLite generated column inspect now
+// describes instead of rejecting, is refused at render time with a typed
+// error rather than silently rendered as a plain writable column: a
+// generated column cannot be written to at all, so that silent substitution
+// would be a worse failure than most this package refuses.
+func TestCreateTableRejectsGeneratedColumn(t *testing.T) {
+	table := schema.TableDef{
+		Name: "measurements",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "celsius", Type: schema.IntegerType{}},
+			{
+				Name:                "fahrenheit",
+				Type:                schema.IntegerType{},
+				GeneratedExpression: "celsius * 9 / 5 + 32",
+				GeneratedStorage:    schema.GeneratedStored,
+			},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"fahrenheit"`)
+	require.ErrorContains(t, err, "celsius * 9 / 5 + 32")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var generatedErr *render.UnsupportedGeneratedColumnError
+	require.ErrorAs(t, err, &generatedErr)
+	require.Equal(t, "fahrenheit", generatedErr.Column)
+	require.Equal(t, "celsius * 9 / 5 + 32", generatedErr.Expression)
+	require.Equal(t, schema.GeneratedStored, generatedErr.Storage)
+	require.ErrorIs(t, err, render.ErrUnsupportedGeneratedColumn)
+}
+
+// TestCreateTableRejectsIntegerDisplayWidth proves that an IntegerType
+// naming a stated DisplayWidth, such as the 11 in a live MySQL int(11)
+// column inspect now describes instead of rejecting, is refused at render
+// time with a typed error rather than silently rendered without it.
+func TestCreateTableRejectsIntegerDisplayWidth(t *testing.T) {
+	table := schema.TableDef{
+		Name: "counters",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "total", Type: schema.IntegerType{DisplayWidth: schema.NewIntegerDisplayWidth(11)}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := render.CreateTable(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"total"`)
+	require.ErrorContains(t, err, "11")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var widthErr *render.UnsupportedIntegerDisplayWidthError
+	require.ErrorAs(t, err, &widthErr)
+	require.Equal(t, "total", widthErr.Column)
+	require.Equal(t, 11, widthErr.Width)
+	require.ErrorIs(t, err, render.ErrUnsupportedIntegerDisplayWidth)
+}
+
+// TestCreateTableRejectsIntegerZeroFill is the ZEROFILL counterpart to
+// TestCreateTableRejectsIntegerDisplayWidth.
+func TestCreateTableRejectsIntegerZeroFill(t *testing.T) {
+	table := schema.TableDef{
+		Name: "counters",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "total", Type: schema.IntegerType{Unsigned: true, ZeroFill: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := render.CreateTable(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"total"`)
+	require.ErrorContains(t, err, "ZEROFILL")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var zeroFillErr *render.UnsupportedIntegerZeroFillError
+	require.ErrorAs(t, err, &zeroFillErr)
+	require.Equal(t, "total", zeroFillErr.Column)
+	require.ErrorIs(t, err, render.ErrUnsupportedIntegerZeroFill)
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",

@@ -669,6 +669,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		defaultValue    any
 		primaryPosition int64
 		columnType      schema.ColumnType
+		hidden          int64
 	}
 	type primaryColumn struct {
 		position int64
@@ -689,8 +690,16 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		if err := rows.Scan(&ordinal, &name, &databaseType, &notNull, &defaultValue, &primaryPosition, &hidden); err != nil {
 			return schema.TableDef{}, fmt.Errorf("inspect: scan SQLite column: %w", err)
 		}
-		if hidden != 0 {
-			return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: hidden or generated column %q is not supported", tableName, name)
+		// PRAGMA table_xinfo's hidden column reports 0 for an ordinary
+		// column, 2 for a VIRTUAL generated column, 3 for a STORED
+		// generated column, and 1 for a genuinely hidden column, the kind
+		// a virtual table module declares (such as fts5's rank column).
+		// CREATE VIRTUAL TABLE definitions are already rejected earlier in
+		// sqliteTableDefinition, so 1 should not occur for a table this
+		// package otherwise accepts; it is rejected here too rather than
+		// silently misread as an ordinary or generated column.
+		if hidden != 0 && hidden != sqliteHiddenGeneratedVirtual && hidden != sqliteHiddenGeneratedStored {
+			return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: hidden column %q is not supported", tableName, name)
 		}
 		columnType, err := normalizeType(i.dialect.Name(), databaseType, sql.NullInt64{})
 		if err != nil {
@@ -703,6 +712,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 			defaultValue:    defaultValue,
 			primaryPosition: primaryPosition,
 			columnType:      columnType,
+			hidden:          hidden,
 		})
 		if primaryPosition > 0 {
 			primaryColumns = append(primaryColumns, primaryColumn{position: primaryPosition, name: name})
@@ -740,12 +750,33 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		// signed 64-bit value however it was declared, so even a column
 		// declared UNSIGNED BIG INT is signed storage. The descriptor records
 		// that truth rather than the declaration.
-		columns = append(columns, schema.ColumnDef{
+		columnDef := schema.ColumnDef{
 			Name:     column.name,
 			Type:     column.columnType,
 			Nullable: column.notNull == 0 && (!rowIDAlias || len(primaryColumns) != 1 || column.primaryPosition <= 0),
 			Default:  text(column.defaultValue),
-		})
+		}
+		if column.hidden == sqliteHiddenGeneratedVirtual || column.hidden == sqliteHiddenGeneratedStored {
+			expression, err := sqliteGeneratedExpression(definition, column.name)
+			if err != nil {
+				return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: serialize generated column %q: %w", tableName, column.name, err)
+			}
+			if expression == "" {
+				return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: generated column %q has no GENERATED ALWAYS AS clause in its own CREATE TABLE definition", tableName, column.name)
+			}
+			columnDef.GeneratedExpression = expression
+			// The storage kind comes from PRAGMA table_xinfo's own hidden
+			// flag rather than from the parsed DDL: a bare "AS (expr)" with
+			// neither VIRTUAL nor STORED spelled out defaults to VIRTUAL, and
+			// the engine's own report is the authoritative answer rather
+			// than a spelling the DDL might have left implicit.
+			if column.hidden == sqliteHiddenGeneratedStored {
+				columnDef.GeneratedStorage = schema.GeneratedStored
+			} else {
+				columnDef.GeneratedStorage = schema.GeneratedVirtual
+			}
+		}
+		columns = append(columns, columnDef)
 	}
 	sort.Slice(primaryColumns, func(left, right int) bool {
 		return primaryColumns[left].position < primaryColumns[right].position
@@ -1586,6 +1617,43 @@ func sqliteConflictResolution(conflict sqlitequery.ConflictResolution) (schema.C
 	default:
 		return "", fmt.Errorf("UNIQUE conflict resolution %q is unsupported", conflict)
 	}
+}
+
+// PRAGMA table_xinfo's hidden column values for a generated column. See the
+// comment where they are checked in sqliteTableOnConnection for the full set
+// of values, including the genuinely hidden column value this package still
+// rejects.
+const (
+	sqliteHiddenGeneratedVirtual = 2
+	sqliteHiddenGeneratedStored  = 3
+)
+
+// sqliteGeneratedExpression returns the expression text of columnName's
+// GENERATED ALWAYS AS clause in statement, or an empty string if the column
+// has no such clause in its own CREATE TABLE definition. Only the expression
+// text comes from here; whether the column is stored or computed on read
+// comes from PRAGMA table_xinfo's own hidden flag instead (see
+// sqliteHiddenGeneratedStored), which is the engine's own authoritative
+// answer rather than a spelling the DDL might have left implicit: a bare
+// "AS (expr)" with neither VIRTUAL nor STORED defaults to VIRTUAL, and
+// sqlitequery's parser leaves that default unspelled rather than filling it
+// in.
+func sqliteGeneratedExpression(statement *sqlitequery.CreateTableStatement, columnName string) (string, error) {
+	if statement == nil {
+		return "", nil
+	}
+	for _, column := range statement.Columns {
+		if !strings.EqualFold(column.Name.Name, columnName) {
+			continue
+		}
+		for _, constraint := range column.Constraints {
+			if constraint.Kind != sqlitequery.ConstraintGenerated || constraint.Generated == nil {
+				continue
+			}
+			return sqliteExpressionSQL(constraint.Generated.Expression)
+		}
+	}
+	return "", nil
 }
 
 func sqliteChecks(statement *sqlitequery.CreateTableStatement, tableName string) ([]schema.CheckDef, error) {
@@ -2689,12 +2757,12 @@ func normalizeMySQLType(typeName string, databaseType string) (schema.ColumnType
 	if typeName == "BOOLEAN" || typeName == "BOOL" || typeName == "TINYINT(1)" {
 		return schema.BooleanType{}, nil
 	}
-	integer, unsigned, err := mysqlIntegerDeclaration(typeName, databaseType)
+	integer, unsigned, displayWidth, zeroFill, err := mysqlIntegerDeclaration(typeName, databaseType)
 	if err != nil {
 		return nil, err
 	}
 	if integer {
-		return schema.IntegerType{Unsigned: unsigned}, nil
+		return schema.IntegerType{Unsigned: unsigned, DisplayWidth: displayWidth, ZeroFill: zeroFill}, nil
 	}
 	switch {
 	case strings.Contains(typeName, "FLOAT") || strings.Contains(typeName, "DOUBLE"):
@@ -2786,11 +2854,13 @@ func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, error)
 }
 
 // mysqlIntegerDeclaration reports whether typeName, an upper-cased MySQL
-// COLUMN_TYPE, declares an integer column this package can represent, and
-// whether that column is UNSIGNED. The two results are, in order, whether the
-// declaration is an integer at all and whether it is unsigned; a declaration
-// that is not an integer reports false, false and no error, leaving the
-// caller's remaining type matches to run.
+// COLUMN_TYPE, declares an integer column this package can represent, its
+// signedness, its stated display width, and whether it carries ZEROFILL. The
+// results are, in order, whether the declaration is an integer at all,
+// whether it is unsigned, its schema.IntegerDisplayWidth, and its ZEROFILL
+// state; a declaration that is not an integer reports false, false, an
+// unstated width, false, and no error, leaving the caller's remaining type
+// matches to run.
 //
 // Like the decimal case, COLUMN_TYPE is matched as a whole declaration rather
 // than by substring. A substring test on "INT" accepts MySQL's own POINT and
@@ -2798,33 +2868,47 @@ func mysqlDecimalDeclaration(typeName string, databaseType string) (bool, error)
 // that follows the type: that is exactly how a BIGINT UNSIGNED column used to
 // become a plain signed BIGINT, losing every value above 9223372036854775807.
 // Only TINYINT, SMALLINT, MEDIUMINT, INT, INTEGER or BIGINT, optionally
-// followed by a display width and then by UNSIGNED, is an integer here.
+// followed by a display width and then by UNSIGNED and/or ZEROFILL, is an
+// integer here.
 //
-// ZEROFILL and any other trailing modifier returns an error instead, because
-// schema.ColumnDef cannot record it and a descriptor that dropped it would
-// re-render as a column with a different meaning.
-func mysqlIntegerDeclaration(typeName string, databaseType string) (bool, bool, error) {
+// ZEROFILL always implies UNSIGNED in MySQL, and the catalog always spells
+// the two together in that order, so "ZEROFILL" alone is not a shape
+// MySQL's own catalog ever produces; it, and any other trailing modifier,
+// returns an error instead, because rasql cannot represent a column whose
+// declaration it does not recognize and a descriptor that dropped an
+// unrecognized modifier would re-render as a column with a different
+// meaning.
+func mysqlIntegerDeclaration(typeName string, databaseType string) (bool, bool, schema.IntegerDisplayWidth, bool, error) {
 	base, rest := splitMySQLDeclaration(typeName)
 	switch base {
 	case "TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "BIGINT":
 	default:
-		return false, false, nil
+		return false, false, schema.IntegerDisplayWidth{}, false, nil
 	}
 
+	var displayWidth schema.IntegerDisplayWidth
 	if strings.HasPrefix(rest, "(") {
 		end := strings.Index(rest, ")")
 		if end < 0 || !validDigitRun(rest[1:end]) {
-			return false, false, fmt.Errorf("unsupported mysql type %q: an integer column must be declared %s or %s(width)", databaseType, base, base)
+			return false, false, schema.IntegerDisplayWidth{}, false, fmt.Errorf("unsupported mysql type %q: an integer column must be declared %s or %s(width)", databaseType, base, base)
 		}
+		width, err := strconv.Atoi(strings.TrimSpace(rest[1:end]))
+		if err != nil {
+			return false, false, schema.IntegerDisplayWidth{}, false, fmt.Errorf("unsupported mysql type %q: %w", databaseType, err)
+		}
+		displayWidth = schema.NewIntegerDisplayWidth(width)
 		rest = strings.TrimSpace(rest[end+1:])
 	}
-	if rest == "UNSIGNED" {
-		return true, true, nil
+	switch rest {
+	case "":
+		return true, false, displayWidth, false, nil
+	case "UNSIGNED":
+		return true, true, displayWidth, false, nil
+	case "UNSIGNED ZEROFILL":
+		return true, true, displayWidth, true, nil
+	default:
+		return false, false, schema.IntegerDisplayWidth{}, false, fmt.Errorf("mysql type %q cannot be represented: an integer column must carry no %s modifier, because rasql cannot record one and re-rendering the column without it would change the values it permits", databaseType, rest)
 	}
-	if rest != "" {
-		return false, false, fmt.Errorf("mysql type %q cannot be represented: an integer column must carry no %s modifier, because rasql cannot record one and re-rendering the column without it would change the values it permits", databaseType, rest)
-	}
-	return true, false, nil
 }
 
 // splitMySQLDeclaration cuts an upper-cased MySQL COLUMN_TYPE into its bare

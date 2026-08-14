@@ -113,7 +113,10 @@ func TestDecimalScaleJSON(t *testing.T) {
 
 	encoded, err = json.Marshal(schema.ColumnDef{Name: "id", Type: schema.IntegerType{}})
 	require.NoError(t, err)
-	require.Contains(t, string(encoded), `"Type":{"Kind":"integer","Unsigned":false}`)
+	require.Contains(t, string(encoded), `"DisplayWidth":null`)
+	require.Contains(t, string(encoded), `"Kind":"integer"`)
+	require.Contains(t, string(encoded), `"Unsigned":false`)
+	require.Contains(t, string(encoded), `"ZeroFill":false`)
 
 	var decoded schema.ColumnDef
 	require.NoError(t, json.Unmarshal([]byte(`{"Name":"amount","Type":{"Kind":"decimal","Precision":19,"Scale":0}}`), &decoded))
@@ -510,6 +513,92 @@ func TestTableValidateUnsignedColumn(t *testing.T) {
 	}
 	require.NoError(t, table.Validate())
 
+}
+
+// TestTableValidateAcceptsIntegerDisplayWidthAndZeroFill proves that an
+// IntegerType naming a stated DisplayWidth and a true ZeroFill, such as what
+// inspect now records for a live MySQL int(n) ZEROFILL column, is valid
+// input: Validate describes the column, and only render.CreateTable and the
+// migrate diff-live path refuse to build DDL for it.
+func TestTableValidateAcceptsIntegerDisplayWidthAndZeroFill(t *testing.T) {
+	table := schema.TableDef{
+		Name: "counters",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "total", Type: schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(10), ZeroFill: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	require.NoError(t, table.Validate())
+}
+
+func TestTableValidateRejectsNegativeIntegerDisplayWidth(t *testing.T) {
+	table := schema.TableDef{
+		Name: "counters",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "total", Type: schema.IntegerType{DisplayWidth: schema.NewIntegerDisplayWidth(-1)}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "must not be negative")
+}
+
+// TestTableValidateAcceptsGeneratedColumn proves that a ColumnDef naming
+// GeneratedExpression and GeneratedStorage together, such as what inspect
+// now records for a live SQLite generated column, is valid input: Validate
+// describes the column, and only render.CreateTable and the migrate
+// diff-live path refuse to build DDL for it.
+func TestTableValidateAcceptsGeneratedColumn(t *testing.T) {
+	table := validTable()
+	table.Columns[1].GeneratedExpression = "amount * 2"
+	table.Columns[1].GeneratedStorage = schema.GeneratedStored
+	require.NoError(t, table.Validate())
+}
+
+func TestTableValidateRejectsGeneratedExpressionWithoutStorage(t *testing.T) {
+	table := validTable()
+	table.Columns[1].GeneratedExpression = "amount * 2"
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "stated together")
+}
+
+func TestTableValidateRejectsGeneratedStorageWithoutExpression(t *testing.T) {
+	table := validTable()
+	table.Columns[1].GeneratedStorage = schema.GeneratedStored
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "stated together")
+}
+
+func TestTableValidateRejectsInvalidGeneratedStorage(t *testing.T) {
+	table := validTable()
+	table.Columns[1].GeneratedExpression = "amount * 2"
+	table.Columns[1].GeneratedStorage = schema.GeneratedStorage("bogus")
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "unsupported generated column storage")
+}
+
+// TestTableValidateRejectsGeneratedColumnWithDefault proves that a
+// generated column stating both GeneratedExpression and Default is
+// rejected: a generated column's value comes from its expression, and SQL
+// itself does not let a generated column also carry a DEFAULT clause.
+func TestTableValidateRejectsGeneratedColumnWithDefault(t *testing.T) {
+	table := validTable()
+	table.Columns[2].GeneratedExpression = "upper(status)"
+	table.Columns[2].GeneratedStorage = schema.GeneratedVirtual
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "must not also state a Default")
 }
 
 // TestTableValidateAcceptsTextWidth is the positive counterpart to "text
