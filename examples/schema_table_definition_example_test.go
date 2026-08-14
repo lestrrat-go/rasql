@@ -14,6 +14,12 @@ func Example_schema_table_definition() {
 	// "id" below before Integer declares it, and the assembled descriptor is
 	// the same either way. The same descriptor can later supply a reusable
 	// query.TableRef or generate DDL.
+	//
+	// RowNamed states the Go row type rasqlgen generates for the table: here
+	// it makes the row type User instead of the default UsersRow, so calling
+	// code reads store.User rather than store.UsersRow. Like RelationshipNamed
+	// below, it is a code-generation hint only — rasqlgen reads it, but
+	// nothing else in rasql does, and it never appears in rendered SQL.
 	users := schema.MustTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
@@ -24,6 +30,7 @@ func Example_schema_table_definition() {
 		schema.Unique("email"),
 		schema.Index("users_email_idx", "email"),
 		schema.Check("balance >= 0"),
+		schema.RowNamed("User"),
 	)
 
 	// A foreign key's Named, References, and OnDelete options configure the
@@ -42,11 +49,11 @@ func Example_schema_table_definition() {
 			schema.RelationshipNamed("buyer")),
 	)
 
-	fmt.Printf("%s: %d columns, primary key %v\n", users.Name, len(users.Columns), users.PrimaryKey)
+	fmt.Printf("%s: %d columns, primary key %v, row type %s\n", users.Name, len(users.Columns), users.PrimaryKey, users.RowName)
 	fmt.Printf("%s: foreign key %s references %s, relationship %q\n",
 		orders.Name, orders.ForeignKeys[0].Name, orders.ForeignKeys[0].ReferencedTable, orders.Relationships[0].Name)
 
 	// Output:
-	// users: 5 columns, primary key [id]
+	// users: 5 columns, primary key [id], row type User
 	// orders: foreign key orders_customer_fkey references customers, relationship "buyer"
 }

@@ -22,6 +22,12 @@ func Example_schema_table_definition() {
 	// "id" below before Integer declares it, and the assembled descriptor is
 	// the same either way. The same descriptor can later supply a reusable
 	// query.TableRef or generate DDL.
+	//
+	// RowNamed states the Go row type rasqlgen generates for the table: here
+	// it makes the row type User instead of the default UsersRow, so calling
+	// code reads store.User rather than store.UsersRow. Like RelationshipNamed
+	// below, it is a code-generation hint only — rasqlgen reads it, but
+	// nothing else in rasql does, and it never appears in rendered SQL.
 	users := schema.MustTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
@@ -32,6 +38,7 @@ func Example_schema_table_definition() {
 		schema.Unique("email"),
 		schema.Index("users_email_idx", "email"),
 		schema.Check("balance >= 0"),
+		schema.RowNamed("User"),
 	)
 
 	// A foreign key's Named, References, and OnDelete options configure the
@@ -50,12 +57,12 @@ func Example_schema_table_definition() {
 			schema.RelationshipNamed("buyer")),
 	)
 
-	fmt.Printf("%s: %d columns, primary key %v\n", users.Name, len(users.Columns), users.PrimaryKey)
+	fmt.Printf("%s: %d columns, primary key %v, row type %s\n", users.Name, len(users.Columns), users.PrimaryKey, users.RowName)
 	fmt.Printf("%s: foreign key %s references %s, relationship %q\n",
 		orders.Name, orders.ForeignKeys[0].Name, orders.ForeignKeys[0].ReferencedTable, orders.Relationships[0].Name)
 
 	// Output:
-	// users: 5 columns, primary key [id]
+	// users: 5 columns, primary key [id], row type User
 	// orders: foreign key orders_customer_fkey references customers, relationship "buyer"
 }
 ```
@@ -90,6 +97,7 @@ precision and scale as ordinary arguments rather than options, since
 | `schema.Index` / `schema.UniqueIndex` | A plain, or unique, secondary index over columns. |
 | `schema.ForeignKey` / `schema.ForeignKeyOn` | A foreign key over one column, or over several. |
 | `schema.InSchema` | The namespace qualifying the table. |
+| `schema.RowNamed` | The Go type name `rasqlgen` gives the row type. |
 
 `schema.ForeignKey` takes the single local column and `schema.ForeignKeyOn`
 takes a `[]string` of them for a composite key; both take the same list of
@@ -119,6 +127,7 @@ rather than a list of options:
 | --- | --- |
 | `Schema` | The optional namespace holding the table. |
 | `Name` | The table identifier. |
+| `RowName` | Optional Go type name for the generated row type; empty means `<Table>Row`. |
 | `Columns` | Each column, in the order it is declared. |
 | `PrimaryKey` | Column names from `Columns` that identify a row. |
 | `UniqueConstraints` | Named or unnamed uniqueness requirements. |
@@ -148,6 +157,12 @@ that is not immediately turned into a table.
 The generated API covers one bounded slice: a non-null single-column foreign key that targets a non-null single-column primary key with the same generated Go type. When both tables are generated in the package, the child table exposes a belongs-to method and the parent table exposes the inverse has-many method. Each relation exposes `Join` and `Load`; `Load` fetches all related rows with one secondary `IN` query and groups them by key. Callers must split very large parent slices themselves when they approach the database parameter limit.
 
 Composite keys, nullable foreign keys, nullable or non-primary target columns, many-to-many links, polymorphic links, nested preloading, and relationships whose target table is not generated in the package remain unsupported. The foreign key and its ordinary SQL join remain available for each of those cases.
+
+## Name the generated row type
+
+`rasqlgen` names the Go row type it generates for a table `<Table>Row`: a table named `users` generates `UsersRow`. `schema.RowNamed` (or `TableDef.RowName` on a struct literal) overrides that default, so a table can generate `User` instead and let calling code read `store.User` rather than `store.UsersRow` — the row type is the one generated name a caller writes throughout their own code.
+
+Nothing is guessed: `rasqlgen` never singularizes a table name to derive a row name on its own. Stripping a trailing `s` produces `Addresse` from `addresses`, `Serie` from `series`, and `Bu` from `bus`, and the bare table name does not compile as a row type either way, since `type Users` would collide with the generated `Users()` accessor. `RowName` is a code-generation hint only: no renderer, dialect, `inspect`, or `migrate` path reads it, and it never appears in rendered SQL.
 
 ## Qualify a table with a schema
 

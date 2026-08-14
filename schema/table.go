@@ -3,7 +3,10 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"go/token"
 	"slices"
+	"unicode"
+	"unicode/utf8"
 )
 
 // DecimalScale is the number of digits a DecimalType column keeps to the right
@@ -208,8 +211,21 @@ type TableDef struct {
 	// inspection remains qualified when it is rendered. SQLite inspection
 	// requires a retained connection when the descriptor addresses temp or
 	// attached data.
-	Schema            string
-	Name              string
+	Schema string
+	Name   string
+
+	// RowName overrides the Go row type rasqlgen generates for the table.
+	// The default, used when RowName is empty, is <Table>Row: a table named
+	// users generates UsersRow. RowName names a Go type, not a SQL
+	// identifier, so a non-empty value must be a valid, exported Go
+	// identifier (an ASCII letter, digit or underscore, first rune an
+	// uppercase letter, not a Go keyword) rather than legal under
+	// ValidateIdentifier's SQL rule. RowName is a code-generation hint
+	// only — no renderer, dialect, inspect, or migrate path reads it, and it
+	// never appears in rendered SQL. inspect never sets it: a live database
+	// has no opinion about Go names.
+	RowName string
+
 	Columns           []ColumnDef
 	PrimaryKey        []string
 	UniqueConstraints []UniqueDef
@@ -275,6 +291,22 @@ func (t TableDef) Column(name string) (ColumnDef, bool) {
 	return ColumnDef{}, false
 }
 
+// validateExportedGoIdentifier reports whether name is a valid, exported Go
+// identifier. RowName names a Go type the generator emits, not a SQL
+// identifier, so it is checked against Go's identifier rule (via
+// go/token.IsIdentifier, which also rejects a Go keyword) plus Go's
+// export rule, rather than against ValidateIdentifier's looser SQL rule.
+func validateExportedGoIdentifier(name string) error {
+	if !token.IsIdentifier(name) {
+		return fmt.Errorf("must be a valid Go identifier")
+	}
+	first, _ := utf8.DecodeRuneInString(name)
+	if !unicode.IsUpper(first) {
+		return fmt.Errorf("must be an exported Go identifier")
+	}
+	return nil
+}
+
 // Validate reports whether t has a valid, internally consistent descriptor.
 func (t TableDef) Validate() error {
 	if t.Schema != "" {
@@ -284,6 +316,11 @@ func (t TableDef) Validate() error {
 	}
 	if err := ValidateIdentifier(t.Name); err != nil {
 		return validationError("table", "%s", err)
+	}
+	if t.RowName != "" {
+		if err := validateExportedGoIdentifier(t.RowName); err != nil {
+			return validationError("table.row_name", "%s", err)
+		}
 	}
 	if len(t.Columns) == 0 {
 		return validationError("table", "must have at least one column")

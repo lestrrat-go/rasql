@@ -12,6 +12,7 @@ import (
 func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor := validTable()
 	descriptor.Schema = "audit"
+	descriptor.RowName = "Order"
 	descriptor.Relationships = []schema.RelationshipDef{{
 		Name:              "Customer",
 		Kind:              schema.RelationshipBelongsTo,
@@ -27,8 +28,10 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor.ForeignKeys[0].ReferencedColumns[0] = "changed"
 	descriptor.Relationships[0].Columns[0] = "changed"
 	descriptor.Schema = "changed"
+	descriptor.RowName = "changed"
 
 	require.Equal(t, "audit", table.Schema)
+	require.Equal(t, "Order", table.RowName)
 	require.Equal(t, "id", table.Columns[0].Name)
 	require.Equal(t, "id", table.PrimaryKey[0])
 	require.Equal(t, "customer_id", table.Indexes[0].Columns[0])
@@ -229,6 +232,11 @@ func TestTableValidate(t *testing.T) {
 		"invalid column type": {
 			Name:    "orders",
 			Columns: []schema.ColumnDef{{Name: "id"}},
+		},
+		"invalid row name": {
+			Name:    "orders",
+			RowName: "1bad",
+			Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		},
 		"duplicate column": {
 			Name: "orders",
@@ -462,11 +470,70 @@ func TestColumnUnsignedJSON(t *testing.T) {
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"events","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}`), &decoded))
 }
 
+// TestRowNameJSON pins the snapshot form rasqlgen's -input reads: a
+// RowName round-trips through JSON, and a snapshot written before RowName
+// existed decodes as the empty string rather than an error, the same
+// backward-compatible read TestColumnUnsignedJSON pins for Unsigned.
+func TestRowNameJSON(t *testing.T) {
+	table := schema.TableDef{
+		Name:    "users",
+		RowName: "User",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	require.NoError(t, table.Validate())
+
+	encoded, err := json.Marshal(table)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"RowName":"User"`)
+
+	var decoded schema.TableDef
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.Equal(t, table, decoded)
+
+	// A snapshot written before RowName existed omits it entirely, which
+	// decodes as the empty string rather than an error.
+	decoded = schema.TableDef{}
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"users","Columns":[{"Name":"id","Type":{"Kind":"integer"}}],"PrimaryKey":["id"]}`), &decoded))
+	require.Empty(t, decoded.RowName)
+}
+
 func TestColumnTypeJSONRejectsIrrelevantOptions(t *testing.T) {
 	var decoded schema.ColumnDef
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"name","Type":{"Kind":"text","Unsigned":true}}`), &decoded))
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"id","Type":{"Kind":"integer","Precision":4}}`), &decoded))
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"id","Type":{"Kind":"unknown"}}`), &decoded))
+}
+
+// TestTableValidateInvalidRowNameReportsPath pins the error path for a
+// RowName that is not a valid, exported Go identifier. RowName names a Go
+// type rather than a SQL identifier, so this covers cases ValidateIdentifier
+// alone would not catch: a lowercase (unexported) name and a Go keyword,
+// alongside a name starting with a digit, a space, and a hyphen.
+func TestTableValidateInvalidRowNameReportsPath(t *testing.T) {
+	tests := map[string]string{
+		"starts with a digit": "1bad",
+		"unexported":          "order",
+		"go keyword":          "type",
+		"contains a space":    "Order Row",
+		"contains a hyphen":   "Order-Row",
+	}
+
+	for name, rowName := range tests {
+		t.Run(name, func(t *testing.T) {
+			table := schema.TableDef{
+				Name:    "orders",
+				RowName: rowName,
+				Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+			}
+
+			err := table.Validate()
+			require.Error(t, err)
+			require.ErrorContains(t, err, "table.row_name")
+		})
+	}
 }
 
 func TestTableValidateDuplicateConstraintNameReportsPath(t *testing.T) {

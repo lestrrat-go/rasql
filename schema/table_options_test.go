@@ -311,6 +311,74 @@ func TestNewTableRejectsNilForeignKeyOption(t *testing.T) {
 	require.True(t, errors.As(err, &validationErr))
 }
 
+// TestRowNamedSetsRowName covers RowNamed through both NewTableDef and
+// MustTableDef, that a definition without it leaves RowName empty, and that
+// applying it before or after the column constructors gives the same
+// descriptor.
+func TestRowNamedSetsRowName(t *testing.T) {
+	columnsFirst, err := schema.NewTableDef("users",
+		schema.Integer("id"),
+		schema.RowNamed("User"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "User", columnsFirst.RowName)
+
+	rowNamedFirst, err := schema.NewTableDef("users",
+		schema.RowNamed("User"),
+		schema.Integer("id"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, columnsFirst, rowNamedFirst)
+
+	require.Equal(t, "User", schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.RowNamed("User"),
+	).RowName)
+
+	withoutOption, err := schema.NewTableDef("users", schema.Integer("id"))
+	require.NoError(t, err)
+	require.Empty(t, withoutOption.RowName)
+}
+
+// TestRowNamedRejectsInvalidGoIdentifier proves that NewTableDef's final
+// Validate call, not just RowNamed's own builder check, catches a RowName
+// that is not a valid exported Go identifier.
+func TestRowNamedRejectsInvalidGoIdentifier(t *testing.T) {
+	tests := map[string]string{
+		"unexported": "user",
+		"go keyword": "type",
+	}
+
+	for name, rowName := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := schema.NewTableDef("users",
+				schema.Integer("id"),
+				schema.RowNamed(rowName),
+			)
+			require.Error(t, err)
+			var validationErr *schema.ValidationError
+			require.True(t, errors.As(err, &validationErr))
+			require.ErrorContains(t, err, "table.row_name")
+		})
+	}
+}
+
+func TestRowNamedRejectsEmptyName(t *testing.T) {
+	_, err := schema.NewTableDef("users",
+		schema.Integer("id"),
+		schema.RowNamed(""),
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "RowNamed name must not be empty")
+
+	require.Panics(t, func() {
+		schema.MustTableDef("users",
+			schema.Integer("id"),
+			schema.RowNamed(""),
+		)
+	})
+}
+
 func TestForeignKeyAsRejectsEmptyName(t *testing.T) {
 	_, err := schema.NewTableDef("orders",
 		schema.Integer("id"),

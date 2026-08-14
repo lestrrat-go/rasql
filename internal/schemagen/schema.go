@@ -225,7 +225,7 @@ func writeTableDescriptor(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString(" = ")
 	source.WriteString(tableTypeName(table.Name))
 	source.WriteString("{rasql.TableFrom[")
-	source.WriteString(rowTypeName(table.Name))
+	source.WriteString(rowTypeName(table))
 	source.WriteString("](")
 	source.WriteString(definitionName(table.Name))
 	source.WriteString(")}\n\n")
@@ -436,8 +436,13 @@ func validateVariableNames(tables []schema.TableDef) error {
 			return generatedNameConflict(table.Name, variable)
 		}
 		names[variable] = struct{}{}
+		if table.RowName != "" {
+			if err := validateRowName(table); err != nil {
+				return err
+			}
+		}
 		for _, generated := range []string{
-			rowTypeName(table.Name),
+			rowTypeName(table),
 			tableTypeName(table.Name),
 			descriptorName(table.Name),
 			definitionName(table.Name),
@@ -448,6 +453,20 @@ func validateVariableNames(tables []schema.TableDef) error {
 			}
 			names[generated] = struct{}{}
 		}
+		// timeScannerTypeName is deliberately absent from this set: a RowName can
+		// never equal one. It derives from the TABLE name and is always unexported,
+		// because descriptorName lowers the leading uppercase run of goName(tableName)
+		// and ValidateIdentifier confines a table name to ASCII [A-Za-z_][A-Za-z0-9_]*,
+		// so that lowered rune is always ASCII a-z. A stated RowName passes
+		// validateExportedGoIdentifier, which requires an uppercase first rune. The two
+		// name spaces are disjoint by exportedness.
+		//
+		// Checked, not assumed: a table with a time column and RowName
+		// "UsersTimeScanner" emits both UsersTimeScanner and usersTimeScanner, which
+		// are distinct Go identifiers, and the generated package builds and vets clean.
+		// Setting RowName to the literal scanner name is rejected, same-table and
+		// cross-table. Falsify this by finding an accepted table name whose
+		// timeScannerTypeName begins with an uppercase rune.
 
 		methods := make(map[string]struct{}, len(table.Columns))
 		for _, column := range table.Columns {
@@ -512,6 +531,39 @@ func validateVariableNames(tables []schema.TableDef) error {
 	return nil
 }
 
+// validateRowName rejects a stated RowName that collides with another name
+// rasqlgen generates for table's own row, naming RowNamed in the message so
+// the error blames the option a person typed by hand rather than the table.
+// schema.TableDef.Validate, which every entry point into this package runs
+// before validateVariableNames, already guarantees a non-empty RowName is a
+// valid, exported Go identifier, so this checks only collisions specific to
+// the generated surface: a reserved method name, and this table's own
+// accessor, table type, descriptor variable, definition variable, or
+// definition accessor. A collision with another table's generated names,
+// with a relationship type name, or with a fixed name in
+// reservedPackageNames is caught afterward by the shared names set the
+// caller builds from rowTypeName(table).
+func validateRowName(table schema.TableDef) error {
+	if _, reserved := reservedFieldNames[table.RowName]; reserved {
+		return fmt.Errorf("generate: table %q states row name %q via RowNamed, which is a reserved generated name", table.Name, table.RowName)
+	}
+	for _, collision := range []struct {
+		label     string
+		generated string
+	}{
+		{"accessor", variableName(table.Name)},
+		{"table type", tableTypeName(table.Name)},
+		{"descriptor variable", descriptorName(table.Name)},
+		{"definition variable", definitionName(table.Name)},
+		{"definition accessor", definitionAccessorName(table.Name)},
+	} {
+		if table.RowName == collision.generated {
+			return fmt.Errorf("generate: table %q states row name %q via RowNamed, which collides with its own generated %s", table.Name, table.RowName, collision.label)
+		}
+	}
+	return nil
+}
+
 func relationshipSupported(child, parent schema.TableDef, relationship schema.RelationshipDef) (schema.ColumnDef, schema.ColumnDef, string, bool) {
 	if relationship.Kind != schema.RelationshipBelongsTo || len(relationship.Columns) != 1 || len(relationship.ReferencedColumns) != 1 {
 		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
@@ -548,8 +600,13 @@ func variableName(name string) string {
 	return goName(name)
 }
 
-func rowTypeName(tableName string) string {
-	return variableName(tableName) + "Row"
+// rowTypeName returns the Go row type generated for table: table.RowName
+// when the descriptor states one, or the default <Table>Row otherwise.
+func rowTypeName(table schema.TableDef) string {
+	if table.RowName != "" {
+		return table.RowName
+	}
+	return variableName(table.Name) + "Row"
 }
 
 // tableTypeName returns the exported wrapper type holding the typed table and
@@ -666,7 +723,7 @@ func writeTableType(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("type ")
 	source.WriteString(typeName)
 	source.WriteString(" struct {\n\trasql.Table[")
-	source.WriteString(rowTypeName(table.Name))
+	source.WriteString(rowTypeName(table))
 	source.WriteString("]\n}\n")
 }
 
@@ -728,7 +785,7 @@ func writeTableAs(source *bytes.Buffer, table schema.TableDef) {
 
 func writeRowType(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("type ")
-	source.WriteString(rowTypeName(table.Name))
+	source.WriteString(rowTypeName(table))
 	source.WriteString(" struct {\n")
 	for _, column := range table.Columns {
 		source.WriteString("\t")
@@ -1005,25 +1062,25 @@ func writeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) 
 		source.WriteString("func (r ")
 		source.WriteString(relationship.typeName)
 		source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
-		source.WriteString(rowTypeName(relationship.parent.Name))
+		source.WriteString(rowTypeName(relationship.parent))
 		source.WriteString(") (map[")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString("][]")
-		source.WriteString(rowTypeName(relationship.child.Name))
+		source.WriteString(rowTypeName(relationship.child))
 		source.WriteString(", error) {\n\treturn rasql.LoadHasMany[")
-		source.WriteString(rowTypeName(relationship.parent.Name))
+		source.WriteString(rowTypeName(relationship.parent))
 		source.WriteString(", ")
-		source.WriteString(rowTypeName(relationship.child.Name))
+		source.WriteString(rowTypeName(relationship.child))
 		source.WriteString(", ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString("](ctx, db, r.Child, r.ChildKey, parents, func(row ")
-		source.WriteString(rowTypeName(relationship.parent.Name))
+		source.WriteString(rowTypeName(relationship.parent))
 		source.WriteString(") ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString(" { return row.")
 		source.WriteString(relationship.parentField)
 		source.WriteString(" }, func(row ")
-		source.WriteString(rowTypeName(relationship.child.Name))
+		source.WriteString(rowTypeName(relationship.child))
 		source.WriteString(") ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString(" { return row.")
@@ -1036,25 +1093,25 @@ func writeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) 
 	source.WriteString("func (r ")
 	source.WriteString(relationship.typeName)
 	source.WriteString(") Load(ctx context.Context, db rasql.DB, children []")
-	source.WriteString(rowTypeName(relationship.child.Name))
+	source.WriteString(rowTypeName(relationship.child))
 	source.WriteString(") (map[")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString("]")
-	source.WriteString(rowTypeName(relationship.parent.Name))
+	source.WriteString(rowTypeName(relationship.parent))
 	source.WriteString(", error) {\n\treturn rasql.LoadBelongsTo[")
-	source.WriteString(rowTypeName(relationship.child.Name))
+	source.WriteString(rowTypeName(relationship.child))
 	source.WriteString(", ")
-	source.WriteString(rowTypeName(relationship.parent.Name))
+	source.WriteString(rowTypeName(relationship.parent))
 	source.WriteString(", ")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString("](ctx, db, r.Parent, r.ParentKey, children, func(row ")
-	source.WriteString(rowTypeName(relationship.child.Name))
+	source.WriteString(rowTypeName(relationship.child))
 	source.WriteString(") ")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString(" { return row.")
 	source.WriteString(relationship.childField)
 	source.WriteString(" }, func(row ")
-	source.WriteString(rowTypeName(relationship.parent.Name))
+	source.WriteString(rowTypeName(relationship.parent))
 	source.WriteString(") ")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString(" { return row.")
@@ -1065,7 +1122,7 @@ func writeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) 
 // writeRowScan writes the direct database/sql scan path and the runtime result
 // column mapping path.
 func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
-	typeName := rowTypeName(table.Name)
+	typeName := rowTypeName(table)
 	if tableHasTimeColumn(table) {
 		source.WriteString("type ")
 		source.WriteString(timeScannerTypeName(table.Name))
@@ -1192,7 +1249,7 @@ func scanIndexName(columnName string) string {
 // writeRowColumnValue writes the rasql.ColumnValuer implementation, which is
 // the write-direction counterpart of the scan methods.
 func writeRowColumnValue(source *bytes.Buffer, table schema.TableDef) {
-	typeName := rowTypeName(table.Name)
+	typeName := rowTypeName(table)
 	source.WriteString("// ColumnValue returns the value of the named column.\n")
 	source.WriteString("func (r ")
 	source.WriteString(typeName)
@@ -1258,6 +1315,11 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("Name: ")
 	source.WriteString(quote(table.Name))
 	source.WriteString(",\n")
+	if table.RowName != "" {
+		source.WriteString("RowName: ")
+		source.WriteString(quote(table.RowName))
+		source.WriteString(",\n")
+	}
 	if len(table.Columns) > 0 {
 		source.WriteString("Columns: []schema.ColumnDef{\n")
 		for _, column := range table.Columns {
