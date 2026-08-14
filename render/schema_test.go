@@ -310,6 +310,77 @@ func TestCreateIndexesRejectsNonDefaultMethod(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestCreateIndexesRejectsPartialIndex proves that an IndexDef naming a
+// Predicate, such as a partial index inspect now describes instead of
+// rejecting, is refused at render time with a typed error rather than
+// silently rendered as a plain unconditional index: rendering a plain index
+// in a partial index's place would build a stricter index than the one the
+// database actually has, which is the exact wrong-DDL failure this refusal
+// exists to prevent.
+func TestCreateIndexesRejectsPartialIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:      "documents_active_idx",
+			Columns:   []string{"status"},
+			Predicate: "status = 'active'",
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_active_idx"`)
+	require.ErrorContains(t, err, `"status = 'active'"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var predicateErr *render.UnsupportedPartialIndexError
+	require.ErrorAs(t, err, &predicateErr)
+	require.Equal(t, "documents_active_idx", predicateErr.Index)
+	require.Equal(t, "status = 'active'", predicateErr.Predicate)
+	require.ErrorIs(t, err, render.ErrUnsupportedPartialIndex)
+
+	// CreateTable never reaches an index's Predicate: indexes render as
+	// separate CREATE INDEX statements, never inline in CREATE TABLE, so
+	// the same table's partial index does not stop it from rendering.
+	_, err = render.CreateTable(dialect.PostgreSQL(), table)
+	require.NoError(t, err)
+}
+
+// TestCreateIndexesRejectsExpressionIndex proves that an IndexDef naming
+// Expressions instead of Columns, such as an expression index inspect now
+// describes instead of rejecting, is refused at render time with a typed
+// error rather than silently rendered over the wrong columns: rasql does
+// not yet know how to build DDL for an expression key.
+func TestCreateIndexesRejectsExpressionIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "title", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:        "documents_lower_title_idx",
+			Expressions: []string{"lower(title)"},
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_lower_title_idx"`)
+	require.ErrorContains(t, err, "lower(title)")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var expressionErr *render.UnsupportedExpressionIndexError
+	require.ErrorAs(t, err, &expressionErr)
+	require.Equal(t, "documents_lower_title_idx", expressionErr.Index)
+	require.Equal(t, []string{"lower(title)"}, expressionErr.Expressions)
+	require.ErrorIs(t, err, render.ErrUnsupportedExpressionIndex)
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",

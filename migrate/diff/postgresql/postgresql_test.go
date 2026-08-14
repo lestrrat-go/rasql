@@ -47,6 +47,49 @@ func TestLiveSourcesRejectsNonDefaultIndexMethod(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsPartialIndex proves that an inspected table
+// carrying a partial index's predicate does not reach diff-live's generated
+// desired-schema sources as a silently downgraded unconditional index:
+// LiveSources renders through render.CreateIndexes, which refuses the
+// predicate, so the error surfaces here rather than a Plan going on to emit
+// a stricter index than the database actually has.
+func TestLiveSourcesRejectsPartialIndex(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "status", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:      "members_active_idx",
+			Columns:   []string{"status"},
+			Predicate: "status = 'active'",
+		}},
+	})
+	require.ErrorContains(t, err, `"members_active_idx"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsExpressionIndex proves that an inspected table
+// carrying an expression index does not reach diff-live's generated
+// desired-schema sources as a silently downgraded plain-column index:
+// LiveSources renders through render.CreateIndexes, which refuses
+// Expressions, so the error surfaces here rather than a Plan going on to
+// emit DDL over the wrong columns.
+func TestLiveSourcesRejectsExpressionIndex(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:        "members_lower_name_idx",
+			Expressions: []string{"lower(name)"},
+		}},
+	})
+	require.ErrorContains(t, err, `"members_lower_name_idx"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, `

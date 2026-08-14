@@ -1656,9 +1656,6 @@ func (i Inspector) sqliteIndexes(ctx context.Context, databaseName, tableName st
 		if origin != "c" && origin != "u" {
 			continue
 		}
-		if partial {
-			return nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: partial indexes are unsupported", name)
-		}
 		if origin == "c" {
 			if err := schema.ValidateIdentifier(name); err != nil {
 				return nil, nil, fmt.Errorf("inspect: SQLite index %q: %w", name, err)
@@ -1668,11 +1665,30 @@ func (i Inspector) sqliteIndexes(ctx context.Context, databaseName, tableName st
 			uniqueConstraints = append(uniqueConstraints, schema.UniqueDef{})
 			continue
 		}
-		columns, err := i.sqliteIndexColumns(ctx, databaseName, name)
+		var definition *sqlitequery.CreateIndexStatement
+		if partial {
+			var err error
+			definition, err = i.sqliteIndexDefinition(ctx, databaseName, name)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		columns, expressions, err := i.sqliteIndexKeys(ctx, databaseName, name, definition)
 		if err != nil {
 			return nil, nil, err
 		}
-		indexes = append(indexes, schema.IndexDef{Name: name, Columns: columns, Unique: unique})
+		index := schema.IndexDef{Name: name, Columns: columns, Expressions: expressions, Unique: unique}
+		if partial {
+			if definition.Where == nil {
+				return nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: reported as partial but its CREATE INDEX definition has no WHERE clause", name)
+			}
+			predicate, err := sqliteExpressionSQL(definition.Where)
+			if err != nil {
+				return nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: serialize partial index predicate: %w", name, err)
+			}
+			index.Predicate = predicate
+		}
+		indexes = append(indexes, index)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("inspect: iterate SQLite indexes: %w", err)
@@ -1680,43 +1696,113 @@ func (i Inspector) sqliteIndexes(ctx context.Context, databaseName, tableName st
 	return indexes, uniqueConstraints, nil
 }
 
-func (i Inspector) sqliteIndexColumns(ctx context.Context, databaseName, indexName string) ([]string, error) {
+// sqliteIndexKeys reads an index's key columns from PRAGMA index_xinfo and
+// returns them either as Columns, when every key is a plain column, or as
+// Expressions, when at least one key is not: index_xinfo reports a NULL
+// column name for an expression key, and rasql-sqlite's parsed CREATE INDEX
+// definition is the only place that key's actual expression text lives.
+// definition is the already-parsed CREATE INDEX statement when the caller
+// already fetched it (a partial index does), or nil to fetch it lazily only
+// if an expression key is actually encountered, so a plain index never pays
+// for a second query.
+func (i Inspector) sqliteIndexKeys(ctx context.Context, databaseName, indexName string, definition *sqlitequery.CreateIndexStatement) ([]string, []string, error) {
 	query := sqliteQualifiedPragma(databaseName, "index_xinfo", indexName)
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("inspect: read SQLite index %q columns: %w", indexName, err)
+		return nil, nil, fmt.Errorf("inspect: read SQLite index %q columns: %w", indexName, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	columns := make([]string, 0)
+	keys := make([]string, 0)
+	hasExpression := false
+	keyPosition := 0
 	for rows.Next() {
 		var sequence, tableColumn, descending, keyColumn int64
 		var name sql.NullString
 		var collation string
 		if err := rows.Scan(&sequence, &tableColumn, &name, &descending, &collation, &keyColumn); err != nil {
-			return nil, fmt.Errorf("inspect: scan SQLite index %q column: %w", indexName, err)
+			return nil, nil, fmt.Errorf("inspect: scan SQLite index %q column: %w", indexName, err)
 		}
 		if keyColumn == 0 {
 			continue
 		}
-		if !name.Valid {
-			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: expression indexes are unsupported", indexName)
-		}
 		if descending != 0 {
-			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: descending columns are unsupported", indexName)
+			return nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: descending columns are unsupported", indexName)
 		}
 		if !strings.EqualFold(collation, "BINARY") {
-			return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: nondefault collations are unsupported", indexName)
+			return nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: nondefault collations are unsupported", indexName)
 		}
-		columns = append(columns, name.String)
+		if name.Valid {
+			keys = append(keys, name.String)
+			keyPosition++
+			continue
+		}
+		if definition == nil {
+			definition, err = i.sqliteIndexDefinition(ctx, databaseName, indexName)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		if keyPosition >= len(definition.Elements) {
+			return nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: its CREATE INDEX definition has fewer keys than reported", indexName)
+		}
+		expression, err := sqliteExpressionSQL(definition.Elements[keyPosition].Expression)
+		if err != nil {
+			return nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: serialize expression key: %w", indexName, err)
+		}
+		keys = append(keys, expression)
+		hasExpression = true
+		keyPosition++
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("inspect: iterate SQLite index %q columns: %w", indexName, err)
+		return nil, nil, fmt.Errorf("inspect: iterate SQLite index %q columns: %w", indexName, err)
 	}
-	if len(columns) == 0 {
-		return nil, fmt.Errorf("inspect: SQLite index %q has no columns", indexName)
+	if len(keys) == 0 {
+		return nil, nil, fmt.Errorf("inspect: SQLite index %q has no columns", indexName)
 	}
-	return columns, nil
+	if hasExpression {
+		return nil, keys, nil
+	}
+	return keys, nil, nil
+}
+
+// sqliteIndexDefinition reads and parses indexName's own CREATE INDEX
+// statement from sqlite_master, the only place a partial index's WHERE
+// predicate or an expression key's expression text is available: PRAGMA
+// index_xinfo reports a NULL column name for an expression key and gives no
+// route to a partial index's predicate at all.
+func (i Inspector) sqliteIndexDefinition(ctx context.Context, databaseName, indexName string) (*sqlitequery.CreateIndexStatement, error) {
+	query := `SELECT sql FROM "` + sqlitePragmaIdentifier(databaseName) + `".sqlite_master WHERE type = 'index' AND name = ?`
+	rows, err := i.queryer.QueryContext(ctx, query, indexName)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read SQLite index %q definition: %w", indexName, err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("inspect: iterate SQLite index %q definition: %w", indexName, err)
+		}
+		return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: its CREATE INDEX definition is unavailable", indexName)
+	}
+	var definition sql.NullString
+	if err := rows.Scan(&definition); err != nil {
+		return nil, fmt.Errorf("inspect: scan SQLite index %q definition: %w", indexName, err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate SQLite index %q definition: %w", indexName, err)
+	}
+	if !definition.Valid || definition.String == "" {
+		return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: its CREATE INDEX definition is unavailable", indexName)
+	}
+	statement, err := sqlitequery.ParseStatement(definition.String)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: its CREATE INDEX definition is unsupported: %w", indexName, err)
+	}
+	createIndex, ok := statement.(*sqlitequery.CreateIndexStatement)
+	if !ok {
+		return nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: its CREATE INDEX definition has an unexpected shape", indexName)
+	}
+	return createIndex, nil
 }
 
 func sqlitePragmaIdentifier(value string) string {
@@ -1910,7 +1996,7 @@ func (i Inspector) rejectUnsupportedIndexes(ctx context.Context, query string, a
 	if err := rows.Scan(&name); err != nil {
 		return fmt.Errorf("inspect: scan unsupported index: %w", err)
 	}
-	return fmt.Errorf("inspect: index %q cannot be represented: rasql supports only valid, non-partial indexes with simple ascending columns, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity", name)
+	return fmt.Errorf("inspect: index %q cannot be represented: rasql supports only valid indexes with ascending columns or expressions, no included columns, default operator classes and collations, default persistent storage options and tablespaces, distinct nulls, and no replica identity", name)
 }
 
 func (i Inspector) rejectUnsupportedExclusionConstraints(ctx context.Context, query string, argument any) error {
@@ -1933,6 +2019,18 @@ func (i Inspector) rejectUnsupportedExclusionConstraints(ctx context.Context, qu
 	return fmt.Errorf("inspect: exclusion constraint %q cannot be represented: rasql does not support exclusion constraints", name)
 }
 
+// buildingIndex accumulates one index's keys across the several rows
+// readIndexes scans for it, one row per key. keys holds each key's text in
+// order — a bare column name for a plain key, or the key's expression text
+// for an expression key — and hasExpression records whether any of them
+// was an expression, so the accumulated keys are assigned to def.Columns or
+// def.Expressions only once, after every row for the index has been seen.
+type buildingIndex struct {
+	def           schema.IndexDef
+	keys          []string
+	hasExpression bool
+}
+
 func (i Inspector) readIndexes(ctx context.Context, query string, argument any, mysqlIndexHasExpression bool) ([]schema.IndexDef, error) {
 	rows, err := i.queryer.QueryContext(ctx, query, argument)
 	if err != nil {
@@ -1940,12 +2038,14 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 	}
 	defer func() { _ = rows.Close() }()
 
-	var indexes []schema.IndexDef
+	var indexes []buildingIndex
 	for rows.Next() {
 		var name string
 		var unique bool
-		var column string
+		var key string
+		var isExpression bool
 		var method schema.IndexMethod
+		var predicate string
 		if i.dialect.Name() == "mysql" {
 			var nullableColumn sql.NullString
 			var prefixLength sql.NullInt64
@@ -1973,31 +2073,65 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 			if prefixLength.Valid {
 				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL prefix index parts", name)
 			}
-			if expression.Valid {
-				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL functional index parts", name)
-			}
-			if !nullableColumn.Valid {
+			switch {
+			case expression.Valid:
+				key = expression.String
+				isExpression = true
+			case nullableColumn.Valid:
+				key = nullableColumn.String
+			default:
 				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql does not support MySQL non-column index parts", name)
 			}
-			column = nullableColumn.String
 		} else {
+			var attributeName sql.NullString
+			var keyExpression sql.NullString
 			var accessMethod string
-			if err := rows.Scan(&name, &unique, &column, &accessMethod); err != nil {
+			var indexPredicate sql.NullString
+			if err := rows.Scan(&name, &unique, &attributeName, &keyExpression, &accessMethod, &indexPredicate); err != nil {
 				return nil, fmt.Errorf("inspect: scan index: %w", err)
 			}
 			if accessMethod != "btree" {
 				method = schema.IndexMethod(accessMethod)
 			}
+			if indexPredicate.Valid {
+				predicate = indexPredicate.String
+			}
+			switch {
+			case attributeName.Valid:
+				key = attributeName.String
+			case keyExpression.Valid:
+				key = keyExpression.String
+				isExpression = true
+			default:
+				return nil, fmt.Errorf("inspect: index %q cannot be represented: rasql could not read an expression key's definition", name)
+			}
 		}
-		if len(indexes) == 0 || indexes[len(indexes)-1].Name != name {
-			indexes = append(indexes, schema.IndexDef{Name: name, Unique: unique, Method: method})
+		if len(indexes) == 0 || indexes[len(indexes)-1].def.Name != name {
+			indexes = append(indexes, buildingIndex{def: schema.IndexDef{Name: name, Unique: unique, Method: method, Predicate: predicate}})
 		}
-		indexes[len(indexes)-1].Columns = append(indexes[len(indexes)-1].Columns, column)
+		current := &indexes[len(indexes)-1]
+		current.keys = append(current.keys, key)
+		if isExpression {
+			current.hasExpression = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate indexes: %w", err)
 	}
-	return indexes, nil
+	if len(indexes) == 0 {
+		return nil, nil
+	}
+	result := make([]schema.IndexDef, len(indexes))
+	for index, building := range indexes {
+		def := building.def
+		if building.hasExpression {
+			def.Expressions = building.keys
+		} else {
+			def.Columns = building.keys
+		}
+		result[index] = def
+	}
+	return result, nil
 }
 
 type mysqlIndexVisibility bool
@@ -2271,8 +2405,8 @@ func postgreSQLInformationQueries(version int) informationQueries {
 		uniqueConstraints:               "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", index_metadata.indnkeyatts <> index_metadata.indnatts, " + temporal + ", index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR index_metadata.indisreplident OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
 		checks:                          "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",
 		unsupportedExclusionConstraints: "SELECT constraint_data.conname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'x' ORDER BY constraint_data.conname",
-		unsupportedIndexes:              "SELECT index_data.relname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND (NOT index_metadata.indisvalid OR index_metadata.indexprs IS NOT NULL OR index_metadata.indpred IS NOT NULL OR index_metadata.indnkeyatts <> index_metadata.indnatts OR index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR " + nullsNotDistinct + " OR index_metadata.indisreplident OR EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) OR EXISTS (SELECT 1 FROM unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indclass::oid[]) WITH ORDINALITY AS operator_class(operator_class_oid, ordinal_position) ON operator_class.ordinal_position = key_column.ordinal_position JOIN pg_catalog.pg_opclass AS operator_class_metadata ON operator_class_metadata.oid = operator_class.operator_class_oid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE NOT operator_class_metadata.opcdefault OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation)) ORDER BY index_data.relname",
-		indexes:                         "SELECT index_data.relname, index_metadata.indisunique, attribute.attname, access_method.amname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam JOIN LATERAL unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND index_metadata.indisvalid AND index_metadata.indexprs IS NULL AND index_metadata.indpred IS NULL AND index_metadata.indnkeyatts = index_metadata.indnatts AND index_data.reloptions IS NULL AND index_data.reltablespace = 0 AND NOT index_metadata.indisreplident AND NOT EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) ORDER BY index_data.relname, key_column.ordinal_position",
+		unsupportedIndexes:              "SELECT index_data.relname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND (NOT index_metadata.indisvalid OR index_metadata.indnkeyatts <> index_metadata.indnatts OR index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR " + nullsNotDistinct + " OR index_metadata.indisreplident OR EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) OR EXISTS (SELECT 1 FROM unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indclass::oid[]) WITH ORDINALITY AS operator_class(operator_class_oid, ordinal_position) ON operator_class.ordinal_position = key_column.ordinal_position JOIN pg_catalog.pg_opclass AS operator_class_metadata ON operator_class_metadata.oid = operator_class.operator_class_oid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE NOT operator_class_metadata.opcdefault OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation)) ORDER BY index_data.relname",
+		indexes:                         "SELECT index_data.relname, index_metadata.indisunique, attribute.attname, pg_catalog.pg_get_indexdef(index_metadata.indexrelid, key_column.ordinal_position::int, true), access_method.amname, pg_catalog.pg_get_expr(index_metadata.indpred, index_metadata.indrelid, true) FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam JOIN LATERAL unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE LEFT JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND index_metadata.indisvalid AND index_metadata.indnkeyatts = index_metadata.indnatts AND index_data.reloptions IS NULL AND index_data.reltablespace = 0 AND NOT index_metadata.indisreplident AND NOT EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) ORDER BY index_data.relname, key_column.ordinal_position",
 		foreignKeys:                     "SELECT constraint_data.conname, local_attribute.attname, referenced_table.relname, referenced_attribute.attname, constraint_data.confdeltype, constraint_data.confupdtype, constraint_data.confmatchtype, referenced_namespace.nspname = current_schema(), constraint_data.condeferrable, constraint_data.condeferred, " + deleteSetColumns + ", constraint_data.convalidated, " + enforced + ", " + temporal + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS referenced_table ON referenced_table.oid = constraint_data.confrelid JOIN pg_catalog.pg_namespace AS referenced_namespace ON referenced_namespace.oid = referenced_table.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS local_key(attribute_number, ordinal_position) ON TRUE JOIN LATERAL unnest(constraint_data.confkey) WITH ORDINALITY AS referenced_key(attribute_number, ordinal_position) ON referenced_key.ordinal_position = local_key.ordinal_position JOIN pg_catalog.pg_attribute AS local_attribute ON local_attribute.attrelid = constraint_data.conrelid AND local_attribute.attnum = local_key.attribute_number JOIN pg_catalog.pg_attribute AS referenced_attribute ON referenced_attribute.attrelid = constraint_data.confrelid AND referenced_attribute.attnum = referenced_key.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'f' ORDER BY constraint_data.conname, local_key.ordinal_position",
 	}
 }
