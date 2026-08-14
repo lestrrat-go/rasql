@@ -90,6 +90,51 @@ func TestLiveSourcesRejectsExpressionIndex(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsNonDefaultForeignKeyMatch proves that an inspected
+// table carrying a foreign key with a non-default MATCH clause does not
+// reach diff-live's generated desired-schema sources as a silently
+// downgraded plain MATCH SIMPLE foreign key: LiveSources renders through
+// render.CreateTable, which refuses the match type, so the error surfaces
+// here rather than a Plan going on to emit the wrong DDL for it.
+func TestLiveSourcesRejectsNonDefaultForeignKeyMatch(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "orders",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "customer_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			Match:             schema.MatchFull,
+		}},
+	})
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsNonDefaultForeignKeyDeferrability is the
+// deferrability counterpart to
+// TestLiveSourcesRejectsNonDefaultForeignKeyMatch.
+func TestLiveSourcesRejectsNonDefaultForeignKeyDeferrability(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "orders",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "customer_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			Deferrable:        schema.DeferrableInitiallyDeferred,
+		}},
+	})
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, `

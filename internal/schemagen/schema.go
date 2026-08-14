@@ -1496,6 +1496,10 @@ func writeForeignKeyDefLiteral(source *bytes.Buffer, key schema.ForeignKeyDef) {
 	source.WriteString(quote(key.ReferencedTable))
 	source.WriteString(", ReferencedColumns: ")
 	writeStringLiteralSlice(source, key.ReferencedColumns)
+	if key.Match != "" {
+		source.WriteString(", Match: ")
+		source.WriteString(matchTypeConstant(key.Match))
+	}
 	if key.OnDelete != "" {
 		source.WriteString(", OnDelete: ")
 		source.WriteString(referenceActionConstant(key.OnDelete))
@@ -1503,6 +1507,10 @@ func writeForeignKeyDefLiteral(source *bytes.Buffer, key schema.ForeignKeyDef) {
 	if key.OnUpdate != "" {
 		source.WriteString(", OnUpdate: ")
 		source.WriteString(referenceActionConstant(key.OnUpdate))
+	}
+	if key.Deferrable != "" {
+		source.WriteString(", Deferrable: ")
+		source.WriteString(deferrabilityConstant(key.Deferrable))
 	}
 	source.WriteString("},\n")
 }
@@ -1562,6 +1570,28 @@ func referenceActionConstant(action schema.ReferenceAction) string {
 		return "schema.SetDefault"
 	default:
 		return "schema.ReferenceAction(" + quote(string(action)) + ")"
+	}
+}
+
+func matchTypeConstant(match schema.MatchType) string {
+	switch match {
+	case schema.MatchFull:
+		return "schema.MatchFull"
+	case schema.MatchPartial:
+		return "schema.MatchPartial"
+	default:
+		return "schema.MatchType(" + quote(string(match)) + ")"
+	}
+}
+
+func deferrabilityConstant(deferrable schema.Deferrability) string {
+	switch deferrable {
+	case schema.DeferrableInitiallyImmediate:
+		return "schema.DeferrableInitiallyImmediate"
+	case schema.DeferrableInitiallyDeferred:
+		return "schema.DeferrableInitiallyDeferred"
+	default:
+		return "schema.Deferrability(" + quote(string(deferrable)) + ")"
 	}
 }
 

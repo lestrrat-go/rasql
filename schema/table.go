@@ -249,8 +249,21 @@ type ForeignKeyDef struct {
 	ReferencedSchema  string
 	ReferencedTable   string
 	ReferencedColumns []string
-	OnDelete          ReferenceAction
-	OnUpdate          ReferenceAction
+
+	// Match names the foreign key's MATCH clause. See MatchType's own doc
+	// for what its zero value means and what currently accepts it.
+	// omitempty keeps a MATCH SIMPLE ForeignKeyDef's JSON identical to what
+	// it encoded before this field existed.
+	Match MatchType `json:",omitempty"`
+
+	OnDelete ReferenceAction
+	OnUpdate ReferenceAction
+
+	// Deferrable names when the foreign key's constraint is checked. See
+	// Deferrability's own doc for what its zero value means and what
+	// currently accepts it. omitempty keeps a NOT DEFERRABLE ForeignKeyDef's
+	// JSON identical to what it encoded before this field existed.
+	Deferrable Deferrability `json:",omitempty"`
 }
 
 // TableDef describes a database table and its constraints.
@@ -603,6 +616,12 @@ func validateForeignKeys(keys []ForeignKeyDef, columns map[string]struct{}, cons
 		}
 		if !key.OnUpdate.valid() {
 			return validationError(path+".on_update", "unsupported reference action %q", key.OnUpdate)
+		}
+		if !key.Match.valid() {
+			return validationError(path+".match", "unsupported foreign key match type %q", key.Match)
+		}
+		if !key.Deferrable.valid() {
+			return validationError(path+".deferrable", "unsupported foreign key deferrability %q", key.Deferrable)
 		}
 	}
 	return nil

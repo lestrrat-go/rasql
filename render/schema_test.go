@@ -381,6 +381,84 @@ func TestCreateIndexesRejectsExpressionIndex(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedExpressionIndex)
 }
 
+// TestCreateTableRejectsNonDefaultForeignKeyMatch proves that a
+// ForeignKeyDef naming a non-default schema.MatchType, such as MATCH FULL
+// which inspect now describes instead of rejecting, is refused at render
+// time with a typed error rather than silently rendered as a plain MATCH
+// SIMPLE foreign key: rasql does not yet know how to build DDL for
+// anything other than a plain MATCH SIMPLE foreign key, and a foreign key
+// renders inline in CREATE TABLE, unlike an index, so the table itself is
+// refused too.
+func TestCreateTableRejectsNonDefaultForeignKeyMatch(t *testing.T) {
+	table := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			Match:             schema.MatchFull,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "MATCH FULL")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var matchErr *render.UnsupportedForeignKeyMatchError
+	require.ErrorAs(t, err, &matchErr)
+	require.Equal(t, "orders_customer_fk", matchErr.ForeignKey)
+	require.Equal(t, schema.MatchFull, matchErr.Match)
+	require.ErrorIs(t, err, render.ErrUnsupportedForeignKeyMatch)
+
+	var renderErr *render.Error
+	require.ErrorAs(t, err, &renderErr)
+	require.Equal(t, "postgresql", renderErr.Dialect)
+}
+
+// TestCreateTableRejectsNonDefaultForeignKeyDeferrability proves that a
+// ForeignKeyDef naming a non-default schema.Deferrability, such as
+// DEFERRABLE INITIALLY DEFERRED which inspect now describes instead of
+// rejecting, is refused at render time with a typed error rather than
+// silently rendered as a plain NOT DEFERRABLE foreign key.
+func TestCreateTableRejectsNonDefaultForeignKeyDeferrability(t *testing.T) {
+	table := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			Deferrable:        schema.DeferrableInitiallyDeferred,
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"orders_customer_fk"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var deferrableErr *render.UnsupportedForeignKeyDeferrabilityError
+	require.ErrorAs(t, err, &deferrableErr)
+	require.Equal(t, "orders_customer_fk", deferrableErr.ForeignKey)
+	require.Equal(t, schema.DeferrableInitiallyDeferred, deferrableErr.Deferrable)
+	require.ErrorIs(t, err, render.ErrUnsupportedForeignKeyDeferrability)
+
+	var renderErr *render.Error
+	require.ErrorAs(t, err, &renderErr)
+	require.Equal(t, "postgresql", renderErr.Dialect)
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",
