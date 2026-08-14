@@ -1372,6 +1372,11 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 			if index.Unique {
 				source.WriteString(", Unique: true")
 			}
+			if index.Method != "" {
+				source.WriteString(", Method: schema.IndexMethod(")
+				source.WriteString(quote(string(index.Method)))
+				source.WriteString(")")
+			}
 			source.WriteString("},\n")
 		}
 		source.WriteString("},\n")

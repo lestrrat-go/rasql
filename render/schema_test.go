@@ -266,6 +266,50 @@ func TestCreateIndexRejectsUnboundedMySQLText(t *testing.T) {
 	require.Equal(t, []string{"CREATE INDEX `idx_documents_title` ON `documents` (`title`)"}, sqls(indexes))
 }
 
+// TestCreateIndexesRejectsNonDefaultMethod proves that an IndexDef naming a
+// non-default schema.IndexMethod, such as a GIN index inspect now describes
+// instead of rejecting, is refused at render time with a typed error rather
+// than silently rendered as a plain default index: rasql does not yet know
+// how to build DDL for anything other than a plain default index, and
+// rendering a B-tree in a GIN index's place would be the exact wrong-DDL
+// failure this refusal exists to prevent.
+func TestCreateIndexesRejectsNonDefaultMethod(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "tags", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:    "documents_tags_gin_idx",
+			Columns: []string{"tags"},
+			Method:  "gin",
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_tags_gin_idx"`)
+	require.ErrorContains(t, err, `"gin"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var methodErr *render.UnsupportedIndexMethodError
+	require.ErrorAs(t, err, &methodErr)
+	require.Equal(t, "documents_tags_gin_idx", methodErr.Index)
+	require.Equal(t, schema.IndexMethod("gin"), methodErr.Method)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexMethod)
+
+	var renderErr *render.Error
+	require.ErrorAs(t, err, &renderErr)
+	require.Equal(t, "postgresql", renderErr.Dialect)
+
+	// CreateTable never reaches an index's Method: indexes render as
+	// separate CREATE INDEX statements, never inline in CREATE TABLE, so
+	// the same table's non-default method does not stop it from rendering.
+	_, err = render.CreateTable(dialect.PostgreSQL(), table)
+	require.NoError(t, err)
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",
