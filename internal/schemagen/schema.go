@@ -1335,15 +1335,7 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 	if len(table.UniqueConstraints) > 0 {
 		source.WriteString("UniqueConstraints: []schema.UniqueDef{\n")
 		for _, constraint := range table.UniqueConstraints {
-			source.WriteString("{")
-			if constraint.Name != "" {
-				source.WriteString("Name: ")
-				source.WriteString(quote(constraint.Name))
-				source.WriteString(", ")
-			}
-			source.WriteString("Columns: ")
-			writeStringLiteralSlice(source, constraint.Columns)
-			source.WriteString("},\n")
+			writeUniqueDefLiteral(source, constraint)
 		}
 		source.WriteString("},\n")
 	}
@@ -1415,6 +1407,33 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("},\n")
 	}
 	source.WriteString("}")
+}
+
+func writeUniqueDefLiteral(source *bytes.Buffer, constraint schema.UniqueDef) {
+	source.WriteString("{")
+	if constraint.Name != "" {
+		source.WriteString("Name: ")
+		source.WriteString(quote(constraint.Name))
+		source.WriteString(", ")
+	}
+	source.WriteString("Columns: ")
+	writeStringLiteralSlice(source, constraint.Columns)
+	if constraint.Deferrable != "" {
+		source.WriteString(", Deferrable: ")
+		source.WriteString(deferrabilityConstant(constraint.Deferrable))
+	}
+	if constraint.NullsNotDistinct {
+		source.WriteString(", NullsNotDistinct: true")
+	}
+	if len(constraint.IncludeColumns) > 0 {
+		source.WriteString(", IncludeColumns: ")
+		writeStringLiteralSlice(source, constraint.IncludeColumns)
+	}
+	if constraint.OnConflict != "" {
+		source.WriteString(", OnConflict: ")
+		source.WriteString(conflictResolutionConstant(constraint.OnConflict))
+	}
+	source.WriteString("},\n")
 }
 
 func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
@@ -1607,6 +1626,21 @@ func deferrabilityConstant(deferrable schema.Deferrability) string {
 		return "schema.DeferrableInitiallyDeferred"
 	default:
 		return "schema.Deferrability(" + quote(string(deferrable)) + ")"
+	}
+}
+
+func conflictResolutionConstant(conflict schema.ConflictResolution) string {
+	switch conflict {
+	case schema.ConflictRollback:
+		return "schema.ConflictRollback"
+	case schema.ConflictFail:
+		return "schema.ConflictFail"
+	case schema.ConflictIgnore:
+		return "schema.ConflictIgnore"
+	case schema.ConflictReplace:
+		return "schema.ConflictReplace"
+	default:
+		return "schema.ConflictResolution(" + quote(string(conflict)) + ")"
 	}
 }
 

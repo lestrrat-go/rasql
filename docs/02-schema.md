@@ -150,6 +150,22 @@ constraint list. `MustTableDef` and `NewTableDef` validate as well, so a
 separate `Validate` call is only needed for a descriptor built at runtime
 that is not immediately turned into a table.
 
+## Unique constraint facts
+
+`UniqueDef` carries four facts a live database can attach to a unique constraint beyond a plain column list: `Deferrable`, `NullsNotDistinct`, `IncludeColumns`, and `OnConflict`. `inspect.Table` now records all four instead of failing the whole table, as it used to whenever a PostgreSQL unique constraint was deferrable, used `NULLS NOT DISTINCT`, or named an `INCLUDE` clause, or a SQLite `UNIQUE` constraint named an `ON CONFLICT` clause.
+
+`Deferrable` reuses `schema.Deferrability`, the same type `ForeignKeyDef.Deferrable` uses (see [Foreign key facts](#foreign-key-facts)). Its zero value, the empty string, means `NOT DEFERRABLE`, the only form every descriptor written before this field existed has always meant.
+
+`NullsNotDistinct` marks a PostgreSQL 15+ `UNIQUE NULLS NOT DISTINCT` constraint, under which two `NULL`s in the constrained columns conflict with each other instead of coexisting. Its zero value, `false`, means `NULLS DISTINCT`, the SQL default and the only behavior every prior descriptor has meant.
+
+`IncludeColumns` lists a PostgreSQL unique constraint's `INCLUDE` columns: columns carried by the constraint's backing index for covering reads without taking part in the uniqueness check itself. Its zero value, `nil`, means the constraint has no `INCLUDE` clause, which is what every `UniqueDef` written before this field existed has always meant.
+
+`OnConflict` names a SQLite unique constraint's `ON CONFLICT` resolution as a `schema.ConflictResolution`. Its zero value, the empty string, means SQLite's own default resolution, `ABORT`, the only behavior every prior descriptor has meant — an explicit `ON CONFLICT ABORT` clause names the same zero value, since it behaves identically to no clause at all. `schema.ConflictRollback`, `schema.ConflictFail`, `schema.ConflictIgnore`, and `schema.ConflictReplace` name the other four resolutions SQLite defines.
+
+All four are describable but not yet renderable. `render.CreateTable` and the migrate diff-live path refuse to build DDL for a unique constraint naming any of them, returning a `*render.UnsupportedUniqueDeferrabilityError`, `*render.UnsupportedUniqueNullsNotDistinctError`, `*render.UnsupportedUniqueIncludeColumnsError`, or `*render.UnsupportedUniqueConflictResolutionError` that names the constraint and the fact it named, since rasql does not yet know how to construct anything other than a plain `UNIQUE (...)` constraint. There is no option-form constructor for any of the four yet: today they only appear on a descriptor `inspect` produced.
+
+PostgreSQL inspection still refuses a temporal unique constraint and one whose backing index uses a nondefault collation, storage option, tablespace, or replica identity; those stay out of scope for now. SQLite inspection still refuses a `UNIQUE` constraint with an expression, collation, or ordering.
+
 ## Index methods
 
 `IndexDef.Method` names a non-default index access method — what PostgreSQL calls an access method and MySQL calls an index type — such as PostgreSQL's `"gin"` or MySQL's `"FULLTEXT"`. Its zero value, the empty string, means the engine's own default: a plain B-tree, which is what every index built through `schema.Index`, `schema.UniqueIndex`, or a struct literal that leaves `Method` unset has always meant, so no existing descriptor or checked-in generated file changes meaning.

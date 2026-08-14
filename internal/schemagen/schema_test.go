@@ -1115,6 +1115,14 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 		UniqueConstraints: []schema.UniqueDef{
 			{Name: "uq_code", Columns: []string{"code"}},
 			{Columns: []string{"bio"}},
+			{
+				Name:             "uq_price_owner",
+				Columns:          []string{"price"},
+				Deferrable:       schema.DeferrableInitiallyDeferred,
+				NullsNotDistinct: true,
+				IncludeColumns:   []string{"owner_id"},
+				OnConflict:       schema.ConflictReplace,
+			},
 		},
 		Checks: []schema.CheckDef{
 			{Name: "chk_price", Expression: "price >= 0", NoInherit: true, NotValid: true, NotEnforced: true},
@@ -1173,6 +1181,7 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `Schema: "app"`)
 	require.Contains(t, text, `{Name: "uq_code", Columns: []string{"code"}}`)
 	require.Contains(t, text, `{Columns: []string{"bio"}}`)
+	require.Contains(t, text, `{Name: "uq_price_owner", Columns: []string{"price"}, Deferrable: schema.DeferrableInitiallyDeferred, NullsNotDistinct: true, IncludeColumns: []string{"owner_id"}, OnConflict: schema.ConflictReplace}`)
 	require.Contains(t, text, `{Name: "chk_price", Expression: "price >= 0", NoInherit: true, NotValid: true, NotEnforced: true}`)
 	require.Contains(t, text, `{Expression: "id > 0"}`)
 	require.Contains(t, text, `{Name: "idx_owner", Columns: []string{"owner_id"}}`)
