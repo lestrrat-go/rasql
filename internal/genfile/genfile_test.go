@@ -107,25 +107,57 @@ func TestResolveDestinationRejectsAnotherFamilysMarker(t *testing.T) {
 	}
 }
 
-// TestResolveDestinationRejectsThePreSplitMarker confirms every family
-// refuses a destination still carrying the single marker every rasqlgen
-// command wrote before each family gained its own, and tells the reader to
-// delete and regenerate rather than guessing which command wrote it.
-func TestResolveDestinationRejectsThePreSplitMarker(t *testing.T) {
+// TestWriteAcceptsAndRewritesThePreSplitMarker confirms every family may
+// replace a destination still carrying the single marker every rasqlgen
+// command wrote before each family gained its own: the write is accepted
+// as a one-time migration, and the source written -- carrying artifact's
+// own marker -- naturally overwrites that first line. This is the upgrade
+// path for a package a pre-split rasqlgen generated.
+func TestWriteAcceptsAndRewritesThePreSplitMarker(t *testing.T) {
 	for _, artifact := range allArtifacts {
 		t.Run(artifact.String(), func(t *testing.T) {
 			directory := t.TempDir()
 			path := filepath.Join(directory, "output_gen.go")
-			original := preSplitMarker + "\n\npackage stale\n"
-			require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+			require.NoError(t, os.WriteFile(path, []byte(PreSplitMarker+"\n\npackage stale\n"), 0o600))
 
-			_, err := ResolveDestination(artifact, path)
-			require.Error(t, err)
-			require.ErrorContains(t, err, "delete it and regenerate")
+			source := artifact.Marker() + "\n\npackage generated\n"
+			require.NoError(t, Write(artifact, path, []byte(source)))
 
-			source, err := os.ReadFile(path)
+			got, err := os.ReadFile(path)
 			require.NoError(t, err)
-			require.Equal(t, original, string(source))
+			require.Equal(t, source, string(got))
 		})
+	}
+}
+
+// TestPreSplitMarkerMigrationIsOneTime confirms the pre-split marker's
+// acceptance is not a permanent hole in the cross-family refusal: once one
+// family has adopted a destination and rewritten its marker, a different
+// family is refused exactly as it would be against any other file that
+// family never wrote.
+func TestPreSplitMarkerMigrationIsOneTime(t *testing.T) {
+	for _, adopter := range allArtifacts {
+		for _, writer := range allArtifacts {
+			if adopter == writer {
+				continue
+			}
+			t.Run(adopter.String()+"_then_"+writer.String(), func(t *testing.T) {
+				directory := t.TempDir()
+				path := filepath.Join(directory, "output_gen.go")
+				require.NoError(t, os.WriteFile(path, []byte(PreSplitMarker+"\n\npackage stale\n"), 0o600))
+
+				adopted := adopter.Marker() + "\n\npackage generated\n"
+				require.NoError(t, Write(adopter, path, []byte(adopted)))
+
+				err := Write(writer, path, []byte(writer.Marker()+"\n\npackage generated\n"))
+				require.Error(t, err)
+				require.ErrorContains(t, err, adopter.String())
+				require.ErrorContains(t, err, writer.String())
+
+				got, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.Equal(t, adopted, string(got), "the file %s adopted must survive a refused write from %s", adopter, writer)
+			})
+		}
 	}
 }

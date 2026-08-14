@@ -3,9 +3,11 @@ package generate_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +44,77 @@ func TestValidateDescriptionPackageOwnershipRejectsSubdirectory(t *testing.T) {
 
 	err := generate.ValidateDescriptionPackageOwnership(directory)
 	require.ErrorContains(t, err, `holds a subdirectory "sub"`)
+}
+
+// TestValidateDescriptionPackageOwnershipAcceptsThePreSplitMarker proves a
+// package a pre-split rasqlgen generated -- one whose files still carry
+// genfile.PreSplitMarker instead of genfile.Bootstrap.Marker() -- passes
+// ownership validation, which is what lets a refresh see it as its own
+// instead of refusing to touch a directory bootstrap genuinely wrote.
+func TestValidateDescriptionPackageOwnershipAcceptsThePreSplitMarker(t *testing.T) {
+	directory := t.TempDir()
+	require.NoError(t, generate.WriteDescriptionPackage("schemasource", directory, usersTableDef()))
+
+	rewriteFirstLine(t, filepath.Join(directory, "users_gen.go"), genfile.PreSplitMarker)
+	rewriteFirstLine(t, filepath.Join(directory, "tables_gen.go"), genfile.PreSplitMarker)
+
+	require.NoError(t, generate.ValidateDescriptionPackageOwnership(directory))
+}
+
+// TestApplyDescriptionDiffRewritesAPreSplitMarkedFile proves a changed
+// table's file predating the marker split is still rewritten by a refresh:
+// the write adopts it, and the result carries bootstrap's own marker like
+// any other file this package writes from then on.
+func TestApplyDescriptionDiffRewritesAPreSplitMarkedFile(t *testing.T) {
+	directory := t.TempDir()
+	users := usersTableDef()
+	require.NoError(t, generate.WriteDescriptionPackage("schemasource", directory, users))
+	rewriteFirstLine(t, filepath.Join(directory, "users_gen.go"), genfile.PreSplitMarker)
+
+	changedUsers := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.Text("phone"),
+		schema.PrimaryKey("id"),
+	)
+	oldTables := []schema.TableDef{users}
+	newTables := []schema.TableDef{changedUsers}
+	diff := generate.DiffDescriptionPackage(oldTables, newTables)
+	require.NoError(t, generate.ApplyDescriptionDiff("schemasource", directory, newTables, diff))
+
+	got, err := os.ReadFile(filepath.Join(directory, "users_gen.go"))
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(string(got), genfile.Bootstrap.Marker()+"\n"))
+}
+
+// TestApplyDescriptionDiffDeletesAPreSplitMarkedFile proves a dropped
+// table's file predating the marker split is still deleted: bootstrap
+// itself generated it, even though it does not yet carry
+// genfile.Bootstrap.Marker().
+func TestApplyDescriptionDiffDeletesAPreSplitMarkedFile(t *testing.T) {
+	directory := t.TempDir()
+	users, dropped := usersTableDef(), namedTableDef("legacy_users")
+	require.NoError(t, generate.WriteDescriptionPackage("schemasource", directory, users, dropped))
+	rewriteFirstLine(t, filepath.Join(directory, "legacy_users_gen.go"), genfile.PreSplitMarker)
+
+	oldTables := []schema.TableDef{users, dropped}
+	newTables := []schema.TableDef{users}
+	diff := generate.DiffDescriptionPackage(oldTables, newTables)
+	require.NoError(t, generate.ApplyDescriptionDiff("schemasource", directory, newTables, diff))
+
+	require.NoFileExists(t, filepath.Join(directory, "legacy_users_gen.go"))
+}
+
+// rewriteFirstLine replaces path's first line with marker, leaving
+// everything after it untouched -- a stand-in for output a pre-split
+// rasqlgen generated.
+func rewriteFirstLine(t *testing.T, path, marker string) {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	require.NoError(t, err)
+	_, rest, found := strings.Cut(string(contents), "\n")
+	require.True(t, found)
+	require.NoError(t, os.WriteFile(path, []byte(marker+"\n"+rest), 0o600))
 }
 
 // TestApplyDescriptionDiffIsNoOpWhenEmpty proves ApplyDescriptionDiff never

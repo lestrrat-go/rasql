@@ -19,8 +19,10 @@ import (
 // directory is one `rasqlgen bootstrap` recognizes as its own: either
 // descriptionHintsFilename, which it may or may not have written yet, or an
 // ordinary file whose first line is genfile.Bootstrap.Marker() -- the same
-// mark every other file bootstrap writes carries. A refresh calls this
-// before reading or changing anything, so it only ever runs against a
+// mark every other file bootstrap writes carries -- or still
+// genfile.PreSplitMarker, the mark a package generated before the marker
+// split carries until this refresh's own writes adopt it. A refresh calls
+// this before reading or changing anything, so it only ever runs against a
 // directory it created, on the same terms WriteDescriptionPackage already
 // enforces for a first run: refusing a hand-written file, or output from
 // another generator, that happens to sit in -output.
@@ -46,7 +48,12 @@ func ValidateDescriptionPackageOwnership(directory string) error {
 }
 
 // requireGeneratedMarker reports an error unless path's first line is
-// exactly genfile.Bootstrap.Marker().
+// exactly genfile.Bootstrap.Marker(), or is still genfile.PreSplitMarker --
+// the mark a package generated before the marker split carries until
+// bootstrap's own writes adopt it. Accepting the pre-split mark here is
+// what lets a refresh see, and a dropped table's file removal delete, a
+// file from before the split; genfile.Write is what actually rewrites that
+// mark once the file is next written.
 func requireGeneratedMarker(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -60,7 +67,7 @@ func requireGeneratedMarker(path string) error {
 		return err
 	}
 	line = strings.TrimRight(line, "\r\n")
-	if line != genfile.Bootstrap.Marker() {
+	if line != genfile.Bootstrap.Marker() && line != genfile.PreSplitMarker {
 		return fmt.Errorf("its first line is not %q", genfile.Bootstrap.Marker())
 	}
 	return nil
