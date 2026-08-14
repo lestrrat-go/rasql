@@ -1116,6 +1116,61 @@ func TestCreateTableRejectsPrimaryKeyConflictResolution(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedPrimaryKeyConflictResolution)
 }
 
+// TestCreateTableRejectsVirtualTable proves that a TableDef naming
+// VirtualTableModule, such as a live SQLite FTS5 virtual table inspect now
+// describes instead of rejecting, is refused at render time with a typed
+// error rather than silently rendered as an ordinary table.
+func TestCreateTableRejectsVirtualTable(t *testing.T) {
+	table := schema.TableDef{
+		Name: "posts_fts",
+		Columns: []schema.ColumnDef{
+			{Name: "body", Type: schema.TextType{}, Nullable: true},
+		},
+		VirtualTableModule:          "fts5",
+		VirtualTableModuleArguments: []string{"body"},
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"posts_fts"`)
+	require.ErrorContains(t, err, `"fts5"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var virtualErr *render.UnsupportedVirtualTableError
+	require.ErrorAs(t, err, &virtualErr)
+	require.Equal(t, "posts_fts", virtualErr.Table)
+	require.Equal(t, "fts5", virtualErr.Module)
+	require.ErrorIs(t, err, render.ErrUnsupportedVirtualTable)
+}
+
+// TestCreateTableRejectsUniqueKeyDetails proves that a UniqueDef naming
+// Keys, such as a live SQLite UNIQUE constraint with a DESC or
+// non-default-collation key inspect now describes instead of rejecting, is
+// refused at render time with a typed error rather than silently rendered
+// as a plain ascending, default-collation constraint.
+func TestCreateTableRejectsUniqueKeyDetails(t *testing.T) {
+	table := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{
+			{Name: "members_email_key", Keys: []schema.IndexKeyDef{{Expression: "email", Descending: true}}},
+		},
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"members_email_key"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var keysErr *render.UnsupportedUniqueKeyDetailsError
+	require.ErrorAs(t, err, &keysErr)
+	require.Equal(t, "members_email_key", keysErr.Unique)
+	require.Equal(t, table.UniqueConstraints[0].Keys, keysErr.Keys)
+	require.ErrorIs(t, err, render.ErrUnsupportedUniqueKeyDetails)
+}
+
 // TestCreateTableRejectsGeneratedColumn proves that a ColumnDef naming a
 // GeneratedExpression, such as a live SQLite generated column inspect now
 // describes instead of rejecting, is refused at render time with a typed

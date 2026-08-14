@@ -574,6 +574,34 @@ func (e *UnsupportedUniqueConflictResolutionError) Unwrap() error {
 	return ErrUnsupportedUniqueConflictResolution
 }
 
+// ErrUnsupportedUniqueKeyDetails is the sentinel wrapped by every
+// [UnsupportedUniqueKeyDetailsError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedUniqueKeyDetails = errors.New("render: unsupported unique constraint key details")
+
+// UnsupportedUniqueKeyDetailsError reports that a UniqueDef names
+// [schema.UniqueDef.Keys], meaning at least one of its keys is ordered DESC
+// or names a non-default collation. inspect can describe such a
+// constraint, and TableDef.Validate accepts it, but this package does not
+// yet know how to build DDL for one.
+type UnsupportedUniqueKeyDetailsError struct {
+	// Unique is the name of the constraint, or empty for an unnamed one.
+	Unique string
+	// Keys is the constraint's own per-key facts.
+	Keys []schema.IndexKeyDef
+}
+
+func (e *UnsupportedUniqueKeyDetailsError) Error() string {
+	return fmt.Sprintf("unique constraint %q has per-key details %+v, which rasql can describe but not yet render", e.Unique, e.Keys)
+}
+
+// Unwrap exposes ErrUnsupportedUniqueKeyDetails so errors.Is(err,
+// ErrUnsupportedUniqueKeyDetails) works alongside errors.As against
+// *UnsupportedUniqueKeyDetailsError.
+func (e *UnsupportedUniqueKeyDetailsError) Unwrap() error {
+	return ErrUnsupportedUniqueKeyDetails
+}
+
 // ErrUnsupportedTableStrict is the sentinel wrapped by every
 // [UnsupportedTableStrictError], so a caller that only needs a presence
 // check can use errors.Is instead of errors.As.
@@ -622,6 +650,33 @@ func (e *UnsupportedTableWithoutRowIDError) Error() string {
 // *UnsupportedTableWithoutRowIDError.
 func (e *UnsupportedTableWithoutRowIDError) Unwrap() error {
 	return ErrUnsupportedTableWithoutRowID
+}
+
+// ErrUnsupportedVirtualTable is the sentinel wrapped by every
+// [UnsupportedVirtualTableError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedVirtualTable = errors.New("render: unsupported SQLite virtual table")
+
+// UnsupportedVirtualTableError reports that a TableDef names
+// [schema.TableDef.VirtualTableModule]. inspect can describe such a table,
+// and TableDef.Validate accepts it, but this package does not yet know how
+// to build a CREATE VIRTUAL TABLE statement for one.
+type UnsupportedVirtualTableError struct {
+	// Table is the name of the virtual table.
+	Table string
+	// Module is the virtual table's own module name.
+	Module string
+}
+
+func (e *UnsupportedVirtualTableError) Error() string {
+	return fmt.Sprintf("table %q is a virtual table using module %q, which rasql can describe but not yet render", e.Table, e.Module)
+}
+
+// Unwrap exposes ErrUnsupportedVirtualTable so errors.Is(err,
+// ErrUnsupportedVirtualTable) works alongside errors.As against
+// *UnsupportedVirtualTableError.
+func (e *UnsupportedVirtualTableError) Unwrap() error {
+	return ErrUnsupportedVirtualTable
 }
 
 // ErrUnsupportedPrimaryKeyAutoincrement is the sentinel wrapped by every
@@ -822,6 +877,9 @@ func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]Statement, error
 }
 
 func (r *renderer) writeCreateTable(table schema.TableDef) error {
+	if table.VirtualTableModule != "" {
+		return &UnsupportedVirtualTableError{Table: table.Name, Module: table.VirtualTableModule}
+	}
 	if table.Strict {
 		return &UnsupportedTableStrictError{Table: table.Name}
 	}
@@ -872,6 +930,9 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		}
 		if constraint.OnConflict != "" {
 			return &UnsupportedUniqueConflictResolutionError{Unique: constraint.Name, OnConflict: constraint.OnConflict}
+		}
+		if len(constraint.Keys) > 0 {
+			return &UnsupportedUniqueKeyDetailsError{Unique: constraint.Name, Keys: constraint.Keys}
 		}
 		if err := r.rejectUnboundedMySQLText(table, constraint.Columns, "a unique constraint"); err != nil {
 			return err
