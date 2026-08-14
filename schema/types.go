@@ -161,8 +161,8 @@ func (c ConflictResolution) valid() bool {
 // Table.Validate rejects the two stated apart from each other.
 //
 // A generated column is describable but not yet renderable: inspect records
-// what a live SQLite generated column actually declares, and
-// TableDef.Validate accepts it, but render.CreateTable and the migrate
+// what a live SQLite, PostgreSQL, or MySQL generated column actually
+// declares, and TableDef.Validate accepts it, but render.CreateTable and the migrate
 // diff-live path refuse to build DDL for one, because rasql does not yet
 // know how to construct a GENERATED ALWAYS AS clause, and because a
 // generated column cannot be written to like an ordinary one, so silently

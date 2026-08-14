@@ -25,6 +25,33 @@ func TestDiffLiveMatchesInlinePrimaryKey(t *testing.T) {
 	require.Empty(t, plan.Statements)
 }
 
+// TestLiveSourcesRejectsGeneratedColumn proves that an inspected
+// PostgreSQL table carrying a generated column does not reach diff-live's
+// generated desired-schema sources as a silently downgraded plain writable
+// column: LiveSources renders through render.CreateTable, which refuses
+// GeneratedExpression regardless of which engine produced the descriptor,
+// so the error surfaces here rather than a Plan going on to emit DDL for a
+// column that cannot be written to at all.
+func TestLiveSourcesRejectsGeneratedColumn(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name: "measurements",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "celsius", Type: schema.IntegerType{}},
+			{
+				Name:                "fahrenheit",
+				Type:                schema.IntegerType{},
+				GeneratedExpression: "celsius * 9 / 5 + 32",
+				GeneratedStorage:    schema.GeneratedStored,
+			},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.ErrorContains(t, err, `"fahrenheit"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 // TestLiveSourcesRejectsNonDefaultIndexMethod proves that an inspected table
 // carrying a non-default index method, such as a GIN index, does not reach
 // diff-live's generated desired-schema sources as a silently downgraded
