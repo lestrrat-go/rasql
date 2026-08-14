@@ -696,45 +696,39 @@ func TestPostgreSQLInspectorRejectsUniqueConstraintWithNondefaultColumnCollation
 	require.EqualError(t, err, "inspect: unique constraint \"uq_users_email\" cannot be represented: rasql does not support unique constraints whose backing indexes use nondefault collations, storage options or tablespaces, or replica identity")
 }
 
-func TestPostgreSQLInspectorRejectsUnsupportedCheck(t *testing.T) {
-	tests := []struct {
-		name      string
-		noInherit bool
-		validated bool
-		enforced  bool
-		want      string
-	}{
-		{name: "no inherit", noInherit: true, validated: true, enforced: true, want: "inspect: check constraint \"chk_users_email\" cannot be represented: rasql does not support NO INHERIT check constraints"},
-		{name: "not valid", validated: false, enforced: true, want: "inspect: check constraint \"chk_users_email\" cannot be represented: rasql does not support NOT VALID check constraints"},
-		{name: "not enforced", validated: true, enforced: false, want: "inspect: check constraint \"chk_users_email\" cannot be represented: rasql does not support NOT ENFORCED check constraints"},
-	}
+// TestPostgreSQLInspectorRecordsCheckFacts proves that a check constraint
+// declared NO INHERIT, NOT VALID, or NOT ENFORCED is described rather than
+// rejected: inspect used to fail the whole table on any of these, which
+// would abort a sweep over a production schema the moment it reached one
+// such check constraint.
+func TestPostgreSQLInspectorRecordsCheckFacts(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
+	expectPostgreSQLMetadataBeforeForeignKeysWithChecks(mock, "users", "180000", sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}).
+		AddRow("chk_users_default", "email <> ''", false, true, true).
+		AddRow("chk_users_no_inherit", "age >= 0", true, true, true).
+		AddRow("chk_users_not_valid", "age < 150", false, false, true).
+		AddRow("chk_users_not_enforced", "id > 0", false, true, false))
+	expectPostgreSQLForeignKeys(mock, "users", "180000")
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			inspector, mock := newPostgreSQLInspector(t)
-			expectPostgreSQLServerVersion(mock, "180000")
-			expectPostgreSQLColumnsAndPrimaryKey(mock, "users")
-			mock.ExpectQuery("SELECT constraint_data\\.conname, attribute\\.attname, constraint_data\\.condeferrable, constraint_data\\.condeferred, index_metadata\\.indnullsnotdistinct, index_metadata\\.indnkeyatts <> index_metadata\\.indnatts, constraint_data\\.conperiod, index_data\\.reloptions IS NOT NULL OR index_data\\.reltablespace <> 0 OR index_metadata\\.indisreplident OR index_collation\\.collation_oid <> attribute\\.attcollation OR attribute\\.attcollation <> type_data\\.typcollation FROM pg_catalog\\.pg_constraint").
-				WithArgs("users").
-				WillReturnRows(sqlmock.NewRows([]string{"conname", "attname", "condeferrable", "condeferred", "indnullsnotdistinct", "includes_columns", "conperiod", "unsupported_index_metadata"}))
-			mock.ExpectQuery("SELECT constraint_data\\.conname, pg_catalog\\.pg_get_expr\\(constraint_data\\.conbin, constraint_data\\.conrelid, true\\), constraint_data\\.connoinherit, constraint_data\\.convalidated, constraint_data\\.conenforced FROM pg_catalog\\.pg_constraint").
-				WithArgs("users").
-				WillReturnRows(sqlmock.NewRows([]string{"conname", "expression", "connoinherit", "convalidated", "conenforced"}).
-					AddRow("chk_users_email", "email <> ''", test.noInherit, test.validated, test.enforced))
-
-			_, err := inspector.Table(t.Context(), "users")
-			require.EqualError(t, err, test.want)
-		})
-	}
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.CheckDef{
+		{Name: "chk_users_default", Expression: "email <> ''"},
+		{Name: "chk_users_no_inherit", Expression: "age >= 0", NoInherit: true},
+		{Name: "chk_users_not_valid", Expression: "age < 150", NotValid: true},
+		{Name: "chk_users_not_enforced", Expression: "id > 0", NotEnforced: true},
+	}, table.Checks)
 }
 
 // TestPostgreSQLInspectorRejectsUnsupportedForeignKey covers the foreign-key
 // facts inspect still rejects outright: a column list on ON DELETE SET NULL
-// or SET DEFAULT, NOT VALID, NOT ENFORCED, and temporal foreign keys. Every
-// row fixes match type, referenced schema, and deferrability at their
-// default, non-rejecting values, since inspect now describes those three
-// facts instead of rejecting them; see
-// TestPostgreSQLInspectorRecordsForeignKeyFacts.
+// or SET DEFAULT, and temporal foreign keys. Every row fixes match type,
+// referenced schema, deferrability, validation, and enforcement at their
+// default, non-rejecting values, since inspect now describes those facts
+// instead of rejecting them; see TestPostgreSQLInspectorRecordsForeignKeyFacts
+// and TestPostgreSQLInspectorRecordsForeignKeyValidationFacts.
 func TestPostgreSQLInspectorRejectsUnsupportedForeignKey(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -745,8 +739,6 @@ func TestPostgreSQLInspectorRejectsUnsupportedForeignKey(t *testing.T) {
 		want             string
 	}{
 		{name: "partial delete set columns", deleteSetColumns: true, validated: true, enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support column lists for ON DELETE SET NULL or SET DEFAULT"},
-		{name: "not valid", enforced: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support NOT VALID foreign keys"},
-		{name: "not enforced", validated: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support NOT ENFORCED foreign keys"},
 		{name: "temporal", validated: true, enforced: true, temporal: true, want: "inspect: foreign key \"fk_users_account\" cannot be represented: rasql does not support temporal foreign keys"},
 	}
 
@@ -820,6 +812,39 @@ func TestPostgreSQLInspectorRecordsForeignKeyFacts(t *testing.T) {
 		{Name: "fk_users_account", Columns: []string{"account_id"}, ReferencedSchema: "billing", ReferencedTable: "accounts", ReferencedColumns: []string{"id"}, OnDelete: schema.NoAction, OnUpdate: schema.NoAction},
 		{Name: "fk_users_owner", Columns: []string{"owner_id"}, ReferencedTable: "owners", ReferencedColumns: []string{"id"}, Match: schema.MatchFull, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, Deferrable: schema.DeferrableInitiallyImmediate},
 		{Name: "fk_users_group", Columns: []string{"group_id"}, ReferencedTable: "groups", ReferencedColumns: []string{"id"}, Match: schema.MatchPartial, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, Deferrable: schema.DeferrableInitiallyDeferred},
+	}, table.ForeignKeys)
+}
+
+// TestPostgreSQLInspectorRecordsForeignKeyValidationFacts proves that a
+// foreign key declared NOT VALID or NOT ENFORCED is described rather than
+// rejected: inspect used to fail the whole table on either, which would
+// abort a sweep over a production schema the moment it reached one such
+// foreign key.
+func TestPostgreSQLInspectorRecordsForeignKeyValidationFacts(t *testing.T) {
+	inspector, mock := newPostgreSQLInspector(t)
+	expectPostgreSQLServerVersion(mock, "180000")
+	mock.ExpectQuery("SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale, character_maximum_length FROM information_schema\\.columns").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil).
+			AddRow("owner_id", "bigint", "NO", nil, nil, nil, nil))
+	expectPostgreSQLCatalogColumnCount(mock, "users", 3)
+	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"attname"}).AddRow("id"))
+	expectPostgreSQLMetadataBeforeForeignKeys(mock, "users", "180000")
+	mock.ExpectQuery("SELECT constraint_data\\.conname, local_attribute\\.attname, referenced_table\\.relname, referenced_attribute\\.attname, constraint_data\\.confdeltype, constraint_data\\.confupdtype, constraint_data\\.confmatchtype, CASE WHEN referenced_namespace\\.nspname = current_schema\\(\\) THEN '' ELSE referenced_namespace\\.nspname END, constraint_data\\.condeferrable, constraint_data\\.condeferred, constraint_data\\.confdelsetcols IS NOT NULL, constraint_data\\.convalidated, constraint_data\\.conenforced, constraint_data\\.conperiod FROM pg_catalog\\.pg_constraint").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"conname", "local_column", "referenced_table", "referenced_column", "delete_action", "update_action", "match_type", "referenced_schema", "condeferrable", "condeferred", "delete_set_columns", "convalidated", "conenforced", "conperiod"}).
+			AddRow("fk_users_account", "account_id", "accounts", "id", "a", "a", "s", "", false, false, false, false, true, false).
+			AddRow("fk_users_owner", "owner_id", "owners", "id", "a", "a", "s", "", false, false, false, true, false, false))
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.ForeignKeyDef{
+		{Name: "fk_users_account", Columns: []string{"account_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id"}, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, NotValid: true},
+		{Name: "fk_users_owner", Columns: []string{"owner_id"}, ReferencedTable: "owners", ReferencedColumns: []string{"id"}, OnDelete: schema.NoAction, OnUpdate: schema.NoAction, NotEnforced: true},
 	}, table.ForeignKeys)
 }
 
@@ -1165,6 +1190,40 @@ func TestMySQLInspectorReadsConstraints(t *testing.T) {
 	require.Contains(t, rendered.SQL(), "CONSTRAINT `uq_users_email` UNIQUE (`email`)")
 	require.Contains(t, rendered.SQL(), "CONSTRAINT `chk_users_email` CHECK (email <> '')")
 	require.Contains(t, rendered.SQL(), "CONSTRAINT `fk_users_account` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`) ON DELETE CASCADE")
+}
+
+// TestMySQLInspectorRecordsCheckNotEnforced proves that a MySQL check
+// constraint declared NOT ENFORCED is described rather than rejected:
+// inspect used to fail the whole table on the first such check constraint,
+// which would abort a sweep over a production schema the moment it reached
+// one. MySQL's own check query already computes enforced from
+// table_constraints.enforced, unlike no_inherit and validated, which it
+// hardcodes FALSE and TRUE respectively because MySQL has no NO INHERIT or
+// NOT VALID concept for check constraints.
+func TestMySQLInspectorRecordsCheckNotEnforced(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	inspector, err := inspect.New(database, dialect.MySQL())
+	require.NoError(t, err)
+	expectMySQLColumnsAndPrimaryKey(mock, "users")
+	mock.ExpectQuery("SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "column_name", "deferrable", "initially_deferred", "nulls_not_distinct", "includes_columns", "temporal", "unsupported_index_metadata"}))
+	mock.ExpectQuery("SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name").
+		WithArgs("users").
+		WillReturnRows(sqlmock.NewRows([]string{"constraint_name", "check_clause", "no_inherit", "validated", "enforced"}).AddRow("chk_users_email", "email <> ''", false, true, false))
+	expectMySQLIndexesOnly(mock, "users")
+	expectMySQLEmptyForeignKeys(mock, "users")
+
+	table, err := inspector.Table(t.Context(), "users")
+	require.NoError(t, err)
+	require.Equal(t, []schema.CheckDef{{Name: "chk_users_email", Expression: "email <> ''", NotEnforced: true}}, table.Checks)
 }
 
 func TestMySQLInspectorScopesPrimaryKeyToTable(t *testing.T) {

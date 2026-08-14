@@ -2056,16 +2056,13 @@ func (i Inspector) readChecks(ctx context.Context, query string, argument any) (
 		if err := rows.Scan(&name, &expression, &noInherit, &validated, &enforced); err != nil {
 			return nil, fmt.Errorf("inspect: scan check constraint: %w", err)
 		}
-		if noInherit {
-			return nil, fmt.Errorf("inspect: check constraint %q cannot be represented: rasql does not support NO INHERIT check constraints", name)
-		}
-		if !validated {
-			return nil, fmt.Errorf("inspect: check constraint %q cannot be represented: rasql does not support NOT VALID check constraints", name)
-		}
-		if !enforced {
-			return nil, fmt.Errorf("inspect: check constraint %q cannot be represented: rasql does not support NOT ENFORCED check constraints", name)
-		}
-		checks = append(checks, schema.CheckDef{Name: name, Expression: expression})
+		checks = append(checks, schema.CheckDef{
+			Name:        name,
+			Expression:  expression,
+			NoInherit:   noInherit,
+			NotValid:    !validated,
+			NotEnforced: !enforced,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate check constraints: %w", err)
@@ -2299,12 +2296,6 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 		if deleteSetColumns {
 			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support column lists for ON DELETE SET NULL or SET DEFAULT", name)
 		}
-		if !validated {
-			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support NOT VALID foreign keys", name)
-		}
-		if !enforced {
-			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support NOT ENFORCED foreign keys", name)
-		}
 		if temporal {
 			return nil, fmt.Errorf("inspect: foreign key %q cannot be represented: rasql does not support temporal foreign keys", name)
 		}
@@ -2317,6 +2308,8 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 			return nil, fmt.Errorf("inspect: foreign key %q: %w", name, err)
 		}
 		deferrability := foreignKeyDeferrability(deferrable, initiallyDeferred)
+		notValid := !validated
+		notEnforced := !enforced
 		if len(keys) == 0 || keys[len(keys)-1].Name != name {
 			keys = append(keys, schema.ForeignKeyDef{
 				Name:             name,
@@ -2326,10 +2319,12 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 				OnDelete:         onDelete,
 				OnUpdate:         onUpdate,
 				Deferrable:       deferrability,
+				NotValid:         notValid,
+				NotEnforced:      notEnforced,
 			})
 		}
 		key := &keys[len(keys)-1]
-		if key.ReferencedSchema != referencedSchema || key.ReferencedTable != referencedTable || key.Match != match || key.OnDelete != onDelete || key.OnUpdate != onUpdate || key.Deferrable != deferrability {
+		if key.ReferencedSchema != referencedSchema || key.ReferencedTable != referencedTable || key.Match != match || key.OnDelete != onDelete || key.OnUpdate != onUpdate || key.Deferrable != deferrability || key.NotValid != notValid || key.NotEnforced != notEnforced {
 			return nil, fmt.Errorf("inspect: foreign key %q has inconsistent metadata", name)
 		}
 		key.Columns = append(key.Columns, column)
