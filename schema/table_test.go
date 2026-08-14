@@ -929,6 +929,62 @@ func TestTableValidatesUniqueConstraintIncludeColumnsDuplicate(t *testing.T) {
 	require.ErrorContains(t, err, `duplicates column "id"`)
 }
 
+// TestTableValidateAcceptsSQLiteTableOptions proves that Strict,
+// WithoutRowID, PrimaryKeyAutoincrement, and PrimaryKeyOnConflict are all
+// accepted together on a table that has a primary key.
+func TestTableValidateAcceptsSQLiteTableOptions(t *testing.T) {
+	table := validTable()
+	table.Strict = true
+	table.WithoutRowID = true
+	table.PrimaryKeyAutoincrement = true
+	table.PrimaryKeyOnConflict = schema.ConflictReplace
+	require.NoError(t, table.Validate())
+}
+
+func TestTableValidatesPrimaryKeyOnConflict(t *testing.T) {
+	table := validTable()
+	table.PrimaryKeyOnConflict = schema.ConflictResolution("bogus")
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "table.primary_key_on_conflict")
+}
+
+// TestTableValidatesPrimaryKeyAutoincrementWithoutPrimaryKey proves that
+// PrimaryKeyAutoincrement is nonsense on a table with no primary key at
+// all, so Validate rejects it instead of quietly accepting a fact that
+// names nothing.
+func TestTableValidatesPrimaryKeyAutoincrementWithoutPrimaryKey(t *testing.T) {
+	table := validTable()
+	table.PrimaryKey = nil
+	table.PrimaryKeyAutoincrement = true
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "table.primary_key_autoincrement")
+	require.ErrorContains(t, err, "must not be set without a primary key")
+}
+
+// TestTableValidatesPrimaryKeyOnConflictWithoutPrimaryKey is the
+// PrimaryKeyOnConflict counterpart to
+// TestTableValidatesPrimaryKeyAutoincrementWithoutPrimaryKey.
+func TestTableValidatesPrimaryKeyOnConflictWithoutPrimaryKey(t *testing.T) {
+	table := validTable()
+	table.PrimaryKey = nil
+	table.PrimaryKeyOnConflict = schema.ConflictReplace
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "table.primary_key_on_conflict")
+	require.ErrorContains(t, err, "must not be set without a primary key")
+}
+
 // TestTableQualifiedName pins QualifiedName and Qualified for both an
 // unqualified and a qualified table.
 func TestTableQualifiedName(t *testing.T) {

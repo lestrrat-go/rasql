@@ -1332,6 +1332,20 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 		writeStringLiteralSlice(source, table.PrimaryKey)
 		source.WriteString(",\n")
 	}
+	if table.Strict {
+		source.WriteString("Strict: true,\n")
+	}
+	if table.WithoutRowID {
+		source.WriteString("WithoutRowID: true,\n")
+	}
+	if table.PrimaryKeyAutoincrement {
+		source.WriteString("PrimaryKeyAutoincrement: true,\n")
+	}
+	if table.PrimaryKeyOnConflict != "" {
+		source.WriteString("PrimaryKeyOnConflict: ")
+		source.WriteString(conflictResolutionConstant(table.PrimaryKeyOnConflict))
+		source.WriteString(",\n")
+	}
 	if len(table.UniqueConstraints) > 0 {
 		source.WriteString("UniqueConstraints: []schema.UniqueDef{\n")
 		for _, constraint := range table.UniqueConstraints {
