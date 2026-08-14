@@ -478,6 +478,11 @@ func TestRunHelp(t *testing.T) {
 			expected: "Usage: rasqlgen <command> [flags]",
 		},
 		{
+			name:     "bootstrap",
+			args:     []string{"bootstrap", "-h"},
+			expected: "Usage of bootstrap:",
+		},
+		{
 			name:     "schema",
 			args:     []string{"schema", "-h"},
 			expected: "Usage of schema:",
