@@ -175,6 +175,110 @@ func (e *UnsupportedIndexKeyDetailsError) Unwrap() error {
 	return ErrUnsupportedIndexKeyDetails
 }
 
+// ErrUnsupportedIndexNotValid is the sentinel wrapped by every
+// [UnsupportedIndexNotValidError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexNotValid = errors.New("render: unsupported invalid index")
+
+// UnsupportedIndexNotValidError reports that an IndexDef sets
+// [schema.IndexDef.NotValid]. inspect can describe such an index, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for an invalid index.
+type UnsupportedIndexNotValidError struct {
+	// Index is the name of the index marked invalid.
+	Index string
+}
+
+func (e *UnsupportedIndexNotValidError) Error() string {
+	return fmt.Sprintf("index %q is not valid, which rasql can describe but not yet render", e.Index)
+}
+
+// Unwrap exposes ErrUnsupportedIndexNotValid so
+// errors.Is(err, ErrUnsupportedIndexNotValid) works alongside errors.As
+// against *UnsupportedIndexNotValidError.
+func (e *UnsupportedIndexNotValidError) Unwrap() error {
+	return ErrUnsupportedIndexNotValid
+}
+
+// ErrUnsupportedIndexStorageParameters is the sentinel wrapped by every
+// [UnsupportedIndexStorageParametersError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexStorageParameters = errors.New("render: unsupported index storage parameters")
+
+// UnsupportedIndexStorageParametersError reports that an IndexDef names
+// [schema.IndexDef.StorageParameters]. inspect can describe such an index,
+// and TableDef.Validate accepts it, but this package does not yet know how
+// to build DDL for a WITH (...) storage-parameters clause.
+type UnsupportedIndexStorageParametersError struct {
+	// Index is the name of the index that named storage parameters.
+	Index string
+	// StorageParameters is the storage parameters the index named.
+	StorageParameters map[string]string
+}
+
+func (e *UnsupportedIndexStorageParametersError) Error() string {
+	return fmt.Sprintf("index %q has storage parameters %v, which rasql can describe but not yet render", e.Index, e.StorageParameters)
+}
+
+// Unwrap exposes ErrUnsupportedIndexStorageParameters so
+// errors.Is(err, ErrUnsupportedIndexStorageParameters) works alongside
+// errors.As against *UnsupportedIndexStorageParametersError.
+func (e *UnsupportedIndexStorageParametersError) Unwrap() error {
+	return ErrUnsupportedIndexStorageParameters
+}
+
+// ErrUnsupportedIndexTablespace is the sentinel wrapped by every
+// [UnsupportedIndexTablespaceError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexTablespace = errors.New("render: unsupported index tablespace")
+
+// UnsupportedIndexTablespaceError reports that an IndexDef names a
+// [schema.IndexDef.Tablespace]. inspect can describe such an index, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for a TABLESPACE clause.
+type UnsupportedIndexTablespaceError struct {
+	// Index is the name of the index that named a tablespace.
+	Index string
+	// Tablespace is the tablespace the index named.
+	Tablespace string
+}
+
+func (e *UnsupportedIndexTablespaceError) Error() string {
+	return fmt.Sprintf("index %q uses tablespace %q, which rasql can describe but not yet render", e.Index, e.Tablespace)
+}
+
+// Unwrap exposes ErrUnsupportedIndexTablespace so
+// errors.Is(err, ErrUnsupportedIndexTablespace) works alongside errors.As
+// against *UnsupportedIndexTablespaceError.
+func (e *UnsupportedIndexTablespaceError) Unwrap() error {
+	return ErrUnsupportedIndexTablespace
+}
+
+// ErrUnsupportedIndexReplicaIdentity is the sentinel wrapped by every
+// [UnsupportedIndexReplicaIdentityError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedIndexReplicaIdentity = errors.New("render: unsupported index replica identity")
+
+// UnsupportedIndexReplicaIdentityError reports that an IndexDef sets
+// [schema.IndexDef.ReplicaIdentity]. inspect can describe such an index, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build DDL for a REPLICA IDENTITY USING INDEX declaration.
+type UnsupportedIndexReplicaIdentityError struct {
+	// Index is the name of the index marked as the replica identity.
+	Index string
+}
+
+func (e *UnsupportedIndexReplicaIdentityError) Error() string {
+	return fmt.Sprintf("index %q is the replica identity, which rasql can describe but not yet render", e.Index)
+}
+
+// Unwrap exposes ErrUnsupportedIndexReplicaIdentity so
+// errors.Is(err, ErrUnsupportedIndexReplicaIdentity) works alongside
+// errors.As against *UnsupportedIndexReplicaIdentityError.
+func (e *UnsupportedIndexReplicaIdentityError) Unwrap() error {
+	return ErrUnsupportedIndexReplicaIdentity
+}
+
 // ErrUnsupportedForeignKeyMatch is the sentinel wrapped by every
 // [UnsupportedForeignKeyMatchError], so a caller that only needs a
 // presence check can use errors.Is instead of errors.As.
@@ -839,6 +943,18 @@ func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef
 	}
 	if len(index.Keys) > 0 {
 		return &UnsupportedIndexKeyDetailsError{Index: index.Name, Keys: index.Keys}
+	}
+	if index.NotValid {
+		return &UnsupportedIndexNotValidError{Index: index.Name}
+	}
+	if len(index.StorageParameters) > 0 {
+		return &UnsupportedIndexStorageParametersError{Index: index.Name, StorageParameters: index.StorageParameters}
+	}
+	if index.Tablespace != "" {
+		return &UnsupportedIndexTablespaceError{Index: index.Name, Tablespace: index.Tablespace}
+	}
+	if index.ReplicaIdentity {
+		return &UnsupportedIndexReplicaIdentityError{Index: index.Name}
 	}
 	if err := r.rejectUnboundedMySQLText(table, index.Columns, "an index"); err != nil {
 		return err

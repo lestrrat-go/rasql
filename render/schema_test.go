@@ -476,6 +476,130 @@ func TestCreateIndexesRejectsKeyDetails(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedIndexKeyDetails)
 }
 
+// TestCreateIndexesRejectsNotValidIndex proves that an IndexDef setting
+// NotValid, such as an index left behind by a failed CREATE INDEX
+// CONCURRENTLY that inspect now describes instead of rejecting, is refused
+// at render time with a typed error rather than silently rendered as a
+// plain, usable index.
+func TestCreateIndexesRejectsNotValidIndex(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:     "documents_status_idx",
+			Columns:  []string{"status"},
+			NotValid: true,
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_status_idx"`)
+	require.ErrorContains(t, err, "not valid")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var notValidErr *render.UnsupportedIndexNotValidError
+	require.ErrorAs(t, err, &notValidErr)
+	require.Equal(t, "documents_status_idx", notValidErr.Index)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexNotValid)
+}
+
+// TestCreateIndexesRejectsStorageParameters proves that an IndexDef naming
+// StorageParameters, such as a fillfactor inspect now describes instead of
+// rejecting, is refused at render time with a typed error rather than
+// silently rendered without its WITH (...) clause.
+func TestCreateIndexesRejectsStorageParameters(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:              "documents_status_idx",
+			Columns:           []string{"status"},
+			StorageParameters: map[string]string{"fillfactor": "70"},
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_status_idx"`)
+	require.ErrorContains(t, err, "storage parameters")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var storageErr *render.UnsupportedIndexStorageParametersError
+	require.ErrorAs(t, err, &storageErr)
+	require.Equal(t, "documents_status_idx", storageErr.Index)
+	require.Equal(t, map[string]string{"fillfactor": "70"}, storageErr.StorageParameters)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexStorageParameters)
+}
+
+// TestCreateIndexesRejectsTablespace proves that an IndexDef naming a
+// Tablespace, which inspect now describes instead of rejecting, is refused
+// at render time with a typed error rather than silently rendered into the
+// database's default tablespace.
+func TestCreateIndexesRejectsTablespace(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:       "documents_status_idx",
+			Columns:    []string{"status"},
+			Tablespace: "pg_custom",
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_status_idx"`)
+	require.ErrorContains(t, err, `"pg_custom"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var tablespaceErr *render.UnsupportedIndexTablespaceError
+	require.ErrorAs(t, err, &tablespaceErr)
+	require.Equal(t, "documents_status_idx", tablespaceErr.Index)
+	require.Equal(t, "pg_custom", tablespaceErr.Tablespace)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexTablespace)
+}
+
+// TestCreateIndexesRejectsReplicaIdentity proves that an IndexDef setting
+// ReplicaIdentity, which inspect now describes instead of rejecting, is
+// refused at render time with a typed error rather than silently rendered
+// as a plain index with no bearing on logical replication.
+func TestCreateIndexesRejectsReplicaIdentity(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:            "documents_status_idx",
+			Columns:         []string{"status"},
+			Unique:          true,
+			ReplicaIdentity: true,
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"documents_status_idx"`)
+	require.ErrorContains(t, err, "replica identity")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var replicaIdentityErr *render.UnsupportedIndexReplicaIdentityError
+	require.ErrorAs(t, err, &replicaIdentityErr)
+	require.Equal(t, "documents_status_idx", replicaIdentityErr.Index)
+	require.ErrorIs(t, err, render.ErrUnsupportedIndexReplicaIdentity)
+}
+
 // TestCreateTableRejectsNonDefaultForeignKeyMatch proves that a
 // ForeignKeyDef naming a non-default schema.MatchType, such as MATCH FULL
 // which inspect now describes instead of rejecting, is refused at render

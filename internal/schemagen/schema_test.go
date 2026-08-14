@@ -1216,6 +1216,8 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 			{Name: "idx_lower_bio", Expressions: []string{"lower(bio)"}},
 			{Name: "idx_price_status", Columns: []string{"price"}, IncludeColumns: []string{"status"}, Invisible: true},
 			{Name: "idx_created_at_desc", Keys: []schema.IndexKeyDef{{Expression: "created_at", Descending: true, Collation: "C", OperatorClass: "text_pattern_ops", PrefixLength: 8}}},
+			{Name: "idx_status_invalid", Columns: []string{"status"}, NotValid: true, StorageParameters: map[string]string{"fillfactor": "70"}, Tablespace: "pg_custom"},
+			{Name: "uidx_status_replident", Columns: []string{"status"}, Unique: true, ReplicaIdentity: true},
 		},
 		ForeignKeys: []schema.ForeignKeyDef{
 			{
@@ -1282,6 +1284,8 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Name: "idx_price_status", Columns: []string{"price"}, IncludeColumns: []string{"status"}, Invisible: true}`)
 	require.Contains(t, text, `{Name: "idx_created_at_desc", Keys: []schema.IndexKeyDef{`)
 	require.Contains(t, text, `{Expression: "created_at", Descending: true, Collation: "C", OperatorClass: "text_pattern_ops", PrefixLength: 8}`)
+	require.Contains(t, text, `{Name: "idx_status_invalid", Columns: []string{"status"}, NotValid: true, StorageParameters: map[string]string{"fillfactor": "70"}, Tablespace: "pg_custom"}`)
+	require.Contains(t, text, `{Name: "uidx_status_replident", Columns: []string{"status"}, Unique: true, ReplicaIdentity: true}`)
 	require.Contains(t, text, `{Name: "fk_owner", Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, Match: schema.MatchFull, OnDelete: schema.Cascade, OnUpdate: schema.Restrict, Deferrable: schema.DeferrableInitiallyDeferred, NotValid: true, NotEnforced: true}`)
 	require.Contains(t, text, `{Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
 	require.Contains(t, text, `{Name: "Owner", Kind: schema.RelationshipBelongsTo, Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)

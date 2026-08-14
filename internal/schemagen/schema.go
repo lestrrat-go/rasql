@@ -1416,6 +1416,20 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 			if index.Invisible {
 				source.WriteString(", Invisible: true")
 			}
+			if index.NotValid {
+				source.WriteString(", NotValid: true")
+			}
+			if len(index.StorageParameters) > 0 {
+				source.WriteString(", StorageParameters: ")
+				writeStringMapLiteral(source, index.StorageParameters)
+			}
+			if index.Tablespace != "" {
+				source.WriteString(", Tablespace: ")
+				source.WriteString(quote(index.Tablespace))
+			}
+			if index.ReplicaIdentity {
+				source.WriteString(", ReplicaIdentity: true")
+			}
 			if len(index.Keys) > 0 {
 				source.WriteString(", Keys: []schema.IndexKeyDef{\n")
 				for _, key := range index.Keys {
@@ -1711,6 +1725,27 @@ func writeStringLiteralSlice(source *bytes.Buffer, values []string) {
 			source.WriteString(", ")
 		}
 		source.WriteString(quote(value))
+	}
+	source.WriteByte('}')
+}
+
+// writeStringMapLiteral writes values as a map[string]string composite
+// literal, with keys sorted so repeated generation of the same descriptor
+// produces byte-identical source.
+func writeStringMapLiteral(source *bytes.Buffer, values map[string]string) {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	source.WriteString("map[string]string{")
+	for index, key := range keys {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(quote(key))
+		source.WriteString(": ")
+		source.WriteString(quote(values[key]))
 	}
 	source.WriteByte('}')
 }

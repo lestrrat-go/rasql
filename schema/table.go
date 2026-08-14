@@ -424,6 +424,69 @@ type IndexDef struct {
 	// from a PostgreSQL or SQLite descriptor.
 	Invisible bool `json:",omitempty"`
 
+	// NotValid records a PostgreSQL index left behind by a failed
+	// CREATE INDEX CONCURRENTLY (or similar concurrent operation):
+	// PostgreSQL keeps the index's catalog entry but marks it unusable
+	// for lookups or constraint enforcement. Its zero value, false,
+	// means the index is valid and usable, which is what every IndexDef
+	// written before this field existed has always meant. MySQL and
+	// SQLite have no equivalent concept, so this never comes from a
+	// MySQL or SQLite descriptor.
+	//
+	// A true NotValid is describable but not yet renderable: inspect
+	// records what a live PostgreSQL index's own validity actually is,
+	// and TableDef.Validate accepts it, but render.CreateIndexes and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct an invalid index.
+	NotValid bool `json:",omitempty"`
+
+	// StorageParameters holds a PostgreSQL index's storage parameters —
+	// settings such as fillfactor that a CREATE INDEX ... WITH (...)
+	// clause attaches to an index — keyed and valued exactly as the
+	// server reports them. Its zero value, nil, means the index carries
+	// no storage parameters, PostgreSQL's own default, which is what
+	// every IndexDef written before this field existed has always
+	// meant. MySQL and SQLite have no equivalent concept, so this never
+	// comes from a MySQL or SQLite descriptor.
+	//
+	// A non-empty StorageParameters is describable but not yet
+	// renderable: inspect records a live PostgreSQL index's storage
+	// parameters, and TableDef.Validate accepts them, but
+	// render.CreateIndexes and the migrate diff-live path refuse to
+	// build DDL for one, because rasql does not yet know how to
+	// construct a WITH (...) clause on an index.
+	StorageParameters map[string]string `json:",omitempty"`
+
+	// Tablespace names the PostgreSQL tablespace holding the index, or
+	// the empty string for the database's default tablespace. Its zero
+	// value, "", means the default tablespace, which is what every
+	// IndexDef written before this field existed has always meant.
+	// MySQL and SQLite have no equivalent concept, so this never comes
+	// from a MySQL or SQLite descriptor.
+	//
+	// A non-empty Tablespace is describable but not yet renderable:
+	// inspect records a live PostgreSQL index's tablespace, and
+	// TableDef.Validate accepts it, but render.CreateIndexes and the
+	// migrate diff-live path refuse to build DDL for one, because rasql
+	// does not yet know how to construct a TABLESPACE clause.
+	Tablespace string `json:",omitempty"`
+
+	// ReplicaIdentity marks the PostgreSQL index the table uses as its
+	// REPLICA IDENTITY USING INDEX for logical replication, in place of
+	// the primary key. Its zero value, false, means the index is not
+	// the replica identity, which is what every IndexDef written before
+	// this field existed has always meant. MySQL and SQLite have no
+	// equivalent concept, so this never comes from a MySQL or SQLite
+	// descriptor.
+	//
+	// A true ReplicaIdentity is describable but not yet renderable:
+	// inspect records what a live PostgreSQL table's replica identity
+	// index actually is, and TableDef.Validate accepts it, but
+	// render.CreateIndexes and the migrate diff-live path refuse to
+	// build DDL for one, because rasql does not yet know how to
+	// construct a REPLICA IDENTITY USING INDEX declaration.
+	ReplicaIdentity bool `json:",omitempty"`
+
 	// Keys, when non-empty, is the full ordered list of per-key facts for
 	// an index that has at least one key ordered DESC, using a
 	// non-default collation or operator class, or (MySQL) indexed over a
@@ -1095,6 +1158,19 @@ func validateIndexes(indexes []IndexDef, columns map[string]struct{}) error {
 				}
 				seen[name] = struct{}{}
 			}
+		}
+		for key := range index.StorageParameters {
+			if key == "" {
+				return validationError(path+".storage_parameters", "must not have an empty key")
+			}
+		}
+		if index.Tablespace != "" {
+			if err := ValidateIdentifier(index.Tablespace); err != nil {
+				return validationError(path+".tablespace", "%s", err)
+			}
+		}
+		if index.ReplicaIdentity && !index.Unique {
+			return validationError(path+".replica_identity", "must not be set on a non-unique index: PostgreSQL requires a unique index to serve as REPLICA IDENTITY USING INDEX")
 		}
 	}
 	return nil
