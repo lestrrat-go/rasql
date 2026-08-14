@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,8 +108,7 @@ func TestGeneratedStoreRunsAgainstSQLite(t *testing.T) {
 // monolithic layout rasqlgen never writes (internal/schemagen/schema_test.go,
 // generate/schema_test.go) or compiles the split layout but only runs the
 // generated descriptor test, never a column accessor, a relationship, or a
-// query function (cli/rasqlgen/rasqlgen_e2e_test.go). See "1.6 Test
-// strategy" for the full accounting.
+// query function (cli/rasqlgen/rasqlgen_e2e_test.go).
 func TestGeneratedStorePackageCompilesAndRuns(t *testing.T) {
 	moduleDir := t.TempDir()
 
@@ -129,8 +129,9 @@ func TestGeneratedStorePackageCompilesAndRuns(t *testing.T) {
 	// generate.WritePackage's own output, so it needs checksums for that
 	// module and its transitive dependencies. The root go.sum already holds
 	// them, since the root go.mod requires the same modernc.org/sqlite
-	// version; copying it keeps the whole fixture offline under
-	// GOPROXY=off, with no "go mod tidy" or network access.
+	// version. Copying it is what lets the offline environment built below
+	// verify every module the scratch build resolves, with no "go mod tidy"
+	// and no network access.
 	repoGoSum, err := os.ReadFile(filepath.Join("..", "go.sum"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.sum"), repoGoSum, 0o600))
@@ -164,8 +165,63 @@ func TestGeneratedStorePackageCompilesAndRuns(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "acceptance_test.go"), []byte(storeAcceptanceTestSource), 0o600))
 
+	// The scratch module's toolchain run gets an explicit environment rather
+	// than the ambient one, so an offline build is what this test enforces
+	// instead of what it happens to inherit: GOPROXY=off makes a fetch fail
+	// instead of silently succeeding against whatever proxy the developer or
+	// CI has configured, and a scratch GOMODCACHE and GOCACHE stop a warm
+	// host cache from standing in for a dependency the fixture never
+	// resolved. Everything else is inherited, because the toolchain still
+	// needs PATH, HOME and the rest of its ambient environment. -modcacherw
+	// leaves the scratch module cache writable, which is what lets
+	// t.TempDir's own cleanup remove it.
+	cacheRoot := t.TempDir()
+	offlineEnvironment := append(os.Environ(),
+		"GOPROXY=off",
+		"GOMODCACHE="+filepath.Join(cacheRoot, "modcache"),
+		"GOCACHE="+filepath.Join(cacheRoot, "buildcache"),
+		"GOFLAGS=-modcacherw",
+	)
+
+	// That scratch module cache starts empty, and GOPROXY=off can never
+	// fill it, so it is populated first from this machine's own module
+	// cache, served as a file:// proxy. That step reaches no network
+	// either: a module this repository has not already downloaded is simply
+	// absent from the file proxy, so a fixture that grew a dependency the
+	// repository does not have fails here rather than fetching it.
+	download := exec.CommandContext(t.Context(), "go", "mod", "download")
+	download.Dir = moduleDir
+	downloadEnvironment := slices.Clone(offlineEnvironment)
+	downloadEnvironment = append(downloadEnvironment, "GOPROXY="+localModuleProxy(t))
+	download.Env = downloadEnvironment
+	downloadOutput, err := download.CombinedOutput()
+	require.NoErrorf(t, err, "go mod download output:\n%s", downloadOutput)
+
 	command := exec.CommandContext(t.Context(), "go", "test", "./...")
 	command.Dir = moduleDir
+	command.Env = offlineEnvironment
 	output, err := command.CombinedOutput()
 	require.NoErrorf(t, err, "go test output:\n%s", output)
+	// A run that reached for a module prints "go: downloading" before
+	// GOPROXY=off refuses it, so the absence of that line is what shows the
+	// scratch cache alone satisfied the build.
+	require.NotContainsf(t, string(output), "go: downloading", "go test output:\n%s", output)
+}
+
+// localModuleProxy returns a file:// module proxy URL for this machine's own
+// Go module cache. Serving the already-downloaded cache to the scratch module
+// is what makes an offline resolve possible at all: the scratch cache can be
+// filled from it without a network fetch, and a module the cache does not hold
+// is a failure rather than a download.
+func localModuleProxy(t *testing.T) string {
+	t.Helper()
+	reported, err := exec.CommandContext(t.Context(), "go", "env", "GOMODCACHE").Output()
+	require.NoError(t, err)
+	downloadDir := filepath.ToSlash(filepath.Join(strings.TrimSpace(string(reported)), "cache", "download"))
+	// A file:// URL needs a rooted, slash-separated path, and GOMODCACHE
+	// starts with a drive letter rather than a slash on Windows.
+	if !strings.HasPrefix(downloadDir, "/") {
+		downloadDir = "/" + downloadDir
+	}
+	return "file://" + downloadDir
 }
