@@ -405,6 +405,29 @@ func TestTableValidateAcceptsDecimalColumn(t *testing.T) {
 	require.NoError(t, table.Validate())
 }
 
+// TestTableValidateAcceptsNonDefaultIndexMethod proves that an IndexDef
+// naming a non-default schema.IndexMethod, such as what inspect now records
+// for a live PostgreSQL GIN index or a MySQL FULLTEXT index, is valid input:
+// Validate describes the index, and only render.CreateIndexes and the
+// migrate diff-live path refuse to build DDL for it.
+func TestTableValidateAcceptsNonDefaultIndexMethod(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "tags", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:    "documents_tags_gin_idx",
+			Columns: []string{"tags"},
+			Method:  "gin",
+		}},
+	}
+
+	require.NoError(t, table.Validate())
+}
+
 // TestTableValidateUnsignedColumn covers the integer-specific signedness
 // option. Other concrete types cannot carry it in the first place.
 func TestTableValidateUnsignedColumn(t *testing.T) {

@@ -25,6 +25,28 @@ func TestDiffLiveMatchesInlinePrimaryKey(t *testing.T) {
 	require.Empty(t, plan.Statements)
 }
 
+// TestLiveSourcesRejectsNonDefaultIndexMethod proves that an inspected table
+// carrying a non-default index method, such as a GIN index, does not reach
+// diff-live's generated desired-schema sources as a silently downgraded
+// plain index: LiveSources renders through render.CreateIndexes, which
+// refuses the method, so the error surfaces here rather than a Plan going on
+// to emit the wrong DDL for it.
+func TestLiveSourcesRejectsNonDefaultIndexMethod(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tags", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:    "members_tags_gin_idx",
+			Columns: []string{"tags"},
+			Method:  "gin",
+		}},
+	})
+	require.ErrorContains(t, err, `"members_tags_gin_idx"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, `

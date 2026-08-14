@@ -1123,6 +1123,7 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 		Indexes: []schema.IndexDef{
 			{Name: "idx_owner", Columns: []string{"owner_id"}},
 			{Name: "uidx_code", Columns: []string{"code"}, Unique: true},
+			{Name: "idx_bio_gin", Columns: []string{"bio"}, Method: "gin"},
 		},
 		ForeignKeys: []schema.ForeignKeyDef{
 			{
@@ -1170,6 +1171,7 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Expression: "id > 0"}`)
 	require.Contains(t, text, `{Name: "idx_owner", Columns: []string{"owner_id"}}`)
 	require.Contains(t, text, `{Name: "uidx_code", Columns: []string{"code"}, Unique: true}`)
+	require.Contains(t, text, `{Name: "idx_bio_gin", Columns: []string{"bio"}, Method: schema.IndexMethod("gin")}`)
 	require.Contains(t, text, `{Name: "fk_owner", Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade, OnUpdate: schema.Restrict}`)
 	require.Contains(t, text, `{Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
 	require.Contains(t, text, `{Name: "Owner", Kind: schema.RelationshipBelongsTo, Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)
