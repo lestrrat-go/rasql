@@ -410,8 +410,64 @@ type TableDef struct {
 	// has no opinion about Go names.
 	RowName string
 
-	Columns           []ColumnDef
-	PrimaryKey        []string
+	Columns    []ColumnDef
+	PrimaryKey []string
+
+	// Strict marks a SQLite STRICT table: every column must declare one of
+	// SQLite's strict type names, and a value that does not match a
+	// column's type is rejected instead of stored under SQLite's usual
+	// type-affinity rules. Its zero value, false, means the table is not
+	// STRICT, which is what every TableDef and every checked-in generated
+	// file written before this field existed has always meant. PostgreSQL
+	// and MySQL have no STRICT concept, so this never comes from a
+	// PostgreSQL or MySQL descriptor.
+	//
+	// A true Strict is describable but not yet renderable: inspect records
+	// what a live SQLite table's own CREATE TABLE text declares, and
+	// TableDef.Validate accepts it, but render.CreateTable and the migrate
+	// diff-live path refuse to build DDL for one, because rasql does not
+	// yet know how to construct a STRICT table.
+	Strict bool `json:",omitempty"`
+
+	// WithoutRowID marks a SQLite WITHOUT ROWID table, which stores rows
+	// keyed directly by their primary key instead of by an implicit
+	// rowid. Its zero value, false, means the table has the usual SQLite
+	// rowid, which is what every TableDef and every checked-in generated
+	// file written before this field existed has always meant. PostgreSQL
+	// and MySQL have no WITHOUT ROWID concept, so this never comes from a
+	// PostgreSQL or MySQL descriptor.
+	//
+	// WithoutRowID is describable but not yet renderable, on the same
+	// terms as Strict.
+	WithoutRowID bool `json:",omitempty"`
+
+	// PrimaryKeyAutoincrement marks a SQLite primary key declared with the
+	// AUTOINCREMENT keyword, which changes SQLite's rowid-allocation
+	// algorithm to never reuse a rowid a deleted row once used. It belongs
+	// to TableDef rather than to a column or to PrimaryKey's own string
+	// list because AUTOINCREMENT is a property of the table's single
+	// INTEGER PRIMARY KEY declaration, not of any one column definition.
+	// Its zero value, false, means the primary key carries no
+	// AUTOINCREMENT keyword, which is what every TableDef and every
+	// checked-in generated file written before this field existed has
+	// always meant. It is meaningless, and TableDef.Validate rejects it,
+	// on a TableDef with an empty PrimaryKey. PostgreSQL and MySQL have no
+	// equivalent SQLite AUTOINCREMENT concept (MySQL's own AUTO_INCREMENT
+	// is a column-level option, unrelated to this field), so this never
+	// comes from a PostgreSQL or MySQL descriptor.
+	//
+	// PrimaryKeyAutoincrement is describable but not yet renderable, on
+	// the same terms as Strict.
+	PrimaryKeyAutoincrement bool `json:",omitempty"`
+
+	// PrimaryKeyOnConflict names a SQLite primary key's ON CONFLICT
+	// resolution. See ConflictResolution's own doc for what its zero value
+	// means and what currently accepts it. It is meaningless, and
+	// TableDef.Validate rejects a non-default value, on a TableDef with an
+	// empty PrimaryKey. omitempty keeps a clause-free TableDef's JSON
+	// identical to what it encoded before this field existed.
+	PrimaryKeyOnConflict ConflictResolution `json:",omitempty"`
+
 	UniqueConstraints []UniqueDef
 	Checks            []CheckDef
 	Indexes           []IndexDef
@@ -552,6 +608,17 @@ func (t TableDef) Validate() error {
 
 	if err := validateColumnList("primary_key", t.PrimaryKey, columns, false); err != nil {
 		return err
+	}
+	if !t.PrimaryKeyOnConflict.valid() {
+		return validationError("table.primary_key_on_conflict", "unsupported primary key conflict resolution %q", t.PrimaryKeyOnConflict)
+	}
+	if len(t.PrimaryKey) == 0 {
+		if t.PrimaryKeyAutoincrement {
+			return validationError("table.primary_key_autoincrement", "must not be set without a primary key")
+		}
+		if t.PrimaryKeyOnConflict != "" {
+			return validationError("table.primary_key_on_conflict", "must not be set without a primary key")
+		}
 	}
 	constraintNames := make(map[string]string)
 	if err := validateNamedColumnLists("unique_constraints", t.UniqueConstraints, columns, constraintNames); err != nil {

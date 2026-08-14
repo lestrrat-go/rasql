@@ -6,9 +6,69 @@ import (
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+// TestLiveSourcesRejectsStrictTable proves that an inspected table carrying
+// Strict does not reach diff-live's generated desired-schema sources as a
+// silently downgraded plain, non-STRICT table: LiveSources renders through
+// render.CreateTable, which refuses Strict, so the error surfaces here
+// rather than a Plan going on to emit the wrong DDL for it.
+func TestLiveSourcesRejectsStrictTable(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		Strict:     true,
+	})
+	require.ErrorContains(t, err, `"members"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsWithoutRowIDTable is the WithoutRowID counterpart
+// to TestLiveSourcesRejectsStrictTable.
+func TestLiveSourcesRejectsWithoutRowIDTable(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:         "members",
+		Columns:      []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey:   []string{"id"},
+		WithoutRowID: true,
+	})
+	require.ErrorContains(t, err, `"members"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsPrimaryKeyAutoincrement is the
+// PrimaryKeyAutoincrement counterpart to TestLiveSourcesRejectsStrictTable.
+func TestLiveSourcesRejectsPrimaryKeyAutoincrement(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:                    "members",
+		Columns:                 []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey:              []string{"id"},
+		PrimaryKeyAutoincrement: true,
+	})
+	require.ErrorContains(t, err, `"members"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsPrimaryKeyConflictResolution is the
+// PrimaryKeyOnConflict counterpart to TestLiveSourcesRejectsStrictTable.
+func TestLiveSourcesRejectsPrimaryKeyConflictResolution(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:                 "members",
+		Columns:              []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey:           []string{"id"},
+		PrimaryKeyOnConflict: schema.ConflictReplace,
+	})
+	require.ErrorContains(t, err, `"members"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
 
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := sqlite.New()

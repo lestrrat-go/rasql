@@ -752,6 +752,116 @@ func TestCreateTableRejectsUniqueConflictResolution(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedUniqueConflictResolution)
 }
 
+// TestCreateTableRejectsStrictTable proves that a TableDef setting Strict,
+// such as a live SQLite STRICT table inspect now describes instead of
+// rejecting, is refused at render time with a typed error rather than
+// silently rendered as a plain, non-STRICT table.
+func TestCreateTableRejectsStrictTable(t *testing.T) {
+	table := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "name", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Strict:     true,
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"users"`)
+	require.ErrorContains(t, err, "STRICT")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var strictErr *render.UnsupportedTableStrictError
+	require.ErrorAs(t, err, &strictErr)
+	require.Equal(t, "users", strictErr.Table)
+	require.ErrorIs(t, err, render.ErrUnsupportedTableStrict)
+
+	var renderErr *render.Error
+	require.ErrorAs(t, err, &renderErr)
+	require.Equal(t, "sqlite", renderErr.Dialect)
+}
+
+// TestCreateTableRejectsWithoutRowIDTable is the WithoutRowID counterpart
+// to TestCreateTableRejectsStrictTable.
+func TestCreateTableRejectsWithoutRowIDTable(t *testing.T) {
+	table := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "name", Type: schema.TextType{}},
+		},
+		PrimaryKey:   []string{"id"},
+		WithoutRowID: true,
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"users"`)
+	require.ErrorContains(t, err, "WITHOUT ROWID")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var withoutRowIDErr *render.UnsupportedTableWithoutRowIDError
+	require.ErrorAs(t, err, &withoutRowIDErr)
+	require.Equal(t, "users", withoutRowIDErr.Table)
+	require.ErrorIs(t, err, render.ErrUnsupportedTableWithoutRowID)
+}
+
+// TestCreateTableRejectsPrimaryKeyAutoincrement proves that a TableDef
+// setting PrimaryKeyAutoincrement, such as a live SQLite AUTOINCREMENT
+// primary key inspect now describes instead of rejecting, is refused at
+// render time with a typed error rather than silently rendered as a plain
+// primary key with no AUTOINCREMENT keyword.
+func TestCreateTableRejectsPrimaryKeyAutoincrement(t *testing.T) {
+	table := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "name", Type: schema.TextType{}},
+		},
+		PrimaryKey:              []string{"id"},
+		PrimaryKeyAutoincrement: true,
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"users"`)
+	require.ErrorContains(t, err, "AUTOINCREMENT")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var autoincrementErr *render.UnsupportedPrimaryKeyAutoincrementError
+	require.ErrorAs(t, err, &autoincrementErr)
+	require.Equal(t, "users", autoincrementErr.Table)
+	require.ErrorIs(t, err, render.ErrUnsupportedPrimaryKeyAutoincrement)
+}
+
+// TestCreateTableRejectsPrimaryKeyConflictResolution proves that a
+// TableDef naming a non-default schema.ConflictResolution on its primary
+// key, such as a live SQLite primary key's ON CONFLICT REPLACE clause
+// inspect now describes instead of rejecting, is refused at render time
+// with a typed error rather than silently rendered as a plain primary key
+// with no conflict resolution.
+func TestCreateTableRejectsPrimaryKeyConflictResolution(t *testing.T) {
+	table := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "name", Type: schema.TextType{}},
+		},
+		PrimaryKey:           []string{"id"},
+		PrimaryKeyOnConflict: schema.ConflictReplace,
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"users"`)
+	require.ErrorContains(t, err, "ON CONFLICT REPLACE")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var conflictErr *render.UnsupportedPrimaryKeyConflictResolutionError
+	require.ErrorAs(t, err, &conflictErr)
+	require.Equal(t, "users", conflictErr.Table)
+	require.Equal(t, schema.ConflictReplace, conflictErr.OnConflict)
+	require.ErrorIs(t, err, render.ErrUnsupportedPrimaryKeyConflictResolution)
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",

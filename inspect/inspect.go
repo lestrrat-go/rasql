@@ -717,14 +717,12 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 	if len(metadata) == 0 {
 		return schema.TableDef{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
-	if options.withoutRowID || options.strict {
-		return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: STRICT and WITHOUT ROWID table options are unsupported", tableName)
-	}
 	definition, foreignKeyClauses, err := i.sqliteTableDefinition(ctx, options.database, tableName)
 	if err != nil {
 		return schema.TableDef{}, err
 	}
-	if err := validateSQLitePrimaryKey(definition, tableName); err != nil {
+	primaryKeyAutoincrement, primaryKeyOnConflict, err := sqlitePrimaryKeyFacts(definition, tableName)
+	if err != nil {
 		return schema.TableDef{}, err
 	}
 	rowIDAlias := false
@@ -777,14 +775,18 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		return schema.TableDef{}, err
 	}
 	table := schema.TableDef{
-		Schema:            options.database,
-		Name:              tableName,
-		Columns:           columns,
-		PrimaryKey:        primaryKey,
-		UniqueConstraints: uniqueConstraints,
-		Checks:            checks,
-		Indexes:           indexes,
-		ForeignKeys:       foreignKeys,
+		Schema:                  options.database,
+		Name:                    tableName,
+		Columns:                 columns,
+		PrimaryKey:              primaryKey,
+		Strict:                  options.strict,
+		WithoutRowID:            options.withoutRowID,
+		PrimaryKeyAutoincrement: primaryKeyAutoincrement,
+		PrimaryKeyOnConflict:    primaryKeyOnConflict,
+		UniqueConstraints:       uniqueConstraints,
+		Checks:                  checks,
+		Indexes:                 indexes,
+		ForeignKeys:             foreignKeys,
 	}
 	if err := table.Validate(); err != nil {
 		return schema.TableDef{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
@@ -1485,17 +1487,28 @@ func sqliteStatementHasRowIDAlias(statement *sqlitequery.CreateTableStatement, c
 	return false
 }
 
-func validateSQLitePrimaryKey(statement *sqlitequery.CreateTableStatement, tableName string) error {
+// sqlitePrimaryKeyFacts reports whether statement's primary key carries an
+// AUTOINCREMENT keyword and names its ON CONFLICT resolution, if any.
+// AUTOINCREMENT only ever appears inline on a column-level PRIMARY KEY
+// constraint (SQLite's own grammar has no table-level form of it), while a
+// conflict resolution can appear on either an inline or a table-level
+// PRIMARY KEY constraint, so both are checked for that one.
+func sqlitePrimaryKeyFacts(statement *sqlitequery.CreateTableStatement, tableName string) (bool, schema.ConflictResolution, error) {
 	if statement == nil {
-		return nil
+		return false, "", nil
 	}
+	autoincrement := false
+	conflict := sqlitequery.ConflictDefault
 	for _, column := range statement.Columns {
 		for _, constraint := range column.Constraints {
 			if constraint.Kind != sqlitequery.ConstraintPrimaryKey {
 				continue
 			}
-			if constraint.Autoincrement || constraint.Conflict != sqlitequery.ConflictDefault {
-				return fmt.Errorf("inspect: SQLite table %q cannot be represented: AUTOINCREMENT and primary-key conflict resolution are unsupported", tableName)
+			if constraint.Autoincrement {
+				autoincrement = true
+			}
+			if constraint.Conflict != sqlitequery.ConflictDefault {
+				conflict = constraint.Conflict
 			}
 		}
 	}
@@ -1504,10 +1517,14 @@ func validateSQLitePrimaryKey(statement *sqlitequery.CreateTableStatement, table
 			continue
 		}
 		if constraint.Conflict != sqlitequery.ConflictDefault {
-			return fmt.Errorf("inspect: SQLite table %q cannot be represented: AUTOINCREMENT and primary-key conflict resolution are unsupported", tableName)
+			conflict = constraint.Conflict
 		}
 	}
-	return nil
+	onConflict, err := sqliteConflictResolution(conflict)
+	if err != nil {
+		return false, "", fmt.Errorf("inspect: SQLite table %q cannot be represented: %w", tableName, err)
+	}
+	return autoincrement, onConflict, nil
 }
 
 func sqliteUniqueConstraints(statement *sqlitequery.CreateTableStatement, tableName string) ([]schema.UniqueDef, error) {

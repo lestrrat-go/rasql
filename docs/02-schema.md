@@ -130,6 +130,10 @@ rather than a list of options:
 | `RowName` | Optional Go type name for the generated row type; empty means `<Table>Row`. |
 | `Columns` | Each column, in the order it is declared. |
 | `PrimaryKey` | Column names from `Columns` that identify a row. |
+| `Strict` | A SQLite `STRICT` table (see [SQLite table-level options](#sqlite-table-level-options)). |
+| `WithoutRowID` | A SQLite `WITHOUT ROWID` table (see [SQLite table-level options](#sqlite-table-level-options)). |
+| `PrimaryKeyAutoincrement` | A SQLite `AUTOINCREMENT` primary key (see [SQLite table-level options](#sqlite-table-level-options)). |
+| `PrimaryKeyOnConflict` | A SQLite primary key's `ON CONFLICT` resolution (see [SQLite table-level options](#sqlite-table-level-options)). |
 | `UniqueConstraints` | Named or unnamed uniqueness requirements. |
 | `Checks` | Check constraints. |
 | `Indexes` | Secondary indexes. |
@@ -165,6 +169,24 @@ that is not immediately turned into a table.
 All four are describable but not yet renderable. `render.CreateTable` and the migrate diff-live path refuse to build DDL for a unique constraint naming any of them, returning a `*render.UnsupportedUniqueDeferrabilityError`, `*render.UnsupportedUniqueNullsNotDistinctError`, `*render.UnsupportedUniqueIncludeColumnsError`, or `*render.UnsupportedUniqueConflictResolutionError` that names the constraint and the fact it named, since rasql does not yet know how to construct anything other than a plain `UNIQUE (...)` constraint. There is no option-form constructor for any of the four yet: today they only appear on a descriptor `inspect` produced.
 
 PostgreSQL inspection still refuses a temporal unique constraint and one whose backing index uses a nondefault collation, storage option, tablespace, or replica identity; those stay out of scope for now. SQLite inspection still refuses a `UNIQUE` constraint with an expression, collation, or ordering.
+
+## SQLite table-level options
+
+`TableDef` carries four SQLite table-level facts beyond its columns and primary key: `Strict`, `WithoutRowID`, `PrimaryKeyAutoincrement`, and `PrimaryKeyOnConflict`. `inspect.Table` now records all four instead of failing the whole table, as it used to whenever a SQLite table was `STRICT`, was `WITHOUT ROWID`, or its primary key used `AUTOINCREMENT` or named an `ON CONFLICT` clause.
+
+`Strict` marks a SQLite `STRICT` table: every column must declare one of SQLite's strict type names, and a value that does not match a column's type is rejected instead of stored under SQLite's usual type-affinity rules. Its zero value, `false`, means the table is not `STRICT`, which is what every `TableDef` written before this field existed has always meant.
+
+`WithoutRowID` marks a SQLite `WITHOUT ROWID` table, which stores rows keyed directly by their primary key instead of by an implicit rowid. Its zero value, `false`, means the table has the usual SQLite rowid, which is what every `TableDef` written before this field existed has always meant.
+
+`PrimaryKeyAutoincrement` marks a SQLite primary key declared with the `AUTOINCREMENT` keyword, which changes SQLite's rowid-allocation algorithm to never reuse a rowid a deleted row once used. It lives on `TableDef` rather than on a column or on `PrimaryKey`'s own string list, because `AUTOINCREMENT` is a property of the table's single `INTEGER PRIMARY KEY` declaration rather than of any one column definition. Its zero value, `false`, means the primary key carries no `AUTOINCREMENT` keyword, which is what every `TableDef` written before this field existed has always meant.
+
+`PrimaryKeyOnConflict` names a SQLite primary key's `ON CONFLICT` resolution, reusing `schema.ConflictResolution` — the same type `UniqueDef.OnConflict` uses (see [Unique constraint facts](#unique-constraint-facts)) — rather than a second spelling of the same five resolutions. Its zero value, the empty string, means SQLite's own default resolution, `ABORT`, the only behavior every prior descriptor has meant.
+
+`PrimaryKeyAutoincrement` and `PrimaryKeyOnConflict` are both meaningless on a table with no primary key at all, so `TableDef.Validate` rejects either one set on a `TableDef` whose `PrimaryKey` is empty.
+
+All four facts are describable but not yet renderable. `render.CreateTable` and the migrate diff-live path refuse to build DDL for a table naming any of them, returning a `*render.UnsupportedTableStrictError`, `*render.UnsupportedTableWithoutRowIDError`, `*render.UnsupportedPrimaryKeyAutoincrementError`, or `*render.UnsupportedPrimaryKeyConflictResolutionError` that names the table and, for the last, the conflict resolution it named, since rasql does not yet know how to construct a `STRICT` table, a `WITHOUT ROWID` table, or an `AUTOINCREMENT` or `ON CONFLICT` primary key. There is no option-form constructor for any of the four yet: today they only appear on a descriptor `inspect` produced.
+
+PostgreSQL and MySQL have no `STRICT`, `WITHOUT ROWID`, or SQLite-style primary key `AUTOINCREMENT`/`ON CONFLICT` concept (MySQL's own `AUTO_INCREMENT` is a column-level option, unrelated to `PrimaryKeyAutoincrement`), so none of the four ever comes from a PostgreSQL or MySQL descriptor. SQLite inspection still refuses a virtual table, a `CREATE TABLE AS SELECT` definition, and an unsupported table kind; those stay out of scope for now.
 
 ## Index methods
 
