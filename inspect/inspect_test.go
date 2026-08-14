@@ -2090,8 +2090,8 @@ func TestMySQLInspectorRoundTripsFixedWidthTextWithoutSpuriousDiff(t *testing.T)
 
 // TestMySQLInspectorMatchesTextColumnTypeExactly covers the two ways a
 // CHAR or VARCHAR declaration can fail to state a plain numeric width: a
-// missing width entirely and a modifier such as BINARY trailing it, which
-// this package cannot record and would otherwise be dropped silently.
+// missing width entirely and a trailing modifier, which this package cannot
+// record and would otherwise be dropped silently.
 func TestMySQLInspectorMatchesTextColumnTypeExactly(t *testing.T) {
 	tests := map[string]struct {
 		columnType string
@@ -2106,11 +2106,15 @@ func TestMySQLInspectorMatchesTextColumnTypeExactly(t *testing.T) {
 			wantErr:    "a VARCHAR column must be declared VARCHAR(width)",
 		},
 		"zerofill modifier": {
-			// "binary" is deliberately not used here: MySQL's own COLUMN_TYPE
-			// would spell that CHAR(36) BINARY, which normalizeMySQLType's
-			// earlier BLOB/BINARY match claims first, matching a wholly
-			// different (and, for CHAR, undocumented) declaration, so it
-			// never reaches mysqlTextWidth at all.
+			// This shape is synthetic: MySQL's own catalog never trails a
+			// CHAR/VARCHAR declaration with anything after its width.
+			// CHARACTER SET and COLLATE are separate information_schema.columns
+			// columns, never appended to COLUMN_TYPE, and the legacy BINARY
+			// attribute is canonicalized to an explicit COLLATE clause at
+			// CREATE TABLE time (MySQL Worklog #13068), so it never reaches
+			// COLUMN_TYPE as literal "BINARY" text either. The row is
+			// fabricated to exercise this defensive branch, which genuine
+			// MySQL server data cannot reach.
 			columnType: "varchar(255) zerofill",
 			wantErr:    "must carry no ZEROFILL modifier",
 		},
@@ -2170,13 +2174,14 @@ func TestMySQLInspectorNormalizesDecimalColumn(t *testing.T) {
 	}, table.Columns)
 }
 
-// TestMySQLInspectorMatchesDecimalColumnTypeExactly covers the two ways a
-// MySQL COLUMN_TYPE can look like a decimal without being one this package can
+// TestMySQLInspectorMatchesDecimalColumnTypeExactly covers the ways a MySQL
+// COLUMN_TYPE can look like a decimal without being one this package can
 // represent. The catalog is read from a server the application may not
-// control, so a decimal is recognized from the whole declaration: catalog text
-// that merely contains DECIMAL or NUMERIC is an unsupported type, and a real
-// decimal declaration carrying a modifier is refused rather than silently
-// re-rendered without it.
+// control, so a decimal is recognized from the whole declaration: catalog
+// text that merely contains DECIMAL or NUMERIC is an unsupported type, and a
+// declaration carrying a modifier other than UNSIGNED or UNSIGNED ZEROFILL
+// (see TestMySQLInspectorRecordsDecimalUnsignedAndZeroFill for those two) is
+// refused rather than silently re-rendered without it.
 func TestMySQLInspectorMatchesDecimalColumnTypeExactly(t *testing.T) {
 	tests := map[string]struct {
 		columnType string
@@ -2190,13 +2195,13 @@ func TestMySQLInspectorMatchesDecimalColumnTypeExactly(t *testing.T) {
 			columnType: "NOT_A_TYPE_NUMERICAL",
 			wantErr:    `unsupported mysql type "NOT_A_TYPE_NUMERICAL"`,
 		},
-		"unsigned decimal": {
-			columnType: "decimal(10,2) unsigned",
-			wantErr:    "must carry no UNSIGNED modifier",
-		},
-		"zerofill decimal": {
-			columnType: "decimal(10,2) unsigned zerofill",
-			wantErr:    "must carry no UNSIGNED ZEROFILL modifier",
+		"zerofill without unsigned": {
+			// MySQL's own catalog always spells ZEROFILL together with
+			// UNSIGNED (see mysqlDecimalDeclaration's doc comment), so this
+			// shape never comes from a real server; it still must not be
+			// silently accepted.
+			columnType: "decimal(10,2) zerofill",
+			wantErr:    "must carry no ZEROFILL modifier",
 		},
 		"decimal alias": {
 			columnType: "fixed(10,2)",
@@ -2262,6 +2267,57 @@ func TestMySQLInspectorAcceptsDocumentedDecimalSpellings(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []schema.ColumnDef{
 				{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}},
+			}, table.Columns)
+		})
+	}
+}
+
+// TestMySQLInspectorRecordsDecimalUnsignedAndZeroFill proves that a MySQL
+// DECIMAL or NUMERIC column carrying UNSIGNED, or UNSIGNED together with
+// ZEROFILL, is now described rather than rejected: inspect used to fail the
+// whole table on the first such column, which would abort a sweep over a
+// production schema the moment it reached one.
+func TestMySQLInspectorRecordsDecimalUnsignedAndZeroFill(t *testing.T) {
+	tests := map[string]struct {
+		columnType string
+		want       schema.ColumnType
+	}{
+		"unsigned": {
+			columnType: "decimal(10,2) unsigned",
+			want:       schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true},
+		},
+		"unsigned zerofill": {
+			columnType: "decimal(10,2) unsigned zerofill",
+			want:       schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true, ZeroFill: true},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale, extra, generation_expression FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position").
+				WithArgs("payments").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "extra", "generation_expression"}).
+					AddRow("amount", test.columnType, "NO", nil, int64(10), int64(2), "", ""))
+			expectMySQLCreateTable(mock, "payments", "CREATE TABLE `payments` (`amount` "+test.columnType+" NOT NULL) ENGINE=InnoDB")
+			mock.ExpectQuery("SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position").
+				WithArgs("payments").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name"}))
+			expectMySQLIndexes(mock, "payments", sqlmock.NewRows([]string{"index_name", "unique", "column_name", "sub_part", "expression", "collation", "index_type", "is_visible"}))
+
+			table, err := inspector.Table(t.Context(), "payments")
+			require.NoError(t, err)
+			require.Equal(t, []schema.ColumnDef{
+				{Name: "amount", Type: test.want},
 			}, table.Columns)
 		})
 	}

@@ -66,6 +66,42 @@ func TestLiveSourcesRejectsIntegerZeroFill(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsDecimalUnsigned proves that an inspected table
+// carrying a MySQL decimal column with a true Unsigned does not reach
+// diff-live's generated desired-schema sources as a silently downgraded
+// plain-signed column: LiveSources renders through render.CreateTable,
+// which refuses Unsigned, so the error surfaces here rather than a Plan
+// going on to emit DDL that drops it.
+func TestLiveSourcesRejectsDecimalUnsigned(t *testing.T) {
+	analyzer := mysql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.ErrorContains(t, err, `"amount"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsDecimalZeroFill is the ZEROFILL counterpart to
+// TestLiveSourcesRejectsDecimalUnsigned.
+func TestLiveSourcesRejectsDecimalZeroFill(t *testing.T) {
+	analyzer := mysql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true, ZeroFill: true}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.ErrorContains(t, err, `"amount"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 // TestLiveSourcesRejectsGeneratedColumn proves that an inspected MySQL
 // table carrying a generated column does not reach diff-live's generated
 // desired-schema sources as a silently downgraded plain writable column:

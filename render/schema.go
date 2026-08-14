@@ -1032,6 +1032,56 @@ func (e *UnsupportedIntegerZeroFillError) Unwrap() error {
 	return ErrUnsupportedIntegerZeroFill
 }
 
+// ErrUnsupportedDecimalUnsigned is the sentinel wrapped by every
+// [UnsupportedDecimalUnsignedError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedDecimalUnsigned = errors.New("render: unsupported decimal unsigned")
+
+// UnsupportedDecimalUnsignedError reports that a ColumnDef names a true
+// [schema.DecimalType.Unsigned]. inspect can describe such a column, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build an UNSIGNED decimal declaration.
+type UnsupportedDecimalUnsignedError struct {
+	// Column is the name of the column that carried UNSIGNED.
+	Column string
+}
+
+func (e *UnsupportedDecimalUnsignedError) Error() string {
+	return fmt.Sprintf("column %q carries UNSIGNED, which rasql can describe but not yet render", e.Column)
+}
+
+// Unwrap exposes ErrUnsupportedDecimalUnsigned so
+// errors.Is(err, ErrUnsupportedDecimalUnsigned) works alongside errors.As
+// against *UnsupportedDecimalUnsignedError.
+func (e *UnsupportedDecimalUnsignedError) Unwrap() error {
+	return ErrUnsupportedDecimalUnsigned
+}
+
+// ErrUnsupportedDecimalZeroFill is the sentinel wrapped by every
+// [UnsupportedDecimalZeroFillError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedDecimalZeroFill = errors.New("render: unsupported decimal zerofill")
+
+// UnsupportedDecimalZeroFillError reports that a ColumnDef names a true
+// [schema.DecimalType.ZeroFill]. inspect can describe such a column, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build a ZEROFILL decimal declaration.
+type UnsupportedDecimalZeroFillError struct {
+	// Column is the name of the column that carried ZEROFILL.
+	Column string
+}
+
+func (e *UnsupportedDecimalZeroFillError) Error() string {
+	return fmt.Sprintf("column %q carries ZEROFILL, which rasql can describe but not yet render", e.Column)
+}
+
+// Unwrap exposes ErrUnsupportedDecimalZeroFill so
+// errors.Is(err, ErrUnsupportedDecimalZeroFill) works alongside errors.As
+// against *UnsupportedDecimalZeroFillError.
+func (e *UnsupportedDecimalZeroFillError) Unwrap() error {
+	return ErrUnsupportedDecimalZeroFill
+}
+
 // ErrUnsupportedExclusionConstraint is the sentinel wrapped by every
 // [UnsupportedExclusionConstraintError], so a caller that only needs a
 // presence check can use errors.Is instead of errors.As.
@@ -1368,6 +1418,17 @@ func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
 		}
 		if integer.ZeroFill {
 			return "", &UnsupportedIntegerZeroFillError{Column: column.Name}
+		}
+	}
+	if decimal, ok := column.Type.(schema.DecimalType); ok {
+		// ZeroFill always implies Unsigned in MySQL, so a decimal carrying
+		// both is checked for ZeroFill first: the more specific attribute
+		// names the actual refusal rather than the weaker fact it implies.
+		if decimal.ZeroFill {
+			return "", &UnsupportedDecimalZeroFillError{Column: column.Name}
+		}
+		if decimal.Unsigned {
+			return "", &UnsupportedDecimalUnsignedError{Column: column.Name}
 		}
 	}
 	name, err := r.quoteIdentifier(column.Name)
