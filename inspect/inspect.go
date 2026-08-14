@@ -153,9 +153,9 @@ func (i Inspector) TableIn(ctx context.Context, databaseName string, tableName s
 	return i.table(ctx, databaseName, tableName)
 }
 
-// TableRef names one base table TableNames or TableNamesIn reported. Schema
+// TableName names one base table TableNames or TableNamesIn reported. Schema
 // and Name mirror schema.TableDef's own fields of the same name, so a
-// TableRef maps onto a descriptor's namespace and name without translation.
+// TableName maps onto a descriptor's namespace and name without translation.
 //
 // On SQLite, Schema names the database the table lives in ("main", "temp",
 // or an attached database name), exactly as PRAGMA table_list's own schema
@@ -164,15 +164,15 @@ func (i Inspector) TableIn(ctx context.Context, databaseName string, tableName s
 // produces for those two dialects today, since schema.TableDef.Schema
 // reaches rendered DML, and filling it with current_schema() or DATABASE()
 // would silently qualify SQL that is unqualified now.
-type TableRef struct {
+type TableName struct {
 	Schema string
 	Name   string
 }
 
-// tableRefLess orders TableRef values by Schema first and then Name, so
+// tableNameLess orders TableName values by Schema first and then Name, so
 // TableNames and TableNamesIn return a deterministic order even when a table
 // name repeats across SQLite databases.
-func tableRefLess(left, right TableRef) bool {
+func tableNameLess(left, right TableName) bool {
 	if left.Schema != right.Schema {
 		return left.Schema < right.Schema
 	}
@@ -182,21 +182,21 @@ func tableRefLess(left, right TableRef) bool {
 // TableNames returns the base tables in the inspected scope, excluding
 // views, sorted by Schema and then Name. PostgreSQL scopes to
 // current_schema() and MySQL to DATABASE(), the same scope Table reads
-// columns from, and both report every TableRef.Schema empty (see TableRef).
+// columns from, and both report every TableName.Schema empty (see TableName).
 // SQLite has no single equivalent scope: like Table's own default, it
 // reports across main, temp, and every database attached to the connection,
-// with TableRef.Schema naming which one each table came from. Use
+// with TableName.Schema naming which one each table came from. Use
 // TableNamesIn to scope SQLite to one database.
-func (i Inspector) TableNames(ctx context.Context) ([]TableRef, error) {
+func (i Inspector) TableNames(ctx context.Context) ([]TableName, error) {
 	return i.tableNames(ctx, "")
 }
 
 // TableNamesIn returns the base tables in a SQLite database, excluding
 // views and sorted by Name, using a retained connection or transaction for
-// temp or an attached database. Every returned TableRef.Schema is
+// temp or an attached database. Every returned TableName.Schema is
 // databaseName. See TableIn for the same retained-connection requirement.
 // TableNamesIn is supported only for SQLite.
-func (i Inspector) TableNamesIn(ctx context.Context, databaseName string) ([]TableRef, error) {
+func (i Inspector) TableNamesIn(ctx context.Context, databaseName string) ([]TableName, error) {
 	if err := schema.ValidateIdentifier(databaseName); err != nil {
 		return nil, fmt.Errorf("inspect: invalid SQLite database name: %w", err)
 	}
@@ -209,7 +209,7 @@ func (i Inspector) TableNamesIn(ctx context.Context, databaseName string) ([]Tab
 	return i.sqliteTableNames(ctx, databaseName)
 }
 
-func (i Inspector) tableNames(ctx context.Context, databaseName string) ([]TableRef, error) {
+func (i Inspector) tableNames(ctx context.Context, databaseName string) ([]TableName, error) {
 	if isNil(i.queryer) || isNil(i.dialect) {
 		return nil, fmt.Errorf("inspect: invalid inspector")
 	}
@@ -929,12 +929,12 @@ func resolveSQLiteTableOptions(databaseName string, tableName string, matches []
 
 // sqliteTableNames enumerates SQLite base tables, excluding views. An empty
 // databaseName matches TableNames' own scope: main, temp, and every database
-// attached to the connection, with each TableRef.Schema naming which one a
+// attached to the connection, with each TableName.Schema naming which one a
 // table came from. A non-empty databaseName scopes to that one database, as
 // TableIn does for a single table lookup, and carries the same
 // retained-connection requirement for temp or an attached database; every
-// returned TableRef.Schema then equals databaseName.
-func (i Inspector) sqliteTableNames(ctx context.Context, databaseName string) ([]TableRef, error) {
+// returned TableName.Schema then equals databaseName.
+func (i Inspector) sqliteTableNames(ctx context.Context, databaseName string) ([]TableName, error) {
 	if databaseName != "" && databaseName != "main" && !sqliteRetainedQueryer(i.queryer) {
 		return nil, sqliteRetainedHandleError()
 	}
@@ -952,14 +952,14 @@ func (i Inspector) sqliteTableNames(ctx context.Context, databaseName string) ([
 	return inspector.sqliteTableNamesOnConnection(ctx, databaseName)
 }
 
-func (i Inspector) sqliteTableNamesOnConnection(ctx context.Context, databaseName string) ([]TableRef, error) {
+func (i Inspector) sqliteTableNamesOnConnection(ctx context.Context, databaseName string) ([]TableName, error) {
 	query := "PRAGMA table_list"
 	if databaseName != "" {
 		query = `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".table_list`
 	}
 	refs, tableListErr := i.sqliteTableListNames(ctx, query)
 	if tableListErr == nil && len(refs) > 0 {
-		sort.Slice(refs, func(left, right int) bool { return tableRefLess(refs[left], refs[right]) })
+		sort.Slice(refs, func(left, right int) bool { return tableNameLess(refs[left], refs[right]) })
 		return refs, nil
 	}
 
@@ -971,22 +971,22 @@ func (i Inspector) sqliteTableNamesOnConnection(ctx context.Context, databaseNam
 		}
 		return nil, err
 	}
-	sort.Slice(legacyRefs, func(left, right int) bool { return tableRefLess(legacyRefs[left], legacyRefs[right]) })
+	sort.Slice(legacyRefs, func(left, right int) bool { return tableNameLess(legacyRefs[left], legacyRefs[right]) })
 	return legacyRefs, nil
 }
 
 // sqliteTableListNames reads PRAGMA table_list rows, keeping only base
 // tables (kind "table", not "view") and dropping SQLite's own internal
 // sqlite_% tables such as sqlite_schema and sqlite_sequence. Each row's own
-// schema column becomes the returned TableRef.Schema.
-func (i Inspector) sqliteTableListNames(ctx context.Context, query string) ([]TableRef, error) {
+// schema column becomes the returned TableName.Schema.
+func (i Inspector) sqliteTableListNames(ctx context.Context, query string) ([]TableName, error) {
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("inspect: read SQLite table scope: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	refs := make([]TableRef, 0)
+	refs := make([]TableName, 0)
 	for rows.Next() {
 		var databaseName, name, kind string
 		var columnCount, withoutRowID, strict int64
@@ -996,7 +996,7 @@ func (i Inspector) sqliteTableListNames(ctx context.Context, query string) ([]Ta
 		if !strings.EqualFold(kind, "table") || sqliteIsInternalTableName(name) {
 			continue
 		}
-		refs = append(refs, TableRef{Schema: databaseName, Name: name})
+		refs = append(refs, TableName{Schema: databaseName, Name: name})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate SQLite table scope: %w", err)
@@ -1007,8 +1007,8 @@ func (i Inspector) sqliteTableListNames(ctx context.Context, query string) ([]Ta
 // sqliteLegacyTableNames is the sqlite_master fallback for engines older
 // than SQLite 3.37, mirroring sqliteLegacyTableOptions: an empty databaseName
 // walks every database PRAGMA database_list reports, and each returned
-// TableRef.Schema is the database that query targeted.
-func (i Inspector) sqliteLegacyTableNames(ctx context.Context, databaseName string) ([]TableRef, error) {
+// TableName.Schema is the database that query targeted.
+func (i Inspector) sqliteLegacyTableNames(ctx context.Context, databaseName string) ([]TableName, error) {
 	databases := []string{databaseName}
 	if databaseName == "" {
 		rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
@@ -1031,7 +1031,7 @@ func (i Inspector) sqliteLegacyTableNames(ctx context.Context, databaseName stri
 		}
 	}
 
-	var refs []TableRef
+	var refs []TableName
 	for _, database := range databases {
 		if err := schema.ValidateIdentifier(database); err != nil {
 			return nil, fmt.Errorf("inspect: SQLite database %q cannot be represented: %w", database, err)
@@ -1050,7 +1050,7 @@ func (i Inspector) sqliteLegacyTableNames(ctx context.Context, databaseName stri
 			if sqliteIsInternalTableName(name) {
 				continue
 			}
-			refs = append(refs, TableRef{Schema: database, Name: name})
+			refs = append(refs, TableName{Schema: database, Name: name})
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
@@ -2177,11 +2177,11 @@ const postgreSQLTableNamesQuery = "SELECT table_data.relname FROM pg_catalog.pg_
 
 // informationSchemaTableNames enumerates base tables for MySQL and
 // PostgreSQL in the scope [Inspector.Table] itself reads from. Every
-// returned TableRef.Schema is left empty, matching Table's own
-// schema.TableDef.Schema for these two dialects (see the TableRef doc
+// returned TableName.Schema is left empty, matching Table's own
+// schema.TableDef.Schema for these two dialects (see the TableName doc
 // comment). The result is sorted again in Go, on top of each query's own
 // ORDER BY, so ordering does not depend on the server's collation.
-func (i Inspector) informationSchemaTableNames(ctx context.Context) ([]TableRef, error) {
+func (i Inspector) informationSchemaTableNames(ctx context.Context) ([]TableName, error) {
 	var query string
 	switch i.dialect.Name() {
 	case "mysql":
@@ -2197,18 +2197,18 @@ func (i Inspector) informationSchemaTableNames(ctx context.Context) ([]TableRef,
 	}
 	defer func() { _ = rows.Close() }()
 
-	refs := make([]TableRef, 0)
+	refs := make([]TableName, 0)
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			return nil, fmt.Errorf("inspect: scan table name: %w", err)
 		}
-		refs = append(refs, TableRef{Name: name})
+		refs = append(refs, TableName{Name: name})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate table names: %w", err)
 	}
-	sort.Slice(refs, func(left, right int) bool { return tableRefLess(refs[left], refs[right]) })
+	sort.Slice(refs, func(left, right int) bool { return tableNameLess(refs[left], refs[right]) })
 	return refs, nil
 }
 

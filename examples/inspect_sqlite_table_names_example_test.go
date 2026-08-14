@@ -48,7 +48,7 @@ func Example_inspect_sqlite_table_names() {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
 		return
 	}
-	// TableNames reports every database's tables together; TableRef.Schema
+	// TableNames reports every database's tables together; TableName.Schema
 	// is what keeps the two "zebras" tables distinguishable.
 	refs, err := inspector.TableNames(ctx)
 	if err != nil {

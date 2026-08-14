@@ -557,7 +557,7 @@ func Example_inspect_sqlite_table() {
 source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_example_test.go)
 <!-- END INCLUDE -->
 
-`Inspector.TableNames(ctx)` returns the base tables in the inspected scope as `[]inspect.TableRef`, excluding views and sorted by `Schema` then `Name`, so a caller does not need to already know a table name to start inspecting it. PostgreSQL scopes to `current_schema()` and MySQL to `DATABASE()`, the same scope `Table` reads columns from, and both leave every `TableRef.Schema` empty: `Table` itself never fills `schema.TableDef.Schema` for those two dialects, and filling it here would silently qualify SQL that is unqualified today. SQLite has no single equivalent scope: like `Table`'s own default, `TableNames` reports across `main`, `temp`, and every database attached to the connection, with `TableRef.Schema` naming which database each table came from — the field a bare table name cannot carry, and why two databases holding a table of the same name still come back as two distinguishable results. `Inspector.TableNamesIn(ctx, databaseName)` scopes SQLite to one database instead, the enumeration counterpart of `TableIn`, and carries the same retained-connection requirement for `temp` or an attached database; every `TableRef.Schema` it returns equals `databaseName`. `TableNamesIn` is supported only for SQLite.
+`Inspector.TableNames(ctx)` returns the base tables in the inspected scope as `[]inspect.TableName`, excluding views and sorted by `Schema` then `Name`, so a caller does not need to already know a table name to start inspecting it. PostgreSQL scopes to `current_schema()` and MySQL to `DATABASE()`, the same scope `Table` reads columns from, and both leave every `TableName.Schema` empty: `Table` itself never fills `schema.TableDef.Schema` for those two dialects, and filling it here would silently qualify SQL that is unqualified today. SQLite has no single equivalent scope: like `Table`'s own default, `TableNames` reports across `main`, `temp`, and every database attached to the connection, with `TableName.Schema` naming which database each table came from — the field a bare table name cannot carry, and why two databases holding a table of the same name still come back as two distinguishable results. `Inspector.TableNamesIn(ctx, databaseName)` scopes SQLite to one database instead, the enumeration counterpart of `TableIn`, and carries the same retained-connection requirement for `temp` or an attached database; every `TableName.Schema` it returns equals `databaseName`. `TableNamesIn` is supported only for SQLite.
 
 <!-- INCLUDE(examples/inspect_sqlite_table_names_example_test.go) -->
 ```go
@@ -611,7 +611,7 @@ func Example_inspect_sqlite_table_names() {
 		fmt.Printf("failed to create SQLite inspector: %s\n", err)
 		return
 	}
-	// TableNames reports every database's tables together; TableRef.Schema
+	// TableNames reports every database's tables together; TableName.Schema
 	// is what keeps the two "zebras" tables distinguishable.
 	refs, err := inspector.TableNames(ctx)
 	if err != nil {
