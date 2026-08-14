@@ -459,6 +459,41 @@ func TestCreateTableRejectsNonDefaultForeignKeyDeferrability(t *testing.T) {
 	require.Equal(t, "postgresql", renderErr.Dialect)
 }
 
+// TestCreateTableRejectsExclusionConstraint proves that a TableDef naming an
+// ExclusionDef, which inspect now describes instead of rejecting, is
+// refused at render time with a typed error rather than silently rendered
+// as a table missing the constraint entirely: an EXCLUDE clause renders
+// inline in CREATE TABLE, like a foreign key, so the table itself is
+// refused too.
+func TestCreateTableRejectsExclusionConstraint(t *testing.T) {
+	table := schema.TableDef{
+		Name: "reservations",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "room", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ExclusionConstraints: []schema.ExclusionDef{{
+			Name:     "reservations_no_double_booking",
+			Method:   "gist",
+			Elements: []schema.ExclusionElementDef{{Expression: "room", Operator: "="}},
+		}},
+	}
+
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.ErrorContains(t, err, `"reservations_no_double_booking"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var exclusionErr *render.UnsupportedExclusionConstraintError
+	require.ErrorAs(t, err, &exclusionErr)
+	require.Equal(t, "reservations_no_double_booking", exclusionErr.Exclusion)
+	require.ErrorIs(t, err, render.ErrUnsupportedExclusionConstraint)
+
+	var renderErr *render.Error
+	require.ErrorAs(t, err, &renderErr)
+	require.Equal(t, "postgresql", renderErr.Dialect)
+}
+
 // TestCreateTableRejectsCheckNoInherit proves that a CheckDef naming
 // NoInherit, such as a NO INHERIT check constraint inspect now describes
 // instead of rejecting, is refused at render time with a typed error rather
