@@ -493,6 +493,88 @@ func (e *UnsupportedPrimaryKeyConflictResolutionError) Unwrap() error {
 	return ErrUnsupportedPrimaryKeyConflictResolution
 }
 
+// ErrUnsupportedGeneratedColumn is the sentinel wrapped by every
+// [UnsupportedGeneratedColumnError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedGeneratedColumn = errors.New("render: unsupported generated column")
+
+// UnsupportedGeneratedColumnError reports that a ColumnDef names a
+// [schema.ColumnDef.GeneratedExpression]. inspect can describe such a
+// column, and TableDef.Validate accepts it, but this package does not yet
+// know how to build a GENERATED ALWAYS AS clause, and a generated column
+// cannot be written to like an ordinary one.
+type UnsupportedGeneratedColumnError struct {
+	// Column is the name of the column that named a generated expression.
+	Column string
+	// Expression is the generated expression the column named.
+	Expression string
+	// Storage is the column's schema.GeneratedStorage.
+	Storage schema.GeneratedStorage
+}
+
+func (e *UnsupportedGeneratedColumnError) Error() string {
+	return fmt.Sprintf("column %q is generated as %s (%s), which rasql can describe but not yet render", e.Column, e.Expression, e.Storage)
+}
+
+// Unwrap exposes ErrUnsupportedGeneratedColumn so
+// errors.Is(err, ErrUnsupportedGeneratedColumn) works alongside errors.As
+// against *UnsupportedGeneratedColumnError.
+func (e *UnsupportedGeneratedColumnError) Unwrap() error {
+	return ErrUnsupportedGeneratedColumn
+}
+
+// ErrUnsupportedIntegerDisplayWidth is the sentinel wrapped by every
+// [UnsupportedIntegerDisplayWidthError], so a caller that only needs a
+// presence check can use errors.Is instead of errors.As.
+var ErrUnsupportedIntegerDisplayWidth = errors.New("render: unsupported integer display width")
+
+// UnsupportedIntegerDisplayWidthError reports that a ColumnDef names a
+// stated [schema.IntegerType.DisplayWidth], such as the 11 in int(11).
+// inspect can describe such a column, and TableDef.Validate accepts it, but
+// this package does not yet know how to build an INT(n) declaration.
+type UnsupportedIntegerDisplayWidthError struct {
+	// Column is the name of the column that named a display width.
+	Column string
+	// Width is the display width the column named.
+	Width int
+}
+
+func (e *UnsupportedIntegerDisplayWidthError) Error() string {
+	return fmt.Sprintf("column %q states an integer display width of %d, which rasql can describe but not yet render", e.Column, e.Width)
+}
+
+// Unwrap exposes ErrUnsupportedIntegerDisplayWidth so
+// errors.Is(err, ErrUnsupportedIntegerDisplayWidth) works alongside
+// errors.As against *UnsupportedIntegerDisplayWidthError.
+func (e *UnsupportedIntegerDisplayWidthError) Unwrap() error {
+	return ErrUnsupportedIntegerDisplayWidth
+}
+
+// ErrUnsupportedIntegerZeroFill is the sentinel wrapped by every
+// [UnsupportedIntegerZeroFillError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedIntegerZeroFill = errors.New("render: unsupported integer zerofill")
+
+// UnsupportedIntegerZeroFillError reports that a ColumnDef names a true
+// [schema.IntegerType.ZeroFill]. inspect can describe such a column, and
+// TableDef.Validate accepts it, but this package does not yet know how to
+// build a ZEROFILL declaration.
+type UnsupportedIntegerZeroFillError struct {
+	// Column is the name of the column that carried ZEROFILL.
+	Column string
+}
+
+func (e *UnsupportedIntegerZeroFillError) Error() string {
+	return fmt.Sprintf("column %q carries ZEROFILL, which rasql can describe but not yet render", e.Column)
+}
+
+// Unwrap exposes ErrUnsupportedIntegerZeroFill so
+// errors.Is(err, ErrUnsupportedIntegerZeroFill) works alongside errors.As
+// against *UnsupportedIntegerZeroFillError.
+func (e *UnsupportedIntegerZeroFillError) Unwrap() error {
+	return ErrUnsupportedIntegerZeroFill
+}
+
 // CreateTable renders a CREATE TABLE statement for table.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
 	if isNilDialect(d) {
@@ -747,6 +829,17 @@ func (r *renderer) rejectUnboundedMySQLText(table schema.TableDef, names []strin
 }
 
 func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
+	if column.GeneratedExpression != "" {
+		return "", &UnsupportedGeneratedColumnError{Column: column.Name, Expression: column.GeneratedExpression, Storage: column.GeneratedStorage}
+	}
+	if integer, ok := column.Type.(schema.IntegerType); ok {
+		if width, stated := integer.DisplayWidth.Value(); stated {
+			return "", &UnsupportedIntegerDisplayWidthError{Column: column.Name, Width: width}
+		}
+		if integer.ZeroFill {
+			return "", &UnsupportedIntegerZeroFillError{Column: column.Name}
+		}
+	}
 	name, err := r.quoteIdentifier(column.Name)
 	if err != nil {
 		return "", err

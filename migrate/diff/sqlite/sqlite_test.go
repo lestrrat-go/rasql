@@ -155,6 +155,32 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 	}}, plan.Statements)
 }
 
+// TestLiveSourcesRejectsGeneratedColumn proves that an inspected table
+// carrying a generated column does not reach diff-live's generated
+// desired-schema sources as a silently downgraded plain writable column:
+// LiveSources renders through render.CreateTable, which refuses
+// GeneratedExpression, so the error surfaces here rather than a Plan going
+// on to emit DDL for a column that cannot be written to at all.
+func TestLiveSourcesRejectsGeneratedColumn(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name: "measurements",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "celsius", Type: schema.IntegerType{}},
+			{
+				Name:                "fahrenheit",
+				Type:                schema.IntegerType{},
+				GeneratedExpression: "celsius * 9 / 5 + 32",
+				GeneratedStorage:    schema.GeneratedStored,
+			},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.ErrorContains(t, err, `"fahrenheit"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffRejectsCollidingGeneratedStatementNames(t *testing.T) {
 	analyzer := sqlite.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY);")

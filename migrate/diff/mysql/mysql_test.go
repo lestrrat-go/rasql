@@ -30,6 +30,42 @@ func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
 	require.Contains(t, sources[1].SQL, "email")
 }
 
+// TestLiveSourcesRejectsIntegerDisplayWidth proves that an inspected table
+// carrying a MySQL integer column with a stated display width does not
+// reach diff-live's generated desired-schema sources as a silently
+// downgraded plain-width column: LiveSources renders through
+// render.CreateTable, which refuses a stated DisplayWidth, so the error
+// surfaces here rather than a Plan going on to emit DDL that drops it.
+func TestLiveSourcesRejectsIntegerDisplayWidth(t *testing.T) {
+	analyzer := mysql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name: "counters",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "total", Type: schema.IntegerType{DisplayWidth: schema.NewIntegerDisplayWidth(11)}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.ErrorContains(t, err, `"total"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsIntegerZeroFill is the ZEROFILL counterpart to
+// TestLiveSourcesRejectsIntegerDisplayWidth.
+func TestLiveSourcesRejectsIntegerZeroFill(t *testing.T) {
+	analyzer := mysql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name: "counters",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "total", Type: schema.IntegerType{Unsigned: true, ZeroFill: true}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.ErrorContains(t, err, `"total"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffLiveMatchesInlinePrimaryKeyUnderMySQLIdentifierRules(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (ID bigint PRIMARY KEY);")

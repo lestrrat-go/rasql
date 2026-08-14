@@ -1462,7 +1462,26 @@ func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
 		source.WriteString(", Default: ")
 		source.WriteString(quote(column.Default))
 	}
+	if column.GeneratedExpression != "" {
+		source.WriteString(", GeneratedExpression: ")
+		source.WriteString(quote(column.GeneratedExpression))
+	}
+	if column.GeneratedStorage != "" {
+		source.WriteString(", GeneratedStorage: ")
+		source.WriteString(generatedStorageConstant(column.GeneratedStorage))
+	}
 	source.WriteString("},\n")
+}
+
+func generatedStorageConstant(storage schema.GeneratedStorage) string {
+	switch storage {
+	case schema.GeneratedStored:
+		return "schema.GeneratedStored"
+	case schema.GeneratedVirtual:
+		return "schema.GeneratedVirtual"
+	default:
+		return "schema.GeneratedStorage(" + quote(string(storage)) + ")"
+	}
 }
 
 // writeColumnTypeLiteral writes the schema.ColumnType literal for columnType.
@@ -1473,11 +1492,33 @@ func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
 func writeColumnTypeLiteral(source *bytes.Buffer, columnType schema.ColumnType) {
 	switch typed := columnType.(type) {
 	case schema.IntegerType:
-		if typed.Unsigned {
-			source.WriteString("schema.IntegerType{Unsigned: true}")
+		width, stated := typed.DisplayWidth.Value()
+		if !typed.Unsigned && !stated && !typed.ZeroFill {
+			source.WriteString("schema.IntegerType{}")
 			return
 		}
-		source.WriteString("schema.IntegerType{}")
+		source.WriteString("schema.IntegerType{")
+		fields := 0
+		if typed.Unsigned {
+			source.WriteString("Unsigned: true")
+			fields++
+		}
+		if stated {
+			if fields > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString("DisplayWidth: schema.NewIntegerDisplayWidth(")
+			source.WriteString(strconv.Itoa(width))
+			source.WriteString(")")
+			fields++
+		}
+		if typed.ZeroFill {
+			if fields > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString("ZeroFill: true")
+		}
+		source.WriteString("}")
 	case schema.TextType:
 		width, stated := typed.Width.Value()
 		if !stated && !typed.Fixed {

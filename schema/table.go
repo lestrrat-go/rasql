@@ -105,37 +105,113 @@ func (w *TextWidth) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// IntegerDisplayWidth is the display width MySQL's integer types carry, such
+// as the 11 in int(11): a minimum number of digits MySQL pads with spaces or,
+// under ZEROFILL, zeros in query output, never a constraint on the values the
+// column stores. Its zero value states no width at all, which is a different
+// thing from a stated width of zero, and is what every IntegerType and every
+// checked-in generated file written before this field existed has always
+// meant. Only MySQL has a display width; PostgreSQL and SQLite integer
+// columns never carry one. Use NewIntegerDisplayWidth to state one.
+type IntegerDisplayWidth struct {
+	value int
+	set   bool
+}
+
+// NewIntegerDisplayWidth returns an IntegerDisplayWidth that states value.
+func NewIntegerDisplayWidth(value int) IntegerDisplayWidth {
+	return IntegerDisplayWidth{value: value, set: true}
+}
+
+// Value returns the stated width and reports whether a width was stated at
+// all. The returned width is meaningless when the second result is false.
+func (w IntegerDisplayWidth) Value() (int, bool) {
+	return w.value, w.set
+}
+
+// MarshalJSON encodes a stated width as a JSON number and an unstated one as
+// null, the same convention TextWidth and DecimalScale use.
+func (w IntegerDisplayWidth) MarshalJSON() ([]byte, error) {
+	if !w.set {
+		return []byte("null"), nil
+	}
+	return json.Marshal(w.value)
+}
+
+// UnmarshalJSON decodes a JSON number as a stated width and null as an
+// unstated one. A snapshot written before a column had a display width
+// therefore decodes as unstated rather than as a width of 0.
+func (w *IntegerDisplayWidth) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*w = IntegerDisplayWidth{}
+		return nil
+	}
+	var value int
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("schema: decode integer display width: %w", err)
+	}
+	*w = NewIntegerDisplayWidth(value)
+	return nil
+}
+
 // ColumnDef describes a table column.
 type ColumnDef struct {
 	Name     string
 	Type     ColumnType
 	Nullable bool
 	Default  string
+
+	// GeneratedExpression is the expression a generated column computes,
+	// exactly as the server reports it, or empty for an ordinary column.
+	// Its zero value, the empty string, means the column is not generated,
+	// which is what every ColumnDef and every checked-in generated file
+	// written before this field existed has always meant.
+	//
+	// A non-empty GeneratedExpression always carries a non-empty
+	// GeneratedStorage; Table.Validate rejects one stated without the
+	// other. See GeneratedStorage's own doc for what recording this fact
+	// currently means for rendering.
+	GeneratedExpression string `json:",omitempty"`
+
+	// GeneratedStorage names whether GeneratedExpression is stored or
+	// computed on read. See GeneratedStorage's own doc.
+	GeneratedStorage GeneratedStorage `json:",omitempty"`
 }
 
 // MarshalJSON encodes a column type as a tagged object so type-specific
 // options cannot appear as fields on unrelated column types.
 func (c ColumnDef) MarshalJSON() ([]byte, error) {
 	type wireColumn struct {
-		Name     string          `json:"Name"`
-		Type     json.RawMessage `json:"Type"`
-		Nullable bool            `json:"Nullable"`
-		Default  string          `json:"Default"`
+		Name                string           `json:"Name"`
+		Type                json.RawMessage  `json:"Type"`
+		Nullable            bool             `json:"Nullable"`
+		Default             string           `json:"Default"`
+		GeneratedExpression string           `json:"GeneratedExpression,omitempty"`
+		GeneratedStorage    GeneratedStorage `json:"GeneratedStorage,omitempty"`
 	}
 	typeData, err := marshalColumnType(c.Type)
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(wireColumn{Name: c.Name, Type: typeData, Nullable: c.Nullable, Default: c.Default})
+	return json.Marshal(wireColumn{
+		Name:                c.Name,
+		Type:                typeData,
+		Nullable:            c.Nullable,
+		Default:             c.Default,
+		GeneratedExpression: c.GeneratedExpression,
+		GeneratedStorage:    c.GeneratedStorage,
+	})
 }
 
 // UnmarshalJSON decodes the tagged column type representation.
 func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 	type wireColumn struct {
-		Name     string          `json:"Name"`
-		Type     json.RawMessage `json:"Type"`
-		Nullable bool            `json:"Nullable"`
-		Default  string          `json:"Default"`
+		Name                string           `json:"Name"`
+		Type                json.RawMessage  `json:"Type"`
+		Nullable            bool             `json:"Nullable"`
+		Default             string           `json:"Default"`
+		GeneratedExpression string           `json:"GeneratedExpression,omitempty"`
+		GeneratedStorage    GeneratedStorage `json:"GeneratedStorage,omitempty"`
 	}
 	var wire wireColumn
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -145,7 +221,14 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	*c = ColumnDef{Name: wire.Name, Type: columnType, Nullable: wire.Nullable, Default: wire.Default}
+	*c = ColumnDef{
+		Name:                wire.Name,
+		Type:                columnType,
+		Nullable:            wire.Nullable,
+		Default:             wire.Default,
+		GeneratedExpression: wire.GeneratedExpression,
+		GeneratedStorage:    wire.GeneratedStorage,
+	}
 	return nil
 }
 
@@ -599,6 +682,19 @@ func (t TableDef) Validate() error {
 			if typed.Fixed && !stated {
 				return validationError(path+".type.width", "fixed-width text column must state a width: use schema.Width, since bare CHAR means CHAR(1), not an unbounded column")
 			}
+		case IntegerType:
+			if width, stated := typed.DisplayWidth.Value(); stated && width < 0 {
+				return validationError(path+".type.display_width", "integer display width must not be negative")
+			}
+		}
+		if (column.GeneratedExpression == "") != (column.GeneratedStorage == "") {
+			return validationError(path+".generated_storage", "GeneratedExpression and GeneratedStorage must be stated together")
+		}
+		if !column.GeneratedStorage.valid() {
+			return validationError(path+".generated_storage", "unsupported generated column storage %q", column.GeneratedStorage)
+		}
+		if column.GeneratedExpression != "" && column.Default != "" {
+			return validationError(path+".default", "a generated column must not also state a Default")
 		}
 		if _, exists := columns[column.Name]; exists {
 			return validationError(path+".name", "duplicates column %q", column.Name)

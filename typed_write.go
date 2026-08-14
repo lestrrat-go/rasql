@@ -376,6 +376,15 @@ func typedInsertMany[T any](table Table[T], values []T, defaultColumns map[strin
 		if _, useDefault := defaultColumns[definitionColumn.Name]; useDefault {
 			continue
 		}
+		// A generated column cannot be written to at all: the database
+		// computes it itself, and rejects a statement that names it
+		// explicitly. It is excluded from the default column list the same
+		// way a caller-selected DefaultColumns entry is, rather than only
+		// on request, because there is no statement a generated column
+		// could ever legitimately appear in here.
+		if definitionColumn.GeneratedExpression != "" {
+			continue
+		}
 		column, err := reference.Column(definitionColumn.Name)
 		if err != nil {
 			return query.Insert{}, err
@@ -464,19 +473,34 @@ func typedUpdateWithOptions[T any](table Table[T], value T, config updateConfig)
 				return query.Update{}, fmt.Errorf("update column %q is selected more than once", name)
 			}
 			seen[name] = struct{}{}
-			if _, exists := definition.Column(name); !exists {
+			selectedColumn, exists := definition.Column(name)
+			if !exists {
 				return query.Update{}, fmt.Errorf("table %q has no column %q selected for update", definition.QualifiedName(), name)
 			}
 			if _, isPrimaryKey := primaryKeys[name]; isPrimaryKey {
 				return query.Update{}, fmt.Errorf("column %q is a primary key and cannot be updated", name)
 			}
+			// A generated column cannot be written to at all, so naming
+			// one explicitly is refused the same way naming a primary key
+			// is, rather than left to fail against the database once the
+			// statement reaches it.
+			if selectedColumn.GeneratedExpression != "" {
+				return query.Update{}, fmt.Errorf("column %q is generated and cannot be updated", name)
+			}
 		}
 	} else {
 		selected = make([]string, 0, len(definition.Columns))
 		for _, column := range definition.Columns {
-			if _, isPrimaryKey := primaryKeys[column.Name]; !isPrimaryKey {
-				selected = append(selected, column.Name)
+			if _, isPrimaryKey := primaryKeys[column.Name]; isPrimaryKey {
+				continue
 			}
+			// See the matching comment in typedInsertMany: a generated
+			// column never belongs in a write statement, so it is excluded
+			// from the default selection the same way a primary key is.
+			if column.GeneratedExpression != "" {
+				continue
+			}
+			selected = append(selected, column.Name)
 		}
 	}
 
