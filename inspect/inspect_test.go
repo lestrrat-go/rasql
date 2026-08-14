@@ -2776,24 +2776,40 @@ func TestSQLiteInspectorRecordsDefaultConflictResolution(t *testing.T) {
 	}, table.UniqueConstraints)
 }
 
-// TestSQLiteInspectorRejectsUniqueConstraintWithCollation proves that a
-// UNIQUE constraint naming an explicit column collation is still rejected,
-// distinct from an ON CONFLICT clause, which
-// TestSQLiteInspectorRecordsUniqueConstraintConflictResolution proves
-// inspect now describes.
-func TestSQLiteInspectorRejectsUniqueConstraintWithCollation(t *testing.T) {
+// TestSQLiteInspectorRecordsUniqueConstraintKeyDetails proves that a
+// UNIQUE constraint's own DESC ordering and non-default collation are now
+// described on UniqueDef.Keys rather than rejected: inspect used to fail
+// the whole table on the first such constraint, which would abort a sweep
+// over a production schema the moment it reached one. UniqueDef.Keys
+// reuses schema.IndexKeyDef, the same type IndexDef.Keys uses for a
+// regular index's own per-key facts, which
+// TestSQLiteInspectorRecordsIndexKeyDetails proves the same way for an
+// index. The plain constraint alongside them keeps UniqueDef.Keys's zero
+// value, proving the field only records key details when a constraint
+// actually has one. The collation name is spelled lowercase in both the
+// source SQL and the expected value: unlike IndexDef.Keys, which reads a
+// regular index's own collation back from PRAGMA index_xinfo verbatim,
+// UniqueDef.Keys is read from the constraint's own parsed CREATE TABLE
+// text, which sqlitequery's parser folds to lowercase for an unquoted
+// identifier, the same folding every other AST-derived identifier in this
+// package (a column or constraint name, for instance) already carries.
+func TestSQLiteInspectorRecordsUniqueConstraintKeyDetails(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	database.SetMaxOpenConns(1)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
-	_, err = database.ExecContext(t.Context(), "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT, UNIQUE (email COLLATE NOCASE))")
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT, code TEXT, UNIQUE (email COLLATE nocase DESC), UNIQUE (code))")
 	require.NoError(t, err)
 
 	inspector, err := inspect.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	_, err = inspector.Table(t.Context(), "members")
-	require.ErrorContains(t, err, "UNIQUE constraints with expressions, collations, or ordering are unsupported")
+	table, err := inspector.Table(t.Context(), "members")
+	require.NoError(t, err)
+	require.Equal(t, []schema.UniqueDef{
+		{Keys: []schema.IndexKeyDef{{Expression: "email", Descending: true, Collation: "nocase"}}},
+		{Columns: []string{"code"}},
+	}, table.UniqueConstraints)
 }
 
 // TestSQLiteInspectorRecordsIndexKeyDetails proves that a descending key and
@@ -2884,13 +2900,20 @@ func TestSQLiteInspectorRecordsExpressionIndex(t *testing.T) {
 	}, table.Indexes)
 }
 
+// TestSQLiteInspectorRejectsUnrepresentableTableMetadata proves that
+// inspect.Table still refuses the SQLite objects this package genuinely
+// cannot describe: a view, which has no independent column, constraint, or
+// index structure of its own for a TableDef to hold, unlike a virtual
+// table or a shadow table, both of which TestSQLiteInspectorRecordsVirtualTable
+// and TestSQLiteInspectorRecordsShadowTable now prove inspect describes.
 func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
 	for _, statement := range []string{
-		"CREATE VIRTUAL TABLE virtual_table USING rtree(id, minx, maxx, miny, maxy)",
+		"CREATE TABLE base (id INTEGER PRIMARY KEY)",
+		"CREATE VIEW base_view AS SELECT id FROM base",
 	} {
 		_, err = database.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
@@ -2902,7 +2925,7 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 		table string
 		want  string
 	}{
-		{table: "virtual_table", want: `table kind "virtual" is unsupported`},
+		{table: "base_view", want: `table kind "view" is unsupported`},
 	} {
 		t.Run(test.table, func(t *testing.T) {
 			_, err := inspector.Table(t.Context(), test.table)
@@ -3081,6 +3104,79 @@ func TestSQLiteInspectorRecordsGeneratedColumns(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestSQLiteInspectorRecordsVirtualTable proves that a live SQLite FTS5
+// virtual table is now described instead of rejecting the whole sweep the
+// moment it is reached: TableDef.VirtualTableModule and
+// .VirtualTableModuleArguments record the module and its arguments, and
+// the module's own hidden columns — FTS5 exposes one named after the
+// table itself, used for MATCH filtering, and one named "rank" — are
+// recorded as ordinary ColumnDefs with Hidden set, rather than failing
+// inspection the way a genuinely hidden column used to unconditionally.
+// The bundled modernc.org/sqlite build used by this package's tests
+// includes FTS5; TestSQLiteInspectorRecordsVirtualTableFromLegacyKind
+// covers a virtual table using the always-available rtree module instead,
+// for a build where FTS5 is unavailable.
+func TestSQLiteInspectorRecordsVirtualTable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE VIRTUAL TABLE posts_fts USING fts5(body, tokenize='porter')")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "posts_fts")
+	require.NoError(t, err)
+	require.Equal(t, "fts5", table.VirtualTableModule)
+	require.Equal(t, []string{"body", "tokenize='porter'"}, table.VirtualTableModuleArguments)
+	require.Empty(t, table.PrimaryKey)
+	require.Equal(t, []schema.ColumnDef{
+		{Name: "body", Type: schema.BytesType{}, Nullable: true},
+		{Name: "posts_fts", Type: schema.BytesType{}, Nullable: true, Hidden: true},
+		{Name: "rank", Type: schema.BytesType{}, Nullable: true, Hidden: true},
+	}, table.Columns)
+
+	// render still refuses DDL for a virtual table until it can build a
+	// CREATE VIRTUAL TABLE statement; see TestCreateTableRejectsVirtualTable
+	// in the render package for that refusal.
+	_, err = render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"posts_fts"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestSQLiteInspectorRecordsShadowTable proves that a virtual table
+// module's own backing table — R-Tree's own "_node" table here — is
+// described the same way an ordinary table is, rather than rejected for
+// its PRAGMA table_list kind, "shadow": a shadow table's own CREATE TABLE
+// text is an entirely ordinary table definition with no virtual-table
+// facts of its own. R-Tree is used here rather than FTS5 because FTS5's
+// own shadow tables quote their name with single quotes in their CREATE
+// TABLE text (sqlite_master.sql for FTS5's own "_data" table, for
+// instance, reads CREATE TABLE 'posts_fts_data'(...)), a form
+// rasql-sqlite's parser cannot parse — a pre-existing parser limit
+// unrelated to shadow tables specifically, listed among what still
+// rejects in this package's own documentation.
+func TestSQLiteInspectorRecordsShadowTable(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE VIRTUAL TABLE shapes USING rtree(id, minx, maxx, miny, maxy)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "shapes_node")
+	require.NoError(t, err)
+	require.Empty(t, table.VirtualTableModule)
+	require.Equal(t, []string{"nodeno"}, table.PrimaryKey)
+	require.Equal(t, []schema.ColumnDef{
+		{Name: "nodeno", Type: schema.IntegerType{}},
+		{Name: "data", Type: schema.BytesType{}, Nullable: true},
+	}, table.Columns)
+}
+
 func TestSQLiteInspectorMarksTableLevelIntegerPrimaryKeysAsNonNullable(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -3244,7 +3340,17 @@ func TestSQLiteInspectorKeepsDeclarationLookupOnOneConnection(t *testing.T) {
 	require.Equal(t, int64(1), driverInstance.connections.Load())
 }
 
-func TestSQLiteInspectorRejectsVirtualTableDefinition(t *testing.T) {
+// TestSQLiteInspectorRecordsVirtualTableFromLegacyKind proves that a
+// virtual table is described even when its own PRAGMA table_list row
+// reports kind "table" rather than "virtual" — the shape a pre-3.37
+// sqlite_master-based fallback (or any other engine that predates
+// table_list's own virtual/shadow kinds) reports for one, since
+// sqlite_master has no separate virtual type. inspect detects a virtual
+// table from its own CREATE VIRTUAL TABLE definition text instead of
+// trusting kind, so this table is still recognized and described exactly
+// as TestSQLiteInspectorRecordsVirtualTable proves for a live one whose
+// kind PRAGMA table_list correctly reports as "virtual".
+func TestSQLiteInspectorRecordsVirtualTableFromLegacyKind(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -3269,9 +3375,15 @@ func TestSQLiteInspectorRejectsVirtualTableDefinition(t *testing.T) {
 		WithArgs("virtual_table").
 		WillReturnRows(sqlmock.NewRows([]string{"sql"}).
 			AddRow("CREATE VIRTUAL TABLE virtual_table USING rtree(id, minx, maxx, miny, maxy)"))
+	mock.ExpectQuery(`PRAGMA "main".index_list("virtual_table")`).
+		WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "unique", "origin", "partial"}))
+	mock.ExpectQuery(`PRAGMA "main".foreign_key_list("virtual_table")`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "seq", "table", "from", "to", "on_update", "on_delete", "match"}))
 
-	_, err = inspector.Table(t.Context(), "virtual_table")
-	require.ErrorContains(t, err, "CREATE VIRTUAL TABLE definitions are unsupported")
+	table, err := inspector.Table(t.Context(), "virtual_table")
+	require.NoError(t, err)
+	require.Equal(t, "rtree", table.VirtualTableModule)
+	require.Equal(t, []string{"id", "minx", "maxx", "miny", "maxy"}, table.VirtualTableModuleArguments)
 }
 
 var sqliteAffinityDriverNames atomic.Int64

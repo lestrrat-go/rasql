@@ -1346,6 +1346,16 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString(conflictResolutionConstant(table.PrimaryKeyOnConflict))
 		source.WriteString(",\n")
 	}
+	if table.VirtualTableModule != "" {
+		source.WriteString("VirtualTableModule: ")
+		source.WriteString(quote(table.VirtualTableModule))
+		source.WriteString(",\n")
+	}
+	if len(table.VirtualTableModuleArguments) > 0 {
+		source.WriteString("VirtualTableModuleArguments: ")
+		writeStringLiteralSlice(source, table.VirtualTableModuleArguments)
+		source.WriteString(",\n")
+	}
 	if len(table.UniqueConstraints) > 0 {
 		source.WriteString("UniqueConstraints: []schema.UniqueDef{\n")
 		for _, constraint := range table.UniqueConstraints {
@@ -1433,24 +1443,7 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 			if len(index.Keys) > 0 {
 				source.WriteString(", Keys: []schema.IndexKeyDef{\n")
 				for _, key := range index.Keys {
-					source.WriteString("{Expression: ")
-					source.WriteString(quote(key.Expression))
-					if key.Descending {
-						source.WriteString(", Descending: true")
-					}
-					if key.Collation != "" {
-						source.WriteString(", Collation: ")
-						source.WriteString(quote(key.Collation))
-					}
-					if key.OperatorClass != "" {
-						source.WriteString(", OperatorClass: ")
-						source.WriteString(quote(key.OperatorClass))
-					}
-					if key.PrefixLength != 0 {
-						source.WriteString(", PrefixLength: ")
-						source.WriteString(strconv.Itoa(key.PrefixLength))
-					}
-					source.WriteString("},\n")
+					writeIndexKeyDefLiteral(source, key)
 				}
 				source.WriteString("}")
 			}
@@ -1477,27 +1470,84 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 
 func writeUniqueDefLiteral(source *bytes.Buffer, constraint schema.UniqueDef) {
 	source.WriteString("{")
+	first := true
 	if constraint.Name != "" {
 		source.WriteString("Name: ")
 		source.WriteString(quote(constraint.Name))
-		source.WriteString(", ")
+		first = false
 	}
-	source.WriteString("Columns: ")
-	writeStringLiteralSlice(source, constraint.Columns)
+	if len(constraint.Columns) > 0 {
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("Columns: ")
+		writeStringLiteralSlice(source, constraint.Columns)
+		first = false
+	}
 	if constraint.Deferrable != "" {
-		source.WriteString(", Deferrable: ")
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("Deferrable: ")
 		source.WriteString(deferrabilityConstant(constraint.Deferrable))
+		first = false
 	}
 	if constraint.NullsNotDistinct {
-		source.WriteString(", NullsNotDistinct: true")
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("NullsNotDistinct: true")
+		first = false
 	}
 	if len(constraint.IncludeColumns) > 0 {
-		source.WriteString(", IncludeColumns: ")
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("IncludeColumns: ")
 		writeStringLiteralSlice(source, constraint.IncludeColumns)
+		first = false
 	}
 	if constraint.OnConflict != "" {
-		source.WriteString(", OnConflict: ")
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("OnConflict: ")
 		source.WriteString(conflictResolutionConstant(constraint.OnConflict))
+		first = false
+	}
+	if len(constraint.Keys) > 0 {
+		if !first {
+			source.WriteString(", ")
+		}
+		source.WriteString("Keys: []schema.IndexKeyDef{\n")
+		for _, key := range constraint.Keys {
+			writeIndexKeyDefLiteral(source, key)
+		}
+		source.WriteString("}")
+	}
+	source.WriteString("},\n")
+}
+
+// writeIndexKeyDefLiteral writes one schema.IndexKeyDef composite literal,
+// shared by IndexDef.Keys and UniqueDef.Keys since both reuse the same
+// type.
+func writeIndexKeyDefLiteral(source *bytes.Buffer, key schema.IndexKeyDef) {
+	source.WriteString("{Expression: ")
+	source.WriteString(quote(key.Expression))
+	if key.Descending {
+		source.WriteString(", Descending: true")
+	}
+	if key.Collation != "" {
+		source.WriteString(", Collation: ")
+		source.WriteString(quote(key.Collation))
+	}
+	if key.OperatorClass != "" {
+		source.WriteString(", OperatorClass: ")
+		source.WriteString(quote(key.OperatorClass))
+	}
+	if key.PrefixLength != 0 {
+		source.WriteString(", PrefixLength: ")
+		source.WriteString(strconv.Itoa(key.PrefixLength))
 	}
 	source.WriteString("},\n")
 }
@@ -1553,6 +1603,9 @@ func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
 	if column.GeneratedStorage != "" {
 		source.WriteString(", GeneratedStorage: ")
 		source.WriteString(generatedStorageConstant(column.GeneratedStorage))
+	}
+	if column.Hidden {
+		source.WriteString(", Hidden: true")
 	}
 	source.WriteString("},\n")
 }

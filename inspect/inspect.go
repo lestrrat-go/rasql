@@ -694,12 +694,12 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		// PRAGMA table_xinfo's hidden column reports 0 for an ordinary
 		// column, 2 for a VIRTUAL generated column, 3 for a STORED
 		// generated column, and 1 for a genuinely hidden column, the kind
-		// a virtual table module declares (such as fts5's rank column).
-		// CREATE VIRTUAL TABLE definitions are already rejected earlier in
-		// sqliteTableDefinition, so 1 should not occur for a table this
-		// package otherwise accepts; it is rejected here too rather than
-		// silently misread as an ordinary or generated column.
-		if hidden != 0 && hidden != sqliteHiddenGeneratedVirtual && hidden != sqliteHiddenGeneratedStored {
+		// a virtual table module declares (such as FTS5's own table-name
+		// and rank columns). A value of 1 is checked once the definition
+		// text (fetched below) says whether this table is actually a
+		// virtual table, since a hidden column only ever comes from one:
+		// see the loop over metadata after that fetch.
+		if hidden != 0 && hidden != sqliteHiddenGeneratedVirtual && hidden != sqliteHiddenGeneratedStored && hidden != sqliteHiddenModule {
 			return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: hidden column %q is not supported", tableName, name)
 		}
 		columnType, err := normalizeType(i.dialect.Name(), databaseType, sql.NullInt64{})
@@ -728,9 +728,35 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 	if len(metadata) == 0 {
 		return schema.TableDef{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
-	definition, foreignKeyClauses, err := i.sqliteTableDefinition(ctx, options.database, tableName)
+	definitionText, err := i.sqliteTableDefinitionText(ctx, options.database, tableName)
 	if err != nil {
 		return schema.TableDef{}, err
+	}
+	// A virtual table's own kind is only reliably "virtual" from PRAGMA
+	// table_list, which is unavailable before SQLite 3.37; the
+	// sqlite_master fallback options.kind uses reports "table" for one
+	// instead, since sqlite_master has no separate virtual type. The
+	// definition text itself is authoritative either way.
+	virtual := sqliteDefinitionContainsVirtualTableKeyword(definitionText)
+	for _, column := range metadata {
+		if column.hidden == sqliteHiddenModule && !virtual {
+			return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: hidden column %q is not supported", tableName, column.name)
+		}
+	}
+	var definition *sqlitequery.CreateTableStatement
+	var foreignKeyClauses []sqliteForeignKeyClause
+	var virtualModule string
+	var virtualModuleArguments []string
+	if virtual {
+		virtualModule, virtualModuleArguments, err = sqliteVirtualTableDefinition(definitionText, tableName)
+		if err != nil {
+			return schema.TableDef{}, err
+		}
+	} else {
+		definition, foreignKeyClauses, err = sqliteParseTableDefinition(definitionText, tableName)
+		if err != nil {
+			return schema.TableDef{}, err
+		}
 	}
 	primaryKeyAutoincrement, primaryKeyOnConflict, err := sqlitePrimaryKeyFacts(definition, tableName)
 	if err != nil {
@@ -756,6 +782,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 			Type:     column.columnType,
 			Nullable: column.notNull == 0 && (!rowIDAlias || len(primaryColumns) != 1 || column.primaryPosition <= 0),
 			Default:  text(column.defaultValue),
+			Hidden:   column.hidden == sqliteHiddenModule,
 		}
 		if column.hidden == sqliteHiddenGeneratedVirtual || column.hidden == sqliteHiddenGeneratedStored {
 			expression, err := sqliteGeneratedExpression(definition, column.name)
@@ -807,18 +834,20 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		return schema.TableDef{}, err
 	}
 	table := schema.TableDef{
-		Schema:                  options.database,
-		Name:                    tableName,
-		Columns:                 columns,
-		PrimaryKey:              primaryKey,
-		Strict:                  options.strict,
-		WithoutRowID:            options.withoutRowID,
-		PrimaryKeyAutoincrement: primaryKeyAutoincrement,
-		PrimaryKeyOnConflict:    primaryKeyOnConflict,
-		UniqueConstraints:       uniqueConstraints,
-		Checks:                  checks,
-		Indexes:                 indexes,
-		ForeignKeys:             foreignKeys,
+		Schema:                      options.database,
+		Name:                        tableName,
+		Columns:                     columns,
+		PrimaryKey:                  primaryKey,
+		Strict:                      options.strict,
+		WithoutRowID:                options.withoutRowID,
+		PrimaryKeyAutoincrement:     primaryKeyAutoincrement,
+		PrimaryKeyOnConflict:        primaryKeyOnConflict,
+		VirtualTableModule:          virtualModule,
+		VirtualTableModuleArguments: virtualModuleArguments,
+		UniqueConstraints:           uniqueConstraints,
+		Checks:                      checks,
+		Indexes:                     indexes,
+		ForeignKeys:                 foreignKeys,
 	}
 	if err := table.Validate(); err != nil {
 		return schema.TableDef{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
@@ -949,7 +978,20 @@ func resolveSQLiteTableOptions(databaseName string, tableName string, matches []
 		}
 		return sqliteTableOptions{}, &AmbiguousTableError{Table: tableName, Databases: databases}
 	}
-	if !strings.EqualFold(matches[0].kind, "table") {
+	// PRAGMA table_list reports one of four kinds: "table", "view",
+	// "shadow" (a virtual table module's own backing table, such as
+	// FTS5's <table>_data), or "virtual" (the virtual table itself). A
+	// shadow table's own CREATE TABLE text is an entirely ordinary
+	// table definition, so it is described the same way "table" is; the
+	// virtual-table branch that follows this function's caller detects
+	// "virtual" from the definition text itself rather than from this
+	// kind, since a pre-3.37 sqlite_master fallback reports a virtual
+	// table's own kind as "table" (sqlite_master has no separate
+	// "virtual" type), so kind alone cannot be trusted to say whether a
+	// table is virtual. "view" and anything else stay unsupported: a
+	// view has no independent column, constraint, or index structure of
+	// its own for a TableDef to hold.
+	if !strings.EqualFold(matches[0].kind, "table") && !strings.EqualFold(matches[0].kind, "shadow") && !strings.EqualFold(matches[0].kind, "virtual") {
 		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: table kind %q is unsupported", tableName, matches[0].kind)
 	}
 	if err := schema.ValidateIdentifier(matches[0].database); err != nil {
@@ -1118,40 +1160,51 @@ func sqliteRetainedHandleError() error {
 	return fmt.Errorf("inspect: SQLite inspection requires a retained *sql.Conn or *sql.Tx for temporary or attached databases")
 }
 
-// sqliteTableDefinition returns the table's parsed CREATE TABLE statement
-// and the MATCH and deferrability clauses sqlitequery's parser cannot
-// represent, one per REFERENCES clause the definition declared, in
-// declaration order. See sqliteNormalizeForeignKeyClauses.
-func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tableName string) (*sqlitequery.CreateTableStatement, []sqliteForeignKeyClause, error) {
+// sqliteTableDefinitionText returns tableName's own CREATE TABLE (or CREATE
+// VIRTUAL TABLE) text from sqlite_master, unparsed. Splitting this out from
+// sqliteParseTableDefinition lets sqliteTableOnConnection decide, from the
+// text alone, whether the table is a virtual table before choosing which of
+// sqliteParseTableDefinition or sqliteVirtualTableDefinition can actually
+// parse it: sqlitequery's grammar has no CREATE VIRTUAL TABLE node.
+func (i Inspector) sqliteTableDefinitionText(ctx context.Context, databaseName, tableName string) (string, error) {
 	query := `SELECT sql FROM "` + sqlitePragmaIdentifier(databaseName) + `".sqlite_master WHERE type = 'table' AND name = ?`
 	rows, err := i.queryer.QueryContext(ctx, query, tableName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect: read SQLite table definition: %w", err)
+		return "", fmt.Errorf("inspect: read SQLite table definition: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return nil, nil, fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
+			return "", fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
 		}
-		return nil, nil, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
+		return "", &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
 	var definition sql.NullString
 	if err := rows.Scan(&definition); err != nil {
-		return nil, nil, fmt.Errorf("inspect: scan SQLite table definition: %w", err)
+		return "", fmt.Errorf("inspect: scan SQLite table definition: %w", err)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
+		return "", fmt.Errorf("inspect: iterate SQLite table definition: %w", err)
 	}
 	if !definition.Valid || definition.String == "" {
-		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unavailable", tableName)
+		return "", fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unavailable", tableName)
 	}
-	if sqliteDefinitionContainsVirtualTableKeyword(definition.String) {
-		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE VIRTUAL TABLE definitions are unsupported", tableName)
-	}
-	normalized, clauses := sqliteNormalizeForeignKeyClauses(definition.String)
+	return definition.String, nil
+}
+
+// sqliteParseTableDefinition parses an ordinary (non-virtual) SQLite CREATE
+// TABLE definition's text and returns the parsed statement and the MATCH
+// and deferrability clauses sqlitequery's parser cannot represent, one per
+// REFERENCES clause the definition declared, in declaration order. See
+// sqliteNormalizeForeignKeyClauses. Callers only reach this once they have
+// already ruled out a CREATE VIRTUAL TABLE definition via
+// sqliteDefinitionContainsVirtualTableKeyword, since sqlitequery's grammar
+// cannot parse one.
+func sqliteParseTableDefinition(definition, tableName string) (*sqlitequery.CreateTableStatement, []sqliteForeignKeyClause, error) {
+	normalized, clauses := sqliteNormalizeForeignKeyClauses(definition)
 	statement, err := sqlitequery.ParseStatement(normalized)
 	if err != nil {
-		if strings.Contains(strings.ToUpper(definition.String), "CHECK") {
+		if strings.Contains(strings.ToUpper(definition), "CHECK") {
 			return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition contains an unsupported CHECK form: %w", tableName, err)
 		}
 		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition is unsupported: %w", tableName, err)
@@ -1161,9 +1214,187 @@ func (i Inspector) sqliteTableDefinition(ctx context.Context, databaseName, tabl
 		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE TABLE definition has an unexpected shape", tableName)
 	}
 	if createTable.As != nil {
+		// A live SQLite catalog never actually reaches this: SQLite
+		// rewrites a CREATE TABLE ... AS SELECT into a plain column list
+		// in sqlite_master.sql the moment the table is created, the same
+		// way it never persists the original SELECT anywhere else, so
+		// createTable.As is only ever non-nil against hand-supplied SQL
+		// (a sqlmock fixture, or migrate/diff's static-source path) that
+		// spells the literal "AS SELECT" text out. There is nothing to
+		// describe faithfully even so: a CTAS table has no independent
+		// column definitions of its own to record beyond what
+		// sqliteTableOnConnection's PRAGMA table_xinfo already reads
+		// unconditionally, so a TableDef naming this fact would have
+		// nothing to say beyond "this table's columns came from a
+		// SELECT," a provenance fact rasql has nowhere to keep once the
+		// table exists.
 		return nil, nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: CREATE TABLE AS SELECT definitions are unsupported", tableName)
 	}
 	return createTable, clauses, nil
+}
+
+// sqliteVirtualTableDefinition reads a SQLite CREATE VIRTUAL TABLE
+// definition's module name and raw module argument text. sqlitequery's
+// grammar has no CREATE VIRTUAL TABLE node, since each module defines its
+// own argument syntax (FTS5's own column-definition-like arguments, for
+// instance), so this reads only the parts SQLite's own grammar fixes: the
+// CREATE VIRTUAL TABLE keywords, an optional IF NOT EXISTS, the table name,
+// USING, the module name, and a balanced, comma-split argument list,
+// keeping each argument's own raw text untouched.
+func sqliteVirtualTableDefinition(definition, tableName string) (string, []string, error) {
+	fail := func() (string, []string, error) {
+		return "", nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: its CREATE VIRTUAL TABLE definition has an unexpected shape", tableName)
+	}
+	index := sqliteSkipSpaceAndComments(definition, 0)
+	index, ok := sqliteMatchKeyword(definition, index, "CREATE")
+	if !ok {
+		return fail()
+	}
+	index, ok = sqliteMatchKeyword(definition, index, "VIRTUAL")
+	if !ok {
+		return fail()
+	}
+	index, ok = sqliteMatchKeyword(definition, index, "TABLE")
+	if !ok {
+		return fail()
+	}
+	if next, ifOk := sqliteMatchKeyword(definition, index, "IF"); ifOk {
+		next, ifOk = sqliteMatchKeyword(definition, next, "NOT")
+		if !ifOk {
+			return fail()
+		}
+		next, ifOk = sqliteMatchKeyword(definition, next, "EXISTS")
+		if !ifOk {
+			return fail()
+		}
+		index = next
+	}
+	_, index, ok = sqliteReadNameToken(definition, index)
+	if !ok {
+		return fail()
+	}
+	if next := sqliteSkipSpaceAndComments(definition, index); next < len(definition) && definition[next] == '.' {
+		_, index, ok = sqliteReadNameToken(definition, next+1)
+		if !ok {
+			return fail()
+		}
+	}
+	index, ok = sqliteMatchKeyword(definition, index, "USING")
+	if !ok {
+		return fail()
+	}
+	module, index, ok := sqliteReadNameToken(definition, index)
+	if !ok || module == "" {
+		return fail()
+	}
+	args, _, err := sqliteVirtualTableModuleArguments(definition, index)
+	if err != nil {
+		return "", nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: %w", tableName, err)
+	}
+	return module, args, nil
+}
+
+// sqliteReadNameToken reads one SQLite name token starting at index — a
+// bare identifier, or one quoted with "double quotes", `backticks`, or
+// [brackets] — skipping leading space and comments first. It reports the
+// token's own text (unquoted) and the index just past it, or false if
+// index does not start a name.
+func sqliteReadNameToken(definition string, index int) (string, int, bool) {
+	index = sqliteSkipSpaceAndComments(definition, index)
+	if index >= len(definition) {
+		return "", index, false
+	}
+	switch definition[index] {
+	case '"', '`', '\'':
+		quote := definition[index]
+		end := skipSQLiteQuoted(definition, index, quote)
+		if end <= index+1 {
+			return "", end, false
+		}
+		return definition[index+1 : end-1], end, true
+	case '[':
+		end := index + 1
+		for end < len(definition) && definition[end] != ']' {
+			end++
+		}
+		if end >= len(definition) {
+			return "", end, false
+		}
+		return definition[index+1 : end], end + 1, true
+	default:
+		if !sqliteIdentifierStart(definition[index]) {
+			return "", index, false
+		}
+		start := index
+		index++
+		for index < len(definition) && sqliteIdentifierPart(definition[index]) {
+			index++
+		}
+		return definition[start:index], index, true
+	}
+}
+
+// sqliteVirtualTableModuleArguments reads a virtual table module's
+// parenthesized, comma-separated argument list starting at index, or
+// reports no arguments if index does not start with "(" — a module may be
+// used with no argument list at all, such as USING module. Each returned
+// argument is the raw source text between its delimiting commas (or
+// parentheses), trimmed of leading and trailing space, exactly as the
+// module itself would receive it: this package does not parse into a
+// module's own argument grammar. Commas, parentheses, and brackets inside a
+// quoted or bracketed span do not count as delimiters.
+func sqliteVirtualTableModuleArguments(definition string, index int) ([]string, int, error) {
+	index = sqliteSkipSpaceAndComments(definition, index)
+	if index >= len(definition) || definition[index] != '(' {
+		return nil, index, nil
+	}
+	open := index
+	index++
+	depth := 1
+	argStart := index
+	var args []string
+	for index < len(definition) {
+		switch definition[index] {
+		case '\'', '"', '`':
+			index = skipSQLiteQuoted(definition, index, definition[index])
+			continue
+		case '[':
+			index++
+			for index < len(definition) && definition[index] != ']' {
+				index++
+			}
+			if index < len(definition) {
+				index++
+			}
+			continue
+		case '(':
+			depth++
+			index++
+			continue
+		case ')':
+			depth--
+			if depth == 0 {
+				if trimmed := strings.TrimSpace(definition[argStart:index]); trimmed != "" || len(args) > 0 {
+					args = append(args, trimmed)
+				}
+				return args, index + 1, nil
+			}
+			index++
+			continue
+		case ',':
+			if depth == 1 {
+				args = append(args, strings.TrimSpace(definition[argStart:index]))
+				index++
+				argStart = index
+				continue
+			}
+			index++
+			continue
+		default:
+			index++
+		}
+	}
+	return nil, index, fmt.Errorf("unterminated module argument list starting at byte %d", open)
 }
 
 func sqliteDefinitionContainsVirtualTableKeyword(definition string) bool {
@@ -1584,15 +1815,44 @@ func sqliteUniqueConstraints(statement *sqlitequery.CreateTableStatement, tableN
 		if err != nil {
 			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: %w", tableName, err)
 		}
+		// Each key's DESC ordering and non-default collation are recorded
+		// on schema.UniqueDef.Keys, reusing schema.IndexKeyDef exactly as
+		// IndexDef.Keys does for a regular index's own per-key facts,
+		// rather than a second type with the same shape. Keys is only
+		// used when at least one key actually carries one of those two
+		// facts; a plain constraint keeps describing its keys with
+		// Columns, exactly as before Keys existed. An expression key
+		// stays rejected: SQLite's own grammar prohibits an expression
+		// inside a UNIQUE table constraint (only a column reference,
+		// optionally COLLATEd and ordered, is allowed), so this branch
+		// only defends against a hand-supplied definition sqlitequery's
+		// parser accepted anyway, never a live SQLite catalog's own text.
 		columns := make([]string, len(constraint.Columns))
+		keys := make([]schema.IndexKeyDef, len(constraint.Columns))
+		needsKeys := false
 		for index, column := range constraint.Columns {
 			expression, ok := column.Expression.(*sqlitequery.IdentifierExpression)
-			if !ok || expression == nil || len(expression.Name) != 1 || column.Collation != nil || column.Direction != sqlitequery.SortDefault {
-				return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: UNIQUE constraints with expressions, collations, or ordering are unsupported", tableName)
+			if !ok || expression == nil || len(expression.Name) != 1 {
+				return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: UNIQUE constraints with expressions are unsupported", tableName)
 			}
-			columns[index] = expression.Name[0].Name
+			name := expression.Name[0].Name
+			columns[index] = name
+			key := schema.IndexKeyDef{Expression: name, Descending: column.Direction == sqlitequery.SortDescending}
+			if collation := sqliteIdentifierName(column.Collation); !strings.EqualFold(collation, "BINARY") {
+				key.Collation = collation
+			}
+			if key.Descending || key.Collation != "" {
+				needsKeys = true
+			}
+			keys[index] = key
 		}
-		constraints = append(constraints, schema.UniqueDef{Name: sqliteIdentifierName(constraint.Name), Columns: columns, OnConflict: onConflict})
+		unique := schema.UniqueDef{Name: sqliteIdentifierName(constraint.Name), OnConflict: onConflict}
+		if needsKeys {
+			unique.Keys = keys
+		} else {
+			unique.Columns = columns
+		}
+		constraints = append(constraints, unique)
 	}
 	return constraints, nil
 }
@@ -1620,11 +1880,12 @@ func sqliteConflictResolution(conflict sqlitequery.ConflictResolution) (schema.C
 	}
 }
 
-// PRAGMA table_xinfo's hidden column values for a generated column. See the
-// comment where they are checked in sqliteTableOnConnection for the full set
-// of values, including the genuinely hidden column value this package still
-// rejects.
+// PRAGMA table_xinfo's hidden column values. See the comment where they are
+// checked in sqliteTableOnConnection for the full set of values.
 const (
+	// sqliteHiddenModule marks a column a virtual table module declares
+	// hidden, such as FTS5's own table-name and rank columns.
+	sqliteHiddenModule           = 1
 	sqliteHiddenGeneratedVirtual = 2
 	sqliteHiddenGeneratedStored  = 3
 )

@@ -70,6 +70,36 @@ func TestLiveSourcesRejectsPrimaryKeyConflictResolution(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsVirtualTable is the VirtualTableModule counterpart
+// to TestLiveSourcesRejectsStrictTable.
+func TestLiveSourcesRejectsVirtualTable(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:                        "posts_fts",
+		Columns:                     []schema.ColumnDef{{Name: "body", Type: schema.TextType{}, Nullable: true}},
+		VirtualTableModule:          "fts5",
+		VirtualTableModuleArguments: []string{"body"},
+	})
+	require.ErrorContains(t, err, `"posts_fts"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsUniqueKeyDetails is the UniqueDef.Keys counterpart
+// to TestLiveSourcesRejectsStrictTable.
+func TestLiveSourcesRejectsUniqueKeyDetails(t *testing.T) {
+	analyzer := sqlite.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{
+			{Keys: []schema.IndexKeyDef{{Expression: "email", Descending: true}}},
+		},
+	})
+	require.ErrorContains(t, err, `"members"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := sqlite.New()
 	baseline := parseSnapshot(t, analyzer, `

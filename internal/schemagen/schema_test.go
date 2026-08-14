@@ -1292,6 +1292,54 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Name: "Combo", Kind: schema.RelationshipBelongsTo, Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
 }
 
+// TestDescriptorSourceStatesVirtualTableFacts proves that VirtualTableModule,
+// VirtualTableModuleArguments, and a hidden column all reach the generated
+// literal.
+func TestDescriptorSourceStatesVirtualTableFacts(t *testing.T) {
+	postsFTS := schema.TableDef{
+		Name: "posts_fts",
+		Columns: []schema.ColumnDef{
+			{Name: "body", Type: schema.TextType{}, Nullable: true},
+			{Name: "posts_fts", Type: schema.TextType{}, Nullable: true, Hidden: true},
+			{Name: "rank", Type: schema.TextType{}, Nullable: true, Hidden: true},
+		},
+		VirtualTableModule:          "fts5",
+		VirtualTableModuleArguments: []string{"body", "tokenize='porter'"},
+	}
+	require.NoError(t, postsFTS.Validate())
+
+	source, err := schemagen.DescriptorSource("generated", postsFTS)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, `VirtualTableModule:          "fts5",`)
+	require.Contains(t, text, `VirtualTableModuleArguments: []string{"body", "tokenize='porter'"},`)
+	require.Contains(t, text, `{Name: "posts_fts", Type: schema.TextType{}, Nullable: true, Hidden: true}`)
+}
+
+// TestDescriptorSourceStatesUniqueConstraintKeys proves that a UniqueDef
+// naming Keys instead of Columns reaches the generated literal, reusing
+// writeIndexKeyDefLiteral the same way IndexDef.Keys already does.
+func TestDescriptorSourceStatesUniqueConstraintKeys(t *testing.T) {
+	members := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{
+			{Keys: []schema.IndexKeyDef{{Expression: "email", Descending: true, Collation: "nocase"}}},
+		},
+	}
+	require.NoError(t, members.Validate())
+
+	source, err := schemagen.DescriptorSource("generated", members)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, `Keys: []schema.IndexKeyDef{`)
+	require.Contains(t, text, `{Expression: "email", Descending: true, Collation: "nocase"}`)
+}
+
 // TestDescriptorSourceKeepsEveryMatchingRelationship pins the case where the
 // old option form lost information: two relationships that both match one
 // foreign key. writeForeignKeyOptions's RelationshipNamed option could carry

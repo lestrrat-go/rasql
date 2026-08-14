@@ -176,6 +176,20 @@ type ColumnDef struct {
 	// GeneratedStorage names whether GeneratedExpression is stored or
 	// computed on read. See GeneratedStorage's own doc.
 	GeneratedStorage GeneratedStorage `json:",omitempty"`
+
+	// Hidden marks a column a SQLite virtual table module declares
+	// hidden — excluded from SELECT * and from an INSERT that names no
+	// column list, but still addressable by name, such as FTS5's own
+	// table-name column used for MATCH filtering or its rank column. Its
+	// zero value, false, means an ordinary column, which is what every
+	// ColumnDef and every checked-in generated file written before this
+	// field existed has always meant. TableDef.Validate rejects a true
+	// Hidden on a table whose TableDef.VirtualTableModule is empty,
+	// since a hidden column is a virtual-table-module concept. A plain
+	// table, PostgreSQL, and MySQL have no equivalent concept, so this
+	// never comes from a PostgreSQL or MySQL descriptor, or from an
+	// ordinary SQLite table.
+	Hidden bool `json:",omitempty"`
 }
 
 // MarshalJSON encodes a column type as a tagged object so type-specific
@@ -188,6 +202,7 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Default             string           `json:"Default"`
 		GeneratedExpression string           `json:"GeneratedExpression,omitempty"`
 		GeneratedStorage    GeneratedStorage `json:"GeneratedStorage,omitempty"`
+		Hidden              bool             `json:"Hidden,omitempty"`
 	}
 	typeData, err := marshalColumnType(c.Type)
 	if err != nil {
@@ -200,6 +215,7 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Default:             c.Default,
 		GeneratedExpression: c.GeneratedExpression,
 		GeneratedStorage:    c.GeneratedStorage,
+		Hidden:              c.Hidden,
 	})
 }
 
@@ -212,6 +228,7 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Default             string           `json:"Default"`
 		GeneratedExpression string           `json:"GeneratedExpression,omitempty"`
 		GeneratedStorage    GeneratedStorage `json:"GeneratedStorage,omitempty"`
+		Hidden              bool             `json:"Hidden,omitempty"`
 	}
 	var wire wireColumn
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -228,6 +245,7 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Default:             wire.Default,
 		GeneratedExpression: wire.GeneratedExpression,
 		GeneratedStorage:    wire.GeneratedStorage,
+		Hidden:              wire.Hidden,
 	}
 	return nil
 }
@@ -277,6 +295,40 @@ type UniqueDef struct {
 	// clause-free UniqueDef's JSON identical to what it encoded before
 	// this field existed.
 	OnConflict ConflictResolution `json:",omitempty"`
+
+	// Keys, when non-empty, is the full ordered list of per-key facts for
+	// a SQLite unique constraint that orders at least one key DESC or
+	// names a non-default collation on it — the same two facts
+	// IndexDef.Keys attaches to a regular index's keys, reusing
+	// IndexKeyDef rather than a second type with the same shape. When
+	// Keys is set it replaces Columns as the source of the constraint's
+	// key order, the same way IndexDef.Keys replaces IndexDef.Columns:
+	// Columns is left empty, and each IndexKeyDef.Expression carries
+	// that key's own column name (SQLite's own grammar prohibits an
+	// expression inside a UNIQUE table constraint, so Expression is
+	// always a bare column name here, never expression text).
+	// IndexKeyDef.OperatorClass and .PrefixLength never come from a
+	// SQLite descriptor, the same as they never come from a SQLite
+	// IndexDef.Keys. Its zero value, nil, means every key is a plain
+	// ascending column in the default collation, described by Columns
+	// exactly as before this field existed. PostgreSQL and MySQL have no
+	// per-key unique-constraint ordering or collation concept, so this
+	// never comes from a PostgreSQL or MySQL descriptor.
+	//
+	// Unlike IndexDef.Keys, which reads a regular index's own collation
+	// back from PRAGMA index_xinfo verbatim, inspect reads a UniqueDef's
+	// Keys from the constraint's own parsed CREATE TABLE text, so an
+	// unquoted collation name comes back however rasql's SQLite parser
+	// folds it, the same folding every other identifier this package
+	// reads from parsed DDL text already carries.
+	//
+	// A UniqueDef naming Keys is describable but not yet renderable:
+	// inspect records what a live SQLite UNIQUE constraint's own keys
+	// actually use, and TableDef.Validate accepts it, but
+	// render.CreateTable and the migrate diff-live path refuse to build
+	// DDL for one, because rasql does not yet know how to construct a
+	// DESC key or a non-default collation inside a UNIQUE constraint.
+	Keys []IndexKeyDef `json:",omitempty"`
 }
 
 // CheckDef requires Expression to evaluate to true for each row.
@@ -762,6 +814,41 @@ type TableDef struct {
 	// identical to what it encoded before this field existed.
 	PrimaryKeyOnConflict ConflictResolution `json:",omitempty"`
 
+	// VirtualTableModule names the module a SQLite CREATE VIRTUAL TABLE
+	// declares with its USING clause, such as "fts5" or "rtree". Its
+	// zero value, the empty string, means the table is an ordinary
+	// table, not a virtual one, which is what every TableDef and every
+	// checked-in generated file written before this field existed has
+	// always meant. PostgreSQL and MySQL have no virtual-table concept,
+	// so this never comes from a PostgreSQL or MySQL descriptor.
+	//
+	// A non-empty VirtualTableModule is describable but not yet
+	// renderable: inspect records what a live SQLite virtual table's own
+	// CREATE VIRTUAL TABLE definition declares, and TableDef.Validate
+	// accepts it, but render.CreateTable and the migrate diff-live path
+	// refuse to build DDL for one, because rasql does not yet know how
+	// to construct a CREATE VIRTUAL TABLE statement. A virtual table has
+	// no primary key, table option, unique constraint, check, index, or
+	// foreign key that this package can independently verify — those are
+	// the module's own business, not SQLite's table catalog — so
+	// TableDef.Validate rejects any of those stated alongside a non-empty
+	// VirtualTableModule.
+	VirtualTableModule string `json:",omitempty"`
+
+	// VirtualTableModuleArguments lists VirtualTableModule's own
+	// arguments, exactly as its CREATE VIRTUAL TABLE definition wrote
+	// them, one raw text span per argument in declaration order — a
+	// module defines its own argument grammar (FTS5's own
+	// column-definition-like arguments, for instance), so this package
+	// does not parse into it. Its zero value, nil, means the module took
+	// no arguments, or VirtualTableModule is itself empty. It is
+	// meaningless, and TableDef.Validate rejects it, without a
+	// VirtualTableModule.
+	//
+	// VirtualTableModuleArguments is describable but not yet renderable,
+	// on the same terms as VirtualTableModule.
+	VirtualTableModuleArguments []string `json:",omitempty"`
+
 	UniqueConstraints []UniqueDef
 	Checks            []CheckDef
 
@@ -799,6 +886,7 @@ func (t TableDef) Clone() TableDef {
 	clone := t
 	clone.Columns = append([]ColumnDef(nil), t.Columns...)
 	clone.PrimaryKey = append([]string(nil), t.PrimaryKey...)
+	clone.VirtualTableModuleArguments = append([]string(nil), t.VirtualTableModuleArguments...)
 	clone.UniqueConstraints = make([]UniqueDef, len(t.UniqueConstraints))
 	for i, constraint := range t.UniqueConstraints {
 		clone.UniqueConstraints[i] = constraint
@@ -920,6 +1008,9 @@ func (t TableDef) Validate() error {
 		if column.GeneratedExpression != "" && column.Default != "" {
 			return validationError(path+".default", "a generated column must not also state a Default")
 		}
+		if column.Hidden && t.VirtualTableModule == "" {
+			return validationError(path+".hidden", "must not be set without a VirtualTableModule")
+		}
 		if _, exists := columns[column.Name]; exists {
 			return validationError(path+".name", "duplicates column %q", column.Name)
 		}
@@ -938,6 +1029,36 @@ func (t TableDef) Validate() error {
 		}
 		if t.PrimaryKeyOnConflict != "" {
 			return validationError("table.primary_key_on_conflict", "must not be set without a primary key")
+		}
+	}
+	if t.VirtualTableModule == "" {
+		if len(t.VirtualTableModuleArguments) > 0 {
+			return validationError("table.virtual_table_module_arguments", "must not be set without a VirtualTableModule")
+		}
+	} else {
+		if len(t.PrimaryKey) > 0 {
+			return validationError("table.primary_key", "must be empty on a SQLite virtual table")
+		}
+		if t.Strict {
+			return validationError("table.strict", "must not be set on a SQLite virtual table")
+		}
+		if t.WithoutRowID {
+			return validationError("table.without_rowid", "must not be set on a SQLite virtual table")
+		}
+		if len(t.UniqueConstraints) > 0 {
+			return validationError("table.unique_constraints", "must be empty on a SQLite virtual table")
+		}
+		if len(t.Checks) > 0 {
+			return validationError("table.checks", "must be empty on a SQLite virtual table")
+		}
+		if len(t.ExclusionConstraints) > 0 {
+			return validationError("table.exclusion_constraints", "must be empty on a SQLite virtual table")
+		}
+		if len(t.Indexes) > 0 {
+			return validationError("table.indexes", "must be empty on a SQLite virtual table")
+		}
+		if len(t.ForeignKeys) > 0 {
+			return validationError("table.foreign_keys", "must be empty on a SQLite virtual table")
 		}
 	}
 	constraintNames := make(map[string]string)
@@ -1022,7 +1143,20 @@ func validateNamedColumnLists(path string, constraints []UniqueDef, columns map[
 			}
 			constraintNames[constraint.Name] = itemPath
 		}
-		if err := validateColumnList(itemPath+".columns", constraint.Columns, columns, true); err != nil {
+		if len(constraint.Keys) > 0 {
+			if len(constraint.Columns) > 0 {
+				return validationError(itemPath+".columns", "must be empty when Keys describes the constraint's keys instead")
+			}
+			for j, key := range constraint.Keys {
+				keyPath := fmt.Sprintf("%s.keys[%d]", itemPath, j)
+				if key.Expression == "" {
+					return validationError(keyPath+".expression", "must not be empty")
+				}
+				if key.PrefixLength < 0 {
+					return validationError(keyPath+".prefix_length", "must not be negative")
+				}
+			}
+		} else if err := validateColumnList(itemPath+".columns", constraint.Columns, columns, true); err != nil {
 			return err
 		}
 		if !constraint.Deferrable.valid() {
