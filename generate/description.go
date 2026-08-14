@@ -19,6 +19,16 @@ import (
 // collision check below rejects that before anything is written.
 const descriptionAggregatorFilename = "tables_gen.go"
 
+// descriptionHintsFilename is the user-owned file WriteDescriptionPackage
+// writes once, the first time it creates a package, and never rewrites
+// again: see internal/schemagen.HintsSource. It deliberately does not end
+// in "_gen.go" -- genfile.Write's own suffix rule exists to gate what
+// rasqlgen may silently replace, and this file is the one output rasqlgen
+// must never replace once it exists, so it is written directly rather than
+// through genfile.Write. schemaOutputFilename's own "<table>_gen.go"
+// naming can never collide with it.
+const descriptionHintsFilename = "hints.go"
+
 // WriteDescriptionPackage writes a bootstrap-generated description package
 // into directory: one file per table, named the same way WritePackage names
 // its own per-table files (schemaOutputFilename), each exporting a function
@@ -99,7 +109,34 @@ func WriteDescriptionPackage(packageName, directory string, tables ...schema.Tab
 	if err := genfile.Write(filepath.Join(directory, descriptionAggregatorFilename), aggregatorSource); err != nil {
 		return fmt.Errorf("write %s: %w", descriptionAggregatorFilename, err)
 	}
+	if err := writeHintsFileIfAbsent(packageName, directory); err != nil {
+		return fmt.Errorf("write %s: %w", descriptionHintsFilename, err)
+	}
 	return nil
+}
+
+// writeHintsFileIfAbsent writes descriptionHintsFilename into directory the
+// first time it does not already exist there, and does nothing otherwise --
+// the file is user-owned from the moment it is written, so a caller that
+// runs this again after editing it, whether WriteDescriptionPackage on a
+// package that predates hints or a later refresh, must never touch it
+// again. os.Stat and os.WriteFile are not one atomic step, but the race
+// this leaves -- two rasqlgen invocations bootstrapping the same output
+// directory at once -- is already unsupported by WriteDescriptionPackage's
+// own directory-emptiness check above, which is subject to the identical
+// race.
+func writeHintsFileIfAbsent(packageName, directory string) error {
+	path := filepath.Join(directory, descriptionHintsFilename)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	source, err := schemagen.HintsSource(packageName)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, source, 0o600)
 }
 
 // descriptionFile is one table's resolved destination and function name,
