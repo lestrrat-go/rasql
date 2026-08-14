@@ -557,6 +557,80 @@ func Example_inspect_sqlite_table() {
 source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_example_test.go)
 <!-- END INCLUDE -->
 
+`Inspector.TableNames(ctx)` returns the base tables in the inspected scope as `[]inspect.TableName`, excluding views and sorted by `Schema` then `Name`, so a caller does not need to already know a table name to start inspecting it. PostgreSQL scopes to `current_schema()` and MySQL to `DATABASE()`, the same scope `Table` reads columns from, and both leave every `TableName.Schema` empty: `Table` itself never fills `schema.TableDef.Schema` for those two dialects, and filling it here would silently qualify SQL that is unqualified today. SQLite has no single equivalent scope: like `Table`'s own default, `TableNames` reports across `main`, `temp`, and every database attached to the connection, with `TableName.Schema` naming which database each table came from — the field a bare table name cannot carry, and why two databases holding a table of the same name still come back as two distinguishable results. `Inspector.TableNamesIn(ctx, databaseName)` scopes SQLite to one database instead, the enumeration counterpart of `TableIn`, and carries the same retained-connection requirement for `temp` or an attached database; every `TableName.Schema` it returns equals `databaseName`. `TableNamesIn` is supported only for SQLite.
+
+<!-- INCLUDE(examples/inspect_sqlite_table_names_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/inspect"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
+)
+
+func Example_inspect_sqlite_table_names() {
+	// This example enumerates the base tables across main and an attached
+	// database, including a table name that exists in both.
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer func() { _ = database.Close() }()
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		fmt.Printf("failed to retain SQLite connection: %s\n", err)
+		return
+	}
+	defer func() { _ = connection.Close() }()
+	if _, err := connection.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS tenant"); err != nil {
+		fmt.Printf("failed to attach tenant database: %s\n", err)
+		return
+	}
+	for _, statement := range []string{
+		"CREATE TABLE main.armadillos (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE main.zebras (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE tenant.zebras (id INTEGER PRIMARY KEY)",
+		// A view is not a base table, so TableNames excludes it.
+		"CREATE VIEW main.zebra_view AS SELECT id FROM main.zebras",
+	} {
+		if _, err := connection.ExecContext(ctx, statement); err != nil {
+			fmt.Printf("failed to run %q: %s\n", statement, err)
+			return
+		}
+	}
+
+	inspector, err := inspect.New(connection, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create SQLite inspector: %s\n", err)
+		return
+	}
+	// TableNames reports every database's tables together; TableName.Schema
+	// is what keeps the two "zebras" tables distinguishable.
+	refs, err := inspector.TableNames(ctx)
+	if err != nil {
+		fmt.Printf("failed to list table names: %s\n", err)
+		return
+	}
+	for _, ref := range refs {
+		fmt.Printf("%s.%s\n", ref.Schema, ref.Name)
+	}
+
+	// Output:
+	// main.armadillos
+	// main.zebras
+	// tenant.zebras
+}
+```
+source: [examples/inspect_sqlite_table_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_names_example_test.go)
+<!-- END INCLUDE -->
+
 `inspect.New` takes the same kind of handle as `rasql.New` plus the dialect that describes the database being read. The result is an ordinary descriptor, so it can be validated, compared against a checked-in definition, or handed to the generator. A PostgreSQL `NUMERIC(p,s)` or MySQL `DECIMAL(p,s)` column normalizes to `schema.DecimalType` with `Precision` and `Scale` filled in from the catalog. Catalog metadata comes from whichever server the application points at, so a decimal is recognized only from a type declaration matched in full, never from a substring of one: on MySQL, `COLUMN_TYPE` must read exactly `DECIMAL` or `NUMERIC`, optionally followed by `(precision)` or `(precision, scale)`, and catalog text such as `FOODECIMALBAR` is an unsupported type rather than a decimal. Four decimal shapes return an error rather than a descriptor: a PostgreSQL column declared as bare, unconstrained `numeric` has no precision the catalog can report, so `Table` refuses it rather than guess one; a decimal column whose catalog row reports no scale is refused for the same reason, since recording the missing scale as 0 would drop the column's fractional digits; a MySQL `DECIMAL`/`NUMERIC` declaration carrying `UNSIGNED`, `ZEROFILL` or any other modifier is refused, because `DecimalType` cannot record the modifier and re-rendering the column without it would change the values the column permits; and any SQLite `DECIMAL`/`NUMERIC` column is refused outright, since such a column actually holds `REAL` values in SQLite (see [Logical column types](#logical-column-types) above) and `schema.DecimalType` would claim an exactness the stored data does not have. A SQLite column that rasql itself created as `DecimalType` was declared `TEXT`, and inspects back as `schema.TextType`, not `schema.DecimalType`: SQLite's catalog does not record enough to recover the original logical type.
 
 Integer declarations are matched the same way, and for the same reason. On MySQL, `COLUMN_TYPE` must read exactly `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `INTEGER` or `BIGINT`, optionally followed by a display width and then by `UNSIGNED`; a declaration carrying `UNSIGNED` sets `IntegerType.Unsigned`, and one carrying `ZEROFILL` or any other modifier is refused, since the concrete type cannot record it. Matching the whole declaration is what makes the `UNSIGNED` visible at all: a substring test on `INT` cannot see what follows the type, which is how a `bigint(20) unsigned` column used to inspect as a plain signed integer and re-render as `BIGINT`, losing every value above 9223372036854775807. It also accepted MySQL's `POINT`, which is not an integer at all and is now an unsupported type. PostgreSQL has no unsigned integer type and SQLite stores a signed 64-bit value whatever a column is declared, so neither ever reports an unsigned column; a SQLite column declared `UNSIGNED BIG INT` inspects as the signed integer column it really is.
