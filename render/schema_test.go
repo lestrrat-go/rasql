@@ -1255,6 +1255,54 @@ func TestCreateTableRejectsIntegerZeroFill(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedIntegerZeroFill)
 }
 
+// TestCreateTableRejectsDecimalUnsigned proves that a DecimalType naming a
+// true Unsigned, such as what inspect now describes for a live MySQL
+// DECIMAL(p,s) UNSIGNED column, is refused at render time with a typed error
+// rather than silently rendered without it.
+func TestCreateTableRejectsDecimalUnsigned(t *testing.T) {
+	table := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := render.CreateTable(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"amount"`)
+	require.ErrorContains(t, err, "UNSIGNED")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var unsignedErr *render.UnsupportedDecimalUnsignedError
+	require.ErrorAs(t, err, &unsignedErr)
+	require.Equal(t, "amount", unsignedErr.Column)
+	require.ErrorIs(t, err, render.ErrUnsupportedDecimalUnsigned)
+}
+
+// TestCreateTableRejectsDecimalZeroFill is the ZEROFILL counterpart to
+// TestCreateTableRejectsDecimalUnsigned.
+func TestCreateTableRejectsDecimalZeroFill(t *testing.T) {
+	table := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true, ZeroFill: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := render.CreateTable(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"amount"`)
+	require.ErrorContains(t, err, "ZEROFILL")
+	require.ErrorContains(t, err, "can describe but not yet render")
+
+	var zeroFillErr *render.UnsupportedDecimalZeroFillError
+	require.ErrorAs(t, err, &zeroFillErr)
+	require.Equal(t, "amount", zeroFillErr.Column)
+	require.ErrorIs(t, err, render.ErrUnsupportedDecimalZeroFill)
+}
+
 func TestCreateTableReportsDecimalTypeErrorWithColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "invoices",

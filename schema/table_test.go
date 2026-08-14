@@ -115,7 +115,9 @@ func TestColumnTypeKinds(t *testing.T) {
 func TestDecimalScaleJSON(t *testing.T) {
 	encoded, err := json.Marshal(schema.ColumnDef{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(0)}})
 	require.NoError(t, err)
-	require.Contains(t, string(encoded), `"Type":{"Kind":"decimal","Precision":19,"Scale":0}`)
+	require.Contains(t, string(encoded), `"Kind":"decimal","Precision":19,"Scale":0`)
+	require.Contains(t, string(encoded), `"Unsigned":false`)
+	require.Contains(t, string(encoded), `"ZeroFill":false`)
 
 	encoded, err = json.Marshal(schema.ColumnDef{Name: "id", Type: schema.IntegerType{}})
 	require.NoError(t, err)
@@ -881,6 +883,24 @@ func TestTableValidateAcceptsIntegerDisplayWidthAndZeroFill(t *testing.T) {
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "total", Type: schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(10), ZeroFill: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidateAcceptsDecimalUnsignedAndZeroFill proves that a
+// DecimalType naming a true Unsigned and a true ZeroFill, such as what
+// inspect now records for a live MySQL DECIMAL(p,s) UNSIGNED ZEROFILL
+// column, is valid input: Validate describes the column, and only
+// render.CreateTable and the migrate diff-live path refuse to build DDL for
+// it.
+func TestTableValidateAcceptsDecimalUnsignedAndZeroFill(t *testing.T) {
+	table := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true, ZeroFill: true}},
 		},
 		PrimaryKey: []string{"id"},
 	}

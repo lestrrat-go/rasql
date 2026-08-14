@@ -842,6 +842,29 @@ func TestSchemaGeneratesIntegerDisplayWidthAndZeroFillColumns(t *testing.T) {
 	require.Contains(t, string(descriptorSource), `{Name: "width_only", Type: schema.IntegerType{DisplayWidth: schema.NewIntegerDisplayWidth(11)}}`)
 }
 
+// TestSchemaGeneratesDecimalUnsignedAndZeroFillColumns pins the generator's
+// mapping for the two MySQL decimal modifiers inspect now records: a true
+// Unsigned restates Unsigned: true in the generated descriptor literal, and
+// a true ZeroFill restates ZeroFill: true, so regenerating from the
+// generated source reproduces the same facts rather than silently dropping
+// them.
+func TestSchemaGeneratesDecimalUnsignedAndZeroFillColumns(t *testing.T) {
+	invoices := schema.TableDef{
+		Name: "invoices",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true, ZeroFill: true}},
+			{Name: "unsigned_only", Type: schema.DecimalType{Precision: 8, Scale: schema.NewDecimalScale(2), Unsigned: true}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", invoices)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), `{Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2), Unsigned: true, ZeroFill: true}}`)
+	require.Contains(t, string(descriptorSource), `{Name: "unsigned_only", Type: schema.DecimalType{Precision: 8, Scale: schema.NewDecimalScale(2), Unsigned: true}}`)
+}
+
 // TestSchemaGeneratesGeneratedColumns pins the generator's mapping for a
 // generated column: GeneratedExpression and GeneratedStorage both restate
 // in the generated descriptor literal, so regenerating from the generated
