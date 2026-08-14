@@ -845,6 +845,90 @@ func TestTableValidateAcceptsForeignKeyValidationFacts(t *testing.T) {
 	require.NoError(t, table.Validate())
 }
 
+// TestTableValidateAcceptsUniqueConstraintFacts proves that a UniqueDef
+// naming a non-default schema.Deferrability, NullsNotDistinct, non-empty
+// IncludeColumns, or a non-default schema.ConflictResolution, such as what
+// inspect now records for a live PostgreSQL deferrable, NULLS NOT
+// DISTINCT, or INCLUDE constraint, or a live SQLite ON CONFLICT clause, is
+// valid input: Validate describes the constraint, and only
+// render.CreateTable and the migrate diff-live path refuse to build DDL
+// for it.
+func TestTableValidateAcceptsUniqueConstraintFacts(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].Deferrable = schema.DeferrableInitiallyDeferred
+	table.UniqueConstraints[0].NullsNotDistinct = true
+	table.UniqueConstraints[0].IncludeColumns = []string{"id"}
+	table.UniqueConstraints[0].OnConflict = schema.ConflictReplace
+	require.NoError(t, table.Validate())
+}
+
+func TestTableValidatesUniqueConstraintDeferrability(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].Deferrable = schema.Deferrability("bogus")
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "unique_constraints[0].deferrable")
+}
+
+func TestTableValidatesUniqueConstraintOnConflict(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].OnConflict = schema.ConflictResolution("bogus")
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "unique_constraints[0].on_conflict")
+}
+
+// TestTableValidatesUniqueConstraintIncludeColumnsUnknownColumn proves that
+// an IncludeColumns entry naming a column the table does not declare is
+// reported at the include_columns element, not the constraint's own
+// columns.
+func TestTableValidatesUniqueConstraintIncludeColumnsUnknownColumn(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].IncludeColumns = []string{"bogus"}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "unique_constraints[0].include_columns[0]")
+}
+
+// TestTableValidatesUniqueConstraintIncludeColumnsOverlapsColumns proves
+// that a column already in the constraint's own Columns cannot also appear
+// in IncludeColumns: a column cannot both key the constraint and be along
+// for the ride.
+func TestTableValidatesUniqueConstraintIncludeColumnsOverlapsColumns(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].IncludeColumns = []string{"customer_id"}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "unique_constraints[0].include_columns[0]")
+	require.ErrorContains(t, err, `duplicates column "customer_id"`)
+}
+
+// TestTableValidatesUniqueConstraintIncludeColumnsDuplicate proves that
+// IncludeColumns itself cannot repeat a column.
+func TestTableValidatesUniqueConstraintIncludeColumnsDuplicate(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints[0].IncludeColumns = []string{"id", "id"}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "unique_constraints[0].include_columns[1]")
+	require.ErrorContains(t, err, `duplicates column "id"`)
+}
+
 // TestTableQualifiedName pins QualifiedName and Qualified for both an
 // unqualified and a qualified table.
 func TestTableQualifiedName(t *testing.T) {

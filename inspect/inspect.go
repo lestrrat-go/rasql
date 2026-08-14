@@ -1520,18 +1520,20 @@ func sqliteUniqueConstraints(statement *sqlitequery.CreateTableStatement, tableN
 			if constraint.Kind != sqlitequery.ConstraintUnique {
 				continue
 			}
-			if constraint.Conflict != sqlitequery.ConflictDefault {
-				return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: UNIQUE conflict resolution is unsupported", tableName)
+			onConflict, err := sqliteConflictResolution(constraint.Conflict)
+			if err != nil {
+				return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: %w", tableName, err)
 			}
-			constraints = append(constraints, schema.UniqueDef{Name: sqliteIdentifierName(constraint.Name), Columns: []string{column.Name.Name}})
+			constraints = append(constraints, schema.UniqueDef{Name: sqliteIdentifierName(constraint.Name), Columns: []string{column.Name.Name}, OnConflict: onConflict})
 		}
 	}
 	for _, constraint := range statement.Constraints {
 		if constraint.Kind != sqlitequery.ConstraintUnique {
 			continue
 		}
-		if constraint.Conflict != sqlitequery.ConflictDefault {
-			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: UNIQUE conflict resolution is unsupported", tableName)
+		onConflict, err := sqliteConflictResolution(constraint.Conflict)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: SQLite table %q cannot be represented: %w", tableName, err)
 		}
 		columns := make([]string, len(constraint.Columns))
 		for index, column := range constraint.Columns {
@@ -1541,9 +1543,32 @@ func sqliteUniqueConstraints(statement *sqlitequery.CreateTableStatement, tableN
 			}
 			columns[index] = expression.Name[0].Name
 		}
-		constraints = append(constraints, schema.UniqueDef{Name: sqliteIdentifierName(constraint.Name), Columns: columns})
+		constraints = append(constraints, schema.UniqueDef{Name: sqliteIdentifierName(constraint.Name), Columns: columns, OnConflict: onConflict})
 	}
 	return constraints, nil
+}
+
+// sqliteConflictResolution maps a SQLite ON CONFLICT keyword to a
+// schema.ConflictResolution. ConflictDefault (no clause) and ConflictAbort
+// (an explicit ON CONFLICT ABORT clause) both name the zero value, since
+// SQLite's own default conflict-resolution algorithm is ABORT, so the two
+// mean the same thing — the same fold sqliteMatchType applies to an
+// explicit MATCH SIMPLE.
+func sqliteConflictResolution(conflict sqlitequery.ConflictResolution) (schema.ConflictResolution, error) {
+	switch conflict {
+	case sqlitequery.ConflictDefault, sqlitequery.ConflictAbort:
+		return "", nil
+	case sqlitequery.ConflictRollback:
+		return schema.ConflictRollback, nil
+	case sqlitequery.ConflictFail:
+		return schema.ConflictFail, nil
+	case sqlitequery.ConflictIgnore:
+		return schema.ConflictIgnore, nil
+	case sqlitequery.ConflictReplace:
+		return schema.ConflictReplace, nil
+	default:
+		return "", fmt.Errorf("UNIQUE conflict resolution %q is unsupported", conflict)
+	}
 }
 
 func sqliteChecks(statement *sqlitequery.CreateTableStatement, tableName string) ([]schema.CheckDef, error) {
@@ -2010,17 +2035,11 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 		var deferrable bool
 		var initiallyDeferred bool
 		var nullsNotDistinct bool
-		var includesColumns bool
+		var includeColumns sql.NullString
 		var temporal bool
 		var unsupportedIndexMetadata bool
-		if err := rows.Scan(&name, &column, &deferrable, &initiallyDeferred, &nullsNotDistinct, &includesColumns, &temporal, &unsupportedIndexMetadata); err != nil {
+		if err := rows.Scan(&name, &column, &deferrable, &initiallyDeferred, &nullsNotDistinct, &includeColumns, &temporal, &unsupportedIndexMetadata); err != nil {
 			return nil, fmt.Errorf("inspect: scan unique constraint: %w", err)
-		}
-		if deferrable || initiallyDeferred || nullsNotDistinct {
-			return nil, fmt.Errorf("inspect: unique constraint %q cannot be represented: rasql supports only non-deferrable unique constraints with distinct nulls", name)
-		}
-		if includesColumns {
-			return nil, fmt.Errorf("inspect: unique constraint %q cannot be represented: rasql does not support unique constraints with included columns", name)
 		}
 		if temporal {
 			return nil, fmt.Errorf("inspect: unique constraint %q cannot be represented: rasql does not support temporal unique constraints", name)
@@ -2029,7 +2048,12 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 			return nil, fmt.Errorf("inspect: unique constraint %q cannot be represented: rasql does not support unique constraints whose backing indexes use nondefault collations, storage options or tablespaces, or replica identity", name)
 		}
 		if len(constraints) == 0 || constraints[len(constraints)-1].Name != name {
-			constraints = append(constraints, schema.UniqueDef{Name: name})
+			constraints = append(constraints, schema.UniqueDef{
+				Name:             name,
+				Deferrable:       postgreSQLDeferrability(deferrable, initiallyDeferred),
+				NullsNotDistinct: nullsNotDistinct,
+				IncludeColumns:   splitPostgreSQLIncludedColumns(includeColumns),
+			})
 		}
 		constraints[len(constraints)-1].Columns = append(constraints[len(constraints)-1].Columns, column)
 	}
@@ -2037,6 +2061,18 @@ func (i Inspector) readUniqueConstraints(ctx context.Context, query string, argu
 		return nil, fmt.Errorf("inspect: iterate unique constraints: %w", err)
 	}
 	return constraints, nil
+}
+
+// splitPostgreSQLIncludedColumns splits the comma-joined list of a unique
+// constraint's INCLUDE column names the uniqueConstraints query aggregates
+// per constraint, or returns nil when the constraint has no INCLUDE clause.
+// A plain column name cannot itself contain a comma, so a simple split is
+// exact.
+func splitPostgreSQLIncludedColumns(value sql.NullString) []string {
+	if !value.Valid || value.String == "" {
+		return nil
+	}
+	return strings.Split(value.String, ",")
 }
 
 func (i Inspector) readChecks(ctx context.Context, query string, argument any) ([]schema.CheckDef, error) {
@@ -2307,7 +2343,7 @@ func (i Inspector) readForeignKeys(ctx context.Context, query string, argument a
 		if err != nil {
 			return nil, fmt.Errorf("inspect: foreign key %q: %w", name, err)
 		}
-		deferrability := foreignKeyDeferrability(deferrable, initiallyDeferred)
+		deferrability := postgreSQLDeferrability(deferrable, initiallyDeferred)
 		notValid := !validated
 		notEnforced := !enforced
 		if len(keys) == 0 || keys[len(keys)-1].Name != name {
@@ -2353,10 +2389,12 @@ func postgreSQLMatchType(code string) (schema.MatchType, error) {
 	}
 }
 
-// foreignKeyDeferrability maps PostgreSQL's condeferrable/condeferred pair
+// postgreSQLDeferrability maps PostgreSQL's condeferrable/condeferred pair
 // (mirrored by MySQL's hardcoded FALSE, FALSE, since MySQL has no
-// deferrable foreign keys) to a schema.Deferrability.
-func foreignKeyDeferrability(deferrable, initiallyDeferred bool) schema.Deferrability {
+// deferrable foreign keys) to a schema.Deferrability. It is shared by
+// readForeignKeys and readUniqueConstraints: both read the same pair of
+// catalog columns for their own constraint kind.
+func postgreSQLDeferrability(deferrable, initiallyDeferred bool) schema.Deferrability {
 	switch {
 	case !deferrable:
 		return ""
@@ -2411,7 +2449,7 @@ func informationSchemaQueries(name string) (informationQueries, error) {
 		return informationQueries{
 			columns:           "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position",
 			primaryKey:        "SELECT key_column_usage.column_name FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'PRIMARY KEY' ORDER BY key_column_usage.ordinal_position",
-			uniqueConstraints: "SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
+			uniqueConstraints: "SELECT key_column_usage.constraint_name, key_column_usage.column_name, FALSE, FALSE, FALSE, NULL, FALSE, FALSE FROM information_schema.table_constraints JOIN information_schema.key_column_usage ON table_constraints.constraint_name = key_column_usage.constraint_name AND table_constraints.table_schema = key_column_usage.table_schema AND table_constraints.table_name = key_column_usage.table_name WHERE table_constraints.table_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'UNIQUE' ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
 			checks:            "SELECT check_constraints.constraint_name, check_constraints.check_clause, FALSE, TRUE, table_constraints.enforced = 'YES' FROM information_schema.check_constraints JOIN information_schema.table_constraints ON table_constraints.constraint_name = check_constraints.constraint_name AND table_constraints.table_schema = check_constraints.constraint_schema WHERE check_constraints.constraint_schema = DATABASE() AND table_constraints.table_name = ? AND table_constraints.constraint_type = 'CHECK' ORDER BY check_constraints.constraint_name",
 			indexes:           "SELECT index_name, 0, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' AND non_unique = 1 ORDER BY index_name, seq_in_index",
 			foreignKeys:       "SELECT key_column_usage.constraint_name, key_column_usage.column_name, key_column_usage.referenced_table_name, key_column_usage.referenced_column_name, CASE referential_constraints.delete_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.delete_rule END, CASE referential_constraints.update_rule WHEN 'NO ACTION' THEN 'a' WHEN 'RESTRICT' THEN 'r' WHEN 'CASCADE' THEN 'c' WHEN 'SET NULL' THEN 'n' WHEN 'SET DEFAULT' THEN 'd' ELSE referential_constraints.update_rule END, CASE referential_constraints.match_option WHEN 'NONE' THEN 's' ELSE referential_constraints.match_option END, CASE WHEN key_column_usage.referenced_table_schema = DATABASE() THEN '' ELSE key_column_usage.referenced_table_schema END, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE FROM information_schema.key_column_usage JOIN information_schema.referential_constraints ON referential_constraints.constraint_schema = key_column_usage.constraint_schema AND referential_constraints.constraint_name = key_column_usage.constraint_name AND referential_constraints.table_name = key_column_usage.table_name WHERE key_column_usage.constraint_schema = DATABASE() AND key_column_usage.table_name = ? AND key_column_usage.referenced_table_name IS NOT NULL ORDER BY key_column_usage.constraint_name, key_column_usage.ordinal_position",
@@ -2521,7 +2559,7 @@ func postgreSQLInformationQueries(version int) informationQueries {
 	return informationQueries{
 		columns:                         "SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale, character_maximum_length FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
 		primaryKey:                      "SELECT attribute.attname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'p' ORDER BY key_column.ordinal_position",
-		uniqueConstraints:               "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", index_metadata.indnkeyatts <> index_metadata.indnatts, " + temporal + ", index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR index_metadata.indisreplident OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
+		uniqueConstraints:               "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", (SELECT string_agg(pg_catalog.pg_get_indexdef(index_metadata.indexrelid, included_column.ordinal_position::int, true), ',' ORDER BY included_column.ordinal_position) FROM generate_series(index_metadata.indnkeyatts + 1, index_metadata.indnatts) AS included_column(ordinal_position)), " + temporal + ", index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR index_metadata.indisreplident OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
 		checks:                          "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",
 		unsupportedExclusionConstraints: "SELECT constraint_data.conname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'x' ORDER BY constraint_data.conname",
 		unsupportedIndexes:              "SELECT index_data.relname FROM pg_catalog.pg_index AS index_metadata JOIN pg_catalog.pg_class AS table_data ON table_data.oid = index_metadata.indrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_data.relam WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint AS constraint_data WHERE constraint_data.conindid = index_metadata.indexrelid) AND (NOT index_metadata.indisvalid OR index_metadata.indnkeyatts <> index_metadata.indnatts OR index_data.reloptions IS NOT NULL OR index_data.reltablespace <> 0 OR " + nullsNotDistinct + " OR index_metadata.indisreplident OR EXISTS (SELECT 1 FROM unnest(index_metadata.indoption::smallint[]) AS index_option(value) WHERE index_option.value <> 0) OR EXISTS (SELECT 1 FROM unnest(index_metadata.indkey::smallint[]) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = index_metadata.indrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indclass::oid[]) WITH ORDINALITY AS operator_class(operator_class_oid, ordinal_position) ON operator_class.ordinal_position = key_column.ordinal_position JOIN pg_catalog.pg_opclass AS operator_class_metadata ON operator_class_metadata.oid = operator_class.operator_class_oid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position WHERE NOT operator_class_metadata.opcdefault OR index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation)) ORDER BY index_data.relname",

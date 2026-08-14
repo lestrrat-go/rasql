@@ -113,6 +113,46 @@ func (d Deferrability) valid() bool {
 	}
 }
 
+// ConflictResolution names a SQLite unique constraint's ON CONFLICT
+// resolution: how SQLite responds when the constraint is violated. Its zero
+// value, the empty string, means SQLite's own default resolution, ABORT,
+// which is what every UniqueDef and every checked-in generated file written
+// before this field existed has always meant. An explicit ON CONFLICT
+// ABORT clause names the same zero value, since it behaves identically to
+// no clause at all, the same way MatchType folds an explicit MATCH SIMPLE
+// into its own zero value.
+//
+// A non-default ConflictResolution is describable but not yet renderable:
+// inspect records what a live SQLite unique constraint's own CREATE TABLE
+// text declares, and TableDef.Validate accepts it, but render.CreateTable
+// and the migrate diff-live path refuse to build DDL for one, because
+// rasql does not yet know how to construct an ON CONFLICT clause.
+type ConflictResolution string
+
+const (
+	// ConflictRollback rolls back the current transaction when the
+	// constraint is violated.
+	ConflictRollback ConflictResolution = "ROLLBACK"
+	// ConflictFail preserves changes already made by the current
+	// statement and returns an error.
+	ConflictFail ConflictResolution = "FAIL"
+	// ConflictIgnore skips the row that would violate the constraint,
+	// keeping every earlier change the current statement made.
+	ConflictIgnore ConflictResolution = "IGNORE"
+	// ConflictReplace deletes the conflicting row before inserting or
+	// updating.
+	ConflictReplace ConflictResolution = "REPLACE"
+)
+
+func (c ConflictResolution) valid() bool {
+	switch c {
+	case "", ConflictRollback, ConflictFail, ConflictIgnore, ConflictReplace:
+		return true
+	default:
+		return false
+	}
+}
+
 // RelationshipKind identifies the relationship shape represented by a
 // descriptor.
 type RelationshipKind string

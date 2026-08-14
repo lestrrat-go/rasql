@@ -237,6 +237,85 @@ func TestLiveSourcesRejectsForeignKeyNotEnforced(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsUniqueConstraintDeferrability proves that an
+// inspected table carrying a deferrable unique constraint does not reach
+// diff-live's generated desired-schema sources as a silently downgraded
+// plain NOT DEFERRABLE unique constraint: LiveSources renders through
+// render.CreateTable, which refuses the deferrability, so the error
+// surfaces here rather than a Plan going on to emit the wrong DDL for it.
+func TestLiveSourcesRejectsUniqueConstraintDeferrability(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:       "members_email_key",
+			Columns:    []string{"email"},
+			Deferrable: schema.DeferrableInitiallyDeferred,
+		}},
+	})
+	require.ErrorContains(t, err, `"members_email_key"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsUniqueConstraintNullsNotDistinct is the
+// NullsNotDistinct counterpart to
+// TestLiveSourcesRejectsUniqueConstraintDeferrability.
+func TestLiveSourcesRejectsUniqueConstraintNullsNotDistinct(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}, Nullable: true}},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:             "members_email_key",
+			Columns:          []string{"email"},
+			NullsNotDistinct: true,
+		}},
+	})
+	require.ErrorContains(t, err, `"members_email_key"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsUniqueConstraintIncludeColumns is the
+// IncludeColumns counterpart to
+// TestLiveSourcesRejectsUniqueConstraintDeferrability.
+func TestLiveSourcesRejectsUniqueConstraintIncludeColumns(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:           "members_email_key",
+			Columns:        []string{"email"},
+			IncludeColumns: []string{"name"},
+		}},
+	})
+	require.ErrorContains(t, err, `"members_email_key"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
+// TestLiveSourcesRejectsUniqueConstraintConflictResolution is the
+// OnConflict counterpart to
+// TestLiveSourcesRejectsUniqueConstraintDeferrability.
+func TestLiveSourcesRejectsUniqueConstraintConflictResolution(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "members",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:       "members_email_key",
+			Columns:    []string{"email"},
+			OnConflict: schema.ConflictReplace,
+		}},
+	})
+	require.ErrorContains(t, err, `"members_email_key"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, `

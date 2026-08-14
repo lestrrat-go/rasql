@@ -153,6 +153,47 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 type UniqueDef struct {
 	Name    string
 	Columns []string
+
+	// Deferrable names when the unique constraint is checked. See
+	// Deferrability's own doc for what its zero value means and what
+	// currently accepts it. omitempty keeps a NOT DEFERRABLE UniqueDef's
+	// JSON identical to what it encoded before this field existed.
+	Deferrable Deferrability `json:",omitempty"`
+
+	// NullsNotDistinct marks a PostgreSQL 15+ UNIQUE NULLS NOT DISTINCT
+	// constraint, under which two NULLs in the constrained columns
+	// conflict with each other instead of coexisting. Its zero value,
+	// false, means NULLS DISTINCT, the SQL default and the only behavior
+	// every UniqueDef written before this field existed has always meant.
+	//
+	// A true NullsNotDistinct is describable but not yet renderable:
+	// inspect records what a live PostgreSQL unique constraint actually
+	// declares, and TableDef.Validate accepts it, but render.CreateTable
+	// and the migrate diff-live path refuse to build DDL for one, because
+	// rasql does not yet know how to construct a NULLS NOT DISTINCT
+	// clause.
+	NullsNotDistinct bool `json:",omitempty"`
+
+	// IncludeColumns lists a PostgreSQL unique constraint's INCLUDE
+	// columns: columns carried by the constraint's backing index for
+	// covering reads without taking part in the uniqueness check itself.
+	// Its zero value, nil, means the constraint has no INCLUDE clause,
+	// which is what every UniqueDef written before this field existed has
+	// always meant.
+	//
+	// A non-empty IncludeColumns is describable but not yet renderable:
+	// inspect records a live PostgreSQL unique constraint's included
+	// columns, and TableDef.Validate accepts them, but render.CreateTable
+	// and the migrate diff-live path refuse to build DDL for one, because
+	// rasql does not yet know how to construct an INCLUDE clause.
+	IncludeColumns []string `json:",omitempty"`
+
+	// OnConflict names a SQLite unique constraint's ON CONFLICT
+	// resolution. See ConflictResolution's own doc for what its zero
+	// value means and what currently accepts it. omitempty keeps a
+	// clause-free UniqueDef's JSON identical to what it encoded before
+	// this field existed.
+	OnConflict ConflictResolution `json:",omitempty"`
 }
 
 // CheckDef requires Expression to evaluate to true for each row.
@@ -593,6 +634,28 @@ func validateNamedColumnLists(path string, constraints []UniqueDef, columns map[
 		}
 		if err := validateColumnList(itemPath+".columns", constraint.Columns, columns, true); err != nil {
 			return err
+		}
+		if !constraint.Deferrable.valid() {
+			return validationError(itemPath+".deferrable", "unsupported unique constraint deferrability %q", constraint.Deferrable)
+		}
+		if !constraint.OnConflict.valid() {
+			return validationError(itemPath+".on_conflict", "unsupported unique constraint conflict resolution %q", constraint.OnConflict)
+		}
+		if len(constraint.IncludeColumns) > 0 {
+			seen := make(map[string]struct{}, len(constraint.Columns)+len(constraint.IncludeColumns))
+			for _, name := range constraint.Columns {
+				seen[name] = struct{}{}
+			}
+			for j, name := range constraint.IncludeColumns {
+				includedPath := fmt.Sprintf("%s.include_columns[%d]", itemPath, j)
+				if _, exists := columns[name]; !exists {
+					return validationError(includedPath, "references unknown column %q", name)
+				}
+				if _, exists := seen[name]; exists {
+					return validationError(includedPath, "duplicates column %q", name)
+				}
+				seen[name] = struct{}{}
+			}
 		}
 	}
 	return nil
