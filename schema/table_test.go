@@ -1450,6 +1450,124 @@ func TestTableValidatesPrimaryKeyOnConflictWithoutPrimaryKey(t *testing.T) {
 	require.ErrorContains(t, err, "must not be set without a primary key")
 }
 
+// TestTableValidateAcceptsVirtualTable proves that a table naming
+// VirtualTableModule and VirtualTableModuleArguments, and a hidden column,
+// is accepted, provided it states none of the ordinary-table facts a
+// virtual table cannot independently carry.
+func TestTableValidateAcceptsVirtualTable(t *testing.T) {
+	table := schema.TableDef{
+		Name: "posts_fts",
+		Columns: []schema.ColumnDef{
+			{Name: "body", Type: schema.TextType{}, Nullable: true},
+			{Name: "posts_fts", Type: schema.TextType{}, Nullable: true, Hidden: true},
+			{Name: "rank", Type: schema.TextType{}, Nullable: true, Hidden: true},
+		},
+		VirtualTableModule:          "fts5",
+		VirtualTableModuleArguments: []string{"body"},
+	}
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidatesHiddenColumnWithoutVirtualTableModule proves that
+// ColumnDef.Hidden is nonsense on a table that is not a SQLite virtual
+// table.
+func TestTableValidatesHiddenColumnWithoutVirtualTableModule(t *testing.T) {
+	table := validTable()
+	table.Columns[0].Hidden = true
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "columns[0].hidden")
+	require.ErrorContains(t, err, "must not be set without a VirtualTableModule")
+}
+
+// TestTableValidatesVirtualTableModuleArgumentsWithoutModule proves that
+// VirtualTableModuleArguments is nonsense without a VirtualTableModule.
+func TestTableValidatesVirtualTableModuleArgumentsWithoutModule(t *testing.T) {
+	table := validTable()
+	table.VirtualTableModuleArguments = []string{"body"}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "table.virtual_table_module_arguments")
+	require.ErrorContains(t, err, "must not be set without a VirtualTableModule")
+}
+
+// TestTableValidatesVirtualTableModuleWithPrimaryKey proves that a virtual
+// table cannot also state a primary key, since a virtual table's own
+// primary key, if any, is the module's business, not something this
+// package's PRAGMA-based read can independently verify.
+func TestTableValidatesVirtualTableModuleWithPrimaryKey(t *testing.T) {
+	table := schema.TableDef{
+		Name:               "posts_fts",
+		Columns:            []schema.ColumnDef{{Name: "body", Type: schema.TextType{}, Nullable: true}},
+		PrimaryKey:         []string{"body"},
+		VirtualTableModule: "fts5",
+	}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "table.primary_key")
+	require.ErrorContains(t, err, "must be empty on a SQLite virtual table")
+}
+
+// TestTableValidatesVirtualTableModuleWithUniqueConstraint proves that a
+// virtual table cannot also carry a unique constraint, the same rejection
+// TestTableValidatesVirtualTableModuleWithPrimaryKey proves for a primary
+// key.
+func TestTableValidatesVirtualTableModuleWithUniqueConstraint(t *testing.T) {
+	table := schema.TableDef{
+		Name:               "posts_fts",
+		Columns:            []schema.ColumnDef{{Name: "body", Type: schema.TextType{}, Nullable: true}},
+		VirtualTableModule: "fts5",
+		UniqueConstraints:  []schema.UniqueDef{{Columns: []string{"body"}}},
+	}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "table.unique_constraints")
+	require.ErrorContains(t, err, "must be empty on a SQLite virtual table")
+}
+
+// TestTableValidateAcceptsUniqueConstraintKeys proves that a UniqueDef
+// naming Keys instead of Columns is accepted.
+func TestTableValidateAcceptsUniqueConstraintKeys(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints = []schema.UniqueDef{{
+		Keys: []schema.IndexKeyDef{
+			{Expression: "customer_id", Descending: true},
+			{Expression: "status", Collation: "NOCASE"},
+		},
+	}}
+	require.NoError(t, table.Validate())
+}
+
+// TestTableValidatesUniqueConstraintKeysWithColumns proves that a UniqueDef
+// cannot name both Columns and Keys, the same either/or validateIndexes
+// already enforces between IndexDef.Columns and IndexDef.Keys.
+func TestTableValidatesUniqueConstraintKeysWithColumns(t *testing.T) {
+	table := validTable()
+	table.UniqueConstraints = []schema.UniqueDef{{
+		Columns: []string{"customer_id"},
+		Keys:    []schema.IndexKeyDef{{Expression: "customer_id", Descending: true}},
+	}}
+
+	err := table.Validate()
+	require.Error(t, err)
+	var validationErr *schema.ValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ErrorContains(t, err, "unique_constraints[0].columns")
+	require.ErrorContains(t, err, "must be empty when Keys describes the constraint's keys instead")
+}
+
 // TestTableQualifiedName pins QualifiedName and Qualified for both an
 // unqualified and a qualified table.
 func TestTableQualifiedName(t *testing.T) {
