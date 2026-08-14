@@ -135,6 +135,29 @@ func TestLiveSourcesRejectsNonDefaultForeignKeyDeferrability(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
+// TestLiveSourcesRejectsExclusionConstraint proves that an inspected table
+// carrying an EXCLUDE constraint does not reach diff-live's generated
+// desired-schema sources as a silently downgraded table missing the
+// constraint entirely: LiveSources renders through render.CreateTable,
+// which refuses an ExclusionDef, so the error surfaces here rather than a
+// Plan going on to emit DDL for a table that no longer prevents the
+// conflicting rows the live database actually rejects.
+func TestLiveSourcesRejectsExclusionConstraint(t *testing.T) {
+	analyzer := postgresql.New()
+	_, err := analyzer.LiveSources(schema.TableDef{
+		Name:       "reservations",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "room", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		ExclusionConstraints: []schema.ExclusionDef{{
+			Name:     "reservations_no_double_booking",
+			Method:   "gist",
+			Elements: []schema.ExclusionElementDef{{Expression: "room", Operator: "="}},
+		}},
+	})
+	require.ErrorContains(t, err, `"reservations_no_double_booking"`)
+	require.ErrorContains(t, err, "can describe but not yet render")
+}
+
 // TestLiveSourcesRejectsCheckNoInherit proves that an inspected table
 // carrying a NO INHERIT check constraint does not reach diff-live's
 // generated desired-schema sources as a silently downgraded plain inherited

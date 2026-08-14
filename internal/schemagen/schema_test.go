@@ -1153,8 +1153,10 @@ func TestSchemaRejectsCollidingInitialismNames(t *testing.T) {
 // TestDescriptorSourceStatesEveryOptionKind checks that the literal writer
 // covers every field the option form used to fold into a constructor call:
 // a named schema, unique constraints named and unnamed, checks named and
-// unnamed, a plain and a unique index, a single-column and a composite
-// foreign key with OnDelete and OnUpdate, and a relationship. Compilability
+// unnamed, an exclusion constraint with a non-default method, several
+// elements, a predicate, and a deferrable clause, a plain and a unique
+// index, a single-column and a composite foreign key with OnDelete and
+// OnUpdate, and a relationship. Compilability
 // of a definition with foreign keys and relationships is already pinned by
 // TestSchemaIsDeterministicAndCompiles and TestSchemaGeneratesTypedRelationships;
 // this test pins the literal text those constructs produce.
@@ -1191,6 +1193,18 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 		Checks: []schema.CheckDef{
 			{Name: "chk_price", Expression: "price >= 0", NoInherit: true, NotValid: true, NotEnforced: true},
 			{Expression: "id > 0"},
+		},
+		ExclusionConstraints: []schema.ExclusionDef{
+			{
+				Name:   "excl_owner_combo",
+				Method: "gist",
+				Elements: []schema.ExclusionElementDef{
+					{Expression: "owner_id", Operator: "="},
+					{Expression: "combo_a", Operator: "<>"},
+				},
+				Predicate:  "owner_id IS NOT NULL",
+				Deferrable: schema.DeferrableInitiallyDeferred,
+			},
 		},
 		Indexes: []schema.IndexDef{
 			{Name: "idx_owner", Columns: []string{"owner_id"}},
@@ -1252,6 +1266,10 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Name: "uq_price_owner", Columns: []string{"price"}, Deferrable: schema.DeferrableInitiallyDeferred, NullsNotDistinct: true, IncludeColumns: []string{"owner_id"}, OnConflict: schema.ConflictReplace}`)
 	require.Contains(t, text, `{Name: "chk_price", Expression: "price >= 0", NoInherit: true, NotValid: true, NotEnforced: true}`)
 	require.Contains(t, text, `{Expression: "id > 0"}`)
+	require.Contains(t, text, `{Name: "excl_owner_combo", Method: schema.IndexMethod("gist"), Elements: []schema.ExclusionElementDef{`)
+	require.Contains(t, text, `{Expression: "owner_id", Operator: "="}`)
+	require.Contains(t, text, `{Expression: "combo_a", Operator: "<>"}`)
+	require.Contains(t, text, `Predicate: "owner_id IS NOT NULL", Deferrable: schema.DeferrableInitiallyDeferred}`)
 	require.Contains(t, text, `{Name: "idx_owner", Columns: []string{"owner_id"}}`)
 	require.Contains(t, text, `{Name: "uidx_code", Columns: []string{"code"}, Unique: true}`)
 	require.Contains(t, text, `{Name: "idx_bio_gin", Columns: []string{"bio"}, Method: schema.IndexMethod("gin")}`)
