@@ -103,6 +103,132 @@ func TestDiffDescriptionPackageReportsIndexChanges(t *testing.T) {
 	require.Contains(t, notes, `~ index "users_email_idx": unique (false -> true)`)
 }
 
+// TestDiffDescriptionPackageReportsChangedUnnamedCheck is the test that
+// fails today: two unnamed checks keyed only by their shared empty Name
+// collapse into one map entry, so the first check's own change is
+// invisible. old and new both carry a second unnamed check, "id > 0",
+// unchanged, which must not appear in either note.
+func TestDiffDescriptionPackageReportsChangedUnnamedCheck(t *testing.T) {
+	before := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.Check("length(email) > 0"),
+		schema.Check("id > 0"),
+	)
+	after := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.Check("length(email) > 5"),
+		schema.Check("id > 0"),
+	)
+
+	diff := generate.DiffDescriptionPackage([]schema.TableDef{before}, []schema.TableDef{after})
+	require.Len(t, diff.Changed, 1)
+	notes := diff.Changed[0].Notes
+	require.Contains(t, notes, "+ unnamed check (length(email) > 5)")
+	require.Contains(t, notes, "- unnamed check (length(email) > 0)")
+	for _, note := range notes {
+		require.NotContains(t, note, "id > 0")
+	}
+}
+
+// TestDiffDescriptionPackageReportsDroppedUnnamedCheck proves dropping one
+// of two unnamed checks is reported, rather than vanishing behind the
+// surviving one.
+func TestDiffDescriptionPackageReportsDroppedUnnamedCheck(t *testing.T) {
+	before := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.Check("length(email) > 0"),
+		schema.Check("id > 0"),
+	)
+	after := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.Check("id > 0"),
+	)
+
+	diff := generate.DiffDescriptionPackage([]schema.TableDef{before}, []schema.TableDef{after})
+	require.Len(t, diff.Changed, 1)
+	notes := diff.Changed[0].Notes
+	require.Equal(t, []string{"- unnamed check (length(email) > 0)"}, notes)
+}
+
+// TestDiffDescriptionPackageIgnoresUnnamedConstraintOrder proves an unnamed
+// constraint's comparison is order-insensitive, matching what diffNamed
+// already does for named entries.
+func TestDiffDescriptionPackageIgnoresUnnamedConstraintOrder(t *testing.T) {
+	before := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.Check("length(email) > 0"),
+		schema.Check("id > 0"),
+	)
+	after := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.Check("id > 0"),
+		schema.Check("length(email) > 0"),
+	)
+
+	diff := generate.DiffDescriptionPackage([]schema.TableDef{before}, []schema.TableDef{after})
+	require.True(t, diff.Empty(), "report: %s", diff.Report())
+}
+
+// TestDiffDescriptionPackageCountsRepeatedUnnamedConstraints proves the
+// comparison counts identical unnamed entries rather than de-duplicating
+// them: dropping one of two identical checks is reported once.
+func TestDiffDescriptionPackageCountsRepeatedUnnamedConstraints(t *testing.T) {
+	before := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.Check("id > 0"),
+		schema.Check("id > 0"),
+	)
+	after := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+		schema.Check("id > 0"),
+	)
+
+	diff := generate.DiffDescriptionPackage([]schema.TableDef{before}, []schema.TableDef{after})
+	require.Len(t, diff.Changed, 1)
+	notes := diff.Changed[0].Notes
+	require.Equal(t, []string{"- unnamed check (id > 0)"}, notes)
+}
+
+// TestDiffDescriptionPackageReportsUnnamedForeignKey proves an unnamed
+// foreign key is reported by what it says, matching the check coverage
+// above for a different unnamed constraint kind.
+func TestDiffDescriptionPackageReportsUnnamedForeignKey(t *testing.T) {
+	before := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.Integer("user_id"),
+		schema.PrimaryKey("id"),
+		schema.ForeignKey("user_id", schema.References("users", "id")),
+	)
+	after := schema.MustTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.Integer("user_id"),
+		schema.PrimaryKey("id"),
+	)
+
+	diff := generate.DiffDescriptionPackage([]schema.TableDef{before}, []schema.TableDef{after})
+	require.Len(t, diff.Changed, 1)
+	notes := diff.Changed[0].Notes
+	require.Equal(t, []string{"- unnamed foreign key (user_id -> users(id))"}, notes)
+}
+
 // TestDiffDescriptionPackageOrderingIsStable proves the report orders
 // tables and notes deterministically regardless of input order, which is
 // what lets a caller diff two reports across runs.

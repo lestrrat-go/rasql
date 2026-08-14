@@ -142,9 +142,10 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen bootstrap \
     + column "phone"
     ~ column "email": nullable (false -> true)
     + index "users_phone_idx"
+    + unnamed check (id > 0)
 ```
 
-A bare re-run only inspects and reports: it compares the live database against the `schema.TableDef` values `-output`'s own `Tables()` already returns and prints every table added, removed, or changed, and every column, index, and other constraint that changed within a table that survived. Nothing is written. Two runs against an unchanged database print nothing and exit 0, which is what makes a refresh safe to run on a schedule or in CI as a drift check. `-table` and `-exclude` scope a refresh exactly as they scope a first run: comparing against a `-table`-narrowed sweep reports every table outside that scope as if it had been dropped, so use the same scope on every refresh of one `-output` directory.
+A bare re-run only inspects and reports: it compares the live database against the `schema.TableDef` values `-output`'s own `Tables()` already returns and prints every table added, removed, or changed, and every column, index, and other constraint that changed within a table that survived. Nothing is written. Two runs against an unchanged database print nothing and exit 0, which is what makes a refresh safe to run on a schedule or in CI as a drift check. `-table` and `-exclude` scope a refresh exactly as they scope a first run: comparing against a `-table`-narrowed sweep reports every table outside that scope as if it had been dropped, so use the same scope on every refresh of one `-output` directory. A unique constraint, foreign key, check, or exclusion constraint the database names is compared by that name, the same as an index always is; an unnamed one -- which SQLite produces for an inline `CHECK` or `REFERENCES` clause, as `+ unnamed check (id > 0)` above shows -- is compared by what it says instead, so a change to one is reported as the old one removed and the new one added, never as a single changed entry.
 
 Add `-write` to apply exactly what the report just described:
 

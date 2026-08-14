@@ -130,6 +130,73 @@ func TestBootstrapRefreshReportsThenWritesSQLiteDrift(t *testing.T) {
 	require.NoError(t, err, string(output))
 }
 
+// TestBootstrapRefreshReportsUnnamedCheckDrift is the end-to-end
+// reproduction of D2 (F3): a table with two unnamed checks, keyed only by
+// their shared empty Name, used to collapse into one map entry on each
+// side, so a change to the first check reported no drift at all and
+// `-write` left the stale expression on disk. SQLite produces unnamed
+// checks and foreign keys as a matter of course, so a bootstrap refresh
+// hits this shape without any hand-written descriptor.
+func TestBootstrapRefreshReportsUnnamedCheckDrift(t *testing.T) {
+	moduleDir := newBootstrapRoundTripModule(t)
+	databasePath := filepath.Join(moduleDir, "schema.db")
+
+	database, err := sql.Open("sqlite", databasePath)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(),
+		"CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, CHECK (length(email) > 0), CHECK (id > 0))")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	t.Chdir(moduleDir)
+	outputDir := filepath.Join(moduleDir, "internal", "tables")
+
+	var buffer bytes.Buffer
+	require.NoError(t, rasqlgen.Run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "tables", "-output", "internal/tables"}, &buffer), buffer.String())
+
+	usersSource, err := os.ReadFile(filepath.Join(outputDir, "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(usersSource), `{Expression: "length(email) > 0"}`)
+	require.Contains(t, string(usersSource), `{Expression: "id > 0"}`)
+
+	database, err = sql.Open("sqlite", databasePath)
+	require.NoError(t, err)
+	for _, statement := range []string{
+		"DROP TABLE users",
+		"CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, CHECK (length(email) > 3), CHECK (id > 0))",
+	} {
+		_, err = database.ExecContext(t.Context(), statement)
+		require.NoError(t, err)
+	}
+	require.NoError(t, database.Close())
+
+	// A report-only run must describe the changed check, not stay silent.
+	buffer.Reset()
+	require.NoError(t, rasqlgen.Run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "tables", "-output", "internal/tables"}, &buffer))
+	report := buffer.String()
+	require.Contains(t, report, `~ table "users"`)
+	require.Contains(t, report, "+ unnamed check (length(email) > 3)")
+	require.Contains(t, report, "- unnamed check (length(email) > 0)")
+
+	usersSource, err = os.ReadFile(filepath.Join(outputDir, "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(usersSource), `{Expression: "length(email) > 0"}`, "a report-only refresh must not change any file")
+
+	// -write applies exactly what the report described.
+	buffer.Reset()
+	require.NoError(t, rasqlgen.Run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "tables", "-output", "internal/tables", "-write"}, &buffer))
+
+	usersSource, err = os.ReadFile(filepath.Join(outputDir, "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(usersSource), `{Expression: "length(email) > 3"}`)
+	require.NotContains(t, string(usersSource), `{Expression: "length(email) > 0"}`)
+
+	// A further rerun against the now-unchanged database reports nothing.
+	buffer.Reset()
+	require.NoError(t, rasqlgen.Run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "tables", "-output", "internal/tables"}, &buffer))
+	require.Empty(t, buffer.String())
+}
+
 // mustSnapshotDirectory reads every regular file directly inside directory
 // into a name-to-contents map, for a byte-identical comparison across an
 // operation that must be a no-op.

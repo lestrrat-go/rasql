@@ -147,10 +147,10 @@ func diffTable(old, new schema.TableDef) []string {
 	var notes []string
 	notes = append(notes, diffColumns(old.Columns, new.Columns)...)
 	notes = append(notes, diffNamed(old.Indexes, new.Indexes, "index", func(i schema.IndexDef) string { return i.Name }, describeIndexChange)...)
-	notes = append(notes, diffNamed(old.UniqueConstraints, new.UniqueConstraints, "unique constraint", func(u schema.UniqueDef) string { return u.Name }, nil)...)
-	notes = append(notes, diffNamed(old.ForeignKeys, new.ForeignKeys, "foreign key", func(f schema.ForeignKeyDef) string { return f.Name }, nil)...)
-	notes = append(notes, diffNamed(old.Checks, new.Checks, "check", func(c schema.CheckDef) string { return c.Name }, nil)...)
-	notes = append(notes, diffNamed(old.ExclusionConstraints, new.ExclusionConstraints, "exclusion constraint", func(e schema.ExclusionDef) string { return e.Name }, nil)...)
+	notes = append(notes, diffNamedOrUnnamed(old.UniqueConstraints, new.UniqueConstraints, "unique constraint", func(u schema.UniqueDef) string { return u.Name }, nil, describeUnique)...)
+	notes = append(notes, diffNamedOrUnnamed(old.ForeignKeys, new.ForeignKeys, "foreign key", func(f schema.ForeignKeyDef) string { return f.Name }, nil, describeForeignKey)...)
+	notes = append(notes, diffNamedOrUnnamed(old.Checks, new.Checks, "check", func(c schema.CheckDef) string { return c.Name }, nil, describeCheck)...)
+	notes = append(notes, diffNamedOrUnnamed(old.ExclusionConstraints, new.ExclusionConstraints, "exclusion constraint", func(e schema.ExclusionDef) string { return e.Name }, nil, describeExclusion)...)
 	if !reflect.DeepEqual(old.PrimaryKey, new.PrimaryKey) {
 		notes = append(notes, fmt.Sprintf("~ primary key (%s -> %s)", strings.Join(old.PrimaryKey, ", "), strings.Join(new.PrimaryKey, ", ")))
 	}
@@ -324,6 +324,133 @@ func diffNamed[T any](old, new []T, label string, name func(T) string, describeC
 	notes = append(notes, removed...)
 	notes = append(notes, changed...)
 	return notes
+}
+
+// diffNamedOrUnnamed returns one note per T added, removed, or changed
+// between old and new, the same as diffNamed, except that an entry whose
+// name(value) is "" is never keyed by that shared empty name. SQLite
+// produces an unnamed unique constraint, foreign key, check, or exclusion
+// constraint for an inline table-constraint clause, and keying those by name
+// would let every unnamed entry of one kind overwrite the previous one, so
+// only the last would survive the comparison. Named entries are split off
+// and compared by diffNamed exactly as before; the rest are compared by
+// diffUnnamed, keyed by their own content instead of a name they do not
+// have.
+func diffNamedOrUnnamed[T any](old, new []T, label string, name func(T) string, describeChange func(T, T) string, describe func(T) string) []string {
+	oldNamed, oldUnnamed := partitionByName(old, name)
+	newNamed, newUnnamed := partitionByName(new, name)
+
+	var notes []string
+	notes = append(notes, diffNamed(oldNamed, newNamed, label, name, describeChange)...)
+	notes = append(notes, diffUnnamed(oldUnnamed, newUnnamed, label, describe)...)
+	return notes
+}
+
+// partitionByName splits values into the entries whose name(value) is not
+// empty and the rest, preserving each side's relative order.
+func partitionByName[T any](values []T, name func(T) string) (named, unnamed []T) {
+	for _, value := range values {
+		if name(value) == "" {
+			unnamed = append(unnamed, value)
+		} else {
+			named = append(named, value)
+		}
+	}
+	return named, unnamed
+}
+
+// diffUnnamed returns one note per T added or removed between old and new,
+// comparing them as an unordered multiset: each side is counted into a
+// map[string]int keyed by fmt.Sprintf("%#v", value), which is a total
+// function on every type this is called with today, since none of them
+// holds an interface-typed field, and fmt prints map keys in sorted order,
+// so the key is deterministic. An entry present more often on one side than
+// the other is reported that many times over; an entry present the same
+// number of times on both sides is reported not at all. There is no changed
+// group and no "~" line: an unnamed entry's content is its only identity,
+// so any change to it is one added line and one removed line, not one
+// changed line.
+func diffUnnamed[T any](old, new []T, label string, describe func(T) string) []string {
+	oldCounts := make(map[string]int, len(old))
+	oldSamples := make(map[string]T, len(old))
+	for _, value := range old {
+		key := fmt.Sprintf("%#v", value)
+		oldCounts[key]++
+		if _, exists := oldSamples[key]; !exists {
+			oldSamples[key] = value
+		}
+	}
+	newCounts := make(map[string]int, len(new))
+	newSamples := make(map[string]T, len(new))
+	for _, value := range new {
+		key := fmt.Sprintf("%#v", value)
+		newCounts[key]++
+		if _, exists := newSamples[key]; !exists {
+			newSamples[key] = value
+		}
+	}
+
+	allKeys := make(map[string]int, len(oldCounts)+len(newCounts))
+	for key := range oldCounts {
+		allKeys[key] = 0
+	}
+	for key := range newCounts {
+		allKeys[key] = 0
+	}
+
+	var added, removed []string
+	for _, key := range sortedKeys(allKeys) {
+		oldCount, newCount := oldCounts[key], newCounts[key]
+		for i := 0; i < newCount-oldCount; i++ {
+			added = append(added, fmt.Sprintf("+ unnamed %s (%s)", label, describe(newSamples[key])))
+		}
+		for i := 0; i < oldCount-newCount; i++ {
+			removed = append(removed, fmt.Sprintf("- unnamed %s (%s)", label, describe(oldSamples[key])))
+		}
+	}
+	notes := make([]string, 0, len(added)+len(removed))
+	notes = append(notes, added...)
+	notes = append(notes, removed...)
+	return notes
+}
+
+// describeCheck renders an unnamed CheckDef's identity for diffUnnamed's
+// report text.
+func describeCheck(c schema.CheckDef) string {
+	return c.Expression
+}
+
+// describeUnique renders an unnamed UniqueDef's identity for diffUnnamed's
+// report text: its Columns joined with ", ", falling back to its Keys'
+// Expression fields joined the same way when Columns is empty, which is
+// where a SQLite unique constraint with a DESC key or a non-default
+// collation records its keys (schema/table.go:331).
+func describeUnique(u schema.UniqueDef) string {
+	if len(u.Columns) > 0 {
+		return strings.Join(u.Columns, ", ")
+	}
+	keys := make([]string, 0, len(u.Keys))
+	for _, key := range u.Keys {
+		keys = append(keys, key.Expression)
+	}
+	return strings.Join(keys, ", ")
+}
+
+// describeForeignKey renders an unnamed ForeignKeyDef's identity for
+// diffUnnamed's report text.
+func describeForeignKey(f schema.ForeignKeyDef) string {
+	return fmt.Sprintf("%s -> %s(%s)", strings.Join(f.Columns, ", "), f.ReferencedTable, strings.Join(f.ReferencedColumns, ", "))
+}
+
+// describeExclusion renders an unnamed ExclusionDef's identity for
+// diffUnnamed's report text: each element as "Expression WITH Operator",
+// joined with ", ".
+func describeExclusion(e schema.ExclusionDef) string {
+	elements := make([]string, 0, len(e.Elements))
+	for _, element := range e.Elements {
+		elements = append(elements, fmt.Sprintf("%s WITH %s", element.Expression, element.Operator))
+	}
+	return strings.Join(elements, ", ")
 }
 
 // normalizeForDiff returns a copy of table suitable for structural
