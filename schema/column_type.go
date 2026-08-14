@@ -35,8 +35,24 @@ func (BooleanType) Kind() TypeKind { return KindBoolean }
 func (BooleanType) columnType()    {}
 
 // IntegerType describes an integer column.
+//
+// DisplayWidth and ZeroFill are both MySQL-only facts. DisplayWidth records a
+// stated display width such as the 11 in int(11); see IntegerDisplayWidth's
+// own doc for what its zero value means. ZeroFill records MySQL's ZEROFILL
+// attribute, which left-pads a displayed value with zeros up to its display
+// width and implies UNSIGNED; its zero value, false, means the column carries
+// no ZEROFILL, which is what every IntegerType and every checked-in
+// generated file written before this field existed has always meant.
+//
+// A stated DisplayWidth or a true ZeroFill is describable but not yet
+// renderable: inspect records what a live MySQL integer column actually
+// declares, and TableDef.Validate accepts it, but render.CreateTable and the
+// migrate diff-live path refuse to build DDL for one, because rasql does not
+// yet know how to construct an INT(n) or ZEROFILL declaration.
 type IntegerType struct {
-	Unsigned bool
+	Unsigned     bool
+	DisplayWidth IntegerDisplayWidth
+	ZeroFill     bool
 }
 
 func (IntegerType) Kind() TypeKind { return KindInteger }
@@ -120,6 +136,13 @@ func marshalColumnType(columnType ColumnType) ([]byte, error) {
 	switch typed := columnType.(type) {
 	case IntegerType:
 		fields["Unsigned"] = typed.Unsigned
+		width, stated := typed.DisplayWidth.Value()
+		if stated {
+			fields["DisplayWidth"] = width
+		} else {
+			fields["DisplayWidth"] = nil
+		}
+		fields["ZeroFill"] = typed.ZeroFill
 	case TextType:
 		width, stated := typed.Width.Value()
 		if stated {
@@ -175,7 +198,7 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 		}
 		return BooleanType{}, nil
 	case KindInteger:
-		if err := allow("Unsigned"); err != nil {
+		if err := allow("Unsigned", "DisplayWidth", "ZeroFill"); err != nil {
 			return nil, err
 		}
 		var unsigned bool
@@ -184,7 +207,19 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 				return nil, fmt.Errorf("schema: decode integer unsigned: %w", err)
 			}
 		}
-		return IntegerType{Unsigned: unsigned}, nil
+		var displayWidth IntegerDisplayWidth
+		if value, ok := fields["DisplayWidth"]; ok {
+			if err := json.Unmarshal(value, &displayWidth); err != nil {
+				return nil, fmt.Errorf("schema: decode integer display width: %w", err)
+			}
+		}
+		var zeroFill bool
+		if value, ok := fields["ZeroFill"]; ok {
+			if err := json.Unmarshal(value, &zeroFill); err != nil {
+				return nil, fmt.Errorf("schema: decode integer zerofill: %w", err)
+			}
+		}
+		return IntegerType{Unsigned: unsigned, DisplayWidth: displayWidth, ZeroFill: zeroFill}, nil
 	case KindFloat:
 		if err := allow(); err != nil {
 			return nil, err

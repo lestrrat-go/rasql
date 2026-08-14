@@ -817,6 +817,66 @@ func TestSchemaGeneratesUnsignedIntegerColumns(t *testing.T) {
 	require.Contains(t, string(descriptorSource), `{Name: "parent_id", Type: schema.IntegerType{Unsigned: true}, Nullable: true}`)
 }
 
+// TestSchemaGeneratesIntegerDisplayWidthAndZeroFillColumns pins the
+// generator's mapping for the two MySQL integer modifiers inspect now
+// records: a stated DisplayWidth restates schema.NewIntegerDisplayWidth(n)
+// in the generated descriptor literal, and a true ZeroFill restates
+// ZeroFill: true, so regenerating from the generated source reproduces the
+// same facts rather than silently dropping them. Neither field changes the
+// generated row's Go field type: only Unsigned does that, exactly as before
+// this feature existed.
+func TestSchemaGeneratesIntegerDisplayWidthAndZeroFillColumns(t *testing.T) {
+	counters := schema.TableDef{
+		Name: "counters",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "total", Type: schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(10), ZeroFill: true}},
+			{Name: "width_only", Type: schema.IntegerType{DisplayWidth: schema.NewIntegerDisplayWidth(11)}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", counters)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), `{Name: "total", Type: schema.IntegerType{Unsigned: true, DisplayWidth: schema.NewIntegerDisplayWidth(10), ZeroFill: true}}`)
+	require.Contains(t, string(descriptorSource), `{Name: "width_only", Type: schema.IntegerType{DisplayWidth: schema.NewIntegerDisplayWidth(11)}}`)
+}
+
+// TestSchemaGeneratesGeneratedColumns pins the generator's mapping for a
+// generated column: GeneratedExpression and GeneratedStorage both restate
+// in the generated descriptor literal, so regenerating from the generated
+// source reproduces the same generated column rather than silently turning
+// it into a plain writable one. The row type still gets an ordinary field
+// for it, since a generated column is read like any other column; the two
+// restated fields are also what typedInsertMany and typedUpdateWithOptions
+// in the root package read to leave the column out of the default INSERT
+// and UPDATE column lists automatically, and to refuse an explicit
+// rasql.UpdateColumns naming it outright (see TestInsertOmitsGeneratedColumn,
+// TestUpdateOmitsGeneratedColumn, and TestUpdateColumnsRejectsGeneratedColumn
+// in the root package), so nothing built through the typed write path ever
+// writes to the generated field.
+func TestSchemaGeneratesGeneratedColumns(t *testing.T) {
+	measurements := schema.TableDef{
+		Name: "measurements",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "celsius", Type: schema.IntegerType{}},
+			{
+				Name:                "fahrenheit",
+				Type:                schema.IntegerType{},
+				GeneratedExpression: "celsius * 9 / 5 + 32",
+				GeneratedStorage:    schema.GeneratedStored,
+			},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := schemagen.PackageSource("generated", measurements)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*Fahrenheit\s+int64$`, string(source))
+	require.Contains(t, string(source), `{Name: "fahrenheit", Type: schema.IntegerType{}, GeneratedExpression: "celsius * 9 / 5 + 32", GeneratedStorage: schema.GeneratedStored}`)
+}
+
 // TestSchemaGeneratesTextWidthColumns pins the generator's text-width
 // mapping. A stated width restates schema.NewTextWidth(n) in the generated
 // descriptor literal, so regenerating from the generated source produces the

@@ -154,6 +154,40 @@ func (c ConflictResolution) valid() bool {
 	}
 }
 
+// GeneratedStorage names whether a generated column's computed value is
+// written into the table or produced each time the column is read. Its zero
+// value, the empty string, means the column is not generated at all: it is
+// meaningless unless ColumnDef.GeneratedExpression is also stated, and
+// Table.Validate rejects the two stated apart from each other.
+//
+// A generated column is describable but not yet renderable: inspect records
+// what a live SQLite generated column actually declares, and
+// TableDef.Validate accepts it, but render.CreateTable and the migrate
+// diff-live path refuse to build DDL for one, because rasql does not yet
+// know how to construct a GENERATED ALWAYS AS clause, and because a
+// generated column cannot be written to like an ordinary one, so silently
+// rendering it as a plain writable column would be a worse failure than
+// refusing outright.
+type GeneratedStorage string
+
+const (
+	// GeneratedStored writes a generated column's computed value into the
+	// table, so it occupies storage and is read back like any other column.
+	GeneratedStored GeneratedStorage = "STORED"
+	// GeneratedVirtual computes a generated column's value each time it is
+	// read, rather than storing it.
+	GeneratedVirtual GeneratedStorage = "VIRTUAL"
+)
+
+func (g GeneratedStorage) valid() bool {
+	switch g {
+	case "", GeneratedStored, GeneratedVirtual:
+		return true
+	default:
+		return false
+	}
+}
+
 // RelationshipKind identifies the relationship shape represented by a
 // descriptor.
 type RelationshipKind string
