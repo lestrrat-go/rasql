@@ -93,7 +93,9 @@ func runSchema(args []string, writer io.Writer) error {
 	dialectName := flags.String("dialect", "postgresql", "database dialect for -dsn")
 	timeout := flags.Duration("timeout", 30*time.Second, "deadline for -dsn metadata inspection")
 	var tableNames tableNames
-	flags.Var(&tableNames, "table", "table to generate from the selected schema input; repeat for multiple tables (duplicate values are rejected)")
+	flags.Var(&tableNames, "table", "table to generate instead of sweeping every base table with -dsn, or to filter a -source package; repeat for multiple tables (duplicate values are rejected)")
+	var excludes excludeTableNames
+	flags.Var(&excludes, "exclude", "table to skip during a -dsn sweep; repeat for multiple tables (duplicate values are rejected); not accepted together with -table, and not supported with -source")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "directory for generated Go source files")
 	if err := parseCommandFlags(flags, args); err != nil {
@@ -104,6 +106,9 @@ func runSchema(args []string, writer io.Writer) error {
 	}
 	if *packageName == "" || *output == "" {
 		return errors.New("schema requires -package and -output")
+	}
+	if len(tableNames) > 0 && len(excludes) > 0 {
+		return errors.New("schema accepts -table or -exclude, not both")
 	}
 	modeCount := 0
 	if *dsn != "" {
@@ -118,14 +123,17 @@ func runSchema(args []string, writer io.Writer) error {
 	case modeCount > 1:
 		return errors.New("schema accepts one of -dsn or -source, not both")
 	}
+	if len(excludes) > 0 && *source != "" {
+		return errors.New("schema -exclude is not supported with -source")
+	}
+	if err := ensureOutputDirectory(*output); err != nil {
+		return err
+	}
 	var tables []schema.TableDef
 	switch {
 	case *source != "":
 		return runSchemaSource(*source, *packageName, *output, tableNames, writer)
 	case *dsn != "":
-		if len(tableNames) == 0 {
-			return errors.New("schema with -dsn requires at least one -table")
-		}
 		d, err := builtinDialect(*dialectName)
 		if err != nil {
 			return err
@@ -150,7 +158,7 @@ func runSchema(args []string, writer io.Writer) error {
 			_ = tx.Rollback()
 			return err
 		}
-		tables, err = inspectTables(ctx, inspector, tableNames)
+		tables, err = sweepTables(ctx, inspector, tableNames, excludes, "schema")
 		if err != nil {
 			_ = tx.Rollback()
 			return err
@@ -163,6 +171,19 @@ func runSchema(args []string, writer io.Writer) error {
 	}
 	if err := generate.WritePackage(*packageName, *output, tables...); err != nil {
 		return fmt.Errorf("write schema output: %w", err)
+	}
+	return nil
+}
+
+// ensureOutputDirectory creates directory and any missing parents so
+// `schema` and `bootstrap` no longer require -output to exist beforehand.
+// It is a no-op when directory already exists as a directory or a symbolic
+// link to one; when directory exists as something else, the failure
+// surfaces here with directory named, rather than later as a generic "not a
+// directory" error from whichever generate.Write* call runs next.
+func ensureOutputDirectory(directory string) error {
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return fmt.Errorf("create output directory %q: %w", directory, err)
 	}
 	return nil
 }

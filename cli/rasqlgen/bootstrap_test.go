@@ -80,7 +80,7 @@ func TestRunBootstrapSweepsSQLite(t *testing.T) {
 }
 
 // TestRunBootstrapExcludeSkipsRenamedHistoryTable proves -exclude covers the
-// case defaultBootstrapHistorySkip cannot: an application-renamed history
+// case defaultSweepHistorySkip cannot: an application-renamed history
 // table.
 func TestRunBootstrapExcludeSkipsRenamedHistoryTable(t *testing.T) {
 	databasePath := mustCreateSQLite(t,
@@ -158,12 +158,18 @@ func TestRunBootstrapRefusesHandWrittenFileInOutputDirectory(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(directory, "users_gen.go"))
 }
 
-func TestRunBootstrapRejectsMissingOutputDirectory(t *testing.T) {
+// TestRunBootstrapCreatesMissingOutputDirectory covers a -output that does
+// not exist yet: bootstrap creates it, including any missing parents,
+// rather than requiring it to already exist. This is what makes the first
+// bootstrap example in docs/06-rasqlgen.md work when copied into a fresh
+// module with no internal/tables directory yet.
+func TestRunBootstrapCreatesMissingOutputDirectory(t *testing.T) {
 	databasePath := mustCreateSQLite(t, "CREATE TABLE users (id INTEGER PRIMARY KEY)")
-	missing := filepath.Join(t.TempDir(), "missing")
+	missing := filepath.Join(t.TempDir(), "missing", "nested")
 
 	err := run([]string{"bootstrap", "-dsn", databasePath, "-dialect", "sqlite", "-package", "schemasource", "-output", missing})
-	require.Error(t, err)
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(missing, "users_gen.go"))
 }
 
 func TestRunBootstrapGeneratedFilesCarryTheMarker(t *testing.T) {
