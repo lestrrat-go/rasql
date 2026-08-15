@@ -245,6 +245,47 @@ func TestInitForceOverwrites(t *testing.T) {
 	require.NotContains(t, string(after), "// stale")
 }
 
+// TestInitScaffoldDocStatesTheForceTerms walks the sequence a user
+// actually runs -- init, init again, init -force -- and requires the doc
+// comment of the file init just rewrote to describe that sequence rather
+// than contradict it. The comment is the only place a reader learns what
+// a second run does, so a scaffold claiming it is written once and left
+// alone, from a run that had just replaced it, would be read as the
+// authority and believed. Each of the three assertions below pins one
+// step of the sequence to the sentence covering it.
+func TestInitScaffoldDocStatesTheForceTerms(t *testing.T) {
+	t.Chdir(t.TempDir())
+	path := filepath.Join("gen", "main.go")
+
+	var first bytes.Buffer
+	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &first))
+
+	var second bytes.Buffer
+	err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &second)
+	require.ErrorContains(t, err, "-force")
+
+	var third bytes.Buffer
+	require.NoError(t, Run([]string{"init", "-dialect", "mysql", "-package", "store", "-output", "internal/store", "-force"}, &third))
+	require.Contains(t, third.String(), "overwrote "+path)
+
+	source, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "dialect.MySQL()", "the -force run must have rewritten the body")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, source, parser.ParseComments)
+	require.NoError(t, err)
+	require.NotNil(t, file.Doc, "the scaffold must carry a package doc comment")
+	doc := file.Doc.Text()
+
+	require.Contains(t, doc, "-force",
+		"the scaffold doc must name the flag that rewrites it, got:\n%s", doc)
+	require.Contains(t, doc, "refuses",
+		"the scaffold doc must say a plain rerun is refused, got:\n%s", doc)
+	require.Contains(t, doc, "discards",
+		"the scaffold doc must say -force discards edits made here, got:\n%s", doc)
+}
+
 // TestInitRejectsInvalidInput requires that every invalid flag combination
 // is refused before anything is written.
 func TestInitRejectsInvalidInput(t *testing.T) {

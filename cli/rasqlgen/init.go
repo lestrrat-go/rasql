@@ -41,10 +41,12 @@ var initScaffoldTemplate = template.Must(template.New("gen/main.go").Parse(`// C
 // Run it with ` + "`go generate ./...`" + `. Pass -check to report whether the
 // checked-in store is current without writing anything.
 //
-// rasqlgen init wrote this file once and never rewrites it. It is the
-// manifest: the package name, the output directory, the dialect, the
-// Go-side hints and the query list all live here, where the compiler
-// checks them and ` + "`git diff`" + ` shows them.
+// rasqlgen init wrote this file once. Run again and it refuses to touch
+// this file unless you pass -force, which rewrites it from the flags of
+// that run and discards every edit made here. It is the manifest: the
+// package name, the output directory, the dialect, the Go-side hints and
+// the query list all live here, where the compiler checks them and
+// ` + "`git diff`" + ` shows them.
 package main
 
 import (
