@@ -13,17 +13,21 @@ import (
 
 // TestMySQLInspectorReportsTableNotFoundAgainstLiveDatabase drives the real
 // MySQL error 1146 path that mysqlErrorNumber (inspect/mysql_error_number.go)
-// depends on. Every sqlmock-based test of this behavior, including
-// TestMySQLInspectorReportsTableNotFoundWhenSHOWCreateProvesAbsence and
-// TestMySQLInspectorPropagatesOtherShowCreateTableErrors in inspect_test.go,
-// constructs a local fake error struct that by definition carries the Number
-// field mysqlErrorNumber looks for, so none of them can catch a real
-// go-sql-driver/mysql release that renames or removes that field -- they
-// would all stay green regardless. This test asks a genuinely absent
-// table's SHOW CREATE TABLE to fail against a real MySQL server, so the
-// error mysqlErrorNumber inspects here is the actual *mysql.MySQLError the
-// driver constructs, not a stand-in, and it pins that inspector.Table still
-// reports TableNotFoundError rather than propagating the raw error.
+// depends on. No sqlmock-based test can: mysqlErrorNumber reads a number only
+// from github.com/go-sql-driver/mysql's own *mysql.MySQLError, identified by
+// package path and type name, and no test may declare a type in that package
+// or import it -- TestInspectDoesNotImportADriver forbids the import outright.
+// So TestMySQLInspectorReportsTableNotFoundWhenSHOWCreateProvesAbsence in
+// mysql_no_such_table_test.go substitutes a local type's identity for the
+// driver's, and TestMySQLInspectorPropagatesOtherShowCreateTableErrors in
+// inspect_test.go feeds types the driver did not declare and expects them to
+// propagate. Neither can catch a go-sql-driver/mysql release that moves,
+// renames, or reshapes that error type -- both would stay green regardless.
+// This test asks a genuinely absent table's SHOW CREATE TABLE to fail against
+// a real MySQL server, so the error mysqlErrorNumber inspects here is the
+// actual *mysql.MySQLError the driver constructs, not a stand-in, and it pins
+// that inspector.Table still reports TableNotFoundError rather than
+// propagating the raw error.
 func TestMySQLInspectorReportsTableNotFoundAgainstLiveDatabase(t *testing.T) {
 	ctx := t.Context()
 	database := dbtest.MySQLDB(t)
