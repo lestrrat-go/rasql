@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/stretchr/testify/require"
@@ -565,15 +566,15 @@ func TestRunApplyStatusAndVerifySQLiteSQLSources(t *testing.T) {
 	require.Equal(t, "migration verification passed\n", outputBuffer.String())
 }
 
-func TestLoadMigrationsRejectsUnexpectedEntries(t *testing.T) {
+func TestMigrationLoadingRejectsUnexpectedEntries(t *testing.T) {
 	directory := newTestDirectory(t)
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "001_create_users.sql"), []byte("CREATE TABLE users (id INTEGER);"), 0o600))
-	_, err := loadMigrations(directory)
+	_, err := migrationdir.Load(directory)
 	require.ErrorContains(t, err, "non-directory entry")
 
 	require.NoError(t, os.Remove(filepath.Join(directory, "001_create_users.sql")))
 	writeTestSQL(t, directory, "001_create_users", "001_create_users.txt", "CREATE TABLE users (id INTEGER);")
-	_, err = loadMigrations(directory)
+	_, err = migrationdir.Load(directory)
 	require.ErrorContains(t, err, "non-SQL source")
 }
 
