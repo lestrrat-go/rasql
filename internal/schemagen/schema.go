@@ -226,7 +226,11 @@ func descriptorSource(packageName string, tables []schema.TableDef) ([]byte, err
 // definitionAccessorName's own accessor, which likewise hands back a clone
 // rather than the package-level variable itself, so mutating one entry of
 // the slice a caller gets from Tables cannot reach what the next call
-// returns.
+// returns. That holds however deep the mutation goes, but only because
+// schema.TableDef.Clone owns the depth of a clone: this function relies on
+// that guarantee rather than restating it, and
+// TestGeneratedTablesHandOutIndependentDescriptors in generate/ exercises
+// the emitted function against it.
 func writeTablesFunc(source *bytes.Buffer, tables []schema.TableDef) {
 	source.WriteString("// Tables returns a clone of every table's descriptor, in the order this\n")
 	source.WriteString("// file declares them.\n")
