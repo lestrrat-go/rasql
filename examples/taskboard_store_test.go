@@ -28,7 +28,10 @@ import (
 // with catalog.FromDatabase exactly the way sample/taskboard/gen/main.go
 // will, and checks the result against sample/taskboard/internal/store
 // through the same directory comparison requireGeneratedDirectoryMatches
-// performs for examples/store and examples/schemasource.
+// performs for examples/store. (examples/schemasource runs a generator over
+// its directory first, so it compares a snapshot taken beforehand as well;
+// nothing here rewrites the directory being checked, so the directory as it
+// stands is the checked-in source.)
 //
 // The migrations are read with internal/migrationdir and applied with
 // migrate.Runner, which is exactly what `rasqlmigrate apply -dir
