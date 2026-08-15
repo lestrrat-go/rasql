@@ -314,7 +314,7 @@ func (s Store) Plan() (Plan, error) {
 		}
 	}
 
-	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, anchor: anchor, anchorInfo: anchorInfo}, nil
+	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, root: root, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans the store and commits the plan: it is Plan followed by
@@ -327,6 +327,19 @@ func (s Store) Write() error {
 		return err
 	}
 	return plan.Commit()
+}
+
+// Check plans the store and compares the plan with what is on disk, without
+// writing anything. It returns nil when a Write would change nothing at
+// all, an error wrapping ErrStale when the generated package differs from
+// what these inputs produce, and the error Commit itself would return when
+// Commit would refuse the run instead of writing anything. See Plan.Check.
+func (s Store) Check() error {
+	plan, err := s.Plan()
+	if err != nil {
+		return err
+	}
+	return plan.Check()
 }
 
 // planQuery renders one Query into its File, checking its output name

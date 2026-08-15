@@ -97,6 +97,10 @@ type Plan struct {
 	// them -- is made from the plan alone, the same instant everything
 	// else about the plan was decided.
 	prune bool
+	// root is the store's resolved Root, carried into the plan so Check can
+	// print a path relative to it instead of always absolute. It plays no
+	// part in Commit.
+	root string
 	// anchor is the deepest directory on dir's own path that already
 	// existed when Store.Plan looked, and anchorInfo is what the filesystem
 	// reported for it: dir itself whenever Dir already existed, and the
@@ -265,7 +269,7 @@ func (p Plan) Commit() error {
 	}
 
 	// Step 1: resolve and authorize everything; write nothing.
-	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir)
+	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir, true)
 	if err != nil {
 		return err
 	}
@@ -434,6 +438,250 @@ func (p Plan) Commit() error {
 	return nil
 }
 
+// ErrStale reports that a generated package differs from what the current
+// inputs would produce. Plan.Check returns an error wrapping it; nothing
+// else does.
+var ErrStale = errors.New("generate: generated package is stale")
+
+// Check compares the plan with what is on disk, without writing anything.
+//
+// It returns nil exactly when Commit would write no file and delete no
+// file: every planned file exists with byte-identical content, and there is
+// nothing to prune. It returns an error wrapping ErrStale, naming each file
+// that is missing, differs, or would be pruned, sorted by path, when the
+// package is simply out of date -- running Commit (or Store.Write) fixes
+// it. It returns the error Commit itself would return, unwrapped by
+// ErrStale, when Commit would refuse the run instead: a leftover file with
+// Prune unset, a destination rasqlgen may not replace, two planned files
+// that land on one destination, or an output directory that is no longer
+// the one this plan was built for. Regenerating does not fix a refusal,
+// which is why it is never reported as staleness.
+//
+// Like Commit, Check makes every one of Commit's step 1 checks afresh
+// rather than trusting what Store.Plan saw, since a Plan can be held and
+// acted on later, after the directory has changed underneath it: it reaches
+// the output directory through the plan's own anchor, re-resolves every
+// destination, refuses the same collisions, and re-reads every orphan's
+// marker. Each planned file is then read through the very directory the
+// matching write would go through, so what Check compares is the file
+// Commit would replace rather than whatever that path reaches on a second
+// resolution.
+//
+// Check writes nothing and deletes nothing, and that is the one place it
+// parts from Commit's step 1: that step creates each missing component of
+// Dir's own path as it authorizes the run, and Check walks the same
+// components without creating any of them. An output directory that does
+// not exist is therefore every planned file missing, which is staleness --
+// a Commit would create the directory and write them all. Commit's step 3
+// re-reads each leftover immediately before deleting it, which has no
+// read-only counterpart to make: it guards a deletion Check never performs,
+// and the marker it re-reads is the one Check already read here.
+func (p Plan) Check() error {
+	if p.dir == "" {
+		return errors.New("generate: zero Plan cannot be checked; only Store.Plan builds a Plan that Check can act on")
+	}
+
+	// Commit's step 1, read-only. dir is nil when the output directory does
+	// not exist yet: Commit would create it here, and Check may not.
+	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir, false)
+	if err != nil {
+		return err
+	}
+	if dir != nil {
+		defer func() { _ = dir.Close() }()
+	}
+
+	// realDir is the plan's output directory as the filesystem reaches it,
+	// which is the form every resolved destination below is spelled in, and
+	// it is put back to the handle just opened for the reason Commit does the
+	// same. A directory that does not exist has no such spelling, and nothing
+	// resolves into it, so the plan's own path stands in.
+	realDir := p.dir
+	if dir != nil {
+		realDir, err = filepath.EvalSymlinks(p.dir)
+		if err != nil {
+			return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
+		}
+		dirInfo, err := dir.Stat(".")
+		if err != nil {
+			return fmt.Errorf("generate: check %s: %w", p.dir, err)
+		}
+		realDirInfo, err := os.Stat(realDir)
+		if err != nil {
+			return fmt.Errorf("generate: check %s: %w", realDir, err)
+		}
+		if !os.SameFile(dirInfo, realDirInfo) {
+			return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit authorized; rerun Store.Plan", p.dir)
+		}
+	}
+
+	// deletions is Commit's own list: every recorded orphan paired with the
+	// destination a planned file has to resolve to in order to land on it.
+	deletions := make([]plannedDeletion, 0, len(p.orphans))
+	for _, orphan := range p.orphans {
+		deletions = append(deletions, plannedDeletion{orphan: orphan, destination: filepath.Join(realDir, filepath.Base(orphan))})
+	}
+
+	// handles hands out the open directory holding each destination, the way
+	// Commit's does, so every read below goes through a directory this call
+	// opened rather than through a path resolved a second time. A plan whose
+	// output directory does not exist opens nothing: every destination is
+	// inside it, so there is nothing there to read.
+	var handles destinationDirectories
+	if dir != nil {
+		handles = destinationDirectories{own: dir, ownPath: realDir}
+	}
+	defer handles.close()
+	checks := make([]checkedFile, 0, len(p.files))
+	for i := range p.files {
+		f := &p.files[i]
+		resolved, parentInfo, err := resolveCheckDestination(f.Path)
+		if err != nil {
+			return err
+		}
+		for _, c := range checks {
+			match := matchDestinations(c.destination, resolved)
+			if match == distinctDestinations {
+				continue
+			}
+			return fmt.Errorf("generate: refusing to commit: %s and %s both resolve to %s, so one would overwrite the other; rerun Store.Plan", c.file.Path, f.Path, match.describe(resolved, c.destination))
+		}
+		for _, d := range deletions {
+			match := matchDestinations(d.destination, resolved)
+			if match == distinctDestinations {
+				continue
+			}
+			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, match.describe(resolved, d.orphan))
+		}
+		var into *os.Root
+		if dir != nil && parentInfo != nil {
+			into, err = handles.open(filepath.Dir(resolved), parentInfo)
+			if err != nil {
+				return err
+			}
+		}
+		checks = append(checks, checkedFile{file: f, destination: resolved, dir: into, name: filepath.Base(resolved)})
+	}
+	for _, orphan := range p.orphans {
+		// A missing output directory took every leftover recorded in it with
+		// it, which is the same answer a name that no longer carries the
+		// marker gives, and the same refusal Commit gives after recreating
+		// the directory and finding the file gone.
+		var info fs.FileInfo
+		if dir != nil {
+			info, err = readGenfileMarker(dir, filepath.Base(orphan))
+			if err != nil {
+				return fmt.Errorf("generate: check %s for rasqlgen's marker: %w", orphan, err)
+			}
+		}
+		if info == nil {
+			return fmt.Errorf("generate: refusing to delete %s: it no longer opens with rasqlgen's marker; something has changed it since Store.Plan ran", orphan)
+		}
+	}
+	if !p.prune && len(p.orphans) > 0 {
+		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write, and Store.Prune is false: %s; set Prune to delete them, or remove them yourself", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
+	}
+
+	// Past the refusal checks, every remaining difference is staleness: a
+	// Write right now would change something, but nothing here stops it.
+	var stale []string
+	for _, c := range checks {
+		current, err := c.read()
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			stale = append(stale, fmt.Sprintf("%s: is missing", formatCheckPath(p.root, c.file.Path)))
+		case err != nil:
+			return fmt.Errorf("generate: read %s: %w", c.destination, err)
+		case !bytes.Equal(current, c.file.Source):
+			stale = append(stale, fmt.Sprintf("%s: differs", formatCheckPath(p.root, c.file.Path)))
+		}
+	}
+	if p.prune {
+		for _, orphan := range p.orphans {
+			stale = append(stale, fmt.Sprintf("%s: would be deleted", formatCheckPath(p.root, orphan)))
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	sort.Strings(stale)
+	return fmt.Errorf("%w: %s", ErrStale, strings.Join(stale, "; "))
+}
+
+// formatCheckPath reports path the way Check's error names it: relative to
+// root when path is inside root, absolute otherwise. An empty root, or a
+// path outside it, is reported as an absolute path rather than a relative
+// form that would not resolve back to the same file.
+func formatCheckPath(root, path string) string {
+	if root == "" {
+		return path
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return path
+	}
+	return rel
+}
+
+// checkedFile is one planned file bound to the destination Plan.Check
+// resolved for it: commitWrite's read-only counterpart, holding the open
+// directory the file is read through instead of the one it would be written
+// through. dir is nil when the directory holding that destination does not
+// exist, which makes the destination itself a file that does not exist.
+type checkedFile struct {
+	// file is the planned file itself, whose Source is what the bytes on
+	// disk are compared against and whose Path an error names.
+	file *File
+	// destination is where Path resolved to at check time.
+	destination string
+	// dir holds destination, and name is destination's own name inside it.
+	dir  *os.Root
+	name string
+}
+
+// read reports the destination's current bytes, read through the directory
+// Check opened for it rather than through its path. A destination whose
+// directory does not exist reports fs.ErrNotExist, which is the answer
+// opening the file there would give and which Check reads as a missing
+// planned file.
+func (c checkedFile) read() ([]byte, error) {
+	if c.dir == nil {
+		return nil, &fs.PathError{Op: "open", Path: c.destination, Err: fs.ErrNotExist}
+	}
+	file, err := c.dir.Open(c.name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return io.ReadAll(file)
+}
+
+// resolveCheckDestination is resolveDestinationInDirectory for a caller that
+// only reads: it reports a nil FileInfo, rather than an error, when the
+// directory holding the resolved destination does not exist.
+//
+// That case is a plan whose output directory is not there yet -- every
+// destination resolves lexically into a directory nothing has created --
+// and it never reaches Commit, whose step 1 creates that directory before it
+// resolves anything. It is a separate function rather than the
+// resolveCommitDestination seam so that a test swapping that seam changes
+// Commit alone.
+func resolveCheckDestination(path string) (string, fs.FileInfo, error) {
+	resolved, err := genfile.ResolveDestination(path)
+	if err != nil {
+		return "", nil, err
+	}
+	parent := filepath.Dir(resolved)
+	info, err := os.Stat(parent)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return resolved, nil, nil
+		}
+		return "", nil, fmt.Errorf("generate: check %s: %w", parent, err)
+	}
+	return resolved, info, nil
+}
+
 // openPlannedDirectory opens the output directory this plan was built for,
 // reaching it the way the plan recorded it rather than by resolving its
 // path afresh.
@@ -447,7 +695,14 @@ func (p Plan) Commit() error {
 // the plan was built would otherwise take every planned write with it, and
 // os.MkdirAll and os.OpenRoot on the plan's own path both follow such a
 // link without noticing.
-func openPlannedDirectory(anchor string, anchorInfo fs.FileInfo, dir string) (*os.Root, error) {
+//
+// create is set by Commit, which may create what is missing, and unset by
+// Check, which must write nothing. With it unset a component that does not
+// exist reports a nil handle and no error: that is an output directory that
+// is not there yet, which Check reads as every planned file missing rather
+// than as a failure. Every other check along the walk is the same either
+// way, so a refusal Commit would give is a refusal Check gives.
+func openPlannedDirectory(anchor string, anchorInfo fs.FileInfo, dir string, create bool) (*os.Root, error) {
 	if anchor == "" || anchorInfo == nil {
 		return nil, fmt.Errorf("generate: internal error: plan for %s recorded no directory to commit through; rerun Store.Plan", dir)
 	}
@@ -475,10 +730,15 @@ func openPlannedDirectory(anchor string, anchorInfo fs.FileInfo, dir string) (*o
 		if component == "." {
 			continue
 		}
-		child, childErr := openChildDirectory(root, component)
+		child, childErr := openChildDirectory(root, component, create)
 		_ = root.Close()
 		if childErr != nil {
 			return nil, fmt.Errorf("generate: refusing to commit into %s: %w", dir, childErr)
+		}
+		if child == nil {
+			// Only a walk that may not create reports this: the component is
+			// missing, so dir is missing, and nothing below it exists either.
+			return nil, nil
 		}
 		root = child
 	}
@@ -486,8 +746,10 @@ func openPlannedDirectory(anchor string, anchorInfo fs.FileInfo, dir string) (*o
 }
 
 // openChildDirectory opens the directory named name directly inside root,
-// creating it when it is missing, and refuses anything that is not a
-// directory entry of its own.
+// creating it when it is missing and create is set, and refuses anything
+// that is not a directory entry of its own. With create unset it creates
+// nothing and reports a nil handle and no error for a name nothing holds,
+// which is the whole of what Plan.Check does differently from Plan.Commit.
 //
 // A name that is a symbolic link is refused rather than followed, even one
 // pointing at a directory inside root: os.Root follows a link that stays
@@ -495,12 +757,17 @@ func openPlannedDirectory(anchor string, anchorInfo fs.FileInfo, dir string) (*o
 // was built for, not whatever a link that appeared later names. The handle
 // is then checked, with os.SameFile, against what the name was just seen to
 // be, so a name replaced between the two calls is refused as well.
-func openChildDirectory(root *os.Root, name string) (*os.Root, error) {
-	if err := root.Mkdir(name, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-		return nil, fmt.Errorf("create %s: %w", name, err)
+func openChildDirectory(root *os.Root, name string, create bool) (*os.Root, error) {
+	if create {
+		if err := root.Mkdir(name, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("create %s: %w", name, err)
+		}
 	}
 	info, err := root.Lstat(name)
 	if err != nil {
+		if !create && errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("check %s: %w", name, err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
