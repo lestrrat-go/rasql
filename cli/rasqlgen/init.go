@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 )
 
@@ -171,7 +172,13 @@ func runInit(args []string, writer io.Writer) error {
 	if *genDir == "" {
 		return errors.New("init: -gen-dir must not be empty")
 	}
+	if err := requireGenDirInsideModule(*genDir); err != nil {
+		return err
+	}
 	if err := requireDistinctInitDirs(*output, *genDir); err != nil {
+		return err
+	}
+	if err := requireGenDirOwnsPackage(*genDir); err != nil {
 		return err
 	}
 
@@ -211,6 +218,76 @@ func runInit(args []string, writer io.Writer) error {
 	_, _ = fmt.Fprintf(writer, "  go get %s\n", spec.driverImport)
 	_, _ = fmt.Fprintln(writer, "  DATABASE_URL=... go generate ./...")
 	return nil
+}
+
+// requireGenDirInsideModule refuses a -gen-dir that resolves outside the
+// module the scaffold is meant to join. -gen-dir is documented as relative
+// to the working directory, so it is resolved that way here, exactly as
+// runInit resolves it before writing; the module root comes from
+// modroot.FromWorkingDirectory, the same walk initOutputDirectory uses for
+// -output and the same walk generate.Store itself makes when Store.Root is
+// left empty. Reusing it is what keeps this command from deciding "where
+// the module is" a second way that could disagree with the first.
+//
+// A -gen-dir outside the module writes a file `go generate ./...` can
+// never run: that command, like every other Go command, only ever walks
+// packages inside the main module, so a scaffold sitting beside the module
+// instead of inside it is invisible to it -- the write would succeed and
+// the file would simply never be reached.
+//
+// A working directory with no go.mod above it has no module root to check
+// against, so nothing is refused here; whatever runs next will fail on its
+// own for the same reason initOutputDirectory falls back the same way.
+func requireGenDirInsideModule(genDir string) error {
+	genPath, err := filepath.Abs(genDir)
+	if err != nil {
+		return fmt.Errorf("init: resolve -gen-dir %q: %w", genDir, err)
+	}
+	root, err := modroot.FromWorkingDirectory()
+	if err != nil {
+		return fmt.Errorf("init: %w", err)
+	}
+	if root == "" {
+		return nil
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("init: resolve module root: %w", err)
+	}
+	if rootAbs == genPath {
+		return nil
+	}
+	rel, err := filepath.Rel(rootAbs, genPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("init: -gen-dir %q resolves to %s, which is outside the module rooted at %s; go generate ./... only walks packages inside the module, so it could never reach a scaffold written there", genDir, genPath, rootAbs)
+	}
+	return nil
+}
+
+// requireGenDirOwnsPackage refuses a -gen-dir that already holds a Go file
+// declaring some package other than "main". The scaffold this command is
+// about to write is always package main, so a directory already speaking
+// for a different package is a directory no build will ever compile again
+// once main.go lands in it: "found packages main (main.go) and tools
+// (helper.go)" from every build, vet and test after that.
+//
+// generate.DirForeignPackage is Store.Plan's own scan for the identical
+// question against -output, exported so this command can ask it about
+// -gen-dir too rather than reimplementing the rule -- and, in particular,
+// rather than reimplementing its symbolic-link and build-tag handling
+// slightly differently. "main.go" is passed as the file this call is about
+// to write itself, so an existing main.go -- which is package main, and
+// therefore never a collision -- does not trip this check; whether it may
+// be overwritten is -force's question, decided separately below.
+func requireGenDirOwnsPackage(genDir string) error {
+	name, declared, err := generate.DirForeignPackage(genDir, "main", "main.go")
+	if err != nil {
+		return fmt.Errorf("init: check -gen-dir %q: %w", genDir, err)
+	}
+	if name == "" {
+		return nil
+	}
+	return fmt.Errorf("init: -gen-dir %q already holds package %q, declared by %s; the scaffold is package main, so it cannot share that directory", genDir, declared, name)
 }
 
 // requireDistinctInitDirs refuses an -output that names the same directory
