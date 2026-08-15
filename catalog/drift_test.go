@@ -62,6 +62,41 @@ func TestDriftIsEmptyForIdenticalInput(t *testing.T) {
 	})
 }
 
+// TestReportFormatsItselfOnlyThroughItsAccessors pins what Report's doc
+// comment promises about the zero value and about formatting. Report is a
+// verdict with no String method: rendering a report for a person is a later
+// change, not this one, so a caller that formats a Report directly gets Go's
+// default struct rendering rather than any report text. When Report does
+// gain a String method, this test fails, and the doc sentence it guards has
+// to be rewritten in the same change.
+func TestReportFormatsItselfOnlyThroughItsAccessors(t *testing.T) {
+	var zero catalog.Report
+
+	t.Run("zero value is empty in every bucket", func(t *testing.T) {
+		require.True(t, zero.Empty())
+		require.Nil(t, zero.Added())
+		require.Nil(t, zero.Removed())
+		require.Nil(t, zero.Changed())
+	})
+
+	t.Run("report has no String method", func(t *testing.T) {
+		_, isStringer := any(zero).(fmt.Stringer)
+		require.False(t, isStringer, "catalog.Report must not implement fmt.Stringer while its doc says it does not format itself")
+		_, pointerIsStringer := any(&zero).(fmt.Stringer)
+		require.False(t, pointerIsStringer, "*catalog.Report must not implement fmt.Stringer either")
+	})
+
+	t.Run("a caller summarizes through the accessors", func(t *testing.T) {
+		report := catalog.Drift(
+			[]schema.TableDef{tbl("legacy", "id"), tbl("users", "id")},
+			[]schema.TableDef{tbl("users", "id", "email"), tbl("orders", "id")},
+		)
+		summary := fmt.Sprintf("schema drift: %d table(s) added, %d removed, %d changed",
+			len(report.Added()), len(report.Removed()), len(report.Changed()))
+		require.Equal(t, "schema drift: 1 table(s) added, 1 removed, 1 changed", summary)
+	})
+}
+
 // TestDriftKeepsSameNamedTablesInDifferentSchemasApart pins the fix for
 // generate.DiffDescriptionPackage's own bug: that comparison keyed tables by
 // Name alone (generate/description_diff.go:93-100) and would have merged

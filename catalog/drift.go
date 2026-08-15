@@ -19,7 +19,8 @@ import (
 //		return err
 //	}
 //	if report := catalog.Drift(store.Tables(), live); !report.Empty() {
-//		log.Print(report)
+//		log.Printf("schema drift: %d table(s) added, %d removed, %d changed",
+//			len(report.Added()), len(report.Removed()), len(report.Changed()))
 //	}
 //
 // Tables are matched by QualifiedName. A table in live that described does
@@ -87,8 +88,12 @@ func Drift(described, live []schema.TableDef) Report {
 // does not have, and, for a table both sides have, exactly how the two
 // descriptors differ.
 //
-// The zero Report describes no drift at all: Empty reports true, every
-// bucket is empty, and String returns "".
+// The zero Report describes no drift at all: Empty reports true and every
+// bucket is empty.
+//
+// A Report is a verdict, not a rendering. It has no String method and does
+// not format itself, so a caller that wants a human-readable summary builds
+// one from Empty and the three accessors.
 //
 // A Report holds copies of the descriptors it was given. Its accessors hand
 // out further copies, so nothing a caller does to the result can reach back
