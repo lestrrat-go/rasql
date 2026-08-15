@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/token"
+	"maps"
 	"slices"
 	"unicode"
 	"unicode/utf8"
@@ -399,6 +400,18 @@ type UniqueDef struct {
 	Collations map[string]string `json:",omitempty"`
 }
 
+// Clone returns a copy of u that shares no slice or map with u. Each field
+// keeps the source's own nilness: a nil field clones to nil, and a
+// stated-but-empty one clones to a non-nil empty container.
+func (u UniqueDef) Clone() UniqueDef {
+	u.Columns = slices.Clone(u.Columns)
+	u.IncludeColumns = slices.Clone(u.IncludeColumns)
+	u.Keys = slices.Clone(u.Keys)
+	u.StorageParameters = maps.Clone(u.StorageParameters)
+	u.Collations = maps.Clone(u.Collations)
+	return u
+}
+
 // CheckDef requires Expression to evaluate to true for each row.
 // Expression is a schema-level SQL expression and is rendered only by a DDL-capable dialect.
 type CheckDef struct {
@@ -650,6 +663,18 @@ type IndexDef struct {
 	NullsNotDistinct bool `json:",omitempty"`
 }
 
+// Clone returns a copy of i that shares no slice or map with i. Each field
+// keeps the source's own nilness: a nil field clones to nil, and a
+// stated-but-empty one clones to a non-nil empty container.
+func (i IndexDef) Clone() IndexDef {
+	i.Columns = slices.Clone(i.Columns)
+	i.Expressions = slices.Clone(i.Expressions)
+	i.IncludeColumns = slices.Clone(i.IncludeColumns)
+	i.Keys = slices.Clone(i.Keys)
+	i.StorageParameters = maps.Clone(i.StorageParameters)
+	return i
+}
+
 // IndexKeyDef describes one key of an index beyond its expression text:
 // order, per-key collation, operator class, and MySQL prefix length. It
 // exists only so IndexDef.Keys can attach these facts to one key position;
@@ -751,6 +776,14 @@ type ExclusionDef struct {
 	Deferrable Deferrability `json:",omitempty"`
 }
 
+// Clone returns a copy of e that shares no slice with e. Elements keeps the
+// source's own nilness: a nil Elements clones to nil, and a stated-but-empty
+// one clones to a non-nil empty slice.
+func (e ExclusionDef) Clone() ExclusionDef {
+	e.Elements = slices.Clone(e.Elements)
+	return e
+}
+
 // ForeignKeyDef describes a foreign-key constraint.
 type ForeignKeyDef struct {
 	Name    string
@@ -838,6 +871,16 @@ type ForeignKeyDef struct {
 	// rasql does not yet know how to construct an ON DELETE SET NULL/SET
 	// DEFAULT column list.
 	DeleteSetColumns []string `json:",omitempty"`
+}
+
+// Clone returns a copy of f that shares no slice with f. Each field keeps
+// the source's own nilness: a nil field clones to nil, and a
+// stated-but-empty one clones to a non-nil empty slice.
+func (f ForeignKeyDef) Clone() ForeignKeyDef {
+	f.Columns = slices.Clone(f.Columns)
+	f.ReferencedColumns = slices.Clone(f.ReferencedColumns)
+	f.DeleteSetColumns = slices.Clone(f.DeleteSetColumns)
+	return f
 }
 
 // TableDef describes a database table and its constraints.
@@ -1004,38 +1047,46 @@ func (t TableDef) QualifiedName() string {
 	return t.Schema + "." + t.Name
 }
 
-// Clone returns a copy of t that does not share slices with t.
+// Clone returns a copy of t that shares no slice and no map with t, at any
+// depth: mutating either side afterwards is invisible to the other. Every
+// container keeps the source's own nilness, so a nil field clones to nil and
+// a stated-but-empty one clones to a non-nil empty container, and a clone is
+// therefore reflect.DeepEqual to its source.
+//
+// A descriptor type that owns a container of its own carries its own Clone
+// method, and this method routes each such field through it, so a container
+// field added to one of those types is copied here as soon as that type's
+// own Clone copies it. ColumnDef, CheckDef, IndexKeyDef and
+// ExclusionElementDef own no container, so their elements are copied by
+// assignment and have no Clone method to route through.
 func (t TableDef) Clone() TableDef {
 	clone := t
-	clone.Columns = append([]ColumnDef(nil), t.Columns...)
-	clone.PrimaryKey = append([]string(nil), t.PrimaryKey...)
-	clone.VirtualTableModuleArguments = append([]string(nil), t.VirtualTableModuleArguments...)
-	clone.UniqueConstraints = make([]UniqueDef, len(t.UniqueConstraints))
-	for i, constraint := range t.UniqueConstraints {
-		clone.UniqueConstraints[i] = constraint
-		clone.UniqueConstraints[i].Columns = append([]string(nil), constraint.Columns...)
-	}
-	clone.Checks = append([]CheckDef(nil), t.Checks...)
-	clone.ExclusionConstraints = make([]ExclusionDef, len(t.ExclusionConstraints))
-	for i, exclusion := range t.ExclusionConstraints {
-		clone.ExclusionConstraints[i] = exclusion
-		clone.ExclusionConstraints[i].Elements = append([]ExclusionElementDef(nil), exclusion.Elements...)
-	}
-	clone.Indexes = make([]IndexDef, len(t.Indexes))
-	for i, index := range t.Indexes {
-		clone.Indexes[i] = index
-		clone.Indexes[i].Columns = append([]string(nil), index.Columns...)
-		clone.Indexes[i].Expressions = append([]string(nil), index.Expressions...)
-	}
-	clone.ForeignKeys = make([]ForeignKeyDef, len(t.ForeignKeys))
-	for i, key := range t.ForeignKeys {
-		clone.ForeignKeys[i] = key
-		clone.ForeignKeys[i].Columns = append([]string(nil), key.Columns...)
-		clone.ForeignKeys[i].ReferencedColumns = append([]string(nil), key.ReferencedColumns...)
-	}
-	clone.Relationships = make([]RelationshipDef, len(t.Relationships))
-	for i, relationship := range t.Relationships {
-		clone.Relationships[i] = relationship.Clone()
+	clone.Columns = slices.Clone(t.Columns)
+	clone.PrimaryKey = slices.Clone(t.PrimaryKey)
+	clone.VirtualTableModuleArguments = slices.Clone(t.VirtualTableModuleArguments)
+	clone.UniqueConstraints = cloneEach(t.UniqueConstraints)
+	clone.Checks = slices.Clone(t.Checks)
+	clone.ExclusionConstraints = cloneEach(t.ExclusionConstraints)
+	clone.Indexes = cloneEach(t.Indexes)
+	clone.ForeignKeys = cloneEach(t.ForeignKeys)
+	clone.Relationships = cloneEach(t.Relationships)
+	return clone
+}
+
+// cloneable is satisfied by every descriptor type in this package that owns
+// a container of its own and so carries its own Clone method.
+type cloneable[T any] interface {
+	Clone() T
+}
+
+// cloneEach returns a copy of source with every element replaced by that
+// element's own clone. It preserves source's nilness exactly as slices.Clone
+// does: a nil source returns nil, and a non-nil empty source returns a
+// non-nil empty slice.
+func cloneEach[T cloneable[T]](source []T) []T {
+	clone := slices.Clone(source)
+	for i, element := range clone {
+		clone[i] = element.Clone()
 	}
 	return clone
 }
