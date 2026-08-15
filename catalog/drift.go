@@ -1,8 +1,10 @@
 package catalog
 
 import (
+	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -88,12 +90,12 @@ func Drift(described, live []schema.TableDef) Report {
 // does not have, and, for a table both sides have, exactly how the two
 // descriptors differ.
 //
-// The zero Report describes no drift at all: Empty reports true and every
-// bucket is empty.
+// The zero Report describes no drift at all: Empty reports true, every
+// bucket is empty, and String returns "".
 //
-// A Report is a verdict, not a rendering. It has no String method and does
-// not format itself, so a caller that wants a human-readable summary builds
-// one from Empty and the three accessors.
+// A Report is a verdict first and a rendering second: the three accessors
+// hand out the descriptors it holds, and String renders those same buckets
+// for a person to read.
 //
 // A Report holds copies of the descriptors it was given. Its accessors hand
 // out further copies, so nothing a caller does to the result can reach back
@@ -135,6 +137,31 @@ func (r Report) Changed() []TableDrift {
 	return append([]TableDrift(nil), r.changed...)
 }
 
+// String renders the report for a person: one line per added or removed
+// table, and one line per changed table followed by its own indented change
+// lines. It returns "" for an empty Report, and otherwise a block of
+// newline-terminated lines, so a caller can print it unconditionally and
+// print nothing when there is nothing to say.
+//
+// The format is stable and deterministic: two comparisons of equal inputs
+// render byte-identical text.
+func (r Report) String() string {
+	if r.Empty() {
+		return ""
+	}
+	var b strings.Builder
+	for _, table := range r.added {
+		fmt.Fprintf(&b, "+ table %q\n", table.QualifiedName())
+	}
+	for _, table := range r.removed {
+		fmt.Fprintf(&b, "- table %q\n", table.QualifiedName())
+	}
+	for _, drift := range r.changed {
+		b.WriteString(drift.String())
+	}
+	return b.String()
+}
+
 // cloneTableDefs returns a copy of tables in which every element is itself a
 // clone, so neither the slice header nor anything reachable from an element
 // is shared with tables. TableDef.Clone owns what "anything" covers: every
@@ -160,13 +187,21 @@ func cloneTableDefs(tables []schema.TableDef) []schema.TableDef {
 type TableDrift struct {
 	described schema.TableDef
 	live      schema.TableDef
+	changes   []Change
 }
 
 // newTableDrift builds a TableDrift from the caller's own described and live
 // descriptors, cloning each so the result shares nothing with either
-// argument, on the same terms as cloneTableDefs.
+// argument, on the same terms as cloneTableDefs. Its change list is built
+// from the two normalized descriptors -- the same values the verdict in
+// Drift already found unequal -- so the explanation can never describe a
+// fact the verdict itself ignored (§2.4).
 func newTableDrift(described, live schema.TableDef) TableDrift {
-	return TableDrift{described: described.Clone(), live: live.Clone()}
+	return TableDrift{
+		described: described.Clone(),
+		live:      live.Clone(),
+		changes:   tableChanges(normalize(described), normalize(live)),
+	}
 }
 
 // Schema returns the namespace the table lives in, empty when the table is
@@ -200,4 +235,47 @@ func (d TableDrift) Described() schema.TableDef {
 // schema already holds it here and need not read the database again.
 func (d TableDrift) Live() schema.TableDef {
 	return d.live.Clone()
+}
+
+// Changes reports every difference between the two descriptors, in a fixed
+// order: the table's own facts first, then each list of elements in the
+// order schema.TableDef declares them, and within a list every addition,
+// then every removal, then every modification, then every move, each group
+// sorted by subject.
+//
+// The result is never empty. A difference the walk cannot itemize is
+// reported as one change naming the two whole descriptors rather than as
+// silence, so a table reported as drifted always says something about why.
+func (d TableDrift) Changes() []Change {
+	return cloneChanges(d.changes)
+}
+
+// cloneChanges deep-copies changes, including each element's own Fields
+// slice, so a caller cannot reach into a TableDrift by mutating what
+// Changes returned.
+func cloneChanges(changes []Change) []Change {
+	if changes == nil {
+		return nil
+	}
+	clone := make([]Change, len(changes))
+	for i, change := range changes {
+		clone[i] = Change{
+			Kind:    change.Kind,
+			Subject: change.Subject,
+			Fields:  append([]FieldChange(nil), change.Fields...),
+		}
+	}
+	return clone
+}
+
+// String renders this table's section of the report: the "~ table" line
+// followed by one four-space indented line per change, each newline
+// terminated.
+func (d TableDrift) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "~ table %q\n", d.QualifiedName())
+	for _, change := range d.changes {
+		fmt.Fprintf(&b, "    %s\n", change.String())
+	}
+	return b.String()
 }
