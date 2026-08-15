@@ -62,14 +62,14 @@ func TestDriftIsEmptyForIdenticalInput(t *testing.T) {
 	})
 }
 
-// TestReportFormatsItselfOnlyThroughItsAccessors pins what Report's doc
-// comment promises about the zero value and about formatting. Report is a
-// verdict with no String method: rendering a report for a person is a later
-// change, not this one, so a caller that formats a Report directly gets Go's
-// default struct rendering rather than any report text. When Report does
-// gain a String method, this test fails, and the doc sentence it guards has
-// to be rewritten in the same change.
-func TestReportFormatsItselfOnlyThroughItsAccessors(t *testing.T) {
+// TestReportZeroValueAndAccessorSummary pins what Report's doc comment
+// promises about the zero value and about summarizing through the
+// accessors. The subtest that stood here asserting Report has no String
+// method was a deliberate tripwire for the change that adds one, and its own
+// comment said the doc sentence it guarded had to be rewritten in that same
+// change. This is that change: Report now implements fmt.Stringer, and
+// drift_report_test.go pins what it renders.
+func TestReportZeroValueAndAccessorSummary(t *testing.T) {
 	var zero catalog.Report
 
 	t.Run("zero value is empty in every bucket", func(t *testing.T) {
@@ -77,13 +77,7 @@ func TestReportFormatsItselfOnlyThroughItsAccessors(t *testing.T) {
 		require.Nil(t, zero.Added())
 		require.Nil(t, zero.Removed())
 		require.Nil(t, zero.Changed())
-	})
-
-	t.Run("report has no String method", func(t *testing.T) {
-		_, isStringer := any(zero).(fmt.Stringer)
-		require.False(t, isStringer, "catalog.Report must not implement fmt.Stringer while its doc says it does not format itself")
-		_, pointerIsStringer := any(&zero).(fmt.Stringer)
-		require.False(t, pointerIsStringer, "*catalog.Report must not implement fmt.Stringer either")
+		require.Equal(t, "", zero.String())
 	})
 
 	t.Run("a caller summarizes through the accessors", func(t *testing.T) {
