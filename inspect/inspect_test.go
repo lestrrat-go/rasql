@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/go-sql-driver/mysql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
@@ -1152,30 +1151,78 @@ func TestMySQLInspectorRejectsZeroVisibleColumnMetadata(t *testing.T) {
 	require.Equal(t, 2, incomplete.Actual)
 }
 
-func TestMySQLInspectorReportsTableNotFoundWhenSHOWCreateProvesAbsence(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
+// TestMySQLInspectorPropagatesOtherShowCreateTableErrors confirms that a
+// SHOW CREATE TABLE failure the MySQL error 1146 detection does not
+// positively recognize is not treated as "table not found": it propagates,
+// carrying the original error and the wrapped message it has today.
+//
+// The last case is the regression the field-only match let through. An error
+// declared outside the driver may carry a field named Number of the same kind
+// holding a number of its own, and reading 1146 out of one made Table report
+// a table that exists as missing while dropping the real failure. The
+// detection now reads a number only from the driver's own error type, so
+// every stand-in declared here propagates whatever number it carries. The
+// genuine driver error still reaches TableNotFoundError, which
+// TestMySQLInspectorReportsTableNotFoundAgainstLiveDatabase pins against a
+// real server.
+func TestMySQLInspectorPropagatesOtherShowCreateTableErrors(t *testing.T) {
+	testCases := map[string]error{
+		"a different MySQL error number":     &foreignNumberedError{Number: 1045, Message: "Access denied"},
+		"a plain error with no Number field": errors.New("boom"),
+		"MySQL error number 1146 carried by an error the driver did not declare": &foreignNumberedError{
+			Number:  1146,
+			Message: "connection reset mid-handshake",
+		},
+	}
+	for name, showCreateTableErr := range testCases {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
 
-	inspector, err := inspect.New(database, dialect.MySQL())
-	require.NoError(t, err)
-	columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale, extra, generation_expression FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
-	mock.ExpectQuery(columnsQuery).
-		WithArgs("ghosts").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "extra", "generation_expression"}))
-	mock.ExpectQuery("SHOW CREATE TABLE `ghosts`").
-		WillReturnError(&mysql.MySQLError{Number: 1146, Message: "Table 'test.ghosts' doesn't exist"})
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale, extra, generation_expression FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+			mock.ExpectQuery(columnsQuery).
+				WithArgs("ghosts").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "extra", "generation_expression"}))
+			mock.ExpectQuery("SHOW CREATE TABLE `ghosts`").
+				WillReturnError(showCreateTableErr)
 
-	table, err := inspector.Table(t.Context(), "ghosts")
-	require.Equal(t, schema.TableDef{}, table)
-	require.ErrorIs(t, err, inspect.ErrTableNotFound)
-	var notFound *inspect.TableNotFoundError
-	require.ErrorAs(t, err, &notFound)
-	require.Equal(t, "ghosts", notFound.Table)
+			table, err := inspector.Table(t.Context(), "ghosts")
+			require.Equal(t, schema.TableDef{}, table)
+			require.NotErrorIs(t, err, inspect.ErrTableNotFound)
+			require.ErrorContains(t, err, `inspect: read MySQL table "ghosts" definition`)
+			require.ErrorIs(t, err, showCreateTableErr)
+		})
+	}
+}
+
+// foreignNumberedError stands in for an error declared by a package other
+// than github.com/go-sql-driver/mysql that reports a number of its own in a
+// field named Number, the same name and kind *mysql.MySQLError uses. Whatever
+// number it carries, that number is not a MySQL server error number, and
+// inspect's MySQL error 1146 detection (mysqlErrorNumber in
+// mysql_error_number.go) reads no number out of it: the detection matches the
+// driver's error type by package path and name, which this local type does
+// not have. That is why every test using this type expects the error to
+// propagate.
+type foreignNumberedError struct {
+	Number  uint16
+	Message string
+}
+
+func (e *foreignNumberedError) Error() string {
+	return fmt.Sprintf("Error %d: %s", e.Number, e.Message)
+}
+
+func (e *foreignNumberedError) Is(target error) bool {
+	other, ok := target.(*foreignNumberedError)
+	return ok && other.Number == e.Number
 }
 
 func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
