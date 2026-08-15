@@ -198,8 +198,9 @@ func TestStorePlanRejectsAHintKeyMatchingTwoTables(t *testing.T) {
 
 // TestStorePlanRejectsCollisions covers every way two of a Store's own
 // destinations can collide: a case-only table rename, a table literally
-// named "schema", a query output equal to another query's, and a query
-// output equal to a table's own file.
+// named "schema", a query output equal to another query's, a query output
+// equal to a table's own file, and the same two pairs spelled apart only by
+// case, which a filesystem ignoring case in file names holds one file for.
 func TestStorePlanRejectsCollisions(t *testing.T) {
 	t.Run("case-only table rename", func(t *testing.T) {
 		store := generate.Store{
@@ -254,6 +255,49 @@ func TestStorePlanRejectsCollisions(t *testing.T) {
 		}
 		_, err := store.Plan()
 		require.ErrorContains(t, err, "collides")
+	})
+
+	// The two case-only pairs below are refused on every platform, this
+	// case-sensitive one included. Neither file exists when Plan runs, so
+	// there is no filesystem to ask which of the two names it would keep;
+	// what makes the pair wrong is that a checkout of the generated package
+	// on macOS or Windows holds one file for both, and the plan would then
+	// write both and keep only the last.
+	t.Run("query outputs differing only in case", func(t *testing.T) {
+		store := generate.Store{
+			Package: "store",
+			Root:    root,
+			Dir:     "store",
+			Tables:  []schema.TableDef{usersTableDef()},
+			Dialect: dialect.PostgreSQL(),
+			Queries: []generate.Query{
+				{Input: "a.sql", Function: "QueryOne", Output: "a_gen.go"},
+				{Input: "a.sql", Function: "QueryTwo", Output: "A_gen.go"},
+			},
+		}
+		plan, err := store.Plan()
+		require.ErrorContains(t, err, "collides")
+		require.ErrorContains(t, err, "a_gen.go")
+		require.ErrorContains(t, err, "A_gen.go")
+		require.Empty(t, plan.Files(), "a rejected Store must plan no files at all")
+	})
+
+	t.Run("query output differs from a table's file only in case", func(t *testing.T) {
+		store := generate.Store{
+			Package: "store",
+			Root:    root,
+			Dir:     "store",
+			Tables:  []schema.TableDef{usersTableDef()},
+			Dialect: dialect.PostgreSQL(),
+			Queries: []generate.Query{
+				{Input: "a.sql", Function: "QueryOne", Output: "Users_gen.go"},
+			},
+		}
+		plan, err := store.Plan()
+		require.ErrorContains(t, err, "collides")
+		require.ErrorContains(t, err, "Users_gen.go")
+		require.ErrorContains(t, err, `table "users"`)
+		require.Empty(t, plan.Files(), "a rejected Store must plan no files at all")
 	})
 }
 
