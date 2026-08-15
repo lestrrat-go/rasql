@@ -139,17 +139,33 @@ func isEmptyDirectory(directory string) (bool, error) {
 }
 
 // refreshBootstrapOutput implements a bootstrap re-run into a directory
-// bootstrap already wrote to: it validates that directory is one bootstrap
-// recognizes as its own, loads its existing Tables() through a `go run`
-// child the same way `rasqlgen schema -source` reads a schema source
-// package, computes the drift against tables, prints the report to writer,
-// and, only when write is true and the report is non-empty, applies it.
+// bootstrap already wrote to: it validates packageName, validates that
+// directory is one bootstrap recognizes as its own, loads its existing
+// Tables() through a `go run` child the same way `rasqlgen schema -source`
+// reads a schema source package, computes the drift against tables, prints
+// the report to writer, and, only when write is true and the report is
+// non-empty, applies it.
+//
+// The package-name check comes first because a refresh has paths that
+// finish without rendering any source at all: a report-only run (write
+// false) returns after printing, and an empty diff returns before that, so
+// neither reaches the generate call that would otherwise reject the name.
+// A first run into an empty -output is checked instead by
+// generate.WriteDescriptionPackage, which renders on every path it takes.
 //
 // Loading the existing package runs with its own background context,
 // separate from the timeout that bounds -dsn metadata inspection above:
 // compiling and running a `go run` child is unrelated work with its own
 // cost, not a database round trip that -timeout was ever meant to bound.
 func refreshBootstrapOutput(packageName, output string, tables []schema.TableDef, write bool, writer io.Writer) error {
+	// No tables are passed: this checks packageName alone. The files a
+	// refresh writes come from the description generator, not from the
+	// schema generator whose naming rules generate.Validate applies to
+	// tables, so validating tables here would refuse input a bootstrap
+	// otherwise accepts.
+	if err := generate.Validate(packageName); err != nil {
+		return err
+	}
 	if err := generate.ValidateDescriptionPackageOwnership(output); err != nil {
 		return err
 	}

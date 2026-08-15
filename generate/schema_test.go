@@ -151,6 +151,48 @@ func TestValidateReportsCollisionsAcrossTables(t *testing.T) {
 	require.ErrorContains(t, err, `duplicates generated name "UsersTable"`)
 }
 
+// TestValidateRejectsInvalidPackageNames covers every value Validate
+// refuses as a package name, since it is the one exported check both
+// WritePackage (the `rasqlgen schema` path) and a library caller building
+// its own source with PackageSource route through.
+func TestValidateRejectsInvalidPackageNames(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	for _, testCase := range []struct {
+		name  string
+		value string
+	}{
+		{"blank_identifier", "_"},
+		{"keyword", "func"},
+		{"starts_with_digit", "2fast"},
+		{"contains_hyphen", "not-valid"},
+		{"empty_string", ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := generate.Validate(testCase.value, users)
+			require.ErrorContains(t, err, "invalid package name")
+		})
+	}
+}
+
+// TestValidateAcceptsUsablePackageNames guards the check against being
+// over-broad.
+func TestValidateAcceptsUsablePackageNames(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	for _, packageName := range []string{"generated", "init", "main"} {
+		t.Run(packageName, func(t *testing.T) {
+			require.NoError(t, generate.Validate(packageName, users))
+		})
+	}
+}
+
 func TestDescriptorTestSourceNamesTheGenerator(t *testing.T) {
 	users := schema.TableDef{
 		Name:       "users",
