@@ -253,8 +253,95 @@ func TestStorePlanRejectsCollisions(t *testing.T) {
 	})
 }
 
-// TestStorePlanRejectsInvalidInput covers every rejection Store.Plan must
-// make before rendering anything, one field at a time.
+// TestStorePlanRejectsAQueryOutputThatIsNotAPlainFileName covers every way a
+// Query.Output that is a path rather than a file name breaks the plan: a ".."
+// element that filepath.Join cleans back onto a table's own destination, a
+// ".." that escapes Dir, a subdirectory Plan never creates, and an absolute
+// path. Each must be an error, and no file may be planned outside Dir.
+func TestStorePlanRejectsAQueryOutputThatIsNotAPlainFileName(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "q.sql"), []byte("SELECT 1"), 0o600))
+
+	for _, output := range []string{
+		"nested/../users_gen.go",
+		"../escape_gen.go",
+		"sub/x_gen.go",
+		filepath.Join(t.TempDir(), "abs_gen.go"),
+	} {
+		t.Run(output, func(t *testing.T) {
+			store := generate.Store{
+				Package: "store",
+				Root:    root,
+				Dir:     "store",
+				Tables:  []schema.TableDef{usersTableDef()},
+				Dialect: dialect.PostgreSQL(),
+				Queries: []generate.Query{{Input: "q.sql", Function: "Q", Output: output}},
+			}
+			plan, err := store.Plan()
+			require.ErrorContains(t, err, "must be a file name directly inside the store's Dir, not a path")
+			require.ErrorContains(t, err, output)
+			require.Empty(t, plan.Files(), "a rejected Store must plan no files at all")
+		})
+	}
+}
+
+// TestStorePlanRejectsAQueryFunctionThatRedeclaresAName covers a Query.Function
+// that collides with a package-level name the generated files already declare
+// -- the table accessor, its table and row types, its definition accessor, and
+// the fixed Tables and descriptor-test names -- and with another query's own
+// Function. Every one of these compiled to a redeclaration error before the
+// check existed.
+func TestStorePlanRejectsAQueryFunctionThatRedeclaresAName(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "q.sql"), []byte("SELECT 1"), 0o600))
+	newStore := func(queries ...generate.Query) generate.Store {
+		return generate.Store{
+			Package: "store",
+			Root:    root,
+			Dir:     "store",
+			Tables:  []schema.TableDef{usersTableDef()},
+			Dialect: dialect.PostgreSQL(),
+			Queries: queries,
+		}
+	}
+
+	for _, function := range []string{
+		"Users",
+		"UsersTable",
+		"UsersRow",
+		"UsersDef",
+		"Tables",
+		"TestRasqlgenGeneratedDefinitionsAreValid",
+	} {
+		t.Run(function, func(t *testing.T) {
+			plan, err := newStore(generate.Query{Input: "q.sql", Function: function, Output: "q_gen.go"}).Plan()
+			require.ErrorContains(t, err, "collides with an identifier the generated store already declares")
+			require.ErrorContains(t, err, function)
+			require.Empty(t, plan.Files(), "a rejected Store must plan no files at all")
+		})
+	}
+
+	t.Run("two queries share a function name", func(t *testing.T) {
+		plan, err := newStore(
+			generate.Query{Input: "q.sql", Function: "Dup", Output: "one_gen.go"},
+			generate.Query{Input: "q.sql", Function: "Dup", Output: "two_gen.go"},
+		).Plan()
+		require.ErrorContains(t, err, `function "Dup" collides with query "Dup"`)
+		require.Empty(t, plan.Files(), "a rejected Store must plan no files at all")
+	})
+
+	t.Run("a function no generated file declares is accepted", func(t *testing.T) {
+		plan, err := newStore(generate.Query{Input: "q.sql", Function: "UserByEmail", Output: "q_gen.go"}).Plan()
+		require.NoError(t, err)
+		require.Len(t, plan.Files(), 4)
+	})
+}
+
+// TestStorePlanRejectsInvalidInput covers the rejections Store.Plan makes for
+// a missing or malformed field, one field at a time. The two rejections that
+// depend on what the rest of the store already claims -- an output that is not
+// a plain file name, and a function name something else declares -- have their
+// own tests above.
 func TestStorePlanRejectsInvalidInput(t *testing.T) {
 	validTable := usersTableDef()
 

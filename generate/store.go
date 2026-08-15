@@ -89,12 +89,17 @@ type Query struct {
 	Input string
 
 	// Function is the generated function name. Required, and must be an
-	// exported Go identifier.
+	// exported Go identifier that no other declaration in the package
+	// already takes: not one the generated tables, descriptors or
+	// descriptor test declare, and not another Query's Function.
 	Function string
 
 	// Output is the file the function is generated into, a file name
 	// rather than a path: it is always written inside the Store's Dir,
-	// and must end in _gen.go. Required.
+	// and must end in _gen.go. A value carrying a directory, a ".."
+	// element or an absolute path is an error rather than a destination,
+	// so a planned file can never land outside Dir or in a subdirectory
+	// of it. Required.
 	Output string
 
 	// Dialect selects the placeholder style. Nil means the Store's own
@@ -108,7 +113,9 @@ type Query struct {
 // It resolves Root and Dir, validates the package name, every descriptor,
 // every hint key, and every generated identifier; renders every per-table
 // file, the descriptor file, the generated descriptor test, and every
-// query; rejects two files that would land on the same path; refuses a
+// query; rejects two files that would land on the same path, a query output
+// that is not a plain file name inside Dir, and a query function that
+// redeclares a name the generated package already uses; refuses a
 // destination that exists and is not a file rasqlgen wrote; and records
 // every file already in Dir that rasqlgen wrote and this plan does not
 // write.
@@ -163,6 +170,21 @@ func (s Store) Plan() (Plan, error) {
 		filenames[filename] = fmt.Sprintf("table %q", table.Name)
 	}
 
+	// identifiers tracks every package-level identifier the generated files
+	// already declare, so a query whose Function would redeclare one is
+	// refused here instead of producing a plan that does not compile. A
+	// query is the only declaration a Store adds that the descriptors do not
+	// explain, which is why this set is built once here and handed to
+	// planQuery rather than derived per query.
+	declared, err := schemagen.PackageLevelNames(s.Package, sorted...)
+	if err != nil {
+		return Plan{}, err
+	}
+	identifiers := make(map[string]string, len(declared)+len(s.Queries))
+	for _, name := range declared {
+		identifiers[name] = "an identifier the generated store already declares"
+	}
+
 	files := make([]File, 0, len(sorted)+2+len(s.Queries))
 	for _, table := range sorted {
 		source, err := schemagen.TableSurfaceSource(s.Package, table, sorted...)
@@ -185,7 +207,7 @@ func (s Store) Plan() (Plan, error) {
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorTestFilename), Source: descriptorTestSource})
 
 	for index, q := range s.Queries {
-		file, err := s.planQuery(root, dir, q, filenames)
+		file, err := s.planQuery(root, dir, q, filenames, identifiers)
 		if err != nil {
 			return Plan{}, fmt.Errorf("generate: query[%d]: %w", index, err)
 		}
@@ -210,9 +232,10 @@ func (s Store) Plan() (Plan, error) {
 
 // planQuery renders one Query into its File, checking its output name
 // against filenames -- the file names every table and the descriptor file
-// already claim -- and recording its own once it passes, so a later query
-// is checked against it too.
-func (s Store) planQuery(root, dir string, q Query, filenames map[string]string) (File, error) {
+// already claim -- and its function name against identifiers -- the
+// package-level names the generated files already declare -- and recording
+// both once they pass, so a later query is checked against them too.
+func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[string]string) (File, error) {
 	if q.Input == "" {
 		return File{}, errors.New("input is required")
 	}
@@ -222,8 +245,14 @@ func (s Store) planQuery(root, dir string, q Query, filenames map[string]string)
 	if !isExportedGoIdentifier(q.Function) {
 		return File{}, fmt.Errorf("function %q must be an exported Go identifier", q.Function)
 	}
+	if owner, exists := identifiers[q.Function]; exists {
+		return File{}, fmt.Errorf("function %q collides with %s", q.Function, owner)
+	}
 	if q.Output == "" {
 		return File{}, errors.New("output is required")
+	}
+	if err := validateQueryOutputName(q.Output); err != nil {
+		return File{}, err
 	}
 	if !strings.HasSuffix(q.Output, "_gen.go") {
 		return File{}, fmt.Errorf("output %q must end in _gen.go", q.Output)
@@ -232,6 +261,7 @@ func (s Store) planQuery(root, dir string, q Query, filenames map[string]string)
 		return File{}, fmt.Errorf("query %q output %q collides with %s", q.Function, q.Output, owner)
 	}
 	filenames[q.Output] = fmt.Sprintf("query %q", q.Function)
+	identifiers[q.Function] = fmt.Sprintf("query %q", q.Function)
 
 	d := q.Dialect
 	if d == nil {
@@ -259,6 +289,25 @@ func (s Store) planQuery(root, dir string, q Query, filenames map[string]string)
 		return File{}, err
 	}
 	return File{Path: filepath.Join(dir, q.Output), Source: source}, nil
+}
+
+// validateQueryOutputName checks that output is the plain file name
+// Query.Output documents itself to be, rather than any kind of path.
+//
+// The check is load-bearing twice over. The collision check above is keyed on
+// the name while the destination is built with filepath.Join, which cleans
+// it, so an unvalidated "nested/../users_gen.go" matches no key the users
+// table registered yet lands on that table's own path: two planned files, one
+// destination. And filepath.Join keeps whatever a cleaned "../" or an
+// absolute path resolves to, so the same gap lets a planned File.Path leave
+// Dir entirely. Requiring the name to be its own filepath.Base closes both,
+// and rejects "sub/x_gen.go" with them, since Plan creates no directory and a
+// later run writing into one would have to.
+func validateQueryOutputName(output string) error {
+	if output != filepath.Base(output) {
+		return fmt.Errorf("output %q must be a file name directly inside the store's Dir, not a path", output)
+	}
+	return nil
 }
 
 // isExportedGoIdentifier reports whether name is a valid, exported Go

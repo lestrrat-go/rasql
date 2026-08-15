@@ -1,6 +1,9 @@
 package schemagen_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1962,6 +1965,106 @@ func TestSchemaRejectsTablesFuncNameCollision(t *testing.T) {
 			require.NoError(t, generate(users))
 			require.NoError(t, generate(definitionAccessor))
 		})
+	}
+}
+
+// TestPackageLevelNamesCoversEveryRenderedDeclaration is the mechanical check
+// behind PackageLevelNames. That function derives its list from the prepared
+// descriptors rather than from the rendered bytes, so it can drift the moment
+// a renderer emits a package-level declaration nobody adds to it. This test
+// parses what the three renderers actually produce and fails on any top-level
+// name the list is missing.
+//
+// The tables are shaped to reach every kind of name at once: a stated RowName,
+// a time column for the scanner type, and a foreign key for the relationship
+// types on both ends of it.
+func TestPackageLevelNamesCoversEveryRenderedDeclaration(t *testing.T) {
+	users := schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "created_at", Type: schema.TimeType{}},
+		},
+		PrimaryKey: []string{"id"},
+		RowName:    "User",
+	}
+	orders := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_user_id_fkey",
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	tables := []schema.TableDef{users, orders}
+
+	rendered := make([][]byte, 0, len(tables)+2)
+	for _, table := range tables {
+		source, err := schemagen.TableSurfaceSource("generated", table, tables...)
+		require.NoError(t, err)
+		rendered = append(rendered, source)
+	}
+	descriptorSource, err := schemagen.DescriptorSource("generated", tables...)
+	require.NoError(t, err)
+	descriptorTestSource, err := schemagen.DescriptorTestSource("generated", tables...)
+	require.NoError(t, err)
+	rendered = append(rendered, descriptorSource, descriptorTestSource)
+
+	names, err := schemagen.PackageLevelNames("generated", tables...)
+	require.NoError(t, err)
+	known := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		known[name] = struct{}{}
+	}
+
+	declared := make([]string, 0)
+	for _, source := range rendered {
+		file, err := parser.ParseFile(token.NewFileSet(), "rendered.go", source, parser.SkipObjectResolution)
+		require.NoError(t, err)
+		for _, decl := range file.Decls {
+			switch typed := decl.(type) {
+			case *ast.FuncDecl:
+				// A method is declared on a type, not at package level, so
+				// it cannot collide with a package-level name.
+				if typed.Recv != nil {
+					continue
+				}
+				declared = append(declared, typed.Name.Name)
+			case *ast.GenDecl:
+				for _, spec := range typed.Specs {
+					switch typed := spec.(type) {
+					case *ast.TypeSpec:
+						declared = append(declared, typed.Name.Name)
+					case *ast.ValueSpec:
+						for _, name := range typed.Names {
+							declared = append(declared, name.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Pin that the rendering above really did reach every kind of name, so a
+	// later change to these descriptors cannot quietly shrink what the loop
+	// below checks: the accessor, the table type, the stated row type, the
+	// definition variable and its accessor, the time-scanner type, a
+	// relationship type from each end of the foreign key, and the two fixed
+	// names the descriptor and descriptor-test files declare.
+	require.Subset(t, declared, []string{
+		"Users", "UsersTable", "User", "usersDef", "UsersDef", "usersTimeScanner",
+		"UsersTableOrdersRelation", "OrdersTableUserRelation",
+		"Tables", "TestRasqlgenGeneratedDefinitionsAreValid",
+	})
+
+	for _, name := range declared {
+		require.Containsf(t, known, name, "the renderers declare %q at package level, which PackageLevelNames does not report", name)
 	}
 }
 

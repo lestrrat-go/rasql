@@ -51,6 +51,55 @@ func Validate(packageName string, tables ...schema.TableDef) error {
 	return err
 }
 
+// PackageLevelNames returns every identifier the generated package declares at
+// package level for tables, sorted and deduplicated: the per-table type,
+// accessor, descriptor and definition names from TableSurfaceSource and
+// DescriptorSource, each relationship type, each time-scanner type, and the
+// fixed names in reservedPackageNames, which is where Tables and the generated
+// descriptor test's own function name come from.
+//
+// It exists for a caller that adds a declaration of its own to the same
+// package -- a generated query function, say -- and must reject a name the
+// generated files already take, since nothing else would catch it until the
+// package failed to compile. validateVariableNames enforces the same set
+// against the table names themselves and is the reason this list can be
+// derived rather than rendered: both walk the same prepared descriptors.
+//
+// Names declared inside a function body are absent, because they cannot
+// collide with a package-level declaration: descriptorTestSource's own
+// definition loop variable and the scanIndex constants writeRowScan emits
+// inside ScanDestinations are both local.
+func PackageLevelNames(packageName string, tables ...schema.TableDef) ([]string, error) {
+	clones, err := prepareSchema(packageName, tables)
+	if err != nil {
+		return nil, err
+	}
+	unique := make(map[string]struct{}, len(clones)*6+len(reservedPackageNames))
+	for reserved := range reservedPackageNames {
+		unique[reserved] = struct{}{}
+	}
+	for _, table := range clones {
+		unique[variableName(table.Name)] = struct{}{}
+		unique[tableTypeName(table.Name)] = struct{}{}
+		unique[rowTypeName(table)] = struct{}{}
+		unique[descriptorName(table.Name)] = struct{}{}
+		unique[definitionName(table.Name)] = struct{}{}
+		unique[definitionAccessorName(table.Name)] = struct{}{}
+		if tableHasTimeColumn(table) {
+			unique[timeScannerTypeName(table.Name)] = struct{}{}
+		}
+		for _, relationship := range relationshipSpecs(table, clones) {
+			unique[relationship.typeName] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(unique))
+	for name := range unique {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 // PackageSource returns a whole generated package for tables: the row types,
 // table types, column accessors and relationships, together with every
 // table's runtime descriptor. Its output is a complete compilation unit, so
@@ -305,15 +354,18 @@ func writeTableDescriptor(source *bytes.Buffer, table schema.TableDef) {
 const descriptorTestFuncName = "TestRasqlgenGeneratedDefinitionsAreValid"
 
 // reservedPackageNames holds every package-level identifier rasqlgen emits
-// with a fixed spelling rather than deriving it from a table. validateVariableNames
-// seeds its collision set with these, so a table whose generated name spells one
-// of them is refused with a collision error instead of generating a package
-// with two declarations of the same name.
+// with a fixed spelling rather than deriving it from a table. Both
+// validateVariableNames and PackageLevelNames seed their name sets with these,
+// so a table whose generated name spells one of them, and a caller declaring a
+// name of its own beside the generated files, are each refused with a
+// collision error instead of producing a package with two declarations of the
+// same name.
 //
 // Names derived from a table name are not listed: validateVariableNames already
-// compares those against each other as it walks the input. Names a generated
-// type declares as a method rather than at package level are not listed either;
-// reservedFieldNames holds those.
+// compares those against each other as it walks the input, and PackageLevelNames
+// derives them from the same descriptors. Names a generated type declares as a
+// method rather than at package level are not listed either; reservedFieldNames
+// holds those.
 //
 // "Tables" is here for writeTablesFunc: a table named "tables" generates a
 // package-level accessor spelled Tables (variableName lowercases nothing off
