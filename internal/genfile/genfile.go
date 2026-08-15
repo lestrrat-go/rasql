@@ -1,6 +1,16 @@
 // Package genfile writes generated Go source without ever truncating an
 // existing file in place. It is internal because both generate and
 // cli/rasqlgen need it and no caller outside this module does.
+//
+// Every write lands by renaming a complete temporary file over the
+// destination, and that rename is atomic only on Unix: os.Rename documents
+// that even within a single directory it is not an atomic operation on
+// non-Unix platforms, so a run interrupted at that rename can leave the
+// destination missing or still holding its old contents. Write and
+// WriteInto publish through the same rename and name this limit rather
+// than restating it; generate.Plan.Commit states what it costs a whole
+// commit. Nothing in this package makes the limit go away, and the tests
+// that pin the replacement's behavior are guarded by //go:build unix.
 package genfile
 
 import (
@@ -36,10 +46,9 @@ import (
 // changes the mode of an existing output file; a file that did not exist is
 // created at 0600. existingDestinationMode owns which bits travel.
 //
-// The rename is only atomic on Unix platforms. os.Rename documents that
-// even within a single directory it is not an atomic operation on
-// non-Unix platforms, so a run interrupted there can leave the destination
-// missing or still holding its old contents.
+// The rename that publishes the file is atomic only on Unix; the package
+// comment owns that limit and what an interruption elsewhere can leave
+// behind.
 func Write(path string, source []byte) error {
 	// Both the temporary file's directory and the rename destination come
 	// from the resolved path. Resolving only the destination would put the
@@ -77,6 +86,10 @@ func Write(path string, source []byte) error {
 // it; an entry that is a symbolic link by the time this runs is refused
 // rather than followed, because it is no longer the file the caller
 // authorized.
+//
+// The extra guarantee is about which directory the steps land in and not
+// about the rename itself, which is the very rename Write publishes
+// through: the package comment's Unix-only limit applies here unchanged.
 func WriteInto(dir *os.Root, name string, source []byte) error {
 	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
 		return fmt.Errorf("generated output %q must be a file name inside the directory, not a path", name)

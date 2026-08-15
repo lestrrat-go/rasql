@@ -167,8 +167,10 @@ func (p Plan) Orphans() []string {
 
 // Commit writes every file in the plan and deletes every path Orphans
 // reports, in four steps, so that a failure before the first write leaves
-// every generated file exactly as it was and every individual file is
-// either its previous content or its new content, never a partial write.
+// every generated file exactly as it was and, on Unix, every individual
+// file is either its previous content or its new content, never a partial
+// write. A non-Unix platform gives less than that last part, for the
+// reason the paragraph after the four steps states.
 //
 // That promise is about files, not about directories. Step 1 creates each
 // missing component of Dir's own path while it authorizes the run -- for a
@@ -226,22 +228,31 @@ func (p Plan) Orphans() []string {
 //     record on disk is still the previous run's, complete and internally
 //     consistent on its own.
 //
-// If the process dies partway through, every file on disk is either its
-// previous content or its new content -- internal/genfile never truncates a
-// destination in place, so nothing is ever a partial write -- but the
-// package as a whole is not guaranteed to build in every window between
-// steps 2 and 4. The per-table file for a table and the aggregator that
-// declares the variable it returns name each other in both directions (see
-// Store's own doc comment), so adding or removing a table needs both files
-// to change together, and no ordering of separate file writes changes
+// If the process dies partway through on Unix, every file on disk is
+// either its previous content or its new content -- internal/genfile never
+// truncates a destination in place, so nothing is ever a partial write --
+// but the package as a whole is not guaranteed to build in every window
+// between steps 2 and 4. The per-table file for a table and the aggregator
+// that declares the variable it returns name each other in both directions
+// (see Store's own doc comment), so adding or removing a table needs both
+// files to change together, and no ordering of separate file writes changes
 // that: renaming two files as one operation is not something the
 // filesystem offers. A run that adds a table can fail to build between
 // steps 2 and 4 on an undefined per-table variable the old aggregator does
 // not yet declare; a run that removes a table can fail to build the same
 // way on a variable the old aggregator still declares after step 3 deleted
-// the file that used it. This is the honest guarantee: every file is old
-// or new, never partial, but the package in between is not promised to
-// compile.
+// the file that used it. This is the honest guarantee on Unix: every file
+// is old or new, never partial, but the package in between is not promised
+// to compile.
+//
+// Only Unix gives even that much. Each file is published by renaming a
+// complete temporary file over its destination, and that rename is atomic
+// only on Unix, so a process that dies during one of them on another
+// platform can leave that destination missing rather than old or new;
+// internal/genfile's package comment owns the limit and what it leaves
+// behind. Nothing here promises otherwise on such a platform, and nothing
+// in this package's tests pins the old-or-new behavior there: the tests
+// that pin it are guarded by //go:build unix.
 //
 // Recovery is to rerun the generator: every input lives in the caller's
 // own program, its migrations, or the database, none of which Commit
