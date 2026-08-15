@@ -80,6 +80,29 @@ func TestGeneratedStoreRunsAgainstSQLite(t *testing.T) {
 		t.Fatalf("Orders().User().ChildKey.Name() = %q, want %q", got, "user_id")
 	}
 
+	// Tables reports every table this store describes, in the declaration
+	// order schema_gen.go states them: alphabetically, so "orders" before
+	// "users".
+	tables := store.Tables()
+	if len(tables) != 2 {
+		t.Fatalf("len(Tables()) = %d, want 2", len(tables))
+	}
+	if tables[0].Name != "orders" || tables[1].Name != "users" {
+		t.Fatalf("Tables() order = [%q, %q], want [\"orders\", \"users\"]", tables[0].Name, tables[1].Name)
+	}
+	// Mutating what Tables returned must not reach the package-level value
+	// the next call reads from, the same guarantee UsersDef already gives a
+	// caller of a single table's descriptor.
+	tables[0].Name = "mutated"
+	tables[0].Columns[0].Name = "mutated"
+	again := store.Tables()
+	if again[0].Name != "orders" {
+		t.Fatalf("Tables() second call Name = %q, want %q; mutating the first result must not affect the next call", again[0].Name, "orders")
+	}
+	if again[0].Columns[0].Name == "mutated" {
+		t.Fatalf("Tables() second call Columns[0].Name was mutated by an earlier caller; Clone must produce an independent copy")
+	}
+
 	statement, err := store.UserByEmail("ada@example.com")
 	if err != nil {
 		t.Fatalf("UserByEmail: %s", err)
@@ -100,8 +123,9 @@ func TestGeneratedStoreRunsAgainstSQLite(t *testing.T) {
 // generated files as one package and runs both the generated
 // schema_gen_test.go and the hand-written test above, which drives a real
 // SQLite round trip through the generated descriptor, a generated column
-// accessor, a generated relationship method that resolves across files, and
-// a generated query function.
+// accessor, a generated relationship method that resolves across files, a
+// generated query function, and the package-level Tables function that
+// aggregates every table's descriptor.
 //
 // Every other test that compiles generated output either builds the
 // monolithic layout rasqlgen never writes (internal/schemagen/schema_test.go,

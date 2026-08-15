@@ -213,6 +213,29 @@ func TestWritePackageRejectsTableSpellingTheGeneratedTest(t *testing.T) {
 	require.Empty(t, entries)
 }
 
+// TestWritePackageRejectsTableSpellingTables confirms that a table named
+// "tables" is refused before anything is written, because its generated
+// package-level accessor is spelled Tables, the same identifier
+// schema_gen.go always declares for the aggregate function that returns
+// every table's descriptor. Both declarations would land in files this run
+// writes into an empty directory, so letting it through would leave a
+// package that fails to build.
+func TestWritePackageRejectsTableSpellingTables(t *testing.T) {
+	directory := t.TempDir()
+	table := schema.MustTableDef("tables",
+		schema.Integer("id"),
+		schema.PrimaryKey("id"),
+	)
+
+	err := generate.WritePackage("store", directory, table)
+	require.ErrorContains(t, err, `table "tables"`)
+	require.ErrorContains(t, err, `duplicates generated name "Tables"`)
+	require.ErrorContains(t, err, "rasqlgen reserves")
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
 // handWrittenSource is a file somebody wrote by hand that happens to sit
 // where generated output would land. Nothing about it says rasqlgen, which
 // is the whole point: the destination must survive.

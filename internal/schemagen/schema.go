@@ -176,6 +176,12 @@ func schemaSource(packageName string, tables, allTables []schema.TableDef, descr
 // matters here is that it is the companion of TableSurfaceSource, not of
 // TableSource, and that its literal is the merged definition prepareSchema
 // produces rather than the input one.
+//
+// It also declares the package-level Tables function, once, after every
+// table's own descriptor: a clone of each table's schema.TableDef, in the
+// same order this file declares them. That makes the generated store
+// self-describing, the same value a separate description package built by
+// `rasqlgen bootstrap` exists to hand back today.
 func DescriptorSource(packageName string, tables ...schema.TableDef) ([]byte, error) {
 	clones, err := prepareSchema(packageName, tables)
 	if err != nil {
@@ -190,21 +196,49 @@ func descriptorSource(packageName string, tables []schema.TableDef) ([]byte, err
 	source.WriteString("package ")
 	source.WriteString(packageName)
 	source.WriteString("\n\n")
+	// Tables always references schema.TableDef, even for a package with no
+	// tables at all, so the schema import stays unconditional here; only
+	// rasql.TableFrom, used by each table's own descriptor, depends on
+	// tables being non-empty.
 	if len(tables) > 0 {
 		source.WriteString("import (\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
 		source.WriteString(")\n\n")
+	} else {
+		source.WriteString("import \"github.com/lestrrat-go/rasql/schema\"\n\n")
 	}
 	for _, table := range tables {
 		writeTableDescriptor(&source, table)
 		source.WriteString("\n")
 	}
+	writeTablesFunc(&source, tables)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("generate: format source: %w", err)
 	}
 	return formatted, nil
+}
+
+// writeTablesFunc writes the package-level Tables function descriptorSource
+// declares once: a clone of every table's descriptor, in the same order
+// this file already declares them. Cloning each entry here matches
+// definitionAccessorName's own accessor, which likewise hands back a clone
+// rather than the package-level variable itself, so mutating one entry of
+// the slice a caller gets from Tables cannot reach what the next call
+// returns.
+func writeTablesFunc(source *bytes.Buffer, tables []schema.TableDef) {
+	source.WriteString("// Tables returns a clone of every table's descriptor, in the order this\n")
+	source.WriteString("// file declares them.\n")
+	source.WriteString("func Tables() []schema.TableDef {\n")
+	source.WriteString("\treturn []schema.TableDef{\n")
+	for _, table := range tables {
+		source.WriteString("\t\t")
+		source.WriteString(definitionName(table.Name))
+		source.WriteString(".Clone(),\n")
+	}
+	source.WriteString("\t}\n")
+	source.WriteString("}\n")
 }
 
 // writeTableDescriptor writes the unexported schema.TableDef literal, the
@@ -276,8 +310,15 @@ const descriptorTestFuncName = "TestRasqlgenGeneratedDefinitionsAreValid"
 // compares those against each other as it walks the input. Names a generated
 // type declares as a method rather than at package level are not listed either;
 // reservedFieldNames holds those.
+//
+// "Tables" is here for writeTablesFunc: a table named "tables" generates a
+// package-level accessor spelled Tables (variableName lowercases nothing off
+// a table name that is already one capitalized word), which would collide
+// with the fixed Tables function descriptorSource always declares in
+// schema_gen.go.
 var reservedPackageNames = map[string]struct{}{
 	descriptorTestFuncName: {},
+	"Tables":               {},
 }
 
 // DescriptorTestSource returns the generated test that validates every
