@@ -23,13 +23,24 @@ import (
 // schemasource.Tables() returns, through requireGeneratedDirectoryMatches,
 // so drift in schema_gen.go or schema_gen_test.go is caught instead of
 // being silently rewritten by the directive that just ran. Because that
-// directive rewrites its three output files unconditionally on every run,
-// this test snapshots the directory first and restores it afterward, so a
-// stale example never leaves the working tree holding output this test did
-// not check in.
+// directive rewrites its output files unconditionally on every run, this
+// test snapshots the directory first and restores it afterward, so a stale
+// example never leaves the working tree holding output this test did not
+// check in.
+//
+// The restore is registered before `go generate` runs and before any
+// requirement that can stop the test, because a directive that fails after
+// it has already replaced a file would otherwise leave that file behind: a
+// failed require exits the test through runtime.Goexit, and a defer
+// registered further down never runs. -update-docs is the one mode with no
+// restore, since rewriting the checked-in directory is what that flag is
+// for.
 func TestSchemaSourceExampleGenerates(t *testing.T) {
 	dir := filepath.Join(repositoryRoot, "examples", "schemasource", "internal", "store")
 	before := snapshotDir(t, dir)
+	if !*updateDocs {
+		defer restoreDir(t, dir, before)
+	}
 
 	// No Dir: `go test` runs this package with its own directory as the
 	// working directory, so ./schemasource is the example package.
@@ -59,7 +70,6 @@ func TestSchemaSourceExampleGenerates(t *testing.T) {
 		requireGeneratedDirectoryIsCurrent(t, store, dir)
 		return
 	}
-	defer restoreDir(t, dir, before)
 	requireGeneratedDirectoryMatches(t, store, dir)
 }
 
@@ -82,13 +92,44 @@ func snapshotDir(t *testing.T, dir string) map[string][]byte {
 	return snapshot
 }
 
-// restoreDir writes back every file snapshotDir captured, so a directive
-// that rewrites its output on every run never leaves the working tree
-// holding output this test did not check in, whether or not the
+// restoreDir returns dir to exactly what snapshotDir captured, so a
+// directive that rewrites its output on every run never leaves the working
+// tree holding output this test did not check in, whether or not the
 // comparison that follows it passes.
+//
+// It removes every file dir now holds that the snapshot does not, then
+// writes the snapshot back. The removal is what puts back a directory the
+// directive added a file to: generate.Store writes one <table>_gen.go per
+// table, so adding a table to the example makes `go generate` create a file
+// no snapshot entry can overwrite, and restoring only the saved files would
+// leave that new file in the checked-in directory.
+//
+// It reports failures with t.Errorf rather than a require, because it runs
+// from a defer that may already be unwinding a failed test and every
+// remaining entry still has to be put back.
 func restoreDir(t *testing.T, dir string, snapshot map[string][]byte) {
 	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Errorf("restore %s: %v", dir, err)
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if _, kept := snapshot[entry.Name()]; kept {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if err := os.Remove(path); err != nil {
+			t.Errorf("remove generated %s: %v", path, err)
+		}
+	}
 	for name, contents := range snapshot {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), contents, 0o644))
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, contents, 0o644); err != nil {
+			t.Errorf("restore %s: %v", path, err)
+		}
 	}
 }

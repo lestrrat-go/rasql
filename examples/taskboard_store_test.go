@@ -3,15 +3,14 @@ package examples_test
 import (
 	"context"
 	"database/sql"
-	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/stretchr/testify/require"
 
 	_ "modernc.org/sqlite"
@@ -31,6 +30,16 @@ import (
 // through the same directory comparison requireGeneratedDirectoryMatches
 // performs for examples/store and examples/schemasource.
 //
+// The migrations are read with internal/migrationdir and applied with
+// migrate.Runner, which is exactly what `rasqlmigrate apply -dir
+// sample/taskboard/migrations/sqlite` does in that module's own
+// //go:generate directive, so the whole migration tree is applied in the
+// same order and under the same rules. Naming one migration directory here
+// instead would leave this test pinning a schema the module's generator
+// stopped producing the moment a second migration was added, and it would
+// still pass. The migration history table migrate.Runner creates is the one
+// catalog.FromDatabase skips by default, so it never reaches the store.
+//
 // It never writes into sample/taskboard, not even under -update-docs: that
 // module regenerates itself with its own `go generate` (documented in
 // CONTRIBUTING.md), and this test would otherwise be a second, silent way
@@ -39,19 +48,9 @@ import (
 // requireGeneratedDirectoryIsCurrent, is what keeps that true regardless of
 // the -update-docs flag.
 func TestTaskboardStoreIsCurrent(t *testing.T) {
-	migrationsDir := filepath.Join(repositoryRoot, "sample", "taskboard", "migrations", "sqlite", "001_initial")
-	entries, err := os.ReadDir(migrationsDir)
-	require.NoError(t, err)
-
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	require.NotEmpty(t, names, "no migrations found in %s", migrationsDir)
+	migrationsDir := filepath.Join(repositoryRoot, "sample", "taskboard", "migrations", "sqlite")
+	migrations, err := migrationdir.Load(migrationsDir)
+	require.NoError(t, err, "load migrations from %s", migrationsDir)
 
 	dbPath := filepath.Join(t.TempDir(), "taskboard.db")
 	database, err := sql.Open("sqlite", dbPath)
@@ -59,22 +58,13 @@ func TestTaskboardStoreIsCurrent(t *testing.T) {
 	t.Cleanup(func() { _ = database.Close() })
 
 	ctx := context.Background()
-	for _, name := range names {
-		contents, err := os.ReadFile(filepath.Join(migrationsDir, name))
-		require.NoError(t, err)
-		for _, statement := range strings.Split(string(contents), ";") {
-			statement = strings.TrimSpace(statement)
-			if statement == "" {
-				continue
-			}
-			_, err := database.ExecContext(ctx, statement)
-			require.NoErrorf(t, err, "apply %s: %s", name, statement)
-		}
-	}
+	runner, err := migrate.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	require.NoError(t, runner.Apply(ctx, migrations...))
 
 	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{Dialect: dialect.SQLite()})
 	require.NoError(t, err)
-	require.Len(t, tables, 3, "expected members, projects, and tasks")
+	require.NotEmpty(t, tables, "%s applied no tables the sweep could see", migrationsDir)
 
 	store := generate.Store{
 		Package: "store",

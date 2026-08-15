@@ -2,17 +2,31 @@ package examples_test
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+)
+
+// queryTemplate, queryFunction, queryDialect, queryPackage and generatedQuery
+// are the one compiled query examples/store holds, named once here because
+// both the generate.Store plan and the rasqlgen command line below have to
+// state the same query for their outputs to be comparable at all.
+const (
+	queryTemplate  = "user_by_email.sql"
+	queryFunction  = "UserByEmail"
+	queryDialect   = "postgresql"
+	queryPackage   = "store"
+	generatedQuery = "user_by_email_gen.go"
 )
 
 // TestGeneratedStoreIsCurrent regenerates the checked-in examples/store
@@ -23,6 +37,15 @@ import (
 // than read from a snapshot file, so the check needs neither a database
 // nor a checked-in copy of the schema.
 func TestGeneratedStoreIsCurrent(t *testing.T) {
+	requireGeneratedDirectoryIsCurrent(t, exampleStore(t), filepath.Join(repositoryRoot, "examples", "store"))
+}
+
+// exampleStore is the generate.Store that plans the checked-in
+// examples/store package, stated once so TestGeneratedQueryIsCurrent
+// compares the rasqlgen command against the same query this store plans.
+func exampleStore(t *testing.T) generate.Store {
+	t.Helper()
+
 	users, err := schema.NewTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
@@ -30,20 +53,69 @@ func TestGeneratedStoreIsCurrent(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	store := generate.Store{
-		Package: "store",
+	return generate.Store{
+		Package: queryPackage,
 		Root:    repositoryRootAbs(t),
 		Dir:     filepath.Join("examples", "store"),
 		Tables:  []schema.TableDef{users},
 		Queries: []generate.Query{{
-			Input:    filepath.Join("examples", "store", "user_by_email.sql"),
-			Function: "UserByEmail",
-			Output:   "user_by_email_gen.go",
+			Input:    filepath.Join("examples", "store", queryTemplate),
+			Function: queryFunction,
+			Output:   generatedQuery,
 			Dialect:  dialect.PostgreSQL(),
 		}},
 	}
+}
 
-	requireGeneratedDirectoryIsCurrent(t, store, filepath.Join(repositoryRoot, "examples", "store"))
+// TestGeneratedQueryIsCurrent drives the `rasqlgen query` command itself,
+// with the flags docs/06-rasqlgen.md documents, and requires the source it
+// writes to be byte-for-byte what examples/store holds.
+//
+// TestGeneratedStoreIsCurrent covers the same file through
+// generate.Store.Plan, which is a different code path: a change to the
+// command's flag handling or output wiring that rejected valid input, or
+// emitted different source, would leave that test green while the documented
+// command was broken. Comparing against the store's own plan as well pins
+// the two paths to each other, and holds under -update-docs, where the
+// checked-in file is the thing being rewritten rather than a fixed golden.
+func TestGeneratedQueryIsCurrent(t *testing.T) {
+	output := filepath.Join(t.TempDir(), generatedQuery)
+	require.NoError(t, rasqlgen.Run([]string{
+		"query",
+		"-input", filepath.Join(repositoryRoot, "examples", "store", queryTemplate),
+		"-function", queryFunction,
+		"-dialect", queryDialect,
+		"-package", queryPackage,
+		"-output", output,
+	}, io.Discard))
+
+	source, err := os.ReadFile(output)
+	require.NoError(t, err)
+
+	plan, err := exampleStore(t).Plan()
+	require.NoError(t, err)
+	planned, ok := plannedFile(plan, generatedQuery)
+	require.True(t, ok, "%s is not planned by the examples/store store", generatedQuery)
+	require.Equal(t, string(planned), string(source),
+		"`rasqlgen query` and generate.Store no longer produce the same %s", generatedQuery)
+
+	if *updateDocs {
+		return
+	}
+	committed, err := os.ReadFile(filepath.Join(repositoryRoot, "examples", "store", generatedQuery))
+	require.NoError(t, err)
+	require.Equal(t, string(committed), string(source),
+		"examples/store/%s is stale; run `go test ./examples/ -update-docs`", generatedQuery)
+}
+
+// plannedFile returns the source plan writes for the file named name.
+func plannedFile(plan generate.Plan, name string) ([]byte, bool) {
+	for _, f := range plan.Files() {
+		if filepath.Base(f.Path) == name {
+			return f.Source, true
+		}
+	}
+	return nil, false
 }
 
 // repositoryRootAbs is repositoryRoot (".." as seen from this package's own
