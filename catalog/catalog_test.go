@@ -3,9 +3,11 @@ package catalog_test
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/catalog"
@@ -200,6 +202,107 @@ func TestFromQueryerReadsThroughTheCallersTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expected, got)
 }
+
+// TestFromDatabaseReportsACommitFailure pins the commit-error path
+// FromDatabase's doc comment describes: the driver's error reaches the caller
+// wrapped, and the connection the transaction held is back in the pool even
+// though FromDatabase calls no Rollback after a failed Commit. It reads a real
+// SQLite database through a driver that refuses only the commit, so every
+// metadata read on the way there is the one the SQLite dialect really issues.
+func TestFromDatabaseReportsACommitFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.db")
+	setup, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = setup.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)")
+	require.NoError(t, err)
+	require.NoError(t, setup.Close())
+
+	database, err := sql.Open(commitFailureDriverName, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+
+	tables, err := catalog.FromDatabase(context.Background(), database, catalog.Options{Dialect: dialect.SQLite()})
+	require.Nil(t, tables)
+	require.ErrorIs(t, err, errCommitRefused)
+	require.ErrorContains(t, err, "catalog: commit inspection transaction")
+	require.Zero(t, database.Stats().InUse,
+		"a failed commit must leave no connection in use: database/sql finishes the transaction and releases its connection before Commit reports the error, which is why FromDatabase needs no Rollback there")
+}
+
+// commitFailureDriverName registers a driver that behaves exactly like the
+// SQLite driver the rest of these tests use, except that committing any
+// transaction fails. Nothing outside TestFromDatabaseReportsACommitFailure
+// uses it.
+const commitFailureDriverName = "sqlite-commit-failure"
+
+var errCommitRefused = errors.New("commit refused by the test driver")
+
+func init() {
+	sql.Register(commitFailureDriverName, &commitFailureDriver{})
+}
+
+type commitFailureDriver struct {
+	once  sync.Once
+	inner driver.Driver
+}
+
+// Open borrows the registered SQLite driver rather than constructing one,
+// because modernc.org/sqlite exports its driver type but not a usable value of
+// it.
+func (d *commitFailureDriver) Open(name string) (driver.Conn, error) {
+	d.once.Do(func() {
+		database, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			return
+		}
+		d.inner = database.Driver()
+		_ = database.Close()
+	})
+	if d.inner == nil {
+		return nil, errors.New("the sqlite driver is unavailable")
+	}
+	connection, err := d.inner.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	beginner, ok := connection.(driver.ConnBeginTx)
+	if !ok {
+		_ = connection.Close()
+		return nil, errors.New("the sqlite driver does not begin transactions with options")
+	}
+	return &commitFailureConn{Conn: connection, beginner: beginner}, nil
+}
+
+type commitFailureConn struct {
+	driver.Conn
+	beginner driver.ConnBeginTx
+}
+
+func (c *commitFailureConn) BeginTx(ctx context.Context, options driver.TxOptions) (driver.Tx, error) {
+	tx, err := c.beginner.BeginTx(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	return commitFailureTx{Tx: tx}, nil
+}
+
+type commitFailureTx struct {
+	driver.Tx
+}
+
+// Commit ends the real transaction before reporting the failure, so the driver
+// hands database/sql back a connection with nothing open on it. The error is
+// not driver.ErrBadConn, so the connection returns to the pool and
+// database/sql's own accounting is what the test observes.
+func (tx commitFailureTx) Commit() error {
+	_ = tx.Tx.Rollback()
+	return errCommitRefused
+}
+
+var _ driver.Driver = (*commitFailureDriver)(nil)
+var _ driver.Conn = (*commitFailureConn)(nil)
+var _ driver.ConnBeginTx = (*commitFailureConn)(nil)
+var _ driver.Tx = commitFailureTx{}
 
 // TestCatalogImportsNoDriverAndNoGenerator holds the package's central
 // promise in place: importing catalog must add no database driver, and no

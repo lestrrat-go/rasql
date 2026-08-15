@@ -88,8 +88,14 @@ var ErrNoTables = errors.New("catalog: no tables to describe")
 // Every table is read inside one read-only transaction, begun with
 // sql.LevelRepeatableRead, so the descriptors describe a single instant
 // rather than a schema that may have moved between round trips. The
-// transaction is committed before returning and rolled back on any failure.
-// Nothing is written to the database.
+// transaction is rolled back when reading a table fails, and committed
+// otherwise. That rollback's own error is discarded, because the read
+// failure that caused it is the one worth reporting and the transaction
+// releases its connection either way. A failed commit is reported as it is,
+// with no rollback after it: database/sql marks the transaction done and
+// releases its connection before Commit returns the error, so a Rollback
+// there would report sql.ErrTxDone and do nothing at all. Nothing is written
+// to the database.
 //
 // With Include empty this sweeps every base table the connection can see:
 // views are never described, because inspection enumerates base tables only,
@@ -112,10 +118,16 @@ func FromDatabase(ctx context.Context, db DB, options Options) ([]schema.TableDe
 	}
 	tables, err := selectTables(ctx, tx, options)
 	if err != nil {
+		// The read failure is what the caller needs; a rollback error on top
+		// of it would say nothing more, and the connection goes back to the
+		// pool whether or not the rollback itself succeeded.
 		_ = tx.Rollback()
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
+		// No Rollback here. database/sql marks the transaction done and
+		// releases its connection before Commit returns this error, so a
+		// Rollback would report sql.ErrTxDone and do nothing at all.
 		return nil, fmt.Errorf("catalog: commit inspection transaction: %w", err)
 	}
 	return tables, nil
