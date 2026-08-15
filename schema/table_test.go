@@ -3,6 +3,8 @@ package schema_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/schema"
@@ -52,6 +54,424 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	scale, stated := decimal.Scale.Value()
 	require.True(t, stated)
 	require.Equal(t, 4, scale)
+}
+
+// TestTableCloneNilSlicesRoundTrip covers the empty descriptor Clone's
+// TestTableCloneCopiesDescriptor case never exercises: a TableDef whose
+// nine slice fields (Columns, PrimaryKey, VirtualTableModuleArguments,
+// UniqueConstraints, Checks, ExclusionConstraints, Indexes, ForeignKeys,
+// Relationships) are all left nil must clone to a value that is
+// reflect.DeepEqual to itself, rather than to one where any of those
+// fields turned into a non-nil empty slice. Its second case makes the same
+// demand of every container a constraint, index, foreign key or
+// relationship owns.
+func TestTableCloneNilSlicesRoundTrip(t *testing.T) {
+	t.Run("table level", func(t *testing.T) {
+		descriptor := schema.TableDef{Name: "orders"}
+		clone := descriptor.Clone()
+
+		require.True(t, reflect.DeepEqual(descriptor, clone))
+		require.Nil(t, clone.Columns)
+		require.Nil(t, clone.PrimaryKey)
+		require.Nil(t, clone.VirtualTableModuleArguments)
+		require.Nil(t, clone.UniqueConstraints)
+		require.Nil(t, clone.Checks)
+		require.Nil(t, clone.ExclusionConstraints)
+		require.Nil(t, clone.Indexes)
+		require.Nil(t, clone.ForeignKeys)
+		require.Nil(t, clone.Relationships)
+	})
+
+	t.Run("within an element", func(t *testing.T) {
+		descriptor := schema.TableDef{
+			Name:                 "orders",
+			UniqueConstraints:    []schema.UniqueDef{{Name: "orders_email_key"}},
+			ExclusionConstraints: []schema.ExclusionDef{{Name: "orders_no_overlap"}},
+			Indexes:              []schema.IndexDef{{Name: "orders_id_idx"}},
+			ForeignKeys:          []schema.ForeignKeyDef{{Name: "orders_customer_fk"}},
+			Relationships:        []schema.RelationshipDef{{Name: "Customer"}},
+		}
+		clone := descriptor.Clone()
+
+		require.True(t, reflect.DeepEqual(descriptor, clone))
+		require.Nil(t, clone.UniqueConstraints[0].Columns)
+		require.Nil(t, clone.UniqueConstraints[0].IncludeColumns)
+		require.Nil(t, clone.UniqueConstraints[0].Keys)
+		require.Nil(t, clone.UniqueConstraints[0].StorageParameters)
+		require.Nil(t, clone.UniqueConstraints[0].Collations)
+		require.Nil(t, clone.ExclusionConstraints[0].Elements)
+		require.Nil(t, clone.Indexes[0].Columns)
+		require.Nil(t, clone.Indexes[0].Expressions)
+		require.Nil(t, clone.Indexes[0].IncludeColumns)
+		require.Nil(t, clone.Indexes[0].Keys)
+		require.Nil(t, clone.Indexes[0].StorageParameters)
+		require.Nil(t, clone.ForeignKeys[0].Columns)
+		require.Nil(t, clone.ForeignKeys[0].ReferencedColumns)
+		require.Nil(t, clone.ForeignKeys[0].DeleteSetColumns)
+		require.Nil(t, clone.Relationships[0].Columns)
+		require.Nil(t, clone.Relationships[0].ReferencedColumns)
+	})
+}
+
+// TestTableCloneEmptyContainersStayNonNil covers the other direction of the
+// same property: a container the source states as empty rather than leaving
+// unset must clone to a non-nil empty container, so a descriptor decoded
+// from JSON with an empty array in it (encoding/json produces a non-nil
+// empty slice for one) still clones to a value equal to itself.
+func TestTableCloneEmptyContainersStayNonNil(t *testing.T) {
+	t.Run("table level", func(t *testing.T) {
+		descriptor := schema.TableDef{
+			Name:                        "orders",
+			Columns:                     []schema.ColumnDef{},
+			PrimaryKey:                  []string{},
+			VirtualTableModuleArguments: []string{},
+			UniqueConstraints:           []schema.UniqueDef{},
+			Checks:                      []schema.CheckDef{},
+			ExclusionConstraints:        []schema.ExclusionDef{},
+			Indexes:                     []schema.IndexDef{},
+			ForeignKeys:                 []schema.ForeignKeyDef{},
+			Relationships:               []schema.RelationshipDef{},
+		}
+		clone := descriptor.Clone()
+
+		require.True(t, reflect.DeepEqual(descriptor, clone))
+		require.NotNil(t, clone.Columns)
+		require.NotNil(t, clone.PrimaryKey)
+		require.NotNil(t, clone.VirtualTableModuleArguments)
+		require.NotNil(t, clone.UniqueConstraints)
+		require.NotNil(t, clone.Checks)
+		require.NotNil(t, clone.ExclusionConstraints)
+		require.NotNil(t, clone.Indexes)
+		require.NotNil(t, clone.ForeignKeys)
+		require.NotNil(t, clone.Relationships)
+	})
+
+	t.Run("within an element", func(t *testing.T) {
+		descriptor := schema.TableDef{
+			Name: "orders",
+			UniqueConstraints: []schema.UniqueDef{{
+				Name:              "orders_email_key",
+				Columns:           []string{},
+				IncludeColumns:    []string{},
+				Keys:              []schema.IndexKeyDef{},
+				StorageParameters: map[string]string{},
+				Collations:        map[string]string{},
+			}},
+			ExclusionConstraints: []schema.ExclusionDef{{
+				Name:     "orders_no_overlap",
+				Elements: []schema.ExclusionElementDef{},
+			}},
+			Indexes: []schema.IndexDef{{
+				Name:              "orders_id_idx",
+				Columns:           []string{},
+				Expressions:       []string{},
+				IncludeColumns:    []string{},
+				Keys:              []schema.IndexKeyDef{},
+				StorageParameters: map[string]string{},
+			}},
+			ForeignKeys: []schema.ForeignKeyDef{{
+				Name:              "orders_customer_fk",
+				Columns:           []string{},
+				ReferencedColumns: []string{},
+				DeleteSetColumns:  []string{},
+			}},
+			Relationships: []schema.RelationshipDef{{
+				Name:              "Customer",
+				Columns:           []string{},
+				ReferencedColumns: []string{},
+			}},
+		}
+		clone := descriptor.Clone()
+
+		require.True(t, reflect.DeepEqual(descriptor, clone))
+		require.NotNil(t, clone.UniqueConstraints[0].Columns)
+		require.NotNil(t, clone.UniqueConstraints[0].IncludeColumns)
+		require.NotNil(t, clone.UniqueConstraints[0].Keys)
+		require.NotNil(t, clone.UniqueConstraints[0].StorageParameters)
+		require.NotNil(t, clone.UniqueConstraints[0].Collations)
+		require.NotNil(t, clone.ExclusionConstraints[0].Elements)
+		require.NotNil(t, clone.Indexes[0].Columns)
+		require.NotNil(t, clone.Indexes[0].Expressions)
+		require.NotNil(t, clone.Indexes[0].IncludeColumns)
+		require.NotNil(t, clone.Indexes[0].Keys)
+		require.NotNil(t, clone.Indexes[0].StorageParameters)
+		require.NotNil(t, clone.ForeignKeys[0].Columns)
+		require.NotNil(t, clone.ForeignKeys[0].ReferencedColumns)
+		require.NotNil(t, clone.ForeignKeys[0].DeleteSetColumns)
+		require.NotNil(t, clone.Relationships[0].Columns)
+		require.NotNil(t, clone.Relationships[0].ReferencedColumns)
+	})
+}
+
+// TestTableCloneContainersAreIndependent proves Clone's doc claim that a
+// clone shares no slice and no map with its source, for every container any
+// descriptor a TableDef reaches owns, and in both directions: writing
+// through the source must be invisible to the clone, and writing through
+// the clone must be invisible to the source. Each case compares the side it
+// did not touch against a freshly built descriptor, so an aliased container
+// anywhere in the tree shows up as an inequality rather than needing its own
+// assertion.
+func TestTableCloneContainersAreIndependent(t *testing.T) {
+	t.Run("mutating the source", func(t *testing.T) {
+		descriptor := containerTableDef()
+		clone := descriptor.Clone()
+
+		mutateContainers(&descriptor)
+
+		require.True(t, reflect.DeepEqual(containerTableDef(), clone))
+	})
+
+	t.Run("mutating the clone", func(t *testing.T) {
+		descriptor := containerTableDef()
+		clone := descriptor.Clone()
+
+		mutateContainers(&clone)
+
+		require.True(t, reflect.DeepEqual(containerTableDef(), descriptor))
+	})
+}
+
+// TestRelationshipCloneContainers covers RelationshipDef.Clone on its own,
+// since it is exported and TableDef.Clone is not its only caller: it must
+// keep each column list's nilness and hand back lists independent of the
+// source's in both directions.
+func TestRelationshipCloneContainers(t *testing.T) {
+	unset := schema.RelationshipDef{Name: "Customer", Kind: schema.RelationshipBelongsTo}
+	require.True(t, reflect.DeepEqual(unset, unset.Clone()))
+	require.Nil(t, unset.Clone().Columns)
+	require.Nil(t, unset.Clone().ReferencedColumns)
+
+	empty := schema.RelationshipDef{
+		Name:              "Customer",
+		Kind:              schema.RelationshipBelongsTo,
+		Columns:           []string{},
+		ReferencedColumns: []string{},
+	}
+	require.True(t, reflect.DeepEqual(empty, empty.Clone()))
+	require.NotNil(t, empty.Clone().Columns)
+	require.NotNil(t, empty.Clone().ReferencedColumns)
+
+	populated := schema.RelationshipDef{
+		Name:              "Customer",
+		Kind:              schema.RelationshipBelongsTo,
+		Columns:           []string{"customer_id"},
+		ReferencedTable:   "customers",
+		ReferencedColumns: []string{"id"},
+	}
+
+	fromSource := populated.Clone()
+	populated.Columns[0] = "changed"
+	populated.ReferencedColumns[0] = "changed"
+	require.Equal(t, "customer_id", fromSource.Columns[0])
+	require.Equal(t, "id", fromSource.ReferencedColumns[0])
+
+	populated.Columns[0] = "customer_id"
+	populated.ReferencedColumns[0] = "id"
+	fromClone := populated.Clone()
+	fromClone.Columns[0] = "changed"
+	fromClone.ReferencedColumns[0] = "changed"
+	require.Equal(t, "customer_id", populated.Columns[0])
+	require.Equal(t, "id", populated.ReferencedColumns[0])
+}
+
+// TestTableCloneCoversEveryContainerField is the mechanical half of the same
+// guarantee: rather than naming the containers it knows about, it walks
+// TableDef with reflection, fills every slice and map it finds -- at the
+// table level and inside each element type -- clones the result, and
+// requires no container to be shared. A container field added to TableDef or
+// to any descriptor type it reaches fails here as soon as that type's own
+// Clone forgets to copy it, so keeping this file's hand-written cases up to
+// date is not what stands between a new field and a silently aliased one.
+func TestTableCloneCoversEveryContainerField(t *testing.T) {
+	descriptor := reflect.New(reflect.TypeOf(schema.TableDef{})).Elem()
+	fillContainerFields(descriptor)
+	source := descriptor.Interface().(schema.TableDef)
+
+	clone := source.Clone()
+
+	require.True(t, reflect.DeepEqual(source, clone))
+	requireContainerFieldsUnshared(t, reflect.ValueOf(source), reflect.ValueOf(clone), "TableDef")
+}
+
+// fillContainerFields gives every slice field of value one element and every
+// map field one entry, descending into the element type of each slice so a
+// container an element owns is filled too. A field of any other kind,
+// including ColumnDef.Type's interface, is left at its zero value: only a
+// container can be shared between a descriptor and its clone.
+func fillContainerFields(value reflect.Value) {
+	for i := range value.NumField() {
+		field := value.Field(i)
+		switch field.Kind() {
+		case reflect.Slice:
+			element := reflect.New(field.Type().Elem()).Elem()
+			if element.Kind() == reflect.Struct {
+				fillContainerFields(element)
+			}
+			field.Set(reflect.Append(field, element))
+		case reflect.Map:
+			field.Set(reflect.MakeMap(field.Type()))
+			field.SetMapIndex(reflect.New(field.Type().Key()).Elem(), reflect.New(field.Type().Elem()).Elem())
+		}
+	}
+}
+
+// requireContainerFieldsUnshared reports a failure for each slice or map
+// field source and clone still share, naming the field's own path through
+// the descriptor. It descends into slice elements the same way
+// fillContainerFields does, so a container an element owns is checked too.
+func requireContainerFieldsUnshared(t *testing.T, source, clone reflect.Value, path string) {
+	t.Helper()
+	for i := range source.NumField() {
+		name := path + "." + source.Type().Field(i).Name
+		sourceField, cloneField := source.Field(i), clone.Field(i)
+		switch sourceField.Kind() {
+		case reflect.Slice:
+			require.NotZero(t, sourceField.Len(), "%s: fixture left this slice empty, so nothing was checked", name)
+			require.NotEqual(t, sourceField.Pointer(), cloneField.Pointer(), "%s shares its backing array with the source", name)
+			if sourceField.Type().Elem().Kind() != reflect.Struct {
+				continue
+			}
+			for element := range sourceField.Len() {
+				requireContainerFieldsUnshared(t, sourceField.Index(element), cloneField.Index(element), fmt.Sprintf("%s[%d]", name, element))
+			}
+		case reflect.Map:
+			require.NotZero(t, sourceField.Len(), "%s: fixture left this map empty, so nothing was checked", name)
+			require.NotEqual(t, sourceField.Pointer(), cloneField.Pointer(), "%s shares its map with the source", name)
+		}
+	}
+}
+
+// containerTableDef returns a descriptor that states every container any
+// schema descriptor owns, each with one entry, so a clone of it exercises
+// every copy TableDef.Clone makes. Each call builds the value afresh, so a
+// test can compare a mutated copy against a pristine one.
+func containerTableDef() schema.TableDef {
+	return schema.TableDef{
+		Name:                        "orders",
+		Columns:                     []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey:                  []string{"id"},
+		VirtualTableModule:          "fts5",
+		VirtualTableModuleArguments: []string{"content=''"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:              "orders_email_key",
+			Columns:           []string{"email"},
+			IncludeColumns:    []string{"id"},
+			Keys:              []schema.IndexKeyDef{{Expression: "email"}},
+			StorageParameters: map[string]string{"fillfactor": "70"},
+			Collations:        map[string]string{"email": "C"},
+		}},
+		Checks: []schema.CheckDef{{Name: "orders_amount_positive", Expression: "amount > 0"}},
+		ExclusionConstraints: []schema.ExclusionDef{{
+			Name:     "orders_no_overlap",
+			Elements: []schema.ExclusionElementDef{{Expression: "customer_id", Operator: "="}},
+		}},
+		Indexes: []schema.IndexDef{{
+			Name:              "orders_customer_id_idx",
+			Columns:           []string{"customer_id"},
+			Expressions:       []string{"lower(email)"},
+			IncludeColumns:    []string{"id"},
+			Keys:              []schema.IndexKeyDef{{Expression: "customer_id"}},
+			StorageParameters: map[string]string{"fillfactor": "70"},
+		}},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+			OnDelete:          schema.SetNull,
+			DeleteSetColumns:  []string{"customer_id"},
+		}},
+		Relationships: []schema.RelationshipDef{{
+			Name:              "Customer",
+			Kind:              schema.RelationshipBelongsTo,
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+}
+
+// mutateContainers writes through every container containerTableDef states,
+// including a new key in each map, so any container a clone still shares
+// with its source carries the write across.
+func mutateContainers(table *schema.TableDef) {
+	table.Columns[0].Name = "changed"
+	table.PrimaryKey[0] = "changed"
+	table.VirtualTableModuleArguments[0] = "changed"
+	table.Checks[0].Expression = "changed"
+
+	unique := &table.UniqueConstraints[0]
+	unique.Name = "changed"
+	unique.Columns[0] = "changed"
+	unique.IncludeColumns[0] = "changed"
+	unique.Keys[0].Expression = "changed"
+	unique.StorageParameters["fillfactor"] = "changed"
+	unique.StorageParameters["added"] = "changed"
+	unique.Collations["email"] = "changed"
+	unique.Collations["added"] = "changed"
+
+	exclusion := &table.ExclusionConstraints[0]
+	exclusion.Name = "changed"
+	exclusion.Elements[0].Expression = "changed"
+
+	index := &table.Indexes[0]
+	index.Name = "changed"
+	index.Columns[0] = "changed"
+	index.Expressions[0] = "changed"
+	index.IncludeColumns[0] = "changed"
+	index.Keys[0].Expression = "changed"
+	index.StorageParameters["fillfactor"] = "changed"
+	index.StorageParameters["added"] = "changed"
+
+	key := &table.ForeignKeys[0]
+	key.Name = "changed"
+	key.Columns[0] = "changed"
+	key.ReferencedColumns[0] = "changed"
+	key.DeleteSetColumns[0] = "changed"
+
+	relationship := &table.Relationships[0]
+	relationship.Name = "changed"
+	relationship.Columns[0] = "changed"
+	relationship.ReferencedColumns[0] = "changed"
+}
+
+// TestTableCloneMixedNilAndPopulatedSlices covers a descriptor with some of
+// the nine slice fields populated and others left nil, so a future fix that
+// preserves nil by dropping the deep copy (aliasing the source slice's
+// backing array instead of copying it) cannot pass unnoticed: it asserts
+// both that unset fields stay nil and that the populated ones are
+// independent copies.
+func TestTableCloneMixedNilAndPopulatedSlices(t *testing.T) {
+	descriptor := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+		},
+		Indexes: []schema.IndexDef{{
+			Name:    "orders_id_idx",
+			Columns: []string{"id"},
+		}},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	clone := descriptor.Clone()
+
+	require.True(t, reflect.DeepEqual(descriptor, clone))
+	require.Nil(t, clone.PrimaryKey)
+	require.Nil(t, clone.VirtualTableModuleArguments)
+	require.Nil(t, clone.UniqueConstraints)
+	require.Nil(t, clone.Checks)
+	require.Nil(t, clone.ExclusionConstraints)
+	require.Nil(t, clone.Relationships)
+
+	descriptor.Indexes[0].Columns[0] = "changed"
+	descriptor.ForeignKeys[0].ReferencedColumns[0] = "changed"
+	require.Equal(t, "id", clone.Indexes[0].Columns[0])
+	require.Equal(t, "id", clone.ForeignKeys[0].ReferencedColumns[0])
 }
 
 // TestDecimalScale covers the distinction the type exists for: a stated scale

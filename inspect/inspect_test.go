@@ -2615,6 +2615,36 @@ func TestSQLiteInspectorReadsTableConstraints(t *testing.T) {
 	}}, table.ForeignKeys)
 }
 
+// TestSQLiteInspectorReportsNilForAbsentConstraintLists proves that a
+// SQLite table with no unique constraints, checks, indexes, or foreign
+// keys reports each of those TableDef slice fields as nil, matching the
+// PostgreSQL and MySQL inspection paths (readUniqueConstraints, readChecks,
+// readIndexes, and readForeignKeys all declare their accumulator with `var
+// ... []T`, never `make([]T, 0)`). The SQLite-specific builders used to
+// diverge, each starting from `make([]T, 0)`, so a table with none of these
+// facts came back with a non-nil empty slice instead — a difference
+// TableDef.Clone's own make(..., len(...)) bug happened to paper over by
+// manufacturing the same non-nil empty slice on every clone, regardless of
+// what inspection actually reported.
+func TestSQLiteInspectorReportsNilForAbsentConstraintLists(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE plain (id INTEGER PRIMARY KEY, name TEXT)")
+	require.NoError(t, err)
+
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "plain")
+	require.NoError(t, err)
+	require.Nil(t, table.UniqueConstraints)
+	require.Nil(t, table.Checks)
+	require.Nil(t, table.Indexes)
+	require.Nil(t, table.ForeignKeys)
+}
+
 func TestSQLiteInspectorReadsConstraintsWithForeignKeyActions(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
