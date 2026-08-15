@@ -26,11 +26,13 @@ const storeAcceptanceTestSource = `package store_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/schema"
 	"example.com/consumer/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -80,6 +82,30 @@ func TestGeneratedStoreRunsAgainstSQLite(t *testing.T) {
 		t.Fatalf("Orders().User().ChildKey.Name() = %q, want %q", got, "user_id")
 	}
 
+	// Tables reports every table this store describes, in the declaration
+	// order schema_gen.go states them: alphabetically, so "orders" before
+	// "profiles" before "users".
+	tables := store.Tables()
+	if len(tables) != 3 {
+		t.Fatalf("len(Tables()) = %d, want 3", len(tables))
+	}
+	if tables[0].Name != "orders" || tables[1].Name != "profiles" || tables[2].Name != "users" {
+		t.Fatalf("Tables() order = [%q, %q, %q], want [\"orders\", \"profiles\", \"users\"]", tables[0].Name, tables[1].Name, tables[2].Name)
+	}
+	// Mutating what Tables returned must not reach the package-level value
+	// the next call reads from, the same guarantee UsersDef already gives a
+	// caller of a single table's descriptor. The test below takes that to
+	// every container a descriptor owns; this is the shallow case.
+	tables[0].Name = "mutated"
+	tables[0].Columns[0].Name = "mutated"
+	again := store.Tables()
+	if again[0].Name != "orders" {
+		t.Fatalf("Tables() second call Name = %q, want %q; mutating the first result must not affect the next call", again[0].Name, "orders")
+	}
+	if again[0].Columns[0].Name == "mutated" {
+		t.Fatalf("Tables() second call Columns[0].Name was mutated by an earlier caller; Clone must produce an independent copy")
+	}
+
 	statement, err := store.UserByEmail("ada@example.com")
 	if err != nil {
 		t.Fatalf("UserByEmail: %s", err)
@@ -91,17 +117,107 @@ func TestGeneratedStoreRunsAgainstSQLite(t *testing.T) {
 		t.Fatalf("UserByEmail args = %#v, want [\"ada@example.com\"]", args)
 	}
 }
+
+// TestGeneratedTablesHandOutIndependentDescriptors drives the generated
+// Tables() function itself, rather than rasqlgen's output read back as
+// text: it mutates every container of a descriptor Tables() returned and
+// requires that nothing a later caller reads changed. The "profiles" table
+// exists for this, carrying a nested container on every descriptor field
+// that owns one, so a container handed out by reference instead of by copy
+// fails here rather than reaching a caller of a generated store.
+func TestGeneratedTablesHandOutIndependentDescriptors(t *testing.T) {
+	tables := store.Tables()
+	if len(tables) != 3 || tables[1].Name != "profiles" {
+		t.Fatalf("Tables()[1].Name = %q over %d tables, want %q over 3", tables[1].Name, len(tables), "profiles")
+	}
+
+	generated := describeProfiles(tables[1])
+	mutateEveryContainer(tables[1])
+	if mutated := describeProfiles(tables[1]); mutated == generated {
+		t.Fatalf("mutateEveryContainer changed nothing describeProfiles reports:\n%s\nthe two must describe the same containers", mutated)
+	}
+	if got := describeProfiles(store.Tables()[1]); got != generated {
+		t.Fatalf("Tables() after an earlier result was mutated =\n%s\nwant\n%s", got, generated)
+	}
+	if got := describeProfiles(store.ProfilesDef()); got != generated {
+		t.Fatalf("ProfilesDef() after a Tables() result was mutated =\n%s\nwant\n%s\nTables must not share state with the package-level descriptor", got, generated)
+	}
+
+	// Two results held at once must not share state with each other either.
+	held := store.Tables()[1]
+	mutateEveryContainer(store.Tables()[1])
+	if got := describeProfiles(held); got != generated {
+		t.Fatalf("a descriptor from one Tables() call was changed through another call's =\n%s\nwant\n%s", got, generated)
+	}
+}
+
+// describeProfiles reports every container of the "profiles" descriptor
+// that schema.TableDef.Clone has to copy, so a container the generated
+// Tables() hands out by reference instead of by copy shows up as a changed
+// description. fmt prints a map in sorted key order, so the result is
+// stable across runs, and an added key changes it.
+func describeProfiles(table schema.TableDef) string {
+	columns := make([]string, 0, len(table.Columns))
+	for _, column := range table.Columns {
+		columns = append(columns, column.Name)
+	}
+	unique := table.UniqueConstraints[0]
+	keyedUnique := table.UniqueConstraints[1]
+	index := table.Indexes[0]
+	keyedIndex := table.Indexes[1]
+	foreignKey := table.ForeignKeys[0]
+	return fmt.Sprintf(
+		"columns=%v primaryKey=%v\nunique=%v include=%v storage=%v collations=%v keys=%v\nindex=%v include=%v storage=%v keys=%v\nforeignKey=%v referenced=%v deleteSet=%v\nrelationship=%v",
+		columns, table.PrimaryKey,
+		unique.Columns, unique.IncludeColumns, unique.StorageParameters, unique.Collations, keyedUnique.Keys,
+		index.Columns, index.IncludeColumns, index.StorageParameters, keyedIndex.Keys,
+		foreignKey.Columns, foreignKey.ReferencedColumns, foreignKey.DeleteSetColumns,
+		table.Relationships[0].Columns,
+	)
+}
+
+// mutateEveryContainer writes through every container describeProfiles
+// reports, and adds a key to each map, which is the mutation a caller of
+// Tables is free to make on what it was handed.
+func mutateEveryContainer(table schema.TableDef) {
+	table.Columns[0].Name = "mutated"
+	table.PrimaryKey[0] = "mutated"
+	table.Relationships[0].Columns[0] = "mutated"
+
+	unique := table.UniqueConstraints[0]
+	unique.Columns[0] = "mutated"
+	unique.IncludeColumns[0] = "mutated"
+	unique.StorageParameters["fillfactor"] = "999"
+	unique.StorageParameters["mutated"] = "mutated"
+	unique.Collations["email"] = "mutated"
+	unique.Collations["mutated"] = "mutated"
+	table.UniqueConstraints[1].Keys[0].Expression = "mutated"
+
+	index := table.Indexes[0]
+	index.Columns[0] = "mutated"
+	index.IncludeColumns[0] = "mutated"
+	index.StorageParameters["fillfactor"] = "999"
+	index.StorageParameters["mutated"] = "mutated"
+	table.Indexes[1].Keys[0].Expression = "mutated"
+
+	foreignKey := table.ForeignKeys[0]
+	foreignKey.Columns[0] = "mutated"
+	foreignKey.ReferencedColumns[0] = "mutated"
+	foreignKey.DeleteSetColumns[0] = "mutated"
+}
 `
 
 // TestGeneratedStorePackageCompilesAndRuns is the acceptance test the split
 // file layout that "rasqlgen schema" writes has never had: it generates that
 // layout, plus a generated query file beside it, into a scratch consumer
-// module and runs "go test ./..." there. That single run compiles all four
-// generated files as one package and runs both the generated
-// schema_gen_test.go and the hand-written test above, which drives a real
+// module and runs "go test ./..." there. That single run compiles every
+// generated file as one package and runs both the generated
+// schema_gen_test.go and the hand-written tests above, which drive a real
 // SQLite round trip through the generated descriptor, a generated column
-// accessor, a generated relationship method that resolves across files, and
-// a generated query function.
+// accessor, a generated relationship method that resolves across files, a
+// generated query function, and the package-level Tables function that
+// aggregates every table's descriptor, including whether what Tables hands
+// back shares any container with what the next call returns.
 //
 // Every other test that compiles generated output either builds the
 // monolithic layout rasqlgen never writes (internal/schemagen/schema_test.go,
@@ -149,7 +265,58 @@ func TestGeneratedStorePackageCompilesAndRuns(t *testing.T) {
 		schema.PrimaryKey("id"),
 		schema.ForeignKey("user_id", schema.References("users", "id")),
 	)
-	require.NoError(t, generate.WritePackage("store", outputDir, users, orders))
+	// profiles is the descriptor the consumer test mutates: it carries a
+	// nested container on every schema.TableDef field that owns one, so the
+	// generated Tables() has something to share if its clone is ever less
+	// than deep. Several of these facts are describable but not renderable,
+	// which is why nothing creates this table in SQLite; they exist here to
+	// be described, cloned and mutated.
+	profiles := schema.TableDef{
+		Name: "profiles",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+			{Name: "region", Type: schema.TextType{}},
+			{Name: "user_id", Type: schema.IntegerType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{
+			{
+				Name:              "profiles_email_key",
+				Columns:           []string{"email"},
+				IncludeColumns:    []string{"id"},
+				StorageParameters: map[string]string{"fillfactor": "70"},
+				Collations:        map[string]string{"email": "C"},
+			},
+			{
+				Name: "profiles_region_key",
+				Keys: []schema.IndexKeyDef{{Expression: "region", Descending: true}},
+			},
+		},
+		Indexes: []schema.IndexDef{
+			{
+				Name:              "profiles_user_idx",
+				Columns:           []string{"user_id"},
+				IncludeColumns:    []string{"email"},
+				StorageParameters: map[string]string{"fillfactor": "80"},
+			},
+			{
+				Name: "profiles_region_idx",
+				Keys: []schema.IndexKeyDef{{Expression: "region", Descending: true}},
+			},
+		},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{
+				Name:              "profiles_user_fk",
+				Columns:           []string{"user_id"},
+				ReferencedTable:   "users",
+				ReferencedColumns: []string{"id"},
+				OnDelete:          schema.SetNull,
+				DeleteSetColumns:  []string{"user_id"},
+			},
+		},
+	}
+	require.NoError(t, generate.WritePackage("store", outputDir, users, orders, profiles))
 
 	// Generate a query function file beside the store package, so the test
 	// covers the real layout: rasqlgen writes a query function into the same

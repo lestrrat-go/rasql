@@ -20,3 +20,11 @@ var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}
 
 // UsersDef returns a copy of the descriptor for the "users" table.
 func UsersDef() schema.TableDef { return usersDef.Clone() }
+
+// Tables returns a clone of every table's descriptor, in the order this
+// file declares them.
+func Tables() []schema.TableDef {
+	return []schema.TableDef{
+		usersDef.Clone(),
+	}
+}
