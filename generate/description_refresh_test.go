@@ -123,6 +123,32 @@ func TestApplyDescriptionDiffNeverRewritesHints(t *testing.T) {
 	require.Equal(t, edited, got)
 }
 
+// TestApplyDescriptionDiffRejectsInvalidPackageNameBeforeWriting proves the
+// package name is refused before the directory is touched, including for a
+// diff that only removes tables. That diff renders nothing until the
+// aggregator, which is written after the dropped table's file is deleted,
+// so a name checked only at render time would take the file with it and
+// leave a package that no longer compiles.
+func TestApplyDescriptionDiffRejectsInvalidPackageNameBeforeWriting(t *testing.T) {
+	for _, packageName := range []string{"_", "func", "2fast", "foo-bar"} {
+		t.Run(packageName, func(t *testing.T) {
+			directory := t.TempDir()
+			users, dropped := usersTableDef(), namedTableDef("legacy_users")
+			require.NoError(t, generate.WriteDescriptionPackage("schemasource", directory, users, dropped))
+
+			before := mustSnapshotDir(t, directory)
+			remaining := []schema.TableDef{users}
+			diff := generate.DiffDescriptionPackage([]schema.TableDef{users, dropped}, remaining)
+			require.False(t, diff.Empty(), "the removal must reach the delete loop for this to prove anything")
+
+			err := generate.ApplyDescriptionDiff(packageName, directory, remaining, diff)
+			require.ErrorContains(t, err, "invalid package name")
+			require.ErrorContains(t, err, packageName)
+			require.Equal(t, before, mustSnapshotDir(t, directory))
+		})
+	}
+}
+
 // mustSnapshotDir reads every regular file directly inside directory into a
 // name-to-contents map, for a byte-identical comparison across an
 // operation that must be a no-op.
