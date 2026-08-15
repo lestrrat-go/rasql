@@ -194,6 +194,69 @@ func TestDriftReportsAReorderedList(t *testing.T) {
 	require.Len(t, report.Changed(), 1)
 }
 
+// pointerCol returns an integer column named name whose type is held by
+// pointer rather than by value. The rest of the schema package does not
+// support that shape -- TableDef.Validate and JSON encoding both reject a
+// pointer-backed column type -- but a caller can still build one in Go and
+// hand it to Drift, and a pointer is the one thing a plain struct assignment
+// leaves shared between a descriptor and its copy. Every case below uses it,
+// because a value-backed column type cannot show the difference: copying it
+// already copies all of it.
+func pointerCol(name string) schema.ColumnDef {
+	return schema.ColumnDef{Name: name, Type: &schema.IntegerType{}}
+}
+
+// TestReportHandsOutIndependentCopies pins Report's doc claim that nothing a
+// caller does to a result can reach back into the Report or into the slices
+// Drift was called with, for each of the three buckets and in both
+// directions: a write through what an accessor returned must be invisible to
+// a later call on the same accessor, and invisible to the caller's own input.
+func TestReportHandsOutIndependentCopies(t *testing.T) {
+	unsigned := func(t *testing.T, column schema.ColumnDef) bool {
+		t.Helper()
+		integer, ok := column.Type.(*schema.IntegerType)
+		require.True(t, ok, "column %q must still hold its type by pointer", column.Name)
+		return integer.Unsigned
+	}
+
+	t.Run("added", func(t *testing.T) {
+		live := []schema.TableDef{{Name: "users", Columns: []schema.ColumnDef{pointerCol("id")}}}
+		report := catalog.Drift(nil, live)
+		require.Len(t, report.Added(), 1)
+
+		report.Added()[0].Columns[0].Type.(*schema.IntegerType).Unsigned = true
+
+		require.False(t, unsigned(t, report.Added()[0].Columns[0]))
+		require.False(t, unsigned(t, live[0].Columns[0]))
+	})
+
+	t.Run("removed", func(t *testing.T) {
+		described := []schema.TableDef{{Name: "users", Columns: []schema.ColumnDef{pointerCol("id")}}}
+		report := catalog.Drift(described, nil)
+		require.Len(t, report.Removed(), 1)
+
+		report.Removed()[0].Columns[0].Type.(*schema.IntegerType).Unsigned = true
+
+		require.False(t, unsigned(t, report.Removed()[0].Columns[0]))
+		require.False(t, unsigned(t, described[0].Columns[0]))
+	})
+
+	t.Run("changed", func(t *testing.T) {
+		described := []schema.TableDef{{Name: "users", Columns: []schema.ColumnDef{pointerCol("id")}}}
+		live := []schema.TableDef{{Name: "users", Columns: []schema.ColumnDef{pointerCol("id"), col("email")}}}
+		report := catalog.Drift(described, live)
+		require.Len(t, report.Changed(), 1)
+
+		report.Changed()[0].Described().Columns[0].Type.(*schema.IntegerType).Unsigned = true
+		report.Changed()[0].Live().Columns[0].Type.(*schema.IntegerType).Unsigned = true
+
+		require.False(t, unsigned(t, report.Changed()[0].Described().Columns[0]))
+		require.False(t, unsigned(t, report.Changed()[0].Live().Columns[0]))
+		require.False(t, unsigned(t, described[0].Columns[0]))
+		require.False(t, unsigned(t, live[0].Columns[0]))
+	})
+}
+
 // --- TestEveryDescriptorFieldIsCompared -------------------------------------
 //
 // This is the completeness test: it walks schema.TableDef reflectively,

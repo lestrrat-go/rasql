@@ -136,8 +136,10 @@ func (r Report) Changed() []TableDrift {
 }
 
 // cloneTableDefs returns a copy of tables in which every element is itself a
-// clone, so neither the slice header nor any container reachable from an
-// element is shared with tables.
+// clone, so neither the slice header nor anything reachable from an element
+// is shared with tables. TableDef.Clone owns what "anything" covers: every
+// container at every depth, and the value a column type held by pointer
+// points at.
 func cloneTableDefs(tables []schema.TableDef) []schema.TableDef {
 	if tables == nil {
 		return nil
@@ -161,8 +163,8 @@ type TableDrift struct {
 }
 
 // newTableDrift builds a TableDrift from the caller's own described and live
-// descriptors, cloning each so the result shares no container with either
-// argument.
+// descriptors, cloning each so the result shares nothing with either
+// argument, on the same terms as cloneTableDefs.
 func newTableDrift(described, live schema.TableDef) TableDrift {
 	return TableDrift{described: described.Clone(), live: live.Clone()}
 }
