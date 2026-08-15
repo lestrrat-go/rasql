@@ -181,6 +181,28 @@ func (s Store) Plan() (Plan, error) {
 		return Plan{}, fmt.Errorf("generate: resolve Dir: %w", err)
 	}
 
+	// checkRoot is the directory Plan.Check names its paths relative to, and
+	// the only thing a plan carries a root for at all. It is made absolute
+	// here, beside the Dir it is compared against, because every File.Path
+	// is absolute and filepath.Rel cannot relate a relative root to an
+	// absolute path: an explicitly relative Store.Root would otherwise send
+	// every reported path back out absolute, which is the form Check keeps
+	// for a file outside Root.
+	//
+	// It is resolved here rather than inside Check because a Plan can be
+	// held and acted on later, and a relative Root only means something
+	// against the working directory Dir was made absolute against. Only this
+	// copy is made absolute: the root every resolveStorePath call resolves
+	// Dir and each Query's Input against stays as it was given, so neither
+	// path resolution nor Commit changes.
+	checkRoot := root
+	if checkRoot != "" {
+		checkRoot, err = filepath.Abs(checkRoot)
+		if err != nil {
+			return Plan{}, fmt.Errorf("generate: resolve Root: %w", err)
+		}
+	}
+
 	tables, err := applyHints(s.Tables, s.Hints)
 	if err != nil {
 		return Plan{}, err
@@ -314,7 +336,7 @@ func (s Store) Plan() (Plan, error) {
 		}
 	}
 
-	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, anchor: anchor, anchorInfo: anchorInfo}, nil
+	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans the store and commits the plan: it is Plan followed by
@@ -327,6 +349,19 @@ func (s Store) Write() error {
 		return err
 	}
 	return plan.Commit()
+}
+
+// Check plans the store and compares the plan with what is on disk, without
+// writing anything. It returns nil when a Write would change nothing at
+// all, an error wrapping ErrStale when the generated package differs from
+// what these inputs produce, and the error Commit itself would return when
+// Commit would refuse the run instead of writing anything. See Plan.Check.
+func (s Store) Check() error {
+	plan, err := s.Plan()
+	if err != nil {
+		return err
+	}
+	return plan.Check()
 }
 
 // planQuery renders one Query into its File, checking its output name
