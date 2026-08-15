@@ -103,13 +103,7 @@ func generateFromSchemaSource(ctx context.Context, sourceDir, packageName, outpu
 		return fmt.Errorf("schema output %q is not a directory", outputDir)
 	}
 
-	// asDirectoryPattern is the same treatment loadExistingDescriptionTables
-	// gives its own directory argument, and for the same reason: a bare
-	// relative path such as "internal/tables" is a valid package pattern on
-	// its own, but go list treats it as an import path to resolve against
-	// the whole module graph rather than as the one directory named, which
-	// this caller's own users type at the command line.
-	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, asDirectoryPattern(sourceDir))
+	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, schemaSourcePattern(sourceDir))
 	if err != nil {
 		return err
 	}
@@ -148,6 +142,28 @@ func generateFromSchemaSource(ctx context.Context, sourceDir, packageName, outpu
 		return fmt.Errorf("schema source %s: %w", importPath, err)
 	}
 	return nil
+}
+
+// schemaSourcePattern returns the package pattern `go list` should resolve
+// for a -source value. Unlike loadExistingDescriptionTables, which is
+// handed a directory by its own caller, -source is typed at the command
+// line and accepts either form: the documented directory ("internal/tables")
+// and a package import path ("example.com/app/internal/tables").
+//
+// Only the directory form gets asDirectoryPattern's "./" prefix, and only
+// when the value actually names a directory on disk, because that prefix is
+// what stops go list from reading a bare relative directory as an
+// import-path pattern to match against the whole module graph. Prefixing an
+// import path instead turns it into a directory that does not exist, which
+// go list rejects outright with "directory not found", so a value that
+// names no directory is passed through untouched and left for go list to
+// resolve as the import path it is.
+func schemaSourcePattern(source string) string {
+	info, err := os.Stat(source)
+	if err != nil || !info.IsDir() {
+		return source
+	}
+	return asDirectoryPattern(source)
 }
 
 // schemaSourcePackageInfo holds the fields `go list -json` reports that

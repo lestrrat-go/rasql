@@ -34,6 +34,11 @@ func Tables() []schema.TableDef {
 }
 `
 
+// schemaSourceFixtureModule is the module path newSchemaSourceFixture
+// declares in the go.mod it writes, named here rather than repeated by any
+// test that needs to address a fixture package by its import path.
+const schemaSourceFixtureModule = "example.com/consumer"
+
 // newSchemaSourceFixture builds a scratch Go module in t.TempDir() holding
 // a schema package under internal/tables (not a top-level directory, so
 // this single fixture covers the case that forces the temporary directory
@@ -59,7 +64,7 @@ func newSchemaSourceFixture(t *testing.T, tablesSource string) string {
 	require.NoError(t, err)
 	repository, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
-	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/consumer\n", 1)
+	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module "+schemaSourceFixtureModule+"\n", 1)
 	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(module), 0o600))
 
@@ -123,6 +128,26 @@ func TestRunSchemaSourceBareRelativeDirectory(t *testing.T) {
 
 	var buffer bytes.Buffer
 	require.NoError(t, rasqlgen.Run([]string{"schema", "-source", "internal/tables", "-package", "store", "-output", "internal/store"}, &buffer))
+
+	usersSource, err := os.ReadFile(filepath.Join(moduleDir, "internal", "store", "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(usersSource), "func Users() UsersTable {")
+
+	requireNoLeftoverSourceTempDir(t, moduleDir)
+}
+
+// This test spawns a real `go run`. -source also accepts the package's
+// import path, which is not the documented directory form but has always
+// resolved, so prefixing a -source value with "./" to make go list read it
+// as a directory must not be done to a value that names no directory: the
+// prefix would turn this import path into a directory that does not exist
+// and fail the run with "directory not found".
+func TestRunSchemaSourcePackageImportPath(t *testing.T) {
+	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
+	t.Chdir(moduleDir)
+
+	var buffer bytes.Buffer
+	require.NoError(t, rasqlgen.Run([]string{"schema", "-source", schemaSourceFixtureModule + "/internal/tables", "-package", "store", "-output", "internal/store"}, &buffer))
 
 	usersSource, err := os.ReadFile(filepath.Join(moduleDir, "internal", "store", "users_gen.go"))
 	require.NoError(t, err)
