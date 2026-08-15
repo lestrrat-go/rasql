@@ -294,7 +294,7 @@ func requireFixturesCoverEveryField(t *testing.T, tables ...schema.TableDef) {
 // schema.UniqueDef.Keys reach.
 func walkFieldType(t reflect.Type, required map[string]bool, visited map[reflect.Type]bool) {
 	switch t.Kind() {
-	case reflect.Ptr, reflect.Slice, reflect.Array:
+	case reflect.Pointer, reflect.Slice, reflect.Array:
 		walkFieldType(t.Elem(), required, visited)
 	case reflect.Map:
 		walkFieldType(t.Elem(), required, visited)
@@ -329,7 +329,7 @@ func walkFieldType(t reflect.Type, required map[string]bool, visited map[reflect
 // own concrete value, which reflect.Value (unlike reflect.Type) can follow.
 func walkFieldValue(value reflect.Value, seen map[string]bool) {
 	switch value.Kind() {
-	case reflect.Ptr, reflect.Interface:
+	case reflect.Pointer, reflect.Interface:
 		if value.IsNil() {
 			return
 		}
