@@ -167,8 +167,18 @@ func (p Plan) Orphans() []string {
 
 // Commit writes every file in the plan and deletes every path Orphans
 // reports, in four steps, so that a failure before the first write leaves
-// the directory exactly as it was and every individual file is either its
-// previous content or its new content, never a partial write.
+// every generated file exactly as it was and every individual file is
+// either its previous content or its new content, never a partial write.
+//
+// That promise is about files, not about directories. Step 1 creates each
+// missing component of Dir's own path while it authorizes the run -- for a
+// Dir that does not exist yet, Dir itself is one of them -- and a failure
+// later in that same step keeps the components it already created. Nothing
+// removes them again: a Mkdir that returned nil is no proof this call
+// created the entry rather than winning a race with another writer, and
+// removing a directory on the way out could take one a concurrent writer
+// has since started using. Recovery is to rerun the generator, which an
+// empty directory left behind this way does not affect.
 //
 //  1. Resolve and authorize everything; write nothing. The plan's output
 //     directory is reached by reopening the deepest directory on its path

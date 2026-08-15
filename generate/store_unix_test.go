@@ -183,6 +183,54 @@ func TestPlanCommitRefusesADirectoryFirstCreatedAsASymlink(t *testing.T) {
 	}
 }
 
+// TestPlanCommitKeepsDirectoriesItCreatedWhenTheWalkFails pins both halves
+// of what Plan.Commit's doc comment promises for a failure before the first
+// write: no generated file is written, and the directory components step 1
+// already created on its way down to Dir stay on disk.
+//
+// Dir here is three components below an existing directory and its last
+// component is longer than the filesystem accepts, so the walk creates the
+// two components above it and then fails to create the third. Removing
+// those two again would be rollback this package does not do: a Mkdir that
+// returned nil does not prove this call created the entry rather than
+// winning a race, and the directory could already be in use by whoever else
+// created it.
+func TestPlanCommitKeepsDirectoriesItCreatedWhenTheWalkFails(t *testing.T) {
+	tooLong := strings.Repeat("n", 300)
+	if err := os.Mkdir(filepath.Join(t.TempDir(), tooLong), 0o700); err == nil {
+		t.Skip("this filesystem accepts a 300-character name, so the walk cannot be made to fail on one")
+	}
+
+	base := t.TempDir()
+	dir := filepath.Join(base, "x", "y", tooLong)
+	store := generate.Store{Package: "store", Dir: dir, Tables: []schema.TableDef{usersTableDef()}}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+
+	entries, err := os.ReadDir(base)
+	require.NoError(t, err)
+	require.Empty(t, entries, "planning a Dir that does not exist must create nothing")
+
+	err = plan.Commit()
+	require.ErrorContains(t, err, "refusing to commit into "+dir)
+
+	require.DirExists(t, filepath.Join(base, "x"), "a component the walk created before the refusal stays")
+	require.DirExists(t, filepath.Join(base, "x", "y"), "a component the walk created before the refusal stays")
+	require.NoDirExists(t, dir)
+
+	var files []string
+	require.NoError(t, filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	}))
+	require.Empty(t, files, "a refusal in step 1 must write no file at all")
+}
+
 // TestStorePlanRejectsTwoFilesThatResolveToOneDestination covers two planned
 // files whose distinct names inside Dir are both symbolic links to one file.
 // The name check cannot see this -- "one_gen.go" and "two_gen.go" are
