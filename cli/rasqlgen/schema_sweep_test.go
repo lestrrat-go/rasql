@@ -53,6 +53,43 @@ func TestRunSchemaExcludeSkipsRenamedHistoryTable(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(directory, "app_migrations_gen.go"))
 }
 
+// TestRunSchemaExcludeUnknownTableSweepsEverything pins what an -exclude
+// naming a table the database does not have does: sweepTables matches an
+// exclusion by name against what inspector.TableNames reported, so a name
+// that matches nothing removes nothing and the run still describes every
+// base table. Nothing checks an -exclude value against the database, so a
+// misspelled name is accepted in silence rather than reported.
+func TestRunSchemaExcludeUnknownTableSweepsEverything(t *testing.T) {
+	databasePath := mustCreateSQLite(t,
+		"CREATE TABLE users (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users (id))",
+	)
+	directory := t.TempDir()
+
+	err := run([]string{"schema", "-dsn", databasePath, "-dialect", "sqlite", "-package", "store", "-output", directory, "-exclude", "no_such_table"})
+	require.NoError(t, err)
+
+	require.FileExists(t, filepath.Join(directory, "users_gen.go"))
+	require.FileExists(t, filepath.Join(directory, "orders_gen.go"))
+	require.FileExists(t, filepath.Join(directory, "schema_gen.go"))
+}
+
+// TestRunSchemaExcludeEveryTableErrors covers -exclude naming every base
+// table the sweep would otherwise describe: the sweep empties out the same
+// way TestRunSchemaErrorsWhenSweepFindsNothing's default history-table skip
+// empties it, so the run must report that and write nothing.
+func TestRunSchemaExcludeEveryTableErrors(t *testing.T) {
+	databasePath := mustCreateSQLite(t,
+		"CREATE TABLE users (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users (id))",
+	)
+	directory := t.TempDir()
+
+	err := run([]string{"schema", "-dsn", databasePath, "-dialect", "sqlite", "-package", "store", "-output", directory, "-exclude", "users", "-exclude", "orders"})
+	require.ErrorContains(t, err, "schema found no tables to describe")
+	require.Empty(t, mustReadDir(t, directory))
+}
+
 // TestRunSchemaRejectsTableAndExcludeTogether covers the same mutual
 // exclusivity `bootstrap` enforces between -table and -exclude.
 func TestRunSchemaRejectsTableAndExcludeTogether(t *testing.T) {
