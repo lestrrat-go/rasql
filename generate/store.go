@@ -274,7 +274,19 @@ func (s Store) Plan() (Plan, error) {
 		return Plan{}, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
 	}
 
-	return Plan{files: files, orphans: orphans}, nil
+	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune}, nil
+}
+
+// Write plans the store and commits the plan: it is Plan followed by
+// Plan.Commit, and creates Dir, with any missing parent, when it does not
+// exist. See Plan.Commit for the write order, what is true on disk after
+// each step, and the honest limit of what a partial failure leaves behind.
+func (s Store) Write() error {
+	plan, err := s.Plan()
+	if err != nil {
+		return err
+	}
+	return plan.Commit()
 }
 
 // planQuery renders one Query into its File, checking its output name
