@@ -71,7 +71,10 @@ func TestStorePlanRendersWhatWritePackageWrites(t *testing.T) {
 // TestStorePlanListsEveryFileInPathOrder pins the exact set of files, and
 // their ordering, for two tables and one query: two per-table files, the
 // two package-wide files, and the query's own output, sorted by path and
-// each an absolute path inside the resolved Dir.
+// each an absolute path inside the resolved Dir. With no symbolic link
+// anywhere along those paths, every file resolves to itself;
+// TestStorePlanReportsWhereASymlinkedFileResolves covers the case where one
+// does not.
 func TestStorePlanListsEveryFileInPathOrder(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "user_by_email.sql"), []byte(`SELECT id, email FROM users WHERE email = {{bind "email"}}`), 0o600))
@@ -99,6 +102,7 @@ func TestStorePlanListsEveryFileInPathOrder(t *testing.T) {
 	for i, f := range files {
 		require.True(t, filepath.IsAbs(f.Path), "path %s must be absolute", f.Path)
 		require.Equal(t, wantDir, filepath.Dir(f.Path))
+		require.Equal(t, f.Path, f.Resolved, "with no symbolic link in the way, %s resolves to itself", f.Path)
 		names[i] = filepath.Base(f.Path)
 		if i > 0 {
 			require.Less(t, files[i-1].Path, files[i].Path, "Files() must be sorted by Path")

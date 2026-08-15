@@ -95,11 +95,14 @@ type Query struct {
 	Function string
 
 	// Output is the file the function is generated into, a file name
-	// rather than a path: it is always written inside the Store's Dir,
-	// and must end in _gen.go. A value carrying a directory, a ".."
+	// rather than a path: it names a file directly inside the Store's
+	// Dir, and must end in _gen.go. A value carrying a directory, a ".."
 	// element or an absolute path is an error rather than a destination,
-	// so a planned file can never land outside Dir or in a subdirectory
-	// of it. Required.
+	// so the planned File.Path is always directly inside Dir rather than
+	// outside it or in a subdirectory of it. Where that path then
+	// resolves is a separate question: a symbolic link in Dir is followed
+	// rather than refused, and File.Resolved reports what a commit would
+	// actually replace. Required.
 	Output string
 
 	// Dialect selects the placeholder style. Nil means the Store's own
@@ -119,6 +122,12 @@ type Query struct {
 // destination that exists and is not a file rasqlgen wrote; and records
 // every file already in Dir that rasqlgen wrote and this plan does not
 // write.
+//
+// Each planned file also carries the destination its path resolves to, in
+// File.Resolved: a path that is a symbolic link, or that sits in a
+// directory reached through one, resolves through it exactly as a commit's
+// own write would, so a file whose bytes land outside Dir says so instead
+// of being described by File.Path alone.
 func (s Store) Plan() (Plan, error) {
 	if !token.IsIdentifier(s.Package) {
 		return Plan{}, fmt.Errorf("generate: store package %q must be a Go identifier", s.Package)
@@ -216,10 +225,17 @@ func (s Store) Plan() (Plan, error) {
 
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 
-	for _, f := range files {
-		if _, err := genfile.ResolveDestination(f.Path); err != nil {
+	// The resolved destination is kept rather than discarded: it is the
+	// file a commit's bytes actually land in, and it differs from the
+	// planned path whenever that path, or a directory holding it, is a
+	// symbolic link. Discarding it would leave File.Path claiming a
+	// destination nothing verified it had.
+	for i := range files {
+		resolved, err := genfile.ResolveDestination(files[i].Path)
+		if err != nil {
 			return Plan{}, err
 		}
+		files[i].Resolved = resolved
 	}
 
 	orphans, err := findOrphans(dir, files)

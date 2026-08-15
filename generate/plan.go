@@ -32,8 +32,19 @@ type Plan struct {
 // File is one rendered output file. Source is the whole file, including the
 // generated-code marker on its first line, already gofmt-formatted.
 type File struct {
-	// Path is the path a commit would write, cleaned and absolute.
+	// Path is the destination as planned, cleaned and absolute: the
+	// store's resolved Dir joined with this file's own name. It is the
+	// path a commit hands to the writer, which is not always the file the
+	// bytes land in; see Resolved.
 	Path string
+	// Resolved is the file a commit would actually replace: Path with
+	// every symbolic link along it followed, which is the destination
+	// internal/genfile.Write writes through to. It equals Path for an
+	// ordinary destination, and differs when Path itself, or a directory
+	// holding it, is a symbolic link. Writing through such a link is
+	// deliberate, so a Resolved outside the store's Dir is reported here
+	// rather than refused.
+	Resolved string
 	// Source is the file's complete contents.
 	Source []byte
 }
@@ -43,7 +54,7 @@ type File struct {
 func (p Plan) Files() []File {
 	files := make([]File, len(p.files))
 	for i, f := range p.files {
-		files[i] = File{Path: f.Path, Source: append([]byte(nil), f.Source...)}
+		files[i] = File{Path: f.Path, Resolved: f.Resolved, Source: append([]byte(nil), f.Source...)}
 	}
 	return files
 }
