@@ -214,19 +214,19 @@ func (s Store) Plan() (Plan, error) {
 // is checked against it too.
 func (s Store) planQuery(root, dir string, q Query, filenames map[string]string) (File, error) {
 	if q.Input == "" {
-		return File{}, errors.New("Input is required")
+		return File{}, errors.New("input is required")
 	}
 	if q.Function == "" {
-		return File{}, errors.New("Function is required")
+		return File{}, errors.New("function is required")
 	}
 	if !isExportedGoIdentifier(q.Function) {
-		return File{}, fmt.Errorf("Function %q must be an exported Go identifier", q.Function)
+		return File{}, fmt.Errorf("function %q must be an exported Go identifier", q.Function)
 	}
 	if q.Output == "" {
-		return File{}, errors.New("Output is required")
+		return File{}, errors.New("output is required")
 	}
 	if !strings.HasSuffix(q.Output, "_gen.go") {
-		return File{}, fmt.Errorf("Output %q must end in _gen.go", q.Output)
+		return File{}, fmt.Errorf("output %q must end in _gen.go", q.Output)
 	}
 	if owner, exists := filenames[q.Output]; exists {
 		return File{}, fmt.Errorf("query %q output %q collides with %s", q.Function, q.Output, owner)
