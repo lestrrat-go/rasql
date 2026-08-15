@@ -73,7 +73,7 @@ func Run(args []string, writer io.Writer) error {
 	case "init":
 		return runInit(args[1:], writer)
 	default:
-		return fmt.Errorf("unknown rasqlgen command %q", args[0])
+		return fmt.Errorf("unknown rasqlgen command %q; expected bootstrap, schema, query, or init", args[0])
 	}
 }
 

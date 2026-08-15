@@ -453,7 +453,11 @@ func TestRunQueryGeneratesSource(t *testing.T) {
 }
 
 func TestRunRejectsUnknownCommand(t *testing.T) {
-	require.Error(t, run([]string{"unknown"}))
+	err := run([]string{"unknown"})
+	require.Error(t, err)
+	for _, command := range []string{"bootstrap", "schema", "query", "init"} {
+		require.ErrorContains(t, err, command)
+	}
 }
 
 // TestRunRejectsNoArguments requires that the usage error returned for a
