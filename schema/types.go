@@ -22,7 +22,10 @@
 // supported way to build a descriptor.
 package schema
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // ReferenceAction defines the action to take when a referenced row changes.
 type ReferenceAction string
@@ -246,10 +249,12 @@ type RelationshipDef struct {
 	ReferencedColumns []string
 }
 
-// Clone returns a copy of r that does not share slices with r.
+// Clone returns a copy of r that shares no slice with r. Each field keeps
+// the source's own nilness: a nil field clones to nil, and a
+// stated-but-empty one clones to a non-nil empty slice.
 func (r RelationshipDef) Clone() RelationshipDef {
-	r.Columns = append([]string(nil), r.Columns...)
-	r.ReferencedColumns = append([]string(nil), r.ReferencedColumns...)
+	r.Columns = slices.Clone(r.Columns)
+	r.ReferencedColumns = slices.Clone(r.ReferencedColumns)
 	return r
 }
 

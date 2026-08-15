@@ -328,13 +328,22 @@ func diffNamed[T any](old, new []T, label string, name func(T) string, describeC
 
 // normalizeForDiff returns a copy of table suitable for structural
 // comparison: RowName cleared, since it is a hint Tables() applies rather
-// than something the database states, and every list field -- at the table
-// level and within each constraint or index -- normalized so an unset
-// (nil) slice compares equal to a stated-but-empty one. Without this, a
-// table read back from a hand-written struct literal (which the encoder
-// omits a zero-length field from entirely, leaving it nil once compiled)
-// would spuriously differ from the same table fresh out of inspection,
-// which does not always leave the same field nil.
+// than something the database states, and every list the assignments below
+// name -- the table's own PrimaryKey, and the column and element lists of
+// each unique constraint, exclusion constraint, index and foreign key --
+// normalized so an unset (nil) slice compares equal to a stated-but-empty
+// one. Every other container is compared exactly as the descriptor states
+// it. Without this, a table read back from a hand-written struct literal
+// (which the encoder omits a zero-length field from entirely, leaving it
+// nil once compiled) would spuriously differ from the same table fresh out
+// of inspection, which does not always leave the same field nil.
+//
+// The table's own constraint, index and column lists need no such
+// normalization: diffColumns and diffNamed key each of them by element name
+// and compare the elements, so an empty list and an unset one both yield no
+// elements and read identically. TableDef.Clone preserves each field's
+// nilness rather than folding an empty list to nil, so nothing here may
+// rely on it to erase the difference.
 func normalizeForDiff(table schema.TableDef) schema.TableDef {
 	table = table.Clone()
 	table.RowName = ""
