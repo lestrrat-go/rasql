@@ -295,7 +295,7 @@ type commitFailureTx struct {
 // not driver.ErrBadConn, so the connection returns to the pool and
 // database/sql's own accounting is what the test observes.
 func (tx commitFailureTx) Commit() error {
-	_ = tx.Tx.Rollback()
+	_ = tx.Rollback()
 	return errCommitRefused
 }
 
