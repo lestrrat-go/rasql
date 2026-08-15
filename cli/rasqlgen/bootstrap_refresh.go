@@ -25,16 +25,16 @@ import (
 // program's own build time.
 func loadExistingDescriptionTables(ctx context.Context, directory string) ([]schema.TableDef, error) {
 	// directory always names a directory here, so it always takes the
-	// directory-pattern prefix; it is passed unprefixed as well, because
-	// that is the value the caller typed and the one an error should name.
-	// directory is `bootstrap`'s -output flag exactly as given, so a bare
-	// relative -output is now reported back as the user wrote it. Before
-	// resolveSchemaSourcePackage took a separate name to report, every
-	// message on this path named the prefixed pattern instead, so
-	// "resolve schema source internal/tables" reads where it once read
-	// "resolve schema source ./internal/tables". That is deliberate, and
-	// TestLoadExistingDescriptionTablesErrorNamesTheDirectoryTyped pins it.
-	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, asDirectoryPattern(directory), directory)
+	// directory-pattern prefix, and the same prefixed pattern is passed as
+	// the name errors report. That keeps a bootstrap refresh naming what it
+	// has always named: an -output of "internal/tables" is reported back as
+	// "resolve schema source ./internal/tables". Only `schema -source`,
+	// whose value the user may type in either form, reports a name other
+	// than the pattern go list is handed.
+	// TestLoadExistingDescriptionTablesErrorNamesTheDirectoryPattern pins
+	// this path's side of that.
+	pattern := asDirectoryPattern(directory)
+	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, pattern, pattern)
 	if err != nil {
 		return nil, err
 	}

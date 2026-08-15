@@ -218,9 +218,12 @@ type schemaSourcePackageInfo struct {
 // directory so a relative pattern is read the way the user typed it.
 //
 // pattern is the package pattern go list is asked to resolve, which a
-// caller may have rewritten from what the user typed. source is that
-// original value, and is the only one of the two any message here reports,
-// so an error names what the user wrote rather than a rewrite of it.
+// caller may have rewritten from the value it was handed. source is the
+// only one of the two any message here reports, so each caller chooses
+// which name its errors carry: runSchemaSource passes the -source value the
+// user typed, so a rewrite of it never reaches a message, while
+// loadExistingDescriptionTables passes the rewritten pattern itself, which
+// is the name a bootstrap refresh has always reported.
 //
 // go list -json is a resolver only, not an error gate: measured on
 // go1.26.1, it exits 0 on a type error, a truncated file, and an
