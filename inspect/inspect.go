@@ -1789,7 +1789,7 @@ func sqliteUniqueConstraints(statement *sqlitequery.CreateTableStatement, tableN
 	if statement == nil {
 		return nil, nil
 	}
-	constraints := make([]schema.UniqueDef, 0)
+	var constraints []schema.UniqueDef
 	for _, column := range statement.Columns {
 		for _, constraint := range column.Constraints {
 			if constraint.Kind != sqlitequery.ConstraintUnique {
@@ -1917,7 +1917,7 @@ func sqliteChecks(statement *sqlitequery.CreateTableStatement, tableName string)
 	if statement == nil {
 		return nil, nil
 	}
-	checks := make([]schema.CheckDef, 0)
+	var checks []schema.CheckDef
 	for _, column := range statement.Columns {
 		for _, constraint := range column.Constraints {
 			if constraint.Kind != sqlitequery.ConstraintCheck {
@@ -2055,6 +2055,9 @@ func (i Inspector) sqliteForeignKeys(ctx context.Context, databaseName, tableNam
 		keys[index].key.Match = match
 		keys[index].key.Deferrable = declared.deferrable
 	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
 	result := make([]schema.ForeignKeyDef, len(keys))
 	for index := range keys {
 		result[index] = keys[index].key
@@ -2103,8 +2106,8 @@ func (i Inspector) sqliteIndexes(ctx context.Context, databaseName, tableName st
 	}
 	defer func() { _ = rows.Close() }()
 
-	indexes := make([]schema.IndexDef, 0)
-	uniqueConstraints := make([]schema.UniqueDef, 0)
+	var indexes []schema.IndexDef
+	var uniqueConstraints []schema.UniqueDef
 	for rows.Next() {
 		var sequence int64
 		var name string
