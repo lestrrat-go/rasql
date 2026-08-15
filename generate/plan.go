@@ -86,7 +86,9 @@ type File struct {
 	// holding it, is a symbolic link. Writing through such a link is
 	// deliberate, so a Resolved outside the store's Dir is reported here
 	// rather than refused. It is unique across a plan's files: Store.Plan
-	// rejects two files that resolve to one destination.
+	// rejects two files that resolve to one destination, and asks the
+	// filesystem whether two spellings are one file rather than comparing
+	// the two strings.
 	Resolved string
 	// Source is the file's complete contents.
 	Source []byte
@@ -106,6 +108,11 @@ func (p Plan) Files() []File {
 // wrote and this plan does not write, sorted by path: the per-table file of
 // a dropped table, the output of a query that was removed, or a file
 // another tool wrote with rasqlgen's own marker.
+//
+// A file the plan does write is never one of these, whatever it is spelled
+// as on disk. On a filesystem that ignores case in file names, a directory
+// holding Q_gen.go and a plan writing q_gen.go name one file, and it is the
+// planned file rather than a leftover.
 func (p Plan) Orphans() []string {
 	return append([]string(nil), p.orphans...)
 }
@@ -126,7 +133,11 @@ func (p Plan) Orphans() []string {
 //     planned file's destination is then re-resolved through
 //     genfile.ResolveDestination, and no two of them may resolve to one
 //     destination, nor may any of them resolve onto a file step 3 deletes.
-//     Finally every recorded orphan is re-read, through the open
+//     Whether two destinations are one file is put to the filesystem, not
+//     decided by comparing the two paths as strings: a filesystem that
+//     ignores case in file names holds a single file for a_gen.go and
+//     A_gen.go, and neither resolving nor planning folds the two spellings
+//     together. Finally every recorded orphan is re-read, through the open
 //     directory, to confirm it is still a regular file carrying rasqlgen's
 //     marker on its first line. All of it is checked fresh here rather
 //     than trusted from Plan time, since a Plan can be held and acted on
@@ -191,43 +202,55 @@ func (p Plan) Commit() error {
 		return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory Store.Plan read, so this plan would write and delete in a directory it never looked at; rerun Store.Plan", p.dir)
 	}
 
-	// deletions maps the destination each recorded orphan occupies to the
-	// orphan itself, so the loop below can refuse a planned file that
-	// resolves onto one. The key is spelled the way a resolved destination
-	// is spelled -- the directory as the filesystem reaches it, joined with
-	// the file's own name -- because that is the only form the two can be
-	// compared in. Every orphan is a direct child of the directory just
+	// deletions pairs every recorded orphan with the destination a planned
+	// file has to resolve to in order to land on it, so the loop below can
+	// refuse such a file. That destination is spelled the way a resolved
+	// destination is spelled -- the directory as the filesystem reaches it,
+	// joined with the file's own name -- because that is the form the two
+	// are compared in. Every orphan is a direct child of the directory just
 	// authorized, which is what makes its base name enough to rebuild it.
 	realDir, err := filepath.EvalSymlinks(p.dir)
 	if err != nil {
 		return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
 	}
-	deletions := make(map[string]string, len(p.orphans))
+	deletions := make([]plannedDeletion, 0, len(p.orphans))
 	for _, orphan := range p.orphans {
-		deletions[filepath.Join(realDir, filepath.Base(orphan))] = orphan
+		deletions = append(deletions, plannedDeletion{orphan: orphan, destination: filepath.Join(realDir, filepath.Base(orphan))})
 	}
 
-	// destinations holds every destination resolved here, at commit time,
-	// rather than discarding each one as soon as it resolves. Two planned
-	// files that land in one file, or a planned file that lands on a file
-	// step 3 deletes, are both invisible to Store.Plan's own check once a
-	// symbolic link appears after it ran -- and the second one is not a
-	// stale write but a lost file: step 2 writes the planned bytes into the
-	// orphan and step 3 then deletes it, leaving neither file on disk and
-	// Commit reporting success.
-	destinations := make(map[string]string, len(p.files))
+	// writes holds every destination resolved here, at commit time, rather
+	// than discarding each one as soon as it resolves. Two planned files
+	// that land in one file, or a planned file that lands on a file step 3
+	// deletes, are both invisible to Store.Plan's own check once a symbolic
+	// link appears after it ran -- and the second one is not a stale write
+	// but a lost file: step 2 writes the planned bytes into the orphan and
+	// step 3 then deletes it, leaving neither file on disk and Commit
+	// reporting success.
+	//
+	// Both comparisons go through sameDestination rather than through map
+	// lookups on the resolved path, because two destinations that name one
+	// file are not always spelled alike: a case-insensitive filesystem
+	// holds a single entry for a_gen.go and A_gen.go, and a resolved path
+	// keeps whichever of the two the caller spelled.
+	writes := make([]plannedWrite, 0, len(p.files))
 	for _, f := range p.files {
 		resolved, err := genfile.ResolveDestination(f.Path)
 		if err != nil {
 			return err
 		}
-		if owner, exists := destinations[resolved]; exists {
-			return fmt.Errorf("generate: refusing to commit: %s and %s both resolve to %s, so one would overwrite the other; rerun Store.Plan", owner, f.Path, resolved)
+		for _, w := range writes {
+			if !sameDestination(w.destination, resolved) {
+				continue
+			}
+			return fmt.Errorf("generate: refusing to commit: %s and %s both resolve to %s, so one would overwrite the other; rerun Store.Plan", w.path, f.Path, oneDestination(resolved, w.destination))
 		}
-		if orphan, exists := deletions[resolved]; exists {
-			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, orphan)
+		for _, d := range deletions {
+			if !sameDestination(d.destination, resolved) {
+				continue
+			}
+			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, oneDestination(resolved, d.orphan))
 		}
-		destinations[resolved] = f.Path
+		writes = append(writes, plannedWrite{path: f.Path, destination: resolved})
 	}
 	for _, orphan := range p.orphans {
 		marker, err := hasGenfileMarker(dir, filepath.Base(orphan))
@@ -290,11 +313,104 @@ func (p Plan) Commit() error {
 	return nil
 }
 
+// plannedWrite is one planned file paired with the destination its path
+// resolved to, kept so a second file that lands on that same destination can
+// be refused naming the first.
+type plannedWrite struct {
+	path        string
+	destination string
+}
+
+// plannedDeletion is one recorded orphan paired with the destination a
+// planned file has to resolve to in order to land on it.
+type plannedDeletion struct {
+	orphan      string
+	destination string
+}
+
+// sameDestination reports whether two resolved destinations name one file.
+//
+// String equality is not enough. A filesystem that ignores case in file
+// names -- macOS's default APFS, and NTFS -- holds a single entry for
+// a_gen.go and A_gen.go, and nothing along the way folds the two spellings
+// together: filepath.EvalSymlinks does not canonicalize case, and
+// genfile.ResolveDestination keeps whichever spelling the caller used. Two
+// spellings that fold together are therefore put to the filesystem itself,
+// with os.SameFile, so a case-sensitive filesystem -- where a_gen.go and
+// A_gen.go really are two files -- keeps them apart. A destination that does
+// not exist yet cannot be compared this way and is only ever equal to its
+// own spelling; Store.Plan's own file-name check is what refuses a pair of
+// planned names that fold together before either exists.
+//
+// Two names that do not fold together are never one destination here even
+// when they share an inode. A hard link is a second name this package may
+// write or delete on its own terms, and genfile.Write renames over one name
+// rather than writing through it, which leaves the other name holding its
+// own bytes.
+func sameDestination(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if !strings.EqualFold(a, b) {
+		return false
+	}
+	aInfo, err := os.Lstat(a)
+	if err != nil {
+		return false
+	}
+	bInfo, err := os.Lstat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(aInfo, bInfo)
+}
+
+// ownsEntry reports whether the entry named name in root, whose own Lstat
+// result is info, is one of the planned file names in own.
+//
+// It is sameDestination's rule applied inside an already-open directory: the
+// same name, or a name that folds together with a planned one and that the
+// filesystem confirms is this very entry. Everything it reads goes through
+// root rather than through a path, for the reason findOrphans opens the
+// directory once to begin with -- a path is resolved afresh on every call,
+// so two reads of the same string are not promised to describe one file.
+func ownsEntry(root *os.Root, own map[string]struct{}, name string, info fs.FileInfo) bool {
+	if _, exists := own[name]; exists {
+		return true
+	}
+	for planned := range own {
+		if !strings.EqualFold(planned, name) {
+			continue
+		}
+		plannedInfo, err := root.Lstat(planned)
+		if err != nil {
+			continue
+		}
+		if os.SameFile(plannedInfo, info) {
+			return true
+		}
+	}
+	return false
+}
+
+// oneDestination describes, for an error message, the single destination two
+// spellings name: the spelling itself when both name it the same way, and
+// both spellings when they differ, which is what a filesystem that ignores
+// case in file names produces for two names differing only in case.
+func oneDestination(resolved, recorded string) string {
+	if resolved == recorded {
+		return recorded
+	}
+	return fmt.Sprintf("%s, which is the same file as %s", resolved, recorded)
+}
+
 // findOrphans reports every leftover file in dir: a regular file directly in
 // dir, whose name ends in _gen.go or _gen_test.go, whose first line is
-// exactly genfile.Marker, and whose path is not one of planned's own paths.
-// A missing dir reports no orphans, matching Store.Plan's promise not to
-// create anything.
+// exactly genfile.Marker, and which is not one of planned's own files. An
+// entry a case-insensitive filesystem holds for a planned name spelled
+// differently is that planned file rather than a leftover, so it is not
+// reported here and not deleted; see ownsEntry. A missing dir reports no
+// orphans, matching Store.Plan's promise not to create anything.
 //
 // It also reports what the filesystem said dir itself was, so Plan.Commit
 // can require that the same path still reaches the same directory before it
@@ -329,9 +445,13 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// own holds each planned file's own name rather than its path: every
+	// planned path is a direct child of dir, so the name is what
+	// distinguishes them, and a name is also what ownsEntry can hand back to
+	// the open directory to compare two entries by identity.
 	own := make(map[string]struct{}, len(planned))
 	for _, f := range planned {
-		own[f.Path] = struct{}{}
+		own[filepath.Base(f.Path)] = struct{}{}
 	}
 
 	orphans := make([]string, 0)
@@ -350,8 +470,7 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		if _, isOwn := own[path]; isOwn {
+		if ownsEntry(root, own, name, info) {
 			continue
 		}
 		marker, err := hasGenfileMarker(root, name)
@@ -361,7 +480,7 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 		if !marker {
 			continue
 		}
-		orphans = append(orphans, path)
+		orphans = append(orphans, filepath.Join(dir, name))
 	}
 	sort.Strings(orphans)
 	return orphans, dirInfo, nil

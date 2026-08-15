@@ -172,6 +172,41 @@ func TestPlanCommitRefusesAPlannedFileThatResolvesOntoALeftover(t *testing.T) {
 	require.NotZero(t, info.Mode()&fs.ModeSymlink)
 }
 
+// TestPlanCommitRefusesAPlannedFileThatResolvesOntoALeftoverSpelledApart is
+// the same loss reached through a spelling rather than a path. The recorded
+// leftover is Dropped_gen.go and the link sends the planned file to
+// dropped_gen.go, which is that same entry on a filesystem that ignores case
+// in file names. Commit compares the two by asking the filesystem, so the
+// run is refused here too; comparing the resolved paths as strings let it
+// through, and step 3 then deleted what step 2 had just written.
+func TestPlanCommitRefusesAPlannedFileThatResolvesOntoALeftoverSpelledApart(t *testing.T) {
+	dir := caseInsensitiveTempDir(t)
+	require.NoError(t, generate.WritePackage("store", dir, usersTableDef()))
+
+	orphan := filepath.Join(dir, "Dropped_gen.go")
+	require.NoError(t, os.WriteFile(orphan, markerFile, 0o600))
+
+	store := generate.Store{Package: "store", Dir: dir, Tables: []schema.TableDef{usersTableDef()}, Prune: true}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	require.Equal(t, []string{orphan}, plan.Orphans())
+
+	// The link appears after Store.Plan looked, which is why the plan's own
+	// resolved destinations cannot see it, and it names the leftover under
+	// the spelling the plan did not record.
+	planned := filepath.Join(dir, "users_gen.go")
+	require.NoError(t, os.Remove(planned))
+	require.NoError(t, os.Symlink(filepath.Join(dir, "dropped_gen.go"), planned))
+
+	err = plan.Commit()
+	require.ErrorContains(t, err, "deletes as a leftover")
+	require.ErrorContains(t, err, orphan)
+
+	leftover, readErr := os.ReadFile(orphan)
+	require.NoError(t, readErr)
+	require.Equal(t, markerFile, leftover)
+}
+
 // TestStoreWriteRefusesAPlannedFileAlreadyLinkedToALeftover is the same loss
 // through one Store.Write, with the link already in place before the plan is
 // built rather than appearing after it. Store.Plan cannot refuse it: the link

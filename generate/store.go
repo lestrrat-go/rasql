@@ -105,7 +105,13 @@ type Query struct {
 	// rather than refused, and File.Resolved reports what a commit would
 	// actually replace. What such a link may not do is land this file on
 	// a destination another planned file also resolves to, which Plan
-	// rejects. Required.
+	// rejects.
+	//
+	// A value that differs only in case from a file name a table, the
+	// descriptor file, or another query already claims is rejected too,
+	// on every platform: a filesystem that ignores case in file names --
+	// macOS's default APFS, and NTFS -- holds one file for both, so a
+	// plan that wrote both would keep only one. Required.
 	Output string
 
 	// Dialect selects the placeholder style. Nil means the Store's own
@@ -119,13 +125,15 @@ type Query struct {
 // It resolves Root and Dir, validates the package name, every descriptor,
 // every hint key, and every generated identifier; renders every per-table
 // file, the descriptor file, the generated descriptor test, and every
-// query; rejects two files that would land on the same path, a query output
-// that is not a plain file name inside Dir, and a query function that
-// redeclares a name the generated package already uses; refuses a
-// destination that exists and is not a file rasqlgen wrote; and records
-// every file already in Dir that rasqlgen wrote and this plan does not
-// write, along with which directory it found them in, so a commit can tell
-// that Dir still names that same directory before deleting any of them.
+// query; rejects two files whose names are one claim -- the same name, or
+// two names differing only in case, which a filesystem that ignores case in
+// file names holds a single file for -- a query output that is not a plain
+// file name inside Dir, and a query function that redeclares a name the
+// generated package already uses; refuses a destination that exists and is
+// not a file rasqlgen wrote; and records every file already in Dir that
+// rasqlgen wrote and this plan does not write, along with which directory it
+// found them in, so a commit can tell that Dir still names that same
+// directory before deleting any of them.
 //
 // Each planned file also carries the destination its path resolves to, in
 // File.Resolved: a path that is a symbolic link, or that sits in a
@@ -134,7 +142,9 @@ type Query struct {
 // of being described by File.Path alone. Resolving through a link is
 // allowed, and where it resolves to is not restricted; two planned files
 // that resolve to one destination are an error, since a commit would write
-// both and keep only the last.
+// both and keep only the last. One destination reached under two spellings
+// is still one destination: a filesystem that ignores case in file names is
+// asked, rather than the two strings compared.
 func (s Store) Plan() (Plan, error) {
 	// The blank identifier is checked separately because
 	// token.IsIdentifier accepts it: it is an identifier everywhere else
@@ -185,15 +195,16 @@ func (s Store) Plan() (Plan, error) {
 	// checked against the same set below. Two tables that lower to the
 	// same file name collide even when schemagen assigns them distinct
 	// generated identifiers, which is why this check exists beside
-	// Validate rather than instead of it.
+	// Validate rather than instead of it. It is keyed through filenameKey,
+	// so two names differing only in case are one claim.
 	filenames := make(map[string]string, len(sorted)+1+len(s.Queries))
-	filenames[schemaDescriptorFilename] = "the schema descriptor file"
+	filenames[filenameKey(schemaDescriptorFilename)] = "the schema descriptor file " + schemaDescriptorFilename
 	for _, table := range sorted {
 		filename := schemaOutputFilename(table.Name)
-		if owner, exists := filenames[filename]; exists {
+		if owner, exists := filenames[filenameKey(filename)]; exists {
 			return Plan{}, fmt.Errorf("generate: table %q generates %q, which collides with %s", table.Name, filename, owner)
 		}
-		filenames[filename] = fmt.Sprintf("table %q", table.Name)
+		filenames[filenameKey(filename)] = fmt.Sprintf("table %q, which generates %s", table.Name, filename)
 	}
 
 	// identifiers tracks every package-level identifier the generated files
@@ -248,25 +259,29 @@ func (s Store) Plan() (Plan, error) {
 	// symbolic link. Discarding it would leave File.Path claiming a
 	// destination nothing verified it had.
 	//
-	// destinations holds every resolved destination so two planned files
-	// that land in one file are refused. The name check above cannot see
-	// this: two distinct names inside Dir are distinct keys there, yet a
-	// symbolic link can point both at one file, and a commit would then
-	// write both and keep only the last. This is the only place that
-	// holds every resolved destination at once. Resolving somewhere
+	// writes holds every resolved destination so two planned files that
+	// land in one file are refused. The name check above cannot see this:
+	// two names inside Dir that do not fold together are separate claims
+	// there, yet a symbolic link can point both at one file, and a commit
+	// would then write both and keep only the last. This is the only place
+	// that holds every resolved destination at once. Resolving somewhere
 	// outside Dir stays allowed -- genfile.Write follows an output link
 	// on purpose -- and only a destination a second planned file also
-	// claims is an error.
-	destinations := make(map[string]string, len(files))
+	// claims is an error. sameDestination decides that, since two
+	// destinations naming one file are not always spelled alike.
+	writes := make([]plannedWrite, 0, len(files))
 	for i := range files {
 		resolved, err := genfile.ResolveDestination(files[i].Path)
 		if err != nil {
 			return Plan{}, err
 		}
-		if owner, exists := destinations[resolved]; exists {
-			return Plan{}, fmt.Errorf("generate: %s and %s both resolve to %s, so one would overwrite the other", owner, files[i].Path, resolved)
+		for _, w := range writes {
+			if !sameDestination(w.destination, resolved) {
+				continue
+			}
+			return Plan{}, fmt.Errorf("generate: %s and %s both resolve to %s, so one would overwrite the other", w.path, files[i].Path, oneDestination(resolved, w.destination))
 		}
-		destinations[resolved] = files[i].Path
+		writes = append(writes, plannedWrite{path: files[i].Path, destination: resolved})
 		files[i].Resolved = resolved
 	}
 
@@ -321,10 +336,10 @@ func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[s
 	if !strings.HasSuffix(q.Output, "_gen.go") {
 		return File{}, fmt.Errorf("output %q must end in _gen.go", q.Output)
 	}
-	if owner, exists := filenames[q.Output]; exists {
+	if owner, exists := filenames[filenameKey(q.Output)]; exists {
 		return File{}, fmt.Errorf("query %q output %q collides with %s", q.Function, q.Output, owner)
 	}
-	filenames[q.Output] = fmt.Sprintf("query %q", q.Function)
+	filenames[filenameKey(q.Output)] = fmt.Sprintf("query %q, which generates %s", q.Function, q.Output)
 	identifiers[q.Function] = fmt.Sprintf("query %q", q.Function)
 
 	d := q.Dialect
@@ -372,6 +387,24 @@ func validateQueryOutputName(output string) error {
 		return fmt.Errorf("output %q must be a file name directly inside the store's Dir, not a path", output)
 	}
 	return nil
+}
+
+// filenameKey reports the key two generated file names are one claim under.
+//
+// Case is folded away, on every platform. A filesystem that ignores case in
+// file names -- macOS's default APFS, and NTFS -- holds a single entry for
+// a_gen.go and A_gen.go, so a store planning both writes one file there and
+// loses the other, and Plan cannot ask the filesystem which it is dealing
+// with: neither name exists yet when this check runs. Folding everywhere
+// rather than only where it matters also keeps one Store planning the same
+// package wherever it runs, which is the point of a generated package that
+// is checked in and built on whatever machine checks it out.
+//
+// Only Query.Output can reach here spelled in mixed case. A table's file
+// name comes from schemaOutputFilename, which lowercases the table name, and
+// the descriptor file names are lowercase constants.
+func filenameKey(name string) string {
+	return strings.ToLower(name)
 }
 
 // isExportedGoIdentifier reports whether name is a valid, exported Go
