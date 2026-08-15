@@ -144,7 +144,9 @@ type Query struct {
 // that resolve to one destination are an error, since a commit would write
 // both and keep only the last. One destination reached under two spellings
 // is still one destination: a filesystem that ignores case in file names is
-// asked, rather than the two strings compared.
+// asked, rather than the two strings compared, and two spellings that fold
+// together while neither of them exists yet -- which nothing on disk tells
+// apart -- are refused rather than planned as two files.
 func (s Store) Plan() (Plan, error) {
 	// The blank identifier is checked separately because
 	// token.IsIdentifier accepts it: it is an identifier everywhere else
@@ -267,8 +269,11 @@ func (s Store) Plan() (Plan, error) {
 	// that holds every resolved destination at once. Resolving somewhere
 	// outside Dir stays allowed -- genfile.Write follows an output link
 	// on purpose -- and only a destination a second planned file also
-	// claims is an error. sameDestination decides that, since two
-	// destinations naming one file are not always spelled alike.
+	// claims is an error. matchDestinations decides that, since two
+	// destinations naming one file are not always spelled alike, and a pair
+	// that folds together with neither of the two on disk yet is refused
+	// rather than allowed: nothing tells such a pair apart before the first
+	// write creates the entry a case-insensitive filesystem holds for both.
 	writes := make([]plannedWrite, 0, len(files))
 	for i := range files {
 		resolved, err := genfile.ResolveDestination(files[i].Path)
@@ -276,10 +281,11 @@ func (s Store) Plan() (Plan, error) {
 			return Plan{}, err
 		}
 		for _, w := range writes {
-			if !sameDestination(w.destination, resolved) {
+			match := matchDestinations(w.destination, resolved)
+			if match == distinctDestinations {
 				continue
 			}
-			return Plan{}, fmt.Errorf("generate: %s and %s both resolve to %s, so one would overwrite the other", w.path, files[i].Path, oneDestination(resolved, w.destination))
+			return Plan{}, fmt.Errorf("generate: %s and %s both resolve to %s, so one would overwrite the other", w.path, files[i].Path, match.describe(resolved, w.destination))
 		}
 		writes = append(writes, plannedWrite{path: files[i].Path, destination: resolved})
 		files[i].Resolved = resolved

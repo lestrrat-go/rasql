@@ -98,7 +98,9 @@ type File struct {
 	// rather than refused. It is unique across a plan's files: Store.Plan
 	// rejects two files that resolve to one destination, and asks the
 	// filesystem whether two spellings are one file rather than comparing
-	// the two strings.
+	// the two strings. Two spellings that fold together and name nothing
+	// yet are rejected as well, since nothing tells them apart before one
+	// of them exists.
 	Resolved string
 	// Source is the file's complete contents.
 	Source []byte
@@ -149,7 +151,9 @@ func (p Plan) Orphans() []string {
 //     decided by comparing the two paths as strings: a filesystem that
 //     ignores case in file names holds a single file for a_gen.go and
 //     A_gen.go, and neither resolving nor planning folds the two spellings
-//     together. The directory holding each resolved destination is opened
+//     together. Two spellings that fold together and that the filesystem
+//     cannot answer for, because neither of them exists yet, are refused as
+//     one destination rather than allowed as two. The directory holding each resolved destination is opened
 //     here too, so steps 2 and 4 write through a directory this step
 //     authorized instead of resolving that path a second time. Finally
 //     every recorded orphan is re-read, through the open directory, to
@@ -249,11 +253,15 @@ func (p Plan) Commit() error {
 	// step 3 then deletes it, leaving neither file on disk and Commit
 	// reporting success.
 	//
-	// Both comparisons go through sameDestination rather than through map
+	// Both comparisons go through matchDestinations rather than through map
 	// lookups on the resolved path, because two destinations that name one
 	// file are not always spelled alike: a case-insensitive filesystem
 	// holds a single entry for a_gen.go and A_gen.go, and a resolved path
-	// keeps whichever of the two the caller spelled.
+	// keeps whichever of the two the caller spelled. A pair that folds
+	// together and that nothing on disk tells apart -- two destinations
+	// neither of which exists yet -- counts as one destination here, since
+	// there is no answer to be had before the first of the two writes
+	// creates it.
 	//
 	// The directory holding each destination is opened here as well, and
 	// steps 2 and 4 write through it. Handing the planned path to the
@@ -270,16 +278,18 @@ func (p Plan) Commit() error {
 			return err
 		}
 		for _, w := range writes {
-			if !sameDestination(w.destination, resolved) {
+			match := matchDestinations(w.destination, resolved)
+			if match == distinctDestinations {
 				continue
 			}
-			return fmt.Errorf("generate: refusing to commit: %s and %s both resolve to %s, so one would overwrite the other; rerun Store.Plan", w.file.Path, f.Path, oneDestination(resolved, w.destination))
+			return fmt.Errorf("generate: refusing to commit: %s and %s both resolve to %s, so one would overwrite the other; rerun Store.Plan", w.file.Path, f.Path, match.describe(resolved, w.destination))
 		}
 		for _, d := range deletions {
-			if !sameDestination(d.destination, resolved) {
+			match := matchDestinations(d.destination, resolved)
+			if match == distinctDestinations {
 				continue
 			}
-			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, oneDestination(resolved, d.orphan))
+			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, match.describe(resolved, d.orphan))
 		}
 		into, err := handles.open(filepath.Dir(resolved))
 		if err != nil {
@@ -591,7 +601,25 @@ type plannedDeletion struct {
 	destination string
 }
 
-// sameDestination reports whether two resolved destinations name one file.
+// destinationMatch is what comparing two resolved destinations concluded:
+// two files, one file, or a pair nothing on disk tells apart.
+type destinationMatch int
+
+const (
+	// distinctDestinations is two files: two spellings that do not fold
+	// together, or two the filesystem itself reported as separate files.
+	distinctDestinations destinationMatch = iota
+	// oneDestination is one file: one spelling used twice, or two the
+	// filesystem confirmed are a single entry.
+	oneDestination
+	// undecidedDestinations is a pair that folds together and that nothing
+	// on disk answers for, because neither spelling names anything yet or
+	// because the filesystem could not be asked. Every caller treats it as
+	// one destination; see matchDestinations for why.
+	undecidedDestinations
+)
+
+// matchDestinations reports whether two resolved destinations name one file.
 //
 // String equality is not enough. A filesystem that ignores case in file
 // names -- macOS's default APFS, and NTFS -- holds a single entry for
@@ -600,40 +628,70 @@ type plannedDeletion struct {
 // genfile.ResolveDestination keeps whichever spelling the caller used. Two
 // spellings that fold together are therefore put to the filesystem itself,
 // with os.SameFile, so a case-sensitive filesystem -- where a_gen.go and
-// A_gen.go really are two files -- keeps them apart. A destination that does
-// not exist yet cannot be compared this way and is only ever equal to its
-// own spelling; Store.Plan's own file-name check is what refuses a pair of
-// planned names that fold together before either exists.
+// A_gen.go really are two files -- keeps them apart.
+//
+// The filesystem only answers for a destination that exists. One spelling
+// naming an existing file while the other names nothing is an answer all the
+// same, and it is "two files": a filesystem that ignored case would have
+// found that one entry under both spellings. A pair where neither spelling
+// exists has no answer at all, and is reported undecided rather than
+// distinct, because reporting it distinct is a commit that writes both
+// spellings into the one entry a case-insensitive filesystem holds, deletes
+// nothing, and reports success with one planned file's bytes gone. A pair the
+// filesystem could not be asked about, because a look at either spelling
+// failed for any other reason, is reported the same conservative way.
+//
+// Refusing an undecided pair costs a case-sensitive filesystem, where the two
+// really are two files, the unusual plan that reaches two not-yet-existing
+// destinations spelled apart only by case through symbolic links. Store.Plan
+// already makes that trade for the names inside Dir, which filenameKey folds
+// on every platform for the same reason: one Store plans the same package
+// wherever it runs.
 //
 // Two names that do not fold together are never one destination here even
 // when they share an inode. A hard link is a second name this package may
 // write or delete on its own terms, and internal/genfile renames over one name
 // rather than writing through it, which leaves the other name holding its
 // own bytes.
-func sameDestination(a, b string) bool {
+//
+// What stays open is the window between the two looks: a spelling created or
+// removed in between is answered for a pair that no longer holds. Closing
+// that needs the commit serialized against every other writer, which is a
+// lock this package does not own.
+func matchDestinations(a, b string) destinationMatch {
 	if a == b {
-		return true
+		return oneDestination
 	}
 	if !strings.EqualFold(a, b) {
-		return false
+		return distinctDestinations
 	}
-	aInfo, err := os.Lstat(a)
-	if err != nil {
-		return false
+	aInfo, aErr := os.Lstat(a)
+	bInfo, bErr := os.Lstat(b)
+	if aErr == nil && bErr == nil {
+		if os.SameFile(aInfo, bInfo) {
+			return oneDestination
+		}
+		return distinctDestinations
 	}
-	bInfo, err := os.Lstat(b)
-	if err != nil {
-		return false
+	if aErr == nil && errors.Is(bErr, fs.ErrNotExist) {
+		return distinctDestinations
 	}
-	return os.SameFile(aInfo, bInfo)
+	if bErr == nil && errors.Is(aErr, fs.ErrNotExist) {
+		return distinctDestinations
+	}
+	return undecidedDestinations
 }
 
 // ownsEntry reports whether the entry named name in root, whose own Lstat
 // result is info, is one of the planned file names in own.
 //
-// It is sameDestination's rule applied inside an already-open directory: the
-// same name, or a name that folds together with a planned one and that the
-// filesystem confirms is this very entry. Everything it reads goes through
+// It is matchDestinations' question asked inside an already-open directory,
+// where the filesystem can always answer it: the same name, or a name that
+// folds together with a planned one and that the filesystem confirms is this
+// very entry. There is no undecided pair here, because name is an entry that
+// exists -- a planned name that folds together with it and yet names nothing
+// in this directory is this filesystem telling the two spellings apart, which
+// makes the entry a leftover rather than the planned file. Everything it reads goes through
 // root rather than through a path, for the reason findOrphans opens the
 // directory once to begin with -- a path is resolved afresh on every call,
 // so two reads of the same string are not promised to describe one file.
@@ -656,13 +714,16 @@ func ownsEntry(root *os.Root, own map[string]struct{}, name string, info fs.File
 	return false
 }
 
-// oneDestination describes, for an error message, the single destination two
-// spellings name: the spelling itself when both name it the same way, and
-// both spellings when they differ, which is what a filesystem that ignores
-// case in file names produces for two names differing only in case.
-func oneDestination(resolved, recorded string) string {
+// describe names, for an error message, the single destination two spellings
+// are being treated as: the spelling itself when both name it the same way,
+// both spellings when the filesystem reported one file for them, and both
+// with what is not known about them when nothing on disk tells them apart.
+func (m destinationMatch) describe(resolved, recorded string) string {
 	if resolved == recorded {
 		return recorded
+	}
+	if m == undecidedDestinations {
+		return fmt.Sprintf("%s, which nothing on disk tells apart from %s: a filesystem that ignores case in file names holds one entry for the two", resolved, recorded)
 	}
 	return fmt.Sprintf("%s, which is the same file as %s", resolved, recorded)
 }

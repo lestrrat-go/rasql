@@ -91,6 +91,45 @@ func TestStorePlanKeepsACaseVariantOfAPlannedFile(t *testing.T) {
 		"the directory holds exactly the planned files, under one spelling each: %v", names)
 }
 
+// TestPlanCommitPrunesALeftoverSpelledApartFromAPlannedFile is the guard on
+// the rule that refuses two destinations nothing on disk tells apart: that
+// rule must not reach a pair the filesystem has already answered for. The
+// leftover Dropped_gen.go folds together with the planned dropped_gen.go and
+// exists, and one spelling naming a file while the other names nothing is the
+// filesystem saying they are two files.
+//
+// It runs on every filesystem rather than only a case-insensitive one,
+// because the outcome asserted here holds either way and neither form of it
+// is a refusal: where the two names are one entry it is the planned file and
+// there is nothing to prune, and where they are two files the leftover is
+// pruned and the planned file written beside where it was.
+func TestPlanCommitPrunesALeftoverSpelledApartFromAPlannedFile(t *testing.T) {
+	dir := t.TempDir()
+	leftover := filepath.Join(dir, "Dropped_gen.go")
+	require.NoError(t, os.WriteFile(leftover, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
+
+	sqlPath := filepath.Join(t.TempDir(), "q.sql")
+	require.NoError(t, os.WriteFile(sqlPath, []byte("SELECT 1"), 0o600))
+
+	store := generate.Store{
+		Package: "store",
+		Dir:     dir,
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{Input: sqlPath, Function: "Dropped", Output: "dropped_gen.go"}},
+		Prune:   true,
+	}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	require.NoError(t, plan.Commit())
+
+	for _, f := range plan.Files() {
+		written, readErr := os.ReadFile(f.Path)
+		require.NoError(t, readErr, "%s must hold its own planned bytes", f.Path)
+		require.Equal(t, f.Source, written)
+	}
+}
+
 // TestStorePlanRejectsTwoQueryOutputsThatShareAnEntry is the other half of
 // the same defect, on the filesystem that makes it real: two query outputs
 // spelled apart only by case are one file here, and a plan that wrote both

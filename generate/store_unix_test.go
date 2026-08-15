@@ -229,6 +229,84 @@ func TestStorePlanRejectsTwoFilesThatResolveToOneDestination(t *testing.T) {
 	require.NoFileExists(t, target, "Plan must not create the file the links point at")
 }
 
+// TestStorePlanRejectsTwoLinksToMissingNamesThatFoldTogether covers the pair
+// TestStorePlanRejectsTwoFilesThatResolveToOneDestination cannot reach: two
+// planned files inside Dir are symbolic links whose targets differ only in
+// case, and neither target exists yet. Asking the filesystem which file each
+// destination is has no answer before either of them exists, and reading that
+// silence as "two files" let the plan through -- a commit then wrote both
+// spellings into the single entry a filesystem that ignores case in file
+// names holds for the two, deleted nothing, and reported success with one
+// planned file's bytes nowhere on disk.
+//
+// The pair is refused on every filesystem, which is also why this test needs
+// no case-insensitive mount: Store.Plan already folds the names inside Dir
+// everywhere, for the same reason.
+func TestStorePlanRejectsTwoLinksToMissingNamesThatFoldTogether(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "store")
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(outside, 0o700))
+
+	upper := filepath.Join(outside, "A_gen.go")
+	lower := filepath.Join(outside, "a_gen.go")
+	require.NoError(t, os.Symlink(upper, filepath.Join(dir, "aa_gen.go")))
+	require.NoError(t, os.Symlink(lower, filepath.Join(dir, "bb_gen.go")))
+
+	store := generate.Store{
+		Package: "store",
+		Dir:     dir,
+		Tables:  []schema.TableDef{namedTableDef("aa"), namedTableDef("bb")},
+	}
+	plan, err := store.Plan()
+	require.ErrorContains(t, err, "both resolve to")
+	require.ErrorContains(t, err, "nothing on disk tells apart")
+	require.Empty(t, plan.Files(), "a rejected Store must plan no files at all")
+
+	require.NoFileExists(t, upper, "Plan must not create the file either link points at")
+	require.NoFileExists(t, lower, "Plan must not create the file either link points at")
+	entries, err := os.ReadDir(outside)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+// TestPlanCommitRefusesTwoLinksToMissingNamesThatFoldTogether is that same
+// pair appearing after the plan was built, which is the window Commit
+// re-resolves every destination for. Store.Plan cannot see it: when it ran,
+// both planned paths were ordinary names inside Dir that resolved to
+// themselves.
+func TestPlanCommitRefusesTwoLinksToMissingNamesThatFoldTogether(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "store")
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(outside, 0o700))
+
+	store := generate.Store{
+		Package: "store",
+		Dir:     dir,
+		Tables:  []schema.TableDef{namedTableDef("aa"), namedTableDef("bb")},
+	}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+
+	upper := filepath.Join(outside, "A_gen.go")
+	lower := filepath.Join(outside, "a_gen.go")
+	require.NoError(t, os.Symlink(upper, filepath.Join(dir, "aa_gen.go")))
+	require.NoError(t, os.Symlink(lower, filepath.Join(dir, "bb_gen.go")))
+
+	err = plan.Commit()
+	require.ErrorContains(t, err, "refusing to commit")
+	require.ErrorContains(t, err, "nothing on disk tells apart")
+
+	require.NoFileExists(t, upper)
+	require.NoFileExists(t, lower)
+	entries, err := os.ReadDir(outside)
+	require.NoError(t, err)
+	require.Empty(t, entries, "a refused commit must write nothing at all")
+}
+
 // TestPlanCommitRefusesAPlannedFileThatResolvesOntoALeftover covers a planned
 // destination that a symbolic link sends onto a file the same run deletes.
 // Nothing is written twice here and nothing is merely stale: step 2 writes
