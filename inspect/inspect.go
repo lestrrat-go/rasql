@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-sql-driver/mysql"
 	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
@@ -452,8 +451,7 @@ func (i Inspector) mySQLCheckColumnVisibility(ctx context.Context, tableName str
 	query := "SHOW CREATE TABLE `" + strings.ReplaceAll(tableName, "`", "``") + "`"
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1146 {
+		if number, ok := mysqlErrorNumber(err); ok && number == mysqlErrNoSuchTable {
 			return false, nil
 		}
 		return true, fmt.Errorf("inspect: read MySQL table %q definition: %w", tableName, err)

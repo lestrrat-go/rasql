@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/go-sql-driver/mysql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
@@ -1168,7 +1167,7 @@ func TestMySQLInspectorReportsTableNotFoundWhenSHOWCreateProvesAbsence(t *testin
 		WithArgs("ghosts").
 		WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "extra", "generation_expression"}))
 	mock.ExpectQuery("SHOW CREATE TABLE `ghosts`").
-		WillReturnError(&mysql.MySQLError{Number: 1146, Message: "Table 'test.ghosts' doesn't exist"})
+		WillReturnError(&fakeMySQLError{Number: 1146, Message: "Table 'test.ghosts' doesn't exist"})
 
 	table, err := inspector.Table(t.Context(), "ghosts")
 	require.Equal(t, schema.TableDef{}, table)
@@ -1176,6 +1175,65 @@ func TestMySQLInspectorReportsTableNotFoundWhenSHOWCreateProvesAbsence(t *testin
 	var notFound *inspect.TableNotFoundError
 	require.ErrorAs(t, err, &notFound)
 	require.Equal(t, "ghosts", notFound.Table)
+}
+
+// TestMySQLInspectorPropagatesOtherShowCreateTableErrors confirms that a
+// SHOW CREATE TABLE failure that is not MySQL error 1146 is not treated as
+// "table not found": it propagates, the same as it does today for any error
+// the MySQL error 1146 detection does not positively recognize.
+func TestMySQLInspectorPropagatesOtherShowCreateTableErrors(t *testing.T) {
+	testCases := map[string]error{
+		"a different MySQL error number":     &fakeMySQLError{Number: 1045, Message: "Access denied"},
+		"a plain error with no Number field": errors.New("boom"),
+	}
+	for name, showCreateTableErr := range testCases {
+		t.Run(name, func(t *testing.T) {
+			database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+
+			inspector, err := inspect.New(database, dialect.MySQL())
+			require.NoError(t, err)
+			columnsQuery := "SELECT column_name, column_type, is_nullable, column_default, numeric_precision, numeric_scale, extra, generation_expression FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
+			mock.ExpectQuery(columnsQuery).
+				WithArgs("ghosts").
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "extra", "generation_expression"}))
+			mock.ExpectQuery("SHOW CREATE TABLE `ghosts`").
+				WillReturnError(showCreateTableErr)
+
+			table, err := inspector.Table(t.Context(), "ghosts")
+			require.Equal(t, schema.TableDef{}, table)
+			require.NotErrorIs(t, err, inspect.ErrTableNotFound)
+			require.ErrorContains(t, err, `inspect: read MySQL table "ghosts" definition`)
+			require.ErrorIs(t, err, showCreateTableErr)
+		})
+	}
+}
+
+// fakeMySQLError mimics the shape *mysql.MySQLError
+// (github.com/go-sql-driver/mysql) has -- an exported Number uint16 field on
+// a pointed-to struct, with Error() string and Is(error) bool methods --
+// without importing that package. inspect's MySQL error 1146 detection
+// (mysqlErrorNumber in mysql_error_number.go) uses reflection rather than a
+// type assertion for exactly this reason: a fixture built from this local
+// type exercises the same field-matching path a real driver error would,
+// without linking or registering the driver.
+type fakeMySQLError struct {
+	Number  uint16
+	Message string
+}
+
+func (e *fakeMySQLError) Error() string {
+	return fmt.Sprintf("Error %d: %s", e.Number, e.Message)
+}
+
+func (e *fakeMySQLError) Is(target error) bool {
+	other, ok := target.(*fakeMySQLError)
+	return ok && other.Number == e.Number
 }
 
 func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
