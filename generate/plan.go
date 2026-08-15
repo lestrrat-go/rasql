@@ -55,6 +55,12 @@ var resolveCommitDestination = resolveDestinationInDirectory
 // Dir and nothing above or beside it -- so without this the directory
 // opened for the write is whatever holds that path by then, which is not
 // promised to be the directory this commit resolved and authorized.
+//
+// A destination whose parent could not be read reports that parent's error
+// and the resolved destination both. Commit returns on the error and never
+// looks at the destination; resolveCheckDestination reads it, because which
+// directory went missing is what tells a plan Commit would create apart from
+// a run Commit refuses.
 func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 	resolved, err := genfile.ResolveDestination(path)
 	if err != nil {
@@ -63,7 +69,7 @@ func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 	parent := filepath.Dir(resolved)
 	info, err := os.Stat(parent)
 	if err != nil {
-		return "", nil, fmt.Errorf("generate: check %s: %w", parent, err)
+		return resolved, nil, fmt.Errorf("generate: check %s: %w", parent, err)
 	}
 	return resolved, info, nil
 }
@@ -453,9 +459,10 @@ var ErrStale = errors.New("generate: generated package is stale")
 // it. It returns the error Commit itself would return, unwrapped by
 // ErrStale, when Commit would refuse the run instead: a leftover file with
 // Prune unset, a destination rasqlgen may not replace, two planned files
-// that land on one destination, or an output directory that is no longer
-// the one this plan was built for. Regenerating does not fix a refusal,
-// which is why it is never reported as staleness.
+// that land on one destination, a destination whose own directory is
+// missing and is not one Commit would create, or an output directory that is
+// no longer the one this plan was built for. Regenerating does not fix a
+// refusal, which is why it is never reported as staleness.
 //
 // Like Commit, Check makes every one of Commit's step 1 checks afresh
 // rather than trusting what Store.Plan saw, since a Plan can be held and
@@ -472,7 +479,11 @@ var ErrStale = errors.New("generate: generated package is stale")
 // Dir's own path as it authorizes the run, and Check walks the same
 // components without creating any of them. An output directory that does
 // not exist is therefore every planned file missing, which is staleness --
-// a Commit would create the directory and write them all. Commit's step 3
+// a Commit would create the directory and write them all. That covers Dir's
+// own path and nothing else, which is exactly what Commit creates: a
+// destination a symbolic link reaches into some other directory that does
+// not exist is a file no Commit ever writes, so it is the refusal Commit
+// gives rather than a missing file. Commit's step 3
 // re-reads each leftover immediately before deleting it, which has no
 // read-only counterpart to make: it guards a deletion Check never performs,
 // and the marker it re-reads is the one Check already read here.
@@ -535,7 +546,7 @@ func (p Plan) Check() error {
 	checks := make([]checkedFile, 0, len(p.files))
 	for i := range p.files {
 		f := &p.files[i]
-		resolved, parentInfo, err := resolveCheckDestination(f.Path)
+		resolved, parentInfo, err := resolveCheckDestination(f.Path, p.dir, dir == nil)
 		if err != nil {
 			return err
 		}
@@ -553,6 +564,12 @@ func (p Plan) Check() error {
 			}
 			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, match.describe(resolved, d.orphan))
 		}
+		// A nil parentInfo is the plan's own output directory missing, and
+		// nothing else: resolveCheckDestination reports every other missing
+		// parent as the error Commit gives. dir is nil in that same case, and
+		// is tested as well so that a Dir created since that walk -- which is
+		// not the directory this call opened -- is still read as missing
+		// rather than through a handle nothing here authorized.
 		var into *os.Root
 		if dir != nil && parentInfo != nil {
 			into, err = handles.open(filepath.Dir(resolved), parentInfo)
@@ -626,8 +643,11 @@ func formatCheckPath(root, path string) string {
 // checkedFile is one planned file bound to the destination Plan.Check
 // resolved for it: commitWrite's read-only counterpart, holding the open
 // directory the file is read through instead of the one it would be written
-// through. dir is nil when the directory holding that destination does not
-// exist, which makes the destination itself a file that does not exist.
+// through. dir is nil when the plan's own output directory does not exist,
+// which makes every destination inside it a file that does not exist and
+// that a Commit would create the directory for and write. A destination
+// whose directory is missing for any other reason never reaches here:
+// resolveCheckDestination reports that as the error Commit gives.
 type checkedFile struct {
 	// file is the planned file itself, whose Source is what the bytes on
 	// disk are compared against and whose Path an error names.
@@ -640,10 +660,10 @@ type checkedFile struct {
 }
 
 // read reports the destination's current bytes, read through the directory
-// Check opened for it rather than through its path. A destination whose
-// directory does not exist reports fs.ErrNotExist, which is the answer
-// opening the file there would give and which Check reads as a missing
-// planned file.
+// Check opened for it rather than through its path. A destination inside an
+// output directory that does not exist reports fs.ErrNotExist, which is the
+// answer opening the file there would give and which Check reads as a
+// missing planned file.
 func (c checkedFile) read() ([]byte, error) {
 	if c.dir == nil {
 		return nil, &fs.PathError{Op: "open", Path: c.destination, Err: fs.ErrNotExist}
@@ -657,29 +677,44 @@ func (c checkedFile) read() ([]byte, error) {
 }
 
 // resolveCheckDestination is resolveDestinationInDirectory for a caller that
-// only reads: it reports a nil FileInfo, rather than an error, when the
-// directory holding the resolved destination does not exist.
+// only reads. It reports whatever that resolver reports, error included,
+// with one exception: a destination whose resolved parent is the plan's own
+// output directory, when that directory is the one thing missing, reports a
+// nil FileInfo and no error.
 //
-// That case is a plan whose output directory is not there yet -- every
-// destination resolves lexically into a directory nothing has created --
-// and it never reaches Commit, whose step 1 creates that directory before it
-// resolves anything. It is a separate function rather than the
-// resolveCommitDestination seam so that a test swapping that seam changes
-// Commit alone.
-func resolveCheckDestination(path string) (string, fs.FileInfo, error) {
-	resolved, err := genfile.ResolveDestination(path)
-	if err != nil {
-		return "", nil, err
+// That exception is the only place Check may part from Commit here, because
+// it is the only missing directory Commit creates. Commit's step 1 creates
+// each missing component of Dir's own path before it resolves anything, so
+// every planned file resolving lexically into a Dir nothing has created is a
+// file Commit would go on to write: staleness, which a rerun fixes.
+//
+// Every other missing parent is a refusal. A destination a symbolic link
+// reaches out of Dir into a directory that does not exist has a parent
+// Commit never creates -- step 1 creates components of Dir's own path and
+// nothing else -- so Commit refuses that run with this very error, before
+// writing anything, and rerunning the generator refuses it again. Reporting
+// it under ErrStale would name the file as merely out of date and promise a
+// regeneration that clears it, and none does. Which case it is cannot be
+// read off the missing parent alone, since os.Stat answers the same way for
+// both; it is dirMissing and the comparison against dir that tell them apart.
+//
+// dirMissing is what openPlannedDirectory already found, rather than a
+// second look at dir, so the two cannot disagree: Check reads through the
+// directory that walk opened, and a Dir created since is not that directory.
+//
+// It is a separate function rather than the resolveCommitDestination seam so
+// that a test swapping that seam changes Commit alone.
+func resolveCheckDestination(path, dir string, dirMissing bool) (string, fs.FileInfo, error) {
+	resolved, info, err := resolveDestinationInDirectory(path)
+	if err == nil {
+		return resolved, info, nil
 	}
-	parent := filepath.Dir(resolved)
-	info, err := os.Stat(parent)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return resolved, nil, nil
-		}
-		return "", nil, fmt.Errorf("generate: check %s: %w", parent, err)
+	// resolved is empty when the destination itself could not be resolved,
+	// which is a refusal of its own and never this exception.
+	if dirMissing && resolved != "" && filepath.Dir(resolved) == dir && errors.Is(err, fs.ErrNotExist) {
+		return resolved, nil, nil
 	}
-	return resolved, info, nil
+	return "", nil, err
 }
 
 // openPlannedDirectory opens the output directory this plan was built for,
