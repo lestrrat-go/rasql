@@ -1,30 +1,35 @@
 package examples_test
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
-// schemaSourceGenerated is the file the schemasource example generates. It
-// is checked in for the same reason examples/store is: a build compiles it,
-// so output the generator stopped producing cannot pass unnoticed.
-const schemaSourceGenerated = "examples/schemasource/internal/store/users_gen.go"
-
-// TestSchemaSourceExampleGenerates runs the example through the very
-// directive the documentation shows, `//go:generate go run ./gen` in the
-// schema package, rather than compiling the program or calling
-// generate.WritePackage itself. Only running it that way exercises the
-// working directory the directive gives it, which is what decides whether
-// the relative output path in gen/main.go resolves at all.
+// TestSchemaSourceExampleGenerates runs the schemasource example through
+// the very directive the documentation shows, `//go:generate go run ./gen`
+// in the schema package, rather than compiling the program or calling
+// generate.Store directly. Only running it that way exercises the working
+// directory the directive gives it, which is what decides whether the
+// relative output path in gen/main.go resolves at all.
+//
+// It then checks every file the directive wrote -- not just users_gen.go
+// -- against a generate.Store built from the same table
+// schemasource.Tables() returns, through requireGeneratedDirectoryMatches,
+// so drift in schema_gen.go or schema_gen_test.go is caught instead of
+// being silently rewritten by the directive that just ran. Because that
+// directive rewrites its three output files unconditionally on every run,
+// this test snapshots the directory first and restores it afterward, so a
+// stale example never leaves the working tree holding output this test did
+// not check in.
 func TestSchemaSourceExampleGenerates(t *testing.T) {
-	path := filepath.Join(repositoryRoot, schemaSourceGenerated)
-	before, err := os.ReadFile(path)
-	require.NoError(t, err)
+	dir := filepath.Join(repositoryRoot, "examples", "schemasource", "internal", "store")
+	before := snapshotDir(t, dir)
 
 	// No Dir: `go test` runs this package with its own directory as the
 	// working directory, so ./schemasource is the example package.
@@ -32,36 +37,58 @@ func TestSchemaSourceExampleGenerates(t *testing.T) {
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "go generate ./schemasource: %s", output)
 
-	after, err := os.ReadFile(path)
+	after, err := os.ReadFile(filepath.Join(dir, "users_gen.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(after), "func Users() UsersTable {")
-	if *updateDocs || bytes.Equal(before, after) {
+
+	users, err := schema.NewTableDef("users",
+		schema.Integer("id"),
+		schema.Text("email", schema.Width(255)),
+		schema.PrimaryKey("id"),
+	)
+	require.NoError(t, err)
+
+	store := generate.Store{
+		Package: "store",
+		Root:    repositoryRootAbs(t),
+		Dir:     filepath.Join("examples", "schemasource", "internal", "store"),
+		Tables:  []schema.TableDef{users},
+	}
+
+	if *updateDocs {
+		requireGeneratedDirectoryIsCurrent(t, store, dir)
 		return
 	}
-	// Put the checked-in file back before failing, so a stale example
-	// leaves the tree as it found it.
-	require.NoError(t, os.WriteFile(path, before, 0o644))
-	require.Equal(t, string(before), string(after),
-		"%s is stale; run `go test ./examples/ -update-docs`", schemaSourceGenerated)
+	defer restoreDir(t, dir, before)
+	requireGeneratedDirectoryMatches(t, store, dir)
 }
 
-// TestSchemaSourceExampleReportsFailureWithNonzeroExit runs the same
-// program from a directory that has no internal/store, which is what the
-// example itself does when a user copies it without creating the output
-// directory first. A generate step that printed the failure and exited 0
-// would look successful while producing nothing.
-func TestSchemaSourceExampleReportsFailureWithNonzeroExit(t *testing.T) {
-	// The premise of the test: this package's own directory, which is the
-	// working directory below, holds no internal/store for the example to
-	// write into.
-	require.NoDirExists(t, filepath.Join("internal", "store"))
+// snapshotDir reads every regular file directly inside dir and returns its
+// name and bytes, so restoreDir can put back exactly what a subprocess
+// like `go generate` overwrote.
+func snapshotDir(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	snapshot := make(map[string][]byte, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		require.NoError(t, err)
+		snapshot[entry.Name()] = contents
+	}
+	return snapshot
+}
 
-	command := exec.CommandContext(t.Context(), "go", "run", "./schemasource/gen")
-	output, err := command.CombinedOutput()
-	require.Error(t, err, "expected a nonzero exit, got: %s", output)
-
-	var exit *exec.ExitError
-	require.ErrorAs(t, err, &exit)
-	require.Equal(t, 1, exit.ExitCode(), "output: %s", output)
-	require.Contains(t, string(output), "failed to write schema package")
+// restoreDir writes back every file snapshotDir captured, so a directive
+// that rewrites its output on every run never leaves the working tree
+// holding output this test did not check in, whether or not the
+// comparison that follows it passes.
+func restoreDir(t *testing.T, dir string, snapshot map[string][]byte) {
+	t.Helper()
+	for name, contents := range snapshot {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), contents, 0o644))
+	}
 }
