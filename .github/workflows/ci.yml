@@ -69,4 +69,7 @@ jobs:
         # log scoped to what this job exists to prove, while ./... still
         # runs (without -v, and without a DSN) in the "check" job, so no
         # package's assertions are skipped anywhere.
+        # TestIntegrationJobListsEveryDBTestGuardedPackage reads this exact
+        # step and fails when the command drops -v or stops covering a
+        # package whose tests are guarded by internal/dbtest.
         run: go test -count=1 -v ./catalog/... ./cli/rasqlgen/... ./generate/... ./inspect/... .
