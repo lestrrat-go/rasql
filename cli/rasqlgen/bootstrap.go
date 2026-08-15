@@ -34,13 +34,14 @@ func (names *excludeTableNames) Set(name string) error {
 	return nil
 }
 
-// defaultBootstrapHistorySkip is the migration history table a sweep skips
-// by default: migrate.New's own default history table name
+// defaultSweepHistorySkip is the migration history table a sweep skips by
+// default, whether the sweep runs as `bootstrap` or as `schema -dsn` with no
+// -table: migrate.New's own default history table name
 // (migrate/runner.go:13). It is a default, not a rule -- an application
 // that renamed its history table with migrate.NewWithHistoryTable describes
 // it under its own name during a sweep unless that name is also passed to
 // -exclude.
-const defaultBootstrapHistorySkip = "rasql_schema_migrations"
+const defaultSweepHistorySkip = "rasql_schema_migrations"
 
 func runBootstrap(args []string, writer io.Writer) error {
 	flags := newFlagSet("bootstrap", writer)
@@ -69,6 +70,9 @@ func runBootstrap(args []string, writer io.Writer) error {
 	if len(tables) > 0 && len(excludes) > 0 {
 		return errors.New("bootstrap accepts -table or -exclude, not both")
 	}
+	if err := ensureOutputDirectory(*output); err != nil {
+		return err
+	}
 
 	d, err := builtinDialect(*dialectName)
 	if err != nil {
@@ -94,7 +98,7 @@ func runBootstrap(args []string, writer io.Writer) error {
 		_ = tx.Rollback()
 		return err
 	}
-	descriptors, err := bootstrapTables(ctx, inspector, tables, excludes)
+	descriptors, err := sweepTables(ctx, inspector, tables, excludes, "bootstrap")
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -170,10 +174,17 @@ func refreshBootstrapOutput(packageName, output string, tables []schema.TableDef
 	return nil
 }
 
-// bootstrapTables resolves the tables a bootstrap run describes: exactly
-// requestedTables when given, or every base table inspector.TableNames
-// reports minus defaultBootstrapHistorySkip and excludedTables otherwise.
-func bootstrapTables(ctx context.Context, inspector inspect.Inspector, requestedTables, excludedTables []string) ([]schema.TableDef, error) {
+// sweepTables resolves the tables a bootstrap run or a `schema -dsn` run
+// describes: exactly requestedTables when given, or every base table
+// inspector.TableNames reports minus defaultSweepHistorySkip and
+// excludedTables otherwise. Both commands share this one implementation
+// rather than each sweeping the database its own way, so a sweep behaves
+// identically -- same history-table default, same exclusion handling, same
+// empty-result refusal -- regardless of which command ran it. commandName
+// names the caller only for the empty-result error message, so that error
+// still reads as "bootstrap found no tables to describe" or "schema found
+// no tables to describe" rather than naming neither command.
+func sweepTables(ctx context.Context, inspector inspect.Inspector, requestedTables, excludedTables []string, commandName string) ([]schema.TableDef, error) {
 	if len(requestedTables) > 0 {
 		return inspectTables(ctx, inspector, requestedTables)
 	}
@@ -183,7 +194,7 @@ func bootstrapTables(ctx context.Context, inspector inspect.Inspector, requested
 		return nil, err
 	}
 	excluded := make(map[string]struct{}, len(excludedTables)+1)
-	excluded[defaultBootstrapHistorySkip] = struct{}{}
+	excluded[defaultSweepHistorySkip] = struct{}{}
 	for _, name := range excludedTables {
 		excluded[name] = struct{}{}
 	}
@@ -193,23 +204,23 @@ func bootstrapTables(ctx context.Context, inspector inspect.Inspector, requested
 		if _, skip := excluded[name.Name]; skip {
 			continue
 		}
-		table, err := bootstrapDescribe(ctx, inspector, name)
+		table, err := describeSweptTable(ctx, inspector, name)
 		if err != nil {
 			return nil, err
 		}
 		tables = append(tables, table)
 	}
 	if len(tables) == 0 {
-		return nil, errors.New("bootstrap found no tables to describe")
+		return nil, fmt.Errorf("%s found no tables to describe", commandName)
 	}
 	return tables, nil
 }
 
-// bootstrapDescribe reads name's descriptor, using the SQLite-scoped
+// describeSweptTable reads name's descriptor, using the SQLite-scoped
 // TableIn when name carries a Schema (main, temp, or an attached database)
 // and the ordinary Table lookup otherwise, which is every case on
 // PostgreSQL and MySQL, and an unscoped SQLite table.
-func bootstrapDescribe(ctx context.Context, inspector inspect.Inspector, name inspect.TableName) (schema.TableDef, error) {
+func describeSweptTable(ctx context.Context, inspector inspect.Inspector, name inspect.TableName) (schema.TableDef, error) {
 	if name.Schema != "" {
 		return inspector.TableIn(ctx, name.Schema, name.Name)
 	}
