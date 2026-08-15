@@ -1,6 +1,16 @@
 // Package genfile writes generated Go source without ever truncating an
 // existing file in place. It is internal because both generate and
 // cli/rasqlgen need it and no caller outside this module does.
+//
+// Every write lands by renaming a complete temporary file over the
+// destination, and that rename is atomic only on Unix: os.Rename documents
+// that even within a single directory it is not an atomic operation on
+// non-Unix platforms, so a run interrupted at that rename can leave the
+// destination missing or still holding its old contents. Write and
+// WriteInto publish through the same rename and name this limit rather
+// than restating it; generate.Plan.Commit states what it costs a whole
+// commit. Nothing in this package makes the limit go away, and the tests
+// that pin the replacement's behavior are guarded by //go:build unix.
 package genfile
 
 import (
@@ -9,16 +19,19 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 // Write writes source to path without ever truncating an
 // existing file in place. Its resolved destination must end in _gen.go, or
 // in _gen_test.go for a generated test file, and, when it already exists,
-// must be a file rasqlgen itself wrote; see ResolveDestination for both
-// checks.
+// must be a file rasqlgen itself wrote; ResolveDestination owns both rules,
+// and the write re-reads the destination's own first line through the
+// directory holding it before it replaces anything.
 // When path is a symbolic link it writes through
 // the link to the file the link points at, leaving the link itself intact.
 // A path that names a directory, or a symbolic link that resolves to one,
@@ -28,15 +41,14 @@ import (
 // destination, then renames the temporary file over the destination only
 // after the write fully succeeds, so a failure at any point along the way
 // leaves the destination untouched instead of empty or partially written.
-// When the destination already exists, the mode bits generatedFileMode
-// reports for it are copied to the temporary file before the rename, so
-// regenerating never changes the mode of an existing output file; a file
-// that did not exist is created at 0600.
+// When the destination already exists, the mode bits it already carries are
+// copied to the temporary file before the rename, so regenerating never
+// changes the mode of an existing output file; a file that did not exist is
+// created at 0600. existingDestinationMode owns which bits travel.
 //
-// The rename is only atomic on Unix platforms. os.Rename documents that
-// even within a single directory it is not an atomic operation on
-// non-Unix platforms, so a run interrupted there can leave the destination
-// missing or still holding its old contents.
+// The rename that publishes the file is atomic only on Unix; the package
+// comment owns that limit and what an interruption elsewhere can leave
+// behind.
 func Write(path string, source []byte) error {
 	// Both the temporary file's directory and the rename destination come
 	// from the resolved path. Resolving only the destination would put the
@@ -46,19 +58,65 @@ func Write(path string, source []byte) error {
 	if err != nil {
 		return err
 	}
-	mode, err := generatedFileMode(destination)
+	dir, err := os.OpenRoot(filepath.Dir(destination))
 	if err != nil {
 		return err
 	}
-	directory := filepath.Dir(destination)
-	temporary, err := os.CreateTemp(directory, "."+filepath.Base(destination)+".tmp*")
+	defer func() { _ = dir.Close() }()
+	return writeInto(dir, filepath.Base(destination), destination, source)
+}
+
+// WriteInto writes source to name, a file directly inside the already-open
+// directory dir, and promises everything Write promises: the destination is
+// never truncated in place, an existing destination must be a regular file
+// carrying Marker on its first line, and the mode bits an existing
+// destination has survive the write.
+//
+// It adds the one guarantee a path cannot give. Every step -- reading the
+// destination's first line, creating the temporary file, the rename -- goes
+// through the directory handle the caller already holds, so a directory
+// along the way that is replaced after the caller authorized the write
+// cannot send any of it somewhere else. A path is resolved afresh by the
+// kernel on every call, which is what lets one authorized destination and
+// the write that follows it land in two different directories.
+//
+// name is a bare file name and is not resolved. A caller that means to
+// follow a symbolic link resolves it with ResolveDestination first and
+// passes the destination that reports, together with the directory holding
+// it; an entry that is a symbolic link by the time this runs is refused
+// rather than followed, because it is no longer the file the caller
+// authorized.
+//
+// The extra guarantee is about which directory the steps land in and not
+// about the rename itself, which is the very rename Write publishes
+// through: the package comment's Unix-only limit applies here unchanged.
+func WriteInto(dir *os.Root, name string, source []byte) error {
+	if name == "" || name == "." || name == ".." || name != filepath.Base(name) {
+		return fmt.Errorf("generated output %q must be a file name inside the directory, not a path", name)
+	}
+	return writeInto(dir, name, filepath.Join(dir.Name(), name), source)
+}
+
+// writeInto is the whole write, from an open directory and a bare name.
+// display is how the destination is spelled in an error message: the whole
+// resolved path when the caller had one, and the directory's own name
+// joined with name when it did not.
+func writeInto(dir *os.Root, name, display string, source []byte) error {
+	if !strings.HasSuffix(name, "_gen.go") && !strings.HasSuffix(name, "_gen_test.go") {
+		return fmt.Errorf("generated output %q must end in _gen.go", display)
+	}
+	mode, err := existingDestinationMode(dir, name, display)
+	if err != nil {
+		return err
+	}
+	temporary, temporaryName, err := createTemporary(dir, name)
 	if err != nil {
 		return err
 	}
 	removeTemporary := true
 	defer func() {
 		if removeTemporary {
-			_ = os.Remove(temporary.Name())
+			_ = dir.Remove(temporaryName)
 		}
 	}()
 
@@ -75,20 +133,108 @@ func Write(path string, source []byte) error {
 	}
 	// chmod before the rename, so the destination is never visible with
 	// the temporary file's mode instead of the mode it had before.
-	if err := os.Chmod(temporary.Name(), mode); err != nil {
+	if err := dir.Chmod(temporaryName, mode); err != nil {
 		return err
 	}
-	if err := os.Rename(temporary.Name(), destination); err != nil {
+	if err := dir.Rename(temporaryName, name); err != nil {
 		return err
 	}
 	removeTemporary = false
 	return nil
 }
 
+// temporaryNameAttempts caps how many names createTemporary tries before it
+// gives up, the same cap os.CreateTemp applies.
+const temporaryNameAttempts = 10000
+
+// createTemporary creates a file directly inside dir under a name nothing
+// else holds, and reports it along with the name it was created under. It
+// stands in for os.CreateTemp, which takes a directory path rather than an
+// open directory: creating the temporary file through the same handle the
+// rename uses is what keeps both of them in the directory the caller
+// authorized.
+//
+// The name is random only so two writers rarely collide. It is not a
+// secret, and does not need to be: the file is created with O_EXCL inside
+// dir, so a name somebody else already holds costs another attempt rather
+// than handing this write their file.
+func createTemporary(dir *os.Root, name string) (*os.File, string, error) {
+	prefix := "." + name + ".tmp"
+	for attempt := 0; attempt < temporaryNameAttempts; attempt++ {
+		candidate := prefix + strconv.FormatUint(rand.Uint64(), 16)
+		file, err := dir.OpenFile(candidate, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			return file, candidate, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("create a temporary file beside %s: %d names were all taken", name, temporaryNameAttempts)
+}
+
+// existingDestinationMode reports the mode bits writeInto must give name,
+// and refuses a destination rasqlgen may not replace: one that already
+// exists and is not a regular file, and one that does not open with Marker
+// standing alone on its first line. It is requireMarker's check made
+// through an open directory rather than through a path, so the file whose
+// first line decides the write is the file the write then lands on.
+//
+// An existing file keeps the bits it already has, because the generated
+// output's mode is the caller's to choose. Only a destination that does not
+// exist yet gets 0600.
+//
+// The sticky bit travels with the permission bits, because writing the file
+// in place kept it and replacing the file must not quietly drop it. Setuid
+// and setgid deliberately do not travel: Linux clears both when an
+// unprivileged process writes a file, so writing in place lost them too,
+// and carrying them across here would make regenerating a file stricter
+// than writing it directly.
+//
+// The mode is read before the file is opened, for the reason requireMarker
+// reads it first: a file that is not a regular file cannot carry a first
+// line to begin with, and opening a fifo would block here until something
+// opened the other end.
+func existingDestinationMode(dir *os.Root, name, display string) (fs.FileMode, error) {
+	info, err := dir.Lstat(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0o600, nil
+		}
+		return 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return 0, fmt.Errorf("refusing to overwrite %s: it already exists and is not a regular file", display)
+	}
+
+	file, err := dir.Open(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0o600, nil
+		}
+		return 0, err
+	}
+	defer func() { _ = file.Close() }()
+
+	// One byte past the marker separates a first line that is the marker
+	// from a longer line that merely starts with it.
+	head := make([]byte, len(Marker)+1)
+	read, err := io.ReadFull(file, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, err
+	}
+	if !startsWithMarker(head[:read]) {
+		return 0, fmt.Errorf("refusing to overwrite %s: it was not generated by rasqlgen, because its first line is not %q", display, Marker)
+	}
+	return info.Mode() & (fs.ModePerm | fs.ModeSticky), nil
+}
+
 // Marker is the first line of every file rasqlgen produces.
 // It is the one thing that tells a file rasqlgen may replace apart from a
-// file somebody wrote by hand, so ResolveDestination requires it of any
-// destination that already exists.
+// file somebody wrote by hand, so nothing in this package replaces a
+// destination that already exists without it: ResolveDestination requires
+// it of the path it resolves, and the write requires it again of the file
+// it is about to rename over.
 //
 // The generators write this line themselves rather than reading it from
 // here, because they are separate packages this one must not reach into.
@@ -198,7 +344,7 @@ const maxOutputSymlinkDepth = 40
 //
 // A link that points at a path which does not exist resolves to that
 // missing path, matching what writing through the link would have done:
-// the missing file is created, with the 0600 that generatedFileMode gives
+// the missing file is created, with the 0600 existingDestinationMode gives
 // any new file, and the link keeps pointing at it. filepath.EvalSymlinks
 // cannot resolve the whole path here, because it fails on such a dangling
 // link; it is used only on directories, which always exist by the time
@@ -265,26 +411,4 @@ func withResolvedParent(path string) string {
 		return path
 	}
 	return filepath.Join(parent, filepath.Base(path))
-}
-
-// generatedFileMode reports the mode bits Write must give
-// path. An existing file keeps the bits it already has, because the
-// generated output's mode is the caller's to choose. Only a path that does
-// not exist yet gets os.CreateTemp's 0600.
-//
-// The sticky bit travels with the permission bits, because writing the
-// file in place kept it and replacing the file must not quietly drop it.
-// Setuid and setgid deliberately do not travel: Linux clears both when an
-// unprivileged process writes a file, so writing in place lost them too,
-// and carrying them across here would make regenerating a file stricter
-// than writing it directly.
-func generatedFileMode(path string) (fs.FileMode, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return 0o600, nil
-		}
-		return 0, err
-	}
-	return info.Mode() & (fs.ModePerm | fs.ModeSticky), nil
 }
