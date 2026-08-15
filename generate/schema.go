@@ -45,12 +45,15 @@ func TableSource(packageName string, table schema.TableDef, allTables ...schema.
 // DescriptorSource returns the file holding every table's runtime
 // descriptor: a schema.TableDef literal for each table, the package-level
 // table value built from it through rasql.TableFrom, and an exported
-// accessor that hands back a clone of the descriptor.
+// accessor that hands back a clone of the descriptor. It also declares a
+// package-level Tables function that returns a clone of every table's
+// descriptor, in the same order the file declares them, which is what makes
+// a generated store self-describing.
 //
-// PackageSource and TableSource emit these declarations themselves, so their
-// output and this one cannot be written into the same package. This is the
-// file rasqlgen writes once per package, beside the per-table files it
-// writes without descriptors.
+// PackageSource and TableSource emit the per-table declarations themselves,
+// so their output and this one cannot be written into the same package.
+// This is the file rasqlgen writes once per package, beside the per-table
+// files it writes without descriptors.
 //
 // The emitted literal is the merged definition the generator produces, not
 // the input one: a derived belongs-to relationship is appended for every

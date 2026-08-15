@@ -305,6 +305,13 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.NotContains(t, string(descriptorSource), "\"fmt\"")
 	require.NotContains(t, string(descriptorSource), "\"github.com/lestrrat-go/rasql/query\"")
 	require.Less(t, stringIndex(t, descriptorSource, "var ordersDef"), stringIndex(t, descriptorSource, "var usersDef"))
+	// Tables clones every table's descriptor after every table's own
+	// declaration, in the same alphabetical order those declarations
+	// already appear in.
+	require.Contains(t, string(descriptorSource), "func Tables() []schema.TableDef {")
+	require.Less(t, stringIndex(t, descriptorSource, "var usersDef"), stringIndex(t, descriptorSource, "func Tables()"))
+	require.Less(t, stringIndex(t, descriptorSource, "invoicesDef.Clone()"), stringIndex(t, descriptorSource, "ordersDef.Clone()"))
+	require.Less(t, stringIndex(t, descriptorSource, "ordersDef.Clone()"), stringIndex(t, descriptorSource, "usersDef.Clone()"))
 
 	descriptorTestSource, err := schemagen.DescriptorTestSource("generated", users, orders, invoices)
 	require.NoError(t, err)
@@ -1881,6 +1888,79 @@ func TestSchemaRejectsGeneratedTestNameCollision(t *testing.T) {
 			// whose accessor is a prefix of the reserved identifier.
 			require.NoError(t, generate(users))
 			require.NoError(t, generate(nearMiss))
+		})
+	}
+}
+
+// TestSchemaRejectsTablesFuncNameCollision proves that a table named
+// "tables" is refused rather than silently producing a package that fails
+// to build: variableName lowercases nothing off a name that is already one
+// capitalized word, so table "tables" generates the package-level accessor
+// Tables, which collides with the Tables function descriptorSource always
+// declares in schema_gen.go. The check runs the same way
+// TestSchemaRejectsGeneratedTestNameCollision does, across every entry
+// point that shares validateVariableNames, since the collision is a
+// package-level Go identifier and every entry point declares into the same
+// namespace.
+func TestSchemaRejectsTablesFuncNameCollision(t *testing.T) {
+	reserved := schema.TableDef{
+		Name:       "tables",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	// TablesDef is definitionAccessorName("tables"): the descriptor
+	// accessor a table named "tables" also generates. It always ends in
+	// "Def", so it can never spell Tables itself, and must keep working.
+	definitionAccessor := schema.TableDef{
+		Name:       "tables_def",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+
+	descriptorSource, err := schemagen.DescriptorSource("generated", users)
+	require.NoError(t, err)
+	require.Contains(t, string(descriptorSource), "func Tables() []schema.TableDef {")
+
+	for name, generate := range map[string]func(tables ...schema.TableDef) error{
+		"Validate": func(tables ...schema.TableDef) error {
+			return schemagen.Validate("generated", tables...)
+		},
+		"PackageSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.PackageSource("generated", tables...)
+			return err
+		},
+		"TableSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.TableSource("generated", tables[0], tables...)
+			return err
+		},
+		"TableSurfaceSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.TableSurfaceSource("generated", tables[0], tables...)
+			return err
+		},
+		"DescriptorSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.DescriptorSource("generated", tables...)
+			return err
+		},
+		"DescriptorTestSource": func(tables ...schema.TableDef) error {
+			_, err := schemagen.DescriptorTestSource("generated", tables...)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := generate(reserved)
+			require.ErrorContains(t, err, `table "tables"`)
+			require.ErrorContains(t, err, `duplicates generated name "Tables"`)
+			require.ErrorContains(t, err, "rasqlgen reserves")
+
+			// The reservation must cost nothing to an ordinary table, or to
+			// the unrelated accessor a table named "tables_def" generates.
+			require.NoError(t, generate(users))
+			require.NoError(t, generate(definitionAccessor))
 		})
 	}
 }

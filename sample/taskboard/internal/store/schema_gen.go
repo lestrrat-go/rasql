@@ -81,3 +81,13 @@ var tasksTable = TasksTable{rasql.TableFrom[TasksRow](tasksDef)}
 
 // TasksDef returns a copy of the descriptor for the "tasks" table.
 func TasksDef() schema.TableDef { return tasksDef.Clone() }
+
+// Tables returns a clone of every table's descriptor, in the order this
+// file declares them.
+func Tables() []schema.TableDef {
+	return []schema.TableDef{
+		membersDef.Clone(),
+		projectsDef.Clone(),
+		tasksDef.Clone(),
+	}
+}
