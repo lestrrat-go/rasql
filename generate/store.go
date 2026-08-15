@@ -285,16 +285,30 @@ func (s Store) Plan() (Plan, error) {
 		files[i].Resolved = resolved
 	}
 
-	// dirInfo identifies the directory the orphans below were found in, so
-	// Plan.Commit can require that Dir still names that same directory
-	// before it deletes any of them. It is nil when Dir does not exist yet,
-	// which is also when there are no orphans to delete.
+	// dirInfo identifies the directory the orphans below were found in. It
+	// is nil when Dir does not exist yet, which is also when there are no
+	// orphans to delete.
 	orphans, dirInfo, err := findOrphans(dir, files)
 	if err != nil {
 		return Plan{}, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
 	}
 
-	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, dirInfo: dirInfo}, nil
+	// Every plan is anchored to a directory whose identity Plan.Commit
+	// checks before it writes or deletes anything: dir itself when it
+	// exists, and the closest existing directory above it when it does not.
+	// A plan for a missing Dir that recorded nothing has nothing to compare
+	// against, and a Dir created as a symbolic link before Commit runs is
+	// then followed to wherever it points, with every planned file written
+	// there.
+	anchor, anchorInfo := dir, dirInfo
+	if anchorInfo == nil {
+		anchor, anchorInfo, err = deepestExistingDirectory(dir)
+		if err != nil {
+			return Plan{}, fmt.Errorf("generate: find an existing directory above %s: %w", dir, err)
+		}
+	}
+
+	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans the store and commits the plan: it is Plan followed by

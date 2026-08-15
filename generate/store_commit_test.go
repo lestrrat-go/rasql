@@ -139,9 +139,9 @@ func TestPlanCommitWritesInThePlannedOrder(t *testing.T) {
 	var sequence []string
 	origWrite, origRemove := writeGeneratedFile, removeGeneratedFile
 	t.Cleanup(func() { writeGeneratedFile, removeGeneratedFile = origWrite, origRemove })
-	writeGeneratedFile = func(path string, source []byte) error {
-		sequence = append(sequence, "write:"+filepath.Base(path))
-		return origWrite(path, source)
+	writeGeneratedFile = func(dir *os.Root, name string, source []byte) error {
+		sequence = append(sequence, "write:"+name)
+		return origWrite(dir, name, source)
 	}
 	removeGeneratedFile = func(dir *os.Root, name string) error {
 		sequence = append(sequence, "delete:"+name)

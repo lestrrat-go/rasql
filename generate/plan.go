@@ -21,13 +21,14 @@ import (
 // package can reach them. cli/rasqlgen/rasqlgen.go:27 uses the same pattern
 // for openDatabase.
 //
-// removeGeneratedFile deletes through an open directory handle and a bare
-// file name rather than a path, so the deletion lands in the directory
-// Commit already authorized. A path would be resolved again by the kernel,
-// component by component, and a directory swapped for a symbolic link
-// between the check and the delete would send that delete somewhere else.
+// Both take an open directory handle and a bare file name rather than a
+// path, so the write and the delete land in the directory Commit already
+// authorized. A path would be resolved again by the kernel, component by
+// component, and a directory swapped for a symbolic link between the
+// authorization and the syscall that follows it would send that write or
+// delete somewhere else.
 var (
-	writeGeneratedFile  = genfile.Write
+	writeGeneratedFile  = genfile.WriteInto
 	removeGeneratedFile = func(dir *os.Root, name string) error { return dir.Remove(name) }
 )
 
@@ -39,9 +40,11 @@ var (
 // once, when Store.Plan builds it. A file that appears in the directory
 // afterwards is not reflected here; call Store.Plan again to see the
 // directory as it is now. The directory itself is the one exception: a plan
-// records which directory it read, and Commit refuses to act when the path
-// no longer names that same directory, since every orphan it would delete
-// was recorded relative to it.
+// records the deepest directory on Dir's own path that already existed, and
+// Commit refuses to act when that path no longer names that same directory,
+// since every orphan it would delete was recorded relative to it and every
+// file it would write lands under it. A Dir that did not exist at all is
+// recorded the same way, through the closest existing directory above it.
 //
 // The zero Plan is not a plan: its Files and Orphans report empty, Commit
 // refuses it naming Store.Plan, and nothing but Store.Plan builds one that
@@ -58,17 +61,24 @@ type Plan struct {
 	// them -- is made from the plan alone, the same instant everything
 	// else about the plan was decided.
 	prune bool
-	// dirInfo is what the filesystem reported for dir at the instant
-	// Store.Plan listed it, or nil when dir did not exist yet and the plan
-	// therefore recorded no orphans at all. Commit compares it, with
-	// os.SameFile, against the directory the same path reaches at commit
-	// time, so a dir that has since been replaced by a symbolic link to
-	// somewhere else is refused instead of having this plan's deletions
-	// applied to whatever the link points at. A path string alone cannot
-	// carry that: every component of it is resolved afresh by the kernel
-	// on each call, so the same string is a different directory once
-	// something along it changes.
-	dirInfo fs.FileInfo
+	// anchor is the deepest directory on dir's own path that already
+	// existed when Store.Plan looked, and anchorInfo is what the filesystem
+	// reported for it: dir itself whenever Dir already existed, and the
+	// closest existing directory above dir when Dir did not.
+	//
+	// Commit reopens anchor, requires os.SameFile to agree it is still that
+	// same directory, and walks down to dir from there, creating each
+	// missing component and refusing any component that is a symbolic link
+	// rather than a directory of its own. So a dir replaced by -- or first
+	// created as -- a link to somewhere else is refused, instead of having
+	// this plan's writes and deletions applied to whatever the link points
+	// at. A path string alone cannot carry that: every component of it is
+	// resolved afresh by the kernel on each call, so the same string is a
+	// different directory once something along it changes. Recording only
+	// an existing dir leaves the missing-dir case with nothing to compare,
+	// which is a plan that follows whatever has taken Dir's name.
+	anchor     string
+	anchorInfo fs.FileInfo
 }
 
 // File is one rendered output file. Source is the whole file, including the
@@ -81,7 +91,7 @@ type File struct {
 	Path string
 	// Resolved is the file a commit would actually replace: Path with
 	// every symbolic link along it followed, which is the destination
-	// internal/genfile.Write writes through to. It equals Path for an
+	// internal/genfile writes through to. It equals Path for an
 	// ordinary destination, and differs when Path itself, or a directory
 	// holding it, is a symbolic link. Writing through such a link is
 	// deliberate, so a Resolved outside the store's Dir is reported here
@@ -123,31 +133,39 @@ func (p Plan) Orphans() []string {
 // previous content or its new content, never a partial write.
 //
 //  1. Resolve and authorize everything; write nothing. The plan's output
-//     directory is created when missing (os.MkdirAll, 0o700) and then
-//     opened once, and every later step acts through that one open
-//     directory rather than through its path. When the plan recorded a
-//     directory -- that is, whenever Dir already existed at Plan time --
-//     the open directory must be that same directory, or Commit refuses:
-//     a Dir replaced by a symbolic link to somewhere else would otherwise
-//     have this plan's deletions applied to files it never read. Every
-//     planned file's destination is then re-resolved through
+//     directory is reached by reopening the deepest directory on its path
+//     that Store.Plan actually saw, requiring it to still be that same
+//     directory, and walking down from there: each missing component below
+//     it is created (0o700) and each component that already exists must be
+//     a directory of its own rather than a symbolic link that has taken
+//     the name. Every later step acts through the one open directory that
+//     walk ends at, rather than through its path -- a Dir replaced by, or
+//     first created as, a symbolic link to somewhere else would otherwise
+//     have this plan's writes and deletions applied to files it never
+//     read. Every planned file's destination is then re-resolved through
 //     genfile.ResolveDestination, and no two of them may resolve to one
 //     destination, nor may any of them resolve onto a file step 3 deletes.
 //     Whether two destinations are one file is put to the filesystem, not
 //     decided by comparing the two paths as strings: a filesystem that
 //     ignores case in file names holds a single file for a_gen.go and
 //     A_gen.go, and neither resolving nor planning folds the two spellings
-//     together. Finally every recorded orphan is re-read, through the open
-//     directory, to confirm it is still a regular file carrying rasqlgen's
-//     marker on its first line. All of it is checked fresh here rather
-//     than trusted from Plan time, since a Plan can be held and acted on
-//     later, after the directory has changed underneath it. When Prune is
-//     false and there is at least one orphan, Commit refuses here, naming
-//     every one of them.
+//     together. The directory holding each resolved destination is opened
+//     here too, so steps 2 and 4 write through a directory this step
+//     authorized instead of resolving that path a second time. Finally
+//     every recorded orphan is re-read, through the open directory, to
+//     confirm it is still a regular file carrying rasqlgen's marker on its
+//     first line. All of it is checked fresh here rather than trusted from
+//     Plan time, since a Plan can be held and acted on later, after the
+//     directory has changed underneath it. When Prune is false and there
+//     is at least one orphan, Commit refuses here, naming every one of
+//     them.
 //  2. Write every per-table file and every query file, in path order.
 //  3. Delete this run's leftovers: every path Orphans reported, in path
 //     order, and only when Prune is set -- otherwise step 1 already
-//     refused the run.
+//     refused the run. Each one is re-read immediately before it is
+//     deleted and must still be the very file step 1 authorized, marker
+//     and identity both, so a file that took its name in between is not
+//     deleted on the strength of a check that never saw it.
 //  4. Write the aggregator last: schema_gen.go, then schema_gen_test.go.
 //     The aggregator is the store's whole record of the schema -- every
 //     descriptor literal and Tables() -- so until this step lands, the
@@ -155,7 +173,7 @@ func (p Plan) Orphans() []string {
 //     consistent on its own.
 //
 // If the process dies partway through, every file on disk is either its
-// previous content or its new content -- genfile.Write never truncates a
+// previous content or its new content -- internal/genfile never truncates a
 // destination in place, so nothing is ever a partial write -- but the
 // package as a whole is not guaranteed to build in every window between
 // steps 2 and 4. The per-table file for a table and the aggregator that
@@ -182,24 +200,32 @@ func (p Plan) Commit() error {
 	}
 
 	// Step 1: resolve and authorize everything; write nothing.
-	if err := os.MkdirAll(p.dir, 0o700); err != nil {
-		return fmt.Errorf("generate: create %s: %w", p.dir, err)
-	}
-	dir, err := os.OpenRoot(p.dir)
+	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir)
 	if err != nil {
-		return fmt.Errorf("generate: open %s: %w", p.dir, err)
+		return err
 	}
 	defer func() { _ = dir.Close() }()
+
+	// realDir is the plan's own output directory as the filesystem reaches
+	// it, which is the form every resolved destination below is spelled in.
+	// It is put back to the handle just authorized, with os.SameFile,
+	// because it comes from resolving a path a second time and a second
+	// resolution of one string is not promised to reach the same directory
+	// the first did.
+	realDir, err := filepath.EvalSymlinks(p.dir)
+	if err != nil {
+		return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
+	}
 	dirInfo, err := dir.Stat(".")
 	if err != nil {
 		return fmt.Errorf("generate: check %s: %w", p.dir, err)
 	}
-	// A plan built when Dir did not exist yet has no directory to compare
-	// against and, for the same reason, no orphans: findOrphans reports
-	// none for a directory it could not list. There is nothing this plan
-	// deletes, so there is nothing an unexpected directory could redirect.
-	if p.dirInfo != nil && !os.SameFile(p.dirInfo, dirInfo) {
-		return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory Store.Plan read, so this plan would write and delete in a directory it never looked at; rerun Store.Plan", p.dir)
+	realDirInfo, err := os.Stat(realDir)
+	if err != nil {
+		return fmt.Errorf("generate: check %s: %w", realDir, err)
+	}
+	if !os.SameFile(dirInfo, realDirInfo) {
+		return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit authorized; rerun Store.Plan", p.dir)
 	}
 
 	// deletions pairs every recorded orphan with the destination a planned
@@ -209,10 +235,6 @@ func (p Plan) Commit() error {
 	// joined with the file's own name -- because that is the form the two
 	// are compared in. Every orphan is a direct child of the directory just
 	// authorized, which is what makes its base name enough to rebuild it.
-	realDir, err := filepath.EvalSymlinks(p.dir)
-	if err != nil {
-		return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
-	}
 	deletions := make([]plannedDeletion, 0, len(p.orphans))
 	for _, orphan := range p.orphans {
 		deletions = append(deletions, plannedDeletion{orphan: orphan, destination: filepath.Join(realDir, filepath.Base(orphan))})
@@ -232,8 +254,17 @@ func (p Plan) Commit() error {
 	// file are not always spelled alike: a case-insensitive filesystem
 	// holds a single entry for a_gen.go and A_gen.go, and a resolved path
 	// keeps whichever of the two the caller spelled.
-	writes := make([]plannedWrite, 0, len(p.files))
-	for _, f := range p.files {
+	//
+	// The directory holding each destination is opened here as well, and
+	// steps 2 and 4 write through it. Handing the planned path to the
+	// writer instead would have it resolve that path a second time, and
+	// the destination the second resolution reaches is not promised to be
+	// the one authorized here.
+	handles := destinationDirectories{own: dir, ownPath: realDir}
+	defer handles.close()
+	writes := make([]commitWrite, 0, len(p.files))
+	for i := range p.files {
+		f := &p.files[i]
 		resolved, err := genfile.ResolveDestination(f.Path)
 		if err != nil {
 			return err
@@ -242,7 +273,7 @@ func (p Plan) Commit() error {
 			if !sameDestination(w.destination, resolved) {
 				continue
 			}
-			return fmt.Errorf("generate: refusing to commit: %s and %s both resolve to %s, so one would overwrite the other; rerun Store.Plan", w.path, f.Path, oneDestination(resolved, w.destination))
+			return fmt.Errorf("generate: refusing to commit: %s and %s both resolve to %s, so one would overwrite the other; rerun Store.Plan", w.file.Path, f.Path, oneDestination(resolved, w.destination))
 		}
 		for _, d := range deletions {
 			if !sameDestination(d.destination, resolved) {
@@ -250,16 +281,23 @@ func (p Plan) Commit() error {
 			}
 			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, oneDestination(resolved, d.orphan))
 		}
-		writes = append(writes, plannedWrite{path: f.Path, destination: resolved})
+		into, err := handles.open(filepath.Dir(resolved))
+		if err != nil {
+			return fmt.Errorf("generate: open %s: %w", filepath.Dir(resolved), err)
+		}
+		writes = append(writes, commitWrite{file: f, destination: resolved, dir: into, name: filepath.Base(resolved)})
 	}
+	orphans := make([]validatedOrphan, 0, len(p.orphans))
 	for _, orphan := range p.orphans {
-		marker, err := hasGenfileMarker(dir, filepath.Base(orphan))
+		name := filepath.Base(orphan)
+		info, err := readGenfileMarker(dir, name)
 		if err != nil {
 			return fmt.Errorf("generate: check %s for rasqlgen's marker: %w", orphan, err)
 		}
-		if !marker {
+		if info == nil {
 			return fmt.Errorf("generate: refusing to delete %s: it no longer opens with rasqlgen's marker; something has changed it since Store.Plan ran", orphan)
 		}
+		orphans = append(orphans, validatedOrphan{orphan: orphan, name: name, info: info})
 	}
 	if !p.prune && len(p.orphans) > 0 {
 		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write, and Store.Prune is false: %s; set Prune to delete them, or remove them yourself", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
@@ -268,18 +306,18 @@ func (p Plan) Commit() error {
 	// The aggregator files are singled out here, once, so steps 2 and 4
 	// below can write in the order Commit's own doc comment promises:
 	// every per-table and query file first, the aggregator last. p.files
-	// is already sorted by Path (Store.Plan sorts it), and that order is
-	// preserved within each group below.
-	var descriptor, descriptorTest *File
-	rest := make([]File, 0, len(p.files))
-	for i := range p.files {
-		switch filepath.Base(p.files[i].Path) {
+	// is already sorted by Path (Store.Plan sorts it), and writes was built
+	// in that order, so it is preserved within each group below.
+	var descriptor, descriptorTest *commitWrite
+	rest := make([]commitWrite, 0, len(writes))
+	for i := range writes {
+		switch filepath.Base(writes[i].file.Path) {
 		case schemaDescriptorFilename:
-			descriptor = &p.files[i]
+			descriptor = &writes[i]
 		case schemaDescriptorTestFilename:
-			descriptorTest = &p.files[i]
+			descriptorTest = &writes[i]
 		default:
-			rest = append(rest, p.files[i])
+			rest = append(rest, writes[i])
 		}
 	}
 	if descriptor == nil || descriptorTest == nil {
@@ -287,28 +325,253 @@ func (p Plan) Commit() error {
 	}
 
 	// Step 2: write every per-table file and every query file.
-	for _, f := range rest {
-		if err := writeGeneratedFile(f.Path, f.Source); err != nil {
-			return fmt.Errorf("generate: write %s: %w", f.Path, err)
+	for _, w := range rest {
+		if err := writeGeneratedFile(w.dir, w.name, w.file.Source); err != nil {
+			return fmt.Errorf("generate: write %s: %w", w.file.Path, err)
 		}
 	}
 
 	// Step 3: delete this run's leftovers, only when Prune is set --
 	// otherwise step 1 already refused the run above.
 	if p.prune {
-		for _, orphan := range p.orphans {
-			if err := removeGeneratedFile(dir, filepath.Base(orphan)); err != nil {
-				return fmt.Errorf("generate: delete %s: %w", orphan, err)
+		for _, orphan := range orphans {
+			if err := orphan.confirm(dir); err != nil {
+				return err
+			}
+			if err := removeGeneratedFile(dir, orphan.name); err != nil {
+				return fmt.Errorf("generate: delete %s: %w", orphan.orphan, err)
 			}
 		}
 	}
 
 	// Step 4: write the aggregator last.
-	if err := writeGeneratedFile(descriptor.Path, descriptor.Source); err != nil {
-		return fmt.Errorf("generate: write %s: %w", descriptor.Path, err)
+	if err := writeGeneratedFile(descriptor.dir, descriptor.name, descriptor.file.Source); err != nil {
+		return fmt.Errorf("generate: write %s: %w", descriptor.file.Path, err)
 	}
-	if err := writeGeneratedFile(descriptorTest.Path, descriptorTest.Source); err != nil {
-		return fmt.Errorf("generate: write %s: %w", descriptorTest.Path, err)
+	if err := writeGeneratedFile(descriptorTest.dir, descriptorTest.name, descriptorTest.file.Source); err != nil {
+		return fmt.Errorf("generate: write %s: %w", descriptorTest.file.Path, err)
+	}
+	return nil
+}
+
+// openPlannedDirectory opens the output directory this plan was built for,
+// reaching it the way the plan recorded it rather than by resolving its
+// path afresh.
+//
+// anchor is the deepest directory on dir's path that existed when
+// Store.Plan looked and anchorInfo what the filesystem said it was, so the
+// walk starts somewhere whose identity can be checked. Every component
+// below it is created when missing and opened through the directory above
+// it, and a component that is a symbolic link is refused rather than
+// followed: a Dir that appeared as a link to an unrelated directory after
+// the plan was built would otherwise take every planned write with it, and
+// os.MkdirAll and os.OpenRoot on the plan's own path both follow such a
+// link without noticing.
+func openPlannedDirectory(anchor string, anchorInfo fs.FileInfo, dir string) (*os.Root, error) {
+	if anchor == "" || anchorInfo == nil {
+		return nil, fmt.Errorf("generate: internal error: plan for %s recorded no directory to commit through; rerun Store.Plan", dir)
+	}
+	root, err := os.OpenRoot(anchor)
+	if err != nil {
+		return nil, fmt.Errorf("generate: open %s: %w", anchor, err)
+	}
+	info, err := root.Stat(".")
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("generate: check %s: %w", anchor, err)
+	}
+	if !os.SameFile(anchorInfo, info) {
+		_ = root.Close()
+		return nil, fmt.Errorf("generate: refusing to commit into %s: %s is no longer the directory Store.Plan read, so this plan would write and delete in a directory it never looked at; rerun Store.Plan", dir, anchor)
+	}
+	rel, err := filepath.Rel(anchor, dir)
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("generate: locate %s under %s: %w", dir, anchor, err)
+	}
+	for _, component := range strings.Split(filepath.ToSlash(rel), "/") {
+		// filepath.Rel reports "." when the two are one directory, which
+		// is every plan whose Dir already existed.
+		if component == "." {
+			continue
+		}
+		child, childErr := openChildDirectory(root, component)
+		_ = root.Close()
+		if childErr != nil {
+			return nil, fmt.Errorf("generate: refusing to commit into %s: %w", dir, childErr)
+		}
+		root = child
+	}
+	return root, nil
+}
+
+// openChildDirectory opens the directory named name directly inside root,
+// creating it when it is missing, and refuses anything that is not a
+// directory entry of its own.
+//
+// A name that is a symbolic link is refused rather than followed, even one
+// pointing at a directory inside root: os.Root follows a link that stays
+// within its own tree, and what is wanted here is the directory the plan
+// was built for, not whatever a link that appeared later names. The handle
+// is then checked, with os.SameFile, against what the name was just seen to
+// be, so a name replaced between the two calls is refused as well.
+func openChildDirectory(root *os.Root, name string) (*os.Root, error) {
+	if err := root.Mkdir(name, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, fmt.Errorf("create %s: %w", name, err)
+	}
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, fmt.Errorf("check %s: %w", name, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symbolic link rather than the directory this plan was built for; rerun Store.Plan", name)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", name)
+	}
+	child, err := root.OpenRoot(name)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", name, err)
+	}
+	childInfo, err := child.Stat(".")
+	if err != nil {
+		_ = child.Close()
+		return nil, fmt.Errorf("check %s: %w", name, err)
+	}
+	if !os.SameFile(info, childInfo) {
+		_ = child.Close()
+		return nil, fmt.Errorf("%s is no longer the directory it was a moment ago; rerun Store.Plan", name)
+	}
+	return child, nil
+}
+
+// deepestExistingDirectory reports the closest directory above dir that
+// already exists, and what the filesystem said it was.
+//
+// A plan for a Dir that does not exist yet has no directory of its own to
+// record, so it records this one: Commit reopens it, requires it to still
+// be the same directory, and creates the rest of the way down through it.
+// Without that there is nothing to compare a missing Dir against, and a Dir
+// that appears as a symbolic link between Plan and Commit is followed to
+// wherever it points, with every planned file written there.
+func deepestExistingDirectory(dir string) (string, fs.FileInfo, error) {
+	current := filepath.Dir(dir)
+	for {
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return "", nil, fmt.Errorf("%s is not a directory", current)
+			}
+			return current, info, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", nil, err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", nil, fmt.Errorf("no directory above %s exists", dir)
+		}
+		current = parent
+	}
+}
+
+// destinationDirectories hands out an open handle on the directory holding
+// each resolved destination, so steps 2 and 4 write through a directory
+// Commit authorized instead of resolving the destination's path a second
+// time.
+//
+// The plan's own output directory is the common case and is already open,
+// so it is reused rather than opened again, and closing it stays with
+// whoever opened it. A destination outside it -- which a symbolic link
+// inside Dir reaches on purpose -- gets its own handle, opened once per
+// directory and closed when the commit is over.
+type destinationDirectories struct {
+	own     *os.Root
+	ownPath string
+	outside map[string]*os.Root
+}
+
+func (d *destinationDirectories) open(path string) (*os.Root, error) {
+	if path == d.ownPath {
+		return d.own, nil
+	}
+	if root, exists := d.outside[path]; exists {
+		return root, nil
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	if d.outside == nil {
+		d.outside = make(map[string]*os.Root, 1)
+	}
+	d.outside[path] = root
+	return root, nil
+}
+
+func (d *destinationDirectories) close() {
+	for _, root := range d.outside {
+		_ = root.Close()
+	}
+}
+
+// commitWrite is one planned file bound to the destination Commit
+// authorized for it: the directory holding that destination, already open,
+// and the file's own name inside it.
+type commitWrite struct {
+	// file is the planned file itself, whose Path names the destination as
+	// planned and whose Source is the bytes to write.
+	file *File
+	// destination is where Path resolved to at commit time, kept for the
+	// comparisons that refuse two files landing on one destination.
+	destination string
+	// dir holds destination, and name is destination's own name inside it.
+	dir  *os.Root
+	name string
+}
+
+// validatedOrphan is one recorded orphan that step 1 confirmed is still a
+// regular file carrying rasqlgen's marker, together with what the
+// filesystem said that file was.
+//
+// The identity is kept because os.Root pins the directory, not the entry
+// inside it: the marker check and the deletion both go through one open
+// directory, so both act in the directory Commit authorized, but each
+// resolves the bare name afresh there. Nothing about the checked file
+// carries over on its own, so a file renamed over that name in between is
+// deleted on the strength of a check that never looked at it.
+type validatedOrphan struct {
+	// orphan is the path Store.Plan recorded, which is what an error names.
+	orphan string
+	// name is the orphan's own name inside the authorized directory, which
+	// every read and the deletion itself go through.
+	name string
+	// info is what the filesystem said the checked file was, taken from the
+	// open file rather than from a second look at the name.
+	info fs.FileInfo
+}
+
+// confirm re-reads the orphan through dir and reports an error unless the
+// name still holds the very file step 1 authorized, marker and identity
+// both.
+//
+// It runs immediately before each deletion rather than once for the whole
+// run, so what a deletion acts on is what was checked. What is left is the
+// gap the filesystem offers no way to close: there is no way to delete a
+// directory entry by identity, so a name changed between this check and the
+// unlink that follows it is still unlinked. Closing that needs the commit
+// serialized against every other writer, which is a lock this package does
+// not own.
+func (o validatedOrphan) confirm(dir *os.Root) error {
+	info, err := readGenfileMarker(dir, o.name)
+	if err != nil {
+		return fmt.Errorf("generate: check %s for rasqlgen's marker: %w", o.orphan, err)
+	}
+	if info == nil {
+		return fmt.Errorf("generate: refusing to delete %s: it no longer opens with rasqlgen's marker; something has changed it since Store.Plan ran", o.orphan)
+	}
+	if !os.SameFile(o.info, info) {
+		return fmt.Errorf("generate: refusing to delete %s: it is no longer the file this commit checked, so deleting it would delete a file nothing authorized; rerun Store.Plan", o.orphan)
 	}
 	return nil
 }
@@ -344,7 +607,7 @@ type plannedDeletion struct {
 //
 // Two names that do not fold together are never one destination here even
 // when they share an inode. A hard link is a second name this package may
-// write or delete on its own terms, and genfile.Write renames over one name
+// write or delete on its own terms, and internal/genfile renames over one name
 // rather than writing through it, which leaves the other name holding its
 // own bytes.
 func sameDestination(a, b string) bool {
@@ -412,10 +675,13 @@ func oneDestination(resolved, recorded string) string {
 // reported here and not deleted; see ownsEntry. A missing dir reports no
 // orphans, matching Store.Plan's promise not to create anything.
 //
-// It also reports what the filesystem said dir itself was, so Plan.Commit
-// can require that the same path still reaches the same directory before it
-// deletes anything found here; that is nil exactly when dir was missing and
-// no orphans were found. The directory is opened once and everything below
+// It also reports what the filesystem said dir itself was, which is what
+// Store.Plan records as the plan's anchor: Plan.Commit reopens it and
+// requires it to still be the same directory before it writes or deletes
+// anything found here. That is nil exactly when dir was missing and no
+// orphans were found, and Store.Plan then anchors the plan to the closest
+// existing directory above dir instead; see deepestExistingDirectory.
+// The directory is opened once and everything below
 // is read through that one handle, so the listing, each entry's mode and
 // each first line all describe the same directory rather than whatever the
 // path reaches at each separate call.
@@ -473,11 +739,11 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 		if ownsEntry(root, own, name, info) {
 			continue
 		}
-		marker, err := hasGenfileMarker(root, name)
+		marker, err := readGenfileMarker(root, name)
 		if err != nil {
 			return nil, nil, err
 		}
-		if !marker {
+		if marker == nil {
 			continue
 		}
 		orphans = append(orphans, filepath.Join(dir, name))
@@ -486,16 +752,25 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 	return orphans, dirInfo, nil
 }
 
-// hasGenfileMarker reports whether name, a file directly inside dir, opens
-// with genfile.Marker standing alone on its first line, the same test
+// readGenfileMarker reports what the filesystem says the file named name,
+// directly inside dir, is -- but only when that file opens with
+// genfile.Marker standing alone on its first line, the same test
 // internal/genfile applies before it will ever overwrite an existing
-// destination. It is duplicated here, rather than exported from
-// internal/genfile, because internal/genfile's own check is a side effect of
-// resolving a destination to write, and this call must never write anything.
+// destination. A file that does not carry the marker, and a name nothing
+// holds, are both reported as a nil FileInfo and no error. The check is
+// duplicated here, rather than exported from internal/genfile, because
+// internal/genfile's own check is a side effect of resolving a destination
+// to write, and this call must never write anything.
 //
 // It takes an open directory and a bare name rather than a path so the file
 // it reads is the one inside the directory the caller already has, not
 // whatever the path reaches when the kernel resolves it again.
+//
+// What it reports comes from the open file rather than from a second look
+// at the name, so it describes the very bytes the marker was read from. A
+// caller that acts on the answer later hands it to os.SameFile to require
+// that the name still holds that same file, since os.Root pins the
+// directory and not the entry in it.
 //
 // The mode is checked before the file is opened, matching what
 // genfile.ResolveDestination does through requireMarker and for the same
@@ -505,36 +780,51 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 // on. Anything that is not a regular file is an error rather than a plain
 // "no marker", because the caller recorded a regular file and something has
 // since replaced it.
-func hasGenfileMarker(dir *os.Root, name string) (bool, error) {
+func readGenfileMarker(dir *os.Root, name string) (fs.FileInfo, error) {
 	info, err := dir.Lstat(name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
+			return nil, nil
 		}
-		return false, err
+		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return false, fmt.Errorf("%s is not a regular file", name)
+		return nil, fmt.Errorf("%s is not a regular file", name)
 	}
 
 	file, err := dir.Open(name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
+			return nil, nil
 		}
-		return false, err
+		return nil, err
 	}
 	defer func() { _ = file.Close() }()
+
+	// The open file is asked what it is a second time, because the Lstat
+	// above described whatever held the name at that instant and the open
+	// resolved the name again. This is the answer that belongs to the bytes
+	// read below.
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
 
 	head := make([]byte, len(genfile.Marker)+1)
 	n, err := io.ReadFull(file, head)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return false, err
+		return nil, err
 	}
 	head = head[:n]
 	if !bytes.HasPrefix(head, []byte(genfile.Marker)) {
-		return false, nil
+		return nil, nil
 	}
 	rest := head[len(genfile.Marker):]
-	return len(rest) == 0 || rest[0] == '\n' || rest[0] == '\r', nil
+	if len(rest) == 0 || rest[0] == '\n' || rest[0] == '\r' {
+		return opened, nil
+	}
+	return nil, nil
 }

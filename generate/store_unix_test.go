@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -85,6 +86,101 @@ func TestStorePlanReportsWhereASymlinkedFileResolves(t *testing.T) {
 	require.NotZero(t, info.Mode()&fs.ModeSymlink, "Plan must leave the symbolic link a symbolic link")
 	require.NoFileExists(t, escaped, "Plan must not create the file the link points at")
 	require.Empty(t, plan.Orphans())
+}
+
+// TestStoreWriteWritesThroughAPlannedSymlink is the control for the
+// directory handles Commit writes through: a planned destination that is a
+// symbolic link out of Dir is still written through, not refused, so the
+// bytes land in the file the link names and the link itself survives.
+func TestStoreWriteWritesThroughAPlannedSymlink(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "store")
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(outside, 0o700))
+
+	escaped := filepath.Join(outside, "escaped_q_gen.go")
+	link := filepath.Join(dir, "q_gen.go")
+	require.NoError(t, os.Symlink(escaped, link))
+
+	sqlPath := filepath.Join(base, "q.sql")
+	require.NoError(t, os.WriteFile(sqlPath, []byte("SELECT 1"), 0o600))
+
+	store := generate.Store{
+		Package: "store",
+		Dir:     dir,
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{Input: sqlPath, Function: "Q", Output: "q_gen.go"}},
+	}
+	require.NoError(t, store.Write())
+
+	info, err := os.Lstat(link)
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&fs.ModeSymlink, "the link itself survives the write")
+	source, err := os.ReadFile(escaped)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(string(source), genfile.Marker), "the query's own bytes land in the file the link names")
+}
+
+// TestPlanCommitRefusesADirectoryFirstCreatedAsASymlink covers a Dir that
+// does not exist when Store.Plan runs and is a symbolic link to an
+// unrelated writable directory by the time Commit does. A plan for a
+// missing Dir has no directory of its own to compare against, so Commit
+// used to create the path -- which now stats as an existing directory
+// through the link -- open it, and write every planned file wherever the
+// link pointed. The plan records the closest existing directory above Dir
+// instead, and Commit walks down from there and refuses a component that is
+// a link rather than a directory of its own.
+// How the link names the directory it points at decides which refusal
+// catches it. A relative target that stays inside the directory above Dir is
+// one an open directory handle follows on its own, so it is the case the
+// walk's own check on each component is there for; an absolute target is
+// refused a layer below, because a handle refuses an absolute link outright.
+func TestPlanCommitRefusesADirectoryFirstCreatedAsASymlink(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		relative bool
+		message  string
+	}{
+		{name: "a relative link inside the directory above Dir", relative: true, message: "symbolic link"},
+		{name: "an absolute link"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			dir := filepath.Join(base, "store")
+			elsewhere := filepath.Join(base, "elsewhere")
+			require.NoError(t, os.MkdirAll(elsewhere, 0o700))
+			require.NoDirExists(t, dir)
+
+			store := generate.Store{Package: "store", Dir: dir, Tables: []schema.TableDef{usersTableDef()}, Prune: true}
+			plan, err := store.Plan()
+			require.NoError(t, err)
+			require.Empty(t, plan.Orphans())
+
+			// The link appears strictly between Plan and Commit, which is
+			// the held plan Commit promises to survive rather than a race
+			// inside one running commit.
+			target := elsewhere
+			if tc.relative {
+				target = "elsewhere"
+			}
+			require.NoError(t, os.Symlink(target, dir))
+
+			err = plan.Commit()
+			require.ErrorContains(t, err, "refusing to commit into "+dir)
+			if tc.message != "" {
+				require.ErrorContains(t, err, tc.message)
+			}
+
+			entries, readErr := os.ReadDir(elsewhere)
+			require.NoError(t, readErr)
+			require.Empty(t, entries, "Commit must write nothing into a directory the plan never read")
+			info, statErr := os.Lstat(dir)
+			require.NoError(t, statErr)
+			require.NotZero(t, info.Mode()&fs.ModeSymlink, "Commit must leave the link alone")
+		})
+	}
 }
 
 // TestStorePlanRejectsTwoFilesThatResolveToOneDestination covers two planned
