@@ -227,6 +227,15 @@ func TestRunSchemaSourceExplicitDirectoryReachesStandardLibraryName(t *testing.T
 // typed: "internal" here names a real directory holding no Go files, so go
 // list refuses the value itself and the retry hands it "./internal", and the
 // reported name must not pick that rewrite up.
+//
+// The label assertion alone would not pin that, because it holds just as
+// well when no retry is made at all: go list refusing "internal" outright
+// reports "package internal is not in std", which carries the same label and
+// no "./internal" either. The two assertions on the detail are what tell the
+// retry apart from its absence. Only the retry's own "./internal" resolves
+// the directory far enough to be refused for holding no Go files, and the
+// standard-library reading of the value is the failure the retry must have
+// replaced.
 func TestRunSchemaSourceErrorNamesTheValueTyped(t *testing.T) {
 	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
 	t.Chdir(moduleDir)
@@ -235,6 +244,8 @@ func TestRunSchemaSourceErrorNamesTheValueTyped(t *testing.T) {
 	err := rasqlgen.Run([]string{"schema", "-source", "internal", "-package", "store", "-output", "internal/store"}, &buffer)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "resolve schema source internal:")
+	require.ErrorContains(t, err, "no Go files in")
+	require.NotContains(t, err.Error(), "is not in std")
 	require.NotContains(t, err.Error(), "./internal")
 
 	requireNoLeftoverSourceTempDir(t, moduleDir)
