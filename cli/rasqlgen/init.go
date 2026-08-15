@@ -291,8 +291,9 @@ func initOutputDirectory(output string) (string, error) {
 	return filepath.Abs(filepath.Join(root, output))
 }
 
-// canonicalDirectory resolves path through every symbolic link that already
-// exists along it and rejoins the part that does not exist yet.
+// canonicalDirectory resolves path through every symbolic link along it,
+// whether or not that link's target exists yet, and rejoins the part of the
+// path the filesystem does not hold.
 //
 // filepath.Abs cannot do this on its own: it is purely lexical -- Clean
 // plus a join with the working directory -- so "alias" and "gen" stay two
@@ -304,16 +305,40 @@ func initOutputDirectory(output string) (string, error) {
 // remainder to it is what serves both: it canonicalizes as much as the
 // filesystem can answer for, and leaves the rest alone.
 //
+// A dangling symbolic link -- one whose target does not exist yet -- needs
+// following by hand. EvalSymlinks reports ErrNotExist for it exactly as it
+// does for a name that is not there at all, so the prefix walk alone would
+// drop to the existing parent and rejoin the link's own name, leaving the
+// link unresolved: "target -> gen" with gen still missing canonicalized to
+// <root>/target and compared unequal to the <root>/gen that -gen-dir names,
+// even though os.MkdirAll then creates gen and makes the two one directory.
+// Reading the link and resolving its target against the directory holding
+// the link is what closes that, and it is the same resolution the kernel
+// performs once the target exists.
+//
 // A path whose every prefix fails to resolve is returned unchanged. That is
 // the lexical comparison this had before, so a path that cannot be
-// canonicalized is no worse off than it was.
+// canonicalized is no worse off than it was. Links read by hand are counted
+// against maxSymlinkHops and hitting that bound returns the path unchanged
+// too, because a link may point at another link and two of them may point at
+// each other, and neither the EvalSymlinks call nor the prefix walk ends
+// such a chain.
 func canonicalDirectory(path string) string {
 	current := path
 	remainder := ""
+	hops := 0
 	for {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
 			return filepath.Join(resolved, remainder)
+		}
+		if target, ok := symlinkTarget(current); ok {
+			hops++
+			if hops > maxSymlinkHops {
+				return path
+			}
+			current = target
+			continue
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
@@ -322,6 +347,34 @@ func canonicalDirectory(path string) string {
 		remainder = filepath.Join(filepath.Base(current), remainder)
 		current = parent
 	}
+}
+
+// maxSymlinkHops bounds how many symbolic links canonicalDirectory reads by
+// hand before it gives up and returns the path it was given. Linux caps its
+// own path resolution at 40 links for the same reason, and this walk needs a
+// bound of its own because it is reached precisely when EvalSymlinks -- which
+// carries that bound -- has already refused to answer.
+const maxSymlinkHops = 40
+
+// symlinkTarget reports where path points, resolved against the directory
+// holding the link, when path is itself a symbolic link. A relative target
+// is joined onto that directory because that is what it is relative to; an
+// absolute one is taken as it stands. Anything that is not a symbolic link,
+// and any link that cannot be read, reports false and leaves the caller on
+// its ordinary walk.
+func symlinkTarget(path string) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	target, err := os.Readlink(path)
+	if err != nil {
+		return "", false
+	}
+	if filepath.IsAbs(target) {
+		return filepath.Clean(target), true
+	}
+	return filepath.Join(filepath.Dir(path), target), true
 }
 
 // renderInitScaffold executes initScaffoldTemplate for one -dialect,

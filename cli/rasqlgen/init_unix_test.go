@@ -15,9 +15,10 @@ import (
 
 // TestInitRefusesOutputThatResolvesToTheScaffoldDirectory requires that
 // -output and -gen-dir are compared as directories, not as path strings.
-// Each case below spells one directory two ways through a symbolic link the
-// filesystem already holds, so the two names differ everywhere except in
-// what they reach.
+// Each case below spells one directory two ways through a symbolic link, so
+// the two names differ everywhere except in what they reach. Most of them
+// link to a directory the filesystem already holds; the two dangling cases
+// link to one the run itself is about to create.
 //
 // filepath.Abs, which this check once relied on alone, cannot see any of
 // them: it is Clean plus a join with the working directory and resolves no
@@ -75,6 +76,34 @@ func TestInitRefusesOutputThatResolvesToTheScaffoldDirectory(t *testing.T) {
 			output: "link/gen",
 			genDir: "real/gen",
 		},
+		// -output is a link whose target does not exist yet. Every case
+		// above links to something already there; this one does not, and
+		// resolving the longest existing prefix is not enough for it,
+		// because EvalSymlinks reports the dangling link as ErrNotExist just
+		// as it reports a missing name, so the walk drops to the module root
+		// and rejoins "target" without ever reading the link. The run that
+		// followed accepted the flags and wrote gen/main.go holding `Dir:
+		// "target"`, and os.MkdirAll then created the very gen the link
+		// points at, so the two flags did name one directory after all. The
+		// store never landed there -- generate.Store.Plan refused it later
+		// -- but refusing it here is the whole point of this check.
+		"output is a dangling link to the scaffold directory": {
+			build: func(t *testing.T, root string) {
+				require.NoError(t, os.Symlink("gen", filepath.Join(root, "target")))
+			},
+			output: "target",
+			genDir: "gen",
+		},
+		// The link on -gen-dir dangles instead, and its target is where
+		// -output points. The scaffold directory is created through the link
+		// by os.MkdirAll, so this too ends with one directory named twice.
+		"the dangling scaffold link points at output": {
+			build: func(t *testing.T, root string) {
+				require.NoError(t, os.Symlink("store", filepath.Join(root, "gen")))
+			},
+			output: "store",
+			genDir: "gen",
+		},
 	}
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
@@ -107,4 +136,39 @@ func TestInitAcceptsDistinctDirectoriesReachedThroughALink(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(root, "real", "gen", "main.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), `Dir:     "link/store"`)
+}
+
+// TestInitAcceptsADanglingLinkToAnotherDirectory is the second control: a
+// link whose target does not exist yet is now read by hand, so what it names
+// has to matter. This one names a directory -gen-dir does not, and the run
+// scaffolds as any other pair of distinct directories does.
+func TestInitAcceptsADanglingLinkToAnotherDirectory(t *testing.T) {
+	root := initModuleDir(t)
+	require.NoError(t, os.Symlink("store", filepath.Join(root, "target")))
+
+	var out bytes.Buffer
+	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "target", "-gen-dir", "gen"}, &out))
+
+	source, err := os.ReadFile(filepath.Join(root, "gen", "main.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), `Dir:     "target"`)
+}
+
+// TestInitTerminatesOnALinkCycle requires that reading links by hand cannot
+// loop. Two links pointing at each other resolve to nothing at all:
+// filepath.EvalSymlinks refuses the cycle, and following it by hand would
+// walk it forever without the hop bound canonicalDirectory carries. The run
+// falls back to comparing the two paths as written, which here is the right
+// answer anyway, and above all it finishes.
+func TestInitTerminatesOnALinkCycle(t *testing.T) {
+	root := initModuleDir(t)
+	require.NoError(t, os.Symlink("second", filepath.Join(root, "first")))
+	require.NoError(t, os.Symlink("first", filepath.Join(root, "second")))
+
+	var out bytes.Buffer
+	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "first", "-gen-dir", "gen"}, &out))
+
+	source, err := os.ReadFile(filepath.Join(root, "gen", "main.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), `Dir:     "first"`)
 }
