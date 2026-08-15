@@ -53,9 +53,10 @@ const schemaSourceFixtureModule = "example.com/consumer"
 // fail with "go: updates to go.mod needed; to update it: go mod tidy".
 // With the copied directive, no go.sum and no `go mod tidy` are needed and
 // the whole fixture runs under GOPROXY=off. This deliberately does not
-// follow rasqlgen_e2e_test.go's TestGoRunSchemaGeneratesCompilableSource,
-// which runs `go get ...@v0.0.0` first and reaches the network; the
-// replace directive below makes that step unnecessary.
+// follow rasqlgen_e2e_test.go's TestGoRunSchemaGeneratesCompilableSource
+// and TestGoRunInitScaffoldGenerates, which run `go get ...@v0.0.0` first
+// and so leave that step free to consult the module proxy; the replace
+// directive below makes the step unnecessary here.
 func newSchemaSourceFixture(t *testing.T, tablesSource string) string {
 	t.Helper()
 	moduleDir := t.TempDir()

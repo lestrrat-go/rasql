@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"text/template"
 )
 
@@ -99,7 +101,7 @@ func run(ctx context.Context, check bool) error {
 
 	store := generate.Store{
 		Package: "{{.Package}}",
-		Dir:     "{{.Output}}",
+		Dir:     {{.OutputLiteral}},
 		Tables:  tables,
 		Hints:   hints,
 		Dialect: {{.DialectCall}},
@@ -145,6 +147,14 @@ func runInit(args []string, writer io.Writer) error {
 	}
 	if filepath.IsAbs(*output) {
 		return fmt.Errorf("init: -output %q must not be absolute", *output)
+	}
+	// The scaffold's doc comment names -output raw, on one comment line, so
+	// a control character there breaks the line rather than the string
+	// literal Store.Dir quotes. A backtick is deliberately not rejected: it
+	// is legal in a Go interpreted string literal and legal in a directory
+	// name, so refusing it would refuse a valid path for nothing.
+	if index := strings.IndexFunc(*output, func(r rune) bool { return r < 0x20 || r == 0x7f }); index >= 0 {
+		return fmt.Errorf("init: -output %q must not contain the control character %q", *output, rune((*output)[index]))
 	}
 	if *genDir == "" {
 		return errors.New("init: -gen-dir must not be empty")
@@ -193,18 +203,29 @@ func runInit(args []string, writer io.Writer) error {
 // the file init writes is gofmt-clean by construction rather than by
 // convention.
 func renderInitScaffold(spec initDialect, packageName, output string) ([]byte, error) {
+	slashed := filepath.ToSlash(output)
 	data := struct {
-		DriverImport string
-		OpenName     string
-		DialectCall  string
-		Package      string
-		Output       string
+		DriverImport  string
+		OpenName      string
+		DialectCall   string
+		Package       string
+		Output        string
+		OutputLiteral string
 	}{
 		DriverImport: spec.driverImport,
 		OpenName:     spec.openName,
 		DialectCall:  spec.dialectCall,
 		Package:      packageName,
-		Output:       filepath.ToSlash(output),
+		Output:       slashed,
+		// OutputLiteral, not Output, is what the template splices into
+		// Store.Dir. The template writes it where a Go string literal
+		// belongs, so it carries its own quotes: a -output holding a
+		// double quote or a backslash would otherwise close or re-read
+		// that literal, and format.Source cannot catch it because the
+		// result is still syntactically valid Go. Quoting here makes the
+		// directory the user typed the directory the scaffold writes to,
+		// whatever it contains.
+		OutputLiteral: strconv.Quote(slashed),
 	}
 
 	var buf bytes.Buffer
