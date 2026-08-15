@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-sql-driver/mysql"
 	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
@@ -122,6 +121,14 @@ type Queryer interface {
 type Inspector struct {
 	queryer Queryer
 	dialect dialect.Dialect
+	// mysqlErrorType is the one error type mySQLCheckColumnVisibility reads a
+	// MySQL server error number from. New sets it to mysqlDriverErrorType, the
+	// identity of the driver's own *mysql.MySQLError; the zero value names no
+	// type and so recognizes no error number at all, which is the fail-closed
+	// direction. Tests substitute a local type's identity here, because a test
+	// cannot declare a type in the driver's package and this package must not
+	// import that package.
+	mysqlErrorType errorTypeIdentity
 }
 
 // New creates an Inspector. It does not open a connection or start a transaction.
@@ -132,7 +139,7 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 	if isNil(d) {
 		return Inspector{}, fmt.Errorf("inspect: dialect must not be nil")
 	}
-	return Inspector{queryer: queryer, dialect: d}, nil
+	return Inspector{queryer: queryer, dialect: d, mysqlErrorType: mysqlDriverErrorType}, nil
 }
 
 // Table reads the supported schema metadata for tableName. It returns
@@ -452,8 +459,7 @@ func (i Inspector) mySQLCheckColumnVisibility(ctx context.Context, tableName str
 	query := "SHOW CREATE TABLE `" + strings.ReplaceAll(tableName, "`", "``") + "`"
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1146 {
+		if number, ok := mysqlErrorNumber(err, i.mysqlErrorType); ok && number == mysqlErrNoSuchTable {
 			return false, nil
 		}
 		return true, fmt.Errorf("inspect: read MySQL table %q definition: %w", tableName, err)
