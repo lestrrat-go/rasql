@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
@@ -307,7 +307,7 @@ func runPlan(args []string) error {
 	if *directory == "" {
 		return errors.New("plan requires -dir")
 	}
-	migrations, err := loadMigrations(*directory)
+	migrations, err := migrationdir.Load(*directory)
 	if err != nil {
 		return err
 	}
@@ -401,7 +401,7 @@ func openRunner(ctx context.Context, directory string, dialectName string, dsn s
 	if err != nil {
 		return migrate.Runner{}, nil, func() {}, err
 	}
-	migrations, err := loadMigrations(directory)
+	migrations, err := migrationdir.Load(directory)
 	if err != nil {
 		return migrate.Runner{}, nil, func() {}, err
 	}
@@ -492,71 +492,6 @@ func driverForDialect(name string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported migration dialect %q", name)
 	}
-}
-
-func loadMigrations(directory string) ([]migrate.Migration, error) {
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		return nil, fmt.Errorf("read migration directory: %w", err)
-	}
-	directories := make([]string, 0)
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		if !entry.IsDir() {
-			return nil, fmt.Errorf("migration directory %q contains non-directory entry %q", directory, entry.Name())
-		}
-		directories = append(directories, entry.Name())
-	}
-	sort.Strings(directories)
-	if len(directories) == 0 {
-		return nil, fmt.Errorf("migration directory %q has no migration directories", directory)
-	}
-	migrations := make([]migrate.Migration, len(directories))
-	for index, name := range directories {
-		migration, err := loadMigration(filepath.Join(directory, name), name)
-		if err != nil {
-			return nil, err
-		}
-		migrations[index] = migration
-	}
-	return migrations, nil
-}
-
-func loadMigration(directory string, id string) (migrate.Migration, error) {
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		return migrate.Migration{}, fmt.Errorf("read migration %q: %w", id, err)
-	}
-	files := make([]string, 0)
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
-			return migrate.Migration{}, fmt.Errorf("migration %q contains non-SQL source %q", id, entry.Name())
-		}
-		files = append(files, entry.Name())
-	}
-	sort.Strings(files)
-	if len(files) == 0 {
-		return migrate.Migration{}, fmt.Errorf("migration %q has no SQL sources", id)
-	}
-	statements := make([]migrate.Statement, len(files))
-	for index, filename := range files {
-		source := filepath.Join(directory, filename)
-		data, err := os.ReadFile(source)
-		if err != nil {
-			return migrate.Migration{}, fmt.Errorf("read migration %q SQL source %q: %w", id, filename, err)
-		}
-		statements[index] = migrate.Statement{Source: filename, SQL: string(data)}
-	}
-	migration := migrate.Migration{ID: id, Statements: statements}
-	if err := migration.Validate(); err != nil {
-		return migrate.Migration{}, err
-	}
-	return migration, nil
 }
 
 func writePlan(output io.Writer, migrations []migrate.Migration) {
