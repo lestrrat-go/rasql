@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
@@ -1190,6 +1193,121 @@ func (m destinationMatch) describe(resolved, recorded string) string {
 		return fmt.Sprintf("%s, which nothing on disk tells apart from %s: a filesystem that ignores case in file names holds one entry for the two", resolved, recorded)
 	}
 	return fmt.Sprintf("%s, which is the same file as %s", resolved, recorded)
+}
+
+// requireStorePackageOwnsDir refuses a Dir that already holds a Go file
+// declaring some other package. Go allows one package per directory, so a
+// run that wrote the store into such a directory would leave one the
+// toolchain refuses to build at all, reporting "found packages main
+// (main.go) and store (schema_gen.go)" for every build, vet and test after
+// it. Nothing the store can do later repairs that, so the run stops here
+// instead of writing.
+//
+// rasqlgen's init command refuses the flags that set this up, but it can
+// only see the directories as they stand when it runs: a symbolic link made
+// afterwards, and any hand-written generate.Store, still arrive here. This
+// is where the two packages actually meet, which is why the refusal lives
+// here as well as there.
+//
+// Three kinds of file are skipped, and each has to be:
+//
+//   - A file the build itself excludes. `//go:build ignore` on a package
+//     main program sitting beside the package it generates is the ordinary
+//     Go layout for a generator, and such a file is not part of the
+//     package. go/build's MatchFile decides this, so the same build
+//     constraints the toolchain applies are applied here.
+//   - A file this plan is about to write, which is about to declare this
+//     store's own package whatever it declares now.
+//   - Any other file rasqlgen wrote, recognized by the same marker
+//     findOrphans reads. Those are either rewritten by a later run or
+//     reported as orphans, and refusing them here would refuse a run whose
+//     only change is a renamed generated package.
+//
+// A file that cannot be read or parsed is skipped too. It is not this
+// package's file, this check is not a Go syntax checker, and refusing a run
+// over a file the compiler will complain about on its own would be a
+// refusal with nothing behind it.
+func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return err
+	}
+	// own is keyed through filenameKey for the same reason findOrphans keys
+	// its own set that way: on a filesystem that ignores case in file names,
+	// a planned name spelled differently is still the planned file.
+	own := make(map[string]struct{}, len(planned))
+	for _, f := range planned {
+		own[filenameKey(filepath.Base(f.Path))] = struct{}{}
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		if _, planned := own[filenameKey(name)]; planned {
+			continue
+		}
+		info, err := root.Lstat(name)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		included, err := build.Default.MatchFile(dir, name)
+		if err != nil || !included {
+			continue
+		}
+		marker, err := readGenfileMarker(root, name)
+		if err != nil {
+			return err
+		}
+		if marker != nil {
+			continue
+		}
+		declared, err := declaredPackage(root, name)
+		if err != nil || declared == "" {
+			continue
+		}
+		// The external test package is the one second package clause a Go
+		// directory is allowed, so a store package's own foo_test files are
+		// not a collision.
+		if declared == pkg || declared == pkg+"_test" {
+			continue
+		}
+		return fmt.Errorf("generate: %s already holds package %q, declared by %s, and this store generates package %q; a directory holds one package, so writing the store there would leave a directory no build can compile", dir, declared, name, pkg)
+	}
+	return nil
+}
+
+// declaredPackage reads name's package clause and nothing else. The parse
+// stops at the clause, so neither the imports nor the body of a file that
+// only happens to share the directory is read or has to be valid.
+func declaredPackage(dir *os.Root, name string) (string, error) {
+	file, err := dir.Open(name)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+
+	parsed, err := parser.ParseFile(token.NewFileSet(), name, file, parser.PackageClauseOnly)
+	if err != nil {
+		return "", err
+	}
+	return parsed.Name.Name, nil
 }
 
 // findOrphans reports every leftover file in dir: a regular file directly in

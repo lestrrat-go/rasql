@@ -13,6 +13,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/genfile"
+	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/internal/schemagen"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/template"
@@ -130,7 +131,10 @@ type Query struct {
 // file names holds a single file for -- a query output that is not a plain
 // file name inside Dir, and a query function that redeclares a name the
 // generated package already uses; refuses a destination that exists and is
-// not a file rasqlgen wrote; and records every file already in Dir that
+// not a file rasqlgen wrote; refuses a Dir that already holds a Go file the
+// build includes and that declares another package, since a directory holds
+// one package and writing the store there would leave one nothing can
+// compile; and records every file already in Dir that
 // rasqlgen wrote and this plan does not write, along with which directory it
 // found them in, so a commit can tell that Dir still names that same
 // directory before deleting any of them.
@@ -311,6 +315,15 @@ func (s Store) Plan() (Plan, error) {
 		}
 		writes = append(writes, plannedWrite{path: files[i].Path, destination: resolved})
 		files[i].Resolved = resolved
+	}
+
+	// A directory already holding another package is refused before
+	// anything else about Dir is decided: the files planned above would
+	// build a directory the Go toolchain rejects outright, and no later step
+	// of a plan or a commit looks at a file whose name this store does not
+	// write.
+	if err := requireStorePackageOwnsDir(dir, s.Package, files); err != nil {
+		return Plan{}, err
 	}
 
 	// dirInfo identifies the directory the orphans below were found in. It
@@ -511,29 +524,24 @@ func applyHints(tables []schema.TableDef, hints map[string]schema.TableHint) ([]
 }
 
 // resolveModuleRoot returns explicit unchanged when it is non-empty, and
-// otherwise walks upward from the process working directory looking for a
-// directory holding go.mod. It reports an empty string, not an error, when
-// none is found: whether that matters depends on whether a relative path
-// ever needs it, which resolveStorePath decides.
+// otherwise asks internal/modroot for the module root of the process
+// working directory. It reports an empty string, not an error, when none is
+// found: whether that matters depends on whether a relative path ever needs
+// it, which resolveStorePath decides.
+//
+// The walk lives in internal/modroot rather than here because rasqlgen's
+// init command has to resolve its -output the same way, so that the
+// directory it compares against -gen-dir is the directory the scaffold it
+// writes will actually generate into.
 func resolveModuleRoot(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	wd, err := os.Getwd()
+	root, err := modroot.FromWorkingDirectory()
 	if err != nil {
-		return "", fmt.Errorf("generate: determine working directory: %w", err)
+		return "", fmt.Errorf("generate: %w", err)
 	}
-	dir := wd
-	for {
-		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !info.IsDir() {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", nil
-		}
-		dir = parent
-	}
+	return root, nil
 }
 
 // resolveStorePath resolves path against root when path is relative. An

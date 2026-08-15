@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+
+	"github.com/lestrrat-go/rasql/internal/modroot"
 )
 
 // initDialect names the driver import path, the sql.Open driver name, and
@@ -221,16 +223,31 @@ func runInit(args []string, writer io.Writer) error {
 //
 // Comparing the two as typed is not enough, because -output "./gen",
 // "gen/" and "gen/../gen" all name the -gen-dir "gen" without matching it
-// as a string, and -gen-dir has the same freedom. Both are therefore
-// resolved against the working directory first, which also settles the
-// case of an absolute -gen-dir against the relative -output that is all
-// this command accepts.
+// as a string, and -gen-dir has the same freedom. Each is therefore
+// resolved to an absolute path first -- which also settles the case of an
+// absolute -gen-dir against the relative -output that is all this command
+// accepts -- and then canonicalized, so that two names the filesystem
+// already leads to one directory compare equal too.
+//
+// The two are resolved against different bases, because the two flags are
+// documented against different bases: -gen-dir names a directory relative
+// to the working directory, and -output is module-root-relative, since the
+// scaffold hands it to generate.Store.Dir with Store.Root left empty. See
+// initOutputDirectory for what comparing them on one base let through.
 //
 // Only equality is refused. An -output nested under -gen-dir, such as
 // "gen/store", is a separate directory and so a separate package, which is
 // a layout this command has no reason to refuse.
+//
+// A run that gets past this check is still not proof the two directories
+// stay distinct: a symbolic link made after init, and any hand-written
+// generate.Store, reach the same collision with nothing here to consult.
+// generate.Store.Plan refuses the write itself for that reason, and is
+// what actually stands between the collision and a broken package; this
+// check is what turns it into a mistake reported at the moment the flags
+// are typed.
 func requireDistinctInitDirs(output, genDir string) error {
-	outputPath, err := filepath.Abs(output)
+	outputPath, err := initOutputDirectory(output)
 	if err != nil {
 		return fmt.Errorf("init: resolve -output %q: %w", output, err)
 	}
@@ -238,10 +255,73 @@ func requireDistinctInitDirs(output, genDir string) error {
 	if err != nil {
 		return fmt.Errorf("init: resolve -gen-dir %q: %w", genDir, err)
 	}
-	if outputPath == genPath {
-		return fmt.Errorf("init: -output %q and -gen-dir %q name the same directory %s; the scaffold is package main and the generated store is another package, so they cannot share one", output, genDir, outputPath)
+	canonicalOutput := canonicalDirectory(outputPath)
+	if canonicalOutput != canonicalDirectory(genPath) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("init: -output %q and -gen-dir %q name the same directory %s; the scaffold is package main and the generated store is another package, so they cannot share one", output, genDir, canonicalOutput)
+}
+
+// initOutputDirectory resolves -output the way the scaffold's own
+// generate.Store resolves Store.Dir: against the module root, because the
+// scaffold leaves Store.Root empty and a relative Dir is then
+// module-root-relative. internal/modroot is the same walk generate itself
+// makes, so the directory compared here is the directory the scaffold
+// writes into.
+//
+// Resolving -output against the working directory instead, as this once
+// did, compares two different bases whenever init runs below the module
+// root, and no symbolic link is needed to see it: from a subdirectory sub/,
+// "-output sub/gen -gen-dir gen" compared <root>/sub/sub/gen against
+// <root>/sub/gen and passed, while the scaffold then generated the store
+// into <root>/sub/gen, beside the main.go init had just written there.
+//
+// A working directory with no go.mod above it has no module root to
+// resolve against. The scaffold's own Store.Plan refuses such a run
+// outright, so nothing is lost by falling back to the working directory
+// here, and the comparison still happens rather than being skipped.
+func initOutputDirectory(output string) (string, error) {
+	root, err := modroot.FromWorkingDirectory()
+	if err != nil {
+		return "", err
+	}
+	if root == "" {
+		return filepath.Abs(output)
+	}
+	return filepath.Abs(filepath.Join(root, output))
+}
+
+// canonicalDirectory resolves path through every symbolic link that already
+// exists along it and rejoins the part that does not exist yet.
+//
+// filepath.Abs cannot do this on its own: it is purely lexical -- Clean
+// plus a join with the working directory -- so "alias" and "gen" stay two
+// strings even when "alias" is a symbolic link to "gen", and so does a
+// parent directory of either that is a link. filepath.EvalSymlinks does
+// resolve them, but reports ErrNotExist for a path whose last element is
+// missing, and -output and -gen-dir routinely name directories init is
+// about to create. Resolving the longest existing prefix and appending the
+// remainder to it is what serves both: it canonicalizes as much as the
+// filesystem can answer for, and leaves the rest alone.
+//
+// A path whose every prefix fails to resolve is returned unchanged. That is
+// the lexical comparison this had before, so a path that cannot be
+// canonicalized is no worse off than it was.
+func canonicalDirectory(path string) string {
+	current := path
+	remainder := ""
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			return filepath.Join(resolved, remainder)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return path
+		}
+		remainder = filepath.Join(filepath.Base(current), remainder)
+		current = parent
+	}
 }
 
 // renderInitScaffold executes initScaffoldTemplate for one -dialect,

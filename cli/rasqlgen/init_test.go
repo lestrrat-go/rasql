@@ -213,6 +213,23 @@ func TestInitRejectsControlCharactersInOutput(t *testing.T) {
 	}
 }
 
+// initModuleDir creates a directory holding a go.mod file and makes it the
+// working directory, returning it.
+//
+// init resolves -output against the module root, the way the scaffold's own
+// generate.Store resolves Store.Dir, so a test that chdir'd into a bare
+// temporary directory would be deciding the comparison against whatever
+// module that temporary directory happened to sit under -- the repository's
+// own, if TMPDIR points inside a checkout, and none at all otherwise. A
+// go.mod of its own pins the module root to the directory the test controls.
+func initModuleDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/scaffolded\n\ngo 1.24\n"), 0o600))
+	t.Chdir(dir)
+	return dir
+}
+
 // TestInitRefusesOutputInTheScaffoldDirectory requires that an -output
 // naming the same directory as -gen-dir is refused before anything is
 // written. Accepting it is not a cosmetic mistake: the scaffold is package
@@ -237,7 +254,7 @@ func TestInitRefusesOutputInTheScaffoldDirectory(t *testing.T) {
 	}
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
-			t.Chdir(t.TempDir())
+			initModuleDir(t)
 			args := []string{"init", "-dialect", "sqlite", "-package", "store", "-output", testCase.output}
 			genDir := "gen"
 			if testCase.genDir != "" {
@@ -261,7 +278,7 @@ func TestInitRefusesOutputInTheScaffoldDirectory(t *testing.T) {
 // test above: a subdirectory of -gen-dir is its own package, so only an
 // exact match is refused and this layout must still be written.
 func TestInitAcceptsOutputNestedInTheScaffoldDirectory(t *testing.T) {
-	t.Chdir(t.TempDir())
+	initModuleDir(t)
 
 	var out bytes.Buffer
 	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "gen/store"}, &out))
@@ -269,6 +286,56 @@ func TestInitAcceptsOutputNestedInTheScaffoldDirectory(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join("gen", "main.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(source), `Dir:     "gen/store"`)
+}
+
+// TestInitResolvesOutputAgainstTheModuleRoot requires that -output is
+// compared with -gen-dir on the base each flag is documented against:
+// -output against the module root, because that is where the scaffold's
+// generate.Store resolves Store.Dir with Store.Root left empty, and
+// -gen-dir against the working directory. No symbolic link is involved in
+// any case below; the whole difference is which directory each name is
+// resolved from.
+//
+// Resolving both against the working directory, as this check once did, let
+// the first case through: from sub/ it compared <root>/sub/sub/gen with
+// <root>/sub/gen, saw two different directories, and wrote the scaffold --
+// after which `go generate` put the store into <root>/sub/gen, beside the
+// main.go it had just written, and `go build ./sub/gen` reported "found
+// packages main (main.go) and store (schema_gen.go)".
+func TestInitResolvesOutputAgainstTheModuleRoot(t *testing.T) {
+	// The two accepted cases are the other half of the same rule. "gen"
+	// names <root>/gen, which is not the <root>/sub/gen the scaffold goes
+	// into, and "sub/store" names a directory of its own; refusing either
+	// would refuse a layout that builds.
+	testCases := map[string]struct {
+		output  string
+		refused bool
+	}{
+		"module-root-relative output naming the scaffold directory": {output: "sub/gen", refused: true},
+		"working-directory spelling of the scaffold directory":      {output: "gen"},
+		"a directory of its own":                                    {output: "sub/store"},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			root := initModuleDir(t)
+			require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+			t.Chdir(filepath.Join(root, "sub"))
+
+			var out bytes.Buffer
+			err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", testCase.output}, &out)
+			if testCase.refused {
+				require.ErrorContains(t, err, "name the same directory")
+				require.ErrorContains(t, err, testCase.output)
+				_, statErr := os.Stat(filepath.Join(root, "sub", "gen"))
+				require.ErrorIs(t, statErr, os.ErrNotExist)
+				return
+			}
+			require.NoError(t, err)
+			source, readErr := os.ReadFile(filepath.Join(root, "sub", "gen", "main.go"))
+			require.NoError(t, readErr)
+			require.Contains(t, string(source), `Dir:     `+strconv.Quote(testCase.output))
+		})
+	}
 }
 
 // TestInitRefusesAnExistingFile requires that init leaves an existing
