@@ -32,6 +32,42 @@ var (
 	removeGeneratedFile = func(dir *os.Root, name string) error { return dir.Remove(name) }
 )
 
+// resolveCommitDestination is the same kind of unexported seam, for the one
+// step of Commit that authorizes a destination: it resolves a planned
+// file's path and, in the same step, records what the filesystem says the
+// directory holding that destination is. A test swaps it to change the
+// directory at exactly that point; nothing outside this package can reach
+// it.
+var resolveCommitDestination = resolveDestinationInDirectory
+
+// resolveDestinationInDirectory resolves a planned file's destination and
+// reports the directory holding it along with what the filesystem said that
+// directory was.
+//
+// The identity is taken here, beside the resolution that authorized the
+// destination, rather than later where the directory is opened. It is what
+// binds the two together: the suffix rule and the marker check
+// genfile.ResolveDestination applies go through a path, and a path is
+// resolved afresh by the kernel on every call, so nothing about the
+// directory those checks ran in carries over to the open on its own. A
+// destination reached through a symbolic link out of Dir has no other
+// record of the directory it landed in -- the plan's own anchor walk covers
+// Dir and nothing above or beside it -- so without this the directory
+// opened for the write is whatever holds that path by then, which is not
+// promised to be the directory this commit resolved and authorized.
+func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
+	resolved, err := genfile.ResolveDestination(path)
+	if err != nil {
+		return "", nil, err
+	}
+	parent := filepath.Dir(resolved)
+	info, err := os.Stat(parent)
+	if err != nil {
+		return "", nil, fmt.Errorf("generate: check %s: %w", parent, err)
+	}
+	return resolved, info, nil
+}
+
 // Plan is a rendered, uncommitted store package: every file's final bytes,
 // every destination already resolved, and every leftover already
 // identified.
@@ -155,7 +191,11 @@ func (p Plan) Orphans() []string {
 //     cannot answer for, because neither of them exists yet, are refused as
 //     one destination rather than allowed as two. The directory holding each resolved destination is opened
 //     here too, so steps 2 and 4 write through a directory this step
-//     authorized instead of resolving that path a second time. Finally
+//     authorized instead of resolving that path a second time, and that
+//     open directory must be the very directory the destination resolved
+//     in -- otherwise a destination reached through a symbolic link out of
+//     Dir is authorized in one directory and written in whichever one has
+//     since taken that path. Finally
 //     every recorded orphan is re-read, through the open directory, to
 //     confirm it is still a regular file carrying rasqlgen's marker on its
 //     first line. All of it is checked fresh here rather than trusted from
@@ -268,12 +308,21 @@ func (p Plan) Commit() error {
 	// writer instead would have it resolve that path a second time, and
 	// the destination the second resolution reaches is not promised to be
 	// the one authorized here.
+	//
+	// That open directory is required to be the one the resolution itself
+	// saw, which is why resolveCommitDestination reports the directory's
+	// identity beside the destination. Opening the resolved parent by path
+	// is a second resolution of its own, and for a destination a symbolic
+	// link reaches out of Dir it is the only one: the anchor walk pins Dir
+	// and nothing beyond it, so without the comparison a directory
+	// replaced between the two lands this commit's bytes somewhere it
+	// never looked.
 	handles := destinationDirectories{own: dir, ownPath: realDir}
 	defer handles.close()
 	writes := make([]commitWrite, 0, len(p.files))
 	for i := range p.files {
 		f := &p.files[i]
-		resolved, err := genfile.ResolveDestination(f.Path)
+		resolved, parentInfo, err := resolveCommitDestination(f.Path)
 		if err != nil {
 			return err
 		}
@@ -291,9 +340,9 @@ func (p Plan) Commit() error {
 			}
 			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, match.describe(resolved, d.orphan))
 		}
-		into, err := handles.open(filepath.Dir(resolved))
+		into, err := handles.open(filepath.Dir(resolved), parentInfo)
 		if err != nil {
-			return fmt.Errorf("generate: open %s: %w", filepath.Dir(resolved), err)
+			return err
 		}
 		writes = append(writes, commitWrite{file: f, destination: resolved, dir: into, name: filepath.Base(resolved)})
 	}
@@ -495,21 +544,50 @@ func deepestExistingDirectory(dir string) (string, fs.FileInfo, error) {
 // whoever opened it. A destination outside it -- which a symbolic link
 // inside Dir reaches on purpose -- gets its own handle, opened once per
 // directory and closed when the commit is over.
+//
+// Every handle handed out, the plan's own directory included, is required
+// to be the directory the destination's own resolution saw. Without that an
+// outside destination is authorized through one directory and written
+// through another: os.OpenRoot resolves each component of the path afresh,
+// so a directory renamed out of the way after the resolution and replaced
+// by a second one leaves the write landing in a directory this commit never
+// resolved. The plan's own directory is pinned twice over -- by the anchor
+// walk and by Commit's own os.SameFile against the resolved Dir -- and the
+// check costs it nothing, so it is applied uniformly rather than only where
+// it is the sole binding.
 type destinationDirectories struct {
 	own     *os.Root
 	ownPath string
 	outside map[string]*os.Root
 }
 
-func (d *destinationDirectories) open(path string) (*os.Root, error) {
+// open reports the open directory holding a resolved destination. resolved
+// is what the filesystem said that directory was when the destination was
+// resolved, and the handle open reports is required to still be that same
+// directory.
+func (d *destinationDirectories) open(path string, resolved fs.FileInfo) (*os.Root, error) {
 	if path == d.ownPath {
+		if err := requireSameDirectory(d.own, path, resolved); err != nil {
+			return nil, err
+		}
 		return d.own, nil
 	}
 	if root, exists := d.outside[path]; exists {
+		// A handle already opened for an earlier destination is checked
+		// again rather than trusted: this destination was resolved through
+		// its own look at the path, and only this comparison says the two
+		// looks found one directory.
+		if err := requireSameDirectory(root, path, resolved); err != nil {
+			return nil, err
+		}
 		return root, nil
 	}
 	root, err := os.OpenRoot(path)
 	if err != nil {
+		return nil, fmt.Errorf("generate: open %s: %w", path, err)
+	}
+	if err := requireSameDirectory(root, path, resolved); err != nil {
+		_ = root.Close()
 		return nil, err
 	}
 	if d.outside == nil {
@@ -517,6 +595,21 @@ func (d *destinationDirectories) open(path string) (*os.Root, error) {
 	}
 	d.outside[path] = root
 	return root, nil
+}
+
+// requireSameDirectory reports an error unless root is the very directory
+// resolved describes. It asks the open handle what it is rather than the
+// path again, which is the whole point: the path is what stopped being
+// trustworthy.
+func requireSameDirectory(root *os.Root, path string, resolved fs.FileInfo) error {
+	info, err := root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("generate: check %s: %w", path, err)
+	}
+	if !os.SameFile(resolved, info) {
+		return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit resolved the destination through, so the generated bytes would land in a directory nothing authorized; rerun Store.Plan", path)
+	}
+	return nil
 }
 
 func (d *destinationDirectories) close() {
