@@ -1227,6 +1227,12 @@ func (m destinationMatch) describe(resolved, recorded string) string {
 // package's file, this check is not a Go syntax checker, and refusing a run
 // over a file the compiler will complain about on its own would be a
 // refusal with nothing behind it.
+//
+// An entry is judged by what it resolves to, not by what holds its name: a
+// symbolic link to a regular Go file is read and compared like the file
+// itself, because that is what go/build compiles, while a link to a
+// directory and a link naming nothing are skipped along with every other
+// entry the build passes over.
 func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -1257,28 +1263,43 @@ func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
 		if _, planned := own[filenameKey(name)]; planned {
 			continue
 		}
-		info, err := root.Lstat(name)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return err
-		}
-		if !info.Mode().IsRegular() {
+		// The entry is resolved through its path rather than through the
+		// open directory, because this check has to see the file the
+		// toolchain will see. go/build follows a symbolic link and compiles
+		// the regular file it lands on, so a link named main.go pointing at
+		// a package main file collides exactly as a plain main.go would.
+		// os.Root refuses to follow any link whose target leaves the root,
+		// which is where such a link almost always points, and resolving
+		// this entry through the handle would report "path escapes from
+		// parent" and skip the very file the check exists to catch.
+		// build.Default.MatchFile below reads the entry through this same
+		// path, so both halves of the decision describe one file.
+		//
+		// Nothing is written or deleted through this path -- the file is
+		// stat'ed, and at most its first line and package clause are read.
+		// Commit's writes and deletes still go through the open directory.
+		entryPath := filepath.Join(dir, name)
+		// Stat follows the link, so what it reports is the target. A link
+		// to a directory, a link naming nothing, and a target the process
+		// cannot stat all fail this test and are skipped: none of them is a
+		// file the build compiles, so none of them can be the second
+		// package in this directory.
+		info, err := os.Stat(entryPath)
+		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
 		included, err := build.Default.MatchFile(dir, name)
 		if err != nil || !included {
 			continue
 		}
-		marker, err := readGenfileMarker(root, name)
+		marker, err := readGenfileMarkerAt(entryPath)
 		if err != nil {
 			return err
 		}
 		if marker != nil {
 			continue
 		}
-		declared, err := declaredPackage(root, name)
+		declared, err := declaredPackage(entryPath)
 		if err != nil || declared == "" {
 			continue
 		}
@@ -1293,17 +1314,22 @@ func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
 	return nil
 }
 
-// declaredPackage reads name's package clause and nothing else. The parse
-// stops at the clause, so neither the imports nor the body of a file that
-// only happens to share the directory is read or has to be valid.
-func declaredPackage(dir *os.Root, name string) (string, error) {
-	file, err := dir.Open(name)
+// declaredPackage reads the package clause of the file at path and nothing
+// else. The parse stops at the clause, so neither the imports nor the body of
+// a file that only happens to share the directory is read or has to be valid.
+//
+// It takes a path, and so resolves a symbolic link to whatever the link
+// names, because its one caller has to compare the package the toolchain
+// will compile from this entry. That caller has already required the path to
+// resolve to a regular file the build includes.
+func declaredPackage(path string) (string, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = file.Close() }()
 
-	parsed, err := parser.ParseFile(token.NewFileSet(), name, file, parser.PackageClauseOnly)
+	parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Base(path), file, parser.PackageClauseOnly)
 	if err != nil {
 		return "", err
 	}
@@ -1407,7 +1433,10 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 //
 // It takes an open directory and a bare name rather than a path so the file
 // it reads is the one inside the directory the caller already has, not
-// whatever the path reaches when the kernel resolves it again.
+// whatever the path reaches when the kernel resolves it again. That is what
+// every caller acting on the answer needs. readGenfileMarkerAt below reads
+// the same marker off a path for the one caller that must instead see what
+// the toolchain sees.
 //
 // What it reports comes from the open file rather than from a second look
 // at the name, so it describes the very bytes the marker was read from. A
@@ -1444,10 +1473,41 @@ func readGenfileMarker(dir *os.Root, name string) (fs.FileInfo, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	// The open file is asked what it is a second time, because the Lstat
-	// above described whatever held the name at that instant and the open
-	// resolved the name again. This is the answer that belongs to the bytes
-	// read below.
+	return genfileMarkerOf(file, name)
+}
+
+// readGenfileMarkerAt is readGenfileMarker against a path rather than an open
+// directory and a name: it resolves the path the way the toolchain does,
+// following a symbolic link to the regular file it names. It exists for
+// requireStorePackageOwnsDir, whose whole job is to judge an entry by the
+// file the build compiles from it, and which os.Root cannot serve because it
+// refuses every link pointing out of the root.
+//
+// The caller has already required the path to resolve to a regular file, so
+// nothing here opens a fifo and blocks; the open file is asked what it is
+// again all the same, since that answer is the one belonging to the bytes
+// read.
+func readGenfileMarkerAt(path string) (fs.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+
+	return genfileMarkerOf(file, filepath.Base(path))
+}
+
+// genfileMarkerOf is the marker rule itself, over a file both readers above
+// have already opened: one rule, one copy, whichever way the file was
+// reached. name is only what the answer is reported against.
+func genfileMarkerOf(file *os.File, name string) (fs.FileInfo, error) {
+	// The open file is asked what it is a second time, because whatever the
+	// caller stat'ed described what held the name at that instant and the
+	// open resolved the name again. This is the answer that belongs to the
+	// bytes read below.
 	opened, err := file.Stat()
 	if err != nil {
 		return nil, err
