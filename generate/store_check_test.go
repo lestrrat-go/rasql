@@ -304,6 +304,62 @@ func TestStoreCheckReportsAnUnownedDestinationAsItself(t *testing.T) {
 	require.Equal(t, handWritten, got, "Check must never touch the unowned file")
 }
 
+// TestStoreCheckNamesStalePathsRelativeToRoot pins how Check's error names a
+// stale file inside the store's Root: relative to that Root, whether Root
+// was given as a relative path or an absolute one. A relative Root is the
+// case that has to be resolved before the plan carries it, since every
+// planned path is absolute and nothing relates a relative root to one; left
+// unresolved, every file inside Root is named by its absolute path, which is
+// the form the message keeps for a file outside Root, and the two cannot be
+// told apart.
+func TestStoreCheckNamesStalePathsRelativeToRoot(t *testing.T) {
+	relativeName := filepath.Join("generated", "store", "users_gen.go")
+	for _, tc := range []struct {
+		name string
+		root func(wd string) string
+	}{
+		{name: "relative root", root: func(string) string { return "." }},
+		{name: "absolute root", root: func(wd string) string { return wd }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			// The working directory is read back rather than taken from
+			// t.TempDir(): a temporary directory reached through a symbolic
+			// link is spelled one way there and another way here, and this is
+			// the spelling every absolute path in the plan is built from.
+			wd, err := os.Getwd()
+			require.NoError(t, err)
+
+			// Dir is relative as well, and never written, so every planned
+			// file is missing and each one is named through Root.
+			store := generate.Store{Package: "store", Root: tc.root(wd), Dir: filepath.Join("generated", "store"), Tables: []schema.TableDef{usersTableDef()}}
+			err = store.Check()
+			require.Error(t, err)
+			require.True(t, errors.Is(err, generate.ErrStale))
+			require.ErrorContains(t, err, relativeName+": is missing")
+			require.NotContains(t, err.Error(), wd, "a file inside Root must be named relative to it, not absolutely")
+		})
+	}
+}
+
+// TestStoreCheckNamesAFileOutsideRootAbsolutely pins the other half of that
+// promise: a planned file that is not inside Root has no relative form that
+// resolves back to it from Root, so Check names it absolutely. This is what
+// makes an absolute name in the message mean "outside Root" rather than
+// "Root was spelled relatively".
+func TestStoreCheckNamesAFileOutsideRootAbsolutely(t *testing.T) {
+	root := t.TempDir()
+	// A sibling of root rather than a child of it: nothing under root reaches
+	// it, which is what makes it a destination outside Root.
+	dir := t.TempDir()
+	store := generate.Store{Package: "store", Root: root, Dir: dir, Tables: []schema.TableDef{usersTableDef()}}
+
+	err := store.Check()
+	require.Error(t, err)
+	require.True(t, errors.Is(err, generate.ErrStale))
+	require.ErrorContains(t, err, filepath.Join(dir, "users_gen.go")+": is missing")
+}
+
 // TestStoreCheckIsCleanForHintedTables confirms Check agrees with Write when
 // Hints are involved, in the two directions the hint's overlay semantics
 // allow: the same Hints reproduce the same bytes, and feeding the store's

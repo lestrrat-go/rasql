@@ -103,9 +103,12 @@ type Plan struct {
 	// them -- is made from the plan alone, the same instant everything
 	// else about the plan was decided.
 	prune bool
-	// root is the store's resolved Root, carried into the plan so Check can
-	// print a path relative to it instead of always absolute. It plays no
-	// part in Commit.
+	// root is the store's resolved Root, made absolute, carried into the
+	// plan so Check can print a path relative to it instead of always
+	// absolute. Store.Plan makes it absolute there, against the same working
+	// directory it made dir absolute against, because a relative root cannot
+	// be related to the absolute paths this plan holds at all and would
+	// leave every reported path absolute. It plays no part in Commit.
 	root string
 	// anchor is the deepest directory on dir's own path that already
 	// existed when Store.Plan looked, and anchorInfo is what the filesystem
@@ -629,6 +632,12 @@ func (p Plan) Check() error {
 // root when path is inside root, absolute otherwise. An empty root, or a
 // path outside it, is reported as an absolute path rather than a relative
 // form that would not resolve back to the same file.
+//
+// root is the plan's own, which Store.Plan already made absolute, and path
+// is a planned File.Path, which is absolute as well. A relative root would
+// name nothing here: filepath.Rel refuses to relate a relative root to an
+// absolute path, so every path would come back out absolute and read as a
+// file outside Root.
 func formatCheckPath(root, path string) string {
 	if root == "" {
 		return path
