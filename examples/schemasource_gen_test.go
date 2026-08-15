@@ -207,3 +207,33 @@ func TestSchemaSourceExampleGeneratesFailsOnStaleCheckedInFile(t *testing.T) {
 	require.Equal(t, stale, string(after),
 		"the subprocess left the generator's own output in the tree instead of restoring the checked-in bytes")
 }
+
+// TestSchemaSourceExampleReportsFailureWithNonzeroExit runs the same
+// program from a directory that has no internal/store, which is what the
+// example itself does when a user copies it without creating the output
+// directory first. A generate step that printed the failure and exited 0
+// would look successful while producing nothing.
+//
+// Neither test above can stand in for this one. Both drive the directive
+// against examples/schemasource, where the output directory already exists,
+// so neither reaches the error branch in gen/main.go and neither looks at the
+// program's exit status at all: `go generate` reports a directive that exited
+// 0 as success, so a generator that swallowed the failure would leave both of
+// them green. This test is the only place the missing-output path and the
+// exit code are checked, which is why it runs the program directly rather
+// than through the directive.
+func TestSchemaSourceExampleReportsFailureWithNonzeroExit(t *testing.T) {
+	// The premise of the test: this package's own directory, which is the
+	// working directory below, holds no internal/store for the example to
+	// write into.
+	require.NoDirExists(t, filepath.Join("internal", "store"))
+
+	command := exec.CommandContext(t.Context(), "go", "run", "./schemasource/gen")
+	output, err := command.CombinedOutput()
+	require.Error(t, err, "expected a nonzero exit, got: %s", output)
+
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 1, exit.ExitCode(), "output: %s", output)
+	require.Contains(t, string(output), "failed to write schema package")
+}
