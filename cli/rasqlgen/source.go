@@ -103,7 +103,9 @@ func generateFromSchemaSource(ctx context.Context, sourceDir, packageName, outpu
 		return fmt.Errorf("schema output %q is not a directory", outputDir)
 	}
 
-	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, schemaSourcePattern(sourceDir))
+	// The pattern is what `go list` is asked to resolve; sourceDir is what
+	// the user typed, and stays the name every message reports back.
+	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, schemaSourcePattern(sourceDir), sourceDir)
 	if err != nil {
 		return err
 	}
@@ -150,20 +152,54 @@ func generateFromSchemaSource(ctx context.Context, sourceDir, packageName, outpu
 // line and accepts either form: the documented directory ("internal/tables")
 // and a package import path ("example.com/app/internal/tables").
 //
-// Only the directory form gets asDirectoryPattern's "./" prefix, and only
-// when the value actually names a directory on disk, because that prefix is
-// what stops go list from reading a bare relative directory as an
-// import-path pattern to match against the whole module graph. Prefixing an
-// import path instead turns it into a directory that does not exist, which
-// go list rejects outright with "directory not found", so a value that
-// names no directory is passed through untouched and left for go list to
-// resolve as the import path it is.
+// Only the directory form gets asDirectoryPattern's "./" prefix, because
+// that prefix is what stops go list from reading a bare relative directory
+// as an import-path pattern to match against the whole module graph.
+// Prefixing an import path instead resolves whatever directory happens to
+// sit at that same relative path, or fails with "directory not found" when
+// none does, so an import path must reach go list untouched.
+//
+// Three tests in order decide which form a value is, and the first two
+// settle it without looking at the filesystem at all:
+//
+//   - A value isDirectoryPattern already reports to be in explicit
+//     directory form is left alone, which asDirectoryPattern does itself.
+//     That form is the escape hatch for a directory whose own name would
+//     otherwise read as an import path.
+//   - A value whose first path element carries a dot is a package import
+//     path. A dot there is the go command's own test for the same thing:
+//     IsStandardImportPath in cmd/go/internal/search assumes "code will
+//     start with a domain name (dot in the first element)" and treats a
+//     path without one as standard-library. Deciding this from the value alone rather than
+//     from os.Stat is what keeps an import path resolving as itself even
+//     when a directory of exactly that relative path sits under the
+//     working directory.
+//   - Anything else is the documented directory form when it names a
+//     directory on disk, and is otherwise passed through for go list to
+//     resolve as the standard-library-shaped import path it looks like.
 func schemaSourcePattern(source string) string {
+	if isSchemaSourceImportPath(source) {
+		return source
+	}
 	info, err := os.Stat(source)
 	if err != nil || !info.IsDir() {
 		return source
 	}
 	return asDirectoryPattern(source)
+}
+
+// isSchemaSourceImportPath reports whether source can only be a package
+// import path, never the documented -source directory form. A value already
+// written in explicit directory form is never one, whatever it is named;
+// past that, a dot in the first path element marks the leading domain of a
+// module path. A directory really named that way is still reachable, by
+// writing it in the explicit form.
+func isSchemaSourceImportPath(source string) bool {
+	if isDirectoryPattern(source) {
+		return false
+	}
+	firstElement, _, _ := strings.Cut(source, "/")
+	return strings.Contains(firstElement, ".")
 }
 
 // schemaSourcePackageInfo holds the fields `go list -json` reports that
@@ -177,23 +213,28 @@ type schemaSourcePackageInfo struct {
 	}
 }
 
-// resolveSchemaSourcePackage resolves sourceDir to an import path and its
+// resolveSchemaSourcePackage resolves pattern to an import path and its
 // module's root directory, running with the current process's own working
-// directory so a relative sourceDir is read the way the user typed it.
+// directory so a relative pattern is read the way the user typed it.
+//
+// pattern is the package pattern go list is asked to resolve, which a
+// caller may have rewritten from what the user typed. source is that
+// original value, and is the only one of the two any message here reports,
+// so an error names what the user wrote rather than a rewrite of it.
 //
 // go list -json is a resolver only, not an error gate: measured on
 // go1.26.1, it exits 0 on a type error, a truncated file, and an
 // unresolvable import in the package it resolves, reporting those only
 // inside the JSON. Only a missing directory or similarly unresolvable
-// sourceDir exits non-zero with a message on stderr, which is what this
+// pattern exits non-zero with a message on stderr, which is what this
 // reports. A compile failure in the package itself is caught later, when
 // generateFromSchemaSource runs `go run` on the generated program that
 // imports it.
 //
 // It runs under ctx so a signal arriving during resolution stops this
 // command as promptly as one arriving during the child run does.
-func resolveSchemaSourcePackage(ctx context.Context, sourceDir string) (string, string, error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-json", sourceDir)
+func resolveSchemaSourcePackage(ctx context.Context, pattern, source string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, "go", "list", "-json", pattern)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -205,20 +246,20 @@ func resolveSchemaSourcePackage(ctx context.Context, sourceDir string) (string, 
 			// on PATH. err itself names that failure; reporting it instead
 			// of an empty errors.New("") is what keeps this branch from
 			// handing the user a message with nothing after the colon.
-			return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, err)
+			return "", "", fmt.Errorf("resolve schema source %s: %w", source, err)
 		}
-		return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, errors.New(message))
+		return "", "", fmt.Errorf("resolve schema source %s: %w", source, errors.New(message))
 	}
 
 	var pkg schemaSourcePackageInfo
 	if err := json.Unmarshal(stdout.Bytes(), &pkg); err != nil {
-		return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, err)
+		return "", "", fmt.Errorf("resolve schema source %s: %w", source, err)
 	}
 	if pkg.Module.Dir == "" {
-		return "", "", fmt.Errorf("schema source %s is not inside a Go module", sourceDir)
+		return "", "", fmt.Errorf("schema source %s is not inside a Go module", source)
 	}
 	if pkg.ImportPath == "" {
-		return "", "", fmt.Errorf("resolve schema source %s: %w", sourceDir, errors.New("go list reported no import path"))
+		return "", "", fmt.Errorf("resolve schema source %s: %w", source, errors.New("go list reported no import path"))
 	}
 	return pkg.ImportPath, pkg.Module.Dir, nil
 }

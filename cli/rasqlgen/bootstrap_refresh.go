@@ -24,7 +24,10 @@ import (
 // Tables() result, since directory's package is not known at this
 // program's own build time.
 func loadExistingDescriptionTables(ctx context.Context, directory string) ([]schema.TableDef, error) {
-	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, asDirectoryPattern(directory))
+	// directory always names a directory here, so it always takes the
+	// directory-pattern prefix; it is passed unprefixed as well, because
+	// that is the value the caller typed and the one an error should name.
+	importPath, moduleDir, err := resolveSchemaSourcePackage(ctx, asDirectoryPattern(directory), directory)
 	if err != nil {
 		return nil, err
 	}
@@ -63,8 +66,8 @@ func loadExistingDescriptionTables(ctx context.Context, directory string) ([]sch
 
 // asDirectoryPattern returns path in the one form `go list` always resolves
 // as a filesystem directory rather than an import-path pattern: unchanged
-// if it is already absolute or already starts with "./" or "../", and
-// prefixed with "./" otherwise. Go's own package-pattern rule (see `go help
+// when isDirectoryPattern already reports it in that form, and prefixed
+// with "./" otherwise. Go's own package-pattern rule (see `go help
 // packages`) treats a bare relative path such as "internal/tables" as an
 // import path to match against the module's declared packages, not as a
 // directory -- which still resolves the right package by coincidence when
@@ -74,10 +77,22 @@ func loadExistingDescriptionTables(ctx context.Context, directory string) ([]sch
 // go.sum: resolving an import-path pattern loads the whole module graph,
 // where resolving a directory pattern loads only the one directory named.
 func asDirectoryPattern(path string) string {
-	if filepath.IsAbs(path) || strings.HasPrefix(path, "."+string(filepath.Separator)) || strings.HasPrefix(path, ".."+string(filepath.Separator)) || path == "." || path == ".." {
+	if isDirectoryPattern(path) {
 		return path
 	}
 	return "." + string(filepath.Separator) + path
+}
+
+// isDirectoryPattern reports whether path is already in the one form go
+// list never reads as an import-path pattern: an absolute path, one
+// starting with "./" or "../", or "." or ".." itself. This is the whole
+// rule, and it lives here once because both asDirectoryPattern and
+// schemaSourcePattern decide from it.
+func isDirectoryPattern(path string) bool {
+	return filepath.IsAbs(path) ||
+		strings.HasPrefix(path, "."+string(filepath.Separator)) ||
+		strings.HasPrefix(path, ".."+string(filepath.Separator)) ||
+		path == "." || path == ".."
 }
 
 // descriptionLoaderProgram builds the temporary package main
