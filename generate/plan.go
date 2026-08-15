@@ -1211,12 +1211,12 @@ func (m destinationMatch) describe(resolved, recorded string) string {
 // skipped and why; planned names this call's own about-to-be-written files,
 // which are skipped along with the rest.
 func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
-	// own is keyed through filenameKey for the same reason findOrphans keys
-	// its own set that way: on a filesystem that ignores case in file names,
-	// a planned name spelled differently is still the planned file.
+	// own keeps the planned spelling. ownsEntry asks the filesystem whether a
+	// case-variant entry is the same directory entry, so a distinct file on a
+	// case-sensitive filesystem is not mistaken for a planned destination.
 	own := make(map[string]struct{}, len(planned))
 	for _, f := range planned {
-		own[filenameKey(filepath.Base(f.Path))] = struct{}{}
+		own[filepath.Base(f.Path)] = struct{}{}
 	}
 	name, declared, err := scanForeignPackage(dir, pkg, own)
 	if err != nil {
@@ -1230,11 +1230,11 @@ func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
 
 // DirForeignPackage reports the name and declared package of a Go file in
 // dir that go/build would include in the package build and whose declared
-// package is neither pkg nor pkg+"_test". Every name in own is skipped
-// (compared case-insensitively, the way a filesystem that ignores case in
-// file names would), because a caller passes its own destination file
-// names there before they exist on disk. It reports ("", "", nil) when dir
-// does not exist, or when no such file is found.
+// package is neither pkg nor pkg+"_test". Every name in own is skipped when
+// it names the same directory entry as a planned destination, including on a
+// filesystem that ignores case in file names. A distinct case-variant file on
+// a case-sensitive filesystem is still scanned. It reports ("", "", nil)
+// when dir does not exist, or when no such file is found.
 //
 // This is requireStorePackageOwnsDir's scan -- the same one Store.Plan
 // runs against -output before Store.Write ever touches that directory,
@@ -1248,14 +1248,15 @@ func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
 func DirForeignPackage(dir, pkg string, own ...string) (name string, declaredPackage string, err error) {
 	ownSet := make(map[string]struct{}, len(own))
 	for _, n := range own {
-		ownSet[filenameKey(filepath.Base(n))] = struct{}{}
+		ownSet[filepath.Base(n)] = struct{}{}
 	}
 	return scanForeignPackage(dir, pkg, ownSet)
 }
 
 // scanForeignPackage is requireStorePackageOwnsDir's and DirForeignPackage's
-// shared scan. own holds the file names (already run through filenameKey)
-// to skip as the caller's own, not-yet-written destinations.
+// shared scan. own holds the exact file names to skip as the caller's own,
+// not-yet-written destinations; ownsEntry handles case variants by asking the
+// filesystem whether they name the same directory entry.
 //
 // Three further kinds of file are skipped, and each has to be:
 //
@@ -1297,7 +1298,14 @@ func scanForeignPackage(dir, pkg string, own map[string]struct{}) (name string, 
 		if !strings.HasSuffix(entryName, ".go") {
 			continue
 		}
-		if _, skip := own[filenameKey(entryName)]; skip {
+		entryInfo, lstatErr := root.Lstat(entryName)
+		if lstatErr != nil {
+			if errors.Is(lstatErr, fs.ErrNotExist) {
+				continue
+			}
+			return "", "", lstatErr
+		}
+		if ownsEntry(root, own, entryName, entryInfo) {
 			continue
 		}
 		// The entry is resolved through its path rather than through the

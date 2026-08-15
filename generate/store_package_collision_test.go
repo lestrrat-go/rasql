@@ -45,6 +45,31 @@ func TestStorePlanRefusesADirectoryHoldingAnotherPackage(t *testing.T) {
 	require.Equal(t, "main.go", entries[0].Name())
 }
 
+// TestStorePlanRefusesACaseVariantUserPackage checks that a file whose name
+// differs from a planned destination only by case is still treated as a
+// separate file on a case-sensitive filesystem. The directory scan must not
+// fold that name before asking the filesystem whether both names are one
+// entry, or it can let a second package into the generated directory.
+func TestStorePlanRefusesACaseVariantUserPackage(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "gen")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	foreign := filepath.Join(dir, "USERS_gen.go")
+	require.NoError(t, os.WriteFile(foreign, []byte("package main\n\nfunc main() {}\n"), 0o644))
+
+	planned := filepath.Join(dir, "users_gen.go")
+	plannedInfo, plannedErr := os.Lstat(planned)
+	foreignInfo, foreignErr := os.Lstat(foreign)
+	if plannedErr == nil && foreignErr == nil && os.SameFile(plannedInfo, foreignInfo) {
+		t.Skip("filesystem ignores case in file names")
+	}
+
+	store := generate.Store{Package: "store", Root: root, Dir: "gen", Tables: []schema.TableDef{usersTableDef()}}
+	_, err := store.Plan()
+	require.ErrorContains(t, err, `already holds package "main"`)
+	require.ErrorContains(t, err, "USERS_gen.go")
+}
+
 // TestStorePlanAcceptsADirectoryNoOtherPackageOwns is the control for the
 // test above. Each case below puts a file in Dir that the check has to let
 // through, and getting any of them wrong turns a working layout into a
