@@ -59,12 +59,56 @@ func TestIntegrationJobListsEveryDBTestGuardedPackage(t *testing.T) {
 	}
 }
 
+// goSkipsDirName reports whether the go tool passes over a directory of this
+// name when it expands the package patterns CI writes -- `./...` in the
+// "check" job, `./dir/...` and `.` in the "integration" job. `go help
+// packages` states the rule: directory names beginning with "." or "_" are
+// ignored, as are directories named "testdata", and a ./... pattern never
+// matches a package inside a vendor directory.
+//
+// This is the one place that rule is written down, and both halves of this
+// guard read it: guardedPackages does not walk into such a directory, and
+// anyListedCovers refuses to call an import path under one covered. Keeping
+// the two halves on a single definition is what stops them disagreeing, since
+// a disagreement here is exactly the false coverage claim this guard exists
+// to prevent -- a test file parked in ".hidden" or "_scratch" runs under no
+// pattern either CI job uses, so calling it covered would report a coverage
+// nothing provides.
+func goSkipsDirName(name string) bool {
+	return strings.HasPrefix(name, ".") ||
+		strings.HasPrefix(name, "_") ||
+		name == "testdata" ||
+		name == "vendor"
+}
+
+// goSkipsImportPath reports whether pkg names a package the go tool passes
+// over for the patterns CI writes, because some element of its path below the
+// module root is a directory goSkipsDirName names.
+func goSkipsImportPath(pkg string) bool {
+	rel, nested := strings.CutPrefix(pkg, modulePath+"/")
+	if !nested {
+		return false
+	}
+	for _, elem := range strings.Split(rel, "/") {
+		if goSkipsDirName(elem) {
+			return true
+		}
+	}
+	return false
+}
+
 // guardedPackages returns the sorted, deduplicated import paths of every
 // package under the root module whose directory contains at least one
 // *_test.go file importing internal/dbtest. It walks the filesystem and
 // parses each test file's import block directly, rather than using
 // go/build package discovery, so a file's build tags (every guarded test
 // file is unix-only) never hide it from this check on a non-unix host.
+//
+// Parsing directly is why the walk has to reproduce the go tool's own
+// directory rules itself (goSkipsDirName): a directory go passes over holds
+// no package either CI job can name, and a scratch copy of this repository
+// under ".worktrees" would otherwise be discovered as a second set of guarded
+// packages that no workflow command ever lists.
 func guardedPackages(t *testing.T, root string) []string {
 	t.Helper()
 
@@ -76,15 +120,16 @@ func guardedPackages(t *testing.T, root string) []string {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".tmp", ".worktrees", "testdata":
-				return filepath.SkipDir
-			}
-			// A nested go.mod (e.g. sample/taskboard) marks the start of a
-			// separate module; its packages are not part of this module's
-			// import path space and are excluded from the workflow's
-			// `go test` invocation entirely, so they are out of scope here.
+			// The root is the module itself, whose own directory name is not
+			// part of any package pattern and so is never skipped.
 			if path != root {
+				if goSkipsDirName(d.Name()) {
+					return filepath.SkipDir
+				}
+				// A nested go.mod (e.g. sample/taskboard) marks the start of a
+				// separate module; its packages are not part of this module's
+				// import path space and are excluded from the workflow's
+				// `go test` invocation entirely, so they are out of scope here.
 				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
 					return filepath.SkipDir
 				}
@@ -271,7 +316,6 @@ var goTestValueFlags = map[string]bool{
 	"-fuzztime":     true,
 	"-gcflags":      true,
 	"-ldflags":      true,
-	"-list":         true,
 	"-memprofile":   true,
 	"-mod":          true,
 	"-o":            true,
@@ -290,9 +334,37 @@ var goTestValueFlags = map[string]bool{
 // closes from the other end: the package list stays complete while the
 // guarded tests inside it never execute. Both forms are rejected, since
 // -run=X silences the same tests -X does.
+//
+// The names here are the canonical ones goTestFlagName produces, so the
+// -test.run and -test.skip spellings of the same flags are rejected too.
 var goTestSelectionFlags = map[string]bool{
 	"-run":  true,
 	"-skip": true,
+}
+
+// goTestNonRunningFlags names the flags that make `go test` report on a
+// package's tests instead of running them. -list prints the names of the
+// tests matching its regexp and executes none of them, so a command carrying
+// it exits 0 with every listed package reporting ok while not one live test
+// touched a database -- the same silent gap a -run filter opens, reached
+// without naming a single test.
+var goTestNonRunningFlags = map[string]bool{
+	"-list": true,
+}
+
+// goTestFlagName reduces a flag token's name, as written, to the single
+// canonical spelling the tables above are keyed by: leading dashes collapse
+// to one, since go accepts -flag and --flag alike, and a leading "test." is
+// dropped, since the test binary's own flags are reachable through `go test`
+// under both spellings and -test.run means exactly what -run means.
+//
+// Normalizing that prefix is what keeps a rejected flag rejected in every
+// spelling. Written as -test.run, a filter would otherwise reach goTestArgs
+// as a name no table holds, carrying a joined value; the command would be
+// accepted with -v and every package still in place, while `go test -v
+// -test.run=^$` runs no test at all and exits 0.
+func goTestFlagName(name string) string {
+	return "-" + strings.TrimPrefix(strings.TrimLeft(name, "-"), "test.")
 }
 
 // goTestArgs splits the arguments following `go test` into the flags and the
@@ -306,6 +378,11 @@ var goTestSelectionFlags = map[string]bool{
 // a bare flag of unknown arity, a value-taking flag with no value left to
 // take, -args (after which go stops reading packages at all), and an operand
 // written in neither ./dir/... nor . form.
+//
+// The flags that would leave the job green without running the tests it
+// lists packages for -- a selection filter, a listing flag -- are refused
+// before arity is consulted at all, so neither the joined form nor the
+// separate one can slip past on the shape of its value.
 func goTestArgs(args []string) (flags, pkgs []string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -322,12 +399,14 @@ func goTestArgs(args []string) (flags, pkgs []string, err error) {
 		}
 
 		name, _, joined := strings.Cut(arg, "=")
-		flag := "-" + strings.TrimLeft(name, "-")
+		flag := goTestFlagName(name)
 		switch {
 		case flag == "-args":
 			return nil, nil, fmt.Errorf("the %q step's command passes %s, after which go hands every remaining argument to the test binary rather than reading it as a package; keep this step a plain `go test` command or update this test", integrationStep, arg)
 		case goTestSelectionFlags[flag]:
 			return nil, nil, fmt.Errorf("the %q step's command passes %s, which selects a subset of each listed package's tests; the job exists to run every live test in the packages it names, so a package would stay listed here while its guarded tests never ran", integrationStep, arg)
+		case goTestNonRunningFlags[flag]:
+			return nil, nil, fmt.Errorf("the %q step's command passes %s, which makes go test report on the listed packages' tests without running any of them; the job would end green, with -v and every package still in place, having touched no database at all", integrationStep, arg)
 		case joined, goTestBoolFlags[flag]:
 			flags = append(flags, arg)
 		case goTestValueFlags[flag]:
@@ -609,6 +688,61 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			wantErr: `passes -skip=TestSomething`,
 		},
 		{
+			// `go test -v -test.run=^$ ./...` prints "no tests to run" for
+			// every package and exits 0, so this spelling has to be refused
+			// as firmly as the -run one; before goTestFlagName normalized the
+			// prefix away, the joined value made this command acceptable.
+			name: "rejects the test-binary spelling of a filter in joined form",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v -test.run=^$ ./alpha/... ."),
+			),
+			wantErr: `passes -test.run=^$`,
+		},
+		{
+			name: "rejects the test-binary spelling of a filter in separate form",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v -test.skip .* ./alpha/... ."),
+			),
+			wantErr: `passes -test.skip`,
+		},
+		{
+			// -list prints test names and runs nothing, in either form.
+			name: "rejects a listing command in joined form",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v -list=.* ./alpha/... ."),
+			),
+			wantErr: `passes -list=.*`,
+		},
+		{
+			name: "rejects a listing command in separate form",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v -list .* ./alpha/... ."),
+			),
+			wantErr: `passes -list`,
+		},
+		{
+			name: "rejects the test-binary spelling of a listing command",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v -test.list=.* ./alpha/... ."),
+			),
+			wantErr: `passes -test.list=.*`,
+		},
+		{
+			// Normalizing the prefix must not change what a value-taking flag
+			// does with the token after it.
+			name: "does not read a test-binary flag's separate value as a package",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -v -test.timeout 20m ./alpha/... ."),
+			),
+			want: []string{"./alpha/...", "."},
+		},
+		{
 			name: "rejects a bare flag of unknown arity",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
@@ -657,11 +791,81 @@ jobs:
 	}
 }
 
+// TestGuardedPackageDiscoveryFollowsGoPackagePatternRules pins the rule
+// goSkipsDirName owns at both the places that read it. The checked-in module
+// has no directory the go tool passes over, so neither half can be shown
+// against the real tree, and the half that matters most is invisible without
+// a fixture: a test file under a directory named ".hidden" or "_scratch"
+// executes under no pattern CI writes -- not the integration job's
+// ./inspect/..., not the check job's ./... -- so discovery must not report
+// its directory as a package of this module, and coverage must never answer
+// that some listed spec covers it.
+//
+// Every directory name below is invented for this fixture. This module has
+// none of them, so no name here can be read as a report about a real one.
+func TestGuardedPackageDiscoveryFollowsGoPackagePatternRules(t *testing.T) {
+	t.Run("discovery skips the directories go passes over", func(t *testing.T) {
+		root := t.TempDir()
+		for _, dir := range []string{
+			".",
+			"alpha",
+			".hidden",
+			"_scratch",
+			"beta/testdata",
+			"gamma/_experimental",
+			"vendor/example.com/dep",
+			"delta",
+		} {
+			path := filepath.Join(root, filepath.FromSlash(dir))
+			require.NoError(t, os.MkdirAll(path, 0o750), "mkdir %s", dir)
+			source := fmt.Sprintf("package p\n\nimport _ %q\n", dbtestImportPath)
+			require.NoError(t, os.WriteFile(filepath.Join(path, "live_test.go"), []byte(source), 0o600), "write %s", dir)
+		}
+		// A nested module is out of this module's import path space, and the
+		// workflow's `go test` never reaches it either.
+		require.NoError(t, os.WriteFile(filepath.Join(root, "delta", "go.mod"), []byte("module example.com/delta\n"), 0o600))
+
+		require.Equal(t, []string{modulePath, modulePath + "/alpha"}, guardedPackages(t, root))
+	})
+
+	t.Run("coverage refuses the import paths go passes over", func(t *testing.T) {
+		// The specs on the left are the shape ci.yml uses; each package on
+		// the right sits under the directory the spec names.
+		listed := []string{"./alpha/...", "."}
+		for _, tc := range []struct {
+			pkg  string
+			want bool
+		}{
+			{pkg: modulePath, want: true},
+			{pkg: modulePath + "/alpha", want: true},
+			{pkg: modulePath + "/alpha/beta", want: true},
+			{pkg: modulePath + "/alpha/.hidden", want: false},
+			{pkg: modulePath + "/alpha/_scratch", want: false},
+			{pkg: modulePath + "/alpha/testdata", want: false},
+			{pkg: modulePath + "/alpha/vendor/example.com/dep", want: false},
+			{pkg: modulePath + "/alpha/_experimental/deeper", want: false},
+			{pkg: modulePath + "/gamma", want: false},
+		} {
+			t.Run(tc.pkg, func(t *testing.T) {
+				require.Equal(t, tc.want, anyListedCovers(listed, tc.pkg))
+			})
+		}
+	})
+}
+
 // anyListedCovers reports whether pkg is covered by any of the package
 // specs go test accepts on a command line: "." (exactly the module root
 // package), "./dir/..." (dir and everything under it), or a literal
 // "./dir" (exactly that package).
+//
+// "everything under it" is the go tool's own reading, not a plain string
+// prefix: a ./dir/... pattern skips the directories goSkipsDirName names, so
+// an import path below one of them is covered by nothing, whatever spec is
+// listed.
 func anyListedCovers(listed []string, pkg string) bool {
+	if goSkipsImportPath(pkg) {
+		return false
+	}
 	for _, spec := range listed {
 		if spec == "." {
 			if pkg == modulePath {

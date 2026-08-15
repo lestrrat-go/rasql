@@ -74,7 +74,8 @@ jobs:
         # package whose tests are guarded by internal/dbtest, or carries
         # an argument its parser cannot classify. goTestArgs in
         # ci_integration_coverage_test.go owns which flags this command
-        # may use; it rejects a -run or -skip filter outright, since one
-        # would silence the very tests this job exists to run while every
-        # package stayed listed here.
+        # may use; it rejects outright every flag that would leave this
+        # job green without running the tests these packages are listed
+        # for -- a -run or -skip filter, or a -list that only prints test
+        # names -- in each spelling go accepts one, -test.run included.
         run: go test -count=1 -v ./catalog/... ./cli/rasqlgen/... ./generate/... ./inspect/... .
