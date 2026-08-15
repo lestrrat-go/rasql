@@ -341,6 +341,41 @@ func TestStorePlanRejectsAQueryFunctionThatRedeclaresAName(t *testing.T) {
 	})
 }
 
+// TestStorePlanRejectsTheBlankIdentifierAsAPackageName pins the one
+// identifier-shaped package name that renders files no compiler accepts.
+// go/token.IsIdentifier returns true for "_", so the identifier check alone
+// let it through and every rendered file opened "package _", which does not
+// build. Nothing else is refused with it: token.IsIdentifier already rejects
+// a keyword, and "package init" is a legal package clause, so both package
+// names below must keep planning their three files.
+func TestStorePlanRejectsTheBlankIdentifierAsAPackageName(t *testing.T) {
+	newStore := func(name string) generate.Store {
+		return generate.Store{
+			Package: name,
+			Dir:     filepath.Join(t.TempDir(), "store"),
+			Tables:  []schema.TableDef{usersTableDef()},
+		}
+	}
+
+	t.Run("blank identifier", func(t *testing.T) {
+		plan, err := newStore("_").Plan()
+		require.EqualError(t, err, "generate: store package cannot be the blank identifier")
+		require.Empty(t, plan.Files(), "a rejected Store must plan no files at all")
+	})
+
+	for _, name := range []string{"store", "init"} {
+		t.Run(name, func(t *testing.T) {
+			plan, err := newStore(name).Plan()
+			require.NoError(t, err)
+			files := plan.Files()
+			require.Len(t, files, 3)
+			for _, f := range files {
+				require.Contains(t, string(f.Source), "package "+name+"\n")
+			}
+		})
+	}
+}
+
 // TestStorePlanRejectsInvalidInput covers the rejections Store.Plan makes for
 // a missing or malformed field, one field at a time. The two rejections that
 // depend on what the rest of the store already claims -- an output that is not

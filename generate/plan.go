@@ -43,7 +43,8 @@ type File struct {
 	// ordinary destination, and differs when Path itself, or a directory
 	// holding it, is a symbolic link. Writing through such a link is
 	// deliberate, so a Resolved outside the store's Dir is reported here
-	// rather than refused.
+	// rather than refused. It is unique across a plan's files: Store.Plan
+	// rejects two files that resolve to one destination.
 	Resolved string
 	// Source is the file's complete contents.
 	Source []byte

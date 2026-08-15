@@ -79,3 +79,49 @@ func TestStorePlanReportsWhereASymlinkedFileResolves(t *testing.T) {
 	require.NoFileExists(t, escaped, "Plan must not create the file the link points at")
 	require.Empty(t, plan.Orphans())
 }
+
+// TestStorePlanRejectsTwoFilesThatResolveToOneDestination covers two planned
+// files whose distinct names inside Dir are both symbolic links to one file.
+// The name check cannot see this -- "one_gen.go" and "two_gen.go" are
+// distinct keys -- so the plan used to come back with no error, two files,
+// and one destination a commit would write twice and keep only the last of.
+// What is refused is the shared destination alone: the single-link case in
+// TestStorePlanReportsWhereASymlinkedFileResolves still plans, links included.
+func TestStorePlanRejectsTwoFilesThatResolveToOneDestination(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "store")
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(outside, 0o700))
+
+	target := filepath.Join(outside, "same_gen.go")
+	one := filepath.Join(dir, "one_gen.go")
+	two := filepath.Join(dir, "two_gen.go")
+	require.NoError(t, os.Symlink(target, one))
+	require.NoError(t, os.Symlink(target, two))
+
+	sqlPath := filepath.Join(base, "q.sql")
+	require.NoError(t, os.WriteFile(sqlPath, []byte("SELECT 1"), 0o600))
+
+	store := generate.Store{
+		Package: "store",
+		Dir:     dir,
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{
+			{Input: sqlPath, Function: "One", Output: "one_gen.go"},
+			{Input: sqlPath, Function: "Two", Output: "two_gen.go"},
+		},
+	}
+	plan, err := store.Plan()
+
+	// The temporary directory itself may be reached through a link, so the
+	// destination is spelled the way the filesystem reaches it.
+	realOutside, evalErr := filepath.EvalSymlinks(outside)
+	require.NoError(t, evalErr)
+	require.ErrorContains(t, err, "both resolve to "+filepath.Join(realOutside, "same_gen.go"))
+	require.ErrorContains(t, err, one)
+	require.ErrorContains(t, err, two)
+	require.Empty(t, plan.Files(), "a rejected Store must plan no files at all")
+	require.NoFileExists(t, target, "Plan must not create the file the links point at")
+}

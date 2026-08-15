@@ -28,7 +28,8 @@ import (
 // output.
 type Store struct {
 	// Package is the generated package name. Required, and must be a Go
-	// identifier.
+	// identifier that is not the blank identifier: "package _" is not a
+	// package clause the compiler accepts.
 	Package string
 
 	// Dir is the directory the package is written into, resolved against
@@ -102,7 +103,9 @@ type Query struct {
 	// outside it or in a subdirectory of it. Where that path then
 	// resolves is a separate question: a symbolic link in Dir is followed
 	// rather than refused, and File.Resolved reports what a commit would
-	// actually replace. Required.
+	// actually replace. What such a link may not do is land this file on
+	// a destination another planned file also resolves to, which Plan
+	// rejects. Required.
 	Output string
 
 	// Dialect selects the placeholder style. Nil means the Store's own
@@ -127,8 +130,21 @@ type Query struct {
 // File.Resolved: a path that is a symbolic link, or that sits in a
 // directory reached through one, resolves through it exactly as a commit's
 // own write would, so a file whose bytes land outside Dir says so instead
-// of being described by File.Path alone.
+// of being described by File.Path alone. Resolving through a link is
+// allowed, and where it resolves to is not restricted; two planned files
+// that resolve to one destination are an error, since a commit would write
+// both and keep only the last.
 func (s Store) Plan() (Plan, error) {
+	// The blank identifier is checked separately because
+	// token.IsIdentifier accepts it: it is an identifier everywhere else
+	// in Go, but "package _" is not a package clause the compiler
+	// accepts, so a plan built from it renders files that cannot build.
+	// Nothing narrower is refused here. A keyword such as "func" is
+	// already refused by token.IsIdentifier, and "package init" is a
+	// legal package clause, so it stays accepted.
+	if s.Package == "_" {
+		return Plan{}, errors.New("generate: store package cannot be the blank identifier")
+	}
 	if !token.IsIdentifier(s.Package) {
 		return Plan{}, fmt.Errorf("generate: store package %q must be a Go identifier", s.Package)
 	}
@@ -230,11 +246,26 @@ func (s Store) Plan() (Plan, error) {
 	// planned path whenever that path, or a directory holding it, is a
 	// symbolic link. Discarding it would leave File.Path claiming a
 	// destination nothing verified it had.
+	//
+	// destinations holds every resolved destination so two planned files
+	// that land in one file are refused. The name check above cannot see
+	// this: two distinct names inside Dir are distinct keys there, yet a
+	// symbolic link can point both at one file, and a commit would then
+	// write both and keep only the last. This is the only place that
+	// holds every resolved destination at once. Resolving somewhere
+	// outside Dir stays allowed -- genfile.Write follows an output link
+	// on purpose -- and only a destination a second planned file also
+	// claims is an error.
+	destinations := make(map[string]string, len(files))
 	for i := range files {
 		resolved, err := genfile.ResolveDestination(files[i].Path)
 		if err != nil {
 			return Plan{}, err
 		}
+		if owner, exists := destinations[resolved]; exists {
+			return Plan{}, fmt.Errorf("generate: %s and %s both resolve to %s, so one would overwrite the other", owner, files[i].Path, resolved)
+		}
+		destinations[resolved] = files[i].Path
 		files[i].Resolved = resolved
 	}
 
