@@ -70,6 +70,11 @@ jobs:
         # runs (without -v, and without a DSN) in the "check" job, so no
         # package's assertions are skipped anywhere.
         # TestIntegrationJobListsEveryDBTestGuardedPackage reads this exact
-        # step and fails when the command drops -v or stops covering a
-        # package whose tests are guarded by internal/dbtest.
+        # step and fails when the command drops -v, stops covering a
+        # package whose tests are guarded by internal/dbtest, or carries
+        # an argument its parser cannot classify. goTestArgs in
+        # ci_integration_coverage_test.go owns which flags this command
+        # may use; it rejects a -run or -skip filter outright, since one
+        # would silence the very tests this job exists to run while every
+        # package stayed listed here.
         run: go test -count=1 -v ./catalog/... ./cli/rasqlgen/... ./generate/... ./inspect/... .

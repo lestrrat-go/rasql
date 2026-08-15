@@ -41,7 +41,10 @@ const (
 // also fails the test when that command stops passing -v: a listed package
 // whose live test skipped and one whose live test ran leave the same
 // package-level "ok" line without it, which is the same silent gap arriving
-// by a different route.
+// by a different route. Reading that list correctly is a third: goTestArgs
+// owns which arguments the command may carry, and refuses to guess at one
+// it cannot classify, since a package list read out of a command this test
+// misunderstands reports a coverage nothing actually provides.
 func TestIntegrationJobListsEveryDBTestGuardedPackage(t *testing.T) {
 	root, err := os.Getwd()
 	require.NoError(t, err, "os.Getwd")
@@ -156,8 +159,8 @@ func integrationJobPackages(t *testing.T, path string) []string {
 //
 // It locates the job and the step exactly instead of searching the whole
 // file for the step's text, and it splits the command's flags from its
-// package operands so that a missing -v is an error rather than a silently
-// dropped token. Both matter. A step name is not unique in a workflow --
+// package operands (see goTestArgs) so that a missing -v is an error rather
+// than a silently dropped token. Both matter. A step name is not unique in a workflow --
 // GitHub Actions accepts a second step, in any job, carrying the same
 // name -- so a first-match text search can end up validating a run: line
 // the integration job never executes while the real one quietly loses a
@@ -206,21 +209,9 @@ func integrationRunPackages(workflow string) ([]string, error) {
 		return nil, fmt.Errorf("expected the %q step to run a `go test` command, got %q", integrationStep, run)
 	}
 
-	var flags, pkgs []string
-	for _, f := range fields[2:] {
-		if strings.HasPrefix(f, "-") {
-			flags = append(flags, f)
-			continue
-		}
-		// Every package spec in this step is written in ./dir/... or "."
-		// form. Anything else is either a package named some other way or
-		// the separate value of a flag such as `-run Name`, and treating
-		// either as a package would make this guard report a coverage it
-		// cannot actually see.
-		if !strings.HasPrefix(f, ".") {
-			return nil, fmt.Errorf("the %q step's command has the argument %q, which is neither a flag nor a ./... or . package spec; this test only understands those package forms", integrationStep, f)
-		}
-		pkgs = append(pkgs, f)
+	flags, pkgs, err := goTestArgs(fields[2:])
+	if err != nil {
+		return nil, err
 	}
 	if !slices.Contains(flags, verboseFlag) {
 		return nil, fmt.Errorf("the %q step's command %q does not pass %s; without it a live test that skipped and one that ran leave the same package-level `ok` line, so the job's log cannot show which happened (see CONTRIBUTING.md's \"Reading the integration job's log\")", integrationStep, run, verboseFlag)
@@ -229,6 +220,129 @@ func integrationRunPackages(workflow string) ([]string, error) {
 		return nil, fmt.Errorf("found no package arguments in the %q step's command %q", integrationStep, run)
 	}
 	return pkgs, nil
+}
+
+// goTestBoolFlags names the `go test` flags that take no argument of their
+// own, so the token after one is a package operand or another flag. A flag
+// missing from this table is not accepted in its bare form (see goTestArgs),
+// which is the safe direction to be wrong in: a value-taking flag mistaken
+// for a boolean one donates its value to the package list, and this guard
+// then reports a coverage it cannot actually see.
+var goTestBoolFlags = map[string]bool{
+	"-a":          true,
+	"-asan":       true,
+	"-benchmem":   true,
+	"-c":          true,
+	"-cover":      true,
+	"-failfast":   true,
+	"-fullpath":   true,
+	"-json":       true,
+	"-modcacherw": true,
+	"-msan":       true,
+	"-n":          true,
+	"-race":       true,
+	"-short":      true,
+	"-trimpath":   true,
+	"-v":          true,
+	"-work":       true,
+	"-x":          true,
+}
+
+// goTestValueFlags names the `go test` flags that take one argument, which
+// go accepts either joined to the flag (-count=1) or as the following token
+// (-count 1). In the second form that token belongs to the flag and is not a
+// package, however much it looks like one: `go test -run ./inspect/... .`
+// runs the root package alone, with ./inspect/... as the -run regexp.
+//
+// The table lists the flags a `go test` command in this workflow plausibly
+// uses rather than every flag go accepts, since goTestArgs rejects a bare
+// flag it does not know instead of guessing its arity.
+var goTestValueFlags = map[string]bool{
+	"-bench":        true,
+	"-benchtime":    true,
+	"-coverpkg":     true,
+	"-covermode":    true,
+	"-coverprofile": true,
+	"-cpu":          true,
+	"-cpuprofile":   true,
+	"-exec":         true,
+	"-count":        true,
+	"-fuzz":         true,
+	"-fuzztime":     true,
+	"-gcflags":      true,
+	"-ldflags":      true,
+	"-list":         true,
+	"-memprofile":   true,
+	"-mod":          true,
+	"-o":            true,
+	"-outputdir":    true,
+	"-p":            true,
+	"-parallel":     true,
+	"-shuffle":      true,
+	"-tags":         true,
+	"-timeout":      true,
+	"-trace":        true,
+}
+
+// goTestSelectionFlags names the flags that choose which of a package's
+// tests actually run. The integration job exists to run every live test in
+// the packages it names, so a filter there recreates the gap this guard
+// closes from the other end: the package list stays complete while the
+// guarded tests inside it never execute. Both forms are rejected, since
+// -run=X silences the same tests -X does.
+var goTestSelectionFlags = map[string]bool{
+	"-run":  true,
+	"-skip": true,
+}
+
+// goTestArgs splits the arguments following `go test` into the flags and the
+// package operands of the integrationStep's command, consuming each flag's
+// argument according to that flag's arity so that a value written apart from
+// its flag is never collected as a package. It returns flag tokens exactly as
+// written, so a joined value stays attached to its flag and the caller's -v
+// check keeps meaning the command passes plain -v.
+//
+// Anything this parser cannot classify is an error rather than a guess:
+// a bare flag of unknown arity, a value-taking flag with no value left to
+// take, -args (after which go stops reading packages at all), and an operand
+// written in neither ./dir/... nor . form.
+func goTestArgs(args []string) (flags, pkgs []string, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			// Every package spec in this step is written in ./dir/... or "."
+			// form. Anything else is a package named some other way, and
+			// treating it as one of these would make this guard report a
+			// coverage it cannot actually see.
+			if !strings.HasPrefix(arg, ".") {
+				return nil, nil, fmt.Errorf("the %q step's command has the argument %q, which is neither a flag nor a ./... or . package spec; this test only understands those package forms", integrationStep, arg)
+			}
+			pkgs = append(pkgs, arg)
+			continue
+		}
+
+		name, _, joined := strings.Cut(arg, "=")
+		flag := "-" + strings.TrimLeft(name, "-")
+		switch {
+		case flag == "-args":
+			return nil, nil, fmt.Errorf("the %q step's command passes %s, after which go hands every remaining argument to the test binary rather than reading it as a package; keep this step a plain `go test` command or update this test", integrationStep, arg)
+		case goTestSelectionFlags[flag]:
+			return nil, nil, fmt.Errorf("the %q step's command passes %s, which selects a subset of each listed package's tests; the job exists to run every live test in the packages it names, so a package would stay listed here while its guarded tests never ran", integrationStep, arg)
+		case joined, goTestBoolFlags[flag]:
+			flags = append(flags, arg)
+		case goTestValueFlags[flag]:
+			if i+1 == len(args) {
+				return nil, nil, fmt.Errorf("the %q step's command ends with %s, which takes a value", integrationStep, arg)
+			}
+			// The next token is this flag's value, not a package, even when
+			// it is shaped like one.
+			i++
+			flags = append(flags, arg)
+		default:
+			return nil, nil, fmt.Errorf("the %q step's command passes %s, and this test does not know whether that flag takes a separate value; write it as %s=value so its value cannot be read as a package, or add it to goTestBoolFlags or goTestValueFlags", integrationStep, arg, flag)
+		}
+	}
+	return flags, pkgs, nil
 }
 
 // workflowStep is one step of a workflow job: the value of its name: key
@@ -466,9 +580,57 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects an argument that is neither a flag nor a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -run TestSomething ./alpha/..."),
+				fixtureStep(integrationStep, "go test -v ./alpha/... TestSomething"),
 			),
 			wantErr: `argument "TestSomething"`,
+		},
+		{
+			name: "does not read a flag's separate value as a package",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v -coverpkg ./alpha/... -timeout 20m ./beta/... ."),
+			),
+			want: []string{"./beta/...", "."},
+		},
+		{
+			name: "rejects a test filter whose value looks like a package list",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v -run ./alpha/... ./beta/... ."),
+			),
+			wantErr: `passes -run`,
+		},
+		{
+			name: "rejects a test filter written in joined form",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -v -skip=TestSomething ./alpha/..."),
+			),
+			wantErr: `passes -skip=TestSomething`,
+		},
+		{
+			name: "rejects a bare flag of unknown arity",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -v -notaflagthisknows ./alpha/..."),
+			),
+			wantErr: "does not know whether that flag takes a separate value",
+		},
+		{
+			name: "rejects a value-taking flag with no value",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -v ./alpha/... -timeout"),
+			),
+			wantErr: "ends with -timeout",
+		},
+		{
+			name: "rejects packages listed after -args",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -v ./alpha/... -args ./beta/..."),
+			),
+			wantErr: "passes -args",
 		},
 		{
 			name: "rejects a workflow without the integration job",
