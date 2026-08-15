@@ -117,11 +117,11 @@ func TestRunSchemaSourceSuccess(t *testing.T) {
 // This test spawns a real `go run`. -source is documented (README.md and
 // docs/06-rasqlgen.md) as taking a bare relative directory such as
 // "internal/tables", with no "./" prefix, and that form must resolve the
-// same package a "./"-prefixed one does: go list treats a bare relative
-// path as an import-path pattern rather than a directory, which forces
-// resolution through the whole module graph instead of the one directory
-// named, and fails in this fixture module the same way it would in a fresh
-// consumer module that carries no go.sum for its indirect dependencies.
+// same package a "./"-prefixed one does. It is the retry that gets it
+// there: go list reads a bare relative path as an import-path pattern
+// rather than a directory, and one carrying no dot in its first element as
+// a standard-library path, so it refuses "internal/tables" outright before
+// the "./"-prefixed form resolves the directory named.
 func TestRunSchemaSourceBareRelativeDirectory(t *testing.T) {
 	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
 	t.Chdir(moduleDir)
@@ -157,12 +157,12 @@ func TestRunSchemaSourcePackageImportPath(t *testing.T) {
 
 // This test spawns a real `go run`. An import path stays an import path
 // even when a directory of exactly that relative path sits under the
-// working directory, which is what stops a decision made from the
-// filesystem alone from silently resolving the wrong thing: the empty
-// directory below carries no Go files, so resolving it instead of the
-// import path fails outright rather than generating something subtly
-// wrong. The directory is empty on purpose -- a schema package planted in
-// it would make the run succeed either way and prove nothing.
+// working directory, which is what stops a directory from silently
+// resolving in place of the package the value names: the empty directory
+// below carries no Go files, so resolving it instead of the import path
+// fails outright rather than generating something subtly wrong. The
+// directory is empty on purpose -- a schema package planted in it would
+// make the run succeed either way and prove nothing.
 func TestRunSchemaSourcePackageImportPathShadowedByDirectory(t *testing.T) {
 	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
 	importPath := schemaSourceFixtureModule + "/internal/tables"
@@ -179,11 +179,54 @@ func TestRunSchemaSourcePackageImportPathShadowedByDirectory(t *testing.T) {
 	requireNoLeftoverSourceTempDir(t, moduleDir)
 }
 
+// This test spawns a real `go list`. A standard-library import path is a
+// value go list resolves on its own, so it is never re-read as a directory
+// of the same relative path: with the empty ./fmt directory below present,
+// "fmt" must still resolve the standard library's fmt, and the run must
+// fail as the package outside any module that fmt is, rather than with the
+// local directory's "no Go files". The directory is empty on purpose -- a
+// schema package planted in it would resolve and generate, which is exactly
+// the wrong package being read. The escape hatch for reaching it on purpose
+// is the explicit form, which
+// TestRunSchemaSourceExplicitDirectoryReachesStandardLibraryName covers.
+func TestRunSchemaSourceStandardLibraryPathShadowedByDirectory(t *testing.T) {
+	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
+	require.NoError(t, os.MkdirAll(filepath.Join(moduleDir, "fmt"), 0o700))
+	t.Chdir(moduleDir)
+
+	var buffer bytes.Buffer
+	err := rasqlgen.Run([]string{"schema", "-source", "fmt", "-package", "store", "-output", "internal/store"}, &buffer)
+	require.EqualError(t, err, "schema source fmt is not inside a Go module")
+
+	requireNoLeftoverSourceTempDir(t, moduleDir)
+}
+
+// This test spawns a real `go run`. The explicit "./" form is what reaches a
+// directory whose own name go list resolves as something else: the schema
+// package below sits in a directory named fmt, and "./fmt" must generate
+// from it rather than resolving the standard library.
+func TestRunSchemaSourceExplicitDirectoryReachesStandardLibraryName(t *testing.T) {
+	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
+	shadowingDir := filepath.Join(moduleDir, "fmt")
+	require.NoError(t, os.MkdirAll(shadowingDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(shadowingDir, "tables.go"), []byte(fixtureTablesSource), 0o600))
+	t.Chdir(moduleDir)
+
+	var buffer bytes.Buffer
+	require.NoError(t, rasqlgen.Run([]string{"schema", "-source", "./fmt", "-package", "store", "-output", "internal/store"}, &buffer), buffer.String())
+
+	usersSource, err := os.ReadFile(filepath.Join(moduleDir, "internal", "store", "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(usersSource), "func Users() UsersTable {")
+
+	requireNoLeftoverSourceTempDir(t, moduleDir)
+}
+
 // This test spawns a real `go run` (go list, specifically). Whatever
 // pattern go list is handed, a failure must name the -source value the user
-// typed: "internal" here names a real directory holding no Go files, so it
-// reaches go list rewritten as "./internal", and the reported name must not
-// pick that rewrite up.
+// typed: "internal" here names a real directory holding no Go files, so go
+// list refuses the value itself and the retry hands it "./internal", and the
+// reported name must not pick that rewrite up.
 func TestRunSchemaSourceErrorNamesTheValueTyped(t *testing.T) {
 	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
 	t.Chdir(moduleDir)

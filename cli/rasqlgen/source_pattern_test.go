@@ -8,48 +8,57 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSchemaSourcePattern pins which -source values get rewritten into a
-// directory pattern and which reach `go list` untouched. It lives in the
-// internal test package because schemaSourcePattern is unexported, and it
-// runs in a scratch directory because the decision reads the filesystem for
-// exactly one of the cases below.
+// TestSchemaSourceDirectoryRetry pins which -source values are retried as a
+// directory pattern once `go list` has refused the value itself, and which
+// are reported with that refusal instead. It lives in the internal test
+// package because schemaSourceDirectoryRetry is unexported.
 //
-// The colliding case is the one that matters: "example.com/pkg" names a
-// real directory here and still resolves as an import path, because a
-// dotted first path element decides the form before os.Stat is consulted.
-func TestSchemaSourcePattern(t *testing.T) {
+// The decision reads no filesystem at all, which is what the scratch
+// directory below proves: every colliding name in it -- "fmt", which go list
+// resolves as the standard library, and "example.com/pkg", which it resolves
+// as an import path -- is decided the same way whether or not a directory of
+// that name sits under the working directory.
+func TestSchemaSourceDirectoryRetry(t *testing.T) {
 	workingDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workingDir, "internal", "tables"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(workingDir, "example.com", "pkg"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(workingDir, "notes"), []byte("x"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(workingDir, "fmt"), 0o700))
 	t.Chdir(workingDir)
 
 	separator := string(filepath.Separator)
-	tests := map[string]string{
-		// A bare relative directory on disk: the documented form, and
-		// the only one that gets the prefix.
-		"internal/tables": "." + separator + "internal/tables",
-		// Already an explicit directory pattern.
-		"./internal/tables": "./internal/tables",
-		".":                 ".",
-		// A module-qualified import path, whether or not a directory of
-		// that name happens to sit under the working directory.
-		"example.com/pkg":            "example.com/pkg",
-		"example.com/consumer/other": "example.com/consumer/other",
-		// The explicit form still reaches a directory whose own name
-		// reads as an import path.
-		"./example.com/pkg": "./example.com/pkg",
-		// No dot in the first element and nothing on disk: left for go
-		// list to resolve as the standard-library-shaped path it looks
-		// like.
-		"net/http": "net/http",
-		// On disk, but not a directory.
-		"notes": "notes",
+	retried := []string{
+		// A bare relative directory: the documented form, and the one the
+		// retry exists for, since go list reads it as a standard-library
+		// import path and refuses it.
+		"internal/tables",
+		// Shaped like a standard-library path, and offered the same retry:
+		// go list resolving it first is what settles those, not this.
+		"net/http",
+		"fmt",
 	}
-	for input, want := range tests {
-		require.Equal(t, want, schemaSourcePattern(input), "input %q", input)
+	for _, input := range retried {
+		pattern, retry := schemaSourceDirectoryRetry(input)
+		require.True(t, retry, "input %q", input)
+		require.Equal(t, "."+separator+input, pattern, "input %q", input)
 	}
 
-	absolute := filepath.Join(workingDir, "internal", "tables")
-	require.Equal(t, absolute, schemaSourcePattern(absolute))
+	notRetried := []string{
+		// Already an explicit directory pattern: the first resolution
+		// already read it as that directory.
+		"./internal/tables",
+		".",
+		"..",
+		"../sibling",
+		filepath.Join(workingDir, "internal", "tables"),
+		// A module-qualified import path, whether or not a directory of
+		// that name happens to sit under the working directory. Its own
+		// resolution failure is the error worth reporting.
+		"example.com/pkg",
+		"example.com/consumer/other",
+	}
+	for _, input := range notRetried {
+		pattern, retry := schemaSourceDirectoryRetry(input)
+		require.False(t, retry, "input %q", input)
+		require.Empty(t, pattern, "input %q", input)
+	}
 }

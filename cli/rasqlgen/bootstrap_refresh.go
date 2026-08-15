@@ -94,7 +94,7 @@ func asDirectoryPattern(path string) string {
 // list never reads as an import-path pattern: an absolute path, one
 // starting with "./" or "../", or "." or ".." itself. This is the whole
 // rule, and it lives here once because both asDirectoryPattern and
-// schemaSourcePattern decide from it.
+// schemaSourceDirectoryRetry decide from it.
 func isDirectoryPattern(path string) bool {
 	return filepath.IsAbs(path) ||
 		strings.HasPrefix(path, "."+string(filepath.Separator)) ||
