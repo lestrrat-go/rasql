@@ -124,7 +124,8 @@ type Query struct {
 // redeclares a name the generated package already uses; refuses a
 // destination that exists and is not a file rasqlgen wrote; and records
 // every file already in Dir that rasqlgen wrote and this plan does not
-// write.
+// write, along with which directory it found them in, so a commit can tell
+// that Dir still names that same directory before deleting any of them.
 //
 // Each planned file also carries the destination its path resolves to, in
 // File.Resolved: a path that is a symbolic link, or that sits in a
@@ -269,12 +270,16 @@ func (s Store) Plan() (Plan, error) {
 		files[i].Resolved = resolved
 	}
 
-	orphans, err := findOrphans(dir, files)
+	// dirInfo identifies the directory the orphans below were found in, so
+	// Plan.Commit can require that Dir still names that same directory
+	// before it deletes any of them. It is nil when Dir does not exist yet,
+	// which is also when there are no orphans to delete.
+	orphans, dirInfo, err := findOrphans(dir, files)
 	if err != nil {
 		return Plan{}, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
 	}
 
-	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune}, nil
+	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, dirInfo: dirInfo}, nil
 }
 
 // Write plans the store and commits the plan: it is Plan followed by

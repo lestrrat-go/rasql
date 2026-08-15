@@ -20,9 +20,15 @@ import (
 // callback to any caller: both vars are unexported, so nothing outside this
 // package can reach them. cli/rasqlgen/rasqlgen.go:27 uses the same pattern
 // for openDatabase.
+//
+// removeGeneratedFile deletes through an open directory handle and a bare
+// file name rather than a path, so the deletion lands in the directory
+// Commit already authorized. A path would be resolved again by the kernel,
+// component by component, and a directory swapped for a symbolic link
+// between the check and the delete would send that delete somewhere else.
 var (
 	writeGeneratedFile  = genfile.Write
-	removeGeneratedFile = os.Remove
+	removeGeneratedFile = func(dir *os.Root, name string) error { return dir.Remove(name) }
 )
 
 // Plan is a rendered, uncommitted store package: every file's final bytes,
@@ -32,7 +38,10 @@ var (
 // A Plan is a decision made at one instant. It reads the output directory
 // once, when Store.Plan builds it. A file that appears in the directory
 // afterwards is not reflected here; call Store.Plan again to see the
-// directory as it is now.
+// directory as it is now. The directory itself is the one exception: a plan
+// records which directory it read, and Commit refuses to act when the path
+// no longer names that same directory, since every orphan it would delete
+// was recorded relative to it.
 //
 // The zero Plan is not a plan: its Files and Orphans report empty, Commit
 // refuses it naming Store.Plan, and nothing but Store.Plan builds one that
@@ -49,6 +58,17 @@ type Plan struct {
 	// them -- is made from the plan alone, the same instant everything
 	// else about the plan was decided.
 	prune bool
+	// dirInfo is what the filesystem reported for dir at the instant
+	// Store.Plan listed it, or nil when dir did not exist yet and the plan
+	// therefore recorded no orphans at all. Commit compares it, with
+	// os.SameFile, against the directory the same path reaches at commit
+	// time, so a dir that has since been replaced by a symbolic link to
+	// somewhere else is refused instead of having this plan's deletions
+	// applied to whatever the link points at. A path string alone cannot
+	// carry that: every component of it is resolved afresh by the kernel
+	// on each call, so the same string is a different directory once
+	// something along it changes.
+	dirInfo fs.FileInfo
 }
 
 // File is one rendered output file. Source is the whole file, including the
@@ -96,14 +116,23 @@ func (p Plan) Orphans() []string {
 // previous content or its new content, never a partial write.
 //
 //  1. Resolve and authorize everything; write nothing. The plan's output
-//     directory is created when missing (os.MkdirAll, 0o700). Every planned
-//     file's destination is re-resolved through genfile.ResolveDestination,
-//     and every recorded orphan is re-read to confirm rasqlgen's marker
-//     still stands on its first line -- both checked fresh here rather than
-//     trusted from Plan time, since a Plan can be held and acted on later,
-//     after the directory has changed underneath it. When Prune is false
-//     and there is at least one orphan, Commit refuses here, naming every
-//     one of them.
+//     directory is created when missing (os.MkdirAll, 0o700) and then
+//     opened once, and every later step acts through that one open
+//     directory rather than through its path. When the plan recorded a
+//     directory -- that is, whenever Dir already existed at Plan time --
+//     the open directory must be that same directory, or Commit refuses:
+//     a Dir replaced by a symbolic link to somewhere else would otherwise
+//     have this plan's deletions applied to files it never read. Every
+//     planned file's destination is then re-resolved through
+//     genfile.ResolveDestination, and no two of them may resolve to one
+//     destination, nor may any of them resolve onto a file step 3 deletes.
+//     Finally every recorded orphan is re-read, through the open
+//     directory, to confirm it is still a regular file carrying rasqlgen's
+//     marker on its first line. All of it is checked fresh here rather
+//     than trusted from Plan time, since a Plan can be held and acted on
+//     later, after the directory has changed underneath it. When Prune is
+//     false and there is at least one orphan, Commit refuses here, naming
+//     every one of them.
 //  2. Write every per-table file and every query file, in path order.
 //  3. Delete this run's leftovers: every path Orphans reported, in path
 //     order, and only when Prune is set -- otherwise step 1 already
@@ -145,13 +174,63 @@ func (p Plan) Commit() error {
 	if err := os.MkdirAll(p.dir, 0o700); err != nil {
 		return fmt.Errorf("generate: create %s: %w", p.dir, err)
 	}
+	dir, err := os.OpenRoot(p.dir)
+	if err != nil {
+		return fmt.Errorf("generate: open %s: %w", p.dir, err)
+	}
+	defer func() { _ = dir.Close() }()
+	dirInfo, err := dir.Stat(".")
+	if err != nil {
+		return fmt.Errorf("generate: check %s: %w", p.dir, err)
+	}
+	// A plan built when Dir did not exist yet has no directory to compare
+	// against and, for the same reason, no orphans: findOrphans reports
+	// none for a directory it could not list. There is nothing this plan
+	// deletes, so there is nothing an unexpected directory could redirect.
+	if p.dirInfo != nil && !os.SameFile(p.dirInfo, dirInfo) {
+		return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory Store.Plan read, so this plan would write and delete in a directory it never looked at; rerun Store.Plan", p.dir)
+	}
+
+	// deletions maps the destination each recorded orphan occupies to the
+	// orphan itself, so the loop below can refuse a planned file that
+	// resolves onto one. The key is spelled the way a resolved destination
+	// is spelled -- the directory as the filesystem reaches it, joined with
+	// the file's own name -- because that is the only form the two can be
+	// compared in. Every orphan is a direct child of the directory just
+	// authorized, which is what makes its base name enough to rebuild it.
+	realDir, err := filepath.EvalSymlinks(p.dir)
+	if err != nil {
+		return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
+	}
+	deletions := make(map[string]string, len(p.orphans))
+	for _, orphan := range p.orphans {
+		deletions[filepath.Join(realDir, filepath.Base(orphan))] = orphan
+	}
+
+	// destinations holds every destination resolved here, at commit time,
+	// rather than discarding each one as soon as it resolves. Two planned
+	// files that land in one file, or a planned file that lands on a file
+	// step 3 deletes, are both invisible to Store.Plan's own check once a
+	// symbolic link appears after it ran -- and the second one is not a
+	// stale write but a lost file: step 2 writes the planned bytes into the
+	// orphan and step 3 then deletes it, leaving neither file on disk and
+	// Commit reporting success.
+	destinations := make(map[string]string, len(p.files))
 	for _, f := range p.files {
-		if _, err := genfile.ResolveDestination(f.Path); err != nil {
+		resolved, err := genfile.ResolveDestination(f.Path)
+		if err != nil {
 			return err
 		}
+		if owner, exists := destinations[resolved]; exists {
+			return fmt.Errorf("generate: refusing to commit: %s and %s both resolve to %s, so one would overwrite the other; rerun Store.Plan", owner, f.Path, resolved)
+		}
+		if orphan, exists := deletions[resolved]; exists {
+			return fmt.Errorf("generate: refusing to commit: %s resolves to %s, which this run deletes as a leftover, so the bytes written there would be deleted again; rerun Store.Plan", f.Path, orphan)
+		}
+		destinations[resolved] = f.Path
 	}
 	for _, orphan := range p.orphans {
-		marker, err := hasGenfileMarker(orphan)
+		marker, err := hasGenfileMarker(dir, filepath.Base(orphan))
 		if err != nil {
 			return fmt.Errorf("generate: check %s for rasqlgen's marker: %w", orphan, err)
 		}
@@ -195,7 +274,7 @@ func (p Plan) Commit() error {
 	// otherwise step 1 already refused the run above.
 	if p.prune {
 		for _, orphan := range p.orphans {
-			if err := removeGeneratedFile(orphan); err != nil {
+			if err := removeGeneratedFile(dir, filepath.Base(orphan)); err != nil {
 				return fmt.Errorf("generate: delete %s: %w", orphan, err)
 			}
 		}
@@ -216,13 +295,39 @@ func (p Plan) Commit() error {
 // exactly genfile.Marker, and whose path is not one of planned's own paths.
 // A missing dir reports no orphans, matching Store.Plan's promise not to
 // create anything.
-func findOrphans(dir string, planned []File) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+//
+// It also reports what the filesystem said dir itself was, so Plan.Commit
+// can require that the same path still reaches the same directory before it
+// deletes anything found here; that is nil exactly when dir was missing and
+// no orphans were found. The directory is opened once and everything below
+// is read through that one handle, so the listing, each entry's mode and
+// each first line all describe the same directory rather than whatever the
+// path reaches at each separate call.
+//
+// An entry that is not a regular file is skipped rather than refused: it is
+// not a file this package wrote, so it is not this package's to delete, and
+// it is not opened either -- os.Root.Open on a fifo would block until
+// something opened the other end.
+func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
+	// OpenRoot refuses anything that is not a directory, and does so
+	// without opening it for reading, so a dir that is a fifo or a plain
+	// file reports an error here rather than blocking or being listed.
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	dirInfo, err := root.Stat(".")
+	if err != nil {
+		return nil, nil, err
+	}
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return nil, nil, err
 	}
 	own := make(map[string]struct{}, len(planned))
 	for _, f := range planned {
@@ -235,9 +340,12 @@ func findOrphans(dir string, planned []File) ([]string, error) {
 		if !strings.HasSuffix(name, "_gen.go") && !strings.HasSuffix(name, "_gen_test.go") {
 			continue
 		}
-		info, err := entry.Info()
+		info, err := root.Lstat(name)
 		if err != nil {
-			return nil, err
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return nil, nil, err
 		}
 		if !info.Mode().IsRegular() {
 			continue
@@ -246,9 +354,9 @@ func findOrphans(dir string, planned []File) ([]string, error) {
 		if _, isOwn := own[path]; isOwn {
 			continue
 		}
-		marker, err := hasGenfileMarker(path)
+		marker, err := hasGenfileMarker(root, name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !marker {
 			continue
@@ -256,17 +364,41 @@ func findOrphans(dir string, planned []File) ([]string, error) {
 		orphans = append(orphans, path)
 	}
 	sort.Strings(orphans)
-	return orphans, nil
+	return orphans, dirInfo, nil
 }
 
-// hasGenfileMarker reports whether path opens with genfile.Marker standing
-// alone on its first line, the same test internal/genfile applies before it
-// will ever overwrite an existing destination. It is duplicated here, rather
-// than exported from internal/genfile, because internal/genfile's own check
-// is a side effect of resolving a destination to write, and this call must
-// never write anything.
-func hasGenfileMarker(path string) (bool, error) {
-	file, err := os.Open(path)
+// hasGenfileMarker reports whether name, a file directly inside dir, opens
+// with genfile.Marker standing alone on its first line, the same test
+// internal/genfile applies before it will ever overwrite an existing
+// destination. It is duplicated here, rather than exported from
+// internal/genfile, because internal/genfile's own check is a side effect of
+// resolving a destination to write, and this call must never write anything.
+//
+// It takes an open directory and a bare name rather than a path so the file
+// it reads is the one inside the directory the caller already has, not
+// whatever the path reaches when the kernel resolves it again.
+//
+// The mode is checked before the file is opened, matching what
+// genfile.ResolveDestination does through requireMarker and for the same
+// reason: a file that is not a regular file cannot carry a first line to
+// begin with, and opening a fifo would block here until something opened the
+// other end, with no timeout, in a generator a build or CI run is waiting
+// on. Anything that is not a regular file is an error rather than a plain
+// "no marker", because the caller recorded a regular file and something has
+// since replaced it.
+func hasGenfileMarker(dir *os.Root, name string) (bool, error) {
+	info, err := dir.Lstat(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("%s is not a regular file", name)
+	}
+
+	file, err := dir.Open(name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return false, nil

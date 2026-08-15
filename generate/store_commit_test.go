@@ -143,9 +143,9 @@ func TestPlanCommitWritesInThePlannedOrder(t *testing.T) {
 		sequence = append(sequence, "write:"+filepath.Base(path))
 		return origWrite(path, source)
 	}
-	removeGeneratedFile = func(path string) error {
-		sequence = append(sequence, "delete:"+filepath.Base(path))
-		return origRemove(path)
+	removeGeneratedFile = func(dir *os.Root, name string) error {
+		sequence = append(sequence, "delete:"+name)
+		return origRemove(dir, name)
 	}
 
 	require.NoError(t, plan.Commit())
