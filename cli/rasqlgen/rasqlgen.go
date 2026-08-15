@@ -58,7 +58,7 @@ func Run(args []string, writer io.Writer) error {
 		return errors.New("rasqlgen: command output must not be nil")
 	}
 	if len(args) == 0 {
-		return errors.New("usage: rasqlgen <schema|query> [flags]")
+		return errors.New("usage: rasqlgen <bootstrap|schema|query|init> [flags]")
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
