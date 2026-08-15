@@ -45,6 +45,30 @@ func TestWriteDescriptionPackageWritesTableSourceBytes(t *testing.T) {
 	require.Equal(t, wantHints, gotHints)
 }
 
+// TestWriteDescriptionPackageRejectsInvalidPackageName covers the
+// `rasqlgen bootstrap` defect that reported "_" as an accepted -package
+// value: WriteDescriptionPackage is what bootstrap calls on a fresh
+// -output directory, and it must refuse the blank identifier the same way
+// WritePackage does for `rasqlgen schema`, before writing anything.
+func TestWriteDescriptionPackageRejectsInvalidPackageName(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		value string
+	}{
+		{"blank_identifier", "_"},
+		{"keyword", "func"},
+		{"starts_with_digit", "2fast"},
+		{"contains_hyphen", "not-valid"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := t.TempDir()
+			err := generate.WriteDescriptionPackage(testCase.value, directory, usersTableDef())
+			require.ErrorContains(t, err, "invalid package name")
+			require.Empty(t, mustReadDescriptionDir(t, directory))
+		})
+	}
+}
+
 func TestWriteDescriptionPackageRejectsNoTables(t *testing.T) {
 	directory := t.TempDir()
 	err := generate.WriteDescriptionPackage("schemasource", directory)

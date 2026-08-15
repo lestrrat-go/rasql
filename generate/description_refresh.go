@@ -82,10 +82,22 @@ func requireGeneratedMarker(path string) error {
 // The caller is responsible for calling ValidateDescriptionPackageOwnership
 // first; ApplyDescriptionDiff does not call it itself, so a caller that
 // only wants the report -- never write -- never pays for a directory
-// listing this function does not otherwise need.
+// listing this function does not otherwise need. packageName is the one
+// thing it does check itself, before touching the directory.
 func ApplyDescriptionDiff(packageName, directory string, tables []schema.TableDef, diff DescriptionDiff) error {
 	if diff.Empty() {
 		return nil
+	}
+
+	// An unusable package name has to be refused before the first write or
+	// delete, not when a file is finally rendered with it. The render calls
+	// below each check it, but a removal-only diff reaches none of them
+	// until TablesFuncSource, which runs after the delete loop: failing
+	// there would leave the dropped table's file gone and the aggregator
+	// still calling its function, a package that no longer compiles and
+	// that the next refresh cannot load.
+	if err := schemagen.Validate(packageName); err != nil {
+		return err
 	}
 
 	files, err := prepareDescriptionFiles(tables)

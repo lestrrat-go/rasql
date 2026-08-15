@@ -13,6 +13,15 @@ func mustCreateSQLite(t *testing.T, statements ...string) string {
 	t.Helper()
 	directory := t.TempDir()
 	databasePath := filepath.Join(directory, "schema.db")
+	mustExecSQLite(t, databasePath, statements...)
+	return databasePath
+}
+
+// mustExecSQLite runs statements against the SQLite database at
+// databasePath, which mustCreateSQLite has usually already written, so a
+// test can drift that schema between two rasqlgen runs.
+func mustExecSQLite(t *testing.T, databasePath string, statements ...string) {
+	t.Helper()
 	database, err := sql.Open("sqlite", databasePath)
 	require.NoError(t, err)
 	for _, statement := range statements {
@@ -20,7 +29,6 @@ func mustCreateSQLite(t *testing.T, statements ...string) string {
 		require.NoError(t, err)
 	}
 	require.NoError(t, database.Close())
-	return databasePath
 }
 
 func TestRunBootstrapRequiresDSN(t *testing.T) {
