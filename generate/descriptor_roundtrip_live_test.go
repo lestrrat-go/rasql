@@ -18,11 +18,17 @@ import (
 // inspects a real table on each engine, renders the resulting
 // schema.TableDef through the same scratch-module round trip the local test
 // uses (see roundTripDescriptors in descriptor_roundtrip_test.go), and
-// requires the same two properties, both checked inside that helper: the
-// descriptor read back through the generated accessor is reflect.DeepEqual,
-// inside the scratch module's own child process, to the literal it was
-// rendered from, and rendering it again is byte-for-byte identical to the
-// first rendering.
+// requires the same properties, all checked inside that helper: the
+// descriptor read back through the generated accessor, inside the scratch
+// module's own child process, is the schema.TableDef inspection produced
+// here and is reflect.DeepEqual to the literal it was rendered from, and
+// rendering it again is byte-for-byte identical to the first rendering.
+//
+// An inspected table that carries a foreign key with no matching
+// relationship fails roundTripDescriptors' own precondition, since rasqlgen
+// derives a relationship for it and the descriptor read back is then not the
+// one passed in; neither table below has a foreign key. See
+// requireGeneratorDerivesNoRelationship for what to do about one that does.
 //
 // dbtest.PostgreSQLDB and dbtest.MySQLDB each skip with instructions when
 // their DSN environment variable is unset, so this test needs no database to
