@@ -209,7 +209,7 @@ func runInit(args []string, writer io.Writer) error {
 	}
 
 	if overwriting {
-		_, _ = fmt.Fprintf(writer, "rasqlgen init: overwrote %s\n", path)
+		_, _ = fmt.Fprintf(writer, "rasqlgen init: -force overwrote %s\n", path)
 	} else {
 		_, _ = fmt.Fprintf(writer, "wrote %s\n", path)
 	}

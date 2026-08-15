@@ -359,7 +359,9 @@ func TestInitRefusesAnExistingFile(t *testing.T) {
 }
 
 // TestInitForceOverwrites requires that -force overwrites an existing
-// gen/main.go and says so.
+// gen/main.go and says plainly that it did: the message names both the
+// flag responsible and the path it replaced, rather than overwriting a
+// file the user was told to own and edit without a word about it.
 func TestInitForceOverwrites(t *testing.T) {
 	t.Chdir(t.TempDir())
 	require.NoError(t, os.MkdirAll("gen", 0o755))
@@ -367,7 +369,7 @@ func TestInitForceOverwrites(t *testing.T) {
 
 	var out bytes.Buffer
 	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-force"}, &out))
-	require.Contains(t, out.String(), "overwrote "+filepath.Join("gen", "main.go"))
+	require.Contains(t, out.String(), "-force overwrote "+filepath.Join("gen", "main.go"))
 
 	after, err := os.ReadFile(filepath.Join("gen", "main.go"))
 	require.NoError(t, err)
@@ -396,7 +398,7 @@ func TestInitScaffoldDocStatesTheForceTerms(t *testing.T) {
 
 	var third bytes.Buffer
 	require.NoError(t, Run([]string{"init", "-dialect", "mysql", "-package", "store", "-output", "internal/store", "-force"}, &third))
-	require.Contains(t, third.String(), "overwrote "+path)
+	require.Contains(t, third.String(), "-force overwrote "+path)
 
 	source, err := os.ReadFile(path)
 	require.NoError(t, err)
