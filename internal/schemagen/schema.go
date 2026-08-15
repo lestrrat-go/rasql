@@ -51,6 +51,33 @@ func Validate(packageName string, tables ...schema.TableDef) error {
 	return err
 }
 
+// isUsablePackageName reports whether name can head a "package" clause that
+// compiles. token.IsIdentifier already refuses a Go keyword, an empty
+// string, and anything that is not a valid identifier at all (a name
+// starting with a digit, or containing a character such as "-"), so none
+// of those need a separate check here. The blank identifier "_" is the one
+// name token.IsIdentifier accepts that still cannot be used: "_" is an
+// ordinary identifier token everywhere else in Go, but the language spec
+// requires a PackageName to not be the blank identifier, so "package _" is
+// not a package clause the compiler accepts. This is the same check
+// generate.Store.Plan makes on the same name, and the same one
+// isUsableGoIdentifier in package template makes on a generated function's
+// package name; every place in this package that validates a package name
+// calls this one function so the rule cannot drift between them.
+func isUsablePackageName(name string) bool {
+	return name != "_" && token.IsIdentifier(name)
+}
+
+// packageNameError reports name as an unusable package name, explaining why:
+// either it is the blank identifier, which the language reserves and never
+// allows as a package name, or it is not a Go identifier at all.
+func packageNameError(name string) error {
+	if name == "_" {
+		return fmt.Errorf("generate: invalid package name %q: the blank identifier cannot name a package", name)
+	}
+	return fmt.Errorf("generate: invalid package name %q: must be a valid Go identifier", name)
+}
+
 // PackageLevelNames returns every identifier the generated package declares at
 // package level for tables, sorted and deduplicated: the per-table type,
 // accessor, descriptor and definition names from TableSurfaceSource and
@@ -418,8 +445,8 @@ func descriptorTestSource(packageName string, tables []schema.TableDef) ([]byte,
 }
 
 func prepareSchema(packageName string, tables []schema.TableDef) ([]schema.TableDef, error) {
-	if !token.IsIdentifier(packageName) {
-		return nil, fmt.Errorf("generate: invalid package name %q", packageName)
+	if !isUsablePackageName(packageName) {
+		return nil, packageNameError(packageName)
 	}
 	clones := make([]schema.TableDef, len(tables))
 	for i, table := range tables {

@@ -958,9 +958,51 @@ func TestSchemaGeneratesFixedWidthTextColumns(t *testing.T) {
 	require.Contains(t, string(descriptorSource), `{Name: "code", Type: schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}}`)
 }
 
+// TestSchemaRejectsInvalidPackageName covers every value Validate,
+// PackageSource, TableSource, DescriptorSource, and DescriptorTestSource
+// refuse as a package name, through the shared prepareSchema they all
+// route through: the blank identifier, which token.IsIdentifier accepts as
+// an ordinary identifier token but which the language spec forbids as a
+// PackageName; a Go keyword; a name that starts with a digit; a name
+// holding a character such as "-"; and the empty string.
 func TestSchemaRejectsInvalidPackageName(t *testing.T) {
-	_, err := schemagen.PackageSource("not-valid")
-	require.Error(t, err)
+	for _, testCase := range []struct {
+		name  string
+		value string
+	}{
+		{"blank_identifier", "_"},
+		{"keyword_func", "func"},
+		{"keyword_range", "range"},
+		{"starts_with_digit", "2fast"},
+		{"contains_hyphen", "not-valid"},
+		{"empty_string", ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := schemagen.PackageSource(testCase.value)
+			require.ErrorContains(t, err, "invalid package name")
+		})
+	}
+}
+
+// TestSchemaRejectsBlankIdentifierPackageNameWithReason pins that "_" gets
+// an error naming why, since it is otherwise an ordinary Go identifier and
+// a generic "must be a Go identifier" message would be confusing for it.
+func TestSchemaRejectsBlankIdentifierPackageNameWithReason(t *testing.T) {
+	_, err := schemagen.PackageSource("_")
+	require.ErrorContains(t, err, "blank identifier")
+}
+
+// TestSchemaAcceptsUsablePackageNames guards the check against being
+// over-broad: an ordinary identifier, and "init" and "main", which stay
+// legal package clauses despite meaning something special elsewhere in Go,
+// must still produce a package.
+func TestSchemaAcceptsUsablePackageNames(t *testing.T) {
+	for _, packageName := range []string{"generated", "init", "main"} {
+		t.Run(packageName, func(t *testing.T) {
+			_, err := schemagen.PackageSource(packageName)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestSchemaRejectsReservedColumnFieldName(t *testing.T) {

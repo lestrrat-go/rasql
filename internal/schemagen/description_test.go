@@ -4,8 +4,81 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/schemagen"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+// invalidPackageNames enumerates every value DescriptionSource,
+// TablesFuncSource, HintsSource, and prepareSchema's own callers refuse as
+// a package name, and why: "_" is an ordinary identifier token everywhere
+// else in Go, but the language spec requires a PackageName to not be the
+// blank identifier, so it is checked on its own; a keyword, an empty
+// string, a name starting with a digit, and a name holding a character
+// such as "-" are never identifiers at all, and token.IsIdentifier already
+// refuses each of those.
+var invalidPackageNames = []struct {
+	name  string
+	value string
+}{
+	{"blank_identifier", "_"},
+	{"keyword_func", "func"},
+	{"keyword_range", "range"},
+	{"starts_with_digit", "2fast"},
+	{"contains_hyphen", "foo-bar"},
+	{"empty_string", ""},
+	{"contains_spaces", "not a package name"},
+}
+
+// TestDescriptionSourceRejectsInvalidPackageName covers every value this
+// package refuses as a package name through DescriptionSource, the one
+// entry point among the three that a package-name test had not yet
+// exercised.
+func TestDescriptionSourceRejectsInvalidPackageName(t *testing.T) {
+	table := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	for _, testCase := range invalidPackageNames {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := schemagen.DescriptionSource(testCase.value, "UsersDef", table)
+			require.ErrorContains(t, err, "invalid package name")
+		})
+	}
+}
+
+// TestTablesFuncSourceRejectsEveryInvalidPackageName widens
+// TestTablesFuncSourceRejectsInvalidPackageName's single case to the full
+// set this package refuses, so a future change to the shared check cannot
+// silently narrow it back down to just one value.
+func TestTablesFuncSourceRejectsEveryInvalidPackageName(t *testing.T) {
+	for _, testCase := range invalidPackageNames {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := schemagen.TablesFuncSource(testCase.value, []string{"UsersDef"})
+			require.ErrorContains(t, err, "invalid package name")
+		})
+	}
+}
+
+// TestHintsSourceRejectsEveryInvalidPackageName widens
+// TestHintsSourceRejectsInvalidPackageName's single case the same way.
+func TestHintsSourceRejectsEveryInvalidPackageName(t *testing.T) {
+	for _, testCase := range invalidPackageNames {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := schemagen.HintsSource(testCase.value)
+			require.ErrorContains(t, err, "invalid package name")
+		})
+	}
+}
+
+// TestBlankIdentifierPackageNameNamesTheReason pins that "_" specifically
+// -- unlike every other refused value -- gets an error that explains why:
+// it is a valid identifier token everywhere else in Go, so a generic
+// "must be a Go identifier" message would be confusing for this one case.
+func TestBlankIdentifierPackageNameNamesTheReason(t *testing.T) {
+	_, err := schemagen.HintsSource("_")
+	require.ErrorContains(t, err, "blank identifier")
+}
 
 // TestHintsSourceRejectsInvalidPackageName pins the same guard
 // DescriptionSource and TablesFuncSource apply to packageName.
@@ -55,4 +128,27 @@ func TestTablesFuncSourceAppliesHints(t *testing.T) {
 func TestTablesFuncSourceRejectsInvalidPackageName(t *testing.T) {
 	_, err := schemagen.TablesFuncSource("not a package name", []string{"UsersDef"})
 	require.ErrorContains(t, err, "invalid package name")
+}
+
+// TestDescriptionEntryPointsAcceptUsablePackageNames guards the check
+// against being over-broad: an ordinary identifier, and the two names that
+// stay legal package clauses despite meaning something special elsewhere in
+// Go ("init" as a function name, "main" as the entry-point package), must
+// all still work through every one of the three description entry points.
+func TestDescriptionEntryPointsAcceptUsablePackageNames(t *testing.T) {
+	table := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	for _, packageName := range []string{"generated", "init", "main"} {
+		t.Run(packageName, func(t *testing.T) {
+			_, err := schemagen.DescriptionSource(packageName, "UsersDef", table)
+			require.NoError(t, err)
+			_, err = schemagen.TablesFuncSource(packageName, []string{"UsersDef"})
+			require.NoError(t, err)
+			_, err = schemagen.HintsSource(packageName)
+			require.NoError(t, err)
+		})
+	}
 }
