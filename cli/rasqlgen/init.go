@@ -150,9 +150,17 @@ func runInit(args []string, writer io.Writer) error {
 	if filepath.IsAbs(*output) {
 		return fmt.Errorf("init: -output %q must not be absolute", *output)
 	}
-	// The scaffold's doc comment names -output raw, on one comment line, so
-	// a control character there breaks the line rather than the string
-	// literal Store.Dir quotes. A backtick is deliberately not rejected: it
+	// The scaffold's doc comment names -output raw, on one comment line,
+	// where Store.Dir gets the quoted form. The policy here is broader than
+	// what that line strictly needs: every ASCII control character is
+	// refused, not only the ones that would break the generated source. Of
+	// the rejected set only a newline actually ends the comment line, and
+	// only a NUL fails the compiler ("unexpected NUL in input"); a tab, a
+	// carriage return and a DEL all compile, and format.Source rewrites the
+	// carriage return rather than refusing it. They are refused anyway,
+	// because a directory named with unprintable text is far more likely a
+	// mistake than an intention, and this keeps such text out of both the
+	// comment and the source. A backtick is deliberately not rejected: it
 	// is legal in a Go interpreted string literal and legal in a directory
 	// name, so refusing it would refuse a valid path for nothing.
 	if index := strings.IndexFunc(*output, func(r rune) bool { return r < 0x20 || r == 0x7f }); index >= 0 {
@@ -160,6 +168,9 @@ func runInit(args []string, writer io.Writer) error {
 	}
 	if *genDir == "" {
 		return errors.New("init: -gen-dir must not be empty")
+	}
+	if err := requireDistinctInitDirs(*output, *genDir); err != nil {
+		return err
 	}
 
 	path := filepath.Join(*genDir, "main.go")
@@ -197,6 +208,39 @@ func runInit(args []string, writer io.Writer) error {
 	_, _ = fmt.Fprintln(writer, "Next:")
 	_, _ = fmt.Fprintf(writer, "  go get %s\n", spec.driverImport)
 	_, _ = fmt.Fprintln(writer, "  DATABASE_URL=... go generate ./...")
+	return nil
+}
+
+// requireDistinctInitDirs refuses an -output that names the same directory
+// as -gen-dir. The scaffold is package main and the store it generates is
+// -package, so one directory holding both is a directory holding two
+// packages: the first `go generate ./...` writes the store files happily,
+// and every build after that fails with "found packages main (main.go) and
+// <package> (schema_gen.go)". Nothing in the scaffold can run again, so
+// this has to fail before the first write rather than be recovered from.
+//
+// Comparing the two as typed is not enough, because -output "./gen",
+// "gen/" and "gen/../gen" all name the -gen-dir "gen" without matching it
+// as a string, and -gen-dir has the same freedom. Both are therefore
+// resolved against the working directory first, which also settles the
+// case of an absolute -gen-dir against the relative -output that is all
+// this command accepts.
+//
+// Only equality is refused. An -output nested under -gen-dir, such as
+// "gen/store", is a separate directory and so a separate package, which is
+// a layout this command has no reason to refuse.
+func requireDistinctInitDirs(output, genDir string) error {
+	outputPath, err := filepath.Abs(output)
+	if err != nil {
+		return fmt.Errorf("init: resolve -output %q: %w", output, err)
+	}
+	genPath, err := filepath.Abs(genDir)
+	if err != nil {
+		return fmt.Errorf("init: resolve -gen-dir %q: %w", genDir, err)
+	}
+	if outputPath == genPath {
+		return fmt.Errorf("init: -output %q and -gen-dir %q name the same directory %s; the scaffold is package main and the generated store is another package, so they cannot share one", output, genDir, outputPath)
+	}
 	return nil
 }
 

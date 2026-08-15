@@ -185,9 +185,14 @@ func storeLiteral(t *testing.T, file *ast.File) ([]string, string) {
 }
 
 // TestInitRejectsControlCharactersInOutput requires that an -output holding
-// a control character is refused before anything is written. The scaffold's
-// doc comment names -output raw on a single comment line, which such a
-// value would break rather than the quoted Store.Dir literal.
+// an ASCII control character is refused before anything is written. The
+// rule is the blanket one runInit applies -- every character below 0x20,
+// plus DEL -- and not a rule about what breaks the generated file, so the
+// cases below are deliberately not all line-breaking: a tab, a carriage
+// return and a DEL each produce a scaffold that compiles, and only the
+// newline ends the doc comment line -output is named raw on. What the
+// blanket rule buys is that unprintable text never reaches the comment or
+// the source in the first place.
 func TestInitRejectsControlCharactersInOutput(t *testing.T) {
 	testCases := map[string]string{
 		"newline":         "internal/sto\nre",
@@ -206,6 +211,64 @@ func TestInitRejectsControlCharactersInOutput(t *testing.T) {
 			require.ErrorIs(t, statErr, os.ErrNotExist)
 		})
 	}
+}
+
+// TestInitRefusesOutputInTheScaffoldDirectory requires that an -output
+// naming the same directory as -gen-dir is refused before anything is
+// written. Accepting it is not a cosmetic mistake: the scaffold is package
+// main, the store it generates is -package, and the first `go generate
+// ./...` therefore leaves a directory holding two packages that no later
+// build can compile.
+//
+// The spellings below are the reason the check resolves both flags instead
+// of comparing them as typed. Each names the -gen-dir directory without
+// matching it as a string, on either side of the comparison.
+func TestInitRefusesOutputInTheScaffoldDirectory(t *testing.T) {
+	testCases := map[string]struct {
+		output string
+		genDir string
+	}{
+		"plain":            {output: "gen"},
+		"dot slash prefix": {output: "./gen"},
+		"trailing slash":   {output: "gen/"},
+		"parent hop":       {output: "gen/../gen"},
+		"gen-dir alias":    {output: "./gen", genDir: "gen/."},
+		"non-default":      {output: "tools/generator", genDir: "tools/generator"},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			args := []string{"init", "-dialect", "sqlite", "-package", "store", "-output", testCase.output}
+			genDir := "gen"
+			if testCase.genDir != "" {
+				args = append(args, "-gen-dir", testCase.genDir)
+				genDir = testCase.genDir
+			}
+
+			var out bytes.Buffer
+			err := Run(args, &out)
+			require.ErrorContains(t, err, "name the same directory")
+			require.ErrorContains(t, err, testCase.output)
+
+			_, statErr := os.Stat(filepath.Clean(genDir))
+			require.ErrorIs(t, statErr, os.ErrNotExist)
+			require.Empty(t, out.String())
+		})
+	}
+}
+
+// TestInitAcceptsOutputNestedInTheScaffoldDirectory is the control for the
+// test above: a subdirectory of -gen-dir is its own package, so only an
+// exact match is refused and this layout must still be written.
+func TestInitAcceptsOutputNestedInTheScaffoldDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var out bytes.Buffer
+	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "gen/store"}, &out))
+
+	source, err := os.ReadFile(filepath.Join("gen", "main.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), `Dir:     "gen/store"`)
 }
 
 // TestInitRefusesAnExistingFile requires that init leaves an existing
@@ -286,8 +349,11 @@ func TestInitScaffoldDocStatesTheForceTerms(t *testing.T) {
 		"the scaffold doc must say -force discards edits made here, got:\n%s", doc)
 }
 
-// TestInitRejectsInvalidInput requires that every invalid flag combination
-// is refused before anything is written.
+// TestInitRejectsInvalidInput requires that each invalid flag value below
+// is refused before anything is written. Two rejections have tests of their
+// own rather than a row here, because each needs assertions this table has
+// no room for: TestInitRejectsControlCharactersInOutput and
+// TestInitRefusesOutputInTheScaffoldDirectory.
 func TestInitRejectsInvalidInput(t *testing.T) {
 	testCases := map[string][]string{
 		"unknown dialect": {"init", "-dialect", "oracle", "-package", "store", "-output", "internal/store"},

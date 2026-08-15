@@ -28,10 +28,11 @@ import (
 // run ./gen -check" through both the clean and the stale state.
 //
 // This test does not set GOPROXY=off and so does not run offline the way
-// generate/acceptance_test.go's fixtures do: it reaches init through the
-// same "go get github.com/lestrrat-go/rasql/cmd/rasqlgen@v0.0.0" a real
-// consumer runs, and that step is free to consult the module proxy. See
-// the comment on env below.
+// generate/acceptance_test.go's fixtures and source_test.go's
+// newSchemaSourceFixture do: it reaches init through the same "go get
+// github.com/lestrrat-go/rasql/cmd/rasqlgen@v0.0.0" a real consumer runs,
+// and that step is free to consult the module proxy. See the comment on env
+// below.
 func TestGoRunInitScaffoldGenerates(t *testing.T) {
 	moduleDir := t.TempDir()
 	repository, err := filepath.Abs(filepath.Join("..", ".."))
