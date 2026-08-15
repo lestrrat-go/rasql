@@ -3,6 +3,7 @@ package schema_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/schema"
@@ -52,6 +53,68 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	scale, stated := decimal.Scale.Value()
 	require.True(t, stated)
 	require.Equal(t, 4, scale)
+}
+
+// TestTableCloneNilSlicesRoundTrip covers the empty descriptor Clone's
+// TestTableCloneCopiesDescriptor case never exercises: a TableDef whose
+// nine slice fields (Columns, PrimaryKey, VirtualTableModuleArguments,
+// UniqueConstraints, Checks, ExclusionConstraints, Indexes, ForeignKeys,
+// Relationships) are all left nil must clone to a value that is
+// reflect.DeepEqual to itself, rather than to one where any of those
+// fields turned into a non-nil empty slice.
+func TestTableCloneNilSlicesRoundTrip(t *testing.T) {
+	descriptor := schema.TableDef{Name: "orders"}
+	clone := descriptor.Clone()
+
+	require.True(t, reflect.DeepEqual(descriptor, clone))
+	require.Nil(t, clone.Columns)
+	require.Nil(t, clone.PrimaryKey)
+	require.Nil(t, clone.VirtualTableModuleArguments)
+	require.Nil(t, clone.UniqueConstraints)
+	require.Nil(t, clone.Checks)
+	require.Nil(t, clone.ExclusionConstraints)
+	require.Nil(t, clone.Indexes)
+	require.Nil(t, clone.ForeignKeys)
+	require.Nil(t, clone.Relationships)
+}
+
+// TestTableCloneMixedNilAndPopulatedSlices covers a descriptor with some of
+// the nine slice fields populated and others left nil, so a future fix that
+// preserves nil by dropping the deep copy (aliasing the source slice's
+// backing array instead of copying it) cannot pass unnoticed: it asserts
+// both that unset fields stay nil and that the populated ones are
+// independent copies.
+func TestTableCloneMixedNilAndPopulatedSlices(t *testing.T) {
+	descriptor := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+		},
+		Indexes: []schema.IndexDef{{
+			Name:    "orders_id_idx",
+			Columns: []string{"id"},
+		}},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Name:              "orders_customer_fk",
+			Columns:           []string{"customer_id"},
+			ReferencedTable:   "customers",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	clone := descriptor.Clone()
+
+	require.True(t, reflect.DeepEqual(descriptor, clone))
+	require.Nil(t, clone.PrimaryKey)
+	require.Nil(t, clone.VirtualTableModuleArguments)
+	require.Nil(t, clone.UniqueConstraints)
+	require.Nil(t, clone.Checks)
+	require.Nil(t, clone.ExclusionConstraints)
+	require.Nil(t, clone.Relationships)
+
+	descriptor.Indexes[0].Columns[0] = "changed"
+	descriptor.ForeignKeys[0].ReferencedColumns[0] = "changed"
+	require.Equal(t, "id", clone.Indexes[0].Columns[0])
+	require.Equal(t, "id", clone.ForeignKeys[0].ReferencedColumns[0])
 }
 
 // TestDecimalScale covers the distinction the type exists for: a stated scale

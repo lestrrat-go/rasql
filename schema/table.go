@@ -1010,30 +1010,26 @@ func (t TableDef) Clone() TableDef {
 	clone.Columns = append([]ColumnDef(nil), t.Columns...)
 	clone.PrimaryKey = append([]string(nil), t.PrimaryKey...)
 	clone.VirtualTableModuleArguments = append([]string(nil), t.VirtualTableModuleArguments...)
-	clone.UniqueConstraints = make([]UniqueDef, len(t.UniqueConstraints))
+	clone.UniqueConstraints = append([]UniqueDef(nil), t.UniqueConstraints...)
 	for i, constraint := range t.UniqueConstraints {
-		clone.UniqueConstraints[i] = constraint
 		clone.UniqueConstraints[i].Columns = append([]string(nil), constraint.Columns...)
 	}
 	clone.Checks = append([]CheckDef(nil), t.Checks...)
-	clone.ExclusionConstraints = make([]ExclusionDef, len(t.ExclusionConstraints))
+	clone.ExclusionConstraints = append([]ExclusionDef(nil), t.ExclusionConstraints...)
 	for i, exclusion := range t.ExclusionConstraints {
-		clone.ExclusionConstraints[i] = exclusion
 		clone.ExclusionConstraints[i].Elements = append([]ExclusionElementDef(nil), exclusion.Elements...)
 	}
-	clone.Indexes = make([]IndexDef, len(t.Indexes))
+	clone.Indexes = append([]IndexDef(nil), t.Indexes...)
 	for i, index := range t.Indexes {
-		clone.Indexes[i] = index
 		clone.Indexes[i].Columns = append([]string(nil), index.Columns...)
 		clone.Indexes[i].Expressions = append([]string(nil), index.Expressions...)
 	}
-	clone.ForeignKeys = make([]ForeignKeyDef, len(t.ForeignKeys))
+	clone.ForeignKeys = append([]ForeignKeyDef(nil), t.ForeignKeys...)
 	for i, key := range t.ForeignKeys {
-		clone.ForeignKeys[i] = key
 		clone.ForeignKeys[i].Columns = append([]string(nil), key.Columns...)
 		clone.ForeignKeys[i].ReferencedColumns = append([]string(nil), key.ReferencedColumns...)
 	}
-	clone.Relationships = make([]RelationshipDef, len(t.Relationships))
+	clone.Relationships = append([]RelationshipDef(nil), t.Relationships...)
 	for i, relationship := range t.Relationships {
 		clone.Relationships[i] = relationship.Clone()
 	}
