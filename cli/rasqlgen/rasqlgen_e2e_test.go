@@ -53,7 +53,14 @@ func TestGoRunInitScaffoldGenerates(t *testing.T) {
 	// //go:generate directive spawns, which this test cannot pass flags to
 	// directly: that command line is exactly what init writes into the
 	// user's file.
-	env := append(os.Environ(), "GOPROXY=off", "GOFLAGS=-buildvcs=false")
+	//
+	// No GOPROXY=off: unlike generate/acceptance_test.go's fixtures, this
+	// test runs `go get github.com/lestrrat-go/rasql/cmd/rasqlgen@v0.0.0`
+	// below to reach init the way a real consumer does, and that step
+	// reaches the network -- see cli/rasqlgen/source_test.go's
+	// newSchemaSourceFixture doc comment for the same tradeoff on the test
+	// this one replaces.
+	env := append(os.Environ(), "GOFLAGS=-buildvcs=false")
 
 	command := exec.CommandContext(t.Context(), "go", "get", "github.com/lestrrat-go/rasql/cmd/rasqlgen@v0.0.0")
 	command.Dir = moduleDir
