@@ -1047,21 +1047,25 @@ func (t TableDef) QualifiedName() string {
 	return t.Schema + "." + t.Name
 }
 
-// Clone returns a copy of t that shares no slice and no map with t, at any
-// depth: mutating either side afterwards is invisible to the other. Every
-// container keeps the source's own nilness, so a nil field clones to nil and
-// a stated-but-empty one clones to a non-nil empty container, and a clone is
-// therefore reflect.DeepEqual to its source.
+// Clone returns a copy of t that shares no slice, no map and no pointer with
+// t, at any depth: mutating either side afterwards is invisible to the other.
+// Every container keeps the source's own nilness, so a nil field clones to
+// nil and a stated-but-empty one clones to a non-nil empty container, and a
+// clone is therefore reflect.DeepEqual to its source.
 //
 // A descriptor type that owns a container of its own carries its own Clone
 // method, and this method routes each such field through it, so a container
 // field added to one of those types is copied here as soon as that type's
 // own Clone copies it. ColumnDef, CheckDef, IndexKeyDef and
 // ExclusionElementDef own no container, so their elements are copied by
-// assignment and have no Clone method to route through.
+// assignment and have no Clone method to route through. ColumnDef.Type is
+// the one field an assignment does not settle, because a ColumnType is an
+// interface that a pointer to a built-in type also satisfies; each column's
+// Type is routed through cloneColumnType, which copies the pointed-to value
+// of such a pointer.
 func (t TableDef) Clone() TableDef {
 	clone := t
-	clone.Columns = slices.Clone(t.Columns)
+	clone.Columns = cloneColumns(t.Columns)
 	clone.PrimaryKey = slices.Clone(t.PrimaryKey)
 	clone.VirtualTableModuleArguments = slices.Clone(t.VirtualTableModuleArguments)
 	clone.UniqueConstraints = cloneEach(t.UniqueConstraints)
@@ -1070,6 +1074,19 @@ func (t TableDef) Clone() TableDef {
 	clone.Indexes = cloneEach(t.Indexes)
 	clone.ForeignKeys = cloneEach(t.ForeignKeys)
 	clone.Relationships = cloneEach(t.Relationships)
+	return clone
+}
+
+// cloneColumns returns a copy of source in which no element shares anything
+// with the source element it was copied from. A ColumnDef owns no container,
+// so an assignment copies all of it but Type, whose interface value is
+// routed through cloneColumnType. It preserves source's nilness exactly as
+// slices.Clone does.
+func cloneColumns(source []ColumnDef) []ColumnDef {
+	clone := slices.Clone(source)
+	for i := range clone {
+		clone[i].Type = cloneColumnType(clone[i].Type)
+	}
 	return clone
 }
 

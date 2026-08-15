@@ -204,13 +204,13 @@ func TestTableCloneEmptyContainersStayNonNil(t *testing.T) {
 }
 
 // TestTableCloneContainersAreIndependent proves Clone's doc claim that a
-// clone shares no slice and no map with its source, for every container any
-// descriptor a TableDef reaches owns, and in both directions: writing
-// through the source must be invisible to the clone, and writing through
-// the clone must be invisible to the source. Each case compares the side it
-// did not touch against a freshly built descriptor, so an aliased container
-// anywhere in the tree shows up as an inequality rather than needing its own
-// assertion.
+// clone shares no slice, no map and no pointer with its source, for every
+// container any descriptor a TableDef reaches owns and for a column type
+// held by pointer, and in both directions: writing through the source must
+// be invisible to the clone, and writing through the clone must be invisible
+// to the source. Each case compares the side it did not touch against a
+// freshly built descriptor, so anything still shared anywhere in the tree
+// shows up as an inequality rather than needing its own assertion.
 func TestTableCloneContainersAreIndependent(t *testing.T) {
 	t.Run("mutating the source", func(t *testing.T) {
 		descriptor := containerTableDef()
@@ -277,11 +277,12 @@ func TestRelationshipCloneContainers(t *testing.T) {
 // TestTableCloneCoversEveryContainerField is the mechanical half of the same
 // guarantee: rather than naming the containers it knows about, it walks
 // TableDef with reflection, fills every slice and map it finds -- at the
-// table level and inside each element type -- clones the result, and
-// requires no container to be shared. A container field added to TableDef or
-// to any descriptor type it reaches fails here as soon as that type's own
-// Clone forgets to copy it, so keeping this file's hand-written cases up to
-// date is not what stands between a new field and a silently aliased one.
+// table level and inside each element type -- and every column type field
+// with a pointer, clones the result, and requires nothing to be shared. A
+// container field, or a field holding a column type, added to TableDef or to
+// any descriptor type it reaches fails here as soon as that type's own Clone
+// forgets to copy it, so keeping this file's hand-written cases up to date is
+// not what stands between a new field and a silently aliased one.
 func TestTableCloneCoversEveryContainerField(t *testing.T) {
 	descriptor := reflect.New(reflect.TypeOf(schema.TableDef{})).Elem()
 	fillContainerFields(descriptor)
@@ -293,11 +294,13 @@ func TestTableCloneCoversEveryContainerField(t *testing.T) {
 	requireContainerFieldsUnshared(t, reflect.ValueOf(source), reflect.ValueOf(clone), "TableDef")
 }
 
-// fillContainerFields gives every slice field of value one element and every
-// map field one entry, descending into the element type of each slice so a
-// container an element owns is filled too. A field of any other kind,
-// including ColumnDef.Type's interface, is left at its zero value: only a
-// container can be shared between a descriptor and its clone.
+// fillContainerFields gives every slice field of value one element, every map
+// field one entry, and every schema.ColumnType field a pointer to a column
+// type, descending into the element type of each slice so a container an
+// element owns is filled too. A field of any other kind is left at its zero
+// value: a slice, a map and a pointer are the three things a descriptor and
+// its clone can share, and ColumnDef.Type is the only field that can hold the
+// third.
 func fillContainerFields(value reflect.Value) {
 	for i := range value.NumField() {
 		field := value.Field(i)
@@ -311,20 +314,31 @@ func fillContainerFields(value reflect.Value) {
 		case reflect.Map:
 			field.Set(reflect.MakeMap(field.Type()))
 			field.SetMapIndex(reflect.New(field.Type().Key()).Elem(), reflect.New(field.Type().Elem()).Elem())
+		case reflect.Interface:
+			if field.Type() == reflect.TypeOf((*schema.ColumnType)(nil)).Elem() {
+				field.Set(reflect.ValueOf(schema.ColumnType(&schema.IntegerType{})))
+			}
 		}
 	}
 }
 
-// requireContainerFieldsUnshared reports a failure for each slice or map
-// field source and clone still share, naming the field's own path through
-// the descriptor. It descends into slice elements the same way
-// fillContainerFields does, so a container an element owns is checked too.
+// requireContainerFieldsUnshared reports a failure for each slice, map or
+// pointer-backed interface field source and clone still share, naming the
+// field's own path through the descriptor. It descends into slice elements
+// the same way fillContainerFields does, so a container an element owns is
+// checked too.
 func requireContainerFieldsUnshared(t *testing.T, source, clone reflect.Value, path string) {
 	t.Helper()
 	for i := range source.NumField() {
 		name := path + "." + source.Type().Field(i).Name
 		sourceField, cloneField := source.Field(i), clone.Field(i)
 		switch sourceField.Kind() {
+		case reflect.Interface:
+			require.False(t, sourceField.IsNil(), "%s: fixture left this interface nil, so nothing was checked", name)
+			if sourceField.Elem().Kind() != reflect.Pointer {
+				continue
+			}
+			require.NotEqual(t, sourceField.Elem().Pointer(), cloneField.Elem().Pointer(), "%s points at the same value as the source", name)
 		case reflect.Slice:
 			require.NotZero(t, sourceField.Len(), "%s: fixture left this slice empty, so nothing was checked", name)
 			require.NotEqual(t, sourceField.Pointer(), cloneField.Pointer(), "%s shares its backing array with the source", name)
@@ -345,10 +359,20 @@ func requireContainerFieldsUnshared(t *testing.T, source, clone reflect.Value, p
 // schema descriptor owns, each with one entry, so a clone of it exercises
 // every copy TableDef.Clone makes. Each call builds the value afresh, so a
 // test can compare a mutated copy against a pristine one.
+//
+// The second column holds its ColumnType by pointer. That is not a shape the
+// rest of the package supports -- Validate and JSON encoding both reject it,
+// since a column type is meant to be held by value -- but a pointer is the
+// one thing besides a slice or a map that a plain assignment would leave
+// shared, so Clone has to copy what it points at and this fixture has to
+// state one.
 func containerTableDef() schema.TableDef {
 	return schema.TableDef{
-		Name:                        "orders",
-		Columns:                     []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: &schema.DecimalType{Precision: 19}},
+		},
 		PrimaryKey:                  []string{"id"},
 		VirtualTableModule:          "fts5",
 		VirtualTableModuleArguments: []string{"content=''"},
@@ -392,10 +416,12 @@ func containerTableDef() schema.TableDef {
 }
 
 // mutateContainers writes through every container containerTableDef states,
-// including a new key in each map, so any container a clone still shares
-// with its source carries the write across.
+// including a new key in each map, and through the pointer its second column
+// holds its type by, so anything a clone still shares with its source
+// carries the write across.
 func mutateContainers(table *schema.TableDef) {
 	table.Columns[0].Name = "changed"
+	table.Columns[1].Type.(*schema.DecimalType).Precision = 1
 	table.PrimaryKey[0] = "changed"
 	table.VirtualTableModuleArguments[0] = "changed"
 	table.Checks[0].Expression = "changed"

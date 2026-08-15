@@ -1,5 +1,6 @@
 // Package catalog produces schema descriptors from a database the caller has
-// already opened.
+// already opened, and compares two sets of descriptors to report how they
+// differ.
 //
 // catalog is a tool-side package: a code-generation program imports it, and
 // the runtime library never does. It registers no database driver and opens
