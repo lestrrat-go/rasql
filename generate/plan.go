@@ -33,6 +33,7 @@ import (
 var (
 	writeGeneratedFile  = genfile.WriteInto
 	removeGeneratedFile = func(dir *os.Root, name string) error { return dir.Remove(name) }
+	readForeignMarker   = readGenfileMarkerAt
 )
 
 // resolveCommitDestination is the same kind of unexported seam, for the one
@@ -1337,9 +1338,13 @@ func scanForeignPackage(dir, pkg string, own map[string]struct{}) (name string, 
 		if matchErr != nil || !included {
 			continue
 		}
-		marker, markerErr := readGenfileMarkerAt(entryPath)
+		marker, markerErr := readForeignMarker(entryPath)
 		if markerErr != nil {
-			return "", "", markerErr
+			// The directory belongs to the caller, so a file can become
+			// unreadable between the inclusion check and this read. It is
+			// not this scan's file to judge; leave it for the toolchain to
+			// report rather than refusing an otherwise unrelated generation.
+			continue
 		}
 		if marker != nil {
 			continue
