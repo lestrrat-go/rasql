@@ -472,10 +472,16 @@ var ErrStale = errors.New("generate: generated package is stale")
 // acted on later, after the directory has changed underneath it: it reaches
 // the output directory through the plan's own anchor, re-resolves every
 // destination, refuses the same collisions, and re-reads every orphan's
-// marker. Each planned file is then read through the very directory the
+// marker. Each planned file is then compared through the very directory the
 // matching write would go through, so what Check compares is the file
 // Commit would replace rather than whatever that path reaches on a second
 // resolution.
+//
+// That comparison reads no more of a destination than the planned file it is
+// compared against, plus the one byte that says the destination goes on past
+// it: a destination longer than the planned file differs by that fact alone.
+// So what a check costs is set by the package these inputs produce, and not
+// by whatever happens to be sitting at a destination when Check runs.
 //
 // Check writes nothing and deletes nothing, and that is the one place it
 // parts from Commit's step 1: that step creates each missing component of
@@ -606,13 +612,13 @@ func (p Plan) Check() error {
 	// Write right now would change something, but nothing here stops it.
 	var stale []string
 	for _, c := range checks {
-		current, err := c.read()
+		matches, err := c.matchesSource()
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			stale = append(stale, fmt.Sprintf("%s: is missing", formatCheckPath(p.root, c.file.Path)))
 		case err != nil:
 			return fmt.Errorf("generate: read %s: %w", c.destination, err)
-		case !bytes.Equal(current, c.file.Source):
+		case !matches:
 			stale = append(stale, fmt.Sprintf("%s: differs", formatCheckPath(p.root, c.file.Path)))
 		}
 	}
@@ -668,21 +674,54 @@ type checkedFile struct {
 	name string
 }
 
-// read reports the destination's current bytes, read through the directory
-// Check opened for it rather than through its path. A destination inside an
-// output directory that does not exist reports fs.ErrNotExist, which is the
-// answer opening the file there would give and which Check reads as a
-// missing planned file.
-func (c checkedFile) read() ([]byte, error) {
+// matchesSource reports whether the destination currently holds the planned
+// file's Source and nothing beyond it, read through the directory Check
+// opened for it rather than through its path. A destination inside an output
+// directory that does not exist reports fs.ErrNotExist, which is the answer
+// opening the file there would give and which Check reads as a missing
+// planned file.
+//
+// It compares instead of handing back the destination's bytes so that what
+// this call costs is decided by the planned file rather than by whatever is
+// at that path: only a file of Source's own length can equal it, so a
+// destination longer than Source is stale however the rest of it reads, and
+// reading that rest would answer a question already settled. A destination is
+// only ever as long as something else left it, so a read that took all of it
+// would let that decide how much memory a check of this package uses.
+func (c checkedFile) matchesSource() (bool, error) {
 	if c.dir == nil {
-		return nil, &fs.PathError{Op: "open", Path: c.destination, Err: fs.ErrNotExist}
+		return false, &fs.PathError{Op: "open", Path: c.destination, Err: fs.ErrNotExist}
 	}
 	file, err := c.dir.Open(c.name)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	defer func() { _ = file.Close() }()
-	return io.ReadAll(file)
+	return readerHoldsExactly(file, c.file.Source)
+}
+
+// readerHoldsExactly reports whether r yields want and then ends.
+//
+// It reads at most len(want)+1 bytes and never asks how long r is: want's own
+// length, to compare, and one byte past it, whose arrival is what tells a
+// reader that merely starts with want from one that is want. So the bound is
+// the planned file's own size, and there is no size limit to pick. Reading
+// one byte past what is expected, so that too much is noticed rather than
+// silently cut off, is a device this package and others here already use:
+// readGenfileMarker below reads one marker and one byte more, and
+// cli/rasqlgen and migrate/diff each read their own limit plus one through
+// io.LimitReader.
+//
+// A short r, an empty r, and an r that ends exactly at want are all answers
+// rather than failures, which is why io.EOF and io.ErrUnexpectedEOF are not
+// reported: whether the bytes matched is the whole result.
+func readerHoldsExactly(r io.Reader, want []byte) (bool, error) {
+	buf := make([]byte, len(want)+1)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false, err
+	}
+	return bytes.Equal(buf[:n], want), nil
 }
 
 // resolveCheckDestination is resolveDestinationInDirectory for a caller that
