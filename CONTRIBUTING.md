@@ -37,10 +37,10 @@ The five files under `sample/taskboard/internal/store` are generated too. `TestT
 `sample/taskboard` is a separate module with its own checked-in `rasqlgen` output, and nothing in `go test ./...` regenerates it. `TestTaskboardStoreIsCurrent` does check it, from the root module, by building a throwaway SQLite database from every migration under `sample/taskboard/migrations/sqlite` and sweeping it with `catalog.FromDatabase`, so a change to the generator that leaves `sample/taskboard/internal/store/{members,projects,tasks}_gen.go`, `schema_gen.go`, or `schema_gen_test.go` stale now fails a fully green root test run instead of passing silently. It reads the migration tree with `internal/migrationdir` and applies it with `migrate.Runner`, which is what `rasqlmigrate apply` does, so adding a migration directory does not leave the test pinning the schema the module used to have. That test only compares, though; it never writes there. Refresh the checked-in files themselves in the same commit:
 
 ```sh
-cd sample/taskboard/internal/store && go generate ./...
+cd sample/taskboard && go generate ./...
 ```
 
-That applies `sample/taskboard/migrations/sqlite` to a throwaway SQLite database and reruns `rasqlgen schema` against it; the database file is gitignored. Then run the sample module's own build and tests, which the root `go test ./...` never reaches:
+That runs `sample/taskboard/gen/main.go`, which applies `sample/taskboard/migrations/sqlite` to a throwaway SQLite database and regenerates the store; `sample/taskboard/internal/store/.taskboard-schema.db` is ignored by Git. Then run the sample module's own build and tests, which the root `go test ./...` never reaches:
 
 ```sh
 cd sample/taskboard && go build ./... && go test ./...
