@@ -175,7 +175,7 @@ func runInit(args []string, writer io.Writer) error {
 	if err := requireGenDirInsideModule(*genDir); err != nil {
 		return err
 	}
-	if err := requireDistinctInitDirs(*output, *genDir); err != nil {
+	if err := requireDistinctInitDirs(*output, *genDir, *packageName); err != nil {
 		return err
 	}
 	if err := requireGenDirOwnsPackage(*genDir); err != nil {
@@ -291,12 +291,13 @@ func requireGenDirOwnsPackage(genDir string) error {
 }
 
 // requireDistinctInitDirs refuses an -output that names the same directory
-// as -gen-dir. The scaffold is package main and the store it generates is
-// -package, so one directory holding both is a directory holding two
-// packages: the first `go generate ./...` writes the store files happily,
-// and every build after that fails with "found packages main (main.go) and
-// <package> (schema_gen.go)". Nothing in the scaffold can run again, so
-// this has to fail before the first write rather than be recovered from.
+// as -gen-dir when the generated package is not main. The scaffold is package
+// main and the store it generates is -package, so one directory holding both
+// is a directory holding two packages in that case: the first `go generate
+// ./...` writes the store files happily, and every build after that fails with
+// "found packages main (main.go) and <package> (schema_gen.go)". A generated
+// package named main is the one valid exception: its files belong to the
+// scaffold's package and can share the directory.
 //
 // Comparing the two as typed is not enough, because -output "./gen",
 // "gen/" and "gen/../gen" all name the -gen-dir "gen" without matching it
@@ -323,7 +324,7 @@ func requireGenDirOwnsPackage(genDir string) error {
 // what actually stands between the collision and a broken package; this
 // check is what turns it into a mistake reported at the moment the flags
 // are typed.
-func requireDistinctInitDirs(output, genDir string) error {
+func requireDistinctInitDirs(output, genDir, packageName string) error {
 	outputPath, err := initOutputDirectory(output)
 	if err != nil {
 		return fmt.Errorf("init: resolve -output %q: %w", output, err)
@@ -334,6 +335,9 @@ func requireDistinctInitDirs(output, genDir string) error {
 	}
 	canonicalOutput := canonicalDirectory(outputPath)
 	if canonicalOutput != canonicalDirectory(genPath) {
+		return nil
+	}
+	if packageName == "main" {
 		return nil
 	}
 	return fmt.Errorf("init: -output %q and -gen-dir %q name the same directory %s; the scaffold is package main and the generated store is another package, so they cannot share one", output, genDir, canonicalOutput)

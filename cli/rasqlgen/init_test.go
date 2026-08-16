@@ -274,6 +274,17 @@ func TestInitRefusesOutputInTheScaffoldDirectory(t *testing.T) {
 	}
 }
 
+func TestInitAcceptsMainPackageInTheScaffoldDirectory(t *testing.T) {
+	initModuleDir(t)
+
+	var out bytes.Buffer
+	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "main", "-output", "gen"}, &out))
+
+	source, err := os.ReadFile(filepath.Join("gen", "main.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), `Package: "main"`)
+}
+
 // TestInitAcceptsOutputNestedInTheScaffoldDirectory is the control for the
 // test above: a subdirectory of -gen-dir is its own package, so only an
 // exact match is refused and this layout must still be written.
