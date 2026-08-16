@@ -56,6 +56,13 @@ type QueryPlan struct {
 	orphans []string
 	dir     string
 	root    string
+	// anchor is the deepest directory on dir's own path that already
+	// existed when QueryPackage.Plan looked, and anchorInfo is what the
+	// filesystem reported for it. Commit reopens anchor, requires it to
+	// still be the same directory, and walks down to dir without following
+	// symbolic links that appeared after the plan was built.
+	anchor     string
+	anchorInfo fs.FileInfo
 }
 
 // Files reports the files the plan writes. The result and every source byte
@@ -143,11 +150,18 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 			return QueryPlan{}, fmt.Errorf("generate: query function %q collides with %s", query.Function, owner)
 		}
 	}
-	orphans, _, err := findOrphans(dir, files)
+	orphans, dirInfo, err := findOrphans(dir, files)
 	if err != nil {
 		return QueryPlan{}, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
 	}
-	return QueryPlan{files: files, orphans: orphans, dir: dir, root: checkRoot}, nil
+	anchor, anchorInfo := dir, dirInfo
+	if anchorInfo == nil {
+		anchor, anchorInfo, err = deepestExistingDirectory(dir)
+		if err != nil {
+			return QueryPlan{}, fmt.Errorf("generate: find an existing directory above %s: %w", dir, err)
+		}
+	}
+	return QueryPlan{files: files, orphans: orphans, dir: dir, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans and commits the query package. The output directory and its
@@ -184,8 +198,26 @@ func (p QueryPlan) Commit() error {
 	if len(p.orphans) > 0 {
 		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write: %s; remove them before writing the query package", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
 	}
-	if err := os.MkdirAll(p.dir, 0o700); err != nil {
-		return fmt.Errorf("generate: create query output directory %q: %w", p.dir, err)
+	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+
+	realDir, err := filepath.EvalSymlinks(p.dir)
+	if err != nil {
+		return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
+	}
+	dirInfo, err := dir.Stat(".")
+	if err != nil {
+		return fmt.Errorf("generate: check %s: %w", p.dir, err)
+	}
+	realDirInfo, err := os.Stat(realDir)
+	if err != nil {
+		return fmt.Errorf("generate: check %s: %w", realDir, err)
+	}
+	if !os.SameFile(dirInfo, realDirInfo) {
+		return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit authorized; rerun QueryPackage.Plan", p.dir)
 	}
 
 	destinations := make([]string, len(p.files))
