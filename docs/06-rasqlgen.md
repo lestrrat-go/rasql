@@ -21,7 +21,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen init \
   -output internal/store
 go get github.com/jackc/pgx/v5/stdlib
 DATABASE_URL="$DATABASE_URL" go generate ./...
-go run ./gen -check
+DATABASE_URL="$DATABASE_URL" go run ./gen -check
 ```
 
 `init` writes only `gen/main.go`. It does not open a database, run a subprocess, or create the generated output directory. The scaffold is a checked-in manifest: the project owns its driver, database URL policy, and generation settings.

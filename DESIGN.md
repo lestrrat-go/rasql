@@ -77,7 +77,7 @@ Inspectors use a small adapter for each database metadata surface. They normaliz
 
 ## Code generation workflow
 
-New projects use `rasqlgen init` to create `gen/main.go`, then check that program into the application repository. The program opens the selected driver, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`, which owns hints, static queries, pruning, writing, and drift checks. The normal lifecycle is `rasqlgen init`, edit the owned program, `DATABASE_URL=... go generate ./...`, and `go run ./gen -check`.
+New projects use `rasqlgen init` to create `gen/main.go`, then check that program into the application repository. The program opens the selected driver, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`, which owns hints, static queries, pruning, writing, and drift checks. The normal lifecycle is `rasqlgen init`, edit the owned program, `DATABASE_URL=... go generate ./...`, and `DATABASE_URL=... go run ./gen -check`.
 
 The direct `bootstrap`, `schema`, and `query` commands remain supported compatibility interfaces. They are retained for existing repositories, checked-in schema packages, and query-only jobs whose workflow does not yet use an owned program. The design does not treat those commands or their exported supporting APIs as removed or deprecated.
 

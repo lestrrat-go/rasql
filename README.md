@@ -38,7 +38,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen init \
   -output internal/store
 go get github.com/jackc/pgx/v5/stdlib
 DATABASE_URL="$DATABASE_URL" go generate ./...
-go run ./gen -check
+DATABASE_URL="$DATABASE_URL" go run ./gen -check
 ```
 
 The generated `gen/main.go` owns the database driver, the `catalog.Options` table selection (`Include`, `Exclude`, and `HistoryTable`), Go-side `Hints`, static `Queries`, and the `generate.Store` `Prune`, `Write`, and `Check` behavior. Edit that program when the project needs a different selection or generation policy; rerun `rasqlgen init` with `-force` only when intentionally replacing the scaffold.
