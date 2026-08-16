@@ -70,6 +70,18 @@ func TestStorePlanRefusesACaseVariantUserPackage(t *testing.T) {
 	require.ErrorContains(t, err, "USERS_gen.go")
 }
 
+func TestStorePlanRefusesANonTestExternalPackage(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "gen")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "helper.go"), []byte("package store_test\n"), 0o644))
+
+	store := generate.Store{Package: "store", Root: root, Dir: "gen", Tables: []schema.TableDef{usersTableDef()}}
+	_, err := store.Plan()
+	require.ErrorContains(t, err, `already holds package "store_test"`)
+	require.ErrorContains(t, err, "helper.go")
+}
+
 func TestStorePlanRefusesAPackageEnabledByGOFLAGS(t *testing.T) {
 	t.Setenv("GOFLAGS", "-tags=rasqlgen_test_tools")
 
@@ -112,6 +124,10 @@ func TestStorePlanAcceptsADirectoryNoOtherPackageOwns(t *testing.T) {
 		"an external test package": {
 			name:    "helpers_test.go",
 			content: "package store_test\n",
+		},
+		"package documentation": {
+			name:    "doc.go",
+			content: "// Package documentation describes the generated package.\npackage documentation\n",
 		},
 		// A file rasqlgen wrote under the package's former name. A run that
 		// renames the generated package rewrites it, so refusing it here

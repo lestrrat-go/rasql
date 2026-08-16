@@ -1270,6 +1270,9 @@ func DirForeignPackage(dir, pkg string, own ...string) (name string, declaredPac
 //     findOrphans reads. Those are either rewritten by a later run or
 //     reported as orphans, and refusing them here would refuse a run whose
 //     only change is a renamed generated package.
+//   - A package documentation file. go/build parses its package clause as
+//     "documentation" but places the file in IgnoredGoFiles, so it does not
+//     make a second build package.
 //   - A file that cannot be read or parsed. It is not this scan's file to
 //     judge, and refusing a run over a file the compiler will complain
 //     about on its own would be a refusal with nothing behind it.
@@ -1357,7 +1360,8 @@ func scanForeignPackage(dir, pkg string, own map[string]struct{}) (name string, 
 		// The external test package is the one second package clause a Go
 		// directory is allowed, so a store package's own foo_test files are
 		// not a collision.
-		if declaredName == pkg || declaredName == pkg+"_test" {
+		if declaredName == "documentation" || declaredName == pkg ||
+			(declaredName == pkg+"_test" && strings.HasSuffix(entryName, "_test.go")) {
 			continue
 		}
 		return entryName, declaredName, nil
