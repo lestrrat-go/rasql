@@ -3,6 +3,7 @@
 package generate_test
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -24,23 +25,94 @@ import (
 // its own first line, and a package clause under it.
 var markerFile = []byte(genfile.Marker + "\n\npackage store\n")
 
-func TestStorePrunesMarkedGeneratedSymlinkOrphan(t *testing.T) {
-	base := t.TempDir()
-	dir := filepath.Join(base, "store")
-	target := filepath.Join(base, "old_gen.go")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(target, markerFile, 0o600))
-	orphan := filepath.Join(dir, "old_gen.go")
-	require.NoError(t, os.Symlink(target, orphan))
+func TestStoreHandlesMarkedGeneratedSymlinkOrphanCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		prune        bool
+		write        func(generate.Store, generate.Plan) error
+		wantWriteErr bool
+	}{
+		{
+			name:         "without Prune Store.Check refuses and Plan.Commit leaves the symlink",
+			write:        func(_ generate.Store, plan generate.Plan) error { return plan.Commit() },
+			wantWriteErr: true,
+		},
+		{
+			name:  "with Prune Store.Check reports stale and Plan.Commit removes only the symlink",
+			prune: true,
+			write: func(_ generate.Store, plan generate.Plan) error { return plan.Commit() },
+		},
+		{
+			name:  "with Prune Store.Check reports stale and Store.Write removes only the symlink",
+			prune: true,
+			write: func(store generate.Store, _ generate.Plan) error { return store.Write() },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			dir := filepath.Join(base, "store")
+			target := filepath.Join(base, "old_gen.go")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			require.NoError(t, os.WriteFile(target, markerFile, 0o600))
+			orphan := filepath.Join(dir, "old_gen.go")
+			require.NoError(t, os.Symlink(target, orphan))
 
-	store := generate.Store{Package: "store", Dir: dir, Tables: []schema.TableDef{usersTableDef()}, Prune: true}
-	plan, err := store.Plan()
+			store := generate.Store{Package: "store", Dir: dir, Tables: []schema.TableDef{usersTableDef()}, Prune: tc.prune}
+			plan, err := store.Plan()
+			require.NoError(t, err)
+			require.Equal(t, []string{orphan}, plan.Orphans())
+
+			checkErr := store.Check()
+			require.Error(t, checkErr)
+			require.ErrorContains(t, checkErr, orphan)
+			if tc.prune {
+				require.True(t, errors.Is(checkErr, generate.ErrStale))
+				require.ErrorContains(t, checkErr, "would be deleted")
+			} else {
+				require.False(t, errors.Is(checkErr, generate.ErrStale), "a symlink orphan without Prune is a refusal, not staleness")
+				require.ErrorContains(t, checkErr, "Store.Prune is false")
+			}
+			requireSymlinkTo(t, orphan, target)
+			requireFileBytes(t, target, markerFile)
+
+			err = tc.write(store, plan)
+			if tc.wantWriteErr {
+				require.Error(t, err)
+				require.ErrorContains(t, err, orphan)
+				requireSymlinkTo(t, orphan, target)
+				for _, f := range plan.Files() {
+					require.NoFileExists(t, f.Path)
+				}
+			} else {
+				require.NoError(t, err)
+				_, err := os.Lstat(orphan)
+				require.ErrorIs(t, err, fs.ErrNotExist)
+				for _, f := range plan.Files() {
+					require.FileExists(t, f.Path)
+				}
+			}
+			requireFileBytes(t, target, markerFile)
+		})
+	}
+}
+
+func requireSymlinkTo(t *testing.T, link string, target string) {
+	t.Helper()
+
+	info, err := os.Lstat(link)
 	require.NoError(t, err)
-	require.Equal(t, []string{orphan}, plan.Orphans())
-	require.ErrorIs(t, plan.Check(), generate.ErrStale)
-	require.NoError(t, plan.Commit())
-	require.NoFileExists(t, orphan)
-	require.FileExists(t, target)
+	require.NotZero(t, info.Mode()&fs.ModeSymlink, "the orphan path must stay a symbolic link")
+	got, err := os.Readlink(link)
+	require.NoError(t, err)
+	require.Equal(t, target, got)
+}
+
+func requireFileBytes(t *testing.T, path string, want []byte) {
+	t.Helper()
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 // TestStorePlanReportsWhereASymlinkedFileResolves pins what File.Resolved is
