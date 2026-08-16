@@ -51,10 +51,12 @@ type QueryPackage struct {
 // complete generated sources and are sorted by destination path. Orphans
 // records marked generated files in Dir that this plan does not write.
 type QueryPlan struct {
-	files   []File
-	orphans []string
-	dir     string
-	root    string
+	files       []File
+	orphans     []string
+	packageName string
+	functions   []string
+	dir         string
+	root        string
 	// anchor is the deepest directory on dir's own path that already
 	// existed when QueryPackage.Plan looked, and anchorInfo is what the
 	// filesystem reported for it. Commit reopens anchor, requires it to
@@ -137,21 +139,13 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 		files = append(files, file)
 	}
 	sort.Slice(files, func(left, right int) bool { return files[left].Path < files[right].Path })
-	if err := requireQueryPackageOwnsDir(dir, p.Package, files); err != nil {
+	queryFunctions := make([]string, len(queries))
+	for i, query := range queries {
+		queryFunctions[i] = query.Function
+	}
+	orphans, dirInfo, err := queryPackageOwnership(dir, p.Package, files, queryFunctions)
+	if err != nil {
 		return QueryPlan{}, err
-	}
-	declared, err := queryPackageDeclaredNames(dir, p.Package, files)
-	if err != nil {
-		return QueryPlan{}, fmt.Errorf("generate: scan %s for package declarations: %w", dir, err)
-	}
-	for _, query := range queries {
-		if owner, exists := declared[query.Function]; exists {
-			return QueryPlan{}, fmt.Errorf("generate: query function %q collides with %s", query.Function, owner)
-		}
-	}
-	orphans, dirInfo, err := findOrphans(dir, files)
-	if err != nil {
-		return QueryPlan{}, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
 	}
 	anchor, anchorInfo := dir, dirInfo
 	if anchorInfo == nil {
@@ -160,7 +154,7 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 			return QueryPlan{}, fmt.Errorf("generate: find an existing directory above %s: %w", dir, err)
 		}
 	}
-	return QueryPlan{files: files, orphans: orphans, dir: dir, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
+	return QueryPlan{files: files, orphans: orphans, packageName: p.Package, functions: queryFunctions, dir: dir, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans and commits the query package. The output directory and its
@@ -186,10 +180,10 @@ func (p QueryPackage) Check() error {
 	return plan.Check()
 }
 
-// Commit publishes every file in the plan. It refuses recorded orphans and
-// validates every destination before writing, so a stale generated file,
-// marker refusal, or another predictable destination error cannot leave an
-// earlier query file replaced.
+// Commit publishes every file in the plan. It refuses recorded or newly
+// appearing ownership conflicts and orphans, and validates every destination
+// before writing, so a stale generated file, marker refusal, or another
+// predictable destination error cannot leave an earlier query file replaced.
 func (p QueryPlan) Commit() error {
 	if p.dir == "" {
 		return errors.New("generate: zero QueryPlan cannot be committed; only QueryPackage.Plan builds a plan")
@@ -242,6 +236,13 @@ func (p QueryPlan) Commit() error {
 			return err
 		}
 		writes[index] = commitWrite{file: file, destination: destination, dir: into, name: filepath.Base(destination)}
+	}
+	orphans, _, err := queryPackageOwnership(p.dir, p.packageName, p.files, p.functions)
+	if err != nil {
+		return fmt.Errorf("%w; rerun QueryPackage.Plan", err)
+	}
+	if len(orphans) > 0 {
+		return fmt.Errorf("generate: %s gained %d file(s) rasqlgen wrote that this plan does not write: %s; rerun QueryPackage.Plan", p.dir, len(orphans), strings.Join(orphans, ", "))
 	}
 
 	for _, write := range writes {
@@ -353,6 +354,26 @@ func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
 		return nil
 	}
 	return fmt.Errorf("generate: %s already holds package %q, declared by %s, and this query package generates package %q; a directory holds one package, so writing the query package there would leave a directory no build can compile", dir, declared, name, pkg)
+}
+
+func queryPackageOwnership(dir, pkg string, planned []File, functions []string) ([]string, fs.FileInfo, error) {
+	if err := requireQueryPackageOwnsDir(dir, pkg, planned); err != nil {
+		return nil, nil, err
+	}
+	declared, err := queryPackageDeclaredNames(dir, pkg, planned)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate: scan %s for package declarations: %w", dir, err)
+	}
+	for _, function := range functions {
+		if owner, exists := declared[function]; exists {
+			return nil, nil, fmt.Errorf("generate: query function %q collides with %s", function, owner)
+		}
+	}
+	orphans, dirInfo, err := findOrphans(dir, planned)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
+	}
+	return orphans, dirInfo, nil
 }
 
 // queryPackageDeclaredNames returns package-level declarations in active Go
