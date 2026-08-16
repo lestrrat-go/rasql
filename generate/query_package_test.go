@@ -165,6 +165,26 @@ func TestQueryPackageRejectsForeignPackageBeforeWriting(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(dir, "query_gen.go"))
 }
 
+func TestQueryPackageRejectsExistingSamePackageFunctionBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	dir := filepath.Join(root, "store")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "handwritten.go"), []byte("package store\n\nfunc Query() {}\n"), 0o600))
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+	}
+
+	_, err := queries.Plan()
+	require.ErrorContains(t, err, `query function "Query" collides with package-level declaration "Query" in handwritten.go`)
+	require.ErrorContains(t, queries.Write(), `query function "Query" collides with package-level declaration "Query" in handwritten.go`)
+	require.NoFileExists(t, filepath.Join(dir, "query_gen.go"))
+}
+
 func TestQueryPackageAuthorizesAllDestinationsBeforeWriting(t *testing.T) {
 	root := t.TempDir()
 	writeQueryFile(t, root, "first.sql", `SELECT id FROM users`)
