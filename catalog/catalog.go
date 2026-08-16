@@ -237,9 +237,7 @@ func describeIncluded(ctx context.Context, inspector inspect.Inspector, names []
 }
 
 // sweepTables resolves every base table the connection can see, minus the
-// migration history table and minus Exclude, matching sweepTables in
-// cli/rasqlgen/bootstrap.go fact for fact: same history-table default, same
-// exclusion handling, same empty-result refusal.
+// migration history table and minus Exclude, and refuses an empty result.
 func sweepTables(ctx context.Context, inspector inspect.Inspector, options Options) ([]schema.TableDef, error) {
 	names, err := inspector.TableNames(ctx)
 	if err != nil {
@@ -276,8 +274,7 @@ func sweepTables(ctx context.Context, inspector inspect.Inspector, options Optio
 // describeSweptTable reads name's descriptor, using the SQLite-scoped
 // TableIn when name carries a Schema (main, temp, or an attached database)
 // and the ordinary Table lookup otherwise, which is every case on
-// PostgreSQL and MySQL, and an unscoped SQLite table -- the same rule
-// cli/rasqlgen/bootstrap.go's describeSweptTable applies.
+// PostgreSQL and MySQL, and an unscoped SQLite table.
 func describeSweptTable(ctx context.Context, inspector inspect.Inspector, name inspect.TableName) (schema.TableDef, error) {
 	if name.Schema != "" {
 		return inspector.TableIn(ctx, name.Schema, name.Name)

@@ -483,7 +483,7 @@ func TestWritePackageRejectsInvalidPackageNameBeforeWriting(t *testing.T) {
 // TestWritePackageRejectsBlankIdentifierPackageName covers the one invalid
 // package name token.IsIdentifier alone does not catch: "_" is an ordinary
 // identifier token everywhere else in Go, but "package _" is not a package
-// clause the compiler accepts. This is the `rasqlgen schema` defect the
+// clause the compiler accepts. This is the package-name defect the
 // check above does not exercise, since "not a valid package name" already
 // fails token.IsIdentifier on its own.
 func TestWritePackageRejectsBlankIdentifierPackageName(t *testing.T) {

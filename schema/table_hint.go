@@ -1,13 +1,9 @@
 package schema
 
 // TableHint carries a Go-side generation override that no live database can
-// supply. A bootstrap-generated description package keeps its hints in a
-// hand-owned file, conventionally holding a map named Hints keyed by table
-// name, that the package's own generated Tables function applies to each
-// schema.TableDef through Apply before returning it. `rasqlgen bootstrap`
-// writes that file once, the first time it creates a package, and a later
-// refresh never rewrites it -- see the "hints" section of
-// docs/06-rasqlgen.md.
+// supply. An owned generator can keep its hints in a hand-owned map keyed by
+// table name and apply each one to a schema.TableDef before passing the
+// descriptors to generate.Store.
 //
 // The hint surface starts deliberately small. RowName is the one override
 // no database can ever recover: a table's generated row type name is a

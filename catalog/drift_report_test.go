@@ -178,7 +178,7 @@ func onlyAddedAndRemoved(t *testing.T, described, live schema.TableDef) (added, 
 
 // TestReportDetailsEveryNamedConstraintKind pins the case the old
 // comparison answered with a bare "~ unique constraint \"u\""
-// (generate/description_diff.go:317): a named unique constraint, check,
+// a named unique constraint, check,
 // index, foreign key, and exclusion constraint each changed in one field
 // produce a "~" line naming that field and its two values.
 func TestReportDetailsEveryNamedConstraintKind(t *testing.T) {

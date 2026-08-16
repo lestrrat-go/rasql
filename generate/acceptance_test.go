@@ -207,9 +207,9 @@ func mutateEveryContainer(table schema.TableDef) {
 }
 `
 
-// TestGeneratedStorePackageCompilesAndRuns is the acceptance test the split
-// file layout that "rasqlgen schema" writes has never had: it generates that
-// layout, plus a generated query file beside it, into a scratch consumer
+// TestGeneratedStorePackageCompilesAndRuns is the acceptance test for the
+// split file layout generate.Store writes: it generates that layout, plus a
+// generated query file beside it, into a scratch consumer
 // module and runs "go test ./..." there. That single run compiles every
 // generated file as one package and runs both the generated
 // schema_gen_test.go and the hand-written tests above, which drive a real
@@ -219,17 +219,13 @@ func mutateEveryContainer(table schema.TableDef) {
 // aggregates every table's descriptor, including whether what Tables hands
 // back shares any container with what the next call returns.
 //
-// Every other test that compiles generated output either builds the
-// monolithic layout rasqlgen never writes (internal/schemagen/schema_test.go,
-// generate/schema_test.go) or compiles the split layout but only runs the
-// generated descriptor test, never a column accessor, a relationship, or a
-// query function (cli/rasqlgen/rasqlgen_e2e_test.go).
+// The other source-generation tests cover individual generated files or
+// specific package-level helpers.
 func TestGeneratedStorePackageCompilesAndRuns(t *testing.T) {
 	moduleDir := t.TempDir()
 
 	// Build the scratch module exactly the way
-	// cli/rasqlgen/source_test.go's newSchemaSourceFixture does: copy the
-	// repository's own go.mod, rather than writing a hand-made "go 1.26"
+	// Copy the repository's own go.mod, rather than writing a hand-made "go 1.26"
 	// directive, and append a replace directive back to this checkout. That
 	// pattern needs no go.sum and no "go mod tidy", and runs offline.
 	repoGoMod, err := os.ReadFile(filepath.Join("..", "go.mod"))

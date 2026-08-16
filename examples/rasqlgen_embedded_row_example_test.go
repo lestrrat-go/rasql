@@ -12,13 +12,10 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// BEGIN(embedded_row)
 type userWithRole struct {
 	store.UsersRow // promotes ScanRow and ScanDestinations
 	Role           string
 }
-
-// END(embedded_row)
 
 // Example_rasqlgen_embedded_row shows what embedding a generated row type does
 // to a read. The wrapper promotes the embedded row's scan methods, the typed

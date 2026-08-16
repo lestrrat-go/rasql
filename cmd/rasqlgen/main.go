@@ -1,4 +1,4 @@
-// rasqlgen generates Go source from rasql schemas and query templates.
+// rasqlgen scaffolds the project-owned generator through the init command.
 package main
 
 import (

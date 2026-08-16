@@ -153,8 +153,8 @@ func TestValidateReportsCollisionsAcrossTables(t *testing.T) {
 
 // TestValidateRejectsInvalidPackageNames covers every value Validate
 // refuses as a package name, since it is the one exported check both
-// WritePackage (the `rasqlgen schema` path) and a library caller building
-// its own source with PackageSource route through.
+// WritePackage and a library caller building its own source with PackageSource
+// route through.
 func TestValidateRejectsInvalidPackageNames(t *testing.T) {
 	users := schema.TableDef{
 		Name:       "users",

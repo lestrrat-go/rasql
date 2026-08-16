@@ -13,18 +13,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mustExecLive runs statement against database and fails the test on error,
-// mirroring cli/rasqlgen/bootstrap_integration_test.go's helper of the same
-// name.
+// mustExecLive runs statement against database and fails the test on error.
 func mustExecLive(t *testing.T, ctx context.Context, database *sql.DB, statement string) {
 	t.Helper()
 	_, err := database.ExecContext(ctx, statement)
 	require.NoError(t, err)
 }
 
-// TestFromDatabaseSweepsLivePostgreSQL mirrors
-// cli/rasqlgen/schema_sweep_integration_test.go: it drives FromDatabase
-// against a real PostgreSQL server, not sqlmock or an in-process SQLite
+// TestFromDatabaseSweepsLivePostgreSQL drives FromDatabase against a real
+// PostgreSQL server, not sqlmock or an in-process SQLite
 // stand-in, and requires the sweep to describe the ordinary table and skip
 // both the migration history table and the view. This also settles, in CI,
 // that PostgreSQL's driver accepts the LevelRepeatableRead read-only

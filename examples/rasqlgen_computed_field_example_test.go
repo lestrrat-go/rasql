@@ -29,7 +29,6 @@ var people = rasql.MustTableOf[personRow](schema.MustTableDef("people",
 	schema.PrimaryKey("id"),
 ))
 
-// BEGIN(computed_field)
 type userReport struct {
 	Email     string
 	FirstName string `rasql:"first_name"`
@@ -39,8 +38,6 @@ type userReport struct {
 func (r userReport) FullName() string {
 	return r.FirstName + " " + r.LastName
 }
-
-// END(computed_field)
 
 // Example_rasqlgen_computed_field builds a value no single column holds. The
 // raw columns stay as fields and the derived value is a method, so the
@@ -87,7 +84,6 @@ func Example_rasqlgen_computed_field() {
 		fmt.Printf("failed to find people.last_name: %s\n", err)
 		return
 	}
-	// BEGIN(computed_field_use)
 	report, err := rasql.DecodeFrom[userReport](people).
 		Project(query.Project(email), query.Project(first), query.Project(last)).
 		One(ctx, db)
@@ -96,7 +92,6 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 	fmt.Println(report.Email, report.FullName())
-	// END(computed_field_use)
 
 	// Output:
 	// ada@example.com Ada Lovelace

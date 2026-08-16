@@ -20,21 +20,6 @@ func TestGoRunHelp(t *testing.T) {
 			expected: "Usage: rasqlgen <command> [flags]",
 		},
 		{
-			name:     "bootstrap",
-			args:     []string{"bootstrap", "-h"},
-			expected: "Usage of bootstrap:",
-		},
-		{
-			name:     "schema",
-			args:     []string{"schema", "-h"},
-			expected: "Usage of schema:",
-		},
-		{
-			name:     "query",
-			args:     []string{"query", "-h"},
-			expected: "Usage of query:",
-		},
-		{
 			name:     "init",
 			args:     []string{"init", "-h"},
 			expected: "Usage of init:",

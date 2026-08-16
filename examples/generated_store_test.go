@@ -3,14 +3,12 @@ package examples_test
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/genfile"
@@ -18,17 +16,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// queryTemplate, queryFunction, queryDialect, queryPackage and generatedQuery
-// are the one compiled query examples/store holds, named once here because
-// both the generate.Store plan and the rasqlgen command line below have to
-// state the same query for their outputs to be comparable at all.
+// queryTemplate, queryFunction, queryPackage and generatedQuery describe the
+// one compiled query examples/store holds.
 const (
 	queryTemplate  = "user_by_email.sql"
 	queryFunction  = "UserByEmail"
-	queryDialect   = "postgresql"
 	queryPackage   = "store"
 	generatedQuery = "user_by_email_gen.go"
 )
+
+const staleDriftLine = "\n// invented drift line, written only by a test that expects this file to be reported stale\n"
 
 // TestGeneratedStoreIsCurrent regenerates the checked-in examples/store
 // package -- the per-table file, the two descriptor files, and the one
@@ -42,8 +39,7 @@ func TestGeneratedStoreIsCurrent(t *testing.T) {
 }
 
 // exampleStore is the generate.Store that plans the checked-in
-// examples/store package, stated once so TestGeneratedQueryIsCurrent
-// compares the rasqlgen command against the same query this store plans.
+// examples/store package.
 func exampleStore(t *testing.T) generate.Store {
 	t.Helper()
 
@@ -66,57 +62,6 @@ func exampleStore(t *testing.T) generate.Store {
 			Dialect:  dialect.PostgreSQL(),
 		}},
 	}
-}
-
-// TestGeneratedQueryIsCurrent drives the `rasqlgen query` command itself,
-// with the flags docs/06-rasqlgen.md documents, and requires the source it
-// writes to be byte-for-byte what examples/store holds.
-//
-// TestGeneratedStoreIsCurrent covers the same file through
-// generate.Store.Plan, which is a different code path: a change to the
-// command's flag handling or output wiring that rejected valid input, or
-// emitted different source, would leave that test green while the documented
-// command was broken. Comparing against the store's own plan as well pins
-// the two paths to each other, and holds under -update-docs, where the
-// checked-in file is the thing being rewritten rather than a fixed golden.
-func TestGeneratedQueryIsCurrent(t *testing.T) {
-	output := filepath.Join(t.TempDir(), generatedQuery)
-	require.NoError(t, rasqlgen.Run([]string{
-		"query",
-		"-input", filepath.Join(repositoryRoot, "examples", "store", queryTemplate),
-		"-function", queryFunction,
-		"-dialect", queryDialect,
-		"-package", queryPackage,
-		"-output", output,
-	}, io.Discard))
-
-	source, err := os.ReadFile(output)
-	require.NoError(t, err)
-
-	plan, err := exampleStore(t).Plan()
-	require.NoError(t, err)
-	planned, ok := plannedFile(plan, generatedQuery)
-	require.True(t, ok, "%s is not planned by the examples/store store", generatedQuery)
-	require.Equal(t, string(planned), string(source),
-		"`rasqlgen query` and generate.Store no longer produce the same %s", generatedQuery)
-
-	if *updateDocs {
-		return
-	}
-	committed, err := os.ReadFile(filepath.Join(repositoryRoot, "examples", "store", generatedQuery))
-	require.NoError(t, err)
-	require.Equal(t, string(committed), string(source),
-		"examples/store/%s is stale; run `go test ./examples/ -update-docs`", generatedQuery)
-}
-
-// plannedFile returns the source plan writes for the file named name.
-func plannedFile(plan generate.Plan, name string) ([]byte, bool) {
-	for _, f := range plan.Files() {
-		if filepath.Base(f.Path) == name {
-			return f.Source, true
-		}
-	}
-	return nil, false
 }
 
 // repositoryRootAbs is repositoryRoot (".." as seen from this package's own
@@ -158,11 +103,8 @@ func requireGeneratedDirectoryIsCurrent(t *testing.T, store generate.Store, dir 
 // no orphans, which is the same directory scan Store.Write's own orphan
 // guard runs.
 //
-// A caller that runs a generator over dir before comparing must not use
-// this: reading dir afterwards compares the generator with itself. Such a
-// caller snapshots dir first and passes generatedFiles of that snapshot to
-// requireGeneratedFilesMatch, which is what TestSchemaSourceExampleGenerates
-// does.
+// A caller must not run a generator over dir before comparing: reading dir
+// afterwards compares the generator with itself.
 func requireGeneratedDirectoryMatches(t *testing.T, store generate.Store, dir string) {
 	t.Helper()
 
@@ -299,8 +241,7 @@ func isGeneratedFile(name string, contents []byte) bool {
 
 // TestStaleGeneratedFilesReportsEveryDifference pins the three differences
 // staleGeneratedFiles tells apart, so a caller that passes it the wrong set
-// of files -- as TestSchemaSourceExampleGenerates once did by reading its
-// directory after `go generate` had rewritten it -- is failing against a
+// of files is failing against a
 // comparison that is known to work rather than one that might not.
 //
 // It starts from the plan's own files as the present set, which is what a

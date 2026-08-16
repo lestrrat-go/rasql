@@ -15,7 +15,7 @@ import (
 const maxQueryInputBytes = 64 << 20
 
 // TestStorePlanRejectsOversizedQueryInput keeps Store.Queries bounded by the
-// same 64 MiB input limit as rasqlgen query. The plan must reject the source
+// same 64 MiB input limit as generated query functions. The plan must reject the source
 // before template parsing or any generated file can be committed.
 func TestStorePlanRejectsOversizedQueryInput(t *testing.T) {
 	root := t.TempDir()

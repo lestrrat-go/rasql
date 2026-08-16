@@ -25,7 +25,7 @@ import (
 // that only the rendered store states; events has no primary key at all, so
 // inspection returns a non-nil empty PrimaryKey where the store renders nil.
 // users also carries two unnamed CHECKs, an unnamed UNIQUE ... ON CONFLICT,
-// and a named UNIQUE, the shapes generate.DiffDescriptionPackage used to
+// and a named UNIQUE, the shapes catalog comparison used to
 // under-report (phase 4 specification §1.1).
 var storeDriftFixtureDDL = []string{
 	`CREATE TABLE orgs (

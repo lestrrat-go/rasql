@@ -256,8 +256,7 @@ func schemaSource(packageName string, tables, allTables []schema.TableDef, descr
 // It also declares the package-level Tables function, once, after every
 // table's own descriptor: a clone of each table's schema.TableDef, in the
 // same order this file declares them. That makes the generated store
-// self-describing, the same value a separate description package built by
-// `rasqlgen bootstrap` exists to hand back today.
+// self-describing, the same value an owned generator passes to generate.Store.
 func DescriptorSource(packageName string, tables ...schema.TableDef) ([]byte, error) {
 	clones, err := prepareSchema(packageName, tables)
 	if err != nil {
