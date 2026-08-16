@@ -1,7 +1,6 @@
 package generate
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -252,7 +251,7 @@ func (p QueryPlan) Check() error {
 	}
 	var stale []string
 	for _, file := range p.files {
-		data, err := os.ReadFile(file.Resolved)
+		matches, err := fileHoldsExactly(file.Resolved, file.Source)
 		if errors.Is(err, os.ErrNotExist) {
 			stale = append(stale, fmt.Sprintf("%s: is missing", formatCheckPath(p.root, file.Path)))
 			continue
@@ -260,7 +259,7 @@ func (p QueryPlan) Check() error {
 		if err != nil {
 			return fmt.Errorf("generate: read %s: %w", file.Resolved, err)
 		}
-		if !bytes.Equal(data, file.Source) {
+		if !matches {
 			stale = append(stale, fmt.Sprintf("%s: differs", formatCheckPath(p.root, file.Path)))
 		}
 	}
@@ -272,6 +271,15 @@ func (p QueryPlan) Check() error {
 	}
 	sort.Strings(stale)
 	return fmt.Errorf("%w: %s", ErrStale, strings.Join(stale, "; "))
+}
+
+func fileHoldsExactly(path string, want []byte) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = file.Close() }()
+	return readerHoldsExactly(file, want)
 }
 
 func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
