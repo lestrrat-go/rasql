@@ -254,23 +254,80 @@ func (p QueryPlan) Commit() error {
 
 // Check compares every planned file with its destination without writing.
 // Missing, differing, and orphaned generated files are reported together and
-// wrap ErrStale.
+// wrap ErrStale. A destination or directory that changed after planning is
+// reported as a refusal because rerunning the plan is required before reading
+// or writing through the changed path.
 func (p QueryPlan) Check() error {
 	if p.dir == "" {
 		return errors.New("generate: zero QueryPlan cannot be checked; only QueryPackage.Plan builds a plan")
 	}
-	var stale []string
-	for _, file := range p.files {
-		matches, err := fileHoldsExactly(file.Resolved, file.Source)
-		if errors.Is(err, os.ErrNotExist) {
-			stale = append(stale, fmt.Sprintf("%s: is missing", formatCheckPath(p.root, file.Path)))
-			continue
-		}
+	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir, false)
+	if err != nil {
+		return err
+	}
+	if dir != nil {
+		defer func() { _ = dir.Close() }()
+	}
+
+	realDir := p.dir
+	if dir != nil {
+		realDir, err = filepath.EvalSymlinks(p.dir)
 		if err != nil {
-			return fmt.Errorf("generate: read %s: %w", file.Resolved, err)
+			return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
 		}
-		if !matches {
-			stale = append(stale, fmt.Sprintf("%s: differs", formatCheckPath(p.root, file.Path)))
+		dirInfo, err := dir.Stat(".")
+		if err != nil {
+			return fmt.Errorf("generate: check %s: %w", p.dir, err)
+		}
+		realDirInfo, err := os.Stat(realDir)
+		if err != nil {
+			return fmt.Errorf("generate: check %s: %w", realDir, err)
+		}
+		if !os.SameFile(dirInfo, realDirInfo) {
+			return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit authorized; rerun QueryPackage.Plan", p.dir)
+		}
+	}
+
+	var handles destinationDirectories
+	if dir != nil {
+		handles = destinationDirectories{own: dir, ownPath: realDir}
+	}
+	defer handles.close()
+	checks := make([]checkedFile, 0, len(p.files))
+	seen := make(map[string]string, len(p.files))
+	var stale []string
+	for index := range p.files {
+		file := &p.files[index]
+		resolved, parentInfo, err := resolveCheckDestination(file.Path, p.dir, dir == nil)
+		if err != nil {
+			return err
+		}
+		if resolved != file.Resolved {
+			return fmt.Errorf("generate: refusing to check query output %s: its destination changed after QueryPackage.Plan; rerun QueryPackage.Plan", file.Path)
+		}
+		key := filepath.Clean(resolved)
+		if previous, exists := seen[key]; exists {
+			return fmt.Errorf("generate: query outputs %s and %s resolve to the same destination %s", previous, file.Path, resolved)
+		}
+		seen[key] = file.Path
+		var into *os.Root
+		if dir != nil && parentInfo != nil {
+			into, err = handles.open(filepath.Dir(resolved), parentInfo)
+			if err != nil {
+				return err
+			}
+		}
+		checks = append(checks, checkedFile{file: file, destination: resolved, dir: into, name: filepath.Base(resolved)})
+	}
+	for _, file := range checks {
+		matches, err := file.matchesSource()
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			stale = append(stale, fmt.Sprintf("%s: is missing", formatCheckPath(p.root, file.file.Path)))
+		case err != nil:
+			return fmt.Errorf("generate: read %s: %w", file.destination, err)
+		case !matches:
+			stale = append(stale, fmt.Sprintf("%s: differs", formatCheckPath(p.root, file.file.Path)))
 		}
 	}
 	for _, orphan := range p.orphans {
@@ -281,15 +338,6 @@ func (p QueryPlan) Check() error {
 	}
 	sort.Strings(stale)
 	return fmt.Errorf("%w: %s", ErrStale, strings.Join(stale, "; "))
-}
-
-func fileHoldsExactly(path string, want []byte) (bool, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = file.Close() }()
-	return readerHoldsExactly(file, want)
 }
 
 func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
