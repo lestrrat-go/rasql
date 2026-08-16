@@ -6,13 +6,138 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/stretchr/testify/require"
 )
+
+func TestQueryPackagePlanSnapshotsSharedInputOnce(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "query.sql")
+	require.NoError(t, syscall.Mkfifo(input, 0o600))
+
+	done := make(chan struct{})
+	writes := writeFIFOQueryInputs(
+		input,
+		done,
+		`SELECT id FROM users WHERE id = {{bind "id"}}`,
+		`SELECT email FROM users WHERE email = {{bind "email"}}`,
+	)
+
+	plan, err := (generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{
+			{Input: "query.sql", Function: "First", Output: "first_gen.go"},
+			{Input: "query.sql", Function: "Second", Output: "second_gen.go"},
+		},
+	}).Plan()
+	close(done)
+	result := <-writes
+	require.NoError(t, result.err)
+	require.Equal(t, 1, result.count)
+	require.NoError(t, err)
+
+	files := plan.Files()
+	require.Len(t, files, 2)
+	sources := make(map[string]string, len(files))
+	for _, file := range files {
+		sources[filepath.Base(file.Path)] = string(file.Source)
+	}
+	require.Contains(t, sources["first_gen.go"], "func First(id any)")
+	require.Contains(t, sources["second_gen.go"], "func Second(id any)")
+	require.NotContains(t, sources["second_gen.go"], "email any")
+}
+
+type fifoQueryInputResult struct {
+	count int
+	err   error
+}
+
+func writeFIFOQueryInputs(path string, done <-chan struct{}, sources ...string) <-chan fifoQueryInputResult {
+	results := make(chan fifoQueryInputResult, 1)
+	go func() {
+		var result fifoQueryInputResult
+		defer func() { results <- result }()
+		for index, source := range sources {
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_NONBLOCK, 0)
+				if err == syscall.ENXIO {
+					timer := time.NewTimer(10 * time.Millisecond)
+					select {
+					case <-done:
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+					continue
+				}
+				if err != nil {
+					result.err = err
+					return
+				}
+				file := os.NewFile(uintptr(fd), path)
+				_, writeErr := file.Write([]byte(source))
+				closeErr := file.Close()
+				if writeErr != nil {
+					result.err = writeErr
+					return
+				}
+				if closeErr != nil {
+					result.err = closeErr
+					return
+				}
+				result.count++
+				if index+1 < len(sources) && !waitFIFOQueryInputReaderClosed(path, done, &result) {
+					return
+				}
+				break
+			}
+		}
+	}()
+	return results
+}
+
+func waitFIFOQueryInputReaderClosed(path string, done <-chan struct{}, result *fifoQueryInputResult) bool {
+	for {
+		select {
+		case <-done:
+			return false
+		default:
+		}
+		fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_NONBLOCK, 0)
+		if err == syscall.ENXIO {
+			return true
+		}
+		if err != nil {
+			result.err = err
+			return false
+		}
+		if err := syscall.Close(fd); err != nil {
+			result.err = err
+			return false
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-done:
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+}
 
 func TestQueryPackageWriteRefusesMarkedGeneratedSymlinkOrphan(t *testing.T) {
 	root := t.TempDir()

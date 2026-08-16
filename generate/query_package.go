@@ -76,6 +76,11 @@ type queryInputSnapshot struct {
 	digest [sha256.Size]byte
 }
 
+type queryInputData struct {
+	snapshot queryInputSnapshot
+	data     []byte
+}
+
 // Files reports the files the plan writes. The result and every source byte
 // slice are copies, so callers cannot mutate the plan.
 func (p QueryPlan) Files() []File {
@@ -153,7 +158,7 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 
 	filenames := make(map[string]string, len(queries))
 	functions := make(map[string]string, len(queries))
-	inputs := make(map[string]queryInputSnapshot, len(queries))
+	inputs := make(map[string]queryInputData, len(queries))
 	files := make([]File, 0, len(queries))
 	for _, query := range queries {
 		file, err := p.planQuery(root, dir, query, filenames, functions, inputs)
@@ -180,7 +185,7 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 	}
 	inputSnapshots := make([]queryInputSnapshot, 0, len(inputs))
 	for _, input := range inputs {
-		inputSnapshots = append(inputSnapshots, input)
+		inputSnapshots = append(inputSnapshots, input.snapshot)
 	}
 	sort.Slice(inputSnapshots, func(left, right int) bool { return inputSnapshots[left].path < inputSnapshots[right].path })
 	return QueryPlan{files: files, orphans: orphans, inputs: inputSnapshots, packageName: p.Package, functions: queryFunctions, dir: dir, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
@@ -634,7 +639,7 @@ func isGeneratedOutputName(name string) bool {
 	return strings.HasSuffix(name, "_gen.go") || strings.HasSuffix(name, "_gen_test.go")
 }
 
-func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string, inputs map[string]queryInputSnapshot) (File, error) {
+func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string, inputs map[string]queryInputData) (File, error) {
 	if query.Input == "" {
 		return File{}, errors.New("generate: query input is required")
 	}
@@ -668,12 +673,19 @@ func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functi
 	if err != nil {
 		return File{}, err
 	}
-	data, err := readQueryInput(inputPath)
-	if err != nil {
-		return File{}, fmt.Errorf("generate: read query input %s: %w", inputPath, err)
+	input, exists := inputs[inputPath]
+	if !exists {
+		data, err := readQueryInput(inputPath)
+		if err != nil {
+			return File{}, fmt.Errorf("generate: read query input %s: %w", inputPath, err)
+		}
+		input = queryInputData{
+			snapshot: queryInputSnapshot{path: inputPath, digest: sha256.Sum256(data)},
+			data:     data,
+		}
+		inputs[inputPath] = input
 	}
-	inputs[inputPath] = queryInputSnapshot{path: inputPath, digest: sha256.Sum256(data)}
-	parsed, err := querytemplate.Parse(query.Function, string(data))
+	parsed, err := querytemplate.Parse(query.Function, string(input.data))
 	if err != nil {
 		return File{}, fmt.Errorf("generate: validate query %q: %w", query.Function, err)
 	}
