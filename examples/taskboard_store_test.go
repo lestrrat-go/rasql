@@ -74,6 +74,7 @@ func TestTaskboardStoreIsCurrent(t *testing.T) {
 		Root:    repositoryRootAbs(t),
 		Dir:     filepath.Join("sample", "taskboard", "internal", "store"),
 		Tables:  tables,
+		Prune:   true,
 	}
 
 	requireGeneratedDirectoryMatches(t, store, filepath.Join(repositoryRoot, "sample", "taskboard", "internal", "store"))

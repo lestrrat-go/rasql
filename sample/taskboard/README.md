@@ -25,10 +25,16 @@ TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 Regenerate the checked-in store descriptors after adding a migration:
 
 ```sh
-go generate ./internal/store
+go generate ./...
 ```
 
-This creates `internal/store/.taskboard-schema.db`, applies the SQLite migrations with `rasqlmigrate`, and generates one `<table>_gen.go` file per table with `rasqlgen -dsn`.
+Check the checked-in store without writing files:
+
+```sh
+go run ./gen -check
+```
+
+The checked-in `gen/main.go` creates `internal/store/.taskboard-schema.db`, loads and applies the SQLite migrations, inspects the live schema, and generates one `<table>_gen.go` file per table. The database file is temporary and ignored by Git.
 
 Open <http://127.0.0.1:8080/> to see the Taskboard page. Set `TASKBOARD_ADDR` to use another listener address. Set `TASKBOARD_DSN` to use a different SQLite database path.
 
