@@ -19,6 +19,8 @@ func TestQueryPackageOwnershipUsesAuthorizedDirectoryHandle(t *testing.T) {
 	require.NoError(t, os.MkdirAll(authorized, 0o700))
 	require.NoError(t, os.MkdirAll(swapped, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(authorized, "old_gen.go"), []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(swapped, "foreign.go"), []byte("package other\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(swapped, "swapped_gen.go"), []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
 	require.NoError(t, os.Symlink(authorized, dir))
 
 	root, err := os.OpenRoot(dir)
@@ -30,4 +32,5 @@ func TestQueryPackageOwnershipUsesAuthorizedDirectoryHandle(t *testing.T) {
 	orphans, _, err := queryPackageOwnershipAt(root, dir, "store", []File{{Path: filepath.Join(dir, "query_gen.go")}}, []string{"Query"})
 	require.NoError(t, err)
 	require.Equal(t, []string{filepath.Join(dir, "old_gen.go")}, orphans)
+	require.NotContains(t, orphans, filepath.Join(dir, "swapped_gen.go"))
 }
