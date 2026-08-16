@@ -1440,13 +1440,14 @@ func declaredPackage(path string) (string, error) {
 	return parsed.Name.Name, nil
 }
 
-// findOrphans reports every leftover file in dir: a regular file directly in
-// dir, whose name ends in _gen.go or _gen_test.go, whose first line is
-// exactly genfile.Marker, and which is not one of planned's own files. An
-// entry a case-insensitive filesystem holds for a planned name spelled
-// differently is that planned file rather than a leftover, so it is not
-// reported here and not deleted; see ownsEntry. A missing dir reports no
-// orphans, matching Store.Plan's promise not to create anything.
+// findOrphans reports every leftover generated entry in dir: a regular file
+// or a symbolic link resolving to one, whose name ends in _gen.go or
+// _gen_test.go, whose resolved first line is exactly genfile.Marker, and
+// which is not one of planned's own files. An entry a case-insensitive
+// filesystem holds for a planned name spelled differently is that planned
+// file rather than a leftover, so it is not reported here and not deleted;
+// see ownsEntry. A missing dir reports no orphans, matching Store.Plan's
+// promise not to create anything.
 //
 // It also reports what the filesystem said dir itself was, which is what
 // Store.Plan records as the plan's anchor: Plan.Commit reopens it and
@@ -1459,10 +1460,11 @@ func declaredPackage(path string) (string, error) {
 // each first line all describe the same directory rather than whatever the
 // path reaches at each separate call.
 //
-// An entry that is not a regular file is skipped rather than refused: it is
-// not a file this package wrote, so it is not this package's to delete, and
-// it is not opened either -- os.Root.Open on a fifo would block until
-// something opened the other end.
+// An entry that is neither a regular file nor a symbolic link is skipped
+// rather than refused: it is not a file this package wrote, so it is not this
+// package's to delete. A symbolic link is followed only after os.Stat says
+// it resolves to a regular file, so a fifo is never opened and cannot block
+// until something opens the other end.
 func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 	// OpenRoot refuses anything that is not a directory, and does so
 	// without opening it for reading, so a dir that is a fifo or a plain
@@ -1506,13 +1508,24 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 			}
 			return nil, nil, err
 		}
-		if !info.Mode().IsRegular() {
+		isSymlink := info.Mode()&fs.ModeSymlink != 0
+		if !info.Mode().IsRegular() && !isSymlink {
 			continue
 		}
 		if ownsEntry(root, own, name, info) {
 			continue
 		}
-		marker, err := readGenfileMarker(root, name)
+		var marker fs.FileInfo
+		if isSymlink {
+			path := filepath.Join(dir, name)
+			resolved, statErr := os.Stat(path)
+			if statErr != nil || !resolved.Mode().IsRegular() {
+				continue
+			}
+			marker, err = readGenfileMarkerAt(path)
+		} else {
+			marker, err = readGenfileMarker(root, name)
+		}
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1583,9 +1596,9 @@ func readGenfileMarker(dir *os.Root, name string) (fs.FileInfo, error) {
 // readGenfileMarkerAt is readGenfileMarker against a path rather than an open
 // directory and a name: it resolves the path the way the toolchain does,
 // following a symbolic link to the regular file it names. It exists for
-// requireStorePackageOwnsDir, whose whole job is to judge an entry by the
-// file the build compiles from it, and which os.Root cannot serve because it
-// refuses every link pointing out of the root.
+// scans that must judge an entry by the file the build compiles from it, and
+// which os.Root cannot serve because it refuses every link pointing out of
+// the root.
 //
 // The caller has already required the path to resolve to a regular file, so
 // nothing here opens a fifo and blocks; the open file is asked what it is

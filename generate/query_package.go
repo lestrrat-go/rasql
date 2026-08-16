@@ -257,11 +257,13 @@ func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
 	return fmt.Errorf("generate: %s already holds package %q, declared by %s, and this query package generates package %q; a directory holds one package, so writing the query package there would leave a directory no build can compile", dir, declared, name, pkg)
 }
 
-// queryPackageDeclaredNames returns package-level declarations in active,
-// non-generated Go files that already belong to pkg. Planned destinations are
-// skipped because they are the files this plan will replace. A generated query
-// package shares its package block with handwritten files, so a collision has
-// to be rejected before Commit can publish any output.
+// queryPackageDeclaredNames returns package-level declarations in active Go
+// files that already belong to pkg. It also reads marked generated symlink
+// targets because the toolchain compiles their resolved declarations while
+// the symlink itself must be recorded as an orphan. Planned destinations are
+// skipped because they are the files this plan will replace. A generated
+// query package shares its package block with handwritten files, so a
+// collision has to be rejected before Commit can publish any output.
 func queryPackageDeclaredNames(dir, pkg string, planned []File) (map[string]string, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -307,7 +309,7 @@ func queryPackageDeclaredNames(dir, pkg string, planned []File) (map[string]stri
 			continue
 		}
 		marker, err := readForeignMarker(path)
-		if err != nil || marker != nil {
+		if err != nil || (marker != nil && info.Mode()&fs.ModeSymlink == 0) {
 			continue
 		}
 		declaredPackage, err := declaredPackage(path)
