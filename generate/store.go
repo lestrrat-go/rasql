@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,8 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/template"
 )
+
+const maxQueryInputBytes = 64 << 20
 
 // Store describes one generated store package: which tables it is
 // generated from, where it goes, and what else belongs in the same
@@ -419,7 +422,7 @@ func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[s
 	if err != nil {
 		return File{}, fmt.Errorf("resolve Input: %w", err)
 	}
-	data, err := os.ReadFile(inputPath)
+	data, err := readQueryInput(inputPath)
 	if err != nil {
 		return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
 	}
@@ -436,6 +439,27 @@ func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[s
 		return File{}, err
 	}
 	return File{Path: filepath.Join(dir, q.Output), Source: source}, nil
+}
+
+// readQueryInput reads a query through a bounded reader. A size check before
+// reading is not enough because a path can name a fifo or another stream that
+// reports no useful size. Reading one byte beyond the limit catches both
+// regular files and streaming inputs without allocating unbounded memory.
+func readQueryInput(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxQueryInputBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxQueryInputBytes {
+		return nil, fmt.Errorf("input file %s exceeds maximum size of %d bytes", path, maxQueryInputBytes)
+	}
+	return data, nil
 }
 
 // validateQueryOutputName checks that output is the plain file name

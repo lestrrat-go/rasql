@@ -77,6 +77,28 @@ func TestInitWritesTheRequestedDialect(t *testing.T) {
 	}
 }
 
+// TestInitWritesLiveSchemaControls requires the owned generator to expose
+// the same selection controls and deadline that the legacy live-schema path
+// provides, while keeping those choices editable in gen/main.go.
+func TestInitWritesLiveSchemaControls(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var out bytes.Buffer
+	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out))
+
+	source, err := os.ReadFile(filepath.Join("gen", "main.go"))
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, `"time"`)
+	require.Contains(t, text, "const inspectionTimeout = 30 * time.Second")
+	require.Contains(t, text, "context.WithTimeout(ctx, inspectionTimeout)")
+	require.Contains(t, text, "var catalogOptions = catalog.Options{")
+	require.Contains(t, text, `// Include:     []string{"users"}`)
+	require.Contains(t, text, `// Exclude:     []string{"audit_log"}`)
+	require.Contains(t, text, `// HistoryTable: "schema_migrations"`)
+	require.Contains(t, text, "catalog.FromDatabase(ctx, database, catalogOptions)")
+}
+
 // TestInitWritesPackageAndOutput requires that -package and -output land in
 // Store.Package and Store.Dir.
 func TestInitWritesPackageAndOutput(t *testing.T) {

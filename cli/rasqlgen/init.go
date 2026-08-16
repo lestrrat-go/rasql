@@ -59,6 +59,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -69,6 +70,20 @@ import (
 )
 
 //go:generate go run .
+
+// inspectionTimeout bounds the live-schema read. Increase it here when the
+// database needs more time; the default matches rasqlgen schema -timeout.
+const inspectionTimeout = 30 * time.Second
+
+// catalogOptions controls which database tables become part of the store.
+// Leave Include and Exclude empty to sweep all base tables. Set HistoryTable
+// when the migration history table uses a name other than the default.
+var catalogOptions = catalog.Options{
+	Dialect: {{.DialectCall}},
+	// Include:     []string{"users"},
+	// Exclude:     []string{"audit_log"},
+	// HistoryTable: "schema_migrations",
+}
 
 // hints carry the Go-side facts no database can state, keyed by table
 // name. A key naming no table in the schema is an error, not a silent
@@ -87,6 +102,9 @@ func main() {
 }
 
 func run(ctx context.Context, check bool) error {
+	ctx, cancel := context.WithTimeout(ctx, inspectionTimeout)
+	defer cancel()
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		return errors.New("set DATABASE_URL to the database this store is generated from")
@@ -97,9 +115,7 @@ func run(ctx context.Context, check bool) error {
 	}
 	defer func() { _ = database.Close() }()
 
-	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{
-		Dialect: {{.DialectCall}},
-	})
+	tables, err := catalog.FromDatabase(ctx, database, catalogOptions)
 	if err != nil {
 		return err
 	}
