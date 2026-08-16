@@ -355,6 +355,9 @@ func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functi
 	if query.Function == "" {
 		return File{}, errors.New("generate: query function is required")
 	}
+	if !isExportedGoIdentifier(query.Function) {
+		return File{}, fmt.Errorf("generate: query function %q must be an exported Go identifier", query.Function)
+	}
 	if query.Output == "" {
 		return File{}, errors.New("generate: query output is required")
 	}
