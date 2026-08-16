@@ -168,6 +168,18 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 		files = append(files, file)
 	}
 	sort.Slice(files, func(left, right int) bool { return files[left].Path < files[right].Path })
+	writes := make([]plannedWrite, 0, len(files))
+	for index := range files {
+		file := &files[index]
+		for _, write := range writes {
+			match := matchDestinations(write.destination, file.Resolved)
+			if match == distinctDestinations {
+				continue
+			}
+			return QueryPlan{}, fmt.Errorf("generate: %s and %s both resolve to %s, so one would overwrite the other", write.path, file.Path, match.describe(file.Resolved, write.destination))
+		}
+		writes = append(writes, plannedWrite{path: file.Path, destination: file.Resolved})
+	}
 	queryFunctions := make([]string, len(queries))
 	for i, query := range queries {
 		queryFunctions[i] = query.Function
@@ -234,7 +246,6 @@ func (p QueryPlan) Commit() error {
 	handles := destinationDirectories{own: dir, ownPath: realDir}
 	defer handles.close()
 	writes := make([]commitWrite, len(p.files))
-	seen := make(map[string]string, len(p.files))
 	for index := range p.files {
 		file := &p.files[index]
 		destination, parentInfo, err := resolveCommitDestination(file.Path)
@@ -244,11 +255,13 @@ func (p QueryPlan) Commit() error {
 		if destination != file.Resolved {
 			return fmt.Errorf("generate: refusing to commit query output %s: its destination changed after QueryPackage.Plan; rerun QueryPackage.Plan", file.Path)
 		}
-		key := filepath.Clean(destination)
-		if previous, exists := seen[key]; exists {
-			return fmt.Errorf("generate: query outputs %s and %s resolve to the same destination %s", previous, file.Path, destination)
+		for previous := 0; previous < index; previous++ {
+			match := matchDestinations(writes[previous].destination, destination)
+			if match == distinctDestinations {
+				continue
+			}
+			return fmt.Errorf("generate: query outputs %s and %s both resolve to %s, so one would overwrite the other; rerun QueryPackage.Plan", writes[previous].file.Path, file.Path, match.describe(destination, writes[previous].destination))
 		}
-		seen[key] = file.Path
 		into, err := handles.open(filepath.Dir(destination), parentInfo)
 		if err != nil {
 			return err
@@ -297,7 +310,6 @@ func (p QueryPlan) Check() error {
 	}
 	defer handles.close()
 	checks := make([]checkedFile, 0, len(p.files))
-	seen := make(map[string]string, len(p.files))
 	var stale []string
 	for index := range p.files {
 		file := &p.files[index]
@@ -308,11 +320,13 @@ func (p QueryPlan) Check() error {
 		if resolved != file.Resolved {
 			return fmt.Errorf("generate: refusing to check query output %s: its destination changed after QueryPackage.Plan; rerun QueryPackage.Plan", file.Path)
 		}
-		key := filepath.Clean(resolved)
-		if previous, exists := seen[key]; exists {
-			return fmt.Errorf("generate: query outputs %s and %s resolve to the same destination %s", previous, file.Path, resolved)
+		for _, previous := range checks {
+			match := matchDestinations(previous.destination, resolved)
+			if match == distinctDestinations {
+				continue
+			}
+			return fmt.Errorf("generate: query outputs %s and %s both resolve to %s, so one would overwrite the other; rerun QueryPackage.Plan", previous.file.Path, file.Path, match.describe(resolved, previous.destination))
 		}
-		seen[key] = file.Path
 		var into *os.Root
 		if dir != nil && parentInfo != nil {
 			into, err = handles.open(filepath.Dir(resolved), parentInfo)
