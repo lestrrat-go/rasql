@@ -58,3 +58,62 @@ func TestQueryPackageRejectsMarkedGeneratedSymlinkDeclarationCollision(t *testin
 	require.ErrorContains(t, err, `query function "Existing" collides with package-level declaration "Existing" in old_gen.go`)
 	require.NoFileExists(t, filepath.Join(dir, "new_gen.go"))
 }
+
+func TestQueryPackageCommitRefusesADirectoryFirstCreatedAsASymlink(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	dir := filepath.Join(root, "store")
+	elsewhere := filepath.Join(root, "elsewhere")
+	require.NoError(t, os.MkdirAll(elsewhere, 0o700))
+	require.NoDirExists(t, dir)
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+	}
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(elsewhere, dir))
+
+	err = plan.Commit()
+	require.ErrorContains(t, err, "refusing to commit into "+dir)
+	entries, readErr := os.ReadDir(elsewhere)
+	require.NoError(t, readErr)
+	require.Empty(t, entries, "Commit must write nothing into a directory the plan never read")
+	info, statErr := os.Lstat(dir)
+	require.NoError(t, statErr)
+	require.NotZero(t, info.Mode()&os.ModeSymlink, "Commit must leave the link alone")
+}
+
+func TestQueryPackageCommitRefusesADirectoryReplacedWithASymlink(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	dir := filepath.Join(root, "store")
+	elsewhere := filepath.Join(root, "elsewhere")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(elsewhere, 0o700))
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+	}
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(dir, filepath.Join(root, "store-original")))
+	require.NoError(t, os.Symlink(elsewhere, dir))
+
+	err = plan.Commit()
+	require.ErrorContains(t, err, "refusing to commit into "+dir)
+	entries, readErr := os.ReadDir(elsewhere)
+	require.NoError(t, readErr)
+	require.Empty(t, entries, "Commit must write nothing into a directory the plan never read")
+	info, statErr := os.Lstat(dir)
+	require.NoError(t, statErr)
+	require.NotZero(t, info.Mode()&os.ModeSymlink, "Commit must leave the link alone")
+}
