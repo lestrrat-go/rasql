@@ -70,6 +70,21 @@ func TestStorePlanRefusesACaseVariantUserPackage(t *testing.T) {
 	require.ErrorContains(t, err, "USERS_gen.go")
 }
 
+func TestStorePlanRefusesAPackageEnabledByGOFLAGS(t *testing.T) {
+	t.Setenv("GOFLAGS", "-tags=rasqlgen_test_tools")
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "gen")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	foreign := filepath.Join(dir, "tools.go")
+	require.NoError(t, os.WriteFile(foreign, []byte("//go:build rasqlgen_test_tools\n\npackage tools\n"), 0o644))
+
+	store := generate.Store{Package: "store", Root: root, Dir: "gen", Tables: []schema.TableDef{usersTableDef()}}
+	_, err := store.Plan()
+	require.ErrorContains(t, err, `already holds package "tools"`)
+	require.ErrorContains(t, err, "tools.go")
+}
+
 // TestStorePlanAcceptsADirectoryNoOtherPackageOwns is the control for the
 // test above. Each case below puts a file in Dir that the check has to let
 // through, and getting any of them wrong turns a working layout into a

@@ -1293,6 +1293,7 @@ func scanForeignPackage(dir, pkg string, own map[string]struct{}) (name string, 
 	if err != nil {
 		return "", "", err
 	}
+	buildContext := activeBuildContext()
 
 	for _, entry := range entries {
 		entryName := entry.Name()
@@ -1334,7 +1335,7 @@ func scanForeignPackage(dir, pkg string, own map[string]struct{}) (name string, 
 		if statErr != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		included, matchErr := build.Default.MatchFile(dir, entryName)
+		included, matchErr := buildContext.MatchFile(dir, entryName)
 		if matchErr != nil || !included {
 			continue
 		}
@@ -1362,6 +1363,55 @@ func scanForeignPackage(dir, pkg string, own map[string]struct{}) (name string, 
 		return entryName, declaredName, nil
 	}
 	return "", "", nil
+}
+
+// activeBuildContext mirrors the build settings the go command takes from the
+// current process. build.Default carries the toolchain's defaults, but it
+// deliberately does not read GOFLAGS, and it is not changed when a caller
+// sets GOOS, GOARCH, or CGO_ENABLED in the environment. The generated
+// package must use the same inclusion decision as the go command that will
+// compile it, or a file enabled by the caller's build settings can be missed
+// and leave two packages in one directory.
+func activeBuildContext() build.Context {
+	context := build.Default
+	if value := os.Getenv("GOOS"); value != "" {
+		context.GOOS = value
+	}
+	if value := os.Getenv("GOARCH"); value != "" {
+		context.GOARCH = value
+	}
+	if value := os.Getenv("CGO_ENABLED"); value != "" {
+		context.CgoEnabled = value == "1"
+	}
+	context.BuildTags = append(context.BuildTags, goFlagsBuildTags(os.Getenv("GOFLAGS"))...)
+	return context
+}
+
+// goFlagsBuildTags extracts the -tags flags accepted in GOFLAGS. GOFLAGS is a
+// space-separated list of flag assignments, so both -tags=value and the
+// equivalent two-token form are accepted here. The go command will reject
+// malformed flags itself; an unrecognized token simply has no effect on this
+// package scan.
+func goFlagsBuildTags(flags string) []string {
+	fields := strings.Fields(flags)
+	var tags []string
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
+		value, ok := strings.CutPrefix(field, "-tags=")
+		if !ok {
+			if field != "-tags" || i+1 >= len(fields) {
+				continue
+			}
+			i++
+			value = fields[i]
+		}
+		for _, tag := range strings.Split(value, ",") {
+			if tag != "" {
+				tags = append(tags, tag)
+			}
+		}
+	}
+	return tags
 }
 
 // declaredPackage reads the package clause of the file at path and nothing
