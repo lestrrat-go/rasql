@@ -1,8 +1,9 @@
-// Package bootstrapsource shows what `rasqlgen bootstrap` writes: a schema
-// package generated directly from a live database, with no hand-written
-// Tables function to keep in sync. The database here is a throwaway SQLite
-// file the generate directive below creates and drops itself, so the
-// example needs no server.
+// Package bootstrapsource documents the supported compatibility workflow for
+// `rasqlgen bootstrap`: it writes a schema package directly from a live
+// database, with no hand-written Tables function to keep in sync. New
+// projects should normally own a generator program created by `rasqlgen init`.
+// The database here is a throwaway SQLite file the generate directive below
+// creates and drops itself, so the example needs no server.
 package bootstrapsource
 
 // The directive the documentation shows, kept here rather than written out

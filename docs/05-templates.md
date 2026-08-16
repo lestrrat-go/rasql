@@ -262,7 +262,7 @@ Read dynamic results in one of three ways:
 
 ## Generate a function instead
 
-`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. `rasqlgen query` is the command-line front end for it; see [`rasqlgen`](06-rasqlgen.md).
+`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. For a new project, put the template in a `generate.Store.Queries` entry in the project-owned `gen/main.go`; that keeps table generation and static query generation in one checked-in program. `rasqlgen query` remains the supported command-line compatibility path for projects that generate a query without an owned program; see [`rasqlgen`](06-rasqlgen.md#compatibility-rasqlgen-query).
 
 ## Next
 

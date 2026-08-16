@@ -1,10 +1,9 @@
-// Command gen is what the "own the program" alternative to `rasqlgen
-// bootstrap` would look like, but its real job here is to build the
-// throwaway SQLite database the documentation's bootstrap example is
-// generated from: it creates a "users" table, runs `rasqlgen bootstrap`
-// against it, and writes the description package into internal/tables, so
-// the checked-in files there came from exactly this run rather than a
-// hand-maintained copy.
+// Command gen intentionally exercises the supported compatibility
+// `rasqlgen bootstrap` workflow. New projects should normally own the
+// generator program created by `rasqlgen init`; this example instead builds
+// the throwaway SQLite database used by the bootstrap documentation, runs
+// `rasqlgen bootstrap` against it, and writes the description package into
+// internal/tables so the checked-in files came from exactly this run.
 //
 // The generate directive lives in the package next door, so this program
 // runs with its working directory at examples/bootstrapsource.

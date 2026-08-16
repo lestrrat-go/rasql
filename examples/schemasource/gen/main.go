@@ -1,8 +1,8 @@
-// Command gen is the "own the program" alternative to `rasqlgen schema
-// -source`: ordinary Go that imports the schema package directly and calls
-// generate.WritePackage itself. A user who would rather not invoke
-// rasqlgen for this step puts a few lines like these behind their own
-// generate directive instead.
+// Command gen shows the supported compatibility alternative to direct
+// `rasqlgen schema -source`: ordinary Go that imports the schema package and
+// calls generate.WritePackage itself. A new project should normally start
+// with `rasqlgen init` and extend its owned program with catalog selection,
+// hints, queries, and generate.Store instead.
 //
 // The generate directive lives in the schema package next door, so this
 // program runs with its working directory at examples/schemasource and

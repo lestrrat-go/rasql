@@ -1,7 +1,8 @@
-// Package schemasource is a schema package: the one file a user maintains
-// when they keep their schema as Go and generate from it with
-// `rasqlgen schema -source`. It is input only; the generated code never
-// imports it.
+// Package schemasource is a compatibility example for a schema package: the
+// one file a user maintains when they keep their schema as Go and generate
+// from it with `rasqlgen schema -source`. New projects should normally own a
+// generator program created by `rasqlgen init`; this package remains input
+// only, and the generated code never imports it.
 package schemasource
 
 // The directive the documentation shows, kept here rather than written out

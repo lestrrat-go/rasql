@@ -1,6 +1,6 @@
 # `rasqlgen`
 
-`rasqlgen` writes Go source: table descriptors from a database or a Go schema package, and query functions from [static templates](05-templates.md). Its output is deterministic, so regenerating unchanged input produces identical files and an accidental edit shows up in review. That holds for `-dsn`; with `-source` (below), output stays only as deterministic as the user's own `Tables` function, so a `Tables` that reads the clock or ranges a map produces different output per run.
+`rasqlgen` scaffolds the generator program that a project owns. That program reads database metadata with `catalog.FromDatabase`, applies project choices, and writes deterministic Go source through `generate.Store`. The direct `bootstrap`, `schema`, and `query` commands remain supported compatibility workflows for existing projects and focused one-off jobs.
 
 Run it from the module without installing a binary:
 
@@ -9,9 +9,32 @@ go get github.com/lestrrat-go/rasql/cmd/rasqlgen@latest
 go run github.com/lestrrat-go/rasql/cmd/rasqlgen <command> [flags]
 ```
 
-`bootstrap`, `schema`, and `query` take flags only, and every flag must precede any other argument: flag parsing stops at the first non-flag argument, so any other argument, or a flag placed after one, is rejected as an unexpected argument.
+## Recommended workflow: own `gen/main.go`
 
-## `rasqlgen bootstrap`
+Run `init` once from the module root:
+
+```sh
+go get github.com/lestrrat-go/rasql/cmd/rasqlgen@latest
+go run github.com/lestrrat-go/rasql/cmd/rasqlgen init \
+  -dialect postgresql \
+  -package store \
+  -output internal/store
+go get github.com/jackc/pgx/v5/stdlib
+DATABASE_URL="$DATABASE_URL" go generate ./...
+go run ./gen -check
+```
+
+`init` writes only `gen/main.go`. It does not open a database, run a subprocess, or create the generated output directory. The scaffold is a checked-in manifest: the project owns its driver, database URL policy, and generation settings.
+
+Edit `gen/main.go` when the project needs to select tables or customize output. `catalog.FromDatabase` accepts `catalog.Options.Include`, `Exclude`, and `HistoryTable`; `generate.Store` accepts `Hints` for Go-only facts, `Queries` for static templates, and `Prune` for files the plan no longer writes. Call `store.Write()` for normal generation and `store.Check()` in CI or a local drift check. The `go:generate` directive runs the same program, so the command and the checked-in source stay together.
+
+The scaffold starts with an empty selection, which describes every visible base table except the migration history table. Use `Include` when the store should contain an explicit allowlist, `Exclude` for a sweep with omissions, and `HistoryTable` when the application renamed its migration history table. `Include` and `Exclude` cannot be used together.
+
+## Compatibility workflows
+
+`bootstrap`, `schema`, and `query` take flags only, and every flag must precede any other argument: flag parsing stops at the first non-flag argument, so any other argument, or a flag placed after one, is rejected as an unexpected argument. These commands retain their existing behavior and remain supported for projects that already use them, for a checked-in schema package, or for a query-only generation step.
+
+## Compatibility: `rasqlgen bootstrap`
 
 ```sh
 go run github.com/lestrrat-go/rasql/cmd/rasqlgen bootstrap \
@@ -160,7 +183,7 @@ A table the report marked `+` gets its `<table>_gen.go` written; a table marked 
 
 A refresh only ever touches a directory `bootstrap` recognizes as its own: every `_gen.go` and `_gen_test.go` file must open with `bootstrap`'s own generated-file marker, and `hints.go` is the one exception allowed without it. A directory holding anything else -- a hand-written file, or output from another generator -- is refused the same way a first run into a non-empty directory is.
 
-## `rasqlgen schema`
+## Compatibility: `rasqlgen schema`
 
 ```sh
 go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
@@ -182,7 +205,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasqlgen schema \
 | `-package` | Package name for the generated files. Required. |
 | `-output` | Directory for generated files, created (including any missing parents) if it does not already exist. Required. |
 
-With no `-table`, `schema -dsn` sweeps every base table `inspect.Inspector.TableNames` reports for the inspected scope, the same sweep [`bootstrap`](#rasqlgen-bootstrap) runs with no `-table` of its own: a view is never swept, and the migration history table (`rasql_schema_migrations` by default; see [`rasqlmigrate`](07-migrations.md)) is skipped unless it is named explicitly with `-table` or renamed with `migrate.NewWithHistoryTable` and passed to `-exclude`. Applying a migration that adds a table is then enough on its own for the next `schema -dsn` run to generate that table's Go API too, with no `-table` list to update by hand. `-source` needs no equivalent flag: it already generates every table its schema package returns when `-table` is empty.
+With no `-table`, `schema -dsn` sweeps every base table `inspect.Inspector.TableNames` reports for the inspected scope, the same sweep [`bootstrap`](#compatibility-rasqlgen-bootstrap) runs with no `-table` of its own: a view is never swept, and the migration history table (`rasql_schema_migrations` by default; see [`rasqlmigrate`](07-migrations.md)) is skipped unless it is named explicitly with `-table` or renamed with `migrate.NewWithHistoryTable` and passed to `-exclude`. Applying a migration that adds a table is then enough on its own for the next `schema -dsn` run to generate that table's Go API too, with no `-table` list to update by hand. `-source` needs no equivalent flag: it already generates every table its schema package returns when `-table` is empty.
 
 Supply exactly one of `-dsn` or `-source`. Direct inspection supports PostgreSQL, MySQL, and SQLite; the command bundles their `pgx`, `mysql`, and `sqlite` drivers, so nothing needs importing to use `-dsn`.
 
@@ -261,7 +284,7 @@ Live MySQL inspection requires metadata privileges that expose every column in t
 
 `-source` takes a second kind of input: a directory holding a Go package that exports exactly one function, `func Tables() []schema.TableDef`. The schema package is input only. The generated code never imports it, so it can be dropped from a production build.
 
-The ordinary way to produce that package is [`rasqlgen bootstrap`](#rasqlgen-bootstrap) against a live database, and the two commands chain directly:
+An existing project can produce that package with [`rasqlgen bootstrap`](#compatibility-rasqlgen-bootstrap) against a live database, and the two commands chain directly:
 
 ```sh
 go run github.com/lestrrat-go/rasql/cmd/rasqlgen bootstrap \
@@ -649,7 +672,7 @@ A generated column changes nothing about the row type either: `rasqlgen` still g
 
 The command fails rather than emitting doubtful code when a table or column name cannot become a Go identifier, or when two of them would collide after conversion. A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods. A table also fails when its accessor would spell the fixed function name `schema_gen_test.go` declares, since one run would otherwise write that identifier into two files of the same package; the error names the identifier. A stated `RowName` fails the same way when it is not a valid, exported Go identifier, when it names one of those reserved methods, or when it collides with another generated name, such as the table's own accessor or table type, another table's row type, a relationship type name, or that fixed function name.
 
-## `rasqlgen query`
+## Compatibility: `rasqlgen query`
 
 ```sh
 go run github.com/lestrrat-go/rasql/cmd/rasqlgen query \
@@ -692,7 +715,7 @@ The SQL is compiled at generation time, so nothing parses the template at run ti
 
 ## Keeping generated files current
 
-Put the command in a `go:generate` line beside the package it writes into. The sample application in this repository generates its descriptors that way, applying its migrations to a throwaway SQLite database first so the generated source follows the migrations rather than a second copy of the schema:
+Put the owned generator program in `gen/main.go` and invoke it from a `go:generate` line. The program should apply the project's migrations or otherwise open its source database, call `catalog.FromDatabase`, and pass the result to `generate.Store`. The separate `sample/taskboard` module currently demonstrates the supported compatibility command instead; its generated files are checked by the root tests and are refreshed in that module until its owned-generator migration is complete:
 
 ```sh
 cd sample/taskboard
@@ -702,7 +725,7 @@ go run ./gen -check
 
 `rasqlgen` replaces only files it wrote itself. Every file it writes opens with the line `// Code generated by rasqlgen; DO NOT EDIT.`, and a destination that already exists must open with that same line. A destination holding anything else stops the run with an error naming the file, so a hand-written file that happens to sit where generated output lands is never destroyed. A `schema` run checks every file it is about to write before it writes the first one, so that refusal cannot leave a package with some files regenerated and the rest as they were. Regenerating output from an earlier run is unaffected, since that output carries the line.
 
-One `schema` run has to write every `<table>_gen.go` file the package already holds. The run rewrites `schema_gen.go` from the tables it was given, so a table left out loses its descriptor there while the `<table>_gen.go` file generated for it earlier stays behind reading it, and the package stops compiling. A run that would end that way refuses before writing anything, naming the file it would strand: generate every table the package needs in one run, or delete that file first. `rasqlgen` never deletes a file itself. A query file generated into the same directory is unaffected, since it declares no descriptor and reads none.
+One `schema` run has to write every `<table>_gen.go` file the package already holds. The run rewrites `schema_gen.go` from the tables it was given, so a table left out loses its descriptor there while the `<table>_gen.go` file generated for it earlier stays behind reading it, and the package stops compiling. A run that would end that way refuses before writing anything, naming the file it would strand: generate every table the package needs in one run, or delete that file first. The compatibility `schema` command does not delete generated files. The owned `generate.Store` path has an explicit `Prune` choice: `Prune: false` refuses owned files the plan omits, while `Prune: true` removes those owned orphans after planning. The compatibility `bootstrap -write` path also removes its own per-table description file when the database table disappears. A query file generated into the same directory is unaffected, since it declares no descriptor and reads none.
 
 What the run has to match is the file an earlier table generated, not the name it was generated under. A file is named after the table in lowercase, so a table renamed only in its case — `Users` to `users` — still generates `users_gen.go` and still declares `usersTable`: the rerun rewrites what is already there and is allowed. A rename that changes the file is not, even when the two names share a descriptor value: `APIKeys` generates `apikeys_gen.go` and `api_keys` generates `api_keys_gen.go`, so a rerun under the second name would leave both files declaring the same types. It is refused with the older file named, and deleting that file is what lets the rename through.
 

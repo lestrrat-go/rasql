@@ -10,7 +10,7 @@ It gives an application one model for schema definitions, dynamic queries, stati
 * Dynamic query building at runtime, through `rasql/dynamic`.
 * Static query building with templates.
 
-`rasql` starts from the database you already have: `rasqlgen bootstrap` describes every table in it as checked-in Go, and a second command turns that description into typed rows, tables, and column accessors.
+`rasql` starts from the database you already have: `rasqlgen init` scaffolds a checked-in generator program, and that project-owned program turns live metadata into typed rows, tables, column accessors, and static query functions.
 
 `rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. Run checked-in SQL migration directories with [`rasqlmigrate`](docs/07-migrations.md), and generate reviewed PostgreSQL, MySQL, or SQLite migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
 
@@ -26,13 +26,28 @@ go get github.com/lestrrat-go/rasql
 
 ## Quick start
 
-### 1. Generate descriptors for your tables
+### 1. Generate the store with an owned program
 
-Point `rasqlgen bootstrap` at the database to describe every table as a checked-in Go schema package, then turn that package into the generated store with `rasqlgen schema -source`. Nothing needs installing first, and the command carries its own PostgreSQL driver:
+Run `rasqlgen init` once. It writes only `gen/main.go`; it does not connect to the database or generate the store. Check that scaffold into the project, then run the project-owned program whenever the schema changes:
 
 ```sh
-mkdir -p internal/tables internal/store
 go get github.com/lestrrat-go/rasql/cmd/rasqlgen@latest
+go run github.com/lestrrat-go/rasql/cmd/rasqlgen init \
+  -dialect postgresql \
+  -package store \
+  -output internal/store
+go get github.com/jackc/pgx/v5/stdlib
+DATABASE_URL="$DATABASE_URL" go generate ./...
+go run ./gen -check
+```
+
+The generated `gen/main.go` owns the database driver, the `catalog.Options` table selection (`Include`, `Exclude`, and `HistoryTable`), Go-side `Hints`, static `Queries`, and the `generate.Store` `Prune`, `Write`, and `Check` behavior. Edit that program when the project needs a different selection or generation policy; rerun `rasqlgen init` with `-force` only when intentionally replacing the scaffold.
+
+### Compatibility workflow: `bootstrap` and `schema`
+
+The `bootstrap`, `schema`, and `query` commands remain supported for existing projects and special cases. They are useful when a project needs a checked-in schema package, a one-off direct generation command, or query-only generation without an owned program. The following two-step workflow remains valid, but it is not the recommended default for a new project:
+
+```sh
 go run github.com/lestrrat-go/rasql/cmd/rasqlgen bootstrap \
   -dsn "$DATABASE_URL" \
   -package tables \
@@ -381,7 +396,7 @@ Open <http://127.0.0.1:8080/> in another terminal.
 | [Querying](docs/03-querying.md) | Typed selects, joins, custom projections, and a reference table for every operation and predicate. |
 | [Writing rows](docs/04-writing.md) | Creating tables and inserting, updating, or deleting rows. |
 | [Static templates](docs/05-templates.md) | Compiling SQL text with named binds into parameterized statements. |
-| [`rasqlgen`](docs/06-rasqlgen.md) | Describing a live database as Go, generating the store from it, and compiling query templates. |
+| [`rasqlgen`](docs/06-rasqlgen.md) | Owning a database-backed generator program, preserving compatibility commands, and compiling query templates. |
 | [Migrations](docs/07-migrations.md) | Applying ordered forward-only DDL migrations. |
 
 The API reference lives at [pkg.go.dev](https://pkg.go.dev/github.com/lestrrat-go/rasql). Each code block that links to a source file is a runnable Go example from [`examples/`](examples/), verified by `go test`.
