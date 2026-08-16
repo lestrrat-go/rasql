@@ -5,7 +5,7 @@ program reads live database metadata with `catalog.FromDatabase`, applies the
 project's choices, and writes deterministic Go source through
 `generate.Store`.
 
-## Create the generator
+## Recommended workflow: own `gen/main.go`
 
 Run `init` once from the module root:
 
@@ -182,6 +182,8 @@ func Tables() []schema.TableDef {
 ```
 source: [examples/store/schema_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/schema_gen.go)
 <!-- END INCLUDE -->
+
+### The mapping and scan methods
 
 Column accessors make query code refer to compiler-checked methods instead of
 column-name strings. The generated scan methods map result columns to typed Go

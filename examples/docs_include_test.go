@@ -816,6 +816,18 @@ func TestDocsNameGeneratedColumnMembers(t *testing.T) {
 	})
 }
 
+func TestRasqlgenDocumentationAnchors(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "06-rasqlgen.md"))
+	require.NoError(t, err)
+
+	for _, heading := range []string{
+		"## Recommended workflow: own `gen/main.go`",
+		"### The mapping and scan methods",
+	} {
+		require.Contains(t, string(contents), "\n"+heading+"\n")
+	}
+}
+
 // accessorSection returns the prose of the section named by
 // accessorSectionHeading, with its fenced examples removed.
 func accessorSection(t *testing.T) string {
