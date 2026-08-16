@@ -13,9 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mustExecLive runs statement against database and fails the test on error,
-// mirroring cli/rasqlgen/bootstrap_integration_test.go's helper of the same
-// name.
+// mustExecLive runs statement against database and fails the test on error.
 func mustExecLive(t *testing.T, ctx context.Context, database *sql.DB, statement string) {
 	t.Helper()
 	_, err := database.ExecContext(ctx, statement)

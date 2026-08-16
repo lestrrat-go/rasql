@@ -25,9 +25,8 @@ type initDialect struct {
 	dialectCall  string
 }
 
-// initDialects is the same mapping inspectionDriver uses for -dsn
-// inspection, restated here so init writes the matching import, sql.Open
-// name and dialect.*() call into the scaffold at scaffold time.
+// initDialects maps each supported dialect to the driver import, sql.Open
+// name, and dialect.*() call that init writes into the scaffold.
 var initDialects = map[string]initDialect{
 	"postgres":   {driverImport: "github.com/jackc/pgx/v5/stdlib", openName: "pgx", dialectCall: "dialect.PostgreSQL()"},
 	"postgresql": {driverImport: "github.com/jackc/pgx/v5/stdlib", openName: "pgx", dialectCall: "dialect.PostgreSQL()"},
@@ -72,7 +71,7 @@ import (
 //go:generate go run .
 
 // inspectionTimeout bounds the live-schema read. Increase it here when the
-// database needs more time; the default matches rasqlgen schema -timeout.
+// database needs more time.
 const inspectionTimeout = 30 * time.Second
 
 // catalogOptions controls which database tables become part of the store.

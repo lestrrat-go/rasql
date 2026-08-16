@@ -33,7 +33,7 @@ The migration package applies ordered, forward-only native SQL migrations for Po
 | `migrate/diff/postgresql` | Compares supported PostgreSQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-pg/query` |
 | `migrate/diff/sqlite` | Compares supported SQLite desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-sqlite/query` |
 | `cmd/rasqlmigrate` | Runs checked-in SQL migration directories and generates reviewed dialect-specific migrations without application Go code. | `migrate`, `migrate/diff`, supported database drivers |
-| `template` and `cmd/rasqlgen` | Compiles static query templates and schema snapshots into Go source. | public packages only |
+| `template`, `catalog`, `generate`, and `cmd/rasqlgen` | Compile static query templates and live catalog metadata into Go source through a project-owned generator. | public packages only |
 
 The dependency flow is deliberately one-way:
 
@@ -79,7 +79,7 @@ Inspectors use a small adapter for each database metadata surface. They normaliz
 
 New projects use `rasqlgen init` to create `gen/main.go`, then check that program into the application repository. The program opens the selected driver, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`, which owns hints, static queries, pruning, writing, and drift checks. The normal lifecycle is `rasqlgen init`, edit the owned program, `DATABASE_URL=... go generate ./...`, and `DATABASE_URL=... go run ./gen -check`.
 
-The direct `bootstrap`, `schema`, and `query` commands remain supported compatibility interfaces. They are retained for existing repositories, checked-in schema packages, and query-only jobs whose workflow does not yet use an owned program. The design does not treat those commands or their exported supporting APIs as removed or deprecated.
+The generator CLI exposes only `init`. Applications own the generated program so table selection, hints, static queries, pruning, and drift checks stay visible in the application repository.
 
 ## Errors and observability
 

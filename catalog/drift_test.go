@@ -92,7 +92,7 @@ func TestReportZeroValueAndAccessorSummary(t *testing.T) {
 }
 
 // TestDriftKeepsSameNamedTablesInDifferentSchemasApart pins the fix for
-// generate.DiffDescriptionPackage's own bug: that comparison keyed tables by
+// the old description comparison's own bug: that comparison keyed tables by
 // Name alone (generate/description_diff.go:93-100) and would have merged
 // audit.events with public.events.
 func TestDriftKeepsSameNamedTablesInDifferentSchemasApart(t *testing.T) {

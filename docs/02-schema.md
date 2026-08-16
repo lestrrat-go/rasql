@@ -2,7 +2,7 @@
 
 A schema descriptor is the single description of a table that `rasql` uses everywhere. It generates DDL, validates dynamic queries, and tells the decoder which columns a result holds. Write it by hand, generate it with an owned program created by [`rasqlgen init`](06-rasqlgen.md#recommended-workflow-own-genmaingo), or read it out of a live database.
 
-The recommended generator calls `catalog.FromDatabase` and passes the descriptors to `generate.Store`. That program can select tables with `catalog.Options.Include`, `Exclude`, and `HistoryTable`, apply Go-only `schema.TableHint` values, compile static queries, choose whether to prune owned files, and expose both write and check modes. The direct `rasqlgen schema` command remains a supported compatibility path for projects that already use it.
+The recommended generator calls `catalog.FromDatabase` and passes the descriptors to `generate.Store`. That program can select tables with `catalog.Options.Include`, `Exclude`, and `HistoryTable`, apply Go-only `schema.TableHint` values, compile static queries, choose whether to prune owned files, and expose both write and check modes.
 
 ## Describe a table in Go
 
@@ -202,7 +202,7 @@ PostgreSQL and MySQL have no `STRICT`, `WITHOUT ROWID`, or SQLite-style primary 
 
 ## SQLite virtual tables
 
-`TableDef.VirtualTableModule` and `.VirtualTableModuleArguments` describe a SQLite `CREATE VIRTUAL TABLE` definition, and `ColumnDef.Hidden` describes a column the table's own module declares hidden. `inspect.Table` now records all three instead of failing the whole table, as it used to whenever a table was a `CREATE VIRTUAL TABLE` definition or carried a hidden column — the kind a virtual table module declares, such as `fts5`'s own table-name column, used for `MATCH` filtering, and its `rank` column. A full-text search table is one of the most common ways a SQLite database uses `CREATE VIRTUAL TABLE`, and it always carries hidden columns of exactly this kind, so this fact is what previously stopped a `rasqlgen bootstrap` sweep from completing over a database that had one.
+`TableDef.VirtualTableModule` and `.VirtualTableModuleArguments` describe a SQLite `CREATE VIRTUAL TABLE` definition, and `ColumnDef.Hidden` describes a column the table's own module declares hidden. `inspect.Table` now records all three instead of failing the whole table, as it used to whenever a table was a `CREATE VIRTUAL TABLE` definition or carried a hidden column — the kind a virtual table module declares, such as `fts5`'s own table-name column, used for `MATCH` filtering, and its `rank` column. A full-text search table is one of the most common ways a SQLite database uses `CREATE VIRTUAL TABLE`, and it always carries hidden columns of exactly this kind.
 
 `VirtualTableModule` names the module a `USING` clause declares, such as `"fts5"` or `"rtree"`. Its zero value, the empty string, means the table is an ordinary table, not a virtual one, which is what every `TableDef` and every checked-in generated file written before this field existed has always meant.
 
