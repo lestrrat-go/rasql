@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -130,6 +134,15 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 	if err := requireQueryPackageOwnsDir(dir, p.Package, files); err != nil {
 		return QueryPlan{}, err
 	}
+	declared, err := queryPackageDeclaredNames(dir, p.Package, files)
+	if err != nil {
+		return QueryPlan{}, fmt.Errorf("generate: scan %s for package declarations: %w", dir, err)
+	}
+	for _, query := range queries {
+		if owner, exists := declared[query.Function]; exists {
+			return QueryPlan{}, fmt.Errorf("generate: query function %q collides with %s", query.Function, owner)
+		}
+	}
 	orphans, _, err := findOrphans(dir, files)
 	if err != nil {
 		return QueryPlan{}, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
@@ -242,6 +255,97 @@ func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
 		return nil
 	}
 	return fmt.Errorf("generate: %s already holds package %q, declared by %s, and this query package generates package %q; a directory holds one package, so writing the query package there would leave a directory no build can compile", dir, declared, name, pkg)
+}
+
+// queryPackageDeclaredNames returns package-level declarations in active,
+// non-generated Go files that already belong to pkg. Planned destinations are
+// skipped because they are the files this plan will replace. A generated query
+// package shares its package block with handwritten files, so a collision has
+// to be rejected before Commit can publish any output.
+func queryPackageDeclaredNames(dir, pkg string, planned []File) (map[string]string, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	own := make(map[string]struct{}, len(planned))
+	for _, file := range planned {
+		own[filepath.Base(file.Path)] = struct{}{}
+	}
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return nil, err
+	}
+	context := activeBuildContext()
+	declared := make(map[string]string)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		info, err := root.Lstat(name)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		if ownsEntry(root, own, name, info) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		resolved, err := os.Stat(path)
+		if err != nil || !resolved.Mode().IsRegular() {
+			continue
+		}
+		included, err := context.MatchFile(dir, name)
+		if err != nil || !included {
+			continue
+		}
+		marker, err := readForeignMarker(path)
+		if err != nil || marker != nil {
+			continue
+		}
+		declaredPackage, err := declaredPackage(path)
+		if err != nil || declaredPackage != pkg {
+			continue
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, source, parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		for _, declaration := range file.Decls {
+			switch declaration := declaration.(type) {
+			case *ast.FuncDecl:
+				if declaration.Recv == nil {
+					declared[declaration.Name.Name] = fmt.Sprintf("package-level declaration %q in %s", declaration.Name.Name, name)
+				}
+			case *ast.GenDecl:
+				if declaration.Tok == token.IMPORT {
+					continue
+				}
+				for _, specification := range declaration.Specs {
+					switch specification := specification.(type) {
+					case *ast.TypeSpec:
+						declared[specification.Name.Name] = fmt.Sprintf("package-level declaration %q in %s", specification.Name.Name, name)
+					case *ast.ValueSpec:
+						for _, identifier := range specification.Names {
+							declared[identifier.Name] = fmt.Sprintf("package-level declaration %q in %s", identifier.Name, name)
+						}
+					}
+				}
+			}
+		}
+	}
+	return declared, nil
 }
 
 func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string) (File, error) {
