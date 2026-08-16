@@ -1,0 +1,60 @@
+//go:build unix
+
+package generate_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/genfile"
+	"github.com/stretchr/testify/require"
+)
+
+func TestQueryPackageWriteRefusesMarkedGeneratedSymlinkOrphan(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	dir := filepath.Join(root, "store")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	target := filepath.Join(root, "old_gen.go")
+	require.NoError(t, os.WriteFile(target, []byte(genfile.Marker+"\n\npackage store\n\nfunc Existing() {}\n"), 0o600))
+	orphan := filepath.Join(dir, "old_gen.go")
+	require.NoError(t, os.Symlink(target, orphan))
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "NewQuery", Output: "new_gen.go"}},
+	}
+
+	err := queries.Write()
+	require.ErrorContains(t, err, "old_gen.go")
+	require.NoFileExists(t, filepath.Join(dir, "new_gen.go"))
+	require.FileExists(t, orphan)
+}
+
+func TestQueryPackageRejectsMarkedGeneratedSymlinkDeclarationCollision(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	dir := filepath.Join(root, "store")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	target := filepath.Join(root, "old_gen.go")
+	require.NoError(t, os.WriteFile(target, []byte(genfile.Marker+"\n\npackage store\n\nfunc Existing() {}\n"), 0o600))
+	require.NoError(t, os.Symlink(target, filepath.Join(dir, "old_gen.go")))
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Existing", Output: "new_gen.go"}},
+	}
+
+	_, err := queries.Plan()
+	require.ErrorContains(t, err, `query function "Existing" collides with package-level declaration "Existing" in old_gen.go`)
+	require.NoFileExists(t, filepath.Join(dir, "new_gen.go"))
+}
