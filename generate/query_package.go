@@ -220,27 +220,11 @@ func (p QueryPlan) Commit() error {
 	if len(p.orphans) > 0 {
 		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write: %s; remove them before writing the query package", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
 	}
-	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir, true)
+	dir, realDir, err := p.openDirectory(true)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = dir.Close() }()
-
-	realDir, err := filepath.EvalSymlinks(p.dir)
-	if err != nil {
-		return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
-	}
-	dirInfo, err := dir.Stat(".")
-	if err != nil {
-		return fmt.Errorf("generate: check %s: %w", p.dir, err)
-	}
-	realDirInfo, err := os.Stat(realDir)
-	if err != nil {
-		return fmt.Errorf("generate: check %s: %w", realDir, err)
-	}
-	if !os.SameFile(dirInfo, realDirInfo) {
-		return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit authorized; rerun QueryPackage.Plan", p.dir)
-	}
 
 	handles := destinationDirectories{own: dir, ownPath: realDir}
 	defer handles.close()
@@ -294,31 +278,12 @@ func (p QueryPlan) Check() error {
 	if p.dir == "" {
 		return errors.New("generate: zero QueryPlan cannot be checked; only QueryPackage.Plan builds a plan")
 	}
-	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir, false)
+	dir, realDir, err := p.openDirectory(false)
 	if err != nil {
 		return err
 	}
 	if dir != nil {
 		defer func() { _ = dir.Close() }()
-	}
-
-	realDir := p.dir
-	if dir != nil {
-		realDir, err = filepath.EvalSymlinks(p.dir)
-		if err != nil {
-			return fmt.Errorf("generate: resolve %s: %w", p.dir, err)
-		}
-		dirInfo, err := dir.Stat(".")
-		if err != nil {
-			return fmt.Errorf("generate: check %s: %w", p.dir, err)
-		}
-		realDirInfo, err := os.Stat(realDir)
-		if err != nil {
-			return fmt.Errorf("generate: check %s: %w", realDir, err)
-		}
-		if !os.SameFile(dirInfo, realDirInfo) {
-			return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit authorized; rerun QueryPackage.Plan", p.dir)
-		}
 	}
 
 	var handles destinationDirectories
@@ -361,6 +326,9 @@ func (p QueryPlan) Check() error {
 	if err != nil {
 		return fmt.Errorf("%w; rerun QueryPackage.Plan", err)
 	}
+	if err := p.validateQueryInputs(); err != nil {
+		return err
+	}
 	for _, file := range checks {
 		matches, err := file.matchesSource()
 		switch {
@@ -380,6 +348,37 @@ func (p QueryPlan) Check() error {
 	}
 	sort.Strings(stale)
 	return fmt.Errorf("%w: %s", ErrStale, strings.Join(stale, "; "))
+}
+
+func (p QueryPlan) openDirectory(create bool) (*os.Root, string, error) {
+	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir, create)
+	if err != nil {
+		return nil, "", err
+	}
+	realDir := p.dir
+	if dir == nil {
+		return nil, realDir, nil
+	}
+	realDir, err = filepath.EvalSymlinks(p.dir)
+	if err != nil {
+		_ = dir.Close()
+		return nil, "", fmt.Errorf("generate: resolve %s: %w", p.dir, err)
+	}
+	dirInfo, err := dir.Stat(".")
+	if err != nil {
+		_ = dir.Close()
+		return nil, "", fmt.Errorf("generate: check %s: %w", p.dir, err)
+	}
+	realDirInfo, err := os.Stat(realDir)
+	if err != nil {
+		_ = dir.Close()
+		return nil, "", fmt.Errorf("generate: check %s: %w", realDir, err)
+	}
+	if !os.SameFile(dirInfo, realDirInfo) {
+		_ = dir.Close()
+		return nil, "", fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit authorized; rerun QueryPackage.Plan", p.dir)
+	}
+	return dir, realDir, nil
 }
 
 func (p QueryPlan) validateQueryInputs() error {
