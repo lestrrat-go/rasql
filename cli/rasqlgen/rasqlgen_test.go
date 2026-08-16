@@ -453,7 +453,25 @@ func TestRunQueryGeneratesSource(t *testing.T) {
 }
 
 func TestRunRejectsUnknownCommand(t *testing.T) {
-	require.Error(t, run([]string{"unknown"}))
+	err := run([]string{"unknown"})
+	require.Error(t, err)
+	for _, command := range []string{"bootstrap", "schema", "query", "init"} {
+		require.ErrorContains(t, err, command)
+	}
+}
+
+// TestRunRejectsNoArguments requires that the usage error returned for a
+// bare "rasqlgen" names every command the binary currently accepts, not
+// only "schema" and "query": the message predates "bootstrap" and predates
+// "init" too, and this is the test that keeps a future addition from
+// leaving the same message stale again.
+func TestRunRejectsNoArguments(t *testing.T) {
+	err := run(nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "bootstrap")
+	require.ErrorContains(t, err, "schema")
+	require.ErrorContains(t, err, "query")
+	require.ErrorContains(t, err, "init")
 }
 
 func TestRunHelp(t *testing.T) {

@@ -51,13 +51,20 @@ const schemaSourceFixtureModule = "example.com/consumer"
 // hand, is what supplies the exact "go 1.26.0" directive: measured on
 // go1.26.1, a hand-written two-component "go 1.26" makes every `go run`
 // fail with "go: updates to go.mod needed; to update it: go mod tidy".
-// With the copied directive, no go.sum and no `go mod tidy` are needed and
-// the whole fixture runs under GOPROXY=off. This deliberately does not
-// follow rasqlgen_e2e_test.go's TestGoRunSchemaGeneratesCompilableSource,
-// which runs `go get ...@v0.0.0` first and reaches the network; the
-// replace directive below makes that step unnecessary.
+// With the copied directive, no go.sum and no `go mod tidy` are needed, so
+// this fixture sets GOPROXY=off for the test that calls it: rasqlgen
+// spawns its child `go` commands with the caller's own environment, so
+// setting the variable here is what every one of them inherits, and a fetch
+// that this fixture does not expect fails instead of quietly succeeding.
+// TestSchemaSourceFixtureForbidsTheModuleProxy pins that. This deliberately
+// does not follow rasqlgen_e2e_test.go's
+// TestGoRunSchemaGeneratesCompilableSource and
+// TestGoRunInitScaffoldGenerates, which run `go get ...@v0.0.0` first and
+// so leave that step free to consult the module proxy; the replace
+// directive below makes the step unnecessary here.
 func newSchemaSourceFixture(t *testing.T, tablesSource string) string {
 	t.Helper()
+	t.Setenv("GOPROXY", "off")
 	moduleDir := t.TempDir()
 
 	repoGoMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
@@ -75,6 +82,24 @@ func newSchemaSourceFixture(t *testing.T, tablesSource string) string {
 	require.NoError(t, os.MkdirAll(filepath.Join(moduleDir, "internal", "store"), 0o700))
 
 	return moduleDir
+}
+
+// TestSchemaSourceFixtureForbidsTheModuleProxy pins the offline claim the
+// doc comment above makes. Asserting the variable alone would not say much;
+// what matters is that a child `go` spawned the way runSchemaSource spawns
+// one -- with cmd.Dir set and cmd.Env left nil, so the process environment
+// is inherited -- reports the value back. That is the whole mechanism the
+// claim rests on, so `go env GOPROXY` is asked for it directly.
+func TestSchemaSourceFixtureForbidsTheModuleProxy(t *testing.T) {
+	moduleDir := newSchemaSourceFixture(t, fixtureTablesSource)
+
+	require.Equal(t, "off", os.Getenv("GOPROXY"))
+
+	cmd := exec.CommandContext(t.Context(), "go", "env", "GOPROXY")
+	cmd.Dir = moduleDir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, "off", strings.TrimSpace(string(output)))
 }
 
 // requireNoLeftoverSourceTempDir asserts that no directory anywhere under

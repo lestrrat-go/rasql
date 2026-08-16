@@ -34,6 +34,11 @@ func TestGoRunHelp(t *testing.T) {
 			args:     []string{"query", "-h"},
 			expected: "Usage of query:",
 		},
+		{
+			name:     "init",
+			args:     []string{"init", "-h"},
+			expected: "Usage of init:",
+		},
 	}
 
 	for _, testCase := range testCases {

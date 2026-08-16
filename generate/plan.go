@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
@@ -30,6 +33,7 @@ import (
 var (
 	writeGeneratedFile  = genfile.WriteInto
 	removeGeneratedFile = func(dir *os.Root, name string) error { return dir.Remove(name) }
+	readForeignMarker   = readGenfileMarkerAt
 )
 
 // resolveCommitDestination is the same kind of unexported seam, for the one
@@ -1192,6 +1196,250 @@ func (m destinationMatch) describe(resolved, recorded string) string {
 	return fmt.Sprintf("%s, which is the same file as %s", resolved, recorded)
 }
 
+// requireStorePackageOwnsDir refuses a Dir that already holds a Go file
+// declaring some other package. Go allows one package per directory, so a
+// run that wrote the store into such a directory would leave one the
+// toolchain refuses to build at all, reporting "found packages main
+// (main.go) and store (schema_gen.go)" for every build, vet and test after
+// it. Nothing the store can do later repairs that, so the run stops here
+// instead of writing.
+//
+// rasqlgen's init command refuses the flags that set this up, but it can
+// only see the directories as they stand when it runs: a symbolic link made
+// afterwards, and any hand-written generate.Store, still arrive here. This
+// is where the two packages actually meet, which is why the refusal lives
+// here as well as there. See scanForeignPackage for exactly which files are
+// skipped and why; planned names this call's own about-to-be-written files,
+// which are skipped along with the rest.
+func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
+	// own keeps the planned spelling. ownsEntry asks the filesystem whether a
+	// case-variant entry is the same directory entry, so a distinct file on a
+	// case-sensitive filesystem is not mistaken for a planned destination.
+	own := make(map[string]struct{}, len(planned))
+	for _, f := range planned {
+		own[filepath.Base(f.Path)] = struct{}{}
+	}
+	name, declared, err := scanForeignPackage(dir, pkg, own)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return nil
+	}
+	return fmt.Errorf("generate: %s already holds package %q, declared by %s, and this store generates package %q; a directory holds one package, so writing the store there would leave a directory no build can compile", dir, declared, name, pkg)
+}
+
+// DirForeignPackage reports the name and declared package of a Go file in
+// dir that go/build would include in the package build and whose declared
+// package is neither pkg nor pkg+"_test". Every name in own is skipped when
+// it names the same directory entry as a planned destination, including on a
+// filesystem that ignores case in file names. A distinct case-variant file on
+// a case-sensitive filesystem is still scanned. It reports ("", "", nil)
+// when dir does not exist, or when no such file is found.
+//
+// This is requireStorePackageOwnsDir's scan -- the same one Store.Plan
+// runs against -output before Store.Write ever touches that directory,
+// since Go allows one package per directory and a store written beside a
+// file declaring a different package would leave a directory no build can
+// ever compile -- exported under its own name for a caller outside this
+// package to apply the identical rule to a directory Store itself never
+// resolves. rasqlgen's init command is that caller: it runs this against
+// -gen-dir, the directory the scaffold is written into, which is never a
+// Store's Dir.
+func DirForeignPackage(dir, pkg string, own ...string) (name string, declaredPackage string, err error) {
+	ownSet := make(map[string]struct{}, len(own))
+	for _, n := range own {
+		ownSet[filepath.Base(n)] = struct{}{}
+	}
+	return scanForeignPackage(dir, pkg, ownSet)
+}
+
+// scanForeignPackage is requireStorePackageOwnsDir's and DirForeignPackage's
+// shared scan. own holds the exact file names to skip as the caller's own,
+// not-yet-written destinations; ownsEntry handles case variants by asking the
+// filesystem whether they name the same directory entry.
+//
+// Three further kinds of file are skipped, and each has to be:
+//
+//   - A file the build itself excludes. `//go:build ignore` on a package
+//     main program sitting beside the package it generates is the ordinary
+//     Go layout for a generator, and such a file is not part of the
+//     package. go/build's MatchFile decides this, so the same build
+//     constraints the toolchain applies are applied here.
+//   - Any other file rasqlgen wrote, recognized by the same marker
+//     findOrphans reads. Those are either rewritten by a later run or
+//     reported as orphans, and refusing them here would refuse a run whose
+//     only change is a renamed generated package.
+//   - A package documentation file. go/build parses its package clause as
+//     "documentation" but places the file in IgnoredGoFiles, so it does not
+//     make a second build package.
+//   - A file that cannot be read or parsed. It is not this scan's file to
+//     judge, and refusing a run over a file the compiler will complain
+//     about on its own would be a refusal with nothing behind it.
+//
+// An entry is judged by what it resolves to, not by what holds its name: a
+// symbolic link to a regular Go file is read and compared like the file
+// itself, because that is what go/build compiles, while a link to a
+// directory and a link naming nothing are skipped along with every other
+// entry the build passes over.
+func scanForeignPackage(dir, pkg string, own map[string]struct{}) (name string, declared string, err error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	defer func() { _ = root.Close() }()
+
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return "", "", err
+	}
+	buildContext := activeBuildContext()
+
+	for _, entry := range entries {
+		entryName := entry.Name()
+		if !strings.HasSuffix(entryName, ".go") {
+			continue
+		}
+		entryInfo, lstatErr := root.Lstat(entryName)
+		if lstatErr != nil {
+			if errors.Is(lstatErr, fs.ErrNotExist) {
+				continue
+			}
+			return "", "", lstatErr
+		}
+		if ownsEntry(root, own, entryName, entryInfo) {
+			continue
+		}
+		// The entry is resolved through its path rather than through the
+		// open directory, because this check has to see the file the
+		// toolchain will see. go/build follows a symbolic link and compiles
+		// the regular file it lands on, so a link named main.go pointing at
+		// a package main file collides exactly as a plain main.go would.
+		// os.Root refuses to follow any link whose target leaves the root,
+		// which is where such a link almost always points, and resolving
+		// this entry through the handle would report "path escapes from
+		// parent" and skip the very file the check exists to catch.
+		// build.Default.MatchFile below reads the entry through this same
+		// path, so both halves of the decision describe one file.
+		//
+		// Nothing is written or deleted through this path -- the file is
+		// stat'ed, and at most its first line and package clause are read.
+		// Commit's writes and deletes still go through the open directory.
+		entryPath := filepath.Join(dir, entryName)
+		// Stat follows the link, so what it reports is the target. A link
+		// to a directory, a link naming nothing, and a target the process
+		// cannot stat all fail this test and are skipped: none of them is a
+		// file the build compiles, so none of them can be the second
+		// package in this directory.
+		info, statErr := os.Stat(entryPath)
+		if statErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		included, matchErr := buildContext.MatchFile(dir, entryName)
+		if matchErr != nil || !included {
+			continue
+		}
+		marker, markerErr := readForeignMarker(entryPath)
+		if markerErr != nil {
+			// The directory belongs to the caller, so a file can become
+			// unreadable between the inclusion check and this read. It is
+			// not this scan's file to judge; leave it for the toolchain to
+			// report rather than refusing an otherwise unrelated generation.
+			continue
+		}
+		if marker != nil {
+			continue
+		}
+		declaredName, declErr := declaredPackage(entryPath)
+		if declErr != nil || declaredName == "" {
+			continue
+		}
+		// The external test package is the one second package clause a Go
+		// directory is allowed, so a store package's own foo_test files are
+		// not a collision.
+		if declaredName == "documentation" || declaredName == pkg ||
+			(declaredName == pkg+"_test" && strings.HasSuffix(entryName, "_test.go")) {
+			continue
+		}
+		return entryName, declaredName, nil
+	}
+	return "", "", nil
+}
+
+// activeBuildContext mirrors the build settings the go command takes from the
+// current process. build.Default carries the toolchain's defaults, but it
+// deliberately does not read GOFLAGS, and it is not changed when a caller
+// sets GOOS, GOARCH, or CGO_ENABLED in the environment. The generated
+// package must use the same inclusion decision as the go command that will
+// compile it, or a file enabled by the caller's build settings can be missed
+// and leave two packages in one directory.
+func activeBuildContext() build.Context {
+	context := build.Default
+	if value := os.Getenv("GOOS"); value != "" {
+		context.GOOS = value
+	}
+	if value := os.Getenv("GOARCH"); value != "" {
+		context.GOARCH = value
+	}
+	if value := os.Getenv("CGO_ENABLED"); value != "" {
+		context.CgoEnabled = value == "1"
+	}
+	context.BuildTags = append(context.BuildTags, goFlagsBuildTags(os.Getenv("GOFLAGS"))...)
+	return context
+}
+
+// goFlagsBuildTags extracts the -tags flags accepted in GOFLAGS. GOFLAGS is a
+// space-separated list of flag assignments, so both -tags=value and the
+// equivalent two-token form are accepted here. The go command will reject
+// malformed flags itself; an unrecognized token simply has no effect on this
+// package scan.
+func goFlagsBuildTags(flags string) []string {
+	fields := strings.Fields(flags)
+	var tags []string
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
+		value, ok := strings.CutPrefix(field, "-tags=")
+		if !ok {
+			if field != "-tags" || i+1 >= len(fields) {
+				continue
+			}
+			i++
+			value = fields[i]
+		}
+		for _, tag := range strings.Split(value, ",") {
+			if tag != "" {
+				tags = append(tags, tag)
+			}
+		}
+	}
+	return tags
+}
+
+// declaredPackage reads the package clause of the file at path and nothing
+// else. The parse stops at the clause, so neither the imports nor the body of
+// a file that only happens to share the directory is read or has to be valid.
+//
+// It takes a path, and so resolves a symbolic link to whatever the link
+// names, because its one caller has to compare the package the toolchain
+// will compile from this entry. That caller has already required the path to
+// resolve to a regular file the build includes.
+func declaredPackage(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+
+	parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Base(path), file, parser.PackageClauseOnly)
+	if err != nil {
+		return "", err
+	}
+	return parsed.Name.Name, nil
+}
+
 // findOrphans reports every leftover file in dir: a regular file directly in
 // dir, whose name ends in _gen.go or _gen_test.go, whose first line is
 // exactly genfile.Marker, and which is not one of planned's own files. An
@@ -1289,7 +1537,10 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 //
 // It takes an open directory and a bare name rather than a path so the file
 // it reads is the one inside the directory the caller already has, not
-// whatever the path reaches when the kernel resolves it again.
+// whatever the path reaches when the kernel resolves it again. That is what
+// every caller acting on the answer needs. readGenfileMarkerAt below reads
+// the same marker off a path for the one caller that must instead see what
+// the toolchain sees.
 //
 // What it reports comes from the open file rather than from a second look
 // at the name, so it describes the very bytes the marker was read from. A
@@ -1326,10 +1577,41 @@ func readGenfileMarker(dir *os.Root, name string) (fs.FileInfo, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	// The open file is asked what it is a second time, because the Lstat
-	// above described whatever held the name at that instant and the open
-	// resolved the name again. This is the answer that belongs to the bytes
-	// read below.
+	return genfileMarkerOf(file, name)
+}
+
+// readGenfileMarkerAt is readGenfileMarker against a path rather than an open
+// directory and a name: it resolves the path the way the toolchain does,
+// following a symbolic link to the regular file it names. It exists for
+// requireStorePackageOwnsDir, whose whole job is to judge an entry by the
+// file the build compiles from it, and which os.Root cannot serve because it
+// refuses every link pointing out of the root.
+//
+// The caller has already required the path to resolve to a regular file, so
+// nothing here opens a fifo and blocks; the open file is asked what it is
+// again all the same, since that answer is the one belonging to the bytes
+// read.
+func readGenfileMarkerAt(path string) (fs.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+
+	return genfileMarkerOf(file, filepath.Base(path))
+}
+
+// genfileMarkerOf is the marker rule itself, over a file both readers above
+// have already opened: one rule, one copy, whichever way the file was
+// reached. name is only what the answer is reported against.
+func genfileMarkerOf(file *os.File, name string) (fs.FileInfo, error) {
+	// The open file is asked what it is a second time, because whatever the
+	// caller stat'ed described what held the name at that instant and the
+	// open resolved the name again. This is the answer that belongs to the
+	// bytes read below.
 	opened, err := file.Stat()
 	if err != nil {
 		return nil, err

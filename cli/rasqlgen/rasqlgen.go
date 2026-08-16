@@ -58,7 +58,7 @@ func Run(args []string, writer io.Writer) error {
 		return errors.New("rasqlgen: command output must not be nil")
 	}
 	if len(args) == 0 {
-		return errors.New("usage: rasqlgen <schema|query> [flags]")
+		return errors.New("usage: rasqlgen <bootstrap|schema|query|init> [flags]")
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -70,8 +70,10 @@ func Run(args []string, writer io.Writer) error {
 		return runSchema(args[1:], writer)
 	case "query":
 		return runQuery(args[1:], writer)
+	case "init":
+		return runInit(args[1:], writer)
 	default:
-		return fmt.Errorf("unknown rasqlgen command %q", args[0])
+		return fmt.Errorf("unknown rasqlgen command %q; expected bootstrap, schema, query, or init", args[0])
 	}
 }
 
@@ -82,6 +84,7 @@ func printUsage(output io.Writer) {
 	_, _ = fmt.Fprintln(output, "  bootstrap Describe a live database as a checked-in schema package")
 	_, _ = fmt.Fprintln(output, "  schema    Generate Go source from a schema")
 	_, _ = fmt.Fprintln(output, "  query     Generate Go source from a SQL template")
+	_, _ = fmt.Fprintln(output, "  init      Scaffold the generator program, gen/main.go")
 	_, _ = fmt.Fprintln(output)
 	_, _ = fmt.Fprintln(output, "Run 'rasqlgen <command> -h' for command flags.")
 }
