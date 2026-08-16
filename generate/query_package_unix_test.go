@@ -85,6 +85,9 @@ func TestQueryPackageCommitRefusesADirectoryFirstCreatedAsASymlink(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, os.Symlink(elsewhere, dir))
 
+	err = plan.Check()
+	require.ErrorContains(t, err, "refusing to commit into "+dir)
+
 	err = plan.Commit()
 	require.ErrorContains(t, err, "refusing to commit into "+dir)
 	entries, readErr := os.ReadDir(elsewhere)
@@ -114,6 +117,9 @@ func TestQueryPackageCommitRefusesADirectoryReplacedWithASymlink(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Rename(dir, filepath.Join(root, "store-original")))
 	require.NoError(t, os.Symlink(elsewhere, dir))
+
+	err = plan.Check()
+	require.ErrorContains(t, err, "refusing to commit into "+dir)
 
 	err = plan.Commit()
 	require.ErrorContains(t, err, "refusing to commit into "+dir)
@@ -145,6 +151,10 @@ func TestQueryPackageCommitRefusesADestinationThatAppearedAsASymlink(t *testing.
 	require.NoError(t, err)
 	planned := filepath.Join(dir, "query_gen.go")
 	require.NoError(t, os.Symlink(victim, planned))
+
+	err = plan.Check()
+	require.ErrorContains(t, err, "destination changed after QueryPackage.Plan")
+	require.False(t, errors.Is(err, generate.ErrStale), "a changed destination is a refusal, not staleness")
 
 	err = plan.Commit()
 	require.ErrorContains(t, err, "destination changed after QueryPackage.Plan")
