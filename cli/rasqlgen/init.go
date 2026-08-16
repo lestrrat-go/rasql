@@ -242,7 +242,9 @@ func runInit(args []string, writer io.Writer) error {
 // modroot.FromWorkingDirectory, the same walk initOutputDirectory uses for
 // -output and the same walk generate.Store itself makes when Store.Root is
 // left empty. Reusing it is what keeps this command from deciding "where
-// the module is" a second way that could disagree with the first.
+// the module is" a second way that could disagree with the first. Both paths
+// are then resolved through symbolic links before containment is checked, so
+// a link inside the module cannot redirect the scaffold outside it.
 //
 // A -gen-dir outside the module writes a file `go generate ./...` can
 // never run: that command, like every other Go command, only ever walks
@@ -269,12 +271,14 @@ func requireGenDirInsideModule(genDir string) error {
 	if err != nil {
 		return fmt.Errorf("init: resolve module root: %w", err)
 	}
-	if rootAbs == genPath {
+	resolvedGenPath := canonicalDirectory(genPath)
+	resolvedRoot := canonicalDirectory(rootAbs)
+	if resolvedRoot == resolvedGenPath {
 		return nil
 	}
-	rel, err := filepath.Rel(rootAbs, genPath)
+	rel, err := filepath.Rel(resolvedRoot, resolvedGenPath)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("init: -gen-dir %q resolves to %s, which is outside the module rooted at %s; go generate ./... only walks packages inside the module, so it could never reach a scaffold written there", genDir, genPath, rootAbs)
+		return fmt.Errorf("init: -gen-dir %q resolves to %s, which is outside the module rooted at %s; go generate ./... only walks packages inside the module, so it could never reach a scaffold written there", genDir, resolvedGenPath, resolvedRoot)
 	}
 	return nil
 }

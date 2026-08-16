@@ -122,6 +122,24 @@ func TestInitRefusesOutputThatResolvesToTheScaffoldDirectory(t *testing.T) {
 	}
 }
 
+// TestInitRejectsGenDirSymlinkOutsideModule requires that containment follows
+// a symbolic link before init writes through it. A lexical absolute-path
+// check accepts this setup and leaves the scaffold outside the module, where
+// go generate ./... cannot reach it.
+func TestInitRejectsGenDirSymlinkOutsideModule(t *testing.T) {
+	root := initModuleDir(t)
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "gen")))
+
+	var out bytes.Buffer
+	err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "gen"}, &out)
+	require.ErrorContains(t, err, "outside the module")
+	require.Empty(t, out.String())
+
+	_, statErr := os.Stat(filepath.Join(outside, "main.go"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 // TestInitAcceptsDistinctDirectoriesReachedThroughALink is the control for
 // the test above: a symbolic link on the path is not itself a reason to
 // refuse, and two names that resolve to two directories still scaffold.
