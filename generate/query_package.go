@@ -45,11 +45,13 @@ type QueryPackage struct {
 }
 
 // QueryPlan is a rendered, uncommitted query package. Its files contain the
-// complete generated sources and are sorted by destination path.
+// complete generated sources and are sorted by destination path. Orphans
+// records marked generated files in Dir that this plan does not write.
 type QueryPlan struct {
-	files []File
-	dir   string
-	root  string
+	files   []File
+	orphans []string
+	dir     string
+	root    string
 }
 
 // Files reports the files the plan writes. The result and every source byte
@@ -68,8 +70,10 @@ func (p QueryPlan) Files() []File {
 
 // Plan validates and renders the query package without writing anything.
 // Every query input is read and compiled, every output is checked for a safe
-// generated-file name, and every destination already on disk must carry the
-// rasqlgen marker. No table schema is consulted.
+// generated-file name, every existing Go file must belong to the package, and
+// every existing generated destination must carry the rasqlgen marker. Marked
+// generated files that are not planned outputs are recorded as orphans. No
+// table schema is consulted.
 func (p QueryPackage) Plan() (QueryPlan, error) {
 	if p.Package == "" {
 		return QueryPlan{}, errors.New("generate: query package requires Package")
@@ -123,7 +127,14 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 		files = append(files, file)
 	}
 	sort.Slice(files, func(left, right int) bool { return files[left].Path < files[right].Path })
-	return QueryPlan{files: files, dir: dir, root: checkRoot}, nil
+	if err := requireQueryPackageOwnsDir(dir, p.Package, files); err != nil {
+		return QueryPlan{}, err
+	}
+	orphans, _, err := findOrphans(dir, files)
+	if err != nil {
+		return QueryPlan{}, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
+	}
+	return QueryPlan{files: files, orphans: orphans, dir: dir, root: checkRoot}, nil
 }
 
 // Write plans and commits the query package. The output directory and its
@@ -149,12 +160,16 @@ func (p QueryPackage) Check() error {
 	return plan.Check()
 }
 
-// Commit publishes every file in the plan. It validates every destination
-// before writing, so a marker refusal or another predictable destination
-// error cannot leave an earlier query file replaced.
+// Commit publishes every file in the plan. It refuses recorded orphans and
+// validates every destination before writing, so a stale generated file,
+// marker refusal, or another predictable destination error cannot leave an
+// earlier query file replaced.
 func (p QueryPlan) Commit() error {
 	if p.dir == "" {
 		return errors.New("generate: zero QueryPlan cannot be committed; only QueryPackage.Plan builds a plan")
+	}
+	if len(p.orphans) > 0 {
+		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write: %s; remove them before writing the query package", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
 	}
 	if err := os.MkdirAll(p.dir, 0o700); err != nil {
 		return fmt.Errorf("generate: create query output directory %q: %w", p.dir, err)
@@ -184,7 +199,8 @@ func (p QueryPlan) Commit() error {
 }
 
 // Check compares every planned file with its destination without writing.
-// Missing and differing files are reported together and wrap ErrStale.
+// Missing, differing, and orphaned generated files are reported together and
+// wrap ErrStale.
 func (p QueryPlan) Check() error {
 	if p.dir == "" {
 		return errors.New("generate: zero QueryPlan cannot be checked; only QueryPackage.Plan builds a plan")
@@ -203,11 +219,29 @@ func (p QueryPlan) Check() error {
 			stale = append(stale, fmt.Sprintf("%s: differs", formatCheckPath(p.root, file.Path)))
 		}
 	}
+	for _, orphan := range p.orphans {
+		stale = append(stale, fmt.Sprintf("%s: is an orphaned generated file", formatCheckPath(p.root, orphan)))
+	}
 	if len(stale) == 0 {
 		return nil
 	}
 	sort.Strings(stale)
 	return fmt.Errorf("%w: %s", ErrStale, strings.Join(stale, "; "))
+}
+
+func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
+	own := make([]string, len(planned))
+	for i, file := range planned {
+		own[i] = filepath.Base(file.Path)
+	}
+	name, declared, err := DirForeignPackage(dir, pkg, own...)
+	if err != nil {
+		return fmt.Errorf("generate: scan %s for package ownership: %w", dir, err)
+	}
+	if name == "" {
+		return nil
+	}
+	return fmt.Errorf("generate: %s already holds package %q, declared by %s, and this query package generates package %q; a directory holds one package, so writing the query package there would leave a directory no build can compile", dir, declared, name, pkg)
 }
 
 func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string) (File, error) {
