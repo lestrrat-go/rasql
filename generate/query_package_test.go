@@ -277,6 +277,60 @@ func TestQueryPackageAuthorizesAllDestinationsBeforeWriting(t *testing.T) {
 	require.Equal(t, before, after)
 }
 
+func TestQueryPlanCommitRejectsPostPlanOwnershipChanges(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, dir string)
+		want   string
+	}{
+		{
+			name: "foreign package",
+			mutate: func(t *testing.T, dir string) {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "foreign.go"), []byte("package other\n"), 0o600))
+			},
+			want: "already holds package \"other\"",
+		},
+		{
+			name: "same package declaration",
+			mutate: func(t *testing.T, dir string) {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "handwritten.go"), []byte("package store\n\nfunc Query() {}\n"), 0o600))
+			},
+			want: `query function "Query" collides`,
+		},
+		{
+			name: "generated orphan",
+			mutate: func(t *testing.T, dir string) {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "old_gen.go"), []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
+			},
+			want: "gained 1 file(s)",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeQueryFile(t, root, "query.sql", `SELECT 1`)
+			queries := generate.QueryPackage{
+				Package: "store",
+				Root:    root,
+				Dir:     "store",
+				Dialect: dialect.SQLite(),
+				Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+			}
+			plan, err := queries.Plan()
+			require.NoError(t, err)
+			test.mutate(t, filepath.Join(root, "store"))
+
+			err = plan.Commit()
+			require.ErrorContains(t, err, test.want)
+			require.ErrorContains(t, err, "rerun QueryPackage.Plan")
+			require.NoFileExists(t, filepath.Join(root, "store", "query_gen.go"))
+		})
+	}
+}
+
 func TestQueryPackageRejectsInvalidQueriesBeforeWriting(t *testing.T) {
 	root := t.TempDir()
 	writeQueryFile(t, root, "query.sql", `SELECT 1`)
