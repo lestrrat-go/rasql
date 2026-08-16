@@ -219,24 +219,34 @@ func (p QueryPlan) Commit() error {
 		return fmt.Errorf("generate: refusing to commit into %s: it is no longer the directory this commit authorized; rerun QueryPackage.Plan", p.dir)
 	}
 
-	destinations := make([]string, len(p.files))
+	handles := destinationDirectories{own: dir, ownPath: realDir}
+	defer handles.close()
+	writes := make([]commitWrite, len(p.files))
 	seen := make(map[string]string, len(p.files))
-	for index, file := range p.files {
-		destination, err := genfile.ResolveDestination(file.Path)
+	for index := range p.files {
+		file := &p.files[index]
+		destination, parentInfo, err := resolveCommitDestination(file.Path)
 		if err != nil {
 			return fmt.Errorf("generate: authorize query output %s: %w", file.Path, err)
+		}
+		if destination != file.Resolved {
+			return fmt.Errorf("generate: refusing to commit query output %s: its destination changed after QueryPackage.Plan; rerun QueryPackage.Plan", file.Path)
 		}
 		key := filepath.Clean(destination)
 		if previous, exists := seen[key]; exists {
 			return fmt.Errorf("generate: query outputs %s and %s resolve to the same destination %s", previous, file.Path, destination)
 		}
 		seen[key] = file.Path
-		destinations[index] = destination
+		into, err := handles.open(filepath.Dir(destination), parentInfo)
+		if err != nil {
+			return err
+		}
+		writes[index] = commitWrite{file: file, destination: destination, dir: into, name: filepath.Base(destination)}
 	}
 
-	for index, file := range p.files {
-		if err := genfile.Write(destinations[index], file.Source); err != nil {
-			return fmt.Errorf("generate: write query output %s: %w", file.Path, err)
+	for _, write := range writes {
+		if err := genfile.WriteInto(write.dir, write.name, write.file.Source); err != nil {
+			return fmt.Errorf("generate: write query output %s: %w", write.file.Path, err)
 		}
 	}
 	return nil

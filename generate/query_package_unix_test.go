@@ -124,3 +124,34 @@ func TestQueryPackageCommitRefusesADirectoryReplacedWithASymlink(t *testing.T) {
 	require.NoError(t, statErr)
 	require.NotZero(t, info.Mode()&os.ModeSymlink, "Commit must leave the link alone")
 }
+
+func TestQueryPackageCommitRefusesADestinationThatAppearedAsASymlink(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	dir := filepath.Join(root, "store")
+	victim := filepath.Join(root, "victim_gen.go")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	original := []byte(genfile.Marker + "\n\npackage store\n\nfunc Victim() {}\n")
+	require.NoError(t, os.WriteFile(victim, original, 0o600))
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+	}
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	planned := filepath.Join(dir, "query_gen.go")
+	require.NoError(t, os.Symlink(victim, planned))
+
+	err = plan.Commit()
+	require.ErrorContains(t, err, "destination changed after QueryPackage.Plan")
+	got, readErr := os.ReadFile(victim)
+	require.NoError(t, readErr)
+	require.Equal(t, original, got)
+	info, statErr := os.Lstat(planned)
+	require.NoError(t, statErr)
+	require.NotZero(t, info.Mode()&os.ModeSymlink)
+}
