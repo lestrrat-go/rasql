@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -53,6 +54,7 @@ type QueryPackage struct {
 type QueryPlan struct {
 	files       []File
 	orphans     []string
+	inputs      []queryInputSnapshot
 	packageName string
 	functions   []string
 	dir         string
@@ -64,6 +66,11 @@ type QueryPlan struct {
 	// symbolic links that appeared after the plan was built.
 	anchor     string
 	anchorInfo fs.FileInfo
+}
+
+type queryInputSnapshot struct {
+	path   string
+	digest [sha256.Size]byte
 }
 
 // Files reports the files the plan writes. The result and every source byte
@@ -130,9 +137,10 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 
 	filenames := make(map[string]string, len(queries))
 	functions := make(map[string]string, len(queries))
+	inputs := make(map[string]queryInputSnapshot, len(queries))
 	files := make([]File, 0, len(queries))
 	for _, query := range queries {
-		file, err := p.planQuery(root, dir, query, filenames, functions)
+		file, err := p.planQuery(root, dir, query, filenames, functions, inputs)
 		if err != nil {
 			return QueryPlan{}, err
 		}
@@ -154,7 +162,12 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 			return QueryPlan{}, fmt.Errorf("generate: find an existing directory above %s: %w", dir, err)
 		}
 	}
-	return QueryPlan{files: files, orphans: orphans, packageName: p.Package, functions: queryFunctions, dir: dir, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
+	inputSnapshots := make([]queryInputSnapshot, 0, len(inputs))
+	for _, input := range inputs {
+		inputSnapshots = append(inputSnapshots, input)
+	}
+	sort.Slice(inputSnapshots, func(left, right int) bool { return inputSnapshots[left].path < inputSnapshots[right].path })
+	return QueryPlan{files: files, orphans: orphans, inputs: inputSnapshots, packageName: p.Package, functions: queryFunctions, dir: dir, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans and commits the query package. The output directory and its
@@ -244,6 +257,9 @@ func (p QueryPlan) Commit() error {
 	if len(orphans) > 0 {
 		return fmt.Errorf("generate: %s gained %d file(s) rasqlgen wrote that this plan does not write: %s; rerun QueryPackage.Plan", p.dir, len(orphans), strings.Join(orphans, ", "))
 	}
+	if err := p.validateQueryInputs(); err != nil {
+		return err
+	}
 
 	for _, write := range writes {
 		if err := genfile.WriteInto(write.dir, write.name, write.file.Source); err != nil {
@@ -320,6 +336,10 @@ func (p QueryPlan) Check() error {
 		}
 		checks = append(checks, checkedFile{file: file, destination: resolved, dir: into, name: filepath.Base(resolved)})
 	}
+	orphans, _, err := queryPackageOwnership(p.dir, p.packageName, p.files, p.functions)
+	if err != nil {
+		return fmt.Errorf("%w; rerun QueryPackage.Plan", err)
+	}
 	for _, file := range checks {
 		matches, err := file.matchesSource()
 		switch {
@@ -331,7 +351,7 @@ func (p QueryPlan) Check() error {
 			stale = append(stale, fmt.Sprintf("%s: differs", formatCheckPath(p.root, file.file.Path)))
 		}
 	}
-	for _, orphan := range p.orphans {
+	for _, orphan := range orphans {
 		stale = append(stale, fmt.Sprintf("%s: is an orphaned generated file", formatCheckPath(p.root, orphan)))
 	}
 	if len(stale) == 0 {
@@ -339,6 +359,19 @@ func (p QueryPlan) Check() error {
 	}
 	sort.Strings(stale)
 	return fmt.Errorf("%w: %s", ErrStale, strings.Join(stale, "; "))
+}
+
+func (p QueryPlan) validateQueryInputs() error {
+	for _, input := range p.inputs {
+		data, err := readQueryInput(input.path)
+		if err != nil {
+			return fmt.Errorf("generate: query input %s changed after QueryPackage.Plan: %w; rerun QueryPackage.Plan", formatCheckPath(p.root, input.path), err)
+		}
+		if sha256.Sum256(data) != input.digest {
+			return fmt.Errorf("generate: query input %s changed after QueryPackage.Plan; rerun QueryPackage.Plan", formatCheckPath(p.root, input.path))
+		}
+	}
+	return nil
 }
 
 func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
@@ -469,7 +502,7 @@ func queryPackageDeclaredNames(dir, pkg string, planned []File) (map[string]stri
 	return declared, nil
 }
 
-func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string) (File, error) {
+func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string, inputs map[string]queryInputSnapshot) (File, error) {
 	if query.Input == "" {
 		return File{}, errors.New("generate: query input is required")
 	}
@@ -507,6 +540,7 @@ func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functi
 	if err != nil {
 		return File{}, fmt.Errorf("generate: read query input %s: %w", inputPath, err)
 	}
+	inputs[inputPath] = queryInputSnapshot{path: inputPath, digest: sha256.Sum256(data)}
 	parsed, err := querytemplate.Parse(query.Function, string(data))
 	if err != nil {
 		return File{}, fmt.Errorf("generate: validate query %q: %w", query.Function, err)

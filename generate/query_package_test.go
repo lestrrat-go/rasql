@@ -331,6 +331,90 @@ func TestQueryPlanCommitRejectsPostPlanOwnershipChanges(t *testing.T) {
 	}
 }
 
+func TestQueryPlanCheckRejectsPostPlanOwnershipChanges(t *testing.T) {
+	tests := []struct {
+		name         string
+		mutate       func(t *testing.T, dir string)
+		want         string
+		requiresPlan bool
+	}{
+		{
+			name: "foreign package",
+			mutate: func(t *testing.T, dir string) {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "foreign.go"), []byte("package other\n"), 0o600))
+			},
+			want:         "already holds package \"other\"",
+			requiresPlan: true,
+		},
+		{
+			name: "same package declaration",
+			mutate: func(t *testing.T, dir string) {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "handwritten.go"), []byte("package store\n\nfunc Query() {}\n"), 0o600))
+			},
+			want:         `query function "Query" collides`,
+			requiresPlan: true,
+		},
+		{
+			name: "generated orphan",
+			mutate: func(t *testing.T, dir string) {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "old_gen.go"), []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
+			},
+			want: "is an orphaned generated file",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeQueryFile(t, root, "query.sql", `SELECT 1`)
+			queries := generate.QueryPackage{
+				Package: "store",
+				Root:    root,
+				Dir:     "store",
+				Dialect: dialect.SQLite(),
+				Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+			}
+			plan, err := queries.Plan()
+			require.NoError(t, err)
+			test.mutate(t, filepath.Join(root, "store"))
+
+			err = plan.Check()
+			require.ErrorContains(t, err, test.want)
+			if test.requiresPlan {
+				require.ErrorContains(t, err, "rerun QueryPackage.Plan")
+			}
+		})
+	}
+}
+
+func TestQueryPlanCommitRejectsChangedQueryInput(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+	}
+	require.NoError(t, queries.Write())
+	outputPath := filepath.Join(root, "store", "query_gen.go")
+	plannedOutput, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "query.sql"), []byte(`SELECT 2`), 0o600))
+
+	err = plan.Commit()
+	require.ErrorContains(t, err, "query input query.sql changed after QueryPackage.Plan")
+	require.ErrorContains(t, err, "rerun QueryPackage.Plan")
+	currentOutput, readErr := os.ReadFile(outputPath)
+	require.NoError(t, readErr)
+	require.Equal(t, plannedOutput, currentOutput)
+}
+
 func TestQueryPackageRejectsInvalidQueriesBeforeWriting(t *testing.T) {
 	root := t.TempDir()
 	writeQueryFile(t, root, "query.sql", `SELECT 1`)
