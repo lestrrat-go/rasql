@@ -26,6 +26,7 @@ The migration package applies ordered, forward-only native SQL migrations for Po
 | `render` | Converts a validated query into SQL text and ordered arguments. | `dialect`, `query` |
 | `rasql` | Executes statements, decodes typed rows, and provides the default fluent API. | `schema`, `dialect`, `query`, `render`, `database/sql` |
 | `inspect` | Reads database metadata and returns normalized schema descriptors. | `schema`, `dialect` |
+| `catalog` | Reads a consistent live-database catalog and applies table-selection options. | `inspect`, `schema`, `dialect`, `database/sql` |
 | `migrate` | Checksums, reports status, and applies forward-only native SQL migrations. | `schema`, `dialect`, `database/sql` |
 | `migrate/diff` | Loads desired-schema sources, owns dialect-neutral diff plans, and writes reviewed migration directories. | Go standard library |
 | `migrate/diff/mysql` | Compares supported MySQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-mysql/query` |
@@ -72,7 +73,13 @@ The first query slice supports `SELECT`, predicates, joins, ordering, limit, and
 
 Schema descriptors include names, columns, nullability, defaults, primary keys, foreign keys, unique constraints, checks, and indexes.
 
-Inspectors use a small adapter for each database metadata surface. They normalize column identifiers, types, nullability, defaults, and primary keys into `schema` values without attempting to infer application names or Go types. The PostgreSQL `rasqlgen schema` path connects directly to inspect named tables. The generator owns Go naming rules and writes stable table-reference source.
+Inspectors use a small adapter for each database metadata surface. They normalize column identifiers, types, nullability, defaults, and primary keys into `schema` values without attempting to infer application names or Go types. `catalog.FromDatabase` reads those descriptors in one transaction and applies `Include`, `Exclude`, and `HistoryTable` selection. The generator owns Go naming rules and writes stable table-reference source.
+
+## Code generation workflow
+
+New projects use `rasqlgen init` to create `gen/main.go`, then check that program into the application repository. The program opens the selected driver, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`, which owns hints, static queries, pruning, writing, and drift checks. The normal lifecycle is `rasqlgen init`, edit the owned program, `DATABASE_URL=... go generate ./...`, and `DATABASE_URL=... go run ./gen -check`.
+
+The direct `bootstrap`, `schema`, and `query` commands remain supported compatibility interfaces. They are retained for existing repositories, checked-in schema packages, and query-only jobs whose workflow does not yet use an owned program. The design does not treat those commands or their exported supporting APIs as removed or deprecated.
 
 ## Errors and observability
 

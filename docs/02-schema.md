@@ -1,6 +1,8 @@
 # Schemas
 
-A schema descriptor is the single description of a table that `rasql` uses everywhere. It generates DDL, validates dynamic queries, and tells the decoder which columns a result holds. Write it by hand, generate it with [`rasqlgen`](06-rasqlgen.md), or read it out of a live database.
+A schema descriptor is the single description of a table that `rasql` uses everywhere. It generates DDL, validates dynamic queries, and tells the decoder which columns a result holds. Write it by hand, generate it with an owned program created by [`rasqlgen init`](06-rasqlgen.md#recommended-workflow-own-genmaingo), or read it out of a live database.
+
+The recommended generator calls `catalog.FromDatabase` and passes the descriptors to `generate.Store`. That program can select tables with `catalog.Options.Include`, `Exclude`, and `HistoryTable`, apply Go-only `schema.TableHint` values, compile static queries, choose whether to prune owned files, and expose both write and check modes. The direct `rasqlgen schema` command remains a supported compatibility path for projects that already use it.
 
 ## Describe a table in Go
 
@@ -654,6 +656,8 @@ A `rasql.Table[T]` is half of a table value rather than the whole of it. Wrap it
 Two methods remain for code that only learns a column name while it runs. `users.Column(name)` looks a column up and returns a `query.ColumnRef` with an error, and `users.Ref()` returns the underlying `query.TableRef` that the lower-level `query` package works in terms of, which [Querying](03-querying.md) uses for joins and projections.
 
 ## Read a table out of a database
+
+An owned generator normally calls `catalog.FromDatabase` rather than using `inspect` table-by-table. Its `catalog.Options` controls `Include`, `Exclude`, and `HistoryTable` selection while keeping the metadata read in one transaction.
 
 `inspect` turns live database metadata back into a `schema.TableDef`, normalizing native column types into logical ones. `Inspector.Table` looks up an unscoped table name. On SQLite, it searches `main`, `temp`, and attached databases; if the name exists in more than one of them, it returns the typed `*inspect.AmbiguousTableError` (also detectable with `inspect.ErrAmbiguousTable`) instead of choosing one. Use `Inspector.TableIn(ctx, databaseName, tableName)` to select `main`, `temp`, or an attached database. The returned `schema.TableDef.Schema` preserves that SQLite database name, so rendering or executing the descriptor continues to address the inspected scope. `inspect.New` accepts a SQLite `*sql.DB` for ordinary `main` tables. A retained `*sql.Conn` or `*sql.Tx` is required for `temp` or an attached database, and the same handle must execute descriptors that refer to those scopes because they belong to one connection rather than the `*sql.DB` pool. `TableIn` is supported only for SQLite. The inspector falls back to each database's `sqlite_master` catalog when `PRAGMA table_list` is unavailable on older SQLite engines.
 
