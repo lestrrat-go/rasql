@@ -91,10 +91,9 @@ func TestReportZeroValueAndAccessorSummary(t *testing.T) {
 	})
 }
 
-// TestDriftKeepsSameNamedTablesInDifferentSchemasApart pins the fix for
-// the old description comparison's own bug: that comparison keyed tables by
-// Name alone (generate/description_diff.go:93-100) and would have merged
-// audit.events with public.events.
+// TestDriftKeepsSameNamedTablesInDifferentSchemasApart pins the fix for the
+// old description comparison bug: it keyed tables by Name alone and would
+// have merged audit.events with public.events.
 func TestDriftKeepsSameNamedTablesInDifferentSchemasApart(t *testing.T) {
 	auditEvents := schema.TableDef{Schema: "audit", Name: "events", Columns: []schema.ColumnDef{col("id")}}
 	publicEventsBefore := schema.TableDef{Schema: "public", Name: "events", Columns: []schema.ColumnDef{col("id")}}
