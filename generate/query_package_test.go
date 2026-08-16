@@ -2,6 +2,7 @@ package generate_test
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,6 +117,40 @@ func TestQueryPackageCheckReportsStaleInput(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, generate.ErrStale), err)
 	require.Contains(t, err.Error(), "user_gen.go")
+}
+
+func TestQueryPlanCheckReportsOversizedOutputWithoutReadingItAll(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "user.sql", `SELECT id FROM users WHERE id = {{bind "id"}}`)
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{Input: "user.sql", Function: "UserByID", Output: "user_gen.go"}},
+	}
+	require.NoError(t, queries.Write())
+
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	files := plan.Files()
+	require.Len(t, files, 1)
+
+	output, err := os.OpenFile(files[0].Resolved, os.O_WRONLY|os.O_TRUNC, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = output.Close() })
+	_, err = output.Write(files[0].Source)
+	require.NoError(t, err)
+	_, err = output.Seek(8<<30, io.SeekStart)
+	require.NoError(t, err)
+	_, err = output.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, output.Close())
+
+	err = plan.Check()
+	require.Error(t, err)
+	require.True(t, errors.Is(err, generate.ErrStale), err)
+	require.Contains(t, err.Error(), "user_gen.go: differs")
 }
 
 func TestQueryPackageCheckReportsMarkedOrphansAndWriteRefusesThem(t *testing.T) {
