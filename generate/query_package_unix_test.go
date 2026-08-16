@@ -155,3 +155,30 @@ func TestQueryPackageCommitRefusesADestinationThatAppearedAsASymlink(t *testing.
 	require.NoError(t, statErr)
 	require.NotZero(t, info.Mode()&os.ModeSymlink)
 }
+
+func TestQueryPackageCheckRefusesADestinationThatChangedToASymlink(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	dir := filepath.Join(root, "store")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+	}
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	require.NoError(t, plan.Commit())
+
+	planned := filepath.Join(dir, "query_gen.go")
+	victim := filepath.Join(root, "victim_gen.go")
+	require.NoError(t, os.Rename(planned, victim))
+	require.NoError(t, os.Symlink(victim, planned))
+
+	err = plan.Check()
+	require.ErrorContains(t, err, "destination changed after QueryPackage.Plan")
+	require.False(t, errors.Is(err, generate.ErrStale), "a changed destination is a refusal, not staleness")
+}
