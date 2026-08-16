@@ -24,6 +24,25 @@ import (
 // its own first line, and a package clause under it.
 var markerFile = []byte(genfile.Marker + "\n\npackage store\n")
 
+func TestStorePrunesMarkedGeneratedSymlinkOrphan(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "store")
+	target := filepath.Join(base, "old_gen.go")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(target, markerFile, 0o600))
+	orphan := filepath.Join(dir, "old_gen.go")
+	require.NoError(t, os.Symlink(target, orphan))
+
+	store := generate.Store{Package: "store", Dir: dir, Tables: []schema.TableDef{usersTableDef()}, Prune: true}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	require.Equal(t, []string{orphan}, plan.Orphans())
+	require.ErrorIs(t, plan.Check(), generate.ErrStale)
+	require.NoError(t, plan.Commit())
+	require.NoFileExists(t, orphan)
+	require.FileExists(t, target)
+}
+
 // TestStorePlanReportsWhereASymlinkedFileResolves pins what File.Resolved is
 // for: a planned destination that is a symbolic link pointing out of Dir is
 // followed, not refused -- internal/genfile.Write writes through an output

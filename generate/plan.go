@@ -226,8 +226,8 @@ func (p Plan) Orphans() []string {
 //     Dir is authorized in one directory and written in whichever one has
 //     since taken that path. Finally
 //     every recorded orphan is re-read, through the open directory, to
-//     confirm it is still a regular file carrying rasqlgen's marker on its
-//     first line. All of it is checked fresh here rather than trusted from
+//     confirm it is still a regular file or a symlink to one carrying
+//     rasqlgen's marker on its first line. All of it is checked fresh rather than trusted from
 //     Plan time, since a Plan can be held and acted on later, after the
 //     directory has changed underneath it. When Prune is false and there
 //     is at least one orphan, Commit refuses here, naming every one of
@@ -387,14 +387,14 @@ func (p Plan) Commit() error {
 	orphans := make([]validatedOrphan, 0, len(p.orphans))
 	for _, orphan := range p.orphans {
 		name := filepath.Base(orphan)
-		info, err := readGenfileMarker(dir, name)
+		info, err := readOrphanMarker(dir, realDir, name)
 		if err != nil {
 			return fmt.Errorf("generate: check %s for rasqlgen's marker: %w", orphan, err)
 		}
 		if info == nil {
 			return fmt.Errorf("generate: refusing to delete %s: it no longer opens with rasqlgen's marker; something has changed it since Store.Plan ran", orphan)
 		}
-		orphans = append(orphans, validatedOrphan{orphan: orphan, name: name, info: info})
+		orphans = append(orphans, validatedOrphan{orphan: orphan, name: name, dirPath: realDir, info: info})
 	}
 	if !p.prune && len(p.orphans) > 0 {
 		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write, and Store.Prune is false: %s; set Prune to delete them, or remove them yourself", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
@@ -599,7 +599,7 @@ func (p Plan) Check() error {
 		// the directory and finding the file gone.
 		var info fs.FileInfo
 		if dir != nil {
-			info, err = readGenfileMarker(dir, filepath.Base(orphan))
+			info, err = readOrphanMarker(dir, realDir, filepath.Base(orphan))
 			if err != nil {
 				return fmt.Errorf("generate: check %s for rasqlgen's marker: %w", orphan, err)
 			}
@@ -1009,8 +1009,8 @@ type commitWrite struct {
 }
 
 // validatedOrphan is one recorded orphan that step 1 confirmed is still a
-// regular file carrying rasqlgen's marker, together with what the
-// filesystem said that file was.
+// regular file, or a symbolic link to one, carrying rasqlgen's marker,
+// together with what the filesystem said that file was.
 //
 // The identity is kept because os.Root pins the directory, not the entry
 // inside it: the marker check and the deletion both go through one open
@@ -1024,6 +1024,10 @@ type validatedOrphan struct {
 	// name is the orphan's own name inside the authorized directory, which
 	// every read and the deletion itself go through.
 	name string
+	// dirPath is the resolved path of the authorized directory, used only to
+	// inspect a symlink target while the directory handle remains the authority
+	// for deletion.
+	dirPath string
 	// info is what the filesystem said the checked file was, taken from the
 	// open file rather than from a second look at the name.
 	info fs.FileInfo
@@ -1041,7 +1045,7 @@ type validatedOrphan struct {
 // serialized against every other writer, which is a lock this package does
 // not own.
 func (o validatedOrphan) confirm(dir *os.Root) error {
-	info, err := readGenfileMarker(dir, o.name)
+	info, err := readOrphanMarker(dir, o.dirPath, o.name)
 	if err != nil {
 		return fmt.Errorf("generate: check %s for rasqlgen's marker: %w", o.orphan, err)
 	}
@@ -1052,6 +1056,27 @@ func (o validatedOrphan) confirm(dir *os.Root) error {
 		return fmt.Errorf("generate: refusing to delete %s: it is no longer the file this commit checked, so deleting it would delete a file nothing authorized; rerun Store.Plan", o.orphan)
 	}
 	return nil
+}
+
+func readOrphanMarker(dir *os.Root, dirPath, name string) (fs.FileInfo, error) {
+	info, err := dir.Lstat(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return readGenfileMarker(dir, name)
+	}
+	resolved, err := os.Stat(filepath.Join(dirPath, name))
+	if err != nil {
+		return nil, err
+	}
+	if !resolved.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	return readGenfileMarkerAt(filepath.Join(dirPath, name))
 }
 
 // plannedWrite is one planned file paired with the destination its path
@@ -1477,7 +1502,10 @@ func findOrphans(dir string, planned []File) ([]string, fs.FileInfo, error) {
 		return nil, nil, err
 	}
 	defer func() { _ = root.Close() }()
+	return findOrphansAt(root, dir, planned)
+}
 
+func findOrphansAt(root *os.Root, dir string, planned []File) ([]string, fs.FileInfo, error) {
 	dirInfo, err := root.Stat(".")
 	if err != nil {
 		return nil, nil, err

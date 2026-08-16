@@ -119,6 +119,27 @@ func TestQueryPackageCheckReportsStaleInput(t *testing.T) {
 	require.Contains(t, err.Error(), "user_gen.go")
 }
 
+func TestQueryPlanCommitKeepsRelativeRootInputPathStable(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+
+	t.Chdir(filepath.Dir(root))
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    filepath.Base(root),
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+	}
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+
+	t.Chdir(outside)
+	require.NoError(t, plan.Commit())
+	require.FileExists(t, filepath.Join(root, "store", "query_gen.go"))
+}
+
 func TestQueryPlanCheckReportsOversizedOutputWithoutReadingItAll(t *testing.T) {
 	root := t.TempDir()
 	writeQueryFile(t, root, "user.sql", `SELECT id FROM users WHERE id = {{bind "id"}}`)
@@ -169,7 +190,14 @@ func TestQueryPackageCheckReportsMarkedGenGoAndGenTestOrphansAndWriteRefusesThem
 	require.NoError(t, os.WriteFile(testOrphan, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
 
 	queries.Queries = []generate.Query{{Input: "second.sql", Function: "Second", Output: "second_gen.go"}}
-	err := queries.Check()
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	orphans := plan.Orphans()
+	require.Equal(t, []string{filepath.Join(root, "store", "first_gen.go"), testOrphan}, orphans)
+	orphans[0] = "mutated"
+	require.Equal(t, filepath.Join(root, "store", "first_gen.go"), plan.Orphans()[0])
+
+	err = queries.Check()
 	require.Error(t, err)
 	require.True(t, errors.Is(err, generate.ErrStale), err)
 	require.Contains(t, err.Error(), "first_gen.go")
@@ -210,6 +238,26 @@ func TestQueryPackageRejectsForeignPackageBeforeWriting(t *testing.T) {
 	require.Equal(t, before, snapshotDir(t, dir))
 	require.NoFileExists(t, filepath.Join(dir, "query_gen.go"))
 	require.NoFileExists(t, filepath.Join(dir, "other_gen.go"))
+}
+
+func TestQueryPackageRejectsMarkedForeignPackageBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	dir := filepath.Join(root, "store")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foreign.go"), []byte(genfile.Marker+"\n\npackage other\n"), 0o600))
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+	}
+
+	_, err := queries.Plan()
+	require.ErrorContains(t, err, `already holds package "other"`)
+	require.NoFileExists(t, filepath.Join(dir, "query_gen.go"))
 }
 
 func TestQueryPackageRejectsExistingSamePackageDeclarationBeforeWriting(t *testing.T) {

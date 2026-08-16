@@ -1,12 +1,15 @@
 package generate
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -87,6 +90,13 @@ func (p QueryPlan) Files() []File {
 	return files
 }
 
+// Orphans reports the marked generated files in Dir that this plan does not
+// write, sorted by path. The result is a copy, so callers cannot mutate the
+// plan.
+func (p QueryPlan) Orphans() []string {
+	return append([]string(nil), p.orphans...)
+}
+
 // Plan validates and renders the query package without writing anything.
 // Every query input is read and compiled, every output is checked for a safe
 // generated-file name, every existing Go file must belong to the package, and
@@ -110,6 +120,12 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 	root, err := resolveModuleRoot(p.Root)
 	if err != nil {
 		return QueryPlan{}, err
+	}
+	if root != "" {
+		root, err = filepath.Abs(root)
+		if err != nil {
+			return QueryPlan{}, fmt.Errorf("generate: resolve Root: %w", err)
+		}
 	}
 	dir, err := resolveQueryPackagePath(root, p.Dir, "Dir")
 	if err != nil {
@@ -250,7 +266,7 @@ func (p QueryPlan) Commit() error {
 		}
 		writes[index] = commitWrite{file: file, destination: destination, dir: into, name: filepath.Base(destination)}
 	}
-	orphans, _, err := queryPackageOwnership(p.dir, p.packageName, p.files, p.functions)
+	orphans, _, err := queryPackageOwnershipAt(dir, p.dir, p.packageName, p.files, p.functions)
 	if err != nil {
 		return fmt.Errorf("%w; rerun QueryPackage.Plan", err)
 	}
@@ -336,7 +352,12 @@ func (p QueryPlan) Check() error {
 		}
 		checks = append(checks, checkedFile{file: file, destination: resolved, dir: into, name: filepath.Base(resolved)})
 	}
-	orphans, _, err := queryPackageOwnership(p.dir, p.packageName, p.files, p.functions)
+	var orphans []string
+	if dir == nil {
+		orphans, _, err = queryPackageOwnership(p.dir, p.packageName, p.files, p.functions)
+	} else {
+		orphans, _, err = queryPackageOwnershipAt(dir, p.dir, p.packageName, p.files, p.functions)
+	}
 	if err != nil {
 		return fmt.Errorf("%w; rerun QueryPackage.Plan", err)
 	}
@@ -374,12 +395,12 @@ func (p QueryPlan) validateQueryInputs() error {
 	return nil
 }
 
-func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
+func requireQueryPackageOwnsDir(root *os.Root, dir, pkg string, planned []File) error {
 	own := make([]string, len(planned))
 	for i, file := range planned {
 		own[i] = filepath.Base(file.Path)
 	}
-	name, declared, err := DirForeignPackage(dir, pkg, own...)
+	name, declared, err := queryForeignPackage(root, dir, pkg, own)
 	if err != nil {
 		return fmt.Errorf("generate: scan %s for package ownership: %w", dir, err)
 	}
@@ -390,10 +411,22 @@ func requireQueryPackageOwnsDir(dir, pkg string, planned []File) error {
 }
 
 func queryPackageOwnership(dir, pkg string, planned []File, functions []string) ([]string, fs.FileInfo, error) {
-	if err := requireQueryPackageOwnsDir(dir, pkg, planned); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, nil
+		}
 		return nil, nil, err
 	}
-	declared, err := queryPackageDeclaredNames(dir, pkg, planned)
+	defer func() { _ = root.Close() }()
+	return queryPackageOwnershipAt(root, dir, pkg, planned, functions)
+}
+
+func queryPackageOwnershipAt(root *os.Root, dir, pkg string, planned []File, functions []string) ([]string, fs.FileInfo, error) {
+	if err := requireQueryPackageOwnsDir(root, dir, pkg, planned); err != nil {
+		return nil, nil, err
+	}
+	declared, err := queryPackageDeclaredNames(root, dir, pkg, planned)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate: scan %s for package declarations: %w", dir, err)
 	}
@@ -402,7 +435,7 @@ func queryPackageOwnership(dir, pkg string, planned []File, functions []string) 
 			return nil, nil, fmt.Errorf("generate: query function %q collides with %s", function, owner)
 		}
 	}
-	orphans, dirInfo, err := findOrphans(dir, planned)
+	orphans, dirInfo, err := findOrphansAt(root, dir, planned)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate: scan %s for leftover files: %w", dir, err)
 	}
@@ -416,16 +449,7 @@ func queryPackageOwnership(dir, pkg string, planned []File, functions []string) 
 // skipped because they are the files this plan will replace. A generated
 // query package shares its package block with handwritten files, so a
 // collision has to be rejected before Commit can publish any output.
-func queryPackageDeclaredNames(dir, pkg string, planned []File) (map[string]string, error) {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer func() { _ = root.Close() }()
-
+func queryPackageDeclaredNames(root *os.Root, dir, pkg string, planned []File) (map[string]string, error) {
 	own := make(map[string]struct{}, len(planned))
 	for _, file := range planned {
 		own[filepath.Base(file.Path)] = struct{}{}
@@ -451,28 +475,27 @@ func queryPackageDeclaredNames(dir, pkg string, planned []File) (map[string]stri
 		if ownsEntry(root, own, name, info) {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		resolved, err := os.Stat(path)
+		resolved, err := queryPackageEntryStat(root, dir, name, info)
 		if err != nil || !resolved.Mode().IsRegular() {
 			continue
 		}
-		included, err := context.MatchFile(dir, name)
-		if err != nil || !included {
-			continue
-		}
-		marker, err := readForeignMarker(path)
-		if err != nil || (marker != nil && info.Mode()&fs.ModeSymlink == 0) {
-			continue
-		}
-		declaredPackage, err := declaredPackage(path)
-		if err != nil || declaredPackage != pkg {
-			continue
-		}
-		source, err := os.ReadFile(path)
+		source, err := queryPackageEntrySource(root, dir, name, info)
 		if err != nil {
 			continue
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, source, parser.SkipObjectResolution)
+		included, err := queryPackageMatchFile(context, dir, name, source)
+		if err != nil || !included {
+			continue
+		}
+		marker, err := queryPackageEntryMarker(root, dir, name, info)
+		if err != nil || (marker != nil && info.Mode()&fs.ModeSymlink == 0 && isGeneratedOutputName(name)) {
+			continue
+		}
+		declaredPackage, err := queryPackageDeclaredPackage(name, source)
+		if err != nil || declaredPackage != pkg {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), name, source, parser.SkipObjectResolution)
 		if err != nil {
 			continue
 		}
@@ -500,6 +523,115 @@ func queryPackageDeclaredNames(dir, pkg string, planned []File) (map[string]stri
 		}
 	}
 	return declared, nil
+}
+
+func queryForeignPackage(root *os.Root, dir, pkg string, own []string) (name string, declared string, err error) {
+	ownSet := make(map[string]struct{}, len(own))
+	for _, file := range own {
+		ownSet[filepath.Base(file)] = struct{}{}
+	}
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return "", "", err
+	}
+	context := activeBuildContext()
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		info, err := root.Lstat(name)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return "", "", err
+		}
+		if ownsEntry(root, ownSet, name, info) {
+			continue
+		}
+		resolved, err := queryPackageEntryStat(root, dir, name, info)
+		if err != nil || !resolved.Mode().IsRegular() {
+			continue
+		}
+		source, err := queryPackageEntrySource(root, dir, name, info)
+		if err != nil {
+			continue
+		}
+		included, err := queryPackageMatchFile(context, dir, name, source)
+		if err != nil || !included {
+			continue
+		}
+		marker, err := queryPackageEntryMarker(root, dir, name, info)
+		if err != nil {
+			continue
+		}
+		if marker != nil && isGeneratedOutputName(name) {
+			continue
+		}
+		declaredName, err := queryPackageDeclaredPackage(name, source)
+		if err != nil || declaredName == "" {
+			continue
+		}
+		if declaredName == "documentation" || declaredName == pkg ||
+			(declaredName == pkg+"_test" && strings.HasSuffix(name, "_test.go")) {
+			continue
+		}
+		return name, declaredName, nil
+	}
+	return "", "", nil
+}
+
+func queryPackageEntryStat(root *os.Root, dir, name string, info fs.FileInfo) (fs.FileInfo, error) {
+	resolved, err := root.Stat(name)
+	if err == nil {
+		return resolved, nil
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return nil, err
+	}
+	return os.Stat(filepath.Join(dir, name))
+}
+
+func queryPackageEntrySource(root *os.Root, dir, name string, info fs.FileInfo) ([]byte, error) {
+	file, err := root.Open(name)
+	if err == nil {
+		defer func() { _ = file.Close() }()
+		return io.ReadAll(file)
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return nil, err
+	}
+	return os.ReadFile(filepath.Join(dir, name))
+}
+
+func queryPackageEntryMarker(root *os.Root, dir, name string, info fs.FileInfo) (fs.FileInfo, error) {
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return readForeignMarker(filepath.Join(dir, name))
+	}
+	return readGenfileMarker(root, name)
+}
+
+func queryPackageMatchFile(context build.Context, dir, name string, source []byte) (bool, error) {
+	context.OpenFile = func(path string) (io.ReadCloser, error) {
+		if filepath.Base(path) == name {
+			return io.NopCloser(bytes.NewReader(source)), nil
+		}
+		return os.Open(path)
+	}
+	return context.MatchFile(dir, name)
+}
+
+func queryPackageDeclaredPackage(name string, source []byte) (string, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), name, source, parser.PackageClauseOnly)
+	if err != nil {
+		return "", err
+	}
+	return file.Name.Name, nil
+}
+
+func isGeneratedOutputName(name string) bool {
+	return strings.HasSuffix(name, "_gen.go") || strings.HasSuffix(name, "_gen_test.go")
 }
 
 func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string, inputs map[string]queryInputSnapshot) (File, error) {
