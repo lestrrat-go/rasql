@@ -3,6 +3,7 @@
 package generate_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +32,12 @@ func TestQueryPackageWriteRefusesMarkedGeneratedSymlinkOrphan(t *testing.T) {
 		Queries: []generate.Query{{Input: "query.sql", Function: "NewQuery", Output: "new_gen.go"}},
 	}
 
-	err := queries.Write()
+	err := queries.Check()
+	require.Error(t, err)
+	require.True(t, errors.Is(err, generate.ErrStale), err)
+	require.ErrorContains(t, err, "old_gen.go")
+
+	err = queries.Write()
 	require.ErrorContains(t, err, "old_gen.go")
 	require.NoFileExists(t, filepath.Join(dir, "new_gen.go"))
 	require.FileExists(t, orphan)
@@ -56,6 +62,7 @@ func TestQueryPackageRejectsMarkedGeneratedSymlinkDeclarationCollision(t *testin
 
 	_, err := queries.Plan()
 	require.ErrorContains(t, err, `query function "Existing" collides with package-level declaration "Existing" in old_gen.go`)
+	require.ErrorContains(t, queries.Write(), `query function "Existing" collides with package-level declaration "Existing" in old_gen.go`)
 	require.NoFileExists(t, filepath.Join(dir, "new_gen.go"))
 }
 

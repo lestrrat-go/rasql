@@ -153,7 +153,7 @@ func TestQueryPlanCheckReportsOversizedOutputWithoutReadingItAll(t *testing.T) {
 	require.Contains(t, err.Error(), "user_gen.go: differs")
 }
 
-func TestQueryPackageCheckReportsMarkedOrphansAndWriteRefusesThem(t *testing.T) {
+func TestQueryPackageCheckReportsMarkedGenGoAndGenTestOrphansAndWriteRefusesThem(t *testing.T) {
 	root := t.TempDir()
 	writeQueryFile(t, root, "first.sql", `SELECT id FROM users`)
 	writeQueryFile(t, root, "second.sql", `SELECT email FROM users`)
@@ -165,59 +165,84 @@ func TestQueryPackageCheckReportsMarkedOrphansAndWriteRefusesThem(t *testing.T) 
 		Queries: []generate.Query{{Input: "first.sql", Function: "First", Output: "first_gen.go"}},
 	}
 	require.NoError(t, queries.Write())
+	testOrphan := filepath.Join(root, "store", "first_gen_test.go")
+	require.NoError(t, os.WriteFile(testOrphan, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
 
 	queries.Queries = []generate.Query{{Input: "second.sql", Function: "Second", Output: "second_gen.go"}}
 	err := queries.Check()
 	require.Error(t, err)
 	require.True(t, errors.Is(err, generate.ErrStale), err)
 	require.Contains(t, err.Error(), "first_gen.go")
+	require.Contains(t, err.Error(), "first_gen_test.go")
 
 	err = queries.Write()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "first_gen.go")
+	require.Contains(t, err.Error(), "first_gen_test.go")
 	require.FileExists(t, filepath.Join(root, "store", "first_gen.go"))
+	require.FileExists(t, testOrphan)
 	require.NoFileExists(t, filepath.Join(root, "store", "second_gen.go"))
 }
 
 func TestQueryPackageRejectsForeignPackageBeforeWriting(t *testing.T) {
 	root := t.TempDir()
 	writeQueryFile(t, root, "query.sql", `SELECT 1`)
+	writeQueryFile(t, root, "other.sql", `SELECT 2`)
 	dir := filepath.Join(root, "store")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foreign.go"), []byte("package other\n"), 0o600))
+	before := snapshotDir(t, dir)
 	queries := generate.QueryPackage{
 		Package: "store",
 		Root:    root,
 		Dir:     "store",
 		Dialect: dialect.SQLite(),
-		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+		Queries: []generate.Query{
+			{Input: "query.sql", Function: "Query", Output: "query_gen.go"},
+			{Input: "other.sql", Function: "Other", Output: "other_gen.go"},
+		},
 	}
 
 	_, err := queries.Plan()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `already holds package "other"`)
 	require.Error(t, queries.Write())
+	require.Equal(t, before, snapshotDir(t, dir))
 	require.NoFileExists(t, filepath.Join(dir, "query_gen.go"))
+	require.NoFileExists(t, filepath.Join(dir, "other_gen.go"))
 }
 
-func TestQueryPackageRejectsExistingSamePackageFunctionBeforeWriting(t *testing.T) {
-	root := t.TempDir()
-	writeQueryFile(t, root, "query.sql", `SELECT 1`)
-	dir := filepath.Join(root, "store")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "handwritten.go"), []byte("package store\n\nfunc Query() {}\n"), 0o600))
-	queries := generate.QueryPackage{
-		Package: "store",
-		Root:    root,
-		Dir:     "store",
-		Dialect: dialect.SQLite(),
-		Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+func TestQueryPackageRejectsExistingSamePackageDeclarationBeforeWriting(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{name: "function", source: "package store\n\nfunc Query() {}\n"},
+		{name: "type", source: "package store\n\ntype Query struct{}\n"},
+		{name: "const", source: "package store\n\nconst Query = 1\n"},
+		{name: "var", source: "package store\n\nvar Query = 1\n"},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeQueryFile(t, root, "query.sql", `SELECT 1`)
+			dir := filepath.Join(root, "store")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "handwritten.go"), []byte(test.source), 0o600))
+			queries := generate.QueryPackage{
+				Package: "store",
+				Root:    root,
+				Dir:     "store",
+				Dialect: dialect.SQLite(),
+				Queries: []generate.Query{{Input: "query.sql", Function: "Query", Output: "query_gen.go"}},
+			}
 
-	_, err := queries.Plan()
-	require.ErrorContains(t, err, `query function "Query" collides with package-level declaration "Query" in handwritten.go`)
-	require.ErrorContains(t, queries.Write(), `query function "Query" collides with package-level declaration "Query" in handwritten.go`)
-	require.NoFileExists(t, filepath.Join(dir, "query_gen.go"))
+			_, err := queries.Plan()
+			require.ErrorContains(t, err, `query function "Query" collides with package-level declaration "Query" in handwritten.go`)
+			require.ErrorContains(t, queries.Write(), `query function "Query" collides with package-level declaration "Query" in handwritten.go`)
+			require.NoFileExists(t, filepath.Join(dir, "query_gen.go"))
+		})
+	}
 }
 
 func TestQueryPackageAuthorizesAllDestinationsBeforeWriting(t *testing.T) {
@@ -286,6 +311,10 @@ func TestQueryPackageRejectsInvalidQueriesBeforeWriting(t *testing.T) {
 			_, err := candidate.Plan()
 			require.Error(t, err)
 			require.Contains(t, err.Error(), test.message)
+			err = candidate.Write()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), test.message)
+			require.NoFileExists(t, filepath.Join(root, "store", "query_gen.go"))
 		})
 	}
 }
