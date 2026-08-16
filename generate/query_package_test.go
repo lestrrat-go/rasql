@@ -236,6 +236,8 @@ func TestQueryPackageRejectsInvalidQueriesBeforeWriting(t *testing.T) {
 		{name: "empty queries", mutate: func(p *generate.QueryPackage) { p.Queries = nil }, message: "at least one query"},
 		{name: "missing input", mutate: func(p *generate.QueryPackage) { p.Queries[0].Input = "" }, message: "query input is required"},
 		{name: "missing function", mutate: func(p *generate.QueryPackage) { p.Queries[0].Function = "" }, message: "query function is required"},
+		{name: "unexported function", mutate: func(p *generate.QueryPackage) { p.Queries[0].Function = "userByID" }, message: "must be an exported Go identifier"},
+		{name: "invalid function", mutate: func(p *generate.QueryPackage) { p.Queries[0].Function = "123User" }, message: "must be an exported Go identifier"},
 		{name: "unsafe output path", mutate: func(p *generate.QueryPackage) { p.Queries[0].Output = "../query_gen.go" }, message: "must be a file name"},
 		{name: "wrong output suffix", mutate: func(p *generate.QueryPackage) { p.Queries[0].Output = "query.go" }, message: "must end in _gen.go"},
 		{name: "invalid source", mutate: func(p *generate.QueryPackage) { p.Queries[0].Input = "invalid.sql" }, message: "validate query"},
