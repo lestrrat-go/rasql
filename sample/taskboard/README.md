@@ -27,6 +27,7 @@ Regenerate the checked-in store descriptors after adding a migration. The sample
 ```sh
 go generate ./...
 ```
+<!-- This recursive command is valid because the generate directive is in gen/main.go; internal/store contains generated output and has no directive. -->
 
 Check the checked-in store without writing files:
 
