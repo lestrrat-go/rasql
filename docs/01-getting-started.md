@@ -68,7 +68,7 @@ Three things travel together here. `UserRow` is the Go type of one row, and its 
 
 Those accessors are the reason a filter never spells a column as a string. `WhereEqual(users.ID(), 42)` builds, while `WhereEqual(users.Emial(), 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column accessors catch](06-rasqlgen.md#what-the-column-accessors-catch) shows what that covers and the three cases it does not.
 
-[Schemas](02-schema.md) covers how to write these tables by hand, and [`rasqlgen`](06-rasqlgen.md) covers how to generate them.
+[Schemas](02-schema.md) covers how to write these tables by hand, and [`rasql codegen`](06-rasqlgen.md) covers how to generate them.
 
 ## Create a DB
 

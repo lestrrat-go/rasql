@@ -175,7 +175,12 @@ source: [examples/store/schema_gen.go](https://github.com/lestrrat-go/rasql/blob
 
 The descriptor stays unexported so no importer can replace it; `store.Users()` hands out the table value, and `store.UsersDef()` hands out a copy of the descriptor. Its column accessors are what the query builders take, so `WhereEqual(users.ID(), 42)` builds while a misspelled `users.Emial()` does not compile. See [what the column accessors catch](docs/06-rasqlgen.md#what-the-column-accessors-catch) and [the mapping methods](docs/06-rasqlgen.md#the-mapping-and-scan-methods).
 
-Writing the same descriptors by hand works too. See [Schemas](docs/02-schema.md) and [`rasqlgen`](docs/06-rasqlgen.md).
+<!-- Both labels in this sentence are page titles, not tool names: docs/02-schema.md opens with
+     "# Schemas" and docs/06-rasqlgen.md opens with "# `rasql codegen`". A "See X and Y" pointer whose
+     first label is a page's own H1 is naming the second page the same way. Every site this change left
+     spelled `rasqlgen` is unlinked prose naming the tool -- the generated-file marker, "the shape
+     rasqlgen emits", the `cmd/rasqlgen` package row -- never a link to that page. -->
+Writing the same descriptors by hand works too. See [Schemas](docs/02-schema.md) and [`rasql codegen`](docs/06-rasqlgen.md).
 
 ### 2. Read and write rows
 
@@ -303,7 +308,7 @@ Open <http://127.0.0.1:8080/> in another terminal.
 | [Querying](docs/03-querying.md) | Typed selects, joins, custom projections, and a reference table for every operation and predicate. |
 | [Writing rows](docs/04-writing.md) | Creating tables and inserting, updating, or deleting rows. |
 | [Static templates](docs/05-templates.md) | Compiling SQL text with named binds into parameterized statements. |
-| [`rasqlgen`](docs/06-rasqlgen.md) | Owning a database-backed generator program and compiling query templates. |
+| [`rasql codegen`](docs/06-rasqlgen.md) | Owning a database-backed generator program and compiling query templates. |
 | [Migrations](docs/07-migrations.md) | Applying ordered forward-only DDL migrations. |
 
 The API reference lives at [pkg.go.dev](https://pkg.go.dev/github.com/lestrrat-go/rasql). Each code block that links to a source file is a runnable Go example from [`examples/`](examples/), verified by `go test`.
