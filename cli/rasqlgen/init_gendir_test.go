@@ -46,7 +46,7 @@ func TestInitRejectsGenDirOutsideModule(t *testing.T) {
 			genDir := testCase.genDir()
 
 			var out bytes.Buffer
-			err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", genDir}, &out)
+			err := RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", genDir}, &out)
 			require.Error(t, err)
 			require.ErrorContains(t, err, "-gen-dir")
 			require.ErrorContains(t, err, "outside the module")
@@ -76,7 +76,7 @@ func TestInitAcceptsGenDirAtTheModuleRoot(t *testing.T) {
 	initModuleDir(t)
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "."}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "."}, &out))
 	require.FileExists(t, "main.go")
 }
 
@@ -98,7 +98,7 @@ func TestInitRejectsGenDirWithForeignPackage(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(toolsDir, "helper.go"), []byte(helperSource), 0o600))
 
 	var out bytes.Buffer
-	err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "tools"}, &out)
+	err := RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "tools"}, &out)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "-gen-dir")
 	require.ErrorContains(t, err, `"tools"`)
@@ -131,6 +131,6 @@ func TestInitAcceptsGenDirWithOnlyAMainPackage(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join("tools", "helper.go"), []byte("package main\n\nfunc helper() {}\n"), 0o600))
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "tools"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "tools"}, &out))
 	require.FileExists(t, filepath.Join("tools", "main.go"))
 }

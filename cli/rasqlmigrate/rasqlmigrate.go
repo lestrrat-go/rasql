@@ -31,30 +31,39 @@ import (
 var (
 	openDatabase                    = sql.Open
 	commandOutput         io.Writer = os.Stdout
+	commandDiagnostics    io.Writer = os.Stdout
 	liveInspectionTimeout           = 30 * time.Second
 	commandMu             sync.Mutex
 )
 
 // Run executes the migration subcommands under the unified rasql command.
-func Run(args []string, writer io.Writer) error {
-	return runPublic(args, writer, "rasql migrate")
+// Command output goes to output, and what the flag package prints while
+// parsing goes to diagnostics, so the unified command can keep the two on
+// separate streams.
+func Run(args []string, output, diagnostics io.Writer) error {
+	if output == nil || diagnostics == nil {
+		return errors.New("rasqlmigrate: command output must not be nil")
+	}
+	return runPublic(args, output, diagnostics, "rasql migrate")
 }
 
 // RunLegacy executes the migration subcommands using rasqlmigrate command
-// names in usage and error messages.
+// names in usage and error messages, writing everything to writer.
 func RunLegacy(args []string, writer io.Writer) error {
-	return runPublic(args, writer, "rasqlmigrate")
-}
-
-func runPublic(args []string, writer io.Writer, program string) error {
 	if writer == nil {
 		return errors.New("rasqlmigrate: command output must not be nil")
 	}
+	return runPublic(args, writer, writer, "rasqlmigrate")
+}
+
+func runPublic(args []string, output, diagnostics io.Writer, program string) error {
 	commandMu.Lock()
 	defer commandMu.Unlock()
-	previous := commandOutput
-	commandOutput = writer
-	defer func() { commandOutput = previous }()
+	previousOutput, previousDiagnostics := commandOutput, commandDiagnostics
+	commandOutput, commandDiagnostics = output, diagnostics
+	defer func() {
+		commandOutput, commandDiagnostics = previousOutput, previousDiagnostics
+	}()
 	return runNamed(args, program)
 }
 
@@ -406,9 +415,13 @@ func runVerify(args []string) error {
 	return nil
 }
 
+// newFlagSet builds a subcommand's flag set. What the flag package prints
+// while parsing is a diagnostic, not command output, so it goes to the
+// diagnostic stream; the standalone rasqlmigrate binary points both streams
+// at one writer and so keeps printing where it always did.
 func newFlagSet(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	flags.SetOutput(commandOutput)
+	flags.SetOutput(commandDiagnostics)
 	return flags
 }
 

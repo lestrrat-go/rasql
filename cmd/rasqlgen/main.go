@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	err := rasqlgen.Run(os.Args[1:], os.Stderr)
+	err := rasqlgen.RunLegacy(os.Args[1:], os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return
 	}

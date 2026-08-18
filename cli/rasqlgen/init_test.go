@@ -23,7 +23,7 @@ func TestInitWritesTheScaffold(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out))
 
 	path := filepath.Join("gen", "main.go")
 	source, err := os.ReadFile(path)
@@ -63,7 +63,7 @@ func TestInitWritesTheRequestedDialect(t *testing.T) {
 		t.Run(testCase.dialect, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			var out bytes.Buffer
-			require.NoError(t, Run([]string{"init", "-dialect", testCase.dialect, "-package", "store", "-output", "internal/store"}, &out))
+			require.NoError(t, RunLegacy([]string{"init", "-dialect", testCase.dialect, "-package", "store", "-output", "internal/store"}, &out))
 
 			source, err := os.ReadFile(filepath.Join("gen", "main.go"))
 			require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestInitWritesLiveSchemaControls(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out))
 
 	source, err := os.ReadFile(filepath.Join("gen", "main.go"))
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestInitWritesPackageAndOutput(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "acct", "-output", "pkg/acct"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "acct", "-output", "pkg/acct"}, &out))
 
 	source, err := os.ReadFile(filepath.Join("gen", "main.go"))
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func TestInitQuotesTheOutputInStoreDir(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			var out bytes.Buffer
-			require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", output}, &out))
+			require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", output}, &out))
 
 			source, err := os.ReadFile(filepath.Join("gen", "main.go"))
 			require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestInitRejectsControlCharactersInOutput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			var out bytes.Buffer
-			err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", output}, &out)
+			err := RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", output}, &out)
 			require.ErrorContains(t, err, "control character")
 			_, statErr := os.Stat("gen")
 			require.ErrorIs(t, statErr, os.ErrNotExist)
@@ -285,7 +285,7 @@ func TestInitRefusesOutputInTheScaffoldDirectory(t *testing.T) {
 			}
 
 			var out bytes.Buffer
-			err := Run(args, &out)
+			err := RunLegacy(args, &out)
 			require.ErrorContains(t, err, "name the same directory")
 			require.ErrorContains(t, err, testCase.output)
 
@@ -300,7 +300,7 @@ func TestInitAcceptsMainPackageInTheScaffoldDirectory(t *testing.T) {
 	initModuleDir(t)
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "main", "-output", "gen"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "main", "-output", "gen"}, &out))
 
 	source, err := os.ReadFile(filepath.Join("gen", "main.go"))
 	require.NoError(t, err)
@@ -314,7 +314,7 @@ func TestInitAcceptsOutputNestedInTheScaffoldDirectory(t *testing.T) {
 	initModuleDir(t)
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "gen/store"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "gen/store"}, &out))
 
 	source, err := os.ReadFile(filepath.Join("gen", "main.go"))
 	require.NoError(t, err)
@@ -355,7 +355,7 @@ func TestInitResolvesOutputAgainstTheModuleRoot(t *testing.T) {
 			t.Chdir(filepath.Join(root, "sub"))
 
 			var out bytes.Buffer
-			err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", testCase.output}, &out)
+			err := RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", testCase.output}, &out)
 			if testCase.refused {
 				require.ErrorContains(t, err, "name the same directory")
 				require.ErrorContains(t, err, testCase.output)
@@ -381,7 +381,7 @@ func TestInitRefusesAnExistingFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join("gen", "main.go"), original, 0o644))
 
 	var out bytes.Buffer
-	err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out)
+	err := RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out)
 	require.Error(t, err)
 	require.ErrorContains(t, err, filepath.Join("gen", "main.go"))
 	require.ErrorContains(t, err, "-force")
@@ -401,7 +401,7 @@ func TestInitForceOverwrites(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join("gen", "main.go"), []byte("package main\n\n// stale\n"), 0o644))
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-force"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-force"}, &out))
 	require.Contains(t, out.String(), "-force overwrote "+filepath.Join("gen", "main.go"))
 
 	after, err := os.ReadFile(filepath.Join("gen", "main.go"))
@@ -423,14 +423,14 @@ func TestInitScaffoldDocStatesTheForceTerms(t *testing.T) {
 	path := filepath.Join("gen", "main.go")
 
 	var first bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &first))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &first))
 
 	var second bytes.Buffer
-	err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &second)
+	err := RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &second)
 	require.ErrorContains(t, err, "-force")
 
 	var third bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "mysql", "-package", "store", "-output", "internal/store", "-force"}, &third))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "mysql", "-package", "store", "-output", "internal/store", "-force"}, &third))
 	require.Contains(t, third.String(), "-force overwrote "+path)
 
 	source, err := os.ReadFile(path)
@@ -470,7 +470,7 @@ func TestInitRejectsInvalidInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			var out bytes.Buffer
-			require.Error(t, Run(args, &out))
+			require.Error(t, RunLegacy(args, &out))
 			_, err := os.Stat("gen")
 			require.ErrorIs(t, err, os.ErrNotExist)
 		})
@@ -485,7 +485,7 @@ func TestInitCreatesNothingElse(t *testing.T) {
 	t.Chdir(dir)
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store"}, &out))
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
@@ -502,7 +502,7 @@ func TestInitPrintsTheNextCommands(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "mysql", "-package", "store", "-output", "internal/store"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "mysql", "-package", "store", "-output", "internal/store"}, &out))
 
 	text := out.String()
 	require.Contains(t, text, "wrote "+filepath.Join("gen", "main.go"))

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"go/format"
 	"go/token"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,7 +42,7 @@ var initScaffoldTemplate = template.Must(template.New("gen/main.go").Parse(`// C
 // Run it with ` + "`go generate ./...`" + `. Pass -check to report whether the
 // checked-in store is current without writing anything.
 //
-// rasqlgen init wrote this file once. Run again and it refuses to touch
+// {{.Program}} init wrote this file once. Run again and it refuses to touch
 // this file unless you pass -force, which rewrites it from the flags of
 // that run and discards every edit made here. It is the manifest: the
 // package name, the output directory, the dialect, the Go-side hints and
@@ -144,8 +143,8 @@ func run(ctx context.Context, check bool) error {
 // nothing else. It opens no database, runs no subprocess, and creates no
 // output directory -- see cli/rasqlgen/init.go's package-level doc, and
 // §3.1 of the phase 5 specification, for why.
-func runInit(args []string, writer io.Writer) error {
-	flags := newFlagSet("init", writer)
+func (c command) runInit(args []string) error {
+	flags := c.newFlagSet(c.initFlagSetName)
 	dialectName := flags.String("dialect", "", "postgresql (or postgres), mysql, or sqlite")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "the generated package's directory, module-root-relative")
@@ -204,14 +203,14 @@ func runInit(args []string, writer io.Writer) error {
 			return fmt.Errorf("init: %s is a directory", path)
 		}
 		if !*force {
-			return fmt.Errorf("rasqlgen init: %s already exists; edit it, or pass -force to overwrite it", path)
+			return fmt.Errorf("%s init: %s already exists; edit it, or pass -force to overwrite it", c.program, path)
 		}
 		overwriting = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("init: stat %s: %w", path, err)
 	}
 
-	source, err := renderInitScaffold(spec, *packageName, *output)
+	source, err := renderInitScaffold(spec, c.program, *packageName, *output)
 	if err != nil {
 		return err
 	}
@@ -224,14 +223,14 @@ func runInit(args []string, writer io.Writer) error {
 	}
 
 	if overwriting {
-		_, _ = fmt.Fprintf(writer, "rasqlgen init: -force overwrote %s\n", path)
+		_, _ = fmt.Fprintf(c.output, "%s init: -force overwrote %s\n", c.program, path)
 	} else {
-		_, _ = fmt.Fprintf(writer, "wrote %s\n", path)
+		_, _ = fmt.Fprintf(c.output, "wrote %s\n", path)
 	}
-	_, _ = fmt.Fprintln(writer)
-	_, _ = fmt.Fprintln(writer, "Next:")
-	_, _ = fmt.Fprintf(writer, "  go get %s\n", spec.driverImport)
-	_, _ = fmt.Fprintln(writer, "  DATABASE_URL=... go generate ./...")
+	_, _ = fmt.Fprintln(c.output)
+	_, _ = fmt.Fprintln(c.output, "Next:")
+	_, _ = fmt.Fprintf(c.output, "  go get %s\n", spec.driverImport)
+	_, _ = fmt.Fprintln(c.output, "  DATABASE_URL=... go generate ./...")
 	return nil
 }
 
@@ -481,12 +480,13 @@ func symlinkTarget(path string) (string, bool) {
 // -package and -output combination and formats the result with gofmt, so
 // the file init writes is gofmt-clean by construction rather than by
 // convention.
-func renderInitScaffold(spec initDialect, packageName, output string) ([]byte, error) {
+func renderInitScaffold(spec initDialect, program, packageName, output string) ([]byte, error) {
 	slashed := filepath.ToSlash(output)
 	data := struct {
 		DriverImport  string
 		OpenName      string
 		DialectCall   string
+		Program       string
 		Package       string
 		Output        string
 		OutputLiteral string
@@ -494,8 +494,12 @@ func renderInitScaffold(spec initDialect, packageName, output string) ([]byte, e
 		DriverImport: spec.driverImport,
 		OpenName:     spec.openName,
 		DialectCall:  spec.dialectCall,
-		Package:      packageName,
-		Output:       slashed,
+		// Program names the command that wrote the file, in the scaffold's
+		// own doc comment: the file says which command a reader runs again,
+		// so it must name the command that ran, not a sibling of it.
+		Program: program,
+		Package: packageName,
+		Output:  slashed,
 		// OutputLiteral, not Output, is what the template splices into
 		// Store.Dir. The template writes it where a Go string literal
 		// belongs, so it carries its own quotes: a -output holding a

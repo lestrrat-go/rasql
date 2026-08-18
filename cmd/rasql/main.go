@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	if err := rasql.Run(os.Args[1:], os.Stdout); err != nil {
+	if err := rasql.Run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}

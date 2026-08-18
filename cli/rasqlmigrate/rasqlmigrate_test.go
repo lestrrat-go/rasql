@@ -598,13 +598,16 @@ func newTestDirectory(t *testing.T) string {
 	return t.TempDir()
 }
 
+// setCommandOutput collects what a command writes. It takes both streams,
+// so a diagnostic a test provokes lands in the buffer rather than on the
+// test binary's own standard output.
 func setCommandOutput(t *testing.T) *bytes.Buffer {
 	t.Helper()
-	previous := commandOutput
+	previousOutput, previousDiagnostics := commandOutput, commandDiagnostics
 	output := new(bytes.Buffer)
-	commandOutput = output
+	commandOutput, commandDiagnostics = output, output
 	t.Cleanup(func() {
-		commandOutput = previous
+		commandOutput, commandDiagnostics = previousOutput, previousDiagnostics
 	})
 	return output
 }
