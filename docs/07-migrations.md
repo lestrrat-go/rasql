@@ -134,6 +134,33 @@ The first PostgreSQL, MySQL, and SQLite slices generate new tables, new nullable
 
 The generated files use the normal migration format. Review them, then apply them with `rasql migrate apply`. Do not edit a generated migration after it has been applied.
 
+## Compare one live table with a desired schema
+
+`rasql migrate diff-live` takes the baseline from a running database instead of a checked-in directory. It inspects one table, renders that descriptor back into DDL, and compares it with the desired schema named by `-to`. PostgreSQL, MySQL, and SQLite are supported.
+
+Preview the migration the comparison proposes:
+
+```sh
+rasql migrate diff-live \
+  -dialect postgresql \
+  -dsn "$DATABASE_URL" \
+  -table members \
+  -to db/schema/postgresql-v1.2
+```
+
+Pass `-output` to write the proposed statements as a new migration directory instead of printing them:
+
+```sh
+rasql migrate diff-live \
+  -dialect postgresql \
+  -dsn "$DATABASE_URL" \
+  -table members \
+  -to db/schema/postgresql-v1.2 \
+  -output db/migrations/postgresql/002_add_member_email
+```
+
+`-dialect`, `-dsn`, `-table`, and `-to` are all required. The command reads the whole comparison inside one transaction, rolls that transaction back, and reports `no schema changes` when the live table already matches. It refuses a plan whose statements touch any table other than `-table`, and it applies the same restrictions the `diff` command does, so a rename, a removal, or a changed column is still written by hand. The command redacts the exact DSN from returned errors.
+
 Any live-schema comparison that uses `inspect` requires complete metadata privileges. MySQL filters `information_schema.columns` by column privileges, so a partial grant can create a false baseline; use table- or database-level `SELECT` (or equivalent full column visibility) before running `diff-live`. The inspector returns `inspect.ErrIncompleteMetadata` when the visible column count does not match the full `SHOW CREATE TABLE` definition.
 
 ## Go API
