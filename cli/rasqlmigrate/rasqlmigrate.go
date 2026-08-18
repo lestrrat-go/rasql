@@ -415,10 +415,11 @@ func runVerify(args []string) error {
 	return nil
 }
 
-// newFlagSet builds a subcommand's flag set. What the flag package prints
-// while parsing is a diagnostic, not command output, so it goes to the
-// diagnostic stream; the standalone rasqlmigrate binary points both streams
-// at one writer and so keeps printing where it always did.
+// newFlagSet builds a subcommand's flag set. A flag set has one writer for
+// both a parse diagnostic and a help listing, so everything it prints goes to
+// the diagnostic stream and the caller sorts the two out by the error the run
+// returned; the standalone rasqlmigrate binary points both streams at one
+// writer and so keeps printing where it always did.
 func newFlagSet(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(commandDiagnostics)

@@ -2,6 +2,7 @@
 package rasql
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,14 +25,17 @@ func Run(args []string, output, diagnostics io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: rasql <codegen|migrate> <command> [flags]")
 	}
-	// The flag package writes a help request and a parse diagnostic to one
-	// writer, so the stream a subcommand's flag set prints on is chosen
-	// here: a help request is output the caller asked for, and everything
-	// else the flag package prints is a diagnostic.
-	flagOutput := diagnostics
-	if helpRequested(args) {
-		flagOutput = output
-	}
+	// The flag package writes a help request and a parse diagnostic to the
+	// single writer a flag set holds, and only the flag package knows which
+	// of the two it printed: a "-h" among the arguments is a help request in
+	// one run and another flag's value in the next. The run reports that
+	// itself, because a help request is the one outcome that returns
+	// flag.ErrHelp. So a subcommand's flag set prints into a buffer, and the
+	// error the run returned picks the stream that buffer is written to: the
+	// help the caller asked for is command output, and everything else the
+	// flag package printed is a diagnostic.
+	var flagPrinted bytes.Buffer
+	var err error
 	switch args[0] {
 	case "-h", "-help", "--help":
 		printUsage(output)
@@ -39,29 +43,20 @@ func Run(args []string, output, diagnostics io.Writer) error {
 	case "codegen":
 		// Each context states its own commands, usage line, and unknown-command
 		// error under the name it was called by, so they are stated once, there.
-		return rasqlgen.Run(args[1:], output, flagOutput)
+		err = rasqlgen.Run(args[1:], output, &flagPrinted)
 	case "migrate":
-		return rasqlmigrate.Run(args[1:], output, flagOutput)
+		err = rasqlmigrate.Run(args[1:], output, &flagPrinted)
 	default:
 		return fmt.Errorf("unknown rasql command %q; expected codegen or migrate", args[0])
 	}
-}
-
-// helpRequested reports whether args ask a command to print its flags. An
-// argument after "--" is a value rather than a flag, so the scan stops
-// there. A help token that a flag value swallowed ("-dialect -h") is not a
-// help request, and such a run prints nothing at all unless parsing fails
-// later on, which puts that one diagnostic on the output stream.
-func helpRequested(args []string) bool {
-	for _, arg := range args {
-		if arg == "--" {
-			return false
+	if flagPrinted.Len() > 0 {
+		flagStream := diagnostics
+		if errors.Is(err, flag.ErrHelp) {
+			flagStream = output
 		}
-		if arg == "-h" || arg == "-help" || arg == "--help" {
-			return true
-		}
+		_, _ = flagStream.Write(flagPrinted.Bytes())
 	}
-	return false
+	return err
 }
 
 func printUsage(output io.Writer) {

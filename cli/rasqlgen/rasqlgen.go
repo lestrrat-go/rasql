@@ -53,8 +53,12 @@ type command struct {
 	initFlagSetName string
 	// output receives help text and what a successful command produced.
 	output io.Writer
-	// diagnostics receives what the flag package prints while parsing: a
-	// parse diagnostic, and the usage block that follows it.
+	// diagnostics receives everything the flag package prints while
+	// parsing, which is a parse diagnostic with the usage block under it,
+	// or the flag listing a help request asked for. Which of the two a run
+	// printed is only known once it returns, so the caller sorts them: this
+	// writer is the diagnostic stream under the standalone binary and one
+	// the unified command buffers and routes by the returned error.
 	diagnostics io.Writer
 }
 
