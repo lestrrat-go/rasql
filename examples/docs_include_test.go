@@ -982,3 +982,119 @@ func TestDocsNameUnifiedMigrateCommand(t *testing.T) {
 		require.NotZero(t, unified, "no page names `rasql migrate <command>`; this check is no longer reading the migration documentation")
 	})
 }
+
+// sampleStartupSeedCall matches the call the sample's startup path makes to
+// write its demo rows. The rule the test below enforces is about behavior, not
+// wording, so it reads this call out of the sample rather than assuming it.
+var sampleStartupSeedCall = regexp.MustCompile(`\bSeedDemo\(`)
+
+// sampleSeedStatement matches a sentence that tells a reader the sample writes
+// rows of its own at startup.
+var sampleSeedStatement = regexp.MustCompile(`(?i)\bseed(s|ed|ing)?\b`)
+
+// sampleSectionHeading opens the README section that walks a reader through
+// running the sample, and sampleSectionEnd is the next heading after it.
+const (
+	sampleSectionHeading = "## Sample application"
+	sampleSectionEnd     = "\n## "
+)
+
+// sampleQuickStartProblem reports why the README's sample walkthrough disagrees
+// with what the sample actually does at startup, or the empty string when the
+// two agree. A sample that seeds rows has to say so, because a reader who is
+// told only that it queries an existing database has no reason to expect the
+// page to already hold data. A sample that does not seed must not claim it.
+func sampleQuickStartProblem(section string, seeds bool) string {
+	states := sampleSeedStatement.MatchString(section)
+	switch {
+	case seeds && !states:
+		return "the sample writes rows at startup, but the walkthrough never says it seeds anything"
+	case !seeds && states:
+		return "the walkthrough says the sample seeds rows, but its startup path writes none"
+	default:
+		return ""
+	}
+}
+
+// sampleQuickStartFixtures pin the rule against invented walkthrough text. None
+// of these is a real passage in this repository: quoting a real bad line here
+// would leave a false positive for the next reader who searches the tree for
+// one.
+var sampleQuickStartFixtures = []struct {
+	name    string
+	section string
+	seeds   bool
+	reject  bool
+}{
+	{
+		name:    "query-only wording for a seeding sample",
+		section: "The application reads an already-migrated database and creates no table of its own.",
+		seeds:   true,
+		reject:  true,
+	},
+	{
+		name:    "seeding stated for a seeding sample",
+		section: "The application seeds rows into an already-migrated database and creates no table of its own.",
+		seeds:   true,
+	},
+	{
+		name:    "seeding claimed by a sample that writes nothing",
+		section: "The application seeds its own rows before the first request arrives.",
+		seeds:   false,
+		reject:  true,
+	},
+	{
+		name:    "query-only wording for a query-only sample",
+		section: "The application reads an already-migrated database and creates no table of its own.",
+		seeds:   false,
+	},
+}
+
+// readmeSampleSection returns the README section that walks a reader through
+// running the sample application.
+func readmeSampleSection(t *testing.T) string {
+	t.Helper()
+
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "README.md"))
+	require.NoError(t, err)
+
+	start := strings.Index(string(contents), sampleSectionHeading)
+	require.NotEqual(t, -1, start, "README.md no longer holds a %q section; this check is no longer reading the sample walkthrough", sampleSectionHeading)
+
+	section := string(contents)[start+len(sampleSectionHeading):]
+	if end := strings.Index(section, sampleSectionEnd); end != -1 {
+		section = section[:end]
+	}
+	return section
+}
+
+// TestReadmeSampleWalkthroughStatesStartupWrites holds the README's sample
+// walkthrough to what the sample's startup path actually does. The walkthrough
+// exists to tell a reader why `rasql migrate apply` has to run first, and that
+// reason is incomplete while the sample writes rows the page never mentions.
+func TestReadmeSampleWalkthroughStatesStartupWrites(t *testing.T) {
+	t.Run("fixtures", func(t *testing.T) {
+		for _, fixture := range sampleQuickStartFixtures {
+			t.Run(fixture.name, func(t *testing.T) {
+				problem := sampleQuickStartProblem(fixture.section, fixture.seeds)
+				if fixture.reject {
+					require.NotEmpty(t, problem, "the rule accepts a walkthrough that disagrees with the sample:\n%s", fixture.section)
+					return
+				}
+				require.Empty(t, problem, "the rule rejects a walkthrough that already agrees with the sample: %s", problem)
+			})
+		}
+	})
+
+	t.Run("documentation", func(t *testing.T) {
+		startup, err := os.ReadFile(filepath.Join(repositoryRoot, "sample", "taskboard", "cmd", "taskboard", "main.go"))
+		require.NoError(t, err)
+
+		seeds := sampleStartupSeedCall.Match(startup)
+		section := readmeSampleSection(t)
+		require.Contains(t, section, "rasql migrate apply", "the sample walkthrough no longer tells a reader to apply the migrations first")
+
+		problem := sampleQuickStartProblem(section, seeds)
+		require.Empty(t, problem, "README.md %q: %s", sampleSectionHeading, problem)
+	})
+}
