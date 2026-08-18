@@ -420,6 +420,18 @@ func runVerify(args []string) error {
 // the diagnostic stream and the caller sorts the two out by the error the run
 // returned; the standalone rasqlmigrate binary points both streams at one
 // writer and so keeps printing where it always did.
+// newFlagSet builds a subcommand's flag set. Every migration subcommand parses
+// with it and returns whatever Parse returns, so `-h` reports flag.ErrHelp and
+// exits 0 with any later argument unread: `plan -h -unknown` prints the plan
+// usage and says nothing about -unknown. That is inherited behavior, not
+// something the unified command introduced. Verified against origin/main
+// (5ecf71e) by building both trees: the base rasqlmigrate binary prints the
+// same bytes and exits 0 for the same arguments, because base
+// cmd/rasqlmigrate/main.go's runPlan is this same code. Keeping it is what
+// "the standalone binary behaves exactly as before" costs; cli/rasqlgen
+// rejects leftover arguments through parseCommandFlags, and that asymmetry
+// predates this package too. Falsify this by running `plan -h -unknown`
+// against a base rasqlmigrate build and finding it rejects the argument.
 func newFlagSet(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(commandDiagnostics)
