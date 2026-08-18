@@ -175,6 +175,11 @@ source: [examples/store/schema_gen.go](https://github.com/lestrrat-go/rasql/blob
 
 The descriptor stays unexported so no importer can replace it; `store.Users()` hands out the table value, and `store.UsersDef()` hands out a copy of the descriptor. Its column accessors are what the query builders take, so `WhereEqual(users.ID(), 42)` builds while a misspelled `users.Emial()` does not compile. See [what the column accessors catch](docs/06-rasqlgen.md#what-the-column-accessors-catch) and [the mapping methods](docs/06-rasqlgen.md#the-mapping-and-scan-methods).
 
+<!-- Both labels in this sentence are page titles, not tool names: docs/02-schema.md opens with
+     "# Schemas" and docs/06-rasqlgen.md opens with "# `rasql codegen`". A "See X and Y" pointer whose
+     first label is a page's own H1 is naming the second page the same way. Every site this change left
+     spelled `rasqlgen` is unlinked prose naming the tool -- the generated-file marker, "the shape
+     rasqlgen emits", the `cmd/rasqlgen` package row -- never a link to that page. -->
 Writing the same descriptors by hand works too. See [Schemas](docs/02-schema.md) and [`rasql codegen`](docs/06-rasqlgen.md).
 
 ### 2. Read and write rows
