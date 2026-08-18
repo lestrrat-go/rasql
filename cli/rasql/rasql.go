@@ -33,7 +33,9 @@ func Run(args []string, output, diagnostics io.Writer) error {
 	// flag.ErrHelp. So a subcommand's flag set prints into a buffer, and the
 	// error the run returned picks the stream that buffer is written to: the
 	// help the caller asked for is command output, and everything else the
-	// flag package printed is a diagnostic.
+	// flag package printed is a diagnostic. cli/rasqlgen already routes its
+	// own flag output that way, so its buffer arrives empty and only
+	// cli/rasqlmigrate leaves the sorting to this caller.
 	var flagPrinted bytes.Buffer
 	var err error
 	switch args[0] {

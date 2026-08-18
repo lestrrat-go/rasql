@@ -2,6 +2,7 @@
 package rasqlgen
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,12 +17,28 @@ func Run(args []string, output, diagnostics io.Writer) error {
 	if output == nil || diagnostics == nil {
 		return errors.New("rasqlgen: command output must not be nil")
 	}
-	return command{
+	// A flag set has one writer for both a help listing and a parse
+	// diagnostic, and only the run knows which of the two it printed,
+	// because a help request is the one outcome that returns flag.ErrHelp.
+	// So the flag set prints into a buffer and the returned error picks the
+	// stream that buffer is written to: the help the caller asked for is
+	// command output, and everything else the flag package printed is a
+	// diagnostic.
+	var flagPrinted bytes.Buffer
+	err := command{
 		program:         "rasql codegen",
 		initFlagSetName: "rasql codegen init",
 		output:          output,
-		diagnostics:     diagnostics,
+		diagnostics:     &flagPrinted,
 	}.run(args)
+	if flagPrinted.Len() > 0 {
+		flagStream := diagnostics
+		if errors.Is(err, flag.ErrHelp) {
+			flagStream = output
+		}
+		_, _ = flagStream.Write(flagPrinted.Bytes())
+	}
+	return err
 }
 
 // RunLegacy executes the same commands under the standalone rasqlgen
@@ -56,9 +73,9 @@ type command struct {
 	// diagnostics receives everything the flag package prints while
 	// parsing, which is a parse diagnostic with the usage block under it,
 	// or the flag listing a help request asked for. Which of the two a run
-	// printed is only known once it returns, so the caller sorts them: this
-	// writer is the diagnostic stream under the standalone binary and one
-	// the unified command buffers and routes by the returned error.
+	// printed is only known once it returns, so whoever built the command
+	// sorts them: this writer is the single writer under the standalone
+	// binary, and a buffer Run routes by the returned error.
 	diagnostics io.Writer
 }
 
