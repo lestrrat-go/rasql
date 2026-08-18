@@ -111,7 +111,7 @@ func TestInitRefusesOutputThatResolvesToTheScaffoldDirectory(t *testing.T) {
 			testCase.build(t, root)
 
 			var out bytes.Buffer
-			err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", testCase.output, "-gen-dir", testCase.genDir}, &out)
+			err := RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", testCase.output, "-gen-dir", testCase.genDir}, &out)
 			require.ErrorContains(t, err, "name the same directory")
 			require.ErrorContains(t, err, testCase.output)
 			require.Empty(t, out.String())
@@ -132,7 +132,7 @@ func TestInitRejectsGenDirSymlinkOutsideModule(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, filepath.Join(root, "gen")))
 
 	var out bytes.Buffer
-	err := Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "gen"}, &out)
+	err := RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "-gen-dir", "gen"}, &out)
 	require.ErrorContains(t, err, "outside the module")
 	require.Empty(t, out.String())
 
@@ -149,7 +149,7 @@ func TestInitAcceptsDistinctDirectoriesReachedThroughALink(t *testing.T) {
 	require.NoError(t, os.Symlink("real", filepath.Join(root, "link")))
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "link/store", "-gen-dir", "real/gen"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "link/store", "-gen-dir", "real/gen"}, &out))
 
 	source, err := os.ReadFile(filepath.Join(root, "real", "gen", "main.go"))
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestInitAcceptsADanglingLinkToAnotherDirectory(t *testing.T) {
 	require.NoError(t, os.Symlink("store", filepath.Join(root, "target")))
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "target", "-gen-dir", "gen"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "target", "-gen-dir", "gen"}, &out))
 
 	source, err := os.ReadFile(filepath.Join(root, "gen", "main.go"))
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestInitTerminatesOnALinkCycle(t *testing.T) {
 	require.NoError(t, os.Symlink("first", filepath.Join(root, "second")))
 
 	var out bytes.Buffer
-	require.NoError(t, Run([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "first", "-gen-dir", "gen"}, &out))
+	require.NoError(t, RunLegacy([]string{"init", "-dialect", "sqlite", "-package", "store", "-output", "first", "-gen-dir", "gen"}, &out))
 
 	source, err := os.ReadFile(filepath.Join(root, "gen", "main.go"))
 	require.NoError(t, err)

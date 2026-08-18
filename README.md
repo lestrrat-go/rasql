@@ -10,9 +10,9 @@ It gives an application one model for schema definitions, dynamic queries, stati
 * Dynamic query building at runtime, through `rasql/dynamic`.
 * Static query building with templates.
 
-`rasql` starts from the database you already have: `rasqlgen init` scaffolds a checked-in generator program, and that project-owned program turns live metadata into typed rows, tables, column accessors, and static query functions.
+`rasql` starts from the database you already have: `rasql codegen init` scaffolds a checked-in generator program, and that project-owned program turns live metadata into typed rows, tables, column accessors, and static query functions.
 
-`rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. Run checked-in SQL migration directories with [`rasqlmigrate`](docs/07-migrations.md), and generate reviewed PostgreSQL, MySQL, or SQLite migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
+`rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. Run checked-in SQL migration directories with [`rasql migrate apply`](docs/07-migrations.md), and generate reviewed PostgreSQL, MySQL, or SQLite migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
 
 ## Requirements
 
@@ -28,11 +28,11 @@ go get github.com/lestrrat-go/rasql
 
 ### 1. Generate the store with an owned program
 
-Run `rasqlgen init` once. It writes only `gen/main.go`; it does not connect to the database or generate the store. Check that scaffold into the project, then run the project-owned program whenever the schema changes:
+Run `rasql codegen init` once. It writes only `gen/main.go`; it does not connect to the database or generate the store. Check that scaffold into the project, then run the project-owned program whenever the schema changes:
 
 ```sh
-go get github.com/lestrrat-go/rasql/cmd/rasqlgen@latest
-go run github.com/lestrrat-go/rasql/cmd/rasqlgen init \
+go get github.com/lestrrat-go/rasql/cmd/rasql@latest
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen init \
   -dialect postgresql \
   -package store \
   -output internal/store
@@ -41,7 +41,7 @@ DATABASE_URL="$DATABASE_URL" go generate ./...
 DATABASE_URL="$DATABASE_URL" go run ./gen -check
 ```
 
-The generated `gen/main.go` owns the database driver, the `catalog.Options` table selection (`Include`, `Exclude`, and `HistoryTable`), Go-side `Hints`, static `Queries`, and the `generate.Store` `Prune`, `Write`, and `Check` behavior. Edit that program when the project needs a different selection or generation policy; rerun `rasqlgen init` with `-force` only when intentionally replacing the scaffold.
+The generated `gen/main.go` owns the database driver, the `catalog.Options` table selection (`Include`, `Exclude`, and `HistoryTable`), Go-side `Hints`, static `Queries`, and the `generate.Store` `Prune`, `Write`, and `Check` behavior. Edit that program when the project needs a different selection or generation policy; rerun `rasql codegen init` with `-force` only when intentionally replacing the scaffold.
 
 The owned generator turns each live table descriptor into the code you query through: a `<table>_gen.go` file holding a row type with its scan methods and its column-value method, a table type with one accessor method per column, and a package-level accessor. A separate `schema_gen.go` holds every table's runtime descriptor. This is the whole file for a `users` table of `id` and `email`:
 
@@ -285,7 +285,7 @@ The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since
 
 ## Sample application
 
-The [Taskboard sample](sample/taskboard/) is a standalone HTTP application whose checked-in SQLite SQL migrations run with `rasqlmigrate` before startup. Its Taskboard page shows typed descriptors, inserts, an update, and a joined query in one small application.
+The [Taskboard sample](sample/taskboard/) is a standalone HTTP application whose checked-in SQLite SQL migrations run with `rasql migrate apply` before startup. Its Taskboard page shows typed descriptors, inserts, an update, and a joined query in one small application.
 
 ```sh
 cd sample/taskboard
@@ -323,6 +323,7 @@ Most applications only import the root `rasql` package plus `dialect` and `schem
 | `inspect` | Reads live database metadata into `schema` descriptors. |
 | `migrate` | Plans and executes forward-only DDL migrations with durable history. |
 | `template`, `generate`, `cmd/rasqlgen` | Compile templates and descriptors into deterministic Go source. |
+| `cmd/rasql` | Runs code generation and migrations as `rasql codegen` and `rasql migrate`. |
 
 See [DESIGN.md](DESIGN.md) for the architecture and the reasoning behind these boundaries.
 

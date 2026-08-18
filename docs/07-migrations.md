@@ -1,16 +1,16 @@
 # Migrations
 
-`rasqlmigrate` applies checked-in, forward-only SQL migrations and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so resolve any failed partial migration before retrying.
+`rasql migrate` applies checked-in, forward-only SQL migrations and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so resolve any failed partial migration before retrying.
 
 The command is designed to run outside the application. The application opens and uses an already-migrated database; it does not import or invoke the migration tool.
 
 Install the command once:
 
 ```sh
-go install github.com/lestrrat-go/rasql/cmd/rasqlmigrate@latest
+go install github.com/lestrrat-go/rasql/cmd/rasql@latest
 ```
 
-Then run `rasqlmigrate <command> [flags]`.
+Then run `rasql migrate <command> [flags]`. The standalone `rasqlmigrate` binary still accepts the same commands under its own name.
 
 ## Migration directories
 
@@ -26,7 +26,7 @@ db/migrations/
       001_add_nickname.sql
 ```
 
-Each `.sql` file contains one native database statement. `rasqlmigrate` sends its bytes unchanged to the database driver. It does not parse, split, or render SQL, so a migration can use the database's own DDL syntax.
+Each `.sql` file contains one native database statement. `rasql migrate` sends its bytes unchanged to the database driver. It does not parse, split, or render SQL, so a migration can use the database's own DDL syntax.
 
 Migration IDs, source filenames, source order, and source bytes are part of the recorded checksum. Do not edit, rename, move, add to, or remove an applied migration. Create a new migration directory for every later change.
 
@@ -35,7 +35,7 @@ Migration IDs, source filenames, source order, and source bytes are part of the 
 Create an empty migration directory, then add numbered SQL source files:
 
 ```sh
-rasqlmigrate new \
+rasql migrate new \
   -dir db/migrations/sqlite \
   -id 002_add_user_nickname
 ```
@@ -49,7 +49,7 @@ ALTER TABLE "users" ADD COLUMN "nickname" TEXT;
 Review the ordered sources without opening a database connection:
 
 ```sh
-rasqlmigrate plan \
+rasql migrate plan \
   -dir db/migrations/sqlite
 ```
 
@@ -59,17 +59,17 @@ Use `apply`, `status`, and `verify` in local automation and CI. Keep the DSN in 
 For SQLite, store the database file outside the migration root.
 
 ```sh
-rasqlmigrate apply \
+rasql migrate apply \
   -dir db/migrations/sqlite \
   -dialect sqlite \
   -dsn "$DATABASE_URL"
 
-rasqlmigrate status \
+rasql migrate status \
   -dir db/migrations/sqlite \
   -dialect sqlite \
   -dsn "$DATABASE_URL"
 
-rasqlmigrate verify \
+rasql migrate verify \
   -dir db/migrations/sqlite \
   -dialect sqlite \
   -dsn "$DATABASE_URL"
@@ -79,7 +79,7 @@ rasqlmigrate verify \
 
 ## Generate PostgreSQL, MySQL, and SQLite migrations
 
-`rasqlmigrate diff` compares two PostgreSQL, MySQL, or SQLite desired-schema directories without connecting to a database. Each directory holds supported natural DDL: `CREATE TABLE` statements and named `CREATE INDEX` statements. It parses source files recursively, then prints a proposed raw SQL migration for review.
+`rasql migrate diff` compares two PostgreSQL, MySQL, or SQLite desired-schema directories without connecting to a database. Each directory holds supported natural DDL: `CREATE TABLE` statements and named `CREATE INDEX` statements. It parses source files recursively, then prints a proposed raw SQL migration for review.
 
 ```text
 db/schema/
@@ -94,7 +94,7 @@ db/migrations/
 Preview the generated migration before writing it:
 
 ```sh
-rasqlmigrate diff \
+rasql migrate diff \
   -dialect postgresql \
   -from db/schema/postgresql-v1.1 \
   -to db/schema/postgresql-v1.2
@@ -103,7 +103,7 @@ rasqlmigrate diff \
 Pass a new migration directory to write one SQL source file for each generated statement:
 
 ```sh
-rasqlmigrate diff \
+rasql migrate diff \
   -dialect postgresql \
   -from db/schema/postgresql-v1.1 \
   -to db/schema/postgresql-v1.2 \
@@ -113,7 +113,7 @@ rasqlmigrate diff \
 Use the same workflow for MySQL with `-dialect mysql` and MySQL schema and migration directories:
 
 ```sh
-rasqlmigrate diff \
+rasql migrate diff \
   -dialect mysql \
   -from db/schema/mysql-v1.1 \
   -to db/schema/mysql-v1.2 \
@@ -123,7 +123,7 @@ rasqlmigrate diff \
 Use the SQLite dialect with separate SQLite schema and migration directories:
 
 ```sh
-rasqlmigrate diff \
+rasql migrate diff \
   -dialect sqlite \
   -from db/schema/sqlite-v1.1 \
   -to db/schema/sqlite-v1.2 \
@@ -132,7 +132,7 @@ rasqlmigrate diff \
 
 The first PostgreSQL, MySQL, and SQLite slices generate new tables, new nullable columns, new required columns with defaults, and ordinary named indexes. They refuse to infer renames, removals, changed columns or constraints, and required columns without a backfill. The PostgreSQL adapter also refuses `CREATE INDEX CONCURRENTLY`. The SQLite adapter requires every added default to be literal and refuses added primary-key, unique, generated, and foreign-key-default columns. Write those migrations by hand.
 
-The generated files use the normal migration format. Review them, then apply them with `rasqlmigrate apply`. Do not edit a generated migration after it has been applied.
+The generated files use the normal migration format. Review them, then apply them with `rasql migrate apply`. Do not edit a generated migration after it has been applied.
 
 Any live-schema comparison that uses `inspect` requires complete metadata privileges. MySQL filters `information_schema.columns` by column privileges, so a partial grant can create a false baseline; use table- or database-level `SELECT` (or equivalent full column visibility) before running `diff-live`. The inspector returns `inspect.ErrIncompleteMetadata` when the visible column count does not match the full `SHOW CREATE TABLE` definition.
 

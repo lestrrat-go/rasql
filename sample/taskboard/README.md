@@ -1,6 +1,6 @@
 # Taskboard sample application
 
-This standalone module runs a small SQLite Taskboard web application. The application only opens and queries its database. The sample already includes the `gen/main.go` scaffold that `rasqlgen init` creates for a new project. Run its checked-in SQLite SQL migrations with `rasqlmigrate` before starting it.
+This standalone module runs a small SQLite Taskboard web application. The application only opens and queries its database. The sample already includes the `gen/main.go` scaffold that `rasql codegen init` creates for a new project. Run its checked-in SQLite SQL migrations with `rasql migrate` before starting it.
 
 - `cmd/taskboard` opens the SQLite database, then wires the rasql db and HTTP server.
 - `migrations` holds the ordered schema changes applied before the application starts.
@@ -11,10 +11,10 @@ This standalone module runs a small SQLite Taskboard web application. The applic
 Initialize the runtime database from this directory:
 
 ```sh
-go run ../../cmd/rasqlmigrate plan \
+go run ../../cmd/rasql migrate plan \
   -dir migrations/sqlite
 
-go run ../../cmd/rasqlmigrate apply \
+go run ../../cmd/rasql migrate apply \
   -dir migrations/sqlite \
   -dialect sqlite \
   -dsn taskboard.db
@@ -22,7 +22,7 @@ go run ../../cmd/rasqlmigrate apply \
 TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 ```
 
-Regenerate the checked-in store descriptors after adding a migration. The sample's checked-in `gen/main.go` owns this workflow; `rasqlgen init` is only needed to create that file in a new project:
+Regenerate the checked-in store descriptors after adding a migration. The sample's checked-in `gen/main.go` owns this workflow; `rasql codegen init` is only needed to create that file in a new project:
 
 ```sh
 go generate ./...

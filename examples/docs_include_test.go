@@ -848,3 +848,137 @@ func accessorSection(t *testing.T) string {
 	}
 	return fencedBlock.ReplaceAllString(body, "")
 }
+
+// migrateCommandName matches the standalone migration command's own name. The
+// unified command spells the same work `rasql migrate <command>`, so a page
+// that still writes the bare name either sends a reader to the standalone
+// binary by accident or describes work the unified command now owns.
+var migrateCommandName = regexp.MustCompile(`\brasqlmigrate\b`)
+
+// migrateCommandPackagePath matches a mention that names a package or command
+// directory rather than an invocation. A package path is the name of a
+// directory in this repository, so it stays correct however the command a
+// reader types is spelled. The exemption covers only the path written on its
+// own inside a code span, the way an inventory row names a directory: a path
+// that carries a subcommand, or that a shell line runs, is an invocation of the
+// standalone command whatever directory it spells, so it keeps no exemption.
+var migrateCommandPackagePath = regexp.MustCompile("`(?:cmd|cli)/rasqlmigrate`")
+
+// standaloneBinaryNote matches the one sentence shape allowed to write the bare
+// name: a note that the separate binary still accepts the same commands. The
+// note has to call it the standalone binary, so a plain "run it with
+// `rasqlmigrate`" instruction is not exempt.
+var standaloneBinaryNote = regexp.MustCompile("standalone `rasqlmigrate` binary")
+
+// migrationInvocationPages lists every page that may tell a reader how to run
+// migrations. It is documentationPages, which already covers README.md and
+// every page under docs/, plus the three pages outside that set which may name
+// the command: the architecture overview, the contributor guide, and the
+// sample's own README.
+func migrationInvocationPages(t *testing.T) []string {
+	t.Helper()
+
+	return append(documentationPages(t),
+		filepath.Join(repositoryRoot, "DESIGN.md"),
+		filepath.Join(repositoryRoot, "CONTRIBUTING.md"),
+		filepath.Join(repositoryRoot, "sample", "taskboard", "README.md"),
+	)
+}
+
+// migrateInvocationProblem reports why a line names the standalone migration
+// command where it should name the unified one, or the empty string when it
+// does not.
+func migrateInvocationProblem(line string) string {
+	remainder := migrateCommandPackagePath.ReplaceAllString(line, "")
+	remainder = standaloneBinaryNote.ReplaceAllString(remainder, "")
+	if !migrateCommandName.MatchString(remainder) {
+		return ""
+	}
+	return "names `rasqlmigrate` as the command to run instead of `rasql migrate <command>`"
+}
+
+// migrateInvocationFixtures pin the rule against invented lines. None of these
+// is a real line in this repository: a real bad line quoted here would become a
+// false positive the next time somebody searches the tree for one.
+var migrateInvocationFixtures = []struct {
+	name   string
+	line   string
+	reject bool
+}{
+	{
+		name:   "bare instruction",
+		line:   "Apply the checked-in directories with `rasqlmigrate` before the service starts.",
+		reject: true,
+	},
+	{
+		name:   "linked instruction",
+		line:   "Roll the schema forward with [`rasqlmigrate`](docs/07-migrations.md) first.",
+		reject: true,
+	},
+	{
+		name:   "standalone application sentence",
+		line:   "The standalone worker runs its migrations with `rasqlmigrate` at boot.",
+		reject: true,
+	},
+	{
+		name:   "package path carrying a subcommand",
+		line:   "Run `cmd/rasqlmigrate apply` once the plan looks right.",
+		reject: true,
+	},
+	{
+		name:   "package path run by a shell line",
+		line:   "go run ./cli/rasqlmigrate plan --dsn $DSN",
+		reject: true,
+	},
+	{
+		name: "package path",
+		line: "| `cli/rasqlmigrate` and `cmd/rasqlmigrate` | Run checked-in SQL migration directories. |",
+	},
+	{
+		name: "standalone binary note",
+		line: "Then run `rasql migrate <command>`. The standalone `rasqlmigrate` binary still accepts the same commands.",
+	},
+	{
+		name: "unified command",
+		line: "Apply the checked-in directories with `rasql migrate apply` before the service starts.",
+	},
+}
+
+// TestDocsNameUnifiedMigrateCommand holds every page that tells a reader how to
+// run migrations to the unified command. `rasql migrate <command>` is the
+// documented invocation, so a page may write the standalone name only as a
+// package path named on its own inside a code span, or as the note that the
+// separate binary still accepts the same commands.
+func TestDocsNameUnifiedMigrateCommand(t *testing.T) {
+	t.Run("fixtures", func(t *testing.T) {
+		for _, fixture := range migrateInvocationFixtures {
+			t.Run(fixture.name, func(t *testing.T) {
+				problem := migrateInvocationProblem(fixture.line)
+				if fixture.reject {
+					require.NotEmpty(t, problem, "the rule accepts a line that sends a reader to the standalone command:\n%s", fixture.line)
+					return
+				}
+				require.Empty(t, problem, "the rule rejects a line that already names the unified command: %s", problem)
+			})
+		}
+	})
+
+	t.Run("documentation", func(t *testing.T) {
+		unified := 0
+		for _, page := range migrationInvocationPages(t) {
+			contents, err := os.ReadFile(page)
+			require.NoError(t, err)
+
+			for number, line := range strings.Split(string(contents), "\n") {
+				if strings.Contains(line, "rasql migrate ") {
+					unified++
+				}
+				problem := migrateInvocationProblem(line)
+				require.Empty(t, problem,
+					"%s:%d %s:\n%s",
+					page, number+1, problem, strings.TrimSpace(line))
+			}
+		}
+		require.NotZero(t, unified, "no page names `rasql migrate <command>`; this check is no longer reading the migration documentation")
+	})
+}

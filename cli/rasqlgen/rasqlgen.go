@@ -2,38 +2,105 @@
 package rasqlgen
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 )
 
-// Run executes rasqlgen with args and writes command output to writer.
-func Run(args []string, writer io.Writer) error {
+// Run executes the codegen commands of the unified rasql command with args.
+// Command output -- help text and what a successful command produced -- goes
+// to output, and what the flag package prints while parsing goes to
+// diagnostics, so the unified command can keep the two on separate streams.
+func Run(args []string, output, diagnostics io.Writer) error {
+	if output == nil || diagnostics == nil {
+		return errors.New("rasqlgen: command output must not be nil")
+	}
+	// A flag set has one writer for both a help listing and a parse
+	// diagnostic, and only the run knows which of the two it printed,
+	// because a help request is the one outcome that returns flag.ErrHelp.
+	// So the flag set prints into a buffer and the returned error picks the
+	// stream that buffer is written to: the help the caller asked for is
+	// command output, and everything else the flag package printed is a
+	// diagnostic.
+	var flagPrinted bytes.Buffer
+	err := command{
+		program:         "rasql codegen",
+		initFlagSetName: "rasql codegen init",
+		output:          output,
+		diagnostics:     &flagPrinted,
+	}.run(args)
+	if flagPrinted.Len() > 0 {
+		flagStream := diagnostics
+		if errors.Is(err, flag.ErrHelp) {
+			flagStream = output
+		}
+		_, _ = flagStream.Write(flagPrinted.Bytes())
+	}
+	return err
+}
+
+// RunLegacy executes the same commands under the standalone rasqlgen
+// command, which reports its own name and writes everything to writer.
+func RunLegacy(args []string, writer io.Writer) error {
 	if writer == nil {
 		return errors.New("rasqlgen: command output must not be nil")
 	}
+	return command{
+		program: "rasqlgen",
+		// The standalone binary prints what it has always printed, so its
+		// flag set keeps the bare subcommand name in "Usage of init:" and
+		// both streams stay on the one writer the caller supplied.
+		initFlagSetName: "init",
+		output:          writer,
+		diagnostics:     writer,
+	}.run(args)
+}
+
+// command holds what one run calls itself and where that run writes.
+type command struct {
+	// program names the command in usage lines and error messages:
+	// "rasqlgen" under the standalone binary, "rasql codegen" under the
+	// unified rasql command.
+	program string
+	// initFlagSetName names the init flag set, which the flag package
+	// prints as "Usage of <name>:". The unified command names itself in
+	// full there, so a diagnostic says which command produced it.
+	initFlagSetName string
+	// output receives help text and what a successful command produced.
+	output io.Writer
+	// diagnostics receives everything the flag package prints while
+	// parsing, which is a parse diagnostic with the usage block under it,
+	// or the flag listing a help request asked for. Which of the two a run
+	// printed is only known once it returns, so whoever built the command
+	// sorts them: this writer is the single writer under the standalone
+	// binary, and a buffer Run routes by the returned error.
+	diagnostics io.Writer
+}
+
+func (c command) run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: rasqlgen <init> [flags]")
+		return fmt.Errorf("usage: %s <init> [flags]", c.program)
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
-		printUsage(writer)
+		c.printUsage()
 		return flag.ErrHelp
 	case "init":
-		return runInit(args[1:], writer)
+		return c.runInit(args[1:])
 	default:
-		return fmt.Errorf("unknown rasqlgen command %q; expected init", args[0])
+		return fmt.Errorf("unknown %s command %q; expected init", c.program, args[0])
 	}
 }
 
-func printUsage(output io.Writer) {
-	_, _ = fmt.Fprintln(output, "Usage: rasqlgen <command> [flags]")
-	_, _ = fmt.Fprintln(output)
-	_, _ = fmt.Fprintln(output, "Commands:")
-	_, _ = fmt.Fprintln(output, "  init      Scaffold the generator program, gen/main.go")
-	_, _ = fmt.Fprintln(output)
-	_, _ = fmt.Fprintln(output, "Run 'rasqlgen <command> -h' for command flags.")
+func (c command) printUsage() {
+	_, _ = fmt.Fprintf(c.output, "Usage: %s <command> [flags]\n", c.program)
+	_, _ = fmt.Fprintln(c.output)
+	_, _ = fmt.Fprintln(c.output, "Commands:")
+	_, _ = fmt.Fprintln(c.output, "  init      Scaffold the generator program, gen/main.go")
+	_, _ = fmt.Fprintln(c.output)
+	_, _ = fmt.Fprintf(c.output, "Run '%s <command> -h' for command flags.\n", c.program)
 }
 
 // parseCommandFlags parses a subcommand's arguments and rejects whatever the
@@ -61,8 +128,8 @@ func unexpectedArgumentsError(rest []string) error {
 	return fmt.Errorf("unexpected arguments: %q", rest)
 }
 
-func newFlagSet(name string, writer io.Writer) *flag.FlagSet {
+func (c command) newFlagSet(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	flags.SetOutput(writer)
+	flags.SetOutput(c.diagnostics)
 	return flags
 }
