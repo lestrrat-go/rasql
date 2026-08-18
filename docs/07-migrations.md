@@ -2,7 +2,7 @@
 
 `rasql migrate` applies checked-in, forward-only SQL migrations and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so resolve any failed partial migration before retrying.
 
-The command is designed to run outside the application. The application opens and uses an already-migrated database; it does not import or invoke the migration tool.
+Run the command outside the application, before it starts. The application then opens a database whose schema is already in place.
 
 Install the command once:
 

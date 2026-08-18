@@ -1,6 +1,6 @@
 # Taskboard sample application
 
-This standalone module runs a small SQLite Taskboard web application. The application only opens and queries its database. The sample already includes the `gen/main.go` scaffold that `rasql codegen init` creates for a new project. Run its checked-in SQLite SQL migrations with `rasql migrate` before starting it.
+This standalone module runs a small SQLite Taskboard web application. Run its checked-in SQLite SQL migrations with `rasql migrate` to create the schema, then start the application. The sample already includes the `gen/main.go` scaffold that `rasql codegen init` creates for a new project.
 
 - `cmd/taskboard` opens the SQLite database, then wires the rasql db and HTTP server.
 - `migrations` holds the ordered schema changes applied before the application starts.
