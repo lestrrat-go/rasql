@@ -11,8 +11,8 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/store"
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/web"
+	"example.com/taskboard/internal/store"
+	"example.com/taskboard/internal/web"
 	_ "modernc.org/sqlite"
 )
 

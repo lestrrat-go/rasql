@@ -1,7 +1,9 @@
-// Command gen builds the Taskboard store from the SQLite migrations.
+// Command gen builds the Taskboard store from a migrated SQLite database.
 //
-// The generator owns the database setup and schema selection, so the checked-in
-// program is the complete source of truth for regenerating internal/store.
+// It is the program a project owns: it names the package, the output
+// directory, and the table selection, and nothing else. Applying the
+// migrations that produce the database it reads is the job of
+// scripts/generate.sh, which sets TASKBOARD_SCHEMA_DSN and runs this.
 package main
 
 import (
@@ -11,25 +13,23 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
+	"time"
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
-	"github.com/lestrrat-go/rasql/internal/migrationdir"
-	"github.com/lestrrat-go/rasql/internal/modroot"
-	"github.com/lestrrat-go/rasql/migrate"
 
 	_ "modernc.org/sqlite"
 )
 
-//go:generate go run .
+//go:generate ../scripts/generate.sh
 
-const (
-	migrationsDirectory = "migrations/sqlite"
-	databaseFile        = "internal/store/.taskboard-schema.db"
-	storeDirectory      = "internal/store"
-)
+// inspectionTimeout bounds the live-schema read.
+const inspectionTimeout = 30 * time.Second
+
+// storeDirectory is where the generated package is written, relative to the
+// module root generate.Store finds for itself.
+const storeDirectory = "internal/store"
 
 func main() {
 	check := flag.Bool("check", false, "report whether the generated store is current instead of writing it")
@@ -41,20 +41,14 @@ func main() {
 }
 
 func run(ctx context.Context, check bool) error {
-	root, err := modroot.FromWorkingDirectory()
-	if err != nil {
-		return err
-	}
-	if root == "" {
-		return errors.New("find taskboard module root: no go.mod found")
-	}
+	ctx, cancel := context.WithTimeout(ctx, inspectionTimeout)
+	defer cancel()
 
-	migrations, err := migrationdir.Load(filepath.Join(root, migrationsDirectory))
-	if err != nil {
-		return fmt.Errorf("load migrations: %w", err)
+	dsn := os.Getenv("TASKBOARD_SCHEMA_DSN")
+	if dsn == "" {
+		return errors.New("set TASKBOARD_SCHEMA_DSN to a migrated database, or run scripts/generate.sh, which does it for you")
 	}
-
-	database, err := sql.Open("sqlite", filepath.Join(root, databaseFile))
+	database, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("open schema database: %w", err)
 	}
@@ -62,14 +56,6 @@ func run(ctx context.Context, check bool) error {
 	defer func() { _ = database.Close() }()
 
 	d := dialect.SQLite()
-	runner, err := migrate.New(database, d)
-	if err != nil {
-		return fmt.Errorf("create migration runner: %w", err)
-	}
-	if err := runner.Apply(ctx, migrations...); err != nil {
-		return fmt.Errorf("apply migrations: %w", err)
-	}
-
 	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{Dialect: d})
 	if err != nil {
 		return fmt.Errorf("inspect schema: %w", err)
@@ -77,9 +63,9 @@ func run(ctx context.Context, check bool) error {
 
 	store := generate.Store{
 		Package: "store",
-		Root:    root,
 		Dir:     storeDirectory,
 		Tables:  tables,
+		Dialect: d,
 		Prune:   true,
 	}
 	if check {

@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/web"
+	"example.com/taskboard/internal/taskboard"
+	"example.com/taskboard/internal/web"
 )
 
 func TestTaskboardHandlerRendersOpenTasks(t *testing.T) {

@@ -1,32 +1,38 @@
 package main
 
 import (
-	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/generate"
-	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunCheck(t *testing.T) {
-	require.NoError(t, run(context.Background(), true))
+// generateScript runs scripts/generate.sh with the given arguments and
+// returns its combined output. The script owns the migration step, so the
+// test drives the same path the documentation tells a reader to run.
+func generateScript(t *testing.T, args ...string) ([]byte, error) {
+	t.Helper()
+	command := exec.Command(filepath.Join("..", "scripts", "generate.sh"), args...)
+	output, err := command.CombinedOutput()
+	return output, err
 }
 
-func TestRunCheckReportsStaleOutput(t *testing.T) {
-	root, err := modroot.FromWorkingDirectory()
-	require.NoError(t, err)
-	require.NotEmpty(t, root)
+func TestGenerateScriptReportsCurrentStore(t *testing.T) {
+	output, err := generateScript(t, "-check")
+	require.NoError(t, err, "generate.sh -check: %s", output)
+}
 
-	path := filepath.Join(root, storeDirectory, "schema_gen.go")
+func TestGenerateScriptReportsStaleStore(t *testing.T) {
+	path := filepath.Join("..", storeDirectory, "schema_gen.go")
 	original, err := os.ReadFile(path)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, os.WriteFile(path, original, 0o644))
 	})
-	require.NoError(t, os.WriteFile(path, append(original, '\n', '/', '/', ' ', 's', 't', 'a', 'l', 'e', '\n'), 0o644))
+	require.NoError(t, os.WriteFile(path, append(original, []byte("\n// stale\n")...), 0o644))
 
-	require.ErrorIs(t, run(context.Background(), true), generate.ErrStale)
+	output, err := generateScript(t, "-check")
+	require.Error(t, err, "generate.sh -check should fail on a stale store: %s", output)
 }

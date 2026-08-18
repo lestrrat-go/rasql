@@ -6,7 +6,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
+	"example.com/taskboard/internal/taskboard"
 )
 
 // Repository stores Taskboard data through rasql.

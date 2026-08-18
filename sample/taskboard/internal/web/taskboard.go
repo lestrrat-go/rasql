@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"strconv"
 
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
+	"example.com/taskboard/internal/taskboard"
 )
 
 const taskboardTemplate = `<!doctype html>

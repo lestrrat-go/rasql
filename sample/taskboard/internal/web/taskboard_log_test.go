@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/taskboard"
+	"example.com/taskboard/internal/taskboard"
 )
 
 func TestTaskboardHandlerLogsStoreErrors(t *testing.T) {

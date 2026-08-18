@@ -1,41 +1,37 @@
 # Taskboard sample application
 
-This standalone module runs a small SQLite Taskboard web application. Run its checked-in SQLite SQL migrations with `rasql migrate` to create the schema, then start the application. The sample already includes the `gen/main.go` scaffold that `rasql codegen init` creates for a new project.
+This is a standalone module that runs a small SQLite Taskboard web application. Its module path is `example.com/taskboard` rather than a path under `github.com/lestrrat-go/rasql`, so it reaches rasql only through the public API a real project has, and a copy of this directory is a working starting point.
 
 - `cmd/taskboard` opens the SQLite database, then wires the rasql db and HTTP server.
-- `migrations` holds the ordered schema changes applied before the application starts.
-- `internal/store` owns schema descriptors and persistence through rasql.
+- `migrations` holds the ordered schema changes.
+- `gen` holds the generator program this project owns.
+- `scripts` wraps every call to the `rasql` command, so a step is run rather than retyped.
+- `internal/store` holds the generated store and the persistence code built on it.
 - `internal/taskboard` owns the taskboard view model.
 - `internal/web` owns HTTP request handling and server lifecycle.
 
-Initialize the runtime database from this directory:
+Create the runtime database and start the application from this directory:
 
 ```sh
-go run ../../cmd/rasql migrate plan \
-  -dir migrations/sqlite
-
-go run ../../cmd/rasql migrate apply \
-  -dir migrations/sqlite \
-  -dialect sqlite \
-  -dsn taskboard.db
-
+./scripts/migrate.sh
 TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 ```
 
-Regenerate the checked-in store descriptors after adding a migration. The sample's checked-in `gen/main.go` owns this workflow; `rasql codegen init` is only needed to create that file in a new project:
+`scripts/migrate.sh` applies `migrations/sqlite` with `rasql migrate apply`, against `taskboard.db` or whatever `TASKBOARD_DSN` names.
+
+Regenerate the checked-in store after adding a migration:
 
 ```sh
-go generate ./...
+./scripts/generate.sh
 ```
-<!-- This recursive command is valid because the generate directive is in gen/main.go; internal/store contains generated output and has no directive. -->
 
-Check the checked-in store without writing files:
+`scripts/generate.sh` rebuilds a throwaway schema database from the same migrations, then runs `gen`, which inspects that database and writes one `<table>_gen.go` file per table. The throwaway database is `internal/store/.taskboard-schema.db` and is ignored by Git. `go generate ./...` runs the same script through the directive in `gen/main.go`.
+
+Report whether the checked-in store is current without writing files:
 
 ```sh
-go run ./gen -check
+./scripts/generate.sh -check
 ```
-
-The checked-in `gen/main.go` creates `internal/store/.taskboard-schema.db`, loads and applies the SQLite migrations, inspects the live schema, and generates one `<table>_gen.go` file per table. The database file is temporary and ignored by Git.
 
 Open <http://127.0.0.1:8080/> to see the Taskboard page. Set `TASKBOARD_ADDR` to use another listener address. Set `TASKBOARD_DSN` to use a different SQLite database path.
 
