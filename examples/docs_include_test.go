@@ -858,8 +858,11 @@ var migrateCommandName = regexp.MustCompile(`\brasqlmigrate\b`)
 // migrateCommandPackagePath matches a mention that names a package or command
 // directory rather than an invocation. A package path is the name of a
 // directory in this repository, so it stays correct however the command a
-// reader types is spelled.
-var migrateCommandPackagePath = regexp.MustCompile("`?(?:cmd|cli)/rasqlmigrate`?")
+// reader types is spelled. The exemption covers only the path written on its
+// own inside a code span, the way an inventory row names a directory: a path
+// that carries a subcommand, or that a shell line runs, is an invocation of the
+// standalone command whatever directory it spells, so it keeps no exemption.
+var migrateCommandPackagePath = regexp.MustCompile("`(?:cmd|cli)/rasqlmigrate`")
 
 // standaloneBinaryNote matches the one sentence shape allowed to write the bare
 // name: a note that the separate binary still accepts the same commands. The
@@ -868,14 +871,16 @@ var migrateCommandPackagePath = regexp.MustCompile("`?(?:cmd|cli)/rasqlmigrate`?
 var standaloneBinaryNote = regexp.MustCompile("standalone `rasqlmigrate` binary")
 
 // migrationInvocationPages lists every page that may tell a reader how to run
-// migrations. It is documentationPages plus the two pages outside that set
-// which name the command: the architecture overview and the sample's own
-// README.
+// migrations. It is documentationPages, which already covers README.md and
+// every page under docs/, plus the three pages outside that set which may name
+// the command: the architecture overview, the contributor guide, and the
+// sample's own README.
 func migrationInvocationPages(t *testing.T) []string {
 	t.Helper()
 
 	return append(documentationPages(t),
 		filepath.Join(repositoryRoot, "DESIGN.md"),
+		filepath.Join(repositoryRoot, "CONTRIBUTING.md"),
 		filepath.Join(repositoryRoot, "sample", "taskboard", "README.md"),
 	)
 }
@@ -916,6 +921,16 @@ var migrateInvocationFixtures = []struct {
 		reject: true,
 	},
 	{
+		name:   "package path carrying a subcommand",
+		line:   "Run `cmd/rasqlmigrate apply` once the plan looks right.",
+		reject: true,
+	},
+	{
+		name:   "package path run by a shell line",
+		line:   "go run ./cli/rasqlmigrate plan --dsn $DSN",
+		reject: true,
+	},
+	{
 		name: "package path",
 		line: "| `cli/rasqlmigrate` and `cmd/rasqlmigrate` | Run checked-in SQL migration directories. |",
 	},
@@ -932,8 +947,8 @@ var migrateInvocationFixtures = []struct {
 // TestDocsNameUnifiedMigrateCommand holds every page that tells a reader how to
 // run migrations to the unified command. `rasql migrate <command>` is the
 // documented invocation, so a page may write the standalone name only as a
-// package path or as the note that the separate binary still accepts the same
-// commands.
+// package path named on its own inside a code span, or as the note that the
+// separate binary still accepts the same commands.
 func TestDocsNameUnifiedMigrateCommand(t *testing.T) {
 	t.Run("fixtures", func(t *testing.T) {
 		for _, fixture := range migrateInvocationFixtures {
