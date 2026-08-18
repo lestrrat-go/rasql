@@ -321,9 +321,11 @@ Most applications only import the root `rasql` package plus `dialect` and `schem
 | `render` | Turns a validated query into SQL text and an ordered argument list. |
 | `dynamic` | Reads results whose column names are known only at run time. |
 | `inspect` | Reads live database metadata into `schema` descriptors. |
+| `catalog` | Reads a whole live catalog in one transaction and applies table selection. |
 | `migrate` | Plans and executes forward-only DDL migrations with durable history. |
-| `template`, `generate`, `cmd/rasqlgen` | Compile templates and descriptors into deterministic Go source. |
-| `cmd/rasql` | Runs code generation and migrations as `rasql codegen` and `rasql migrate`. |
+| `template`, `generate` | Compile templates and descriptors into deterministic Go source. |
+| `cmd/rasql` | Scaffolds the generator program and applies migrations, as `rasql codegen` and `rasql migrate`. |
+| `cmd/rasqlgen`, `cmd/rasqlmigrate` | Accept the same commands as the unified `rasql` command, under their own names. |
 
 See [DESIGN.md](DESIGN.md) for the architecture and the reasoning behind these boundaries.
 
