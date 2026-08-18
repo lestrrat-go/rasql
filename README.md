@@ -294,10 +294,14 @@ The [Taskboard sample](sample/taskboard/) is a standalone HTTP application whose
 
 ```sh
 cd sample/taskboard
-go run ./cmd/taskboard
+go run ../../cmd/rasql migrate apply \
+  -dir migrations/sqlite \
+  -dialect sqlite \
+  -dsn taskboard.db
+TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 ```
 
-Open <http://127.0.0.1:8080/> in another terminal.
+The application seeds rows into an already-migrated database and queries it, but creates no table of its own, so `rasql migrate apply` has to run first. Open <http://127.0.0.1:8080/> in another terminal.
 
 ## Documentation
 
