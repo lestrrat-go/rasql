@@ -28,7 +28,7 @@ Write the example first, under `examples/`, as an `Example*` function with an `/
 go test ./examples/ -update-docs
 ```
 
-New generator examples should use the owned-program workflow: `rasqlgen init` creates `gen/main.go`, the program calls `catalog.FromDatabase` and `generate.Store`, and `DATABASE_URL="$DATABASE_URL" go generate ./...` followed by `DATABASE_URL="$DATABASE_URL" go run ./gen -check` refreshes and verifies the package.
+New generator examples should use the owned-program workflow: `rasql codegen init` creates `gen/main.go`, the program calls `catalog.FromDatabase` and `generate.Store`, and `DATABASE_URL="$DATABASE_URL" go generate ./...` followed by `DATABASE_URL="$DATABASE_URL" go run ./gen -check` refreshes and verifies the package.
 
 The same flag rewrites the checked-in generated files the documentation shows. `examples/store/users_gen.go`, `examples/store/schema_gen.go`, `examples/store/schema_gen_test.go`, and `examples/store/user_by_email_gen.go` are checked by `TestGeneratedStoreIsCurrent`, which plans a `generate.Store` over the same table and query the files were generated from, reads the directory itself rather than a hardcoded file list, and requires the two to name the same generated files with the same bytes.
 

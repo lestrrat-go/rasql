@@ -14,7 +14,7 @@ These pages explain how to use `rasql` in an application. For what `rasql` is an
 
 Pages 3 through 5 are independent of each other. Read the first two, then jump to whichever fits the task.
 
-For a new application, start with the `rasqlgen init` workflow in [the generator guide](06-rasqlgen.md#recommended-workflow-own-genmaingo). The checked-in `gen/main.go` keeps the driver, table selection, hints, queries, pruning policy, and drift check in the application repository.
+For a new application, start with the `rasql codegen init` workflow in [the generator guide](06-rasqlgen.md#recommended-workflow-own-genmaingo). The checked-in `gen/main.go` keeps the driver, table selection, hints, queries, pruning policy, and drift check in the application repository.
 
 ## About the code blocks
 

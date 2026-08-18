@@ -1,17 +1,18 @@
-# `rasqlgen`
+# `rasql codegen`
 
-`rasqlgen` scaffolds a generator program that the application owns. The
+`rasql codegen` scaffolds a generator program that the application owns. The
 program reads live database metadata with `catalog.FromDatabase`, applies the
 project's choices, and writes deterministic Go source through
-`generate.Store`.
+`generate.Store`. The standalone `rasqlgen` binary still accepts the same
+commands under its own name.
 
 ## Recommended workflow: own `gen/main.go`
 
 Run `init` once from the module root:
 
 ```sh
-go get github.com/lestrrat-go/rasql/cmd/rasqlgen@latest
-go run github.com/lestrrat-go/rasql/cmd/rasqlgen init \
+go get github.com/lestrrat-go/rasql/cmd/rasql@latest
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen init \
   -dialect postgresql \
   -package store \
   -output internal/store

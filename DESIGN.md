@@ -32,8 +32,9 @@ The migration package applies ordered, forward-only native SQL migrations for Po
 | `migrate/diff/mysql` | Compares supported MySQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-mysql/query` |
 | `migrate/diff/postgresql` | Compares supported PostgreSQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-pg/query` |
 | `migrate/diff/sqlite` | Compares supported SQLite desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-sqlite/query` |
-| `cmd/rasqlmigrate` | Runs checked-in SQL migration directories and generates reviewed dialect-specific migrations without application Go code. | `migrate`, `migrate/diff`, supported database drivers |
-| `template`, `catalog`, `generate`, and `cmd/rasqlgen` | Compile static query templates and live catalog metadata into Go source through a project-owned generator. | public packages only |
+| `cli/rasqlmigrate` and `cmd/rasqlmigrate` | Run checked-in SQL migration directories and generate reviewed dialect-specific migrations without application Go code. | `migrate`, `migrate/diff`, supported database drivers |
+| `template`, `catalog`, `generate`, `cli/rasqlgen`, and `cmd/rasqlgen` | Compile static query templates and live catalog metadata into Go source through a project-owned generator. | public packages only |
+| `cli/rasql` and `cmd/rasql` | Offer both contexts under one command, as `rasql codegen` and `rasql migrate`. | `cli/rasqlgen`, `cli/rasqlmigrate` |
 
 The dependency flow is deliberately one-way:
 
@@ -77,7 +78,7 @@ Inspectors use a small adapter for each database metadata surface. They normaliz
 
 ## Code generation workflow
 
-New projects use `rasqlgen init` to create `gen/main.go`, then check that program into the application repository. The program opens the selected driver, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`, which owns hints, static queries, pruning, writing, and drift checks. The normal lifecycle is `rasqlgen init`, edit the owned program, `DATABASE_URL=... go generate ./...`, and `DATABASE_URL=... go run ./gen -check`.
+New projects use `rasql codegen init` to create `gen/main.go`, then check that program into the application repository. The program opens the selected driver, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`, which owns hints, static queries, pruning, writing, and drift checks. The normal lifecycle is `rasql codegen init`, edit the owned program, `DATABASE_URL=... go generate ./...`, and `DATABASE_URL=... go run ./gen -check`.
 
 The generator CLI exposes only `init`. Applications own the generated program so table selection, hints, static queries, pruning, and drift checks stay visible in the application repository.
 
