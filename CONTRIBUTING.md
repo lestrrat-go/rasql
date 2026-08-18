@@ -32,17 +32,17 @@ New generator examples should use the owned-program workflow: `rasql codegen ini
 
 The same flag rewrites the checked-in generated files the documentation shows. `examples/store/users_gen.go`, `examples/store/schema_gen.go`, `examples/store/schema_gen_test.go`, and `examples/store/user_by_email_gen.go` are checked by `TestGeneratedStoreIsCurrent`, which plans a `generate.Store` over the same table and query the files were generated from, reads the directory itself rather than a hardcoded file list, and requires the two to name the same generated files with the same bytes.
 
-The five files under `sample/taskboard/internal/store` are generated too. `TestTaskboardStoreIsCurrent`, in the root module, checks them against a `generate.Store` built from a throwaway in-process SQLite database, but it never writes into that directory, not even under `-update-docs`. The Taskboard module owns its generator in `sample/taskboard/gen/main.go`; refresh it with `go generate ./...` from `sample/taskboard`, then verify it with `go run ./gen -check`.
+The five files under `sample/taskboard/internal/store` are generated too. `TestTaskboardStoreIsCurrent`, in the root module, checks them against a `generate.Store` built from a throwaway in-process SQLite database, but it never writes into that directory, not even under `-update-docs`. The Taskboard module owns its generator in `sample/taskboard/gen/main.go`; refresh it with `./scripts/generate.sh` from `sample/taskboard`, then verify it with `./scripts/generate.sh -check`.
 
 ### Generated files outside the root module
 
 `sample/taskboard` is a separate module with an owned generator and checked-in output, and nothing in `go test ./...` regenerates it. `TestTaskboardStoreIsCurrent` does check it, from the root module, by building a throwaway SQLite database from every migration under `sample/taskboard/migrations/sqlite` and sweeping it with `catalog.FromDatabase`, so a change to the generator that leaves `sample/taskboard/internal/store/{members,projects,tasks}_gen.go`, `schema_gen.go`, or `schema_gen_test.go` stale now fails a fully green root test run instead of passing silently. It reads the migration tree with `internal/migrationdir` and applies it with `migrate.Runner`, which is what the owned generator does, so adding a migration directory does not leave the test pinning the schema the module used to have. That test only compares, though; it never writes there. Refresh the checked-in files themselves in the same commit:
 
 ```sh
-cd sample/taskboard && go generate ./...
+cd sample/taskboard && ./scripts/generate.sh
 ```
 
-That runs `sample/taskboard/gen/main.go`, which applies `sample/taskboard/migrations/sqlite` to a throwaway SQLite database and regenerates the store; `sample/taskboard/internal/store/.taskboard-schema.db` is ignored by Git. Then run the sample module's own build and tests, which the root `go test ./...` never reaches:
+That script applies `sample/taskboard/migrations/sqlite` to a throwaway SQLite database with `rasql migrate apply`, then runs `sample/taskboard/gen/main.go` over it to regenerate the store; `sample/taskboard/internal/store/.taskboard-schema.db` is ignored by Git. The generator itself only inspects and generates, since the sample module cannot import `internal/migrationdir` the way the root module's own test does. Then run the sample module's own build and tests, which the root `go test ./...` never reaches:
 
 ```sh
 cd sample/taskboard && go build ./... && go test ./...

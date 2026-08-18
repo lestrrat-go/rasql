@@ -1,4 +1,4 @@
-module github.com/lestrrat-go/rasql/sample/taskboard
+module example.com/taskboard
 
 go 1.26.0
 

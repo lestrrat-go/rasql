@@ -290,18 +290,15 @@ The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since
 
 ## Sample application
 
-The [Taskboard sample](sample/taskboard/) is a standalone HTTP application whose checked-in SQLite SQL migrations run with `rasql migrate apply` before startup. Its Taskboard page shows typed descriptors, inserts, an update, and a joined query in one small application.
+The [Taskboard sample](sample/taskboard/) is a standalone HTTP application built on checked-in SQLite migrations and a generated store. Its Taskboard page shows typed descriptors, inserts, an update, and a joined query in one small application. It is a module of its own, `example.com/taskboard`, so it reaches rasql only through the public API a real project has.
 
 ```sh
 cd sample/taskboard
-go run ../../cmd/rasql migrate apply \
-  -dir migrations/sqlite \
-  -dialect sqlite \
-  -dsn taskboard.db
+./scripts/migrate.sh
 TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 ```
 
-`rasql migrate apply` creates the tables, and the application then seeds rows into them and serves the page. Open <http://127.0.0.1:8080/> in another terminal.
+`scripts/migrate.sh` applies the migrations with `rasql migrate apply`, and the application then seeds rows into them and serves the page. Open <http://127.0.0.1:8080/> in another terminal.
 
 ## Documentation
 

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/web"
+	"example.com/taskboard/internal/web"
 )
 
 func TestServerRunRejectsNilContext(t *testing.T) {

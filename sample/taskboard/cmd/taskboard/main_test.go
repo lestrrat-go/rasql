@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/sample/taskboard/internal/web"
+	"example.com/taskboard/internal/web"
 )
 
 func TestNewServerServesTaskboard(t *testing.T) {
