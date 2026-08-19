@@ -1,8 +1,10 @@
 # Writing rows
 
-The root package writes a typed row without building a statement by hand. For anything the typed helpers do not cover, the `query` package builds the statement and `rasql.Exec` runs it, except a statement carrying a `RETURNING` clause, which reads its rows back through `dynamic.QueryWrite` or the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]`.
+A write takes either of the two paths [Querying](03-querying.md) describes. The `query` package builds the statement and `render` turns it into SQL text with its arguments, which needs no row type and no database handle. The root package instead writes a typed row directly, reading the columns off the Go value, and covers the common inserts, updates, and deletes without a statement being assembled by hand.
 
-Every write operation, predicate, and statement constructor is listed in the [operation reference](03-querying.md#operation-reference).
+`rasql.Exec` runs a statement built the first way, except one carrying a `RETURNING` clause, which reads its rows back through `dynamic.QueryWrite` or the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]`. [Write through the SQL builder](#write-through-the-sql-builder) covers that path, and the sections before it cover the typed helpers.
+
+Every write operation, predicate, and statement constructor is listed in the [SQL builder reference](04-sql-builder.md#operation-reference) and the [typed reference](05-typed-queries.md#operation-reference).
 
 ## Create a table
 
@@ -22,7 +24,7 @@ Each statement runs on its own. To create several tables atomically, run `Create
 
 A descriptor that names a [`Schema`](02-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.CreateTable` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `CreateTable` fails with the server's own error.
 
-Most applications manage schema changes with [`migrate`](07-migrations.md). `CreateTable` remains useful for tests, examples, and one-shot setup.
+Most applications manage schema changes with [`migrate`](09-migrations.md). `CreateTable` remains useful for tests, examples, and one-shot setup.
 
 ## Insert a row
 
@@ -90,7 +92,7 @@ func Example_rasql_insert() {
 source: [examples/rasql_insert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_insert_example_test.go)
 <!-- END INCLUDE -->
 
-The value must carry one exported tagged field for every column of the table, so a row that omits a column is a compile-time or validation problem rather than a silent `NULL`. A generated row type has no tags and supplies its column values through a `ColumnValue` method instead, which [the mapping methods](06-rasqlgen.md#the-mapping-and-scan-methods) covers. `Insert` returns the driver's `sql.Result`, which reports rows affected and, on databases that support it, the last inserted id.
+The value must carry one exported tagged field for every column of the table, so a row that omits a column is a compile-time or validation problem rather than a silent `NULL`. A generated row type has no tags and supplies its column values through a `ColumnValue` method instead, which [the mapping methods](08-rasqlgen.md#the-mapping-and-scan-methods) covers. `Insert` returns the driver's `sql.Result`, which reports rows affected and, on databases that support it, the last inserted id.
 
 `rasql.InsertMany` applies the same mapping to a slice of values and emits one parameterized multi-row `INSERT`. `InsertManyWithOptions` accepts `DefaultColumns` and omits those columns from every row; when every column is selected, it executes one dialect-rendered default-values `INSERT` per row. An empty slice is rejected, and callers that need to split a very large batch should make several calls so each statement stays under the database's parameter limit.
 
@@ -380,9 +382,91 @@ source: [examples/rasql_delete_example_test.go](https://github.com/lestrrat-go/r
 
 A delete matches whatever the predicate matches, so it is not tied to a primary key the way `Update` is. `Build` renders the statement without executing it when you want to see the SQL first; combine it with `AllowAll` to render a full-table delete.
 
-## Build advanced write statements
+## Write through the SQL builder
 
-`rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for conflict handling or SQL shapes not covered by the typed helpers. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `dynamic.QueryWrite` for one of those instead.
+The `query` package builds every write statement, and `render` turns one into SQL text with its arguments in placeholder order. Neither step opens a database or asks for a Go row type, so a program that only has to produce SQL stops at the rendered statement.
+
+<!-- INCLUDE(examples/query_render_write_example_test.go#render_write) -->
+```go
+func Example_query_render_write() {
+	// A table description carries everything the DDL and the write
+	// statements need. No row type and no database handle appear here.
+	definition := schema.MustTableDef("accounts",
+		schema.Integer("id"),
+		schema.Text("email"),
+		schema.PrimaryKey("id"),
+	)
+	accounts := query.MustTableRef(definition)
+	id, err := accounts.Column("id")
+	if err != nil {
+		fmt.Printf("failed to reference the id column: %s\n", err)
+		return
+	}
+	email, err := accounts.Column("email")
+	if err != nil {
+		fmt.Printf("failed to reference the email column: %s\n", err)
+		return
+	}
+
+	// render.CreateTable turns the description into DDL for one dialect.
+	ddl, err := render.CreateTable(dialect.PostgreSQL(), definition)
+	if err != nil {
+		fmt.Printf("failed to render the DDL: %s\n", err)
+		return
+	}
+	fmt.Println(ddl.SQL())
+
+	// query.NewInsert builds the statement; render.Insert turns it into SQL
+	// text and the arguments that go with it.
+	insert, err := query.NewInsert(accounts,
+		[]query.ColumnRef{id, email},
+		[]query.Expression{query.Bind(1), query.Bind("ada@example.com")},
+	)
+	if err != nil {
+		fmt.Printf("failed to build the insert: %s\n", err)
+		return
+	}
+	rendered, err := render.Insert(dialect.PostgreSQL(), insert)
+	if err != nil {
+		fmt.Printf("failed to render the insert: %s\n", err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+
+	// An update is the same two steps. WithWhere keeps it off every row.
+	update, err := query.NewUpdate(accounts, query.Set(email, query.Bind("grace@example.com")))
+	if err != nil {
+		fmt.Printf("failed to build the update: %s\n", err)
+		return
+	}
+	update, err = update.WithWhere(query.Equal(id, query.Bind(1)))
+	if err != nil {
+		fmt.Printf("failed to add the predicate: %s\n", err)
+		return
+	}
+	rendered, err = render.Update(dialect.PostgreSQL(), update)
+	if err != nil {
+		fmt.Printf("failed to render the update: %s\n", err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+
+	// Output:
+	// CREATE TABLE "accounts" ("id" BIGINT NOT NULL, "email" TEXT NOT NULL, PRIMARY KEY ("id"))
+	// INSERT INTO "accounts" ("id", "email") VALUES ($1, $2)
+	// 1 ada@example.com
+	// UPDATE "accounts" SET "email" = $1 WHERE ("accounts"."id" = $2)
+	// grace@example.com 1
+}
+```
+source: [examples/query_render_write_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_render_write_example_test.go)
+<!-- END INCLUDE -->
+
+`render.CreateTable` takes the table description directly, so the DDL above comes out of a `schema.TableDef` alone. `rasql.CreateTable` in [Create a table](#create-a-table) renders the same DDL and executes it, which is why it asks for a `rasql.Table[T]` and an open database.
+
+Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for conflict handling or SQL shapes not covered by the typed helpers. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `dynamic.QueryWrite` for one of those instead.
 
 `NewUpdate` and `NewDelete` accept a missing predicate while a statement is being assembled, but rendering and execution reject that shape unless the intent is explicit. Call `statement.AllowAll()` and use the returned statement when every row should be changed. A predicate and `AllowAll` cannot be combined.
 
@@ -491,9 +575,9 @@ func Example_rasql_returning() {
 source: [examples/rasql_returning_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_returning_example_test.go)
 <!-- END INCLUDE -->
 
-`QueryWriteOne` reports its row count through the same sentinels `One` does, described under [Select typed rows](03-querying.md#select-typed-rows): `rasql.ErrNoRows` when `RETURNING` produced no rows, and `rasql.ErrMultipleRows` when it produced more than one.
+`QueryWriteOne` reports its row count through the same sentinels `One` does, described under [Select typed rows](05-typed-queries.md#select-typed-rows): `rasql.ErrNoRows` when `RETURNING` produced no rows, and `rasql.ErrMultipleRows` when it produced more than one.
 
-Both typed terminals refuse a `RETURNING` clause that omits a column of the target table when `T` maps the whole table, because the omitted field would come back as a zero value with nothing to say so. A row type maps the whole table when it declares both `ScanRow` and `ScanDestinations`, which is the pair [rasqlgen](06-rasqlgen.md) writes for every row type it generates. A hand-written row type that maps only part of a table declares `ScanDestinations` alone, and these terminals then accept whatever projections it is given.
+Both typed terminals refuse a `RETURNING` clause that omits a column of the target table when `T` maps the whole table, because the omitted field would come back as a zero value with nothing to say so. A row type maps the whole table when it declares both `ScanRow` and `ScanDestinations`, which is the pair [rasqlgen](08-rasqlgen.md) writes for every row type it generates. A hand-written row type that maps only part of a table declares `ScanDestinations` alone, and these terminals then accept whatever projections it is given.
 
 A fluent delete uses the same dynamic and typed terminals:
 
@@ -526,7 +610,7 @@ source: [examples/rasql_delete_returning_example_test.go](https://github.com/les
 
 A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result.LastInsertId()` from `Exec` instead.
 
-`DB.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](05-templates.md) is executed.
+`DB.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](07-templates.md) is executed.
 
 ## Operational hooks
 
@@ -669,4 +753,4 @@ source: [examples/rasql_transaction_example_test.go](https://github.com/lestrrat
 
 ## Next
 
-[Static templates](05-templates.md) covers fixed SQL text with named binds.
+[Static templates](07-templates.md) covers fixed SQL text with named binds.

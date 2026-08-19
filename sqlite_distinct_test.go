@@ -80,7 +80,8 @@ func TestSQLiteRunsDistinctStatements(t *testing.T) {
 }
 
 // TestSQLiteDistinctCountDropsNULL proves the divergence documented in
-// docs/03-querying.md under Aggregates and Select distinct rows:
+// docs/04-sql-builder.md under Aggregates and docs/05-typed-queries.md
+// under Select distinct rows:
 // COUNT(DISTINCT column) counts the distinct non-NULL values of one column,
 // while SELECT DISTINCT over that same column keeps NULL as a value of its
 // own. The two therefore answer differently over data holding a NULL, which is

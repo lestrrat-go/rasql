@@ -776,7 +776,7 @@ func TestDocsNameGeneratedColumnMembers(t *testing.T) {
 		for _, sentence := range passageUnit.Split(section, -1) {
 			problem := accessorCompileProblem(sentence)
 			require.Empty(t, problem,
-				"docs/06-rasqlgen.md %s:\n%s",
+				"docs/08-rasqlgen.md %s:\n%s",
 				problem, strings.TrimSpace(sentence))
 		}
 	})
@@ -817,7 +817,7 @@ func TestDocsNameGeneratedColumnMembers(t *testing.T) {
 }
 
 func TestRasqlgenDocumentationAnchors(t *testing.T) {
-	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "06-rasqlgen.md"))
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "08-rasqlgen.md"))
 	require.NoError(t, err)
 
 	for _, heading := range []string{
@@ -834,11 +834,11 @@ func TestRasqlgenDocumentationAnchors(t *testing.T) {
 func accessorSection(t *testing.T) string {
 	t.Helper()
 
-	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "06-rasqlgen.md"))
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "08-rasqlgen.md"))
 	require.NoError(t, err)
 
 	_, after, found := strings.Cut(string(contents), accessorSectionHeading+"\n")
-	require.True(t, found, "docs/06-rasqlgen.md no longer has the %q section; move these checks to its new heading", accessorSectionHeading)
+	require.True(t, found, "docs/08-rasqlgen.md no longer has the %q section; move these checks to its new heading", accessorSectionHeading)
 
 	body := after
 	for _, line := range strings.Split(after, "\n") {
@@ -913,7 +913,7 @@ var migrateInvocationFixtures = []struct {
 	},
 	{
 		name:   "linked instruction",
-		line:   "Roll the schema forward with [`rasqlmigrate`](docs/07-migrations.md) first.",
+		line:   "Roll the schema forward with [`rasqlmigrate`](docs/09-migrations.md) first.",
 		reject: true,
 	},
 	{
