@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -74,14 +73,12 @@ func run(args []string) error {
 
 func runNamed(args []string, program string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: %s <new|diff|diff-live|plan|apply|status|verify> [flags]", program)
+		return fmt.Errorf("usage: %s <diff|diff-live|plan|apply|status|verify> [flags]", program)
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
 		printUsage(commandOutput, program)
 		return flag.ErrHelp
-	case "new":
-		return runNew(args[1:])
 	case "diff":
 		return runDiff(args[1:])
 	case "diff-live":
@@ -103,7 +100,6 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintf(output, "Usage: %s <command> [flags]\n", program)
 	_, _ = fmt.Fprintln(output)
 	_, _ = fmt.Fprintln(output, "Commands:")
-	_, _ = fmt.Fprintln(output, "  new      Create a directory for one migration")
 	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
 	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
 	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
@@ -111,7 +107,10 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
 	_, _ = fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
 	_, _ = fmt.Fprintln(output)
-	_, _ = fmt.Fprintln(output, "A migration directory contains ordered .sql files. Each file contains one native SQL statement.")
+	_, _ = fmt.Fprintln(output, "-dir holds one directory per migration, named for its ID, which you create yourself.")
+	_, _ = fmt.Fprintln(output, "Each holds one or more .sql files, each with one native SQL statement. Migrations run")
+	_, _ = fmt.Fprintln(output, "in directory-name order, and a migration's sources run in filename order, so pad the")
+	_, _ = fmt.Fprintln(output, "numbers you name them with. An applied migration must never change; add a new one.")
 	_, _ = fmt.Fprintf(output, "Run '%s <command> -h' for command flags.\n", program)
 }
 
@@ -301,30 +300,6 @@ func schemaAnalyzer(name string) (diff.Analyzer, error) {
 	default:
 		return nil, fmt.Errorf("unsupported schema diff dialect %q", name)
 	}
-}
-
-func runNew(args []string) error {
-	flags := newFlagSet("new")
-	directory := flags.String("dir", "", "directory that holds migration directories")
-	id := flags.String("id", "", "migration ID")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if *directory == "" || *id == "" {
-		return errors.New("new requires -dir and -id")
-	}
-	if strings.HasPrefix(*id, ".") || filepath.Base(*id) != *id {
-		return fmt.Errorf("migration ID %q cannot become a directory name", *id)
-	}
-	output := filepath.Join(*directory, *id)
-	if err := os.MkdirAll(*directory, 0o700); err != nil {
-		return fmt.Errorf("create migration parent directory: %w", err)
-	}
-	if err := os.Mkdir(output, 0o700); err != nil {
-		return fmt.Errorf("create migration directory %q: %w", output, err)
-	}
-	_, _ = fmt.Fprintf(commandOutput, "created %s; add ordered .sql files\n", output)
-	return nil
 }
 
 func runPlan(args []string) error {

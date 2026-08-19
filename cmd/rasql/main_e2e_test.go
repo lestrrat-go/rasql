@@ -29,7 +29,7 @@ func TestGoRunSeparatesDiagnosticsFromOutput(t *testing.T) {
 		// A "-h" a flag value consumed is not a help request, so the failure
 		// that follows it stays on standard error like any other failure.
 		{name: "codegen help token as flag value", args: []string{"codegen", "init", "-dialect", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
-		{name: "migrate help token as flag value", args: []string{"migrate", "new", "-dir", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
+		{name: "migrate help token as flag value", args: []string{"migrate", "plan", "-dir", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			repository, err := filepath.Abs(filepath.Join("..", ".."))
