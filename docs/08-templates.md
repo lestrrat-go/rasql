@@ -264,8 +264,8 @@ Read dynamic results in one of three ways:
 
 ## Generate a function instead
 
-`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. Put the template in the `queries` list of `rasql.json`; that keeps table generation and static query generation in one command. See [`rasql codegen`](08-rasqlgen.md#static-query-functions).
+`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. Put the template in the `queries` list of `rasql.json`; that keeps table generation and static query generation in one command. See [`rasql codegen`](09-rasqlgen.md#static-query-functions).
 
 ## Next
 
-[`rasqlgen`](08-rasqlgen.md) generates table descriptors and query functions as Go source.
+[`rasqlgen`](09-rasqlgen.md) generates table descriptors and query functions as Go source.

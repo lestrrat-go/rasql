@@ -24,7 +24,7 @@ The [typed builder](05-typed-queries.md) is the ORM, and it lives in the root `r
 | A tool renders SQL for something else to run, or for a test to compare. | SQL builder. |
 | The table is known only when the program runs. | SQL builder, executed through `rasql/dynamic`. |
 | A join or a projection produces a shape that is not a table row. | Typed builder, through `rasql.DecodeFrom[R]`. |
-| The statement uses syntax the builders do not model. | A [static template](07-templates.md) or `render.Precompiled`. |
+| The statement uses syntax the builders do not model. | A [static template](08-templates.md) or `render.Precompiled`. |
 
 The two are not exclusive. The typed builder takes `query` expressions in its `Where`, `Having`, `GroupBy`, and `Order` methods, so a predicate tree built with `query.And` and `query.Or` drops straight into a typed select. Its `Build(d)` method stops at the same `render.Statement` the SQL builder returns, which is how a typed query is inspected without a database.
 

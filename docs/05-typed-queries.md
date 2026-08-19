@@ -4,7 +4,7 @@ This page covers the ORM, the builder that knows the Go type of a row. [The SQL 
 
 `rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
 
-Columns come from the generated table value, so `users.ID()` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](08-rasqlgen.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
+Columns come from the generated table value, so `users.ID()` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](09-rasqlgen.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
 
 Generated relationship methods provide a typed join and eager-loading path for the supported relationship slice described in [Relationships](02-schema.md#relationships). A child relation such as `orders.User()` exposes `Join()` for a fluent query and `Load(ctx, db, children)` for one batched lookup that returns related rows grouped by foreign-key value. The inverse parent relation such as `users.Orders()` returns children grouped by parent key. Use the ordinary `Join` API for unsupported relationship shapes.
 
@@ -40,7 +40,7 @@ The first table is the typed layer in `rasql`. The second is `rasql/dynamic`, fo
 | `CREATE TABLE` plus its indexes | `rasql.CreateTable(ctx, db, table)` | `error` |
 | Upsert | `query.New…` then `rasql.Exec(ctx, db, statement)` | `sql.Result` |
 | Write with `RETURNING`, decoded | `query.New….WithReturning(...)` then `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `[]T` / `T` |
-| Compiled [static template](07-templates.md) | `db.ExecRendered(ctx, statement)` | `sql.Result` |
+| Compiled [static template](08-templates.md) | `db.ExecRendered(ctx, statement)` | `sql.Result` |
 
 #### rasql/dynamic
 
@@ -951,7 +951,7 @@ PostgreSQL and MySQL refuse the same shape unconditionally on their own, Postgre
 
 ## Decode a custom shape
 
-A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise. A field no single column holds is computed by a method on the result type from the raw columns beside it, or converted by a field type implementing `sql.Scanner`; see [the mapping methods](08-rasqlgen.md#the-mapping-and-scan-methods). Use `DecodeFromRef` when the primary table is a bare `query.TableRef` with no Go row type.
+A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise. A field no single column holds is computed by a method on the result type from the raw columns beside it, or converted by a field type implementing `sql.Scanner`; see [the mapping methods](09-rasqlgen.md#the-mapping-and-scan-methods). Use `DecodeFromRef` when the primary table is a bare `query.TableRef` with no Go row type.
 
 <!-- INCLUDE(examples/rasql_dynamic_projection_example_test.go) -->
 ```go
@@ -1148,4 +1148,4 @@ A debug `Handle` may return `nil` rows after logging; `dynamic.Scan` treats that
 
 ## Next
 
-[Writing rows](06-writing.md) covers inserts, updates, and deletes, and [Static templates](07-templates.md) covers fixed SQL text with named binds.
+[Writing rows](06-writing.md) covers inserts, updates, and deletes, and [Static templates](08-templates.md) covers fixed SQL text with named binds.

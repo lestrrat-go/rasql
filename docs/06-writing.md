@@ -20,11 +20,11 @@ if err := rasql.CreateTable(ctx, db, users); err != nil {
 source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_sqlite_query_example_test.go)
 <!-- END INCLUDE -->
 
-Each statement runs on its own. To create several tables atomically, run `CreateTable` through the `rasql.DB` returned by `DB.Begin` and commit once every one has succeeded, as [Transactions](#transactions) shows.
+Each statement runs on its own. To create several tables atomically, run `CreateTable` through the `rasql.DB` returned by `DB.Begin` and commit once every one has succeeded, as [Transactions](07-database.md#transactions) shows.
 
 A descriptor that names a [`Schema`](02-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.CreateTable` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `CreateTable` fails with the server's own error.
 
-Most applications manage schema changes with [`migrate`](09-migrations.md). `CreateTable` remains useful for tests, examples, and one-shot setup.
+Most applications manage schema changes with [`migrate`](10-migrations.md). `CreateTable` remains useful for tests, examples, and one-shot setup.
 
 ## Insert a row
 
@@ -92,7 +92,7 @@ func Example_rasql_insert() {
 source: [examples/rasql_insert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_insert_example_test.go)
 <!-- END INCLUDE -->
 
-The value must carry one exported tagged field for every column of the table, so a row that omits a column is a compile-time or validation problem rather than a silent `NULL`. A generated row type has no tags and supplies its column values through a `ColumnValue` method instead, which [the mapping methods](08-rasqlgen.md#the-mapping-and-scan-methods) covers. `Insert` returns the driver's `sql.Result`, which reports rows affected and, on databases that support it, the last inserted id.
+The value must carry one exported tagged field for every column of the table, so a row that omits a column is a compile-time or validation problem rather than a silent `NULL`. A generated row type has no tags and supplies its column values through a `ColumnValue` method instead, which [the mapping methods](09-rasqlgen.md#the-mapping-and-scan-methods) covers. `Insert` returns the driver's `sql.Result`, which reports rows affected and, on databases that support it, the last inserted id.
 
 `rasql.InsertMany` applies the same mapping to a slice of values and emits one parameterized multi-row `INSERT`. `InsertManyWithOptions` accepts `DefaultColumns` and omits those columns from every row; when every column is selected, it executes one dialect-rendered default-values `INSERT` per row. An empty slice is rejected, and callers that need to split a very large batch should make several calls so each statement stays under the database's parameter limit.
 
@@ -577,7 +577,7 @@ source: [examples/rasql_returning_example_test.go](https://github.com/lestrrat-g
 
 `QueryWriteOne` reports its row count through the same sentinels `One` does, described under [Select typed rows](05-typed-queries.md#select-typed-rows): `rasql.ErrNoRows` when `RETURNING` produced no rows, and `rasql.ErrMultipleRows` when it produced more than one.
 
-Both typed terminals refuse a `RETURNING` clause that omits a column of the target table when `T` maps the whole table, because the omitted field would come back as a zero value with nothing to say so. A row type maps the whole table when it declares both `ScanRow` and `ScanDestinations`, which is the pair [rasqlgen](08-rasqlgen.md) writes for every row type it generates. A hand-written row type that maps only part of a table declares `ScanDestinations` alone, and these terminals then accept whatever projections it is given.
+Both typed terminals refuse a `RETURNING` clause that omits a column of the target table when `T` maps the whole table, because the omitted field would come back as a zero value with nothing to say so. A row type maps the whole table when it declares both `ScanRow` and `ScanDestinations`, which is the pair [rasqlgen](09-rasqlgen.md) writes for every row type it generates. A hand-written row type that maps only part of a table declares `ScanDestinations` alone, and these terminals then accept whatever projections it is given.
 
 A fluent delete uses the same dynamic and typed terminals:
 
@@ -610,147 +610,8 @@ source: [examples/rasql_delete_returning_example_test.go](https://github.com/les
 
 A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result.LastInsertId()` from `Exec` instead.
 
-`DB.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](07-templates.md) is executed.
-
-## Operational hooks
-
-`rasql.Hook` provides a small observation and policy boundary around rendered database operations. A hook receives the operation kind, the exact SQL text, and a copy of the bound arguments. `Before` hooks can reject a statement before it reaches `database/sql`; `After` hooks receive the execution error, if any, and can report or reject the result.
-
-Hooks run in registration order before execution and reverse registration order after execution. A hook cannot replace the SQL or its bound arguments, so policy checks and logging do not change the statement sent to the driver.
-
-<!-- INCLUDE(examples/rasql_hook_example_test.go#hook) -->
-```go
-policy := rasql.HookFunc{
-	BeforeFunc: func(ctx context.Context, operation rasql.Operation) error {
-		if operation.Kind() == rasql.ExecOperation && operation.SQL() == `DELETE FROM "users"` {
-			return errors.New("unfiltered deletes are disabled")
-		}
-		return nil
-	},
-}
-
-db, err = db.WithHooks(policy)
-if err != nil {
-	// Handle invalid hook configuration.
-	fmt.Printf("failed to install the hook: %s\n", err)
-	return
-}
-```
-source: [examples/rasql_hook_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_hook_example_test.go)
-<!-- END INCLUDE -->
-
-Pass hooks to `rasql.New`, or add them with `DB.WithHooks`. A transaction started by `DB.Begin` inherits every hook already registered on that `DB`, then appends any hooks passed to `Begin` itself. A policy hook registered on a `DB` therefore also runs for operations inside transactions started from it, not just for calls made directly through the `DB`. Add hooks scoped to only the transaction by passing them to `Begin`, or by calling `WithHooks` on the `DB` it returns. `WithHooks` returns the same concrete `DB` value, so transaction ownership and explicit `Commit` or `Rollback` remain visible.
-
-Hooks cover calls through `DB`, including transactions, the high-level builders, and static rendered statements. They do not wrap `Begin`, `Commit`, `Rollback`, direct `database/sql` calls, or the migration and inspection packages, which use their own database handles. Hooks are synchronous and do not add retries, tracing spans, tenant filters, or automatic redaction; applications must implement those policies in their hooks or at their database boundary.
-
-## Transactions
-
-A transaction is not a separate type. `DB.Begin` takes `*sql.TxOptions` and optional hooks, which may be omitted, starts a transaction on the same handle and dialect the `DB` was built from, and returns another `rasql.DB` bound to it. That returned `DB` is a transaction, so every builder terminal and every free function that takes a `rasql.DB` — `rasql.Insert`, `rasql.Update`, `rasql.CreateTable`, and the rest — accepts it exactly as it accepts `db`, because both values share the one `rasql.DB` type.
-
-The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation. Calling `Commit` or `Rollback` on a `DB` that is not a transaction returns an error rather than being a compile-time mistake, since one concrete type now covers both cases.
-
-A transaction still cannot be nested: calling `Begin` on a `DB` that is already a transaction returns an error instead of opening a savepoint. An application that already holds a native `*sql.Tx` can hand it straight to `rasql.New` instead of calling `Begin`; the resulting `DB` is a transaction the same way one returned by `Begin` is.
-
-<!-- INCLUDE(examples/rasql_transaction_example_test.go) -->
-```go
-package examples_test
-
-import (
-	"context"
-	"database/sql"
-	"fmt"
-
-	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/dialect"
-	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
-)
-
-func Example_rasql_transaction() {
-	// This example writes two rows and reads them back inside one transaction,
-	// then reads them again through the plain db after it commits.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
-	ctx := context.Background()
-	database, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		fmt.Printf("failed to open SQLite database: %s\n", err)
-		return
-	}
-	defer func() { _ = database.Close() }()
-	// An in-memory SQLite database is per connection, so keep this example on one.
-	database.SetMaxOpenConns(1)
-
-	// A DB couples a database handle with the dialect used to render SQL.
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		fmt.Printf("failed to create rasql db: %s\n", err)
-		return
-	}
-	// Create the table before any transaction starts.
-	if err := rasql.CreateTable(ctx, db, users); err != nil {
-		fmt.Printf("failed to create users table: %s\n", err)
-		return
-	}
-
-	// db.Begin starts a transaction on the same handle and returns another DB
-	// bound to it. There is no separate transaction type to carry around: tx is
-	// a DB, so everything below takes it exactly as it takes db.
-	tx, err := db.Begin(ctx, nil)
-	if err != nil {
-		fmt.Printf("failed to begin transaction: %s\n", err)
-		return
-	}
-	// Rollback reports nothing once Commit has already succeeded, which is what
-	// makes this bare defer correct rather than an error every caller discards.
-	defer func() { _ = tx.Rollback() }()
-
-	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 1, "ada@example.com")
-	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
-		fmt.Printf("failed to insert user: %s\n", err)
-		return
-	}
-	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 2, "grace@example.com")
-	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 2, Email: "grace@example.com"}); err != nil {
-		fmt.Printf("failed to insert user: %s\n", err)
-		return
-	}
-
-	// The same builder shape that runs against db also runs against tx: it
-	// reads the two rows written above, before they are committed.
-	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	inTx, err := rasql.SelectFrom(users).OrderAsc(users.ID()).All(ctx, tx)
-	if err != nil {
-		fmt.Printf("failed to query users in transaction: %s\n", err)
-		return
-	}
-	fmt.Printf("%d rows visible in transaction\n", len(inTx))
-
-	if err := tx.Commit(); err != nil {
-		fmt.Printf("failed to commit transaction: %s\n", err)
-		return
-	}
-
-	// Nothing touches db between Begin and Commit above. That is this
-	// example's own constraint, not rasql's: SetMaxOpenConns(1) gives it one
-	// connection, and the transaction holds it until Commit or Rollback
-	// releases it back to the pool.
-	// SQL: SELECT users.id, users.email FROM users ORDER BY users.id ASC
-	afterCommit, err := rasql.SelectFrom(users).OrderAsc(users.ID()).All(ctx, db)
-	if err != nil {
-		fmt.Printf("failed to query users after commit: %s\n", err)
-		return
-	}
-	fmt.Printf("%d rows visible after commit\n", len(afterCommit))
-
-	// Output:
-	// 2 rows visible in transaction
-	// 2 rows visible after commit
-}
-```
-source: [examples/rasql_transaction_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_transaction_example_test.go)
-<!-- END INCLUDE -->
+`DB.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](08-templates.md) is executed.
 
 ## Next
 
-[Static templates](07-templates.md) covers fixed SQL text with named binds.
+[The database handle](07-database.md) covers hooks and transactions, which wrap the writes on this page. [Static templates](08-templates.md) covers fixed SQL text with named binds.

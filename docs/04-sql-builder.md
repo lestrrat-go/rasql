@@ -67,17 +67,7 @@ source: [examples/query_render_select_example_test.go](https://github.com/lestrr
 
 ## Run a rendered statement
 
-A `render.Statement` carries the SQL text and the arguments, so `database/sql` runs it directly through `QueryContext` or `ExecContext`. `rasql` also runs one, which is worth having for the hooks and the row decoding:
-
-| Call | Runs |
-| --- | --- |
-| `db.QueryRendered(ctx, statement)` | A rendered statement, yielding `dynamic.Row` values. |
-| `db.ExecRendered(ctx, statement)` | A rendered statement that returns no rows. |
-| `rasql.QueryRenderedAll[T](ctx, db, statement)` | The same, decoded into `T`. |
-| `rasql.Exec(ctx, db, statement)` | A `query.WriteStatement`, rendering it on the way. It rejects a write carrying a `RETURNING` clause, which `dynamic.QueryWrite` or `rasql.QueryWriteAll[T]` reads instead. |
-| `dynamic.Query(ctx, db, statement)` | A `query.Select`, rendering it on the way. |
-
-`rasql.Exec` and `dynamic.Query` take the statement rather than the rendered text, because a `rasql.DB` already holds the dialect to render with. `rasql.Exec` rejects a write carrying a `RETURNING` clause, and `dynamic.QueryWrite` reads the rows of one instead. [Writing rows](06-writing.md#write-through-the-sql-builder) covers the write side of that path.
+A `render.Statement` carries the SQL text and the arguments, so `database/sql` runs it directly through `QueryContext` or `ExecContext`. [The database handle](07-database.md#run-a-rendered-statement) covers running one through a `rasql.DB` instead, which adds hooks and row decoding.
 
 ## Operation reference
 
@@ -356,4 +346,4 @@ A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `G
 
 ## Next
 
-[Typed queries](05-typed-queries.md) adds the generated table and the row type, and works through joins, grouping, and custom result shapes. [Static templates](07-templates.md) covers hand-written SQL text for the syntax this builder does not model.
+[Typed queries](05-typed-queries.md) adds the generated table and the row type, and works through joins, grouping, and custom result shapes. [Static templates](08-templates.md) covers hand-written SQL text for the syntax this builder does not model.
