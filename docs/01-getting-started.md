@@ -66,9 +66,9 @@ source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/r
 
 Three things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. The embedded `rasql.Table[UserRow]` binds that row type to a validated table description, so the compiler knows what a query against `users` returns. The `ID` and `Email` methods are the column accessors the query builders take.
 
-Those accessors are the reason a filter never spells a column as a string. `WhereEqual(users.ID(), 42)` builds, while `WhereEqual(users.Emial(), 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column accessors catch](09-rasqlgen.md#what-the-column-accessors-catch) shows what that covers and the three cases it does not.
+Those accessors are the reason a filter never spells a column as a string. `WhereEqual(users.ID(), 42)` builds, while `WhereEqual(users.Emial(), 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column accessors catch](orm/02-generated-store.md#what-the-column-accessors-catch) shows what that covers and the three cases it does not.
 
-[Schemas](02-schema.md) covers how to write these tables by hand, and [`rasql codegen`](09-rasqlgen.md) covers how to generate them.
+[Schemas](core/01-schema.md) covers how to write these tables by hand, and [`rasql codegen`](orm/01-codegen.md) covers how to generate them.
 
 ## Create a DB
 
@@ -85,7 +85,7 @@ if err != nil {
 source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_sqlite_query_example_test.go)
 <!-- END INCLUDE -->
 
-`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Typed queries](05-typed-queries.md#see-the-sql-without-a-database) shows. To start a transaction, call `Begin` on the resulting `DB` instead, which the [Transactions](07-database.md#transactions) section covers.
+`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Typed queries](orm/03-typed-queries.md#see-the-sql-without-a-database) shows. To start a transaction, call `Begin` on the resulting `DB` instead, which the [Transactions](core/04-database.md#transactions) section covers.
 
 Pick the dialect that matches the database: `dialect.PostgreSQL()`, `dialect.MySQL()`, or `dialect.SQLite()`. The dialect decides how identifiers are quoted, how placeholders are numbered, how logical column types become DDL, and which syntax the renderer may use.
 
@@ -159,7 +159,7 @@ source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrra
 The example moves through four steps.
 
 1. `rasql.CreateTable` renders the table description as DDL and executes it, followed by any indexes. A real application usually creates tables through migrations instead, so this step is mostly a convenience for tests and examples.
-2. `rasql.Insert` reads the tagged fields of `UserRow` and writes them as bound values. See [Writing rows](06-writing.md).
+2. `rasql.Insert` reads the tagged fields of `UserRow` and writes them as bound values. See [Writing rows](orm/04-writing.md).
 3. `rasql.SelectFrom(users)` starts a builder that already knows the result type. `WhereEqual` binds `42` as an argument rather than putting it into the SQL text.
 4. `One` executes the statement and returns a single decoded `UserRow`, reporting `rasql.ErrNoRows` when the result holds no row and `rasql.ErrMultipleRows` when it holds more than one.
 
@@ -224,7 +224,7 @@ func Example_query_render_select() {
 source: [examples/query_render_select_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_render_select_example_test.go)
 <!-- END INCLUDE -->
 
-[Querying](03-querying.md) compares the two builders and says which one a task calls for.
+[Querying](02-querying.md) compares the two builders and says which one a task calls for.
 
 ## Handling errors
 
@@ -252,4 +252,4 @@ source: [examples/rasql_query_errors_example_test.go](https://github.com/lestrra
 
 ## Next
 
-[Schemas](02-schema.md) explains how to describe a table in Go, and how to read one back out of an existing database. [Querying](03-querying.md) compares the two builders that read rows through those descriptions.
+[Schemas](core/01-schema.md) explains how to describe a table in Go, and how to read one back out of an existing database. [Querying](02-querying.md) compares the two builders that read rows through those descriptions.

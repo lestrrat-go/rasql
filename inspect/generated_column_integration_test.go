@@ -21,7 +21,7 @@ import (
 // actually report back for "celsius * 9 / 5 + 32", not the text as typed:
 // both engines re-serialize a generated column's expression from its own
 // parsed, normalized internal form rather than echoing the source. See the
-// "server-normalized" note in docs/02-schema.md's Generated columns section
+// "server-normalized" note in docs/core/01-schema.md's Generated columns section
 // for why an exact string match, not a substring or non-empty check, is the
 // right assertion here -- these two constants are precisely the fact that
 // note exists to document.

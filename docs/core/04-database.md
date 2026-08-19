@@ -1,12 +1,12 @@
 # The database handle
 
-A `rasql.DB` pairs a database handle with the dialect used to render SQL. Both builders in [Querying](03-querying.md) end here when they execute, and a statement rendered by hand runs through the same value.
+A `rasql.DB` pairs a database handle with the dialect used to render SQL. Both builders in [Querying](../02-querying.md) end here when they execute, and a statement rendered by hand runs through the same value.
 
-`rasql.New(handle, dialect, hooks…)` builds one. It opens no connection and starts no transaction, and it accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do. A custom `Handle` prints or records statements in place of running them, which [Typed queries](05-typed-queries.md#see-the-sql-without-a-database) shows.
+`rasql.New(handle, dialect, hooks…)` builds one. It opens no connection and starts no transaction, and it accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do. A custom `Handle` prints or records statements in place of running them, which [Typed queries](../orm/03-typed-queries.md#see-the-sql-without-a-database) shows.
 
 ## Run a rendered statement
 
-[The SQL builder](04-sql-builder.md) ends at a `render.Statement`, which holds SQL text and its arguments. `database/sql` runs one directly. Running it through a `rasql.DB` instead applies the registered hooks and decodes the rows:
+[The SQL builder](02-sql-builder.md) ends at a `render.Statement`, which holds SQL text and its arguments. `database/sql` runs one directly. Running it through a `rasql.DB` instead applies the registered hooks and decodes the rows:
 
 | Call | Runs |
 | --- | --- |
@@ -16,7 +16,7 @@ A `rasql.DB` pairs a database handle with the dialect used to render SQL. Both b
 | `rasql.Exec(ctx, db, statement)` | A `query.WriteStatement`, rendering it on the way. It rejects a write carrying a `RETURNING` clause, which `dynamic.QueryWrite` or `rasql.QueryWriteAll[T]` reads instead. |
 | `dynamic.Query(ctx, db, statement)` | A `query.Select`, rendering it on the way. |
 
-`rasql.Exec` and `dynamic.Query` take the statement rather than the rendered text, because a `rasql.DB` already holds the dialect to render with. `rasql.Exec` rejects a write carrying a `RETURNING` clause, and `dynamic.QueryWrite` reads the rows of one instead. [Writing rows](06-writing.md#write-through-the-sql-builder) covers the write side of that path.
+`rasql.Exec` and `dynamic.Query` take the statement rather than the rendered text, because a `rasql.DB` already holds the dialect to render with. `rasql.Exec` rejects a write carrying a `RETURNING` clause, and `dynamic.QueryWrite` reads the rows of one instead. [Writing rows](03-write-statements.md) covers the write side of that path.
 
 ## Operational hooks
 
@@ -160,4 +160,4 @@ source: [examples/rasql_transaction_example_test.go](https://github.com/lestrrat
 
 ## Next
 
-[Static templates](08-templates.md) covers fixed SQL text with named binds, which this handle runs like any other rendered statement.
+[Static templates](05-templates.md) covers fixed SQL text with named binds, which this handle runs like any other rendered statement.
