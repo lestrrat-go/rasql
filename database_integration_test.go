@@ -169,8 +169,8 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// column decodes with 30 digits right of the point rather than 4.
 	// PostgreSQL returns the value at its own scale. That difference is a real,
 	// user-visible property of the scalar functions this change adds, and it is
-	// documented on query.Coalesce and in docs/03-querying.md; pinning it here
-	// per dialect is what keeps the documentation honest. Coalescing against
+	// documented on query.Coalesce and in docs/04-sql-builder.md; pinning it
+	// here per dialect is what keeps the documentation honest. Coalescing against
 	// another decimal expression rather than a bound value would dodge the
 	// widening, but this projection exists to exercise a bound fallback, so it
 	// states both exact strings instead.
@@ -191,7 +191,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	requireSameDecimal(t, secondStored.Amount, coalesced.second)
 
 	// NULLIF is the counterexample the documentation on query.Coalesce and in
-	// docs/03-querying.md now names: the widening above is not a property of
+	// docs/04-sql-builder.md now names: the widening above is not a property of
 	// mixing any function with a placeholder, it is a property of a function
 	// whose result type is resolved across all of its arguments. MySQL types
 	// NULLIF from its first argument alone, so a decimal column passed first
