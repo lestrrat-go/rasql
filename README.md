@@ -12,7 +12,7 @@ It gives an application one model for schema definitions, dynamic queries, stati
 
 `rasql` starts from the database you already have: `rasql codegen generate` reads its live metadata and writes typed rows, tables, column accessors, and static query functions as checked-in Go source.
 
-`rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. Run checked-in SQL migration directories with [`rasql migrate apply`](docs/07-migrations.md), and generate reviewed PostgreSQL, MySQL, or SQLite migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
+`rasql` applies ordered DDL migrations for PostgreSQL, MySQL, and SQLite, and reverts them. Run checked-in SQL migration directories with [`rasql migrate apply`](docs/07-migrations.md), undo them with [`rasql migrate down`](docs/07-migrations.md#revert-a-migration), and generate reviewed PostgreSQL, MySQL, or SQLite migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
 
 ## Requirements
 
@@ -310,7 +310,7 @@ TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 | [Writing rows](docs/04-writing.md) | Creating tables and inserting, updating, or deleting rows. |
 | [Static templates](docs/05-templates.md) | Compiling SQL text with named binds into parameterized statements. |
 | [`rasql codegen`](docs/06-rasqlgen.md) | Owning a database-backed generator program and compiling query templates. |
-| [Migrations](docs/07-migrations.md) | Applying ordered forward-only DDL migrations. |
+| [Migrations](docs/07-migrations.md) | Applying ordered DDL migrations, and reverting them. |
 
 The API reference lives at [pkg.go.dev](https://pkg.go.dev/github.com/lestrrat-go/rasql). Each code block that links to a source file is a runnable Go example from [`examples/`](examples/), verified by `go test`.
 
@@ -328,7 +328,7 @@ Most applications only import the root `rasql` package plus `dialect` and `schem
 | `dynamic` | Reads results whose column names are known only at run time. |
 | `inspect` | Reads live database metadata into `schema` descriptors. |
 | `catalog` | Reads a whole live catalog in one transaction and applies table selection. |
-| `migrate` | Plans and executes forward-only DDL migrations with durable history. |
+| `migrate` | Plans, executes, and reverts DDL migrations with durable history. |
 | `template`, `generate` | Compile templates and descriptors into deterministic Go source. |
 | `cmd/rasql` | Scaffolds the generator program and applies migrations, as `rasql codegen` and `rasql migrate`. |
 | `cmd/rasqlgen`, `cmd/rasqlmigrate` | Accept the same commands as the unified `rasql` command, under their own names. |

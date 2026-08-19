@@ -16,7 +16,7 @@ Create the runtime database and start the application from this directory:
 TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 ```
 
-`scripts/migrate.sh` applies `migrations/sqlite` with `rasql migrate apply`, against `taskboard.db` or whatever `TASKBOARD_DSN` names.
+`scripts/migrate.sh` applies `migrations` with `rasql migrate apply`, against `taskboard.db` or whatever `TASKBOARD_DSN` names.
 
 Regenerate the checked-in store after adding a migration:
 

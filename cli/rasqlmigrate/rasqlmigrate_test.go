@@ -540,16 +540,17 @@ func TestRunWithHardDeadlineReturnsContextDeadline(t *testing.T) {
 
 func TestRunPlanPrintsSQLSources(t *testing.T) {
 	directory := newTestDirectory(t)
-	writeTestSQL(t, directory, "001_create_users", "001_create_users.sql", "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n")
-	writeTestSQL(t, directory, "001_create_users", "002_users_email_index.sql", "CREATE INDEX \"users_email_idx\" ON \"users\" (\"email\");\n")
+	writeTestMigration(t, directory, "001_create_users")
+	writeTestSQL(t, directory, "001_create_users", "002_users_email_index.up.sql", "CREATE INDEX \"users_email_idx\" ON \"users\" (\"email\");\n")
+	writeTestSQL(t, directory, "001_create_users", "002_users_email_index.down.sql", "DROP INDEX \"users_email_idx\";\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"plan", "-dir", directory}))
-	require.Equal(t, "-- 001_create_users/001_create_users.sql\nCREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n\n-- 001_create_users/002_users_email_index.sql\nCREATE INDEX \"users_email_idx\" ON \"users\" (\"email\");\n", outputBuffer.String())
+	require.Equal(t, "-- 001_create_users/001_create_users.up.sql\nCREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n\n-- 001_create_users/002_users_email_index.up.sql\nCREATE INDEX \"users_email_idx\" ON \"users\" (\"email\");\n", outputBuffer.String())
 }
 
 func TestRunApplyStatusAndVerifySQLiteSQLSources(t *testing.T) {
 	directory := newTestDirectory(t)
-	writeTestSQL(t, directory, "001_create_users", "001_create_users.sql", "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n")
+	writeTestMigration(t, directory, "001_create_users")
 	dsn := filepath.Join(t.TempDir(), "application.db")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
@@ -564,6 +565,76 @@ func TestRunApplyStatusAndVerifySQLiteSQLSources(t *testing.T) {
 	require.Equal(t, "migration verification passed\n", outputBuffer.String())
 }
 
+// TestRunDownRevertsAppliedMigrations drives the command end to end
+// against SQLite: apply two migrations, revert the newest, and see the
+// history and the schema both follow.
+func TestRunDownRevertsAppliedMigrations(t *testing.T) {
+	directory := newTestDirectory(t)
+	writeTestMigration(t, directory, "001_create_users")
+	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.up.sql", "CREATE TABLE \"posts\" (\"id\" INTEGER PRIMARY KEY);\n")
+	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.down.sql", "DROP TABLE \"posts\";\n")
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
+
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-steps", "1"}))
+	require.Equal(t, "reverted\t002_create_posts\nmigration revert completed: 1 reverted\n", outputBuffer.String())
+
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"status", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
+	require.Equal(t, "applied\t001_create_users\npending\t002_create_posts\n", outputBuffer.String())
+}
+
+// TestRunDownToLeavesTheNamedMigrationApplied pins what -to means, which is
+// the flag most easily read as "revert this one too".
+func TestRunDownToLeavesTheNamedMigrationApplied(t *testing.T) {
+	directory := newTestDirectory(t)
+	writeTestMigration(t, directory, "001_create_users")
+	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.up.sql", "CREATE TABLE \"posts\" (\"id\" INTEGER PRIMARY KEY);\n")
+	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.down.sql", "DROP TABLE \"posts\";\n")
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
+
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-to", "001_create_users"}))
+	require.Equal(t, "reverted\t002_create_posts\nmigration revert completed: 1 reverted\n", outputBuffer.String())
+}
+
+func TestRunDownDryRunPrintsReverseSQLAndChangesNothing(t *testing.T) {
+	directory := newTestDirectory(t)
+	writeTestMigration(t, directory, "001_create_users")
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
+
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-steps", "1", "-dry-run"}))
+	require.Equal(t, "-- 001_create_users/001_create_users.down.sql\nDROP TABLE \"users\";\n", outputBuffer.String())
+
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"status", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
+	require.Equal(t, "applied\t001_create_users\n", outputBuffer.String())
+}
+
+// TestRunDownRequiresExactlyOneTarget refuses both the run that names no
+// target and the run that names two, so no invocation can revert a depth
+// nobody asked for.
+func TestRunDownRequiresExactlyOneTarget(t *testing.T) {
+	directory := newTestDirectory(t)
+	writeTestMigration(t, directory, "001_create_users")
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	setCommandOutput(t)
+	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
+
+	err := run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn})
+	require.EqualError(t, err, "down requires -to or -steps")
+
+	err = run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-to", "001_create_users", "-steps", "1"})
+	require.EqualError(t, err, "down accepts -to or -steps, not both")
+}
+
 func TestMigrationLoadingRejectsUnexpectedEntries(t *testing.T) {
 	directory := newTestDirectory(t)
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "001_create_users.sql"), []byte("CREATE TABLE users (id INTEGER);"), 0o600))
@@ -573,7 +644,15 @@ func TestMigrationLoadingRejectsUnexpectedEntries(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(directory, "001_create_users.sql")))
 	writeTestSQL(t, directory, "001_create_users", "001_create_users.txt", "CREATE TABLE users (id INTEGER);")
 	_, err = migrationdir.Load(directory)
-	require.ErrorContains(t, err, "non-SQL source")
+	require.ErrorContains(t, err, "which is neither a .up.sql nor a .down.sql source")
+}
+
+// writeTestMigration writes the one reversible migration most of these
+// tests need: a create-table forward source and the drop that undoes it.
+func writeTestMigration(t *testing.T, directory string, id string) {
+	t.Helper()
+	writeTestSQL(t, directory, id, "001_create_users.up.sql", "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n")
+	writeTestSQL(t, directory, id, "001_create_users.down.sql", "DROP TABLE \"users\";\n")
 }
 
 func TestRunHelpAndUnknownCommand(t *testing.T) {

@@ -48,7 +48,7 @@ func TestRunCodegenRejectsRemovedCommands(t *testing.T) {
 
 func TestRunMigrateRejectsNoCommand(t *testing.T) {
 	err := Run([]string{"migrate"}, &bytes.Buffer{}, &bytes.Buffer{})
-	require.EqualError(t, err, "usage: rasql migrate <diff|diff-live|plan|apply|status|verify> [flags]")
+	require.EqualError(t, err, "usage: rasql migrate <diff|diff-live|plan|apply|down|status|verify> [flags]")
 }
 
 // TestRunKeepsFlagDiagnosticsOffOutput requires that a refused flag is

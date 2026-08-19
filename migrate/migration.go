@@ -1,4 +1,4 @@
-// Package migrate applies ordered, forward-only SQL migrations.
+// Package migrate applies ordered SQL migrations, and reverses them.
 package migrate
 
 import (
@@ -9,13 +9,26 @@ import (
 	"unicode/utf8"
 )
 
-// Migration is one ordered, forward-only database change.
+// Migration is one ordered database change and the sources that undo it.
 //
 // Every Statement contains native SQL. The runner sends the source unchanged
 // to the database driver and does not parse, split, or render it.
 type Migration struct {
-	ID         string
+	ID string
+
+	// Statements are the forward sources, in the order they are applied.
+	// They alone form the recorded checksum.
 	Statements []Statement
+
+	// Down are the reverse sources, in the order they run to undo this
+	// migration. They are deliberately not part of the checksum, so a
+	// reverse script can be added or corrected for a migration that is
+	// already applied without invalidating its history record.
+	//
+	// Every migration read from disk has them, because a migration with no
+	// reverse source fails to load. A Migration built in Go may leave them
+	// empty, and Revert then refuses to select it.
+	Down []Statement
 }
 
 // Statement is one native SQL source file within a Migration.
@@ -38,8 +51,21 @@ func (m Migration) validate() error {
 	if len(m.Statements) == 0 {
 		return fmt.Errorf("migrate: migration %q must contain at least one SQL source", m.ID)
 	}
-	sources := make(map[string]struct{}, len(m.Statements))
-	for index, statement := range m.Statements {
+	if err := m.validateStatements(m.Statements); err != nil {
+		return err
+	}
+	// Down is checked by the same rules, and separately: a reverse source
+	// may reuse a forward source's name, since the two sets are executed by
+	// different calls and each is reported by its own file name.
+	return m.validateStatements(m.Down)
+}
+
+// validateStatements checks one set of sources. An empty set is valid here;
+// whether a set may be empty is the caller's question, because Statements
+// must not be and Down may be.
+func (m Migration) validateStatements(statements []Statement) error {
+	sources := make(map[string]struct{}, len(statements))
+	for index, statement := range statements {
 		if statement.Source == "" || !utf8.ValidString(statement.Source) || strings.ContainsRune(statement.Source, '\x00') {
 			return fmt.Errorf("migrate: migration %q SQL source %d is invalid", m.ID, index+1)
 		}

@@ -15,7 +15,8 @@ func TestGoRunPlansAndAppliesSQLiteSQLSources(t *testing.T) {
 	require.NoError(t, err)
 	migrationDirectory := filepath.Join(directory, "migrations", "001_initial")
 	require.NoError(t, os.MkdirAll(migrationDirectory, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(migrationDirectory, "001_create_users.sql"), []byte("CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(migrationDirectory, "001_create_users.up.sql"), []byte("CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(migrationDirectory, "001_create_users.down.sql"), []byte("DROP TABLE \"users\";\n"), 0o600))
 	databasePath := filepath.Join(directory, "application.db")
 
 	plan := runCommand(t, repository, "plan", "-dir", filepath.Dir(migrationDirectory))
