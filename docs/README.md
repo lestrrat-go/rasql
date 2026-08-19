@@ -17,14 +17,15 @@ Start with these two, whichever layer the task belongs to:
 2. [The SQL builder](core/02-sql-builder.md) builds and renders a statement with `query` and `render`, with no database handle and no Go row type.
 3. [Write statements](core/03-write-statements.md) builds inserts, updates, deletes, and upserts the same way, and reads a `RETURNING` clause back.
 4. [The database handle](core/04-database.md) runs a rendered statement, installs hooks, and starts a [transaction](core/04-database.md#transactions).
-5. [Static templates](core/05-templates.md) compiles fixed SQL text with named binds.
-6. [Migrations](core/06-migrations.md) applies ordered DDL migrations and reverts them.
+5. [Dynamic rows](core/05-dynamic.md) reads and writes rows for a column name the program only knows as a string.
+6. [Static templates](core/06-templates.md) compiles fixed SQL text with named binds.
+7. [Migrations](core/07-migrations.md) applies ordered DDL migrations and reverts them.
 
 ### The ORM layer
 
 1. [`rasql codegen`](orm/01-codegen.md) writes the store package from live metadata, driven by one settings file.
 2. [The generated store](orm/02-generated-store.md) says what that package contains: row types, table types, column accessors, and static query functions.
-3. [Typed queries](orm/03-typed-queries.md) reads rows through the generated table: typed selects, joins, custom projections, and SQL inspection. `rasql/dynamic` sits here too, for columns you only know as strings when the program runs.
+3. [Typed queries](orm/03-typed-queries.md) reads rows through the generated table: typed selects, joins, custom projections, and SQL inspection.
 4. [Writing rows](orm/04-writing.md) creates tables and inserts, updates, or deletes rows.
 
 Within each layer the pages stand on their own. Read the first two, then jump to whichever fits the task.

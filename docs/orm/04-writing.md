@@ -22,7 +22,7 @@ Each statement runs on its own. To create several tables atomically, run `Create
 
 A descriptor that names a [`Schema`](../core/01-schema.md#qualify-a-table-with-a-schema) renders `CREATE TABLE "audit"."events"` and `CREATE INDEX ... ON "audit"."events"` (SQLite instead qualifies the index name and leaves the table bare) into that namespace, but `rasql.CreateTable` never creates the namespace itself: it must already exist, created by a reviewed native migration, or `CreateTable` fails with the server's own error.
 
-Most applications manage schema changes with [`migrate`](../core/06-migrations.md). `CreateTable` remains useful for tests, examples, and one-shot setup.
+Most applications manage schema changes with [`migrate`](../core/07-migrations.md). `CreateTable` remains useful for tests, examples, and one-shot setup.
 
 ## Insert a row
 

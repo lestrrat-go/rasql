@@ -24,14 +24,14 @@ The [typed builder](orm/03-typed-queries.md) is the ORM, and it lives in the roo
 | A tool renders SQL for something else to run, or for a test to compare. | SQL builder. |
 | The table is known only when the program runs. | SQL builder, executed through `rasql/dynamic`. |
 | A join or a projection produces a shape that is not a table row. | Typed builder, through `rasql.DecodeFrom[R]`. |
-| The statement uses syntax the builders do not model. | A [static template](core/05-templates.md) or `render.Precompiled`. |
+| The statement uses syntax the builders do not model. | A [static template](core/06-templates.md) or `render.Precompiled`. |
 
 The two are not exclusive. The typed builder takes `query` expressions in its `Where`, `Having`, `GroupBy`, and `Order` methods, so a predicate tree built with `query.And` and `query.Or` drops straight into a typed select. Its `Build(d)` method stops at the same `render.Statement` the SQL builder returns, which is how a typed query is inspected without a database.
 
 ## Where rasql/dynamic sits
 
-`rasql/dynamic` opens a database and reads rows for a table that has no Go row type. It offers the same fluent shape as the typed builder, names its columns as strings, and yields `dynamic.Row` values instead of decoding. Use it when the column names arrive as data, and see [Typed queries](orm/03-typed-queries.md#rasqldynamic) for its methods.
+`rasql/dynamic` opens a database and reads rows for a table that has no Go row type. It offers the same fluent shape as the typed builder, names its columns as strings, and yields `dynamic.Row` values instead of decoding. Use it when the column names arrive as data, and see [Dynamic rows](core/05-dynamic.md) for its methods. It belongs to the core layer, since a caller reaches it without generating anything.
 
 ## Next
 
-[The SQL builder](core/02-sql-builder.md) covers the statement constructors, the expression constructors, and rendering. [Typed queries](orm/03-typed-queries.md) covers the typed builder and works through joins, grouping, subqueries, and custom result shapes. [Writing rows](orm/04-writing.md) covers inserts, updates, and deletes on both sides.
+[The SQL builder](core/02-sql-builder.md) covers the statement constructors, the expression constructors, and rendering. [Typed queries](orm/03-typed-queries.md) covers the typed builder and works through joins, grouping, subqueries, and custom result shapes. [Dynamic rows](core/05-dynamic.md) covers the builder that names its columns as strings. [Writing rows](orm/04-writing.md) covers inserts, updates, and deletes on both sides.

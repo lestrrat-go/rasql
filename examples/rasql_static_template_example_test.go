@@ -70,6 +70,7 @@ func Example_rasql_static_template() {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
 	}
+	// BEGIN(read_dynamic_rows)
 	for result, err := range dynamic.Scan(sqlRows) {
 		if err != nil {
 			fmt.Printf("failed to query user: %s\n", err)
@@ -82,6 +83,7 @@ func Example_rasql_static_template() {
 		}
 		fmt.Println(email)
 	}
+	// END(read_dynamic_rows)
 
 	// Output:
 	// ada@example.com

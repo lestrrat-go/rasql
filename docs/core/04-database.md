@@ -10,13 +10,13 @@ A `rasql.DB` pairs a database handle with the dialect used to render SQL. Both b
 
 | Call | Runs |
 | --- | --- |
-| `db.QueryRendered(ctx, statement)` | A rendered statement, yielding `dynamic.Row` values. |
+| `db.QueryRendered(ctx, statement)` | A rendered statement, returning the `*sql.Rows` the caller owns; [`dynamic.Scan`](05-dynamic.md#read-a-row) turns those into `dynamic.Row` values and closes them. |
 | `db.ExecRendered(ctx, statement)` | A rendered statement that returns no rows. |
 | `rasql.QueryRenderedAll[T](ctx, db, statement)` | The same, decoded into `T`. |
 | `rasql.Exec(ctx, db, statement)` | A `query.WriteStatement`, rendering it on the way. It rejects a write carrying a `RETURNING` clause, which `dynamic.QueryWrite` or `rasql.QueryWriteAll[T]` reads instead. |
 | `dynamic.Query(ctx, db, statement)` | A `query.Select`, rendering it on the way. |
 
-`rasql.Exec` and `dynamic.Query` take the statement rather than the rendered text, because a `rasql.DB` already holds the dialect to render with. `rasql.Exec` rejects a write carrying a `RETURNING` clause, and `dynamic.QueryWrite` reads the rows of one instead. [Writing rows](03-write-statements.md) covers the write side of that path.
+`rasql.Exec` and `dynamic.Query` take the statement rather than the rendered text, because a `rasql.DB` already holds the dialect to render with. `rasql.Exec` rejects a write carrying a `RETURNING` clause, and `dynamic.QueryWrite` reads the rows of one instead. [Writing rows](03-write-statements.md) covers the write side of that path, and [Dynamic rows](05-dynamic.md) covers the `dynamic` calls named here.
 
 ## Operational hooks
 
@@ -160,4 +160,4 @@ source: [examples/rasql_transaction_example_test.go](https://github.com/lestrrat
 
 ## Next
 
-[Static templates](05-templates.md) covers fixed SQL text with named binds, which this handle runs like any other rendered statement.
+[Static templates](06-templates.md) covers fixed SQL text with named binds, which this handle runs like any other rendered statement.

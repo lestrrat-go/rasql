@@ -6,10 +6,11 @@ It gives an application one model for schema definitions, dynamic queries, stati
 
 ## Features
 
-* **DDL migrations.** Run checked-in SQL migration directories in order with [`rasql migrate apply`](docs/core/06-migrations.md), revert them with [`rasql migrate revert`](docs/core/06-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite migration from desired-schema sources when that helps. See [Migrations](docs/core/06-migrations.md).
+* **DDL migrations.** Run checked-in SQL migration directories in order with [`rasql migrate apply`](docs/core/07-migrations.md), revert them with [`rasql migrate revert`](docs/core/07-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite migration from desired-schema sources when that helps. See [Migrations](docs/core/07-migrations.md).
 * **Query builder.** The `query` package builds a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. Both packages import only `schema` and `dialect`, so this layer runs with no database handle and no Go row type. See [The SQL builder](docs/core/02-sql-builder.md).
-* **ORM.** Run `rasql codegen generate` against the database you already have, and it reads the live metadata and writes typed row structs, table types, column accessors, and static query functions as checked-in Go source. `rasql.SelectFrom`, `rasql.Insert`, `rasql.Update`, and `rasql.DeleteFrom` then build statements over those tables and decode results straight into the row type, and `rasql/dynamic` runs the same statements against a table that has no Go row type. See [Typed queries](docs/orm/03-typed-queries.md), [Writing rows](docs/orm/04-writing.md), and [`rasql codegen`](docs/orm/01-codegen.md).
-* **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Static templates](docs/core/05-templates.md).
+* **ORM.** Run `rasql codegen generate` against the database you already have, and it reads the live metadata and writes typed row structs, table types, column accessors, and static query functions as checked-in Go source. `rasql.SelectFrom`, `rasql.Insert`, `rasql.Update`, and `rasql.DeleteFrom` then build statements over those tables and decode results straight into the row type. See [Typed queries](docs/orm/03-typed-queries.md), [Writing rows](docs/orm/04-writing.md), and [`rasql codegen`](docs/orm/01-codegen.md).
+* **Rows without a Go type.** `rasql/dynamic` runs the same statements against a table that has no row type, naming its columns as strings and yielding `dynamic.Row` values. See [Dynamic rows](docs/core/05-dynamic.md).
+* **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Static templates](docs/core/06-templates.md).
 * **Schema description and inspection.** Write table definitions as Go code, or read them back from a live database. See [Schemas](docs/core/01-schema.md).
 * **PostgreSQL, MySQL, and SQLite.** The same application code runs against all three; the driver and the DSN are what change.
 
@@ -312,8 +313,9 @@ The [documentation index](docs/) groups these pages by layer: the core layer bui
 | [The SQL builder](docs/core/02-sql-builder.md) | Building and rendering a statement through `query` and `render`, with a reference for every constructor and predicate. |
 | [Write statements](docs/core/03-write-statements.md) | Building inserts, updates, deletes, and upserts, and reading a `RETURNING` clause. |
 | [The database handle](docs/core/04-database.md) | Running a rendered statement, installing hooks, and starting a transaction. |
-| [Static templates](docs/core/05-templates.md) | Compiling SQL text with named binds into parameterized statements. |
-| [Migrations](docs/core/06-migrations.md) | Applying ordered DDL migrations, and reverting them. |
+| [Dynamic rows](docs/core/05-dynamic.md) | Reading and writing rows for a column name known only as a string at run time. |
+| [Static templates](docs/core/06-templates.md) | Compiling SQL text with named binds into parameterized statements. |
+| [Migrations](docs/core/07-migrations.md) | Applying ordered DDL migrations, and reverting them. |
 | **ORM layer** | |
 | [`rasql codegen`](docs/orm/01-codegen.md) | Running the generator and configuring it with `rasql.json`. |
 | [The generated store](docs/orm/02-generated-store.md) | The row types, table types, column accessors, and static query functions it writes. |

@@ -254,13 +254,7 @@ source: [examples/rasql_typed_static_template_example_test.go](https://github.co
 
 The template parser still permits only `{{bind "name"}}` actions, and `Compile` still chooses placeholders from the selected dialect. `QueryRendered` does not parse or validate the SQL grammar, table names, column names, or database-specific features; the target database checks those when it executes the statement. The fluent builder remains the place for dialect-neutral validation of its supported syntax. CTEs, window functions, recursive queries, vendor-specific clauses, and other syntax not modeled by the builder must use a static template or `render.Precompiled` statement.
 
-Read dynamic results in one of three ways:
-
-| Call | Gives |
-| --- | --- |
-| `dynamic.Get[T](result, "email")` | One named value, decoded as `T`. |
-| `dynamic.Assign(result, "email", &value)` | The same value, decoded into an existing destination. |
-| `dynamic.Decode[T](result)` | A whole struct, matching `rasql` tags or snake-cased field names. |
+[Read a row](05-dynamic.md#read-a-row) lists the three calls that read a value out of a `dynamic.Row`.
 
 ## Generate a function instead
 
