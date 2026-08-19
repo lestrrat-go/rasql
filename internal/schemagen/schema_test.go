@@ -347,7 +347,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	output, err = command.CombinedOutput()
 	require.NoErrorf(t, err, "go test output:\n%s", output)
 
-	// docs/08-rasqlgen.md promises that a misspelled column accessor and a
+	// docs/09-rasqlgen.md promises that a misspelled column accessor and a
 	// column named by string both fail to compile. Build a package that does
 	// each and require the compiler to say so, so the documentation cannot
 	// drift.
