@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -547,8 +548,21 @@ func TestDocsQualifyExecWithReturningRule(t *testing.T) {
 func documentationPages(t *testing.T) []string {
 	t.Helper()
 
-	pages, err := filepath.Glob(filepath.Join(repositoryRoot, "docs", "*.md"))
+	// The pages are grouped into per-layer directories, so the walk descends
+	// rather than globbing one level: a page moved into a new group would
+	// otherwise drop out of every check on this list without failing one.
+	var pages []string
+	err := filepath.WalkDir(filepath.Join(repositoryRoot, "docs"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".md") {
+			pages = append(pages, path)
+		}
+		return nil
+	})
 	require.NoError(t, err)
+	sort.Strings(pages)
 	return append([]string{filepath.Join(repositoryRoot, "README.md")}, pages...)
 }
 
@@ -776,7 +790,7 @@ func TestDocsNameGeneratedColumnMembers(t *testing.T) {
 		for _, sentence := range passageUnit.Split(section, -1) {
 			problem := accessorCompileProblem(sentence)
 			require.Empty(t, problem,
-				"docs/09-rasqlgen.md %s:\n%s",
+				"docs/orm/02-generated-store.md %s:\n%s",
 				problem, strings.TrimSpace(sentence))
 		}
 	})
@@ -816,16 +830,29 @@ func TestDocsNameGeneratedColumnMembers(t *testing.T) {
 	})
 }
 
-func TestRasqlgenDocumentationAnchors(t *testing.T) {
-	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "09-rasqlgen.md"))
-	require.NoError(t, err)
-
-	for _, heading := range []string{
+// rasqlgenAnchors pin the headings the README and the other pages link to by
+// anchor, each on the page that owns it. The generator command and the package
+// it writes are documented separately, so a heading that moves between the two
+// has to move its links with it.
+var rasqlgenAnchors = map[string][]string{
+	filepath.Join("orm", "01-codegen.md"): {
 		"## Run the command",
 		"## The settings file",
+	},
+	filepath.Join("orm", "02-generated-store.md"): {
 		"### The mapping and scan methods",
-	} {
-		require.Contains(t, string(contents), "\n"+heading+"\n")
+		"## Static query functions",
+	},
+}
+
+func TestRasqlgenDocumentationAnchors(t *testing.T) {
+	for page, headings := range rasqlgenAnchors {
+		contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", page))
+		require.NoError(t, err)
+
+		for _, heading := range headings {
+			require.Contains(t, string(contents), "\n"+heading+"\n", "docs/%s no longer has the %q heading", page, heading)
+		}
 	}
 }
 
@@ -834,11 +861,11 @@ func TestRasqlgenDocumentationAnchors(t *testing.T) {
 func accessorSection(t *testing.T) string {
 	t.Helper()
 
-	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "09-rasqlgen.md"))
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "orm", "02-generated-store.md"))
 	require.NoError(t, err)
 
 	_, after, found := strings.Cut(string(contents), accessorSectionHeading+"\n")
-	require.True(t, found, "docs/09-rasqlgen.md no longer has the %q section; move these checks to its new heading", accessorSectionHeading)
+	require.True(t, found, "docs/orm/02-generated-store.md no longer has the %q section; move these checks to its new heading", accessorSectionHeading)
 
 	body := after
 	for _, line := range strings.Split(after, "\n") {
@@ -913,7 +940,7 @@ var migrateInvocationFixtures = []struct {
 	},
 	{
 		name:   "linked instruction",
-		line:   "Roll the schema forward with [`rasqlmigrate`](docs/10-migrations.md) first.",
+		line:   "Roll the schema forward with [`rasqlmigrate`](docs/core/06-migrations.md) first.",
 		reject: true,
 	},
 	{

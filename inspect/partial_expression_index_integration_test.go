@@ -80,7 +80,7 @@ func TestPostgreSQLInspectorRecordsExpressionIndexAgainstLiveDatabase(t *testing
 // at all around its arithmetic; the server adds a wrapping pair around it as
 // the left operand of ">" that the original source never had, proving the
 // text is deparsed rather than echoed verbatim. Unlike
-// ColumnDef.GeneratedExpression (see docs/02-schema.md), which is fully
+// ColumnDef.GeneratedExpression (see docs/core/01-schema.md), which is fully
 // parenthesized at every operator, PostgreSQL's index predicate and
 // expression deparse route only adds parentheses where its own deparser
 // judges them needed, so this expression's left-associative "* /" chain
