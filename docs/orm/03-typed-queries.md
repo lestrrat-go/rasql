@@ -18,7 +18,7 @@ The tables in this section enumerate every operation the typed API offers. The s
 
 ### Statements
 
-The first table is the typed layer in `rasql`. The second is `rasql/dynamic`, for a column name you only know as a string when the program runs.
+This table enumerates the typed layer in `rasql`. [Dynamic rows](../core/05-dynamic.md#operation-reference) has the matching table for `rasql/dynamic`, which names a column as a string instead.
 
 | Operation | Entry point | Result |
 | --- | --- | --- |
@@ -40,27 +40,13 @@ The first table is the typed layer in `rasql`. The second is `rasql/dynamic`, fo
 | `CREATE TABLE` plus its indexes | `rasql.CreateTable(ctx, db, table)` | `error` |
 | Upsert | `query.New…` then `rasql.Exec(ctx, db, statement)` | `sql.Result` |
 | Write with `RETURNING`, decoded | `query.New….WithReturning(...)` then `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `[]T` / `T` |
-| Compiled [static template](../core/05-templates.md) | `db.ExecRendered(ctx, statement)` | `sql.Result` |
-
-#### rasql/dynamic
-
-| Operation | Entry point | Result |
-| --- | --- | --- |
-| `SELECT` without decoding | `dynamic.SelectFrom(table.Ref())` | `dynamic.SelectBuilder`, yielding `dynamic.Row` |
-| `SELECT` from a hand-built statement | `dynamic.Query(ctx, db, statement)` | `iter.Seq2[dynamic.Row, error]` |
-| `DELETE` with no Go row type | `dynamic.DeleteFrom(table.Ref())` | `dynamic.DeleteBuilder` |
-| `DELETE` with `RETURNING`, undecoded | `dynamic.DeleteFrom(table.Ref()).Returning(...)` | `dynamic.DeleteReturningBuilder`, yielding `dynamic.Row` |
-| Write with `RETURNING`, undecoded | `query.New….WithReturning(...)` then `dynamic.QueryWrite(ctx, db, statement)` | `iter.Seq2[dynamic.Row, error]` |
+| Compiled [static template](../core/06-templates.md) | `db.ExecRendered(ctx, statement)` | `sql.Result` |
 
 Writes are covered in [Writing rows](04-writing.md); the rest of this page covers reads.
 
 ### Select builder methods
 
-The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in `rasql`. The builder below it comes from `dynamic.SelectFrom`.
-
-The two builders differ in how they name a column. `TypedSelectBuilder` takes a `query.ColumnRef`, usually a generated accessor such as `users.ID()`, so a wrong name does not compile and a join can order by a column of any table in the statement. `dynamic.SelectBuilder` has exactly one table and no generated columns, so it keeps plain names.
-
-`TypedSelectBuilder`:
+The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in `rasql`. It takes a `query.ColumnRef` wherever it names a column, usually a generated accessor such as `users.ID()`, so a wrong name does not compile and a join can order by a column of any table in the statement. [`dynamic.SelectBuilder`](../core/05-dynamic.md#select-builder-methods) is the builder that names its columns as strings instead.
 
 | Method | Effect |
 | --- | --- |
@@ -81,36 +67,14 @@ The two builders differ in how they name a column. `TypedSelectBuilder` takes a 
 | `One(ctx, db)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. |
 | `Count(ctx, db)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. |
 
-`dynamic.SelectBuilder`:
-
-| Method | Effect |
-| --- | --- |
-| `Select(names…)` | Adds primary-table columns by name. |
-| `Project(projections…)` | Adds projections built with `query.Project`. |
-| `Distinct()` | De-duplicates result rows. |
-| `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. |
-| `Where(expression)` | Adds a predicate from a `query` expression. |
-| `WhereEqual(name, value)` | Adds `column = value` for a primary-table column. |
-| `WhereIn(name, values…)` | Adds `column IN (values…)` for a primary-table column, one placeholder per value. |
-| `GroupBy(expressions…)` | Adds grouping built with the basic query API. |
-| `GroupByColumns(names…)` | Adds primary-table columns to the grouping by name. |
-| `Having(expression)` | Adds a grouped predicate from a `query` expression; combines with `AND` like `Where`. |
-| `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. |
-| `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. |
-| `Limit(n)`, `Offset(n)` | Pages the result. |
-| `Build(d)` | Renders `render.Statement` for a `dialect.Dialect` without executing. |
-| `Query(ctx, db)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. |
-| `Count(ctx, db)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. |
-
-`dynamic.SelectBuilder` has no `All` or `One`: it has no Go type to collect into, so a caller ranges its `Query` sequence directly or reads one row with `dynamic.Get`.
-
 `Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
 `AND` in the order they were made, which is what a conditionally built filter
 needs. Use a single `query.Or` call for a top-level `OR`; it is not wrapped in
 an `AND` unless another `Where`, `WhereEqual`, or `WhereIn` follows it.
-`WhereIn` needs at least one value on either builder: an empty list makes
+`WhereIn` needs at least one value: an empty list makes
 `Build` and the executing methods return an error rather than render `IN ()`,
-which is not valid SQL in any supported dialect.
+which is not valid SQL in any supported dialect. The same two rules hold on
+[`dynamic.SelectBuilder`](../core/05-dynamic.md#select-builder-methods).
 
 ### Delete builder methods
 
@@ -125,8 +89,8 @@ which is not valid SQL in any supported dialect.
 
 Pass the builder to `rasql.QueryDeleteAll[T]` or `rasql.QueryDeleteOne[T]` to
 decode typed rows. `rasql.DeleteFrom` has no undecoded terminal:
-`dynamic.DeleteFrom(table.Ref()).Returning(...).Query(ctx, db)` reads the same
-rows as `dynamic.Row` values.
+[`dynamic.DeleteFrom(table.Ref()).Returning(...).Query(ctx, db)`](../core/05-dynamic.md#delete-rows)
+reads the same rows as `dynamic.Row` values.
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate on the delete builder the same way: repeated calls combine with `AND` in the order they were made. Each of them supplies the predicate that `Build` and `Exec` require, so a delete still needs one of them or an explicit `AllowAll`. `WhereIn` needs at least one value: an empty list makes `Build` and `Exec` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect.
 
@@ -232,7 +196,7 @@ source: [examples/rasql_no_rows_example_test.go](https://github.com/lestrrat-go/
 
 ## Filter, order, and page
 
-`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.ColumnRef` and cover the common cases without importing the `query` package. Generated tables expose one accessor method per column, so `users.ID()` is the whole reference. `Limit` and `Offset` page the result. `dynamic.SelectBuilder` from `dynamic.SelectFrom` also has `Select`, which narrows the projection to named columns. A caller who wants the raw row and full manual control drops to `dynamic.SelectFrom(table.Ref()).Query(ctx, db)` instead.
+`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.ColumnRef` and cover the common cases without importing the `query` package. Generated tables expose one accessor method per column, so `users.ID()` is the whole reference. `Limit` and `Offset` page the result. A caller who wants the raw row and full manual control drops to [`dynamic.SelectFrom(table.Ref()).Query(ctx, db)`](../core/05-dynamic.md) instead.
 
 `WhereIn` covers a membership test the same way. It needs at least one value: an empty list makes `Build`, `Query`, `All`, and `One` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect. A non-empty list binds each value as its own placeholder:
 
@@ -795,11 +759,11 @@ func Example_rasql_group_by() {
 source: [examples/rasql_group_by_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_group_by_example_test.go)
 <!-- END INCLUDE -->
 
-`dynamic.SelectBuilder` groups by a primary-table column name with `GroupByColumns`, the counterpart to `Select`'s `names…` form, without importing the `query` package.
+[`dynamic.SelectBuilder`](../core/05-dynamic.md#select-builder-methods) groups by a primary-table column name with `GroupByColumns` instead, without importing the `query` package.
 
 ## Select distinct rows
 
-`Distinct()` adds `DISTINCT` right after `SELECT`, so the statement returns one row per distinct combination of its projected values. It is meaningful mainly beside a narrowed projection: `rasql.SelectFrom[T]` already selects every column of the table, including its primary key, which makes every row unique before `DISTINCT` runs. Use `rasql.DecodeFrom[R]` with `Project`, or `dynamic.SelectBuilder`'s `Select` with specific column names, to narrow the projection first.
+`Distinct()` adds `DISTINCT` right after `SELECT`, so the statement returns one row per distinct combination of its projected values. It is meaningful mainly beside a narrowed projection: `rasql.SelectFrom[T]` already selects every column of the table, including its primary key, which makes every row unique before `DISTINCT` runs. Use `rasql.DecodeFrom[R]` with `Project`, or [`dynamic.SelectBuilder`](../core/05-dynamic.md#select-builder-methods)'s `Select` with specific column names, to narrow the projection first.
 
 `Distinct` composes with everything else the builder offers — joins, `Where`, `GroupBy` and `Having`, `Order`, and `Limit`/`Offset` — with one rule left to the database rather than enforced in Go: an `ORDER BY` expression that is not among the distinct projections. SQLite accepts that shape and answers it from whichever row survived de-duplication, which is no question the caller asked; PostgreSQL refuses it with SQLSTATE `42P10`, and MySQL refuses it with error 3065 `ER_FIELD_IN_ORDER_NOT_SELECT`. rasql renders what the caller asks for and lets the database report that error, the way it already does for a WHERE clause that outgrows a dialect's parameter limit, rather than reimplementing the two servers' rule in Go.
 
@@ -1143,9 +1107,9 @@ func Example_rasql_debug_query() {
 source: [examples/rasql_debug_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_debug_query_example_test.go)
 <!-- END INCLUDE -->
 
-A debug `Handle` may return `nil` rows after logging; `dynamic.Scan` treats that as an empty result rather than an error. When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `rasql.DB` needed.
+When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `rasql.DB` needed.
 
 
 ## Next
 
-[Writing rows](04-writing.md) covers inserts, updates, and deletes, and [Static templates](../core/05-templates.md) covers fixed SQL text with named binds.
+[Writing rows](04-writing.md) covers inserts, updates, and deletes, and [Static templates](../core/06-templates.md) covers fixed SQL text with named binds.

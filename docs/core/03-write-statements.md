@@ -227,7 +227,7 @@ source: [examples/rasql_delete_returning_example_test.go](https://github.com/les
 
 A MySQL caller who needs a generated key skips `RETURNING` and reads `sql.Result.LastInsertId()` from `Exec` instead.
 
-`DB.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](05-templates.md) is executed.
+`DB.ExecRendered` runs a statement that is already rendered, which is how a compiled [static template](06-templates.md) is executed.
 
 
 ## Next

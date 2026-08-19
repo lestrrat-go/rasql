@@ -346,4 +346,4 @@ A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `G
 
 ## Next
 
-[Typed queries](../orm/03-typed-queries.md) adds the generated table and the row type, and works through joins, grouping, and custom result shapes. [Static templates](05-templates.md) covers hand-written SQL text for the syntax this builder does not model.
+[Typed queries](../orm/03-typed-queries.md) adds the generated table and the row type, and works through joins, grouping, and custom result shapes. [Static templates](06-templates.md) covers hand-written SQL text for the syntax this builder does not model.
