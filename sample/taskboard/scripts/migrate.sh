@@ -7,6 +7,6 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
 go run ../../cmd/rasql migrate apply \
-  -dir migrations/sqlite \
+  -dir migrations \
   -dialect sqlite \
   -dsn "${TASKBOARD_DSN:-taskboard.db}"

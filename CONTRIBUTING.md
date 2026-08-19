@@ -36,13 +36,13 @@ The five files under `sample/taskboard/internal/store` are generated too. `TestT
 
 ### Generated files outside the root module
 
-`sample/taskboard` is a separate module with checked-in generated output, and nothing in `go test ./...` regenerates it. `TestTaskboardStoreIsCurrent` does check it, from the root module, by building a throwaway SQLite database from every migration under `sample/taskboard/migrations/sqlite` and sweeping it with `catalog.FromDatabase`, so a change to the generator that leaves `sample/taskboard/internal/store/{members,projects,tasks}_gen.go`, `schema_gen.go`, or `schema_gen_test.go` stale now fails a fully green root test run instead of passing silently. It reads the migration tree with `internal/migrationdir` and applies it with `migrate.Runner`, which is what the sample's own script does through `rasql migrate apply`, so adding a migration directory does not leave the test pinning the schema the module used to have. That test only compares, though; it never writes there. Refresh the checked-in files themselves in the same commit:
+`sample/taskboard` is a separate module with checked-in generated output, and nothing in `go test ./...` regenerates it. `TestTaskboardStoreIsCurrent` does check it, from the root module, by building a throwaway SQLite database from every migration under `sample/taskboard/migrations` and sweeping it with `catalog.FromDatabase`, so a change to the generator that leaves `sample/taskboard/internal/store/{members,projects,tasks}_gen.go`, `schema_gen.go`, or `schema_gen_test.go` stale now fails a fully green root test run instead of passing silently. It reads the migration tree with `internal/migrationdir` and applies it with `migrate.Runner`, which is what the sample's own script does through `rasql migrate apply`, so adding a migration directory does not leave the test pinning the schema the module used to have. That test only compares, though; it never writes there. Refresh the checked-in files themselves in the same commit:
 
 ```sh
 cd sample/taskboard && ./scripts/generate.sh
 ```
 
-That script applies `sample/taskboard/migrations/sqlite` to a throwaway SQLite database with `rasql migrate apply`, then runs `rasql codegen generate` over it to regenerate the store; `sample/taskboard/internal/store/.taskboard-schema.db` is ignored by Git. The script is what pairs the two commands, since the sample module cannot import `internal/migrationdir` the way the root module's own test does. Then run the sample module's own build and tests, which the root `go test ./...` never reaches:
+That script applies `sample/taskboard/migrations` to a throwaway SQLite database with `rasql migrate apply`, then runs `rasql codegen generate` over it to regenerate the store; `sample/taskboard/internal/store/.taskboard-schema.db` is ignored by Git. The script is what pairs the two commands, since the sample module cannot import `internal/migrationdir` the way the root module's own test does. Then run the sample module's own build and tests, which the root `go test ./...` never reaches:
 
 ```sh
 cd sample/taskboard && go build ./... && go test ./...

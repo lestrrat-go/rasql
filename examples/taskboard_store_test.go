@@ -33,7 +33,7 @@ import (
 //
 // The migrations are read with internal/migrationdir and applied with
 // migrate.Runner, which is exactly what `rasqlmigrate apply -dir
-// sample/taskboard/migrations/sqlite` does in that module's own
+// sample/taskboard/migrations` does in that module's own
 // //go:generate directive, so the whole migration tree is applied in the
 // same order and under the same rules. Naming one migration directory here
 // instead would leave this test pinning a schema the module's generator
@@ -49,7 +49,7 @@ import (
 // requireGeneratedDirectoryIsCurrent, is what keeps that true regardless of
 // the -update-docs flag.
 func TestTaskboardStoreIsCurrent(t *testing.T) {
-	migrationsDir := filepath.Join(repositoryRoot, "sample", "taskboard", "migrations", "sqlite")
+	migrationsDir := filepath.Join(repositoryRoot, "sample", "taskboard", "migrations")
 	migrations, err := migrationdir.Load(migrationsDir)
 	require.NoError(t, err, "load migrations from %s", migrationsDir)
 

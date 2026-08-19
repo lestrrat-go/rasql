@@ -11,7 +11,7 @@ schema_dsn=internal/store/.taskboard-schema.db
 rm -f "$schema_dsn" "$schema_dsn-wal" "$schema_dsn-shm"
 
 go run ../../cmd/rasql migrate apply \
-  -dir migrations/sqlite \
+  -dir migrations \
   -dialect sqlite \
   -dsn "$schema_dsn"
 
