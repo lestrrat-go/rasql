@@ -1,6 +1,8 @@
 # The SQL builder
 
-The `query` package builds a SQL statement and validates it, and the `render` package turns that statement into SQL text with its arguments in placeholder order. Both packages import `schema` and `dialect` and nothing else of `rasql`, so a statement is built and rendered with no database handle and no Go row type in sight. [Typed queries](05-typed-queries.md) covers the builder that adds those two things.
+`rasql` builds a statement in one of two ways. The ORM binds a table to a Go row type, so a query returns decoded rows, the compiler checks each column, and the call that executes needs a `rasql.DB`; [Typed queries](05-typed-queries.md) covers it. The raw SQL builder, which this page covers, stops at the SQL text and its arguments and leaves the running to the caller.
+
+The `query` package builds the statement and validates it, and the `render` package turns that statement into SQL text with its arguments in placeholder order. Both packages import `schema` and `dialect` and nothing else of `rasql`, so a statement is built and rendered with no database handle and no Go row type in sight.
 
 A statement is dialect-neutral until it renders. The same `query.Select` becomes PostgreSQL, MySQL, or SQLite text depending on the `dialect.Dialect` passed to `render`, and a value passed through `query.Bind` stays an argument in every one of them.
 

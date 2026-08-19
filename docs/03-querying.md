@@ -6,7 +6,7 @@
 
 The [SQL builder](04-sql-builder.md) lives in `query` and `render`. `query` assembles a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. These two packages import `schema` and `dialect` and nothing else of `rasql`, so the statement is built with no database handle in hand and no Go type for the row. What comes back is a `render.Statement`, which an application executes however it likes, including through `database/sql` directly.
 
-The [typed builder](05-typed-queries.md) lives in the root `rasql` package. It starts from a generated table value that carries the Go row type, so `rasql.SelectFrom(users)` already knows what a result row decodes into, and `users.ID()` is a column reference the compiler checks. It builds the same statements the SQL builder builds, then executes them and decodes each row into the row type.
+The [typed builder](05-typed-queries.md) is the ORM, and it lives in the root `rasql` package. It starts from a generated table value that carries the Go row type, so `rasql.SelectFrom(users)` already knows what a result row decodes into, and `users.ID()` is a column reference the compiler checks. It builds the same statements the SQL builder builds, then executes them and decodes each row into the row type.
 
 | | SQL builder | Typed builder |
 | --- | --- | --- |

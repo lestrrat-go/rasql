@@ -1,5 +1,7 @@
 # Typed queries
 
+This page covers the ORM, the builder that knows the Go type of a row. [The SQL builder](04-sql-builder.md) covers the raw path, which renders SQL text and stops there.
+
 `rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
 
 Columns come from the generated table value, so `users.ID()` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](08-rasqlgen.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
