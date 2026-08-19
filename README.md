@@ -6,10 +6,10 @@ It gives an application one model for schema definitions, dynamic queries, stati
 
 ## Features
 
-* **DDL migrations.** Run checked-in SQL migration directories in order with [`rasql migrate apply`](docs/07-migrations.md), revert them with [`rasql migrate down`](docs/07-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite migration from desired-schema sources when that helps. See [Migrations](docs/07-migrations.md).
-* **Query builder.** Build selects, inserts, updates, and deletes from Go values, and let rasql render them for the dialect in use. `rasql/dynamic` builds the same statements against a table that has no Go row type. See [Querying](docs/03-querying.md).
-* **ORM.** Run `rasql codegen generate` against the database you already have, and it reads the live metadata and writes typed row structs, table types, column accessors, and static query functions as checked-in Go source. An application then reads and writes rows as Go values, with type-safe result-set access. See [`rasql codegen`](docs/06-rasqlgen.md).
-* **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Static templates](docs/05-templates.md).
+* **DDL migrations.** Run checked-in SQL migration directories in order with [`rasql migrate apply`](docs/10-migrations.md), revert them with [`rasql migrate down`](docs/10-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite migration from desired-schema sources when that helps. See [Migrations](docs/10-migrations.md).
+* **Query builder.** The `query` package builds a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. Both packages import only `schema` and `dialect`, so this layer runs with no database handle and no Go row type. See [The SQL builder](docs/04-sql-builder.md).
+* **ORM.** Run `rasql codegen generate` against the database you already have, and it reads the live metadata and writes typed row structs, table types, column accessors, and static query functions as checked-in Go source. `rasql.SelectFrom`, `rasql.Insert`, `rasql.Update`, and `rasql.DeleteFrom` then build statements over those tables and decode results straight into the row type, and `rasql/dynamic` runs the same statements against a table that has no Go row type. See [Typed queries](docs/05-typed-queries.md), [Writing rows](docs/06-writing.md), and [`rasql codegen`](docs/09-rasqlgen.md).
+* **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Static templates](docs/08-templates.md).
 * **Schema description and inspection.** Write table definitions as Go code, or read them back from a live database. See [Schemas](docs/02-schema.md).
 * **PostgreSQL, MySQL, and SQLite.** The same application code runs against all three; the driver and the DSN are what change.
 
@@ -40,7 +40,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate \
 
 Pass `-check` to report whether the checked-in package is current instead of writing it. `-include`, `-exclude`, and `-history-table` narrow the table selection, and `-prune=false` refuses a run that would delete a generated file it no longer writes.
 
-Everything that stays the same from run to run lives in a checked-in `rasql.json` at the module root: the package name, the output directory, the dialect, the table selection, row-type names, static queries, and the pruning policy. The DSN is never read from it. See [the generator guide](docs/06-rasqlgen.md#the-settings-file).
+Everything that stays the same from run to run lives in a checked-in `rasql.json` at the module root: the package name, the output directory, the dialect, the table selection, row-type names, static queries, and the pruning policy. The DSN is never read from it. See [the generator guide](docs/09-rasqlgen.md#the-settings-file).
 
 Generation turns each live table descriptor into the code you query through: a `<table>_gen.go` file holding a row type with its scan methods and its column-value method, a table type with one accessor method per column, and a package-level accessor. A separate `schema_gen.go` holds every table's runtime descriptor. This is the whole file for a `users` table of `id` and `email`:
 
@@ -172,14 +172,14 @@ func Tables() []schema.TableDef {
 source: [examples/store/schema_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/schema_gen.go)
 <!-- END INCLUDE -->
 
-The descriptor stays unexported so no importer can replace it; `store.Users()` hands out the table value, and `store.UsersDef()` hands out a copy of the descriptor. Its column accessors are what the query builders take, so `WhereEqual(users.ID(), 42)` builds while a misspelled `users.Emial()` does not compile. See [what the column accessors catch](docs/06-rasqlgen.md#what-the-column-accessors-catch) and [the mapping methods](docs/06-rasqlgen.md#the-mapping-and-scan-methods).
+The descriptor stays unexported so no importer can replace it; `store.Users()` hands out the table value, and `store.UsersDef()` hands out a copy of the descriptor. Its column accessors are what the query builders take, so `WhereEqual(users.ID(), 42)` builds while a misspelled `users.Emial()` does not compile. See [what the column accessors catch](docs/09-rasqlgen.md#what-the-column-accessors-catch) and [the mapping methods](docs/09-rasqlgen.md#the-mapping-and-scan-methods).
 
 <!-- Both labels in this sentence are page titles, not tool names: docs/02-schema.md opens with
-     "# Schemas" and docs/06-rasqlgen.md opens with "# `rasql codegen`". A "See X and Y" pointer whose
+     "# Schemas" and docs/09-rasqlgen.md opens with "# `rasql codegen`". A "See X and Y" pointer whose
      first label is a page's own H1 is naming the second page the same way. Every site this change left
      spelled `rasqlgen` is unlinked prose naming the tool -- the generated-file marker, "the shape
      rasqlgen emits", the `cmd/rasqlgen` package row -- never a link to that page. -->
-Writing the same descriptors by hand works too. See [Schemas](docs/02-schema.md) and [`rasql codegen`](docs/06-rasqlgen.md).
+Writing the same descriptors by hand works too. See [Schemas](docs/02-schema.md) and [`rasql codegen`](docs/09-rasqlgen.md).
 
 ### 2. Read and write rows
 
@@ -305,11 +305,14 @@ TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
 | --- | --- |
 | [Getting started](docs/01-getting-started.md) | Installing, creating a DB, and running a first query. |
 | [Schemas](docs/02-schema.md) | Describing tables in Go and reading them back from a live database. |
-| [Querying](docs/03-querying.md) | Typed selects, joins, custom projections, and a reference table for every operation and predicate. |
-| [Writing rows](docs/04-writing.md) | Creating tables and inserting, updating, or deleting rows. |
-| [Static templates](docs/05-templates.md) | Compiling SQL text with named binds into parameterized statements. |
-| [`rasql codegen`](docs/06-rasqlgen.md) | Owning a database-backed generator program and compiling query templates. |
-| [Migrations](docs/07-migrations.md) | Applying ordered DDL migrations, and reverting them. |
+| [Querying](docs/03-querying.md) | The two builders, and which one a task calls for. |
+| [The SQL builder](docs/04-sql-builder.md) | Building and rendering a statement through `query` and `render`, with a reference for every constructor and predicate. |
+| [Typed queries](docs/05-typed-queries.md) | Typed selects, joins, custom projections, and the builder-method reference. |
+| [Writing rows](docs/06-writing.md) | Creating tables and inserting, updating, or deleting rows. |
+| [The database handle](docs/07-database.md) | Running a rendered statement, installing hooks, and starting a transaction. |
+| [Static templates](docs/08-templates.md) | Compiling SQL text with named binds into parameterized statements. |
+| [`rasql codegen`](docs/09-rasqlgen.md) | Owning a database-backed generator program and compiling query templates. |
+| [Migrations](docs/10-migrations.md) | Applying ordered DDL migrations, and reverting them. |
 
 The API reference lives at [pkg.go.dev](https://pkg.go.dev/github.com/lestrrat-go/rasql). Each code block that links to a source file is a runnable Go example from [`examples/`](examples/), verified by `go test`.
 

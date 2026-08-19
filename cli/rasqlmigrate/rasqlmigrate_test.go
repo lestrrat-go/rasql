@@ -26,7 +26,7 @@ import (
 // TestRunRejectsRemovedNewCommand pins the removal of the "new" subcommand,
 // which created a migration directory and nothing inside it. A user makes
 // that directory with mkdir; the layout it has to follow is stated in the
-// usage block and in docs/07-migrations.md, and every rule that matters is
+// usage block and in docs/10-migrations.md, and every rule that matters is
 // enforced where the migrations are read and applied.
 func TestRunRejectsRemovedNewCommand(t *testing.T) {
 	setCommandOutput(t)
