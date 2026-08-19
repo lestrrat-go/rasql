@@ -73,7 +73,7 @@ func run(args []string) error {
 
 func runNamed(args []string, program string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: %s <diff|diff-live|plan|apply|status|verify> [flags]", program)
+		return fmt.Errorf("usage: %s <diff|diff-live|plan|apply|down|status|verify> [flags]", program)
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -87,6 +87,8 @@ func runNamed(args []string, program string) error {
 		return runPlan(args[1:])
 	case "apply":
 		return runApply(args[1:])
+	case "down":
+		return runDown(args[1:])
 	case "status":
 		return runStatus(args[1:])
 	case "verify":
@@ -104,13 +106,16 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
 	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
 	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations")
+	_, _ = fmt.Fprintln(output, "  down     Revert applied migrations, newest first")
 	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
 	_, _ = fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
 	_, _ = fmt.Fprintln(output)
 	_, _ = fmt.Fprintln(output, "-dir holds one directory per migration, named for its ID, which you create yourself.")
-	_, _ = fmt.Fprintln(output, "Each holds one or more .sql files, each with one native SQL statement. Migrations run")
-	_, _ = fmt.Fprintln(output, "in directory-name order, and a migration's sources run in filename order, so pad the")
-	_, _ = fmt.Fprintln(output, "numbers you name them with. An applied migration must never change; add a new one.")
+	_, _ = fmt.Fprintln(output, "Each holds a .up.sql source for every step forward with the .down.sql that undoes it")
+	_, _ = fmt.Fprintln(output, "beside it, one native SQL statement per file. Migrations run in directory-name order,")
+	_, _ = fmt.Fprintln(output, "forward sources in ascending filename order and reverse sources in descending order,")
+	_, _ = fmt.Fprintln(output, "so pad the numbers you name them with. The forward sources of an applied migration")
+	_, _ = fmt.Fprintln(output, "must never change; revert it with down, or add a new migration.")
 	_, _ = fmt.Fprintf(output, "Run '%s <command> -h' for command flags.\n", program)
 }
 
@@ -338,6 +343,87 @@ func runApply(args []string) error {
 	}
 	_, _ = fmt.Fprintln(commandOutput, "migration apply completed")
 	return nil
+}
+
+// runDown implements the "down" command. It requires exactly one of -to and
+// -steps, so a run that names no target reverts nothing rather than
+// defaulting to some depth a user did not ask for.
+func runDown(args []string) error {
+	flags := newFlagSet("down")
+	directory := flags.String("dir", "", "directory that holds migration directories")
+	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
+	dsn := flags.String("dsn", "", "database connection string")
+	historyTable := flags.String("history-table", "", "migration history table name")
+	through := flags.String("to", "", "leave the database where this migration was applied, reverting every migration after it")
+	steps := flags.Int("steps", 0, "revert this many of the newest applied migrations")
+	dryRun := flags.Bool("dry-run", false, "print the SQL the revert would run without running it")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	target, err := revertTarget(*through, *steps)
+	if err != nil {
+		return err
+	}
+	runner, migrations, closeDatabase, err := openRunner(context.Background(), *directory, *dialectName, *dsn, *historyTable)
+	if err != nil {
+		return err
+	}
+	defer closeDatabase()
+
+	if *dryRun {
+		plan, err := runner.RevertPlan(context.Background(), target, migrations...)
+		if err != nil {
+			return dsnredact.Error(err, *dsn)
+		}
+		writeRevertPlan(commandOutput, plan)
+		return nil
+	}
+	reverted, err := runner.Revert(context.Background(), target, migrations...)
+	if err != nil {
+		return dsnredact.Error(err, *dsn)
+	}
+	for _, migration := range reverted {
+		_, _ = fmt.Fprintf(commandOutput, "reverted\t%s\n", migration.ID)
+	}
+	_, _ = fmt.Fprintf(commandOutput, "migration revert completed: %d reverted\n", len(reverted))
+	return nil
+}
+
+// revertTarget turns the -to and -steps flags into one target, refusing the
+// run when neither or both are given. "Neither" is the case worth refusing
+// loudest: a down command with no target that reverted everything would be
+// one keystroke away from an empty database.
+func revertTarget(through string, steps int) (migrate.RevertTarget, error) {
+	switch {
+	case through != "" && steps != 0:
+		return migrate.RevertTarget{}, errors.New("down accepts -to or -steps, not both")
+	case through != "":
+		return migrate.Through(through), nil
+	case steps != 0:
+		return migrate.Steps(steps), nil
+	default:
+		return migrate.RevertTarget{}, errors.New("down requires -to or -steps")
+	}
+}
+
+// writeRevertPlan prints the reverse sources a revert would run, in the
+// order it would run them, in the same form writePlan uses for forward
+// sources.
+func writeRevertPlan(output io.Writer, plan []migrate.Migration) {
+	first := true
+	for _, migration := range plan {
+		for _, statement := range migration.Down {
+			if !first {
+				_, _ = fmt.Fprintln(output)
+			}
+			first = false
+			_, _ = fmt.Fprintf(output, "-- %s/%s\n", migration.ID, statement.Source)
+			_, _ = fmt.Fprint(output, statement.SQL)
+			if !strings.HasSuffix(statement.SQL, "\n") {
+				_, _ = fmt.Fprintln(output)
+			}
+		}
+	}
 }
 
 func runStatus(args []string) error {

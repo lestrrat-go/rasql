@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`rasql` is a Go SQL toolkit that gives applications one model for schema definitions, dynamic queries, static queries, result decoding, database inspection, and forward-only DDL migrations. It produces parameterized SQL for PostgreSQL, MySQL, and SQLite without hiding dialect differences that affect correctness.
+`rasql` is a Go SQL toolkit that gives applications one model for schema definitions, dynamic queries, static queries, result decoding, database inspection, and ordered DDL migrations. It produces parameterized SQL for PostgreSQL, MySQL, and SQLite without hiding dialect differences that affect correctness.
 
-The migration package applies ordered, forward-only native SQL migrations for PostgreSQL, MySQL, and SQLite. It keeps an ID and checksum history, preserves source order, and rejects a changed or skipped migration. Its optional desired-schema diff adapters parse and render dialect-specific SQL to generate reviewed migrations. The runner does not parse migration SQL, automatically repair a live schema, or synthesize migrations from a live schema difference.
+The migration package applies ordered native SQL migrations for PostgreSQL, MySQL, and SQLite, and reverts them. It keeps an ID and checksum history, preserves source order, and rejects a changed or skipped migration. Every migration carries the reverse sources that undo it, and a revert runs them newest first and deletes each history record; the checksum covers the forward sources alone, so a reverse source can be corrected for a migration that is already applied. Its optional desired-schema diff adapters parse and render dialect-specific SQL to generate reviewed migrations. The runner does not parse migration SQL, automatically repair a live schema, or synthesize migrations from a live schema difference.
 
 ## Design decisions
 
@@ -27,7 +27,7 @@ The migration package applies ordered, forward-only native SQL migrations for Po
 | `rasql` | Executes statements, decodes typed rows, and provides the default fluent API. | `schema`, `dialect`, `query`, `render`, `database/sql` |
 | `inspect` | Reads database metadata and returns normalized schema descriptors. | `schema`, `dialect` |
 | `catalog` | Reads a consistent live-database catalog and applies table-selection options. | `inspect`, `schema`, `dialect`, `database/sql` |
-| `migrate` | Checksums, reports status, and applies forward-only native SQL migrations. | `schema`, `dialect`, `database/sql` |
+| `migrate` | Checksums, reports status, applies native SQL migrations, and reverts them. | `schema`, `dialect`, `database/sql` |
 | `migrate/diff` | Loads desired-schema sources, owns dialect-neutral diff plans, and writes reviewed migration directories. | Go standard library |
 | `migrate/diff/mysql` | Compares supported MySQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-mysql/query` |
 | `migrate/diff/postgresql` | Compares supported PostgreSQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-pg/query` |

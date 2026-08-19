@@ -112,6 +112,7 @@ func (r Runner) validate() error {
 type preparedMigration struct {
 	id         string
 	statements []Statement
+	down       []Statement
 	checksum   string
 }
 
@@ -129,6 +130,7 @@ func prepareMigrations(migrations []Migration) ([]preparedMigration, error) {
 		prepared[index] = preparedMigration{
 			id:         migration.ID,
 			statements: append([]Statement(nil), migration.Statements...),
+			down:       append([]Statement(nil), migration.Down...),
 			checksum:   checksum(migration.Statements),
 		}
 	}

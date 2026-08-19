@@ -1,6 +1,6 @@
 # Migrations
 
-`rasql migrate` applies checked-in, forward-only SQL migrations and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so resolve any failed partial migration before retrying.
+`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so resolve any failed partial migration before retrying.
 
 Run the command outside the application, before it starts. The application then opens a database whose schema is already in place.
 
@@ -14,21 +14,26 @@ Then run `rasql migrate <command> [flags]`. The standalone `rasqlmigrate` binary
 
 ## Migration directories
 
-Keep a separate migration root for every database dialect. Each first-level directory is one migration ID, and its `.sql` files run in lexicographic filename order.
+Keep a separate migration root for every database dialect. Each first-level directory is one migration ID, and it holds a `.up.sql` source for every step forward with the `.down.sql` that undoes it beside it.
 
 ```text
 db/migrations/
   sqlite/
     001_initial/
-      001_create_users.sql
-      002_users_email_index.sql
+      001_create_users.up.sql
+      001_create_users.down.sql
+      002_users_email_index.up.sql
+      002_users_email_index.down.sql
     002_add_user_nickname/
-      001_add_nickname.sql
+      001_add_nickname.up.sql
+      001_add_nickname.down.sql
 ```
 
 Each `.sql` file contains one native database statement. `rasql migrate` sends its bytes unchanged to the database driver. It does not parse, split, or render SQL, so a migration can use the database's own DDL syntax.
 
-Migration IDs, source filenames, source order, and source bytes are part of the recorded checksum. Do not edit, rename, move, add to, or remove an applied migration. Create a new migration directory for every later change.
+Forward migration IDs, source filenames, source order, and source bytes are part of the recorded checksum. Do not edit, rename, move, add to, or remove the forward sources of an applied migration. Create a new migration directory for every later change, or revert the migration first with [`down`](#revert-a-migration).
+
+Reverse sources stay out of the checksum, so a `.down.sql` can be added or corrected for a migration that is already applied.
 
 ### The rules a migration root follows
 
@@ -37,12 +42,16 @@ Create these directories yourself with `mkdir`. There is no command that scaffol
 - The root passed as `-dir` holds directories and nothing else. A file sitting directly in it fails the load, so a stray `notes.txt` is reported rather than skipped.
 - A directory's name is the migration ID that the history table records. It may be any non-empty valid UTF-8 text up to 255 bytes, with no NUL.
 - Migrations run in the sort order of those names, compared as bytes rather than as numbers. `10_x` sorts before `9_x`, so pad the numbers: `001`, `002`, `010`.
-- A migration directory holds one or more `.sql` files and no subdirectories. Any other extension fails the load, and an empty directory fails it too.
-- A migration's own sources run in the sort order of their filenames, with the same byte comparison and the same need for padding.
-- An entry whose name starts with a dot is ignored at both levels, so an editor's swap file does not become a migration.
+- A migration directory holds sources and no subdirectories. Every source ends in `.up.sql` or `.down.sql`; any other name fails the load, a plain `.sql` included, which is what turns a misspelled `001_add_nickname.dwon.sql` into an error rather than a silent extra forward source.
+- A migration's forward sources run in ascending filename order, with the same byte comparison and the same need for padding.
+- Its reverse sources run in **descending** filename order, so the migration is undone in the reverse of the order it was done.
+- Every migration needs at least one `.up.sql` and at least one `.down.sql`. A migration with no reverse source fails the load, so `apply` refuses it too and a reverse script cannot be missing on the day it is needed. A change that destroys data still writes the reverse that rebuilds the structure, such as re-adding a dropped column without its rows.
+- A migration may hold fewer reverse sources than forward ones. One `DROP TABLE` undoes a create-table plus a create-index without an empty file standing in for the second.
+- Every `.down.sql` must share its stem with a `.up.sql` in the same migration. That is the typo check, and it is the only pairing rule.
+- An entry whose name starts with a dot is ignored, so an editor's swap file does not become a migration.
 - A source file must hold something other than whitespace.
 
-The engine enforces the rest at apply time, against the history table rather than the disk. A migration whose recorded bytes no longer match its files fails with a checksum error. A new migration whose name sorts before one that is already applied fails as "recorded after a missing migration", rather than running out of order or being skipped. A recorded migration whose directory has since disappeared fails as "was not supplied".
+The engine enforces the rest at apply time, against the history table rather than the disk. A migration whose recorded bytes no longer match its forward files fails with a checksum error. A new migration whose name sorts before one that is already applied fails as "recorded after a missing migration", rather than running out of order or being skipped. A recorded migration whose directory has since disappeared fails as "was not supplied".
 
 ## Create and review a migration
 
@@ -52,10 +61,16 @@ Create the directory and add numbered SQL source files:
 mkdir -p db/migrations/sqlite/002_add_user_nickname
 ```
 
-For example, `db/migrations/sqlite/002_add_user_nickname/001_add_nickname.sql` can contain:
+For example, `db/migrations/sqlite/002_add_user_nickname/001_add_nickname.up.sql` can contain:
 
 ```sql
 ALTER TABLE "users" ADD COLUMN "nickname" TEXT;
+```
+
+and `001_add_nickname.down.sql` beside it:
+
+```sql
+ALTER TABLE "users" DROP COLUMN "nickname";
 ```
 
 Review the ordered sources without opening a database connection:
@@ -88,6 +103,32 @@ rasql migrate verify \
 ```
 
 `status` reports `applied`, `pending`, `changed`, `out_of_order`, and `unknown` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
+
+## Revert a migration
+
+`rasql migrate down` undoes applied migrations, newest first, running each one's `.down.sql` sources and deleting its history record. It requires exactly one of `-to` and `-steps`, so a run that names no target reverts nothing rather than choosing a depth for you.
+
+```sh
+rasql migrate down \
+  -dir db/migrations/sqlite \
+  -dialect sqlite \
+  -dsn "$DATABASE_URL" \
+  -steps 1
+
+rasql migrate down \
+  -dir db/migrations/sqlite \
+  -dialect sqlite \
+  -dsn "$DATABASE_URL" \
+  -to 001_initial
+```
+
+`-steps N` reverts the N newest applied migrations. `-to ID` leaves the database at the point where `ID` was applied, so `ID` itself stays applied and every migration after it is reverted; naming the newest applied migration reverts nothing. Add `-dry-run` to print the reverse SQL the run would execute without opening a transaction.
+
+A reverted migration becomes `pending` again, so `apply` runs it once more. That is the fix-and-reapply loop: revert the migration, correct its sources, apply it again.
+
+The whole run is refused, before any statement runs, when a selected migration's forward sources no longer match their recorded checksum, when `-to` names a migration that is not applied, when `-steps` exceeds the number applied, or when the history disagrees with the supplied migrations. A refused run changes nothing.
+
+PostgreSQL and SQLite revert a migration atomically, so a failed revert leaves the database as it was. MySQL commits DDL implicitly, so a revert that fails partway can leave a schema half undone with the migration still recorded; resolve that state by hand before running `down` again. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go`.
 
 ## Generate PostgreSQL, MySQL, and SQLite migrations
 

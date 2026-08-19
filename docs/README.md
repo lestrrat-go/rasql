@@ -10,7 +10,7 @@ These pages explain how to use `rasql` in an application. For what `rasql` is an
 4. [Writing rows](04-writing.md) creates tables and inserts, updates, or deletes rows, including inside a [transaction](04-writing.md#transactions).
 5. [Static templates](05-templates.md) compiles fixed SQL text with named binds.
 6. [`rasql codegen`](06-rasqlgen.md) writes the store package from live metadata, either as a command or through a project-owned generator.
-7. [Migrations](07-migrations.md) applies forward-only DDL migrations.
+7. [Migrations](07-migrations.md) applies ordered DDL migrations and reverts them.
 
 Pages 3 through 5 are independent of each other. Read the first two, then jump to whichever fits the task.
 
