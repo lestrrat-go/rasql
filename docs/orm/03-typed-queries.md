@@ -42,7 +42,7 @@ This table enumerates the typed layer in `rasql`. [Dynamic rows](../core/05-dyna
 | Write with `RETURNING`, decoded | `query.New….WithReturning(...)` then `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `[]T` / `T` |
 | Compiled [static template](../core/06-templates.md) | `db.ExecRendered(ctx, statement)` | `sql.Result` |
 
-Writes are covered in [Writing rows](04-writing.md); the rest of this page covers reads.
+[Writing rows](04-writing.md) covers the writes. The rest of this page covers reads.
 
 ### Select builder methods
 
@@ -69,7 +69,7 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
 `AND` in the order they were made, which is what a conditionally built filter
-needs. Use a single `query.Or` call for a top-level `OR`; it is not wrapped in
+needs. Use a single `query.Or` call for a top-level `OR`. It is not wrapped in
 an `AND` unless another `Where`, `WhereEqual`, or `WhereIn` follows it.
 `WhereIn` needs at least one value: an empty list makes
 `Build` and the executing methods return an error rather than render `IN ()`,
@@ -294,7 +294,7 @@ rows, err := rasql.SelectFrom(users).
 source: [examples/rasql_where_expressions_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_where_expressions_example_test.go)
 <!-- END INCLUDE -->
 
-A generated accessor cannot name a column the table does not have, because the method would not exist. A table built at run time has no such accessors, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column; a typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument; the renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
+A generated accessor cannot name a column the table does not have, because the method would not exist. A table built at run time has no such accessors, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column. A typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument. The renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
 
 ## Nest a predicate tree
 
@@ -398,7 +398,7 @@ The two `Where` calls above combine with `AND` under the rule that [Select build
 
 ## Filter with a subquery
 
-`query.InSelect` and `query.Scalar` take a `SELECT` statement as the right-hand side of a predicate, in place of a value list or a bound value. Each subquery is validated and rendered as its own statement; [Subqueries](../core/02-sql-builder.md#subqueries) covers the placement rules, including MySQL's restriction on `LIMIT` inside an `InSelect` statement.
+`query.InSelect` and `query.Scalar` take a `SELECT` statement as the right-hand side of a predicate, in place of a value list or a bound value. Each subquery is validated and rendered as its own statement. [Subqueries](../core/02-sql-builder.md#subqueries) covers the placement rules, including MySQL's restriction on `LIMIT` inside an `InSelect` statement.
 
 <!-- INCLUDE(examples/rasql_subquery_example_test.go) -->
 ```go
@@ -645,11 +645,11 @@ func Example_rasql_count() {
 source: [examples/rasql_count_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_count_example_test.go)
 <!-- END INCLUDE -->
 
-`Count` rejects a builder that sets `Limit` or `Offset`, because a count of a paged statement is not the count the caller built the statement to ask for; count an unpaged builder, then page a copy of it for the rows. `SUM` and `AVG` have no equivalent helper, because their result types are not portable across dialects — project them with `query.Sum` or `query.Avg` and decode through `rasql.DecodeFrom[R]` instead, as [Aggregates](../core/02-sql-builder.md#aggregates) covers.
+`Count` rejects a builder that sets `Limit` or `Offset`, because a count of a paged statement is not the count the caller built the statement to ask for. Count an unpaged builder, then page a copy of it for the rows. `SUM` and `AVG` have no equivalent helper, because their result types are not portable across dialects. Project them with `query.Sum` or `query.Avg` and decode through `rasql.DecodeFrom[R]` instead, as [Aggregates](../core/02-sql-builder.md#aggregates) covers.
 
 ## Group rows
 
-`GroupBy` adds a `GROUP BY` clause, which is what lets a projection set mix a bare column with an aggregate: [Aggregates](../core/02-sql-builder.md#aggregates) refuses that combination without one. `Having` adds a `HAVING` clause, filtering groups after aggregation the way `Where` filters rows before it; repeated calls combine with `AND` in the order they were made, exactly as `Where` does. `Having` needs groups to filter, so it requires either a `GroupBy` or a projection set that aggregates and reads no column outside an aggregate, a set in which a projection reading no column — a bound value, say — may sit beside the aggregate. [Aggregates](../core/02-sql-builder.md#aggregates) states what each of those two cases allows the clause to read.
+`GroupBy` adds a `GROUP BY` clause, which is what lets a projection set mix a bare column with an aggregate: [Aggregates](../core/02-sql-builder.md#aggregates) refuses that combination without one. `Having` adds a `HAVING` clause, filtering groups after aggregation the way `Where` filters rows before it. Repeated calls combine with `AND` in the order they were made, exactly as `Where` does. `Having` needs groups to filter, so it requires either a `GroupBy` or a projection set that aggregates and reads no column outside an aggregate, a set in which a projection reading no column — a bound value, say — may sit beside the aggregate. [Aggregates](../core/02-sql-builder.md#aggregates) states what each of those two cases allows the clause to read.
 
 <!-- INCLUDE(examples/rasql_group_by_example_test.go) -->
 ```go
@@ -765,7 +765,7 @@ source: [examples/rasql_group_by_example_test.go](https://github.com/lestrrat-go
 
 `Distinct()` adds `DISTINCT` right after `SELECT`, so the statement returns one row per distinct combination of its projected values. It is meaningful mainly beside a narrowed projection: `rasql.SelectFrom[T]` already selects every column of the table, including its primary key, which makes every row unique before `DISTINCT` runs. Use `rasql.DecodeFrom[R]` with `Project`, or [`dynamic.SelectBuilder`](../core/05-dynamic.md#select-builder-methods)'s `Select` with specific column names, to narrow the projection first.
 
-`Distinct` composes with everything else the builder offers — joins, `Where`, `GroupBy` and `Having`, `Order`, and `Limit`/`Offset` — with one rule left to the database rather than enforced in Go: an `ORDER BY` expression that is not among the distinct projections. SQLite accepts that shape and answers it from whichever row survived de-duplication, which is no question the caller asked; PostgreSQL refuses it with SQLSTATE `42P10`, and MySQL refuses it with error 3065 `ER_FIELD_IN_ORDER_NOT_SELECT`. rasql renders what the caller asks for and lets the database report that error, the way it already does for a WHERE clause that outgrows a dialect's parameter limit, rather than reimplementing the two servers' rule in Go.
+`Distinct` composes with everything else the builder offers — joins, `Where`, `GroupBy` and `Having`, `Order`, and `Limit`/`Offset` — with one rule left to the database rather than enforced in Go: an `ORDER BY` expression that is not among the distinct projections. SQLite accepts that shape and answers it from whichever row survived de-duplication, which is no question the caller asked. PostgreSQL refuses it with SQLSTATE `42P10`, and MySQL refuses it with error 3065 `ER_FIELD_IN_ORDER_NOT_SELECT`. rasql renders what the caller asks for and lets the database report that error, the way it already does for a WHERE clause that outgrows a dialect's parameter limit, rather than reimplementing the two servers' rule in Go.
 
 <!-- INCLUDE(examples/rasql_distinct_example_test.go) -->
 ```go
@@ -901,8 +901,8 @@ A table whose descriptor names a `Schema` (see [Qualify a table with a schema](.
 
 A statement may carry two sources only when a server can tell their column references apart, and `Validate` refuses the statement when it cannot. A refused statement reports `table "…" is referred to as "…", which already refers to table "…"`, naming the two tables it could not separate. A source is referred to by its alias when it has one, and by its table name otherwise. Two sources therefore clash whenever:
 
-- they share an alias, whatever the two tables are and whichever schemas they come from;
-- one carries an alias that repeats another source's unaliased table name;
+- They share an alias, whatever the two tables are and whichever schemas they come from.
+- One carries an alias that repeats another source's unaliased table name.
 - they share a table name and at least one of them is unqualified, because a bare `"users"."id"` names an unqualified `users` and a qualified `tenant_a.users` equally.
 
 Two unaliased tables of the same name in *different* schemas do not clash. Each renders its columns under its own `"schema"."table"` prefix, so `tenant_a.users` joined to `tenant_b.users` renders a statement whose every column reference names exactly one source. `TestSQLiteRefusesAmbiguousSources` runs that join against SQLite alongside each shape validation refuses.
@@ -915,7 +915,7 @@ PostgreSQL and MySQL refuse the same shape unconditionally on their own, Postgre
 
 ## Decode a custom shape
 
-A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise. A field no single column holds is computed by a method on the result type from the raw columns beside it, or converted by a field type implementing `sql.Scanner`; see [the mapping methods](02-generated-store.md#the-mapping-and-scan-methods). Use `DecodeFromRef` when the primary table is a bare `query.TableRef` with no Go row type.
+A join or a narrowed projection does not return a table's row type. `DecodeFrom` names the result type instead, and maps each selected column onto its fields, matching a `rasql` tag if present and the snake-cased field name otherwise. A field no single column holds is computed by a method on the result type from the raw columns beside it, or converted by a field type implementing `sql.Scanner`. [The mapping methods](02-generated-store.md#the-mapping-and-scan-methods) covers both. Use `DecodeFromRef` when the primary table is a bare `query.TableRef` with no Go row type.
 
 <!-- INCLUDE(examples/rasql_dynamic_projection_example_test.go) -->
 ```go
@@ -1035,7 +1035,7 @@ func Example_rasql_dynamic_projection() {
 source: [examples/rasql_dynamic_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_dynamic_projection_example_test.go)
 <!-- END INCLUDE -->
 
-`Join` takes `rasql.InnerJoin` or `rasql.LeftJoin` with the join condition; the `query` versions take a `query.TableRef` for dynamic code. `Project` selects expressions rather than plain column names, and `As` renames one so it lines up with a field of the result type. Because the projection is explicit here, the result type only needs fields for the columns actually selected.
+`Join` takes `rasql.InnerJoin` or `rasql.LeftJoin` with the join condition. The `query` versions take a `query.TableRef` for dynamic code. `Project` selects expressions rather than plain column names, and `As` renames one so it lines up with a field of the result type. Because the projection is explicit here, the result type only needs fields for the columns actually selected.
 
 ## See the SQL without a database
 
