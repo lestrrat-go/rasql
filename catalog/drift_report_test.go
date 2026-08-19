@@ -77,8 +77,11 @@ func usersReportFixture() (described, live schema.TableDef) {
 // table exercising every shape of change this package renders.
 func TestReportRendersEveryKindOfChange(t *testing.T) {
 	usersDescribed, usersLive := usersReportFixture()
+	// The two leftover tables carry different columns, so the added and
+	// removed lines this test is about are not paired into a rename line
+	// instead. TestReportRendersARename covers that line.
 	legacyUsers := tbl("legacy_users", "id")
-	orders := tbl("orders", "id")
+	orders := tbl("orders", "id", "total")
 
 	report := catalog.Drift(
 		[]schema.TableDef{legacyUsers, usersDescribed},
