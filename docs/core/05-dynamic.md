@@ -41,7 +41,7 @@ Predicates, aggregates, and statement constructors are the same ones [the SQL bu
 
 `dynamic.SelectBuilder` has no `All` or `One`: it has no Go type to collect into, so a caller ranges its `Query` sequence directly or reads one row with `dynamic.Get`.
 
-`Where`, `WhereEqual`, and `WhereIn` accumulate with `AND` here the same way they do on the typed builder, and `WhereIn` rejects an empty value list the same way; [Select builder methods](../orm/03-typed-queries.md#select-builder-methods) states both rules.
+`Where`, `WhereEqual`, and `WhereIn` accumulate with `AND` here the same way they do on the typed builder, and `WhereIn` rejects an empty value list the same way. [Select builder methods](../orm/03-typed-queries.md#select-builder-methods) states both rules.
 
 `Select` narrows the projection to named columns, which is what makes `Distinct()` meaningful: a builder that projects every column of a table, primary key included, has already made each row unique before `DISTINCT` runs. `GroupByColumns` is the same `names…` form for the grouping.
 
@@ -75,7 +75,7 @@ Read the values of a row in one of three ways:
 | `dynamic.Assign(result, "email", &value)` | The same value, decoded into an existing destination. |
 | `dynamic.Decode[T](result)` | A whole struct, matching `rasql` tags or snake-cased field names. |
 
-A debug `Handle` may return `nil` rows after logging; `dynamic.Scan` treats that as an empty result rather than an error.
+A debug `Handle` may return `nil` rows after logging. `dynamic.Scan` reads that as an empty result rather than an error.
 
 ## Delete rows
 

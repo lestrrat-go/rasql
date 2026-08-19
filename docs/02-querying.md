@@ -1,12 +1,12 @@
 # Querying
 
-`rasql` offers two builders for reading rows, and this page says what each one is for. Both start from a table description, both validate the statement before it becomes SQL, and both send every value as a bound argument.
+`rasql` offers two builders for reading rows, one per layer, and this page says what each one is for. Both start from a table description, both validate the statement before it becomes SQL, and both send every value as a bound argument.
 
 ## Two builders
 
-The [SQL builder](core/02-sql-builder.md) lives in `query` and `render`. `query` assembles a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. These two packages import `schema` and `dialect` and nothing else of `rasql`, so the statement is built with no database handle in hand and no Go type for the row. What comes back is a `render.Statement`, which an application executes however it likes, including through `database/sql` directly.
+The [SQL builder](core/02-sql-builder.md) is the core layer, and it lives in `query` and `render`. `query` assembles a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. These two packages import `schema` and `dialect` and nothing else of `rasql`, so the statement is built with no database handle in hand and no Go type for the row. What comes back is a `render.Statement`, which an application executes however it likes, including through `database/sql` directly.
 
-The [typed builder](orm/03-typed-queries.md) is the ORM, and it lives in the root `rasql` package. It starts from a generated table value that carries the Go row type, so `rasql.SelectFrom(users)` already knows what a result row decodes into, and `users.ID()` is a column reference the compiler checks. It builds the same statements the SQL builder builds, then executes them and decodes each row into the row type.
+The [typed builder](orm/03-typed-queries.md) is the ORM layer, and it lives in the root `rasql` package. It starts from a generated table value that carries the Go row type, so `rasql.SelectFrom(users)` already knows what a result row decodes into, and `users.ID()` is a column reference the compiler checks. It builds the same statements the SQL builder builds, then executes them and decodes each row into the row type.
 
 | | SQL builder | Typed builder |
 | --- | --- | --- |

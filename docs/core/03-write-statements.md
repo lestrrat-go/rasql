@@ -83,7 +83,7 @@ source: [examples/query_render_write_example_test.go](https://github.com/lestrra
 
 `render.CreateTable` takes the table description directly, so the DDL above comes out of a `schema.TableDef` alone. `rasql.CreateTable` in [Create a table](../orm/04-writing.md#create-a-table) renders the same DDL and executes it, which is why it asks for a `rasql.Table[T]` and an open database.
 
-Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for conflict handling or SQL shapes not covered by the typed helpers. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows; use `dynamic.QueryWrite` for one of those instead.
+Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is what the `query` constructors produce: `NewInsert`, `NewInsertRows`, `NewUpdate`, `NewDelete`, and `NewUpsert`. Use them for conflict handling or SQL shapes not covered by the typed helpers. `Exec` rejects a statement carrying a `RETURNING` clause, because it discards result rows. Use `dynamic.QueryWrite` for one of those instead.
 
 `NewUpdate` and `NewDelete` accept a missing predicate while a statement is being assembled, but rendering and execution reject that shape unless the intent is explicit. Call `statement.AllowAll()` and use the returned statement when every row should be changed. A predicate and `AllowAll` cannot be combined.
 
@@ -106,11 +106,11 @@ result, err := rasql.Exec(ctx, db, statement)
 source: [examples/rasql_partial_update_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_partial_update_example_test.go)
 <!-- END INCLUDE -->
 
-Each `With…` method returns a new validated statement rather than changing the one it was called on, matching the immutable style of the select builders. `NewUpsert` accepts an explicit conflict target the same way; check `dialect.CapabilityConflictTarget` before relying on it, since MySQL lacks it and rejects a statement that sets one.
+Each `With…` method returns a new validated statement rather than changing the one it was called on, matching the immutable style of the select builders. `NewUpsert` accepts an explicit conflict target the same way. Check `dialect.CapabilityConflictTarget` before relying on it, since MySQL lacks it and rejects a statement that sets one.
 
 A multi-row insert built with `NewInsertRows` carries `RETURNING` and conflict handling the same way a one-row insert does, with two caveats.
 
-Row order in a `RETURNING` result is not guaranteed to match the order of the `VALUES` list: SQLite states outright that `RETURNING` output order is undefined, and PostgreSQL never promises it either. Project a column that identifies the row and match on it; do not correlate the result with the input rows by position.
+Row order in a `RETURNING` result is not guaranteed to match the order of the `VALUES` list: SQLite states outright that `RETURNING` output order is undefined, and PostgreSQL never promises it either. Project a column that identifies the row and match on it. Never correlate the result with the input rows by position.
 
 That advice assumes each `VALUES` row leaves its own distinct row behind, which a repeated conflict key breaks. An upsert over two `VALUES` rows sharing one conflict key returns, on SQLite, one `RETURNING` row per `VALUES` row, both carrying the same identifying value, even though only one physical row exists afterwards. An identifying column tells you which row a result refers to, not how many results refer to the same row.
 
@@ -124,7 +124,7 @@ Either keep conflict keys unique within one statement, or account for that updat
 
 ## Reading a `RETURNING` clause
 
-`WithReturning` adds a `RETURNING` clause on dialects that support it; check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `dynamic.QueryWrite` renders and runs it, returning the same rangeable `dynamic.Row` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do. The typed pair stays in `rasql`, because they name a Go type rather than a column string.
+`WithReturning` adds a `RETURNING` clause on dialects that support it. Check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `dynamic.QueryWrite` renders and runs it, returning the same rangeable `dynamic.Row` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do. The typed pair stays in `rasql`, because they name a Go type rather than a column string.
 
 <!-- INCLUDE(examples/rasql_returning_example_test.go) -->
 ```go

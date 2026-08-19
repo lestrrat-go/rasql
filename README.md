@@ -2,7 +2,14 @@
 
 `rasql` (pronounced “rascal”) is an all-in-one SQL toolkit for Go.
 
-It gives an application one model for schema definitions, dynamic queries, static queries, result decoding, and database inspection. Every statement it produces is parameterized: values travel as bound arguments, never as SQL text.
+It gives an application one model for schema definitions, dynamic queries, static queries, result decoding, and database inspection. Every statement it produces is parameterized, so values travel as bound arguments and never as SQL text.
+
+`rasql` comes in two layers, and an application picks whichever one fits the job.
+
+* The **core layer** describes tables, builds SQL, runs it, compiles templates, and applies migrations. It needs no Go type for a row and no generated code.
+* The **ORM layer** sits on top. `rasql codegen` writes a store package from the database you already have, and the typed builders read and write Go values through it.
+
+Most applications start with the ORM layer, which the quick start below does. [Getting started](docs/01-getting-started.md) runs the same ground more slowly, and [Querying](docs/02-querying.md) says which layer a given task calls for.
 
 ## Features
 
@@ -12,7 +19,7 @@ It gives an application one model for schema definitions, dynamic queries, stati
 * **Rows without a Go type.** `rasql/dynamic` runs the same statements against a table that has no row type, naming its columns as strings and yielding `dynamic.Row` values. See [Dynamic rows](docs/core/05-dynamic.md).
 * **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Static templates](docs/core/06-templates.md).
 * **Schema description and inspection.** Write table definitions as Go code, or read them back from a live database. See [Schemas](docs/core/01-schema.md).
-* **PostgreSQL, MySQL, and SQLite.** The same application code runs against all three; the driver and the DSN are what change.
+* **PostgreSQL, MySQL, and SQLite.** The same application code runs against all three. Only the driver and the DSN change.
 
 ## Requirements
 
@@ -173,7 +180,7 @@ func Tables() []schema.TableDef {
 source: [examples/store/schema_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/schema_gen.go)
 <!-- END INCLUDE -->
 
-The descriptor stays unexported so no importer can replace it; `store.Users()` hands out the table value, and `store.UsersDef()` hands out a copy of the descriptor. Its column accessors are what the query builders take, so `WhereEqual(users.ID(), 42)` builds while a misspelled `users.Emial()` does not compile. See [what the column accessors catch](docs/orm/02-generated-store.md#what-the-column-accessors-catch) and [the mapping methods](docs/orm/02-generated-store.md#the-mapping-and-scan-methods).
+The descriptor stays unexported so no importer can replace it. `store.Users()` hands out the table value, and `store.UsersDef()` hands out a copy of the descriptor. Its column accessors are what the query builders take, so `WhereEqual(users.ID(), 42)` builds while a misspelled `users.Emial()` does not compile. See [what the column accessors catch](docs/orm/02-generated-store.md#what-the-column-accessors-catch) and [the mapping methods](docs/orm/02-generated-store.md#the-mapping-and-scan-methods).
 
 <!-- Both labels in this sentence are page titles, not tool names: docs/02-schema.md opens with
      "# Schemas" and docs/09-rasqlgen.md opens with "# `rasql codegen`". A "See X and Y" pointer whose
@@ -282,7 +289,7 @@ func Example_rasql_quickstart() {
 source: [examples/rasql_quickstart_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_quickstart_example_test.go)
 <!-- END INCLUDE -->
 
-`users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()` or `dialect.MySQL()` to run the same code against another database; only the driver and the DSN change with it.
+`users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()` or `dialect.MySQL()` to run the same code against another database. Only the driver and the DSN change with it.
 
 Inserts, updates, deletes, and typed selects have dedicated helpers. A fluent delete that carries `Returning` reads its deleted rows decoded through `rasql.QueryDeleteAll` or `rasql.QueryDeleteOne`, and undecoded through `dynamic.DeleteFrom(table.Ref()).Returning(...).Query`. Upserts and anything else beyond them are built through the `query` package and run with `rasql.Exec`, except a statement with a `RETURNING` clause, which reads its rows back through `dynamic.QueryWrite` instead.
 
@@ -316,6 +323,7 @@ The [documentation index](docs/) groups these pages by layer: the core layer bui
 | [Dynamic rows](docs/core/05-dynamic.md) | Reading and writing rows for a column name known only as a string at run time. |
 | [Static templates](docs/core/06-templates.md) | Compiling SQL text with named binds into parameterized statements. |
 | [Migrations](docs/core/07-migrations.md) | Applying ordered DDL migrations, and reverting them. |
+| [Inspection-only facts](docs/core/08-inspection-facts.md) | Reference for the facts inspection reads that rasql cannot write back as DDL. |
 | **ORM layer** | |
 | [`rasql codegen`](docs/orm/01-codegen.md) | Running the generator and configuring it with `rasql.json`. |
 | [The generated store](docs/orm/02-generated-store.md) | The row types, table types, column accessors, and static query functions it writes. |

@@ -20,6 +20,7 @@ Start with these two, whichever layer the task belongs to:
 5. [Dynamic rows](core/05-dynamic.md) reads and writes rows for a column name the program only knows as a string.
 6. [Static templates](core/06-templates.md) compiles fixed SQL text with named binds.
 7. [Migrations](core/07-migrations.md) applies ordered DDL migrations and reverts them.
+8. [Inspection-only facts](core/08-inspection-facts.md) is a reference for the facts a live database reports that `rasql` records but cannot write back as DDL.
 
 ### The ORM layer
 
