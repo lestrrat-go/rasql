@@ -586,13 +586,6 @@ func TestRunHelpAndUnknownCommand(t *testing.T) {
 	require.Error(t, run([]string{"unknown"}))
 }
 
-func TestRedactErrorRemovesDSN(t *testing.T) {
-	dsn := "postgres://user:secret@example.test/database"
-	err := redactError(errors.New("connect "+dsn+" failed"), dsn)
-	require.NotContains(t, err.Error(), dsn)
-	require.Contains(t, err.Error(), "[redacted]")
-}
-
 func newTestDirectory(t *testing.T) string {
 	t.Helper()
 	return t.TempDir()

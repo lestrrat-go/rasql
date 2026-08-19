@@ -10,7 +10,7 @@ It gives an application one model for schema definitions, dynamic queries, stati
 * Dynamic query building at runtime, through `rasql/dynamic`.
 * Static query building with templates.
 
-`rasql` starts from the database you already have: `rasql codegen init` scaffolds a checked-in generator program, and that project-owned program turns live metadata into typed rows, tables, column accessors, and static query functions.
+`rasql` starts from the database you already have: `rasql codegen generate` reads its live metadata and writes typed rows, tables, column accessors, and static query functions as checked-in Go source.
 
 `rasql` applies ordered, forward-only DDL migrations for PostgreSQL, MySQL, and SQLite. Run checked-in SQL migration directories with [`rasql migrate apply`](docs/07-migrations.md), and generate reviewed PostgreSQL, MySQL, or SQLite migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
 
@@ -26,24 +26,24 @@ go get github.com/lestrrat-go/rasql
 
 ## Quick start
 
-### 1. Generate the store with an owned program
+### 1. Generate the store
 
-Run `rasql codegen init` once. It writes only `gen/main.go`; it does not connect to the database or generate the store. Check that scaffold into the project, then run the project-owned program whenever the schema changes:
+Run `rasql codegen generate` against the database whenever the schema changes. It reads the live metadata and writes the store package:
 
 ```sh
 go get github.com/lestrrat-go/rasql/cmd/rasql@latest
-go run github.com/lestrrat-go/rasql/cmd/rasql codegen init \
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate \
+  -dsn "$DATABASE_URL" \
   -dialect postgresql \
   -package store \
   -output internal/store
-go get github.com/jackc/pgx/v5/stdlib
-DATABASE_URL="$DATABASE_URL" go generate ./...
-DATABASE_URL="$DATABASE_URL" go run ./gen -check
 ```
 
-The generated `gen/main.go` owns the database driver, the `catalog.Options` table selection (`Include`, `Exclude`, and `HistoryTable`), Go-side `Hints`, static `Queries`, and the `generate.Store` `Prune`, `Write`, and `Check` behavior. Edit that program when the project needs a different selection or generation policy; rerun `rasql codegen init` with `-force` only when intentionally replacing the scaffold.
+Pass `-check` to report whether the checked-in package is current instead of writing it. `-include`, `-exclude`, and `-history-table` narrow the table selection, and `-prune=false` refuses a run that would delete a generated file it no longer writes.
 
-The owned generator turns each live table descriptor into the code you query through: a `<table>_gen.go` file holding a row type with its scan methods and its column-value method, a table type with one accessor method per column, and a package-level accessor. A separate `schema_gen.go` holds every table's runtime descriptor. This is the whole file for a `users` table of `id` and `email`:
+A project that must state a Go-side hint, or compile a static SQL template into the package, owns a generator program instead. `rasql codegen init` scaffolds it as `gen/main.go`; that program holds the driver, the table selection, the hints, the static queries, and the pruning policy where the compiler checks them. See [the generator guide](docs/06-rasqlgen.md).
+
+Generation turns each live table descriptor into the code you query through: a `<table>_gen.go` file holding a row type with its scan methods and its column-value method, a table type with one accessor method per column, and a package-level accessor. A separate `schema_gen.go` holds every table's runtime descriptor. This is the whole file for a `users` table of `id` and `email`:
 
 <!-- INCLUDE(examples/store/users_gen.go) -->
 ```go

@@ -821,7 +821,8 @@ func TestRasqlgenDocumentationAnchors(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, heading := range []string{
-		"## Recommended workflow: own `gen/main.go`",
+		"## `generate`: run the command",
+		"## `init`: own `gen/main.go`",
 		"### The mapping and scan methods",
 	} {
 		require.Contains(t, string(contents), "\n"+heading+"\n")

@@ -26,10 +26,10 @@ func Run(args []string, output, diagnostics io.Writer) error {
 	// diagnostic.
 	var flagPrinted bytes.Buffer
 	err := command{
-		program:         "rasql codegen",
-		initFlagSetName: "rasql codegen init",
-		output:          output,
-		diagnostics:     &flagPrinted,
+		program:       "rasql codegen",
+		flagSetPrefix: "rasql codegen ",
+		output:        output,
+		diagnostics:   &flagPrinted,
 	}.run(args)
 	if flagPrinted.Len() > 0 {
 		flagStream := diagnostics
@@ -52,9 +52,9 @@ func RunLegacy(args []string, writer io.Writer) error {
 		// The standalone binary prints what it has always printed, so its
 		// flag set keeps the bare subcommand name in "Usage of init:" and
 		// both streams stay on the one writer the caller supplied.
-		initFlagSetName: "init",
-		output:          writer,
-		diagnostics:     writer,
+		flagSetPrefix: "",
+		output:        writer,
+		diagnostics:   writer,
 	}.run(args)
 }
 
@@ -64,10 +64,12 @@ type command struct {
 	// "rasqlgen" under the standalone binary, "rasql codegen" under the
 	// unified rasql command.
 	program string
-	// initFlagSetName names the init flag set, which the flag package
-	// prints as "Usage of <name>:". The unified command names itself in
-	// full there, so a diagnostic says which command produced it.
-	initFlagSetName string
+	// flagSetPrefix goes in front of a subcommand's name to make the flag
+	// set name the flag package prints as "Usage of <name>:". The unified
+	// command sets "rasql codegen ", so a diagnostic says which command
+	// produced it; the standalone binary leaves it empty and keeps
+	// printing the bare subcommand name it always printed.
+	flagSetPrefix string
 	// output receives help text and what a successful command produced.
 	output io.Writer
 	// diagnostics receives everything the flag package prints while
@@ -81,16 +83,18 @@ type command struct {
 
 func (c command) run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: %s <init> [flags]", c.program)
+		return fmt.Errorf("usage: %s <generate|init> [flags]", c.program)
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
 		c.printUsage()
 		return flag.ErrHelp
+	case "generate":
+		return c.runGenerate(args[1:])
 	case "init":
 		return c.runInit(args[1:])
 	default:
-		return fmt.Errorf("unknown %s command %q; expected init", c.program, args[0])
+		return fmt.Errorf("unknown %s command %q; expected generate or init", c.program, args[0])
 	}
 }
 
@@ -98,6 +102,7 @@ func (c command) printUsage() {
 	_, _ = fmt.Fprintf(c.output, "Usage: %s <command> [flags]\n", c.program)
 	_, _ = fmt.Fprintln(c.output)
 	_, _ = fmt.Fprintln(c.output, "Commands:")
+	_, _ = fmt.Fprintln(c.output, "  generate  Generate the store package from a live database")
 	_, _ = fmt.Fprintln(c.output, "  init      Scaffold the generator program, gen/main.go")
 	_, _ = fmt.Fprintln(c.output)
 	_, _ = fmt.Fprintf(c.output, "Run '%s <command> -h' for command flags.\n", c.program)
