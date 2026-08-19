@@ -4,15 +4,14 @@
 
 It gives an application one model for schema definitions, dynamic queries, static queries, result decoding, and database inspection. Every statement it produces is parameterized: values travel as bound arguments, never as SQL text.
 
-* PostgreSQL, MySQL, and SQLite dialects.
-* Schema definitions written as Go code, including generation from live database metadata.
-* Type-safe result-set access.
-* Dynamic query building at runtime, through `rasql/dynamic`.
-* Static query building with templates.
+## Features
 
-`rasql` starts from the database you already have: `rasql codegen generate` reads its live metadata and writes typed rows, tables, column accessors, and static query functions as checked-in Go source.
-
-`rasql` applies ordered DDL migrations for PostgreSQL, MySQL, and SQLite, and reverts them. Run checked-in SQL migration directories with [`rasql migrate apply`](docs/07-migrations.md), undo them with [`rasql migrate down`](docs/07-migrations.md#revert-a-migration), and generate reviewed PostgreSQL, MySQL, or SQLite migrations from desired-schema sources when useful. It also describes and inspects schemas for use in application code and migration planning.
+* **DDL migrations.** Run checked-in SQL migration directories in order with [`rasql migrate apply`](docs/07-migrations.md), revert them with [`rasql migrate down`](docs/07-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite migration from desired-schema sources when that helps. See [Migrations](docs/07-migrations.md).
+* **Query builder.** Build selects, inserts, updates, and deletes from Go values, and let rasql render them for the dialect in use. `rasql/dynamic` builds the same statements against a table that has no Go row type. See [Querying](docs/03-querying.md).
+* **ORM.** Run `rasql codegen generate` against the database you already have, and it reads the live metadata and writes typed row structs, table types, column accessors, and static query functions as checked-in Go source. An application then reads and writes rows as Go values, with type-safe result-set access. See [`rasql codegen`](docs/06-rasqlgen.md).
+* **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Static templates](docs/05-templates.md).
+* **Schema description and inspection.** Write table definitions as Go code, or read them back from a live database. See [Schemas](docs/02-schema.md).
+* **PostgreSQL, MySQL, and SQLite.** The same application code runs against all three; the driver and the DSN are what change.
 
 ## Requirements
 
