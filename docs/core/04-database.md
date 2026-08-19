@@ -20,7 +20,7 @@ A `rasql.DB` pairs a database handle with the dialect used to render SQL. Both b
 
 ## Operational hooks
 
-`rasql.Hook` provides a small observation and policy boundary around rendered database operations. A hook receives the operation kind, the exact SQL text, and a copy of the bound arguments. `Before` hooks can reject a statement before it reaches `database/sql`; `After` hooks receive the execution error, if any, and can report or reject the result.
+`rasql.Hook` provides a small observation and policy boundary around rendered database operations. A hook receives the operation kind, the exact SQL text, and a copy of the bound arguments. A `Before` hook can reject a statement before it reaches `database/sql`. An `After` hook receives the execution error, if any, and can report or reject the result.
 
 Hooks run in registration order before execution and reverse registration order after execution. A hook cannot replace the SQL or its bound arguments, so policy checks and logging do not change the statement sent to the driver.
 
@@ -47,7 +47,7 @@ source: [examples/rasql_hook_example_test.go](https://github.com/lestrrat-go/ras
 
 Pass hooks to `rasql.New`, or add them with `DB.WithHooks`. A transaction started by `DB.Begin` inherits every hook already registered on that `DB`, then appends any hooks passed to `Begin` itself. A policy hook registered on a `DB` therefore also runs for operations inside transactions started from it, not just for calls made directly through the `DB`. Add hooks scoped to only the transaction by passing them to `Begin`, or by calling `WithHooks` on the `DB` it returns. `WithHooks` returns the same concrete `DB` value, so transaction ownership and explicit `Commit` or `Rollback` remain visible.
 
-Hooks cover calls through `DB`, including transactions, the high-level builders, and static rendered statements. They do not wrap `Begin`, `Commit`, `Rollback`, direct `database/sql` calls, or the migration and inspection packages, which use their own database handles. Hooks are synchronous and do not add retries, tracing spans, tenant filters, or automatic redaction; applications must implement those policies in their hooks or at their database boundary.
+Hooks cover calls through `DB`, including transactions, the high-level builders, and static rendered statements. They do not wrap `Begin`, `Commit`, `Rollback`, direct `database/sql` calls, or the migration and inspection packages, which use their own database handles. Hooks are synchronous, and they add no retries, tracing spans, tenant filters, or automatic redaction. An application implements those policies in its own hooks or at its database boundary.
 
 ## Transactions
 
@@ -55,7 +55,7 @@ A transaction is not a separate type. `DB.Begin` takes `*sql.TxOptions` and opti
 
 The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation. Calling `Commit` or `Rollback` on a `DB` that is not a transaction returns an error rather than being a compile-time mistake, since one concrete type now covers both cases.
 
-A transaction still cannot be nested: calling `Begin` on a `DB` that is already a transaction returns an error instead of opening a savepoint. An application that already holds a native `*sql.Tx` can hand it straight to `rasql.New` instead of calling `Begin`; the resulting `DB` is a transaction the same way one returned by `Begin` is.
+A transaction still cannot be nested: calling `Begin` on a `DB` that is already a transaction returns an error instead of opening a savepoint. An application that already holds a native `*sql.Tx` can hand it straight to `rasql.New` instead of calling `Begin`. The resulting `DB` is a transaction the same way one returned by `Begin` is.
 
 <!-- INCLUDE(examples/rasql_transaction_example_test.go) -->
 ```go

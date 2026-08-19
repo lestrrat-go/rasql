@@ -19,7 +19,7 @@ Most applications start with the ORM layer, which the quick start below does. [G
 * **Rows without a Go type.** `rasql/dynamic` runs the same statements against a table that has no row type, naming its columns as strings and yielding `dynamic.Row` values. See [Dynamic rows](docs/core/05-dynamic.md).
 * **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Static templates](docs/core/06-templates.md).
 * **Schema description and inspection.** Write table definitions as Go code, or read them back from a live database. See [Schemas](docs/core/01-schema.md).
-* **PostgreSQL, MySQL, and SQLite.** The same application code runs against all three; the driver and the DSN are what change.
+* **PostgreSQL, MySQL, and SQLite.** The same application code runs against all three. Only the driver and the DSN change.
 
 ## Requirements
 
@@ -180,7 +180,7 @@ func Tables() []schema.TableDef {
 source: [examples/store/schema_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/schema_gen.go)
 <!-- END INCLUDE -->
 
-The descriptor stays unexported so no importer can replace it; `store.Users()` hands out the table value, and `store.UsersDef()` hands out a copy of the descriptor. Its column accessors are what the query builders take, so `WhereEqual(users.ID(), 42)` builds while a misspelled `users.Emial()` does not compile. See [what the column accessors catch](docs/orm/02-generated-store.md#what-the-column-accessors-catch) and [the mapping methods](docs/orm/02-generated-store.md#the-mapping-and-scan-methods).
+The descriptor stays unexported so no importer can replace it. `store.Users()` hands out the table value, and `store.UsersDef()` hands out a copy of the descriptor. Its column accessors are what the query builders take, so `WhereEqual(users.ID(), 42)` builds while a misspelled `users.Emial()` does not compile. See [what the column accessors catch](docs/orm/02-generated-store.md#what-the-column-accessors-catch) and [the mapping methods](docs/orm/02-generated-store.md#the-mapping-and-scan-methods).
 
 <!-- Both labels in this sentence are page titles, not tool names: docs/02-schema.md opens with
      "# Schemas" and docs/09-rasqlgen.md opens with "# `rasql codegen`". A "See X and Y" pointer whose
@@ -289,7 +289,7 @@ func Example_rasql_quickstart() {
 source: [examples/rasql_quickstart_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_quickstart_example_test.go)
 <!-- END INCLUDE -->
 
-`users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()` or `dialect.MySQL()` to run the same code against another database; only the driver and the DSN change with it.
+`users` and `UserRow` stand in for the generated `store.Users()` and `store.UsersRow`, so an application would write `rasql.SelectFrom(store.Users())` instead. Swap `dialect.SQLite()` for `dialect.PostgreSQL()` or `dialect.MySQL()` to run the same code against another database. Only the driver and the DSN change with it.
 
 Inserts, updates, deletes, and typed selects have dedicated helpers. A fluent delete that carries `Returning` reads its deleted rows decoded through `rasql.QueryDeleteAll` or `rasql.QueryDeleteOne`, and undecoded through `dynamic.DeleteFrom(table.Ref()).Returning(...).Query`. Upserts and anything else beyond them are built through the `query` package and run with `rasql.Exec`, except a statement with a `RETURNING` clause, which reads its rows back through `dynamic.QueryWrite` instead.
 

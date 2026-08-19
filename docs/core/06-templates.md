@@ -252,13 +252,13 @@ func Example_rasql_typed_static_template() {
 source: [examples/rasql_typed_static_template_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_typed_static_template_example_test.go)
 <!-- END INCLUDE -->
 
-The template parser still permits only `{{bind "name"}}` actions, and `Compile` still chooses placeholders from the selected dialect. `QueryRendered` does not parse or validate the SQL grammar, table names, column names, or database-specific features; the target database checks those when it executes the statement. The fluent builder remains the place for dialect-neutral validation of its supported syntax. CTEs, window functions, recursive queries, vendor-specific clauses, and other syntax not modeled by the builder must use a static template or `render.Precompiled` statement.
+The template parser still permits only `{{bind "name"}}` actions, and `Compile` still chooses placeholders from the selected dialect. `QueryRendered` does not parse or validate the SQL grammar, table names, column names, or database-specific features. The target database checks those when it executes the statement. The fluent builder remains the place for dialect-neutral validation of its supported syntax. CTEs, window functions, recursive queries, vendor-specific clauses, and other syntax not modeled by the builder must use a static template or `render.Precompiled` statement.
 
 [Read a row](05-dynamic.md#read-a-row) lists the three calls that read a value out of a `dynamic.Row`.
 
 ## Generate a function instead
 
-`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. Put the template in the `queries` list of `rasql.json`; that keeps table generation and static query generation in one command. See [`rasql codegen`](../orm/02-generated-store.md#static-query-functions).
+`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. Put the template in the `queries` list of `rasql.json`, which keeps table generation and static query generation in one command. See [`rasql codegen`](../orm/02-generated-store.md#static-query-functions).
 
 ## Next
 
