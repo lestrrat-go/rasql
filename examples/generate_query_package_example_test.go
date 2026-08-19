@@ -13,6 +13,9 @@ import (
 // SQL templates alone, plans it, writes it into a scratch directory, and
 // checks the result. No database is opened and no table descriptor is
 // supplied, which is the whole difference from generate.Store.
+//
+// One query names a template file and the other carries its template in SQL,
+// which is the choice every Query makes.
 func Example_generate_query_package() {
 	dir, err := os.MkdirTemp("", "rasql-generate-query-package-example-*")
 	if err != nil {
@@ -34,6 +37,7 @@ func Example_generate_query_package() {
 		Dialect: dialect.PostgreSQL(),
 		Queries: []generate.Query{
 			{Input: template, Function: "UserByEmail", Output: "user_by_email_gen.go"},
+			{SQL: "SELECT count(*) FROM users", Function: "CountUsers", Output: "count_users_gen.go"},
 		},
 	}
 
@@ -59,6 +63,7 @@ func Example_generate_query_package() {
 	// END(query_package)
 
 	// Output:
+	// count_users_gen.go
 	// user_by_email_gen.go
 	// check: ok
 }

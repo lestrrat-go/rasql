@@ -40,3 +40,69 @@ func TestStorePlanRejectsOversizedQueryInput(t *testing.T) {
 	require.ErrorContains(t, err, input)
 	require.ErrorContains(t, err, "exceeds maximum size of 67108864 bytes")
 }
+
+// TestStoreCompilesInlineQuery requires a query carrying its template in SQL
+// to generate the same function a query naming a file generates, with no file
+// on disk for it.
+func TestStoreCompilesInlineQuery(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users WHERE email = {{bind "email"}}`,
+			Function: "UserByEmail",
+			Output:   "user_by_email_gen.go",
+		}},
+	}
+
+	require.NoError(t, store.Write())
+	generated, err := os.ReadFile(filepath.Join(root, "store", "user_by_email_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(generated), "func UserByEmail(email any)")
+	require.Contains(t, string(generated), "SELECT id FROM users WHERE email = $1")
+	require.NoError(t, store.Check())
+}
+
+// TestStoreRejectsQueryTemplateCount requires a query to carry its template in
+// exactly one of Input and SQL.
+func TestStoreRejectsQueryTemplateCount(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "query.sql")
+	require.NoError(t, os.WriteFile(input, []byte("SELECT 1"), 0o600))
+	base := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+	}
+
+	testCases := []struct {
+		name    string
+		query   generate.Query
+		message string
+	}{
+		{
+			name:    "neither",
+			query:   generate.Query{Function: "Query", Output: "query_gen.go"},
+			message: "input or sql is required",
+		},
+		{
+			name:    "both",
+			query:   generate.Query{Input: input, SQL: "SELECT 1", Function: "Query", Output: "query_gen.go"},
+			message: "input and sql cannot both be set",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := base
+			store.Queries = []generate.Query{testCase.query}
+			_, err := store.Plan()
+			require.ErrorContains(t, err, testCase.message)
+		})
+	}
+}

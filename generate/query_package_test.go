@@ -558,7 +558,8 @@ func TestQueryPackageRejectsInvalidQueriesBeforeWriting(t *testing.T) {
 		message string
 	}{
 		{name: "empty queries", mutate: func(p *generate.QueryPackage) { p.Queries = nil }, message: "at least one query"},
-		{name: "missing input", mutate: func(p *generate.QueryPackage) { p.Queries[0].Input = "" }, message: "query input is required"},
+		{name: "missing template", mutate: func(p *generate.QueryPackage) { p.Queries[0].Input = "" }, message: "query input or sql is required"},
+		{name: "both input and sql", mutate: func(p *generate.QueryPackage) { p.Queries[0].SQL = "SELECT 1" }, message: "query input and sql cannot both be set"},
 		{name: "missing function", mutate: func(p *generate.QueryPackage) { p.Queries[0].Function = "" }, message: "query function is required"},
 		{name: "unexported function", mutate: func(p *generate.QueryPackage) { p.Queries[0].Function = "userByID" }, message: "must be an exported Go identifier"},
 		{name: "invalid function", mutate: func(p *generate.QueryPackage) { p.Queries[0].Function = "123User" }, message: "must be an exported Go identifier"},
@@ -614,4 +615,56 @@ func TestQueryPackageRejectsCollisions(t *testing.T) {
 func writeQueryFile(t *testing.T, root, name, source string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(source), 0o600))
+}
+
+// TestQueryPackageCompilesInlineQuery requires a query carrying its template
+// in SQL to generate the same function a query naming a file generates, and
+// requires Check to stay green with no template file anywhere on disk.
+func TestQueryPackageCompilesInlineQuery(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "from_file.sql", `SELECT id FROM users WHERE id = {{bind "id"}}`)
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{
+			{Input: "from_file.sql", Function: "FromFile", Output: "from_file_gen.go"},
+			{SQL: `SELECT id FROM users WHERE id = {{bind "id"}}`, Function: "Inline", Output: "inline_gen.go"},
+		},
+	}
+	require.NoError(t, queries.Write())
+
+	fromFile, err := os.ReadFile(filepath.Join(root, "store", "from_file_gen.go"))
+	require.NoError(t, err)
+	inline, err := os.ReadFile(filepath.Join(root, "store", "inline_gen.go"))
+	require.NoError(t, err)
+	require.Equal(t,
+		strings.Replace(string(fromFile), "func FromFile(", "func Inline(", 1),
+		string(inline),
+		"the same template must render the same function body whether it comes from a file or from SQL")
+	require.NoError(t, queries.Check())
+}
+
+// TestQueryPackageInlineQuerySurvivesADeletedQueryDirectory requires an inline
+// template to be independent of the filesystem: a plan takes no snapshot of
+// it, so removing every .sql file leaves the commit valid.
+func TestQueryPackageInlineQuerySurvivesADeletedQueryDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeQueryFile(t, root, "unused.sql", `SELECT 1`)
+
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{SQL: `SELECT id FROM users WHERE id = {{bind "id"}}`, Function: "Inline", Output: "inline_gen.go"}},
+	}
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(root, "unused.sql")))
+
+	require.NoError(t, plan.Commit())
+	require.FileExists(t, filepath.Join(root, "store", "inline_gen.go"))
 }

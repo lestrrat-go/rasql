@@ -153,12 +153,20 @@ func TestConfigRefusals(t *testing.T) {
 		{
 			name:     "query with no function",
 			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite", "queries": [{"input": "queries/x.sql"}]}`,
-			expected: `config query "queries/x.sql" states no function`,
+			expected: "config query 1 states no function",
 		},
 		{
-			name:     "query with no input",
+			name:     "query with no template",
 			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite", "queries": [{"function": "X"}]}`,
-			expected: "config query 1 states no input",
+			expected: "config query 1 states neither input nor sql",
+		},
+		{
+			// Two templates for one function is a half-finished edit
+			// rather than a request for either of them, so neither is
+			// picked.
+			name:     "query with both a file and inline sql",
+			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite", "queries": [{"input": "queries/x.sql", "sql": "SELECT 1", "function": "X"}]}`,
+			expected: "config query 1 states both input and sql",
 		},
 		{
 			name:     "explicit config that does not exist",
@@ -221,4 +229,62 @@ func TestConfigDerivesQueryOutputNames(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(dir, "internal", "store", "user_by_email_gen.go"))
 	require.NoError(t, err)
 	require.True(t, strings.Contains(string(source), "func UserByEmail("))
+}
+
+// TestConfigCompilesInlineQueries requires a query written into the settings
+// file to reach the same generated function a query in its own file reaches,
+// and requires its output name to come from the function when the file states
+// none.
+func TestConfigCompilesInlineQueries(t *testing.T) {
+	dir, databasePath := configModule(t, `{
+  "package": "store",
+  "output": "internal/store",
+  "dialect": "sqlite",
+  "queries": [
+    {"sql": "SELECT id FROM users WHERE email = {{bind \"email\"}}", "function": "UserByEmail"},
+    {"sql": "SELECT id FROM users WHERE id = {{bind \"id\"}}", "function": "UserByID", "output": "lookup_gen.go"}
+  ]
+}`)
+
+	output, err := runConfigured(t, dir, "-dsn", databasePath)
+	require.NoError(t, err, output)
+
+	source, err := os.ReadFile(filepath.Join(dir, "internal", "store", "user_by_email_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func UserByEmail(email any)")
+	require.Contains(t, string(source), "SELECT id FROM users WHERE email = ?")
+
+	source, err = os.ReadFile(filepath.Join(dir, "internal", "store", "lookup_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func UserByID(id any)")
+}
+
+// TestConfigInlineQueryOutputNamesUseTheFunction pins the derivation an
+// inline query depends on, including the acronym the naive rule would split
+// into u_s_e_r_by_i_d.
+func TestConfigInlineQueryOutputNamesUseTheFunction(t *testing.T) {
+	testCases := []struct {
+		function string
+		expected string
+	}{
+		{function: "UserByEmail", expected: "user_by_email_gen.go"},
+		{function: "UserByID", expected: "user_by_id_gen.go"},
+		{function: "HTTPLog", expected: "http_log_gen.go"},
+		{function: "Recent", expected: "recent_gen.go"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.function, func(t *testing.T) {
+			dir, databasePath := configModule(t, `{
+  "package": "store",
+  "output": "internal/store",
+  "dialect": "sqlite",
+  "tables": {"exclude": ["audit_log"]},
+  "queries": [{"sql": "SELECT 1", "function": "`+testCase.function+`"}]
+}`)
+
+			output, err := runConfigured(t, dir, "-dsn", databasePath)
+			require.NoError(t, err, output)
+			require.FileExists(t, filepath.Join(dir, "internal", "store", testCase.expected))
+		})
+	}
 }

@@ -90,8 +90,18 @@ type Store struct {
 // inside the store package.
 type Query struct {
 	// Input is the template file, resolved against the Store's Root when
-	// relative. Required.
+	// relative. Exactly one of Input and SQL is required.
 	Input string
+
+	// SQL is the template itself, given in place of a file. Exactly one of
+	// Input and SQL is required, and stating both is an error rather than
+	// a precedence rule.
+	//
+	// A template held here is part of whatever value builds this Store, so
+	// nothing on disk records it and Plan takes no snapshot of it. A
+	// template held in Input is read from a file the plan re-reads before
+	// it commits, which catches an edit made while the plan was in hand.
+	SQL string
 
 	// Function is the generated function name. Required, and must be an
 	// exported Go identifier that no other declaration in the package
@@ -386,8 +396,11 @@ func (s Store) Check() error {
 // package-level names the generated files already declare -- and recording
 // both once they pass, so a later query is checked against them too.
 func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[string]string) (File, error) {
-	if q.Input == "" {
-		return File{}, errors.New("input is required")
+	if q.Input == "" && q.SQL == "" {
+		return File{}, errors.New("input or sql is required")
+	}
+	if q.Input != "" && q.SQL != "" {
+		return File{}, errors.New("input and sql cannot both be set")
 	}
 	if q.Function == "" {
 		return File{}, errors.New("function is required")
@@ -418,15 +431,19 @@ func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[s
 		d = s.Dialect
 	}
 
-	inputPath, err := resolveStorePath(root, q.Input)
-	if err != nil {
-		return File{}, fmt.Errorf("resolve Input: %w", err)
+	text := q.SQL
+	if q.Input != "" {
+		inputPath, err := resolveStorePath(root, q.Input)
+		if err != nil {
+			return File{}, fmt.Errorf("resolve Input: %w", err)
+		}
+		data, err := readQueryInput(inputPath)
+		if err != nil {
+			return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
+		}
+		text = string(data)
 	}
-	data, err := readQueryInput(inputPath)
-	if err != nil {
-		return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
-	}
-	parsed, err := template.Parse(q.Function, string(data))
+	parsed, err := template.Parse(q.Function, text)
 	if err != nil {
 		return File{}, err
 	}
