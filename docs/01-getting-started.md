@@ -1,6 +1,8 @@
 # Getting started
 
-This page runs one program end to end: describe a table, create it, write a row, and read it back as a Go value. That program uses the typed builder. The section [A statement without a database](#a-statement-without-a-database) shows the other way in, where `query` and `render` produce the SQL text and leave the running to the caller.
+This page runs one program from end to end. The program describes a table, creates it, writes a row, and reads that row back as a Go value.
+
+`rasql` comes in two layers. The core layer builds SQL text and runs it, and it needs no Go type for a row. The ORM layer sits on top and adds that row type, so a query hands back a decoded struct instead of raw columns. The program below uses the ORM layer, because that is what most applications reach for first. The last section, [A statement without a database](#a-statement-without-a-database), runs the core layer on its own.
 
 ## Install
 
@@ -16,55 +18,48 @@ go get modernc.org/sqlite
 
 ## The table used throughout the documentation
 
-Almost every example on these pages queries the same `users` table. It is defined once, in the shape `rasqlgen` emits for a generated table, and the other examples use it as if it came from generated source.
+Almost every example on these pages queries the same `users` table. Three declarations make it up, and this section takes them one at a time.
 
-<!-- INCLUDE(examples/query_example_tables_test.go) -->
+A row type is an ordinary Go struct. Each field carries a `rasql` tag naming the column it holds.
+
+<!-- INCLUDE(examples/query_example_tables_test.go#row_type) -->
 ```go
-package examples_test
-
-import (
-	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
-)
-
-// UserRow, UsersTable, and users have the shape rasqlgen creates for a table
-// definition. The other examples use them as if they came from generated source.
 type UserRow struct {
 	ID    int64  `rasql:"id"`
 	Email string `rasql:"email"`
 }
+```
+source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
+<!-- END INCLUDE -->
 
-// UsersTable embeds the typed table and exposes one accessor method per
-// column, so a mistyped column name fails to compile instead of failing at
-// run time.
+A table type embeds `rasql.Table[UserRow]` and adds one method per column. Those methods are the column accessors the query builders take.
+
+<!-- INCLUDE(examples/query_example_tables_test.go#table_type) -->
+```go
 type UsersTable struct {
 	rasql.Table[UserRow]
 }
 
 func (t UsersTable) ID() query.ColumnRef    { return rasql.ColumnOf(t.Table, "id") }
 func (t UsersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
+```
+source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
+<!-- END INCLUDE -->
 
-// users keeps the generated row type and its table value together.
+The table value ties the two together. `schema.MustTableDef` describes the table itself, and `rasql.MustTableOf` binds the row type to that description, so the compiler knows what a query against `users` returns.
+
+<!-- INCLUDE(examples/query_example_tables_test.go#table_value) -->
+```go
 var users = UsersTable{rasql.MustTableOf[UserRow](schema.MustTableDef("users",
 	schema.Integer("id"),
 	schema.Text("email"),
 	schema.PrimaryKey("id"),
 ))}
-
-// As returns the table under alias.
-func (t UsersTable) As(alias string) (UsersTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
-	if err != nil {
-		return UsersTable{}, err
-	}
-	return UsersTable{Table: aliased}, nil
-}
 ```
 source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
 <!-- END INCLUDE -->
 
-Three things travel together here. `UserRow` is the Go type of one row, and its `rasql` tags name the column each field holds. The embedded `rasql.Table[UserRow]` binds that row type to a validated table description, so the compiler knows what a query against `users` returns. The `ID` and `Email` methods are the column accessors the query builders take.
+`rasql codegen generate` writes all three from a live database, which [`rasql codegen`](orm/01-codegen.md) covers. These pages declare them by hand so that every example runs without a generator step. The same source file gives `UsersTable` an `As` method, which [Alias a table for a self-join](orm/03-typed-queries.md#alias-a-table-for-a-self-join) uses.
 
 Those accessors are the reason a filter never spells a column as a string. `WhereEqual(users.ID(), 42)` builds, while `WhereEqual(users.Emial(), 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column accessors catch](orm/02-generated-store.md#what-the-column-accessors-catch) shows what that covers and the three cases it does not.
 
@@ -85,11 +80,11 @@ if err != nil {
 source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_sqlite_query_example_test.go)
 <!-- END INCLUDE -->
 
-`rasql.New` neither opens a connection nor starts a transaction. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, or a custom implementation to inspect SQL without a database, as [Typed queries](orm/03-typed-queries.md#see-the-sql-without-a-database) shows. To start a transaction, call `Begin` on the resulting `DB` instead, which the [Transactions](core/04-database.md#transactions) section covers.
+`rasql.New` wraps a handle the caller already opened. It accepts anything satisfying `rasql.Handle`, which `*sql.DB` and `*sql.Tx` both do, and it also accepts a custom implementation that inspects SQL without a database, as [Typed queries](orm/03-typed-queries.md#see-the-sql-without-a-database) shows. Call `Begin` on the resulting `DB` to start a transaction, which the [Transactions](core/04-database.md#transactions) section covers.
 
-Pick the dialect that matches the database: `dialect.PostgreSQL()`, `dialect.MySQL()`, or `dialect.SQLite()`. The dialect decides how identifiers are quoted, how placeholders are numbered, how logical column types become DDL, and which syntax the renderer may use.
+Pick the dialect that matches the database. The three are `dialect.PostgreSQL()`, `dialect.MySQL()`, and `dialect.SQLite()`. The dialect decides how identifiers are quoted, how placeholders are numbered, how logical column types become DDL, and which syntax the renderer may use.
 
-A `DB` is a value, not a handle to close. It is safe for concurrent use whenever the `Handle` inside it is, so a `*sql.DB` based `DB` can be shared across goroutines.
+A `DB` is a plain value, so nothing has to close it. It is safe for concurrent use whenever the `Handle` inside it is, so a `DB` built on a `*sql.DB` can be shared across goroutines.
 
 ## Run the first query
 
@@ -156,18 +151,18 @@ func Example_rasql_sqlite_query() {
 source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_sqlite_query_example_test.go)
 <!-- END INCLUDE -->
 
-The example moves through four steps.
+The program moves through four steps.
 
 1. `rasql.CreateTable` renders the table description as DDL and executes it, followed by any indexes. A real application usually creates tables through migrations instead, so this step is mostly a convenience for tests and examples.
 2. `rasql.Insert` reads the tagged fields of `UserRow` and writes them as bound values. See [Writing rows](orm/04-writing.md).
 3. `rasql.SelectFrom(users)` starts a builder that already knows the result type. `WhereEqual` binds `42` as an argument rather than putting it into the SQL text.
 4. `One` executes the statement and returns a single decoded `UserRow`, reporting `rasql.ErrNoRows` when the result holds no row and `rasql.ErrMultipleRows` when it holds more than one.
 
-The `database.SetMaxOpenConns(1)` call is a SQLite detail, not a `rasql` requirement. An in-memory SQLite database belongs to a single connection, so a pooled second connection would not see the created table.
+The `database.SetMaxOpenConns(1)` call is a SQLite detail rather than a `rasql` requirement. An in-memory SQLite database belongs to a single connection, so a pooled second connection would not see the created table.
 
 ## A statement without a database
 
-The program above binds a Go row type to a table and executes through a `rasql.DB`. The `query` and `render` packages stop one step earlier: they build a statement from a table description and render it as SQL text with its arguments, which suits a test, a migration tool, or any code that hands the SQL to something else. The example below describes its own `accounts` table, because this path needs neither generated code nor a row type.
+The program above binds a Go row type to a table and runs it through a `rasql.DB`. The core layer stops one step earlier. `query` builds a statement from a table description, and `render` turns that statement into SQL text with its arguments. A test, a migration tool, or any code that hands the SQL to something else can stop right there. The example below describes its own `accounts` table, because this path needs no generated code and no row type.
 
 <!-- INCLUDE(examples/query_render_select_example_test.go#render_select) -->
 ```go

@@ -2,7 +2,14 @@
 
 `rasql` (pronounced “rascal”) is an all-in-one SQL toolkit for Go.
 
-It gives an application one model for schema definitions, dynamic queries, static queries, result decoding, and database inspection. Every statement it produces is parameterized: values travel as bound arguments, never as SQL text.
+It gives an application one model for schema definitions, dynamic queries, static queries, result decoding, and database inspection. Every statement it produces is parameterized, so values travel as bound arguments and never as SQL text.
+
+`rasql` comes in two layers, and an application picks whichever one fits the job.
+
+* The **core layer** describes tables, builds SQL, runs it, compiles templates, and applies migrations. It needs no Go type for a row and no generated code.
+* The **ORM layer** sits on top. `rasql codegen` writes a store package from the database you already have, and the typed builders read and write Go values through it.
+
+Most applications start with the ORM layer, which the quick start below does. [Getting started](docs/01-getting-started.md) runs the same ground more slowly, and [Querying](docs/02-querying.md) says which layer a given task calls for.
 
 ## Features
 
