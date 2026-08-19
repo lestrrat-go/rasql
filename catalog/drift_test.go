@@ -28,10 +28,13 @@ func tbl(name string, columns ...string) schema.TableDef {
 }
 
 func TestDriftReportsAddedRemovedAndChangedTables(t *testing.T) {
+	// The added and removed tables carry different columns on purpose. Two
+	// leftover tables of the same shape are paired as a rename instead, which
+	// TestDriftPairsRenamedTables covers.
 	removedTable := tbl("legacy", "id")
 	changedBefore := tbl("users", "id")
 	changedAfter := tbl("users", "id", "email")
-	addedTable := tbl("orders", "id")
+	addedTable := tbl("orders", "id", "total")
 
 	described := []schema.TableDef{removedTable, changedBefore}
 	live := []schema.TableDef{changedAfter, addedTable}
@@ -76,6 +79,7 @@ func TestReportZeroValueAndAccessorSummary(t *testing.T) {
 		require.True(t, zero.Empty())
 		require.Nil(t, zero.Added())
 		require.Nil(t, zero.Removed())
+		require.Nil(t, zero.Renamed())
 		require.Nil(t, zero.Changed())
 		require.Equal(t, "", zero.String())
 	})
@@ -83,11 +87,11 @@ func TestReportZeroValueAndAccessorSummary(t *testing.T) {
 	t.Run("a caller summarizes through the accessors", func(t *testing.T) {
 		report := catalog.Drift(
 			[]schema.TableDef{tbl("legacy", "id"), tbl("users", "id")},
-			[]schema.TableDef{tbl("users", "id", "email"), tbl("orders", "id")},
+			[]schema.TableDef{tbl("users", "id", "email"), tbl("orders", "id", "total")},
 		)
-		summary := fmt.Sprintf("schema drift: %d table(s) added, %d removed, %d changed",
-			len(report.Added()), len(report.Removed()), len(report.Changed()))
-		require.Equal(t, "schema drift: 1 table(s) added, 1 removed, 1 changed", summary)
+		summary := fmt.Sprintf("schema drift: %d table(s) added, %d removed, %d renamed, %d changed",
+			len(report.Added()), len(report.Removed()), len(report.Renamed()), len(report.Changed()))
+		require.Equal(t, "schema drift: 1 table(s) added, 1 removed, 0 renamed, 1 changed", summary)
 	})
 }
 

@@ -164,6 +164,71 @@ func match[T any](old, new []T) matchResult {
 	return result
 }
 
+// renameFingerprint returns table with its identity -- Schema and Name --
+// cleared, the value two tables are compared by when deciding whether one was
+// renamed into the other. table must already be normalized.
+//
+// The returned descriptor shares every container with table, since clearing
+// two strings on a copy of the struct cannot reach them. It is only ever
+// compared, never mutated and never handed to a caller.
+func renameFingerprint(table schema.TableDef) schema.TableDef {
+	table.Schema = ""
+	table.Name = ""
+	return table
+}
+
+// tableRenamePairs pairs a table match left over on the described side with
+// one it left over on the live side when the two descriptors are equal in
+// everything but their identity, which is what a renamed table looks like to
+// a matcher that pairs on name. describedNorm and liveNorm are the normalized
+// descriptors match compared, and removed and added are the positions it
+// reported as unpaired.
+//
+// A pair is made only when the fingerprint appears exactly once among the
+// leftovers on each side. Two dropped tables and two added tables that all
+// describe the same shape -- a pair of (id, name) lookup tables, say -- pair
+// nothing at all, because every pairing of them is an even guess and a wrong
+// rename carries one table's rows under another table's name.
+//
+// Renaming a table leaves its constraint and index names alone in both
+// PostgreSQL and MySQL, so a real rename reaches here as two descriptors
+// differing in the table name and nothing else. A table newly created in the
+// shape of a dropped one carries constraint names derived from its own name
+// instead, so it differs by those names too and pairs with nothing.
+func tableRenamePairs(removed, added []int, describedNorm, liveNorm []schema.TableDef) []indexPair {
+	var pairs []indexPair
+	for _, oi := range removed {
+		fingerprint := renameFingerprint(describedNorm[oi])
+		if countFingerprint(added, liveNorm, fingerprint) != 1 {
+			continue
+		}
+		if countFingerprint(removed, describedNorm, fingerprint) != 1 {
+			continue
+		}
+		// Both counts are 1, so exactly one added position carries this
+		// shape and the search below always finds it.
+		for _, ni := range added {
+			if reflect.DeepEqual(fingerprint, renameFingerprint(liveNorm[ni])) {
+				pairs = append(pairs, indexPair{oldIndex: oi, newIndex: ni})
+				break
+			}
+		}
+	}
+	return pairs
+}
+
+// countFingerprint reports how many of positions name a table in tables whose
+// rename fingerprint equals fingerprint.
+func countFingerprint(positions []int, tables []schema.TableDef, fingerprint schema.TableDef) int {
+	count := 0
+	for _, i := range positions {
+		if reflect.DeepEqual(fingerprint, renameFingerprint(tables[i])) {
+			count++
+		}
+	}
+	return count
+}
+
 // identity computes v's matching identity for match's step 1: v's Name
 // field, when v's type has one and it is a non-empty string, prefixed with
 // "Schema." when v's type also has a non-empty Schema string field. v must
