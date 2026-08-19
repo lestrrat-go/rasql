@@ -653,8 +653,11 @@ func isGeneratedOutputName(name string) bool {
 }
 
 func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string, inputs map[string]queryInputData) (File, error) {
-	if query.Input == "" {
-		return File{}, errors.New("generate: query input is required")
+	if query.Input == "" && query.SQL == "" {
+		return File{}, errors.New("generate: query input or sql is required")
+	}
+	if query.Input != "" && query.SQL != "" {
+		return File{}, errors.New("generate: query input and sql cannot both be set")
 	}
 	if query.Function == "" {
 		return File{}, errors.New("generate: query function is required")
@@ -682,23 +685,27 @@ func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functi
 	if d == nil {
 		d = p.Dialect
 	}
-	inputPath, err := resolveQueryPackagePath(root, query.Input, "Query.Input")
-	if err != nil {
-		return File{}, err
-	}
-	input, exists := inputs[inputPath]
-	if !exists {
-		data, err := readQueryInput(inputPath)
+	text := query.SQL
+	if query.Input != "" {
+		inputPath, err := resolveQueryPackagePath(root, query.Input, "Query.Input")
 		if err != nil {
-			return File{}, fmt.Errorf("generate: read query input %s: %w", inputPath, err)
+			return File{}, err
 		}
-		input = queryInputData{
-			snapshot: queryInputSnapshot{path: inputPath, digest: sha256.Sum256(data)},
-			data:     data,
+		input, exists := inputs[inputPath]
+		if !exists {
+			data, err := readQueryInput(inputPath)
+			if err != nil {
+				return File{}, fmt.Errorf("generate: read query input %s: %w", inputPath, err)
+			}
+			input = queryInputData{
+				snapshot: queryInputSnapshot{path: inputPath, digest: sha256.Sum256(data)},
+				data:     data,
+			}
+			inputs[inputPath] = input
 		}
-		inputs[inputPath] = input
+		text = string(input.data)
 	}
-	parsed, err := querytemplate.Parse(query.Function, string(input.data))
+	parsed, err := querytemplate.Parse(query.Function, text)
 	if err != nil {
 		return File{}, fmt.Errorf("generate: validate query %q: %w", query.Function, err)
 	}

@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode"
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/modroot"
@@ -86,17 +88,29 @@ type configTables struct {
 }
 
 // configQuery is one static SQL template compiled into a generated function.
+//
+// The template lives either in its own file, named by Input, or in this file,
+// written into SQL. A file keeps SQL in a file an editor, a formatter and a
+// query runner all recognize as SQL, which a JSON string is not, and it holds
+// a multi-line statement as the lines it was written as. Writing the template
+// here keeps a one-line query in one place, at the cost of escaping every
+// quote the {{bind "name"}} action needs.
 type configQuery struct {
 	// Input is the template file, resolved against Root when relative.
+	// State exactly one of Input and SQL.
 	Input string `json:"input"`
+
+	// SQL is the template itself. State exactly one of Input and SQL.
+	SQL string `json:"sql"`
 
 	// Function is the generated function name, which must be exported.
 	Function string `json:"function"`
 
 	// Output is the file the function is generated into, a file name
 	// directly inside the generated package's directory. Empty derives it
-	// from Input's base name: queries/user_by_email.sql becomes
-	// user_by_email_gen.go.
+	// from Input's base name, so queries/user_by_email.sql becomes
+	// user_by_email_gen.go, and from Function for a query stating SQL, so
+	// UserByEmail becomes user_by_email_gen.go as well.
 	Output string `json:"output"`
 }
 
@@ -179,17 +193,24 @@ func (c config) queries() ([]generate.Query, error) {
 	}
 	queries := make([]generate.Query, len(c.Queries))
 	for index, query := range c.Queries {
-		if query.Input == "" {
-			return nil, fmt.Errorf("generate: config query %d states no input", index+1)
+		if query.Input == "" && query.SQL == "" {
+			return nil, fmt.Errorf("generate: config query %d states neither input nor sql", index+1)
+		}
+		if query.Input != "" && query.SQL != "" {
+			return nil, fmt.Errorf("generate: config query %d states both input and sql; a query's template lives in one of them", index+1)
 		}
 		if query.Function == "" {
-			return nil, fmt.Errorf("generate: config query %q states no function", query.Input)
+			return nil, fmt.Errorf("generate: config query %d states no function", index+1)
 		}
 		output := query.Output
-		if output == "" {
+		switch {
+		case output != "":
+		case query.Input != "":
 			output = derivedQueryOutput(query.Input)
+		default:
+			output = snakeCase(query.Function) + "_gen.go"
 		}
-		queries[index] = generate.Query{Input: query.Input, Function: query.Function, Output: output}
+		queries[index] = generate.Query{Input: query.Input, SQL: query.SQL, Function: query.Function, Output: output}
 	}
 	return queries, nil
 }
@@ -201,4 +222,23 @@ func (c config) queries() ([]generate.Query, error) {
 func derivedQueryOutput(input string) string {
 	base := filepath.Base(filepath.FromSlash(input))
 	return base[:len(base)-len(filepath.Ext(base))] + "_gen.go"
+}
+
+// snakeCase names the generated file for a query that states its template
+// inline and names no output: the function name lowered, with an underscore
+// before each word after the first, so UserByEmail becomes user_by_email and
+// UserByID becomes user_by_id.
+func snakeCase(name string) string {
+	runes := []rune(name)
+	var result strings.Builder
+	result.Grow(len(name) + 4)
+	for index, current := range runes {
+		if index > 0 && unicode.IsUpper(current) &&
+			(!unicode.IsUpper(runes[index-1]) ||
+				(index+1 < len(runes) && unicode.IsLower(runes[index+1]))) {
+			result.WriteByte('_')
+		}
+		result.WriteRune(unicode.ToLower(current))
+	}
+	return result.String()
 }

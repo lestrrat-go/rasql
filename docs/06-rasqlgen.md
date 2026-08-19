@@ -49,7 +49,8 @@ module root. Write it once and check it in:
     "row_names": {"users": "User"}
   },
   "queries": [
-    {"input": "queries/user_by_email.sql", "function": "UserByEmail"}
+    {"input": "queries/user_by_email.sql", "function": "UserByEmail"},
+    {"sql": "SELECT count(*) FROM users", "function": "CountUsers"}
   ]
 }
 ```
@@ -68,10 +69,22 @@ reads badly, and when it collides with another table's generated names, which
 refuses the run.
 
 `queries` compiles static SQL templates into generated functions beside the
-table code. Each entry names its `input` template, resolved against the same
-root, and the `function` to generate. It may also name the `output` file;
-leaving that out derives it from the input, so `queries/user_by_email.sql`
-becomes `user_by_email_gen.go`.
+table code. Each entry names the `function` to generate and states its
+template in exactly one of two places. Naming an `input` file, resolved
+against the same root, keeps the template in a file an editor, a formatter and
+a query runner all read as SQL, and holds a multi-line statement as the lines
+it was written as. Writing the template into `sql` instead keeps a short query
+in the settings file, at the cost of escaping the quotes each `{{bind "name"}}`
+action needs. Stating both is refused rather than resolved by precedence.
+
+An entry may also name the `output` file. Leaving that out derives it from the
+input, so `queries/user_by_email.sql` becomes `user_by_email_gen.go`, and
+derives it from the function for an entry stating `sql`, so `CountUsers`
+becomes `count_users_gen.go`.
+
+A template held in `input` is read again before the run writes anything, so an
+edit made while a run was in flight is caught rather than committed around. A
+template held in `sql` is already in hand, so nothing has to be re-read.
 
 `prune` lets a run delete a generated file it no longer writes, such as the
 per-table file of a dropped table. Setting it to `false` refuses the run and
@@ -305,8 +318,8 @@ accessor would spell the fixed function name `schema_gen_test.go` declares.
 
 ## Static query functions
 
-Add an entry to the settings file's `queries` list with the template path and
-the function name.
+Add an entry to the settings file's `queries` list with the function name and
+the template, either as an `input` path or written into `sql`.
 
 The template contains SQL and named bind actions:
 
@@ -354,6 +367,7 @@ queries := generate.QueryPackage{
 	Dialect: dialect.PostgreSQL(),
 	Queries: []generate.Query{
 		{Input: template, Function: "UserByEmail", Output: "user_by_email_gen.go"},
+		{SQL: "SELECT count(*) FROM users", Function: "CountUsers", Output: "count_users_gen.go"},
 	},
 }
 
@@ -381,9 +395,10 @@ source: [examples/generate_query_package_example_test.go](https://github.com/les
 <!-- END INCLUDE -->
 
 `Package`, `Dir`, and at least one `Query` are required, and `Dialect` is
-required whenever a query leaves its own `Dialect` nil. `Root` resolves a
-relative `Dir` or `Query.Input`, defaulting to the module root, exactly as it
-does for `Store`. Queries are rendered in output-name order, so their order in
+required whenever a query leaves its own `Dialect` nil. Each `Query` states
+its template in exactly one of `Input` and `SQL`, the same choice the settings
+file's `input` and `sql` offer. `Root` resolves a relative `Dir` or
+`Query.Input`, defaulting to the module root, exactly as it does for `Store`. Queries are rendered in output-name order, so their order in
 the slice does not reach the generated package.
 
 A query package shares its package block with hand-written files in the same
