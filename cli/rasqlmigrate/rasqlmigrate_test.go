@@ -23,17 +23,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunNewCreatesMigrationDirectory(t *testing.T) {
-	directory := newTestDirectory(t)
-	outputBuffer := setCommandOutput(t)
-	require.NoError(t, run([]string{"new", "-dir", directory, "-id", "002_add_nickname"}))
-	path := filepath.Join(directory, "002_add_nickname")
-	require.Equal(t, "created "+path+"; add ordered .sql files\n", outputBuffer.String())
-	require.DirExists(t, path)
-	require.Error(t, run([]string{"new", "-dir", directory, "-id", "002_add_nickname"}))
-	require.Error(t, run([]string{"new", "-dir", directory, "-id", "../../outside"}))
-	require.Error(t, run([]string{"new", "-dir", directory, "-id", ".."}))
-	require.Error(t, run([]string{"new", "-dir", directory, "-id", ".hidden"}))
+// TestRunRejectsRemovedNewCommand pins the removal of the "new" subcommand,
+// which created a migration directory and nothing inside it. A user makes
+// that directory with mkdir; the layout it has to follow is stated in the
+// usage block and in docs/07-migrations.md, and every rule that matters is
+// enforced where the migrations are read and applied.
+func TestRunRejectsRemovedNewCommand(t *testing.T) {
+	setCommandOutput(t)
+	err := run([]string{"new", "-dir", newTestDirectory(t), "-id", "002_add_nickname"})
+	require.EqualError(t, err, `unknown rasqlmigrate command "new"`)
 }
 
 func TestRunDiffPreviewsAndWritesPostgreSQLMigration(t *testing.T) {

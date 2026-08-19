@@ -30,14 +30,26 @@ Each `.sql` file contains one native database statement. `rasql migrate` sends i
 
 Migration IDs, source filenames, source order, and source bytes are part of the recorded checksum. Do not edit, rename, move, add to, or remove an applied migration. Create a new migration directory for every later change.
 
+### The rules a migration root follows
+
+Create these directories yourself with `mkdir`. There is no command that scaffolds them, because the layout is the whole contract and every rule below is enforced where the migrations are read and applied.
+
+- The root passed as `-dir` holds directories and nothing else. A file sitting directly in it fails the load, so a stray `notes.txt` is reported rather than skipped.
+- A directory's name is the migration ID that the history table records. It may be any non-empty valid UTF-8 text up to 255 bytes, with no NUL.
+- Migrations run in the sort order of those names, compared as bytes rather than as numbers. `10_x` sorts before `9_x`, so pad the numbers: `001`, `002`, `010`.
+- A migration directory holds one or more `.sql` files and no subdirectories. Any other extension fails the load, and an empty directory fails it too.
+- A migration's own sources run in the sort order of their filenames, with the same byte comparison and the same need for padding.
+- An entry whose name starts with a dot is ignored at both levels, so an editor's swap file does not become a migration.
+- A source file must hold something other than whitespace.
+
+The engine enforces the rest at apply time, against the history table rather than the disk. A migration whose recorded bytes no longer match its files fails with a checksum error. A new migration whose name sorts before one that is already applied fails as "recorded after a missing migration", rather than running out of order or being skipped. A recorded migration whose directory has since disappeared fails as "was not supplied".
+
 ## Create and review a migration
 
-Create an empty migration directory, then add numbered SQL source files:
+Create the directory and add numbered SQL source files:
 
 ```sh
-rasql migrate new \
-  -dir db/migrations/sqlite \
-  -id 002_add_user_nickname
+mkdir -p db/migrations/sqlite/002_add_user_nickname
 ```
 
 For example, `db/migrations/sqlite/002_add_user_nickname/001_add_nickname.sql` can contain:

@@ -48,7 +48,7 @@ func TestRunCodegenRejectsRemovedCommands(t *testing.T) {
 
 func TestRunMigrateRejectsNoCommand(t *testing.T) {
 	err := Run([]string{"migrate"}, &bytes.Buffer{}, &bytes.Buffer{})
-	require.EqualError(t, err, "usage: rasql migrate <new|diff|diff-live|plan|apply|status|verify> [flags]")
+	require.EqualError(t, err, "usage: rasql migrate <diff|diff-live|plan|apply|status|verify> [flags]")
 }
 
 // TestRunKeepsFlagDiagnosticsOffOutput requires that a refused flag is
@@ -138,7 +138,7 @@ func TestRunKeepsSwallowedHelpTokenOffOutput(t *testing.T) {
 		usage string
 	}{
 		{name: "codegen", args: []string{"codegen", "init", "-dialect", "-h", "-unknown"}, usage: "Usage of rasql codegen init:"},
-		{name: "migrate", args: []string{"migrate", "new", "-dir", "-h", "-unknown"}, usage: "Usage of new:"},
+		{name: "migrate", args: []string{"migrate", "plan", "-dir", "-h", "-unknown"}, usage: "Usage of plan:"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
