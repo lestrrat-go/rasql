@@ -36,7 +36,7 @@ func TestRevertAgainstLiveDatabases(t *testing.T) {
 				reversibleMigration("001_users", `CREATE TABLE revert_users (id INTEGER NOT NULL PRIMARY KEY)`, `DROP TABLE revert_users`),
 				reversibleMigration("002_projects", `CREATE TABLE revert_projects (id INTEGER NOT NULL PRIMARY KEY)`, `DROP TABLE revert_projects`),
 			}
-			require.NoError(t, runner.Apply(t.Context(), migrations...))
+			requireApplied(t, t.Context(), runner, migrations...)
 			require.True(t, liveTableExists(t, database, test.dialect.Name(), "revert_projects"))
 
 			reverted, err := runner.Revert(t.Context(), migrate.Steps(1), migrations...)
@@ -52,7 +52,7 @@ func TestRevertAgainstLiveDatabases(t *testing.T) {
 			require.Contains(t, entries, migrate.StatusEntry{ID: "002_projects", State: migrate.StatusPending},
 				"a reverted migration becomes pending again")
 
-			require.NoError(t, runner.Apply(t.Context(), migrations...))
+			requireApplied(t, t.Context(), runner, migrations...)
 			require.True(t, liveTableExists(t, database, test.dialect.Name(), "revert_projects"))
 		})
 	}
@@ -84,7 +84,7 @@ func TestFailedRevertAgainstLiveDatabases(t *testing.T) {
 				reversibleMigration("001_first", `CREATE TABLE failed_first (id INTEGER NOT NULL PRIMARY KEY)`, `DROP TABLE failed_first`),
 				reversibleMigration("002_second", `CREATE TABLE failed_second (id INTEGER NOT NULL PRIMARY KEY)`, `DROP TABLE failed_second`),
 			}
-			require.NoError(t, runner.Apply(t.Context(), migrations...))
+			requireApplied(t, t.Context(), runner, migrations...)
 
 			// The newest migration reverts cleanly and the one under it
 			// fails, so the run gets one statement in before it stops.

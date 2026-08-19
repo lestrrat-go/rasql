@@ -37,7 +37,7 @@ func revertFixture(t *testing.T) (migrate.Runner, *sql.DB, []migrate.Migration) 
 		reversibleMigration("002_projects", `CREATE TABLE "projects" ("id" INTEGER PRIMARY KEY)`, `DROP TABLE "projects"`),
 		reversibleMigration("003_tasks", `CREATE TABLE "tasks" ("id" INTEGER PRIMARY KEY)`, `DROP TABLE "tasks"`),
 	}
-	require.NoError(t, runner.Apply(t.Context(), migrations...))
+	requireApplied(t, t.Context(), runner, migrations...)
 	return runner, database, migrations
 }
 
@@ -196,7 +196,7 @@ func TestRevertAndApplyRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, entries, migrate.StatusEntry{ID: "003_tasks", State: migrate.StatusPending})
 
-	require.NoError(t, runner.Apply(t.Context(), migrations...))
+	requireApplied(t, t.Context(), runner, migrations...)
 	require.True(t, tableExists(t, database, "tasks"))
 	require.Equal(t, []string{"001_users", "002_projects", "003_tasks"}, appliedIDs(t, database))
 }

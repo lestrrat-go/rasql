@@ -1,6 +1,7 @@
 package migrate_test
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -25,8 +26,8 @@ func TestRunnerAppliesSQLiteMigrationsAndDetectsDrift(t *testing.T) {
 	createUsers := sqlMigration("001_create_users", `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY)`)
 	addNickname := sqlMigration("002_add_nickname", `ALTER TABLE "users" ADD COLUMN "nickname" TEXT`)
 
-	require.NoError(t, runner.Apply(t.Context(), addNickname, createUsers))
-	require.NoError(t, runner.Apply(t.Context(), createUsers, addNickname))
+	requireApplied(t, t.Context(), runner, addNickname, createUsers)
+	requireApplied(t, t.Context(), runner, createUsers, addNickname)
 
 	rows, err := database.QueryContext(t.Context(), "SELECT id, checksum FROM rasql_schema_migrations ORDER BY id")
 	require.NoError(t, err)
@@ -46,7 +47,7 @@ func TestRunnerAppliesSQLiteMigrationsAndDetectsDrift(t *testing.T) {
 
 	drifted := addNickname
 	drifted.Statements[0].Source = "002_display_name.sql"
-	err = runner.Apply(t.Context(), createUsers, drifted)
+	_, err = runner.Apply(t.Context(), migrate.AllPending(), createUsers, drifted)
 	require.ErrorContains(t, err, "checksum does not match")
 }
 
@@ -65,7 +66,7 @@ func TestRunnerRollsBackFailedSQLiteMigration(t *testing.T) {
 		`CREATE INDEX "events_id_idx" ON "events" ("id")`,
 		`CREATE INDEX "events_id_idx" ON "events" ("id")`,
 	)
-	err = runner.Apply(t.Context(), failing)
+	_, err = runner.Apply(t.Context(), migrate.AllPending(), failing)
 	require.ErrorContains(t, err, "execute migration")
 
 	var count int
@@ -86,8 +87,8 @@ func TestRunnerRejectsRecordedMigrationAfterAMissingMigration(t *testing.T) {
 	first := sqlMigration("001_create_users", `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY)`)
 	second := sqlMigration("002_add_nickname", `ALTER TABLE "users" ADD COLUMN "nickname" TEXT`)
 	third := sqlMigration("003_add_display_name", `ALTER TABLE "users" ADD COLUMN "display_name" TEXT`)
-	require.NoError(t, runner.Apply(t.Context(), first, third))
-	err = runner.Apply(t.Context(), first, second, third)
+	requireApplied(t, t.Context(), runner, first, third)
+	_, err = runner.Apply(t.Context(), migrate.AllPending(), first, second, third)
 	require.ErrorContains(t, err, "recorded after a missing migration")
 }
 
@@ -102,8 +103,8 @@ func TestRunnerRejectsUnspecifiedRecordedMigration(t *testing.T) {
 	require.NoError(t, err)
 	first := sqlMigration("001_create_users", `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY)`)
 	second := sqlMigration("002_add_nickname", `ALTER TABLE "users" ADD COLUMN "nickname" TEXT`)
-	require.NoError(t, runner.Apply(t.Context(), first, second))
-	err = runner.Apply(t.Context(), first)
+	requireApplied(t, t.Context(), runner, first, second)
+	_, err = runner.Apply(t.Context(), migrate.AllPending(), first)
 	require.ErrorContains(t, err, "was not supplied")
 }
 
@@ -121,7 +122,7 @@ func TestRunnerStatusReportsPendingAppliedChangedAndUnknown(t *testing.T) {
 	status, err := runner.Status(t.Context(), migration)
 	require.NoError(t, err)
 	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusPending}}, status)
-	require.NoError(t, runner.Apply(t.Context(), migration))
+	requireApplied(t, t.Context(), runner, migration)
 
 	status, err = runner.Status(t.Context(), migration)
 	require.NoError(t, err)
@@ -164,7 +165,7 @@ func TestRunnerUsesPostgreSQLTransactionAndHistoryLock(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, runner.Apply(t.Context(), migration))
+	requireApplied(t, t.Context(), runner, migration)
 }
 
 func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
@@ -195,7 +196,7 @@ func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
 		WithArgs("rasql_schema_migrations").
 		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
 
-	require.NoError(t, runner.Apply(t.Context(), migration))
+	requireApplied(t, t.Context(), runner, migration)
 }
 
 func TestRunnerRejectsInvalidSQLSource(t *testing.T) {
@@ -206,7 +207,7 @@ func TestRunnerRejectsInvalidSQLSource(t *testing.T) {
 	})
 	runner, err := migrate.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	err = runner.Apply(t.Context(), migrate.Migration{ID: "001", Statements: []migrate.Statement{{Source: "001.sql"}}})
+	_, err = runner.Apply(t.Context(), migrate.AllPending(), migrate.Migration{ID: "001", Statements: []migrate.Statement{{Source: "001.sql"}}})
 	require.ErrorContains(t, err, "is empty")
 }
 
@@ -219,4 +220,13 @@ func sqlMigration(id string, sqlSources ...string) migrate.Migration {
 		}
 	}
 	return migrate.Migration{ID: id, Statements: statements}
+}
+
+// requireApplied brings the database up to date and fails the test unless
+// every supplied migration is reported as applied.
+func requireApplied(t *testing.T, ctx context.Context, runner migrate.Runner, migrations ...migrate.Migration) []migrate.Migration {
+	t.Helper()
+	applied, err := runner.Apply(ctx, migrate.AllPending(), migrations...)
+	require.NoError(t, err)
+	return applied
 }

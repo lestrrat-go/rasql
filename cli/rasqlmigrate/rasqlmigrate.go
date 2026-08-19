@@ -73,7 +73,7 @@ func run(args []string) error {
 
 func runNamed(args []string, program string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: %s <diff|diff-live|plan|apply|down|status|verify> [flags]", program)
+		return fmt.Errorf("usage: %s <diff|diff-live|plan|apply|revert|status|verify> [flags]", program)
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -87,8 +87,8 @@ func runNamed(args []string, program string) error {
 		return runPlan(args[1:])
 	case "apply":
 		return runApply(args[1:])
-	case "down":
-		return runDown(args[1:])
+	case "revert":
+		return runRevert(args[1:])
 	case "status":
 		return runStatus(args[1:])
 	case "verify":
@@ -105,8 +105,8 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
 	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
 	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
-	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations")
-	_, _ = fmt.Fprintln(output, "  down     Revert applied migrations, newest first")
+	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations, oldest first")
+	_, _ = fmt.Fprintln(output, "  revert   Revert applied migrations, newest first")
 	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
 	_, _ = fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
 	_, _ = fmt.Fprintln(output)
@@ -115,7 +115,7 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "beside it, one native SQL statement per file. Migrations run in directory-name order,")
 	_, _ = fmt.Fprintln(output, "forward sources in ascending filename order and reverse sources in descending order,")
 	_, _ = fmt.Fprintln(output, "so pad the numbers you name them with. The forward sources of an applied migration")
-	_, _ = fmt.Fprintln(output, "must never change; revert it with down, or add a new migration.")
+	_, _ = fmt.Fprintln(output, "must never change; revert it with revert, or add a new migration.")
 	_, _ = fmt.Fprintf(output, "Run '%s <command> -h' for command flags.\n", program)
 }
 
@@ -330,26 +330,45 @@ func runApply(args []string) error {
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	dsn := flags.String("dsn", "", "database connection string")
 	historyTable := flags.String("history-table", "", "migration history table name")
+	through := flags.String("to", "", "stop at this migration, applying it and every pending migration before it")
+	dryRun := flags.Bool("dry-run", false, "print the SQL the apply would run without running it")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	target := migrate.AllPending()
+	if *through != "" {
+		target = migrate.ApplyThrough(*through)
 	}
 	runner, migrations, closeDatabase, err := openRunner(context.Background(), *directory, *dialectName, *dsn, *historyTable)
 	if err != nil {
 		return err
 	}
 	defer closeDatabase()
-	if err := runner.Apply(context.Background(), migrations...); err != nil {
+
+	if *dryRun {
+		plan, err := runner.ApplyPlan(context.Background(), target, migrations...)
+		if err != nil {
+			return dsnredact.Error(err, *dsn)
+		}
+		writePlan(commandOutput, plan)
+		return nil
+	}
+	applied, err := runner.Apply(context.Background(), target, migrations...)
+	if err != nil {
 		return dsnredact.Error(err, *dsn)
 	}
-	_, _ = fmt.Fprintln(commandOutput, "migration apply completed")
+	for _, migration := range applied {
+		_, _ = fmt.Fprintf(commandOutput, "applied\t%s\n", migration.ID)
+	}
+	_, _ = fmt.Fprintf(commandOutput, "migration apply completed: %d applied\n", len(applied))
 	return nil
 }
 
-// runDown implements the "down" command. It requires exactly one of -to and
-// -steps, so a run that names no target reverts nothing rather than
+// runRevert implements the "revert" command. It requires exactly one of -to
+// and -steps, so a run that names no target reverts nothing rather than
 // defaulting to some depth a user did not ask for.
-func runDown(args []string) error {
-	flags := newFlagSet("down")
+func runRevert(args []string) error {
+	flags := newFlagSet("revert")
 	directory := flags.String("dir", "", "directory that holds migration directories")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	dsn := flags.String("dsn", "", "database connection string")
@@ -391,18 +410,18 @@ func runDown(args []string) error {
 
 // revertTarget turns the -to and -steps flags into one target, refusing the
 // run when neither or both are given. "Neither" is the case worth refusing
-// loudest: a down command with no target that reverted everything would be
+// loudest: a revert command with no target that reverted everything would be
 // one keystroke away from an empty database.
 func revertTarget(through string, steps int) (migrate.RevertTarget, error) {
 	switch {
 	case through != "" && steps != 0:
-		return migrate.RevertTarget{}, errors.New("down accepts -to or -steps, not both")
+		return migrate.RevertTarget{}, errors.New("revert accepts -to or -steps, not both")
 	case through != "":
 		return migrate.Through(through), nil
 	case steps != 0:
 		return migrate.Steps(steps), nil
 	default:
-		return migrate.RevertTarget{}, errors.New("down requires -to or -steps")
+		return migrate.RevertTarget{}, errors.New("revert requires -to or -steps")
 	}
 }
 
