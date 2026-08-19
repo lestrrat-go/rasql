@@ -12,7 +12,8 @@ import (
 
 const defaultHistoryTable = "rasql_schema_migrations"
 
-// Runner applies migrations to one database and records each completed migration.
+// Runner applies and reverts migrations on one database, and records each
+// completed migration.
 // Its configuration is immutable, so Apply is safe to invoke concurrently.
 type Runner struct {
 	database     *sql.DB
@@ -72,36 +73,6 @@ func NewWithHistoryTable(database *sql.DB, d dialect.Dialect, historyTable strin
 	}, nil
 }
 
-// Apply executes migrations in ID order.
-// PostgreSQL and SQLite apply a complete migration atomically. MySQL DDL may
-// commit implicitly, so a failure can leave completed statements in place and
-// the migration unrecorded; resolve that state before running Apply again.
-func (r Runner) Apply(ctx context.Context, migrations ...Migration) error {
-	if err := r.validate(); err != nil {
-		return err
-	}
-	prepared, err := prepareMigrations(migrations)
-	if err != nil {
-		return err
-	}
-	connection, err := r.database.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("migrate: open database connection: %w", err)
-	}
-	defer func() { _ = connection.Close() }()
-
-	switch r.dialect.Name() {
-	case "postgresql":
-		return r.applyPostgreSQL(ctx, connection, prepared)
-	case "mysql":
-		return r.applyMySQL(ctx, connection, prepared)
-	case "sqlite":
-		return r.applySQLite(ctx, connection, prepared)
-	default:
-		return fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
-	}
-}
-
 func (r Runner) validate() error {
 	if r.database == nil || r.dialect == nil || r.historyTable == "" || r.historySQL == "" || r.idSQL == "" || r.checksumSQL == "" || r.appliedAtSQL == "" {
 		return fmt.Errorf("migrate: invalid runner")
@@ -140,115 +111,12 @@ func prepareMigrations(migrations []Migration) ([]preparedMigration, error) {
 	return prepared, nil
 }
 
-func (r Runner) applyPostgreSQL(ctx context.Context, connection *sql.Conn, migrations []preparedMigration) error {
-	if err := r.ensureHistory(ctx, connection); err != nil {
-		return err
-	}
-	transaction, err := connection.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("migrate: begin PostgreSQL transaction: %w", err)
-	}
-	defer func() { _ = transaction.Rollback() }()
-	if _, err := transaction.ExecContext(ctx, "LOCK TABLE "+r.historySQL+" IN EXCLUSIVE MODE"); err != nil {
-		return fmt.Errorf("migrate: lock migration history: %w", err)
-	}
-	if err := r.applyPrepared(ctx, transaction, transaction, migrations); err != nil {
-		return err
-	}
-	if err := transaction.Commit(); err != nil {
-		return fmt.Errorf("migrate: commit PostgreSQL migration transaction: %w", err)
-	}
-	return nil
-}
-
-func (r Runner) applyMySQL(ctx context.Context, connection *sql.Conn, migrations []preparedMigration) error {
-	var acquired int
-	if err := connection.QueryRowContext(ctx, "SELECT GET_LOCK(?, ?)", r.historyTable, 30).Scan(&acquired); err != nil {
-		return fmt.Errorf("migrate: acquire MySQL migration lock: %w", err)
-	}
-	if acquired != 1 {
-		return fmt.Errorf("migrate: acquire MySQL migration lock: timed out")
-	}
-	defer r.releaseMySQLLock(connection)
-	if err := r.ensureHistory(ctx, connection); err != nil {
-		return err
-	}
-	return r.applyPrepared(ctx, connection, connection, migrations)
-}
-
-func (r Runner) releaseMySQLLock(connection *sql.Conn) {
-	var released int
-	_ = connection.QueryRowContext(context.Background(), "SELECT RELEASE_LOCK(?)", r.historyTable).Scan(&released)
-}
-
-func (r Runner) applySQLite(ctx context.Context, connection *sql.Conn, migrations []preparedMigration) error {
-	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return fmt.Errorf("migrate: begin SQLite migration transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
-		}
-	}()
-	if err := r.ensureHistory(ctx, connection); err != nil {
-		return err
-	}
-	if err := r.applyPrepared(ctx, connection, connection, migrations); err != nil {
-		return err
-	}
-	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
-		return fmt.Errorf("migrate: commit SQLite migration transaction: %w", err)
-	}
-	committed = true
-	return nil
-}
-
 type queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 type executor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-func (r Runner) applyPrepared(ctx context.Context, queries queryer, executions executor, migrations []preparedMigration) error {
-	applied, err := r.applied(ctx, queries)
-	if err != nil {
-		return err
-	}
-	expected := make(map[string]struct{}, len(migrations))
-	for _, migration := range migrations {
-		expected[migration.id] = struct{}{}
-	}
-	for id := range applied {
-		if _, exists := expected[id]; !exists {
-			return fmt.Errorf("migrate: recorded migration %q was not supplied", id)
-		}
-	}
-	pending := false
-	for _, migration := range migrations {
-		recordedChecksum, exists := applied[migration.id]
-		if exists {
-			if recordedChecksum != migration.checksum {
-				return fmt.Errorf("migrate: migration %q checksum does not match recorded migration", migration.id)
-			}
-			if pending {
-				return fmt.Errorf("migrate: migration %q is recorded after a missing migration", migration.id)
-			}
-			continue
-		}
-		pending = true
-		for _, statement := range migration.statements {
-			if _, err := executions.ExecContext(ctx, statement.SQL); err != nil {
-				return fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
-			}
-		}
-		if err := r.record(ctx, executions, migration); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (r Runner) ensureHistory(ctx context.Context, executions executor) error {

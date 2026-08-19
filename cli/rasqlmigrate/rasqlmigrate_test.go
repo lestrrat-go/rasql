@@ -554,7 +554,7 @@ func TestRunApplyStatusAndVerifySQLiteSQLSources(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "application.db")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
-	require.Equal(t, "migration apply completed\n", outputBuffer.String())
+	require.Equal(t, "applied\t001_create_users\nmigration apply completed: 1 applied\n", outputBuffer.String())
 
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"status", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
@@ -565,10 +565,49 @@ func TestRunApplyStatusAndVerifySQLiteSQLSources(t *testing.T) {
 	require.Equal(t, "migration verification passed\n", outputBuffer.String())
 }
 
-// TestRunDownRevertsAppliedMigrations drives the command end to end
+// TestRunApplyToStopsAtTheNamedMigration pins what -to means on apply: the
+// named migration runs, and every migration after it stays pending. It is
+// the mirror of the revert flag, which leaves the named one applied.
+func TestRunApplyToStopsAtTheNamedMigration(t *testing.T) {
+	directory := newTestDirectory(t)
+	writeTestMigration(t, directory, "001_create_users")
+	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.up.sql", "CREATE TABLE \"posts\" (\"id\" INTEGER PRIMARY KEY);\n")
+	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.down.sql", "DROP TABLE \"posts\";\n")
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-to", "001_create_users"}))
+	require.Equal(t, "applied\t001_create_users\nmigration apply completed: 1 applied\n", outputBuffer.String())
+
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"status", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
+	require.Equal(t, "applied\t001_create_users\npending\t002_create_posts\n", outputBuffer.String())
+}
+
+// TestRunApplyDryRunPrintsForwardSQLAndChangesNothing mirrors the revert
+// dry run. Unlike plan, it reads the history table, so it prints only what
+// is still pending.
+func TestRunApplyDryRunPrintsForwardSQLAndChangesNothing(t *testing.T) {
+	directory := newTestDirectory(t)
+	writeTestMigration(t, directory, "001_create_users")
+	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.up.sql", "CREATE TABLE \"posts\" (\"id\" INTEGER PRIMARY KEY);\n")
+	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.down.sql", "DROP TABLE \"posts\";\n")
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	outputBuffer := setCommandOutput(t)
+	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-to", "001_create_users"}))
+
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-dry-run"}))
+	require.Equal(t, "-- 002_create_posts/001_create_posts.up.sql\nCREATE TABLE \"posts\" (\"id\" INTEGER PRIMARY KEY);\n", outputBuffer.String())
+
+	outputBuffer.Reset()
+	require.NoError(t, run([]string{"status", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
+	require.Equal(t, "applied\t001_create_users\npending\t002_create_posts\n", outputBuffer.String())
+}
+
+// TestRunRevertRevertsAppliedMigrations drives the command end to end
 // against SQLite: apply two migrations, revert the newest, and see the
 // history and the schema both follow.
-func TestRunDownRevertsAppliedMigrations(t *testing.T) {
+func TestRunRevertRevertsAppliedMigrations(t *testing.T) {
 	directory := newTestDirectory(t)
 	writeTestMigration(t, directory, "001_create_users")
 	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.up.sql", "CREATE TABLE \"posts\" (\"id\" INTEGER PRIMARY KEY);\n")
@@ -578,7 +617,7 @@ func TestRunDownRevertsAppliedMigrations(t *testing.T) {
 	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
 
 	outputBuffer.Reset()
-	require.NoError(t, run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-steps", "1"}))
+	require.NoError(t, run([]string{"revert", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-steps", "1"}))
 	require.Equal(t, "reverted\t002_create_posts\nmigration revert completed: 1 reverted\n", outputBuffer.String())
 
 	outputBuffer.Reset()
@@ -586,9 +625,9 @@ func TestRunDownRevertsAppliedMigrations(t *testing.T) {
 	require.Equal(t, "applied\t001_create_users\npending\t002_create_posts\n", outputBuffer.String())
 }
 
-// TestRunDownToLeavesTheNamedMigrationApplied pins what -to means, which is
+// TestRunRevertToLeavesTheNamedMigrationApplied pins what -to means, which is
 // the flag most easily read as "revert this one too".
-func TestRunDownToLeavesTheNamedMigrationApplied(t *testing.T) {
+func TestRunRevertToLeavesTheNamedMigrationApplied(t *testing.T) {
 	directory := newTestDirectory(t)
 	writeTestMigration(t, directory, "001_create_users")
 	writeTestSQL(t, directory, "002_create_posts", "001_create_posts.up.sql", "CREATE TABLE \"posts\" (\"id\" INTEGER PRIMARY KEY);\n")
@@ -598,11 +637,11 @@ func TestRunDownToLeavesTheNamedMigrationApplied(t *testing.T) {
 	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
 
 	outputBuffer.Reset()
-	require.NoError(t, run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-to", "001_create_users"}))
+	require.NoError(t, run([]string{"revert", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-to", "001_create_users"}))
 	require.Equal(t, "reverted\t002_create_posts\nmigration revert completed: 1 reverted\n", outputBuffer.String())
 }
 
-func TestRunDownDryRunPrintsReverseSQLAndChangesNothing(t *testing.T) {
+func TestRunRevertDryRunPrintsReverseSQLAndChangesNothing(t *testing.T) {
 	directory := newTestDirectory(t)
 	writeTestMigration(t, directory, "001_create_users")
 	dsn := filepath.Join(t.TempDir(), "application.db")
@@ -610,7 +649,7 @@ func TestRunDownDryRunPrintsReverseSQLAndChangesNothing(t *testing.T) {
 	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
 
 	outputBuffer.Reset()
-	require.NoError(t, run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-steps", "1", "-dry-run"}))
+	require.NoError(t, run([]string{"revert", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-steps", "1", "-dry-run"}))
 	require.Equal(t, "-- 001_create_users/001_create_users.down.sql\nDROP TABLE \"users\";\n", outputBuffer.String())
 
 	outputBuffer.Reset()
@@ -618,21 +657,21 @@ func TestRunDownDryRunPrintsReverseSQLAndChangesNothing(t *testing.T) {
 	require.Equal(t, "applied\t001_create_users\n", outputBuffer.String())
 }
 
-// TestRunDownRequiresExactlyOneTarget refuses both the run that names no
+// TestRunRevertRequiresExactlyOneTarget refuses both the run that names no
 // target and the run that names two, so no invocation can revert a depth
 // nobody asked for.
-func TestRunDownRequiresExactlyOneTarget(t *testing.T) {
+func TestRunRevertRequiresExactlyOneTarget(t *testing.T) {
 	directory := newTestDirectory(t)
 	writeTestMigration(t, directory, "001_create_users")
 	dsn := filepath.Join(t.TempDir(), "application.db")
 	setCommandOutput(t)
 	require.NoError(t, run([]string{"apply", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
 
-	err := run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn})
-	require.EqualError(t, err, "down requires -to or -steps")
+	err := run([]string{"revert", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn})
+	require.EqualError(t, err, "revert requires -to or -steps")
 
-	err = run([]string{"down", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-to", "001_create_users", "-steps", "1"})
-	require.EqualError(t, err, "down accepts -to or -steps, not both")
+	err = run([]string{"revert", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn, "-to", "001_create_users", "-steps", "1"})
+	require.EqualError(t, err, "revert accepts -to or -steps, not both")
 }
 
 func TestMigrationLoadingRejectsUnexpectedEntries(t *testing.T) {

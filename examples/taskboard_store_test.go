@@ -61,7 +61,9 @@ func TestTaskboardStoreIsCurrent(t *testing.T) {
 	ctx := context.Background()
 	runner, err := migrate.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	require.NoError(t, runner.Apply(ctx, migrations...))
+	applied, err := runner.Apply(ctx, migrate.AllPending(), migrations...)
+	require.NoError(t, err)
+	require.Len(t, applied, len(migrations))
 
 	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{Dialect: dialect.SQLite()})
 	require.NoError(t, err)
