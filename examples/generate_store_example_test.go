@@ -10,7 +10,7 @@ import (
 )
 
 // Example_generate_store builds a generate.Store over a hand-written table
-// definition the way a user's own gen/main.go would, plans it, writes it into
+// definition the way `rasql codegen generate` does from a database, plans it, writes it into
 // a scratch directory, and checks the result -- all through generate's
 // exported surface, from a package outside generate itself.
 func Example_generate_store() {

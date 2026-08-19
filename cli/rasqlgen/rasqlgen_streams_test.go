@@ -27,8 +27,8 @@ func TestRunSendsHelpToOutput(t *testing.T) {
 		},
 		{
 			name:     "subcommand",
-			args:     []string{"init", "-h"},
-			expected: "Usage of rasql codegen init:",
+			args:     []string{"generate", "-h"},
+			expected: "Usage of rasql codegen generate:",
 		},
 	}
 
@@ -49,11 +49,11 @@ func TestRunSendsHelpToOutput(t *testing.T) {
 // diagnostic with it.
 func TestRunSendsParseFailureToDiagnostics(t *testing.T) {
 	var output, diagnostics bytes.Buffer
-	err := rasqlgen.Run([]string{"init", "-unknown"}, &output, &diagnostics)
+	err := rasqlgen.Run([]string{"generate", "-unknown"}, &output, &diagnostics)
 	require.Error(t, err)
 	require.NotErrorIs(t, err, flag.ErrHelp)
 	require.Contains(t, diagnostics.String(), "flag provided but not defined: -unknown")
-	require.Contains(t, diagnostics.String(), "Usage of rasql codegen init:")
+	require.Contains(t, diagnostics.String(), "Usage of rasql codegen generate:")
 	require.Empty(t, output.String())
 }
 
@@ -62,6 +62,6 @@ func TestRunSendsParseFailureToDiagnostics(t *testing.T) {
 // streams and must keep printing everything there.
 func TestRunLegacyKeepsHelpOnItsOneWriter(t *testing.T) {
 	var writer bytes.Buffer
-	require.ErrorIs(t, rasqlgen.RunLegacy([]string{"init", "-h"}, &writer), flag.ErrHelp)
-	require.Contains(t, writer.String(), "Usage of init:")
+	require.ErrorIs(t, rasqlgen.RunLegacy([]string{"generate", "-h"}, &writer), flag.ErrHelp)
+	require.Contains(t, writer.String(), "Usage of generate:")
 }

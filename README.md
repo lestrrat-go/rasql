@@ -41,7 +41,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate \
 
 Pass `-check` to report whether the checked-in package is current instead of writing it. `-include`, `-exclude`, and `-history-table` narrow the table selection, and `-prune=false` refuses a run that would delete a generated file it no longer writes.
 
-A project that must state a Go-side hint, or compile a static SQL template into the package, owns a generator program instead. `rasql codegen init` scaffolds it as `gen/main.go`; that program holds the driver, the table selection, the hints, the static queries, and the pruning policy where the compiler checks them. See [the generator guide](docs/06-rasqlgen.md).
+Everything that stays the same from run to run lives in a checked-in `rasql.json` at the module root: the package name, the output directory, the dialect, the table selection, row-type names, static queries, and the pruning policy. The DSN is never read from it. See [the generator guide](docs/06-rasqlgen.md#the-settings-file).
 
 Generation turns each live table descriptor into the code you query through: a `<table>_gen.go` file holding a row type with its scan methods and its column-value method, a table type with one accessor method per column, and a package-level accessor. A separate `schema_gen.go` holds every table's runtime descriptor. This is the whole file for a `users` table of `id` and `email`:
 

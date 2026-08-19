@@ -1,0 +1,5 @@
+{
+  "package": "store",
+  "output": "internal/store",
+  "dialect": "sqlite"
+}

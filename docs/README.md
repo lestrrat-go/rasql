@@ -9,12 +9,12 @@ These pages explain how to use `rasql` in an application. For what `rasql` is an
 3. [Querying](03-querying.md) reads rows: typed selects, joins, custom projections, and SQL inspection. Its [operation reference](03-querying.md#operation-reference) enumerates every statement, builder method, and predicate. `rasql` is the typed layer; `rasql/dynamic` holds the builders and row reads for columns you only know as strings when the program runs.
 4. [Writing rows](04-writing.md) creates tables and inserts, updates, or deletes rows, including inside a [transaction](04-writing.md#transactions).
 5. [Static templates](05-templates.md) compiles fixed SQL text with named binds.
-6. [`rasql codegen`](06-rasqlgen.md) writes the store package from live metadata, either as a command or through a project-owned generator.
+6. [`rasql codegen`](06-rasqlgen.md) writes the store package from live metadata, driven by one settings file.
 7. [Migrations](07-migrations.md) applies ordered DDL migrations and reverts them.
 
 Pages 3 through 5 are independent of each other. Read the first two, then jump to whichever fits the task.
 
-For a new application, start with the `rasql codegen generate` command in [the generator guide](06-rasqlgen.md#generate-run-the-command). A project that needs Go-side hints or static queries owns a generator program instead, which `rasql codegen init` scaffolds; the checked-in `gen/main.go` then keeps the driver, table selection, hints, queries, pruning policy, and drift check in the application repository.
+For a new application, start with the `rasql codegen generate` command in [the generator guide](06-rasqlgen.md#run-the-command). The checked-in [`rasql.json`](06-rasqlgen.md#the-settings-file) keeps the package name, output directory, table selection, row-type names, static queries, and pruning policy in the application repository.
 
 ## About the code blocks
 

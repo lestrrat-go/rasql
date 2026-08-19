@@ -28,7 +28,7 @@ Write the example first, under `examples/`, as an `Example*` function with an `/
 go test ./examples/ -update-docs
 ```
 
-New generator examples should use `rasql codegen generate`, which reads the database and writes the package in one command, and `rasql codegen generate -check`, which reports drift without writing. An example that needs a Go-side hint or a static query uses the owned-program workflow instead: `rasql codegen init` creates `gen/main.go`, the program calls `catalog.FromDatabase` and `generate.Store`, and `DATABASE_URL="$DATABASE_URL" go generate ./...` followed by `DATABASE_URL="$DATABASE_URL" go run ./gen -check` refreshes and verifies the package.
+New generator examples should use `rasql codegen generate`, which reads the database and writes the package in one command, and `rasql codegen generate -check`, which reports drift without writing. Settings other than the DSN belong in that project's `rasql.json`, including a Go-side row name or a static query.
 
 The same flag rewrites the checked-in generated files the documentation shows. `examples/store/users_gen.go`, `examples/store/schema_gen.go`, `examples/store/schema_gen_test.go`, and `examples/store/user_by_email_gen.go` are checked by `TestGeneratedStoreIsCurrent`, which plans a `generate.Store` over the same table and query the files were generated from, reads the directory itself rather than a hardcoded file list, and requires the two to name the same generated files with the same bytes.
 

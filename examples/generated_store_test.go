@@ -29,8 +29,8 @@ const staleDriftLine = "\n// invented drift line, written only by a test that ex
 
 // TestGeneratedStoreIsCurrent regenerates the checked-in examples/store
 // package -- the per-table file, the two descriptor files, and the one
-// compiled query -- through generate.Store, the same path a user's own
-// gen/main.go runs, and fails when the directory differs from what that
+// compiled query -- through generate.Store, the same path `rasql codegen
+// generate` takes, and fails when the directory differs from what that
 // store plans. The definition and the query are stated here in Go rather
 // than read from a snapshot file, so the check needs neither a database
 // nor a checked-in copy of the schema.

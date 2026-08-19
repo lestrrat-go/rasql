@@ -3,11 +3,10 @@
 //
 // It exists so two callers cannot drift apart. generate.Store resolves a
 // relative Store.Dir against the module root whenever Store.Root is empty,
-// and rasqlgen's init command has to reach that same directory to compare
-// -output with -gen-dir before it writes a scaffold whose Store.Dir is the
-// -output it was given. A second copy of the walk in the command would
-// decide the comparison on one base while the scaffold wrote on another,
-// which is exactly the disagreement this package removes.
+// and rasqlgen reaches that same directory to find the settings file a run
+// reads when -config names none. A second copy of the walk in the command
+// would look for that file beside a directory the generator does not write
+// to, which is exactly the disagreement this package removes.
 package modroot
 
 import (

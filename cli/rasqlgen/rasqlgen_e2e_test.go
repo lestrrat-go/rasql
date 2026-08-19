@@ -14,26 +14,19 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// TestGoRunInitScaffoldGenerates is the load-bearing test of the init
-// command: writing gen/main.go is easy to get superficially right, so this
-// proves the scaffold by building and running it, not by comparing it to an
-// expected string.
+// TestGoRunGeneratesFromAConfigFile is the load-bearing test of the settings
+// file: reading JSON is easy to get superficially right, so this proves it
+// by generating a real package in a real module and building it, not by
+// comparing structs.
 //
-// It scaffolds into a scratch consumer module the way
-// generate/acceptance_test.go's TestGeneratedStorePackageCompilesAndRuns
-// does (copy this repository's go.mod/go.sum, rewrite the module line,
-// append a replace back to this checkout, so no "go mod tidy" is needed and
-// every step after the "go get" below resolves through the copied go.sum
-// and the replace directive), runs "init" through "go run" exactly as a
-// real consumer would, generates a store from a real SQLite database
-// through the scaffold's own "go generate ./..." directive, and drives "go
-// run ./gen -check" through both the clean and the stale state.
-//
-// This test does not set GOPROXY=off because it reaches init through the same
-// "go get github.com/lestrrat-go/rasql/cmd/rasqlgen@v0.0.0" a real consumer
-// runs, and that step is free to consult the module proxy. See the comment on
-// env below.
-func TestGoRunInitScaffoldGenerates(t *testing.T) {
+// It builds a scratch consumer module the way generate/acceptance_test.go's
+// TestGeneratedStorePackageCompilesAndRuns does (copy this repository's
+// go.mod/go.sum, rewrite the module line, append a replace back to this
+// checkout, so no "go mod tidy" is needed), writes a rasql.json naming a row
+// type and a static query, runs the command through "go run" exactly as a
+// real consumer would, and drives -check through both the clean and the
+// stale state.
+func TestGoRunGeneratesFromAConfigFile(t *testing.T) {
 	moduleDir := t.TempDir()
 	repository, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
@@ -44,9 +37,6 @@ func TestGoRunInitScaffoldGenerates(t *testing.T) {
 	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(module), 0o600))
 
-	// modernc.org/sqlite is already a direct requirement of this
-	// repository's own go.mod, so the copied go.mod already requires what the scaffold
-	// imports; nothing more needs adding for this test to build.
 	repoGoSum, err := os.ReadFile(filepath.Join(repository, "go.sum"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.sum"), repoGoSum, 0o600))
@@ -55,34 +45,8 @@ func TestGoRunInitScaffoldGenerates(t *testing.T) {
 	// and Go's VCS auto-detection has been observed to still try (and fail)
 	// to run "git status" when a stray .git directory sits somewhere above
 	// the OS temp directory -- see generate/descriptor_roundtrip_test.go's
-	// identical guard. Setting it through GOFLAGS, not a per-command flag,
-	// is what makes it reach the "go run ." the scaffold's own
-	// //go:generate directive spawns, which this test cannot pass flags to
-	// directly: that command line is exactly what init writes into the
-	// user's file.
-	//
-	// No GOPROXY=off: this test runs `go get
-	// github.com/lestrrat-go/rasql/cmd/rasqlgen@v0.0.0` below to reach init the
-	// way a real consumer runs, and that step is left free to consult the
-	// module proxy.
+	// identical guard.
 	env := append(os.Environ(), "GOFLAGS=-buildvcs=false")
-
-	command := exec.CommandContext(t.Context(), "go", "get", "github.com/lestrrat-go/rasql/cmd/rasqlgen@v0.0.0")
-	command.Dir = moduleDir
-	command.Env = env
-	output, err := command.CombinedOutput()
-	require.NoError(t, err, string(output))
-
-	command = exec.CommandContext(t.Context(), "go", "run", "github.com/lestrrat-go/rasql/cmd/rasqlgen", "init", "-dialect", "sqlite", "-package", "store", "-output", "internal/store")
-	command.Dir = moduleDir
-	command.Env = env
-	output, err = command.CombinedOutput()
-	require.NoError(t, err, string(output))
-	require.Contains(t, string(output), "wrote "+filepath.Join("gen", "main.go"))
-	require.FileExists(t, filepath.Join(moduleDir, "gen", "main.go"))
-	// init runs nothing: no output directory and no database file exist yet.
-	_, err = os.Stat(filepath.Join(moduleDir, "internal"))
-	require.ErrorIs(t, err, os.ErrNotExist)
 
 	databasePath := filepath.Join(moduleDir, "schema.db")
 	database, err := sql.Open("sqlite", databasePath)
@@ -91,33 +55,70 @@ func TestGoRunInitScaffoldGenerates(t *testing.T) {
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)")
 	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE audit_log (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
 	// rasql_schema_migrations is catalog.FromDatabase's own default history
 	// table exclusion; it must not show up as a generated file below.
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE rasql_schema_migrations (version TEXT PRIMARY KEY)")
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
-	generateEnv := append(append([]string{}, env...), "DATABASE_URL="+databasePath)
+	require.NoError(t, os.MkdirAll(filepath.Join(moduleDir, "queries"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "queries", "user_by_email.sql"),
+		[]byte(`SELECT id, email FROM users WHERE email = {{bind "email"}}`), 0o600))
 
-	command = exec.CommandContext(t.Context(), "go", "generate", "./...")
-	command.Dir = moduleDir
-	command.Env = generateEnv
-	output, err = command.CombinedOutput()
+	// Every setting this project has lives here: the package, the output
+	// directory, the dialect, the excluded table, the row-type override, and
+	// the static query whose output file name is left to be derived.
+	config := `{
+  "package": "store",
+  "output": "internal/store",
+  "dialect": "sqlite",
+  "tables": {
+    "exclude": ["audit_log"],
+    "row_names": {"users": "User"}
+  },
+  "queries": [
+    {"input": "queries/user_by_email.sql", "function": "UserByEmail"}
+  ]
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "rasql.json"), []byte(config), 0o600))
+
+	// The command line carries only what the file deliberately does not: the
+	// DSN, and which of write-or-check this run is.
+	generate := func(extra ...string) ([]byte, error) {
+		args := append([]string{"run", "github.com/lestrrat-go/rasql/cmd/rasql", "codegen", "generate", "-dsn", databasePath}, extra...)
+		command := exec.CommandContext(t.Context(), "go", args...)
+		command.Dir = moduleDir
+		command.Env = env
+		return command.CombinedOutput()
+	}
+
+	output, err := generate()
 	require.NoError(t, err, string(output))
 
-	command = exec.CommandContext(t.Context(), "go", "build", "./...")
+	storeDir := filepath.Join(moduleDir, "internal", "store")
+	require.Equal(t, []string{"posts_gen.go", "schema_gen.go", "schema_gen_test.go", "user_by_email_gen.go", "users_gen.go"},
+		generatedFileNames(t, storeDir),
+		"the excluded table generates no file, and the query's output name is derived from its input")
+
+	source, err := os.ReadFile(filepath.Join(storeDir, "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), "type User struct", "the configured row name reaches the generated type")
+	require.NotContains(t, string(source), "type UsersRow struct")
+
+	source, err = os.ReadFile(filepath.Join(storeDir, "user_by_email_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func UserByEmail(")
+
+	command := exec.CommandContext(t.Context(), "go", "build", "./...")
 	command.Dir = moduleDir
 	command.Env = env
 	output, err = command.CombinedOutput()
 	require.NoError(t, err, string(output))
 
-	storeDir := filepath.Join(moduleDir, "internal", "store")
-	require.Equal(t, []string{"posts_gen.go", "schema_gen.go", "schema_gen_test.go", "users_gen.go"}, generatedFileNames(t, storeDir))
-
-	command = exec.CommandContext(t.Context(), "go", "run", "./gen", "-check")
-	command.Dir = moduleDir
-	command.Env = generateEnv
-	output, err = command.CombinedOutput()
+	output, err = generate("-check")
 	require.NoError(t, err, string(output))
 
 	database, err = sql.Open("sqlite", databasePath)
@@ -126,24 +127,52 @@ func TestGoRunInitScaffoldGenerates(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
-	command = exec.CommandContext(t.Context(), "go", "run", "./gen", "-check")
-	command.Dir = moduleDir
-	command.Env = generateEnv
-	output, err = command.CombinedOutput()
+	output, err = generate("-check")
 	require.Error(t, err)
 	require.Contains(t, string(output), "is stale")
 
-	command = exec.CommandContext(t.Context(), "go", "generate", "./...")
+	output, err = generate()
+	require.NoError(t, err, string(output))
+	output, err = generate("-check")
+	require.NoError(t, err, string(output))
+}
+
+// TestGoRunFlagOverridesTheConfigFile requires a flag the user typed to beat
+// the same setting in the file, so a one-off run needs no edit to it.
+func TestGoRunFlagOverridesTheConfigFile(t *testing.T) {
+	moduleDir := t.TempDir()
+	repository, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+
+	repoGoMod, err := os.ReadFile(filepath.Join(repository, "go.mod"))
+	require.NoError(t, err)
+	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/consumer\n", 1)
+	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(module), 0o600))
+	repoGoSum, err := os.ReadFile(filepath.Join(repository, "go.sum"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.sum"), repoGoSum, 0o600))
+	env := append(os.Environ(), "GOFLAGS=-buildvcs=false")
+
+	databasePath := filepath.Join(moduleDir, "schema.db")
+	database, err := sql.Open("sqlite", databasePath)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	config := `{"package": "store", "output": "internal/store", "dialect": "sqlite"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "rasql.json"), []byte(config), 0o600))
+
+	command := exec.CommandContext(t.Context(), "go", "run", "github.com/lestrrat-go/rasql/cmd/rasql",
+		"codegen", "generate", "-dsn", databasePath, "-output", "internal/elsewhere")
 	command.Dir = moduleDir
-	command.Env = generateEnv
-	output, err = command.CombinedOutput()
+	command.Env = env
+	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 
-	command = exec.CommandContext(t.Context(), "go", "run", "./gen", "-check")
-	command.Dir = moduleDir
-	command.Env = generateEnv
-	output, err = command.CombinedOutput()
-	require.NoError(t, err, string(output))
+	require.FileExists(t, filepath.Join(moduleDir, "internal", "elsewhere", "users_gen.go"))
+	require.NoDirExists(t, filepath.Join(moduleDir, "internal", "store"))
 }
 
 // generatedFileNames reports the sorted names of the regular files directly

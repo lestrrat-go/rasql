@@ -6,6 +6,7 @@ This is a standalone module that runs a small SQLite Taskboard web application. 
 - `migrations` holds the ordered schema changes.
 - `scripts` wraps every call to the `rasql` command, so a step is run rather than retyped.
 - `internal/store` holds the generated store and the persistence code built on it.
+- `rasql.json` holds the codegen settings, which is everything but the DSN.
 - `internal/taskboard` owns the taskboard view model.
 - `internal/web` owns HTTP request handling and server lifecycle.
 
@@ -24,7 +25,7 @@ Regenerate the checked-in store after adding a migration:
 ./scripts/generate.sh
 ```
 
-`scripts/generate.sh` rebuilds a throwaway schema database from the same migrations, then runs `rasql codegen generate` against it, which writes one `<table>_gen.go` file per table. The throwaway database is `internal/store/.taskboard-schema.db` and is ignored by Git. `go generate ./...` runs the same script through the directive in `internal/store/repository.go`.
+`scripts/generate.sh` rebuilds a throwaway schema database from the same migrations, then runs `rasql codegen generate` against it, which reads `rasql.json` and writes one `<table>_gen.go` file per table. The throwaway database is `internal/store/.taskboard-schema.db` and is ignored by Git. `go generate ./...` runs the same script through the directive in `internal/store/repository.go`.
 
 Report whether the checked-in store is current without writing files:
 

@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"go/token"
 	"strings"
 	"time"
 
 	"github.com/lestrrat-go/rasql/catalog"
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
 
@@ -18,31 +20,48 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// dialectSpec holds what one -dialect value selects: the sql.Open driver
+// name the command opens the database with, and the dialect value it hands
+// to catalog and generate.
+type dialectSpec struct {
+	openName string
+	dialect  dialect.Dialect
+}
+
+// supportedDialects maps every accepted -dialect spelling to its spec.
+//
+// A dialect.Dialect is an immutable value, so holding one here rather than
+// calling for it per run is safe to share across concurrent runs.
+var supportedDialects = map[string]dialectSpec{
+	"postgres":   {openName: "pgx", dialect: dialect.PostgreSQL()},
+	"postgresql": {openName: "pgx", dialect: dialect.PostgreSQL()},
+	"mysql":      {openName: "mysql", dialect: dialect.MySQL()},
+	"sqlite":     {openName: "sqlite", dialect: dialect.SQLite()},
+}
+
 // defaultInspectionTimeout bounds the whole run: opening the database,
 // reading its metadata, and writing the package. It matches the timeout the
-// init scaffold starts with, and -timeout replaces it.
+// settings file leaves alone, and -timeout replaces it.
 const defaultInspectionTimeout = 30 * time.Second
 
 // runGenerate implements the "generate" command: it reads a live database
 // and writes the store package, with no program in between.
 //
-// This is the command for a project whose generation is fully described by
-// its flags, which is the common case: a package name, an output directory,
-// a dialect, and a table selection. A project that must state something no
-// flag can carry -- a schema.TableHint, or a generate.Query compiling a
-// static SQL template into the package -- runs "init" instead and owns the
-// program those values live in. Both routes call the same catalog and
-// generate packages and produce byte-identical output from the same
-// database, so a project that outgrows this command can scaffold the
-// program later without regenerating differently.
+// What stays the same from run to run comes from the settings file, and what
+// changes per run comes from a flag, with a flag the user typed overriding
+// the file. Two settings are deliberately flag-only: the DSN, because the
+// file is checked in and a connection string carries a credential, and
+// -check, because it selects what one run does rather than what the project
+// is.
 //
-// Unlike init, this command opens a database, so this file is where the
-// three drivers enter the binary. They reach no library package: catalog
-// takes an already-open handle exactly so that a user's own generator adds
-// no driver to its module graph, and that promise is about the library, not
-// about a command the user runs.
+// This command opens a database, so this file is where the three drivers
+// enter the binary. They reach no library package: catalog takes an
+// already-open handle exactly so that a user's own program adds no driver to
+// its module graph, and that promise is about the library, not about a
+// command the user runs.
 func (c command) runGenerate(args []string) error {
 	flags := c.newFlagSet(c.flagSetPrefix + "generate")
+	configPath := flags.String("config", "", "settings file to read (default: rasql.json at the module root, when it exists)")
 	dsn := flags.String("dsn", "", "connection string for the database to generate from")
 	dialectName := flags.String("dialect", "", "postgresql (or postgres), mysql, or sqlite")
 	packageName := flags.String("package", "", "generated package name")
@@ -56,6 +75,33 @@ func (c command) runGenerate(args []string) error {
 	timeout := flags.Duration("timeout", defaultInspectionTimeout, "limit on the whole run")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
+	}
+	// Which flags the user actually typed decides what the settings file may
+	// still supply, so a project keeps its settings in one place and a
+	// one-off run overrides any of them without editing that file.
+	typed := typedFlags(flags)
+
+	settings, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	if !typed.has("dialect") && settings.Dialect != "" {
+		*dialectName = settings.Dialect
+	}
+	if !typed.has("package") && settings.Package != "" {
+		*packageName = settings.Package
+	}
+	if !typed.has("output") && settings.Output != "" {
+		*output = settings.Output
+	}
+	if !typed.has("root") && settings.Root != "" {
+		*root = settings.Root
+	}
+	if !typed.has("history-table") && settings.Tables.HistoryTable != "" {
+		*historyTable = settings.Tables.HistoryTable
+	}
+	if !typed.has("prune") && settings.Prune != nil {
+		*prune = *settings.Prune
 	}
 
 	spec, ok := supportedDialects[*dialectName]
@@ -79,6 +125,20 @@ func (c command) runGenerate(args []string) error {
 		return err
 	}
 	excludeTables, err := splitTableNames("exclude", *exclude)
+	if err != nil {
+		return err
+	}
+	if !typed.has("include") && len(settings.Tables.Include) > 0 {
+		includeTables = settings.Tables.Include
+	}
+	if !typed.has("exclude") && len(settings.Tables.Exclude) > 0 {
+		excludeTables = settings.Tables.Exclude
+	}
+	hints, err := settings.hints()
+	if err != nil {
+		return err
+	}
+	queries, err := settings.queries()
 	if err != nil {
 		return err
 	}
@@ -107,7 +167,9 @@ func (c command) runGenerate(args []string) error {
 		Dir:     *output,
 		Root:    *root,
 		Tables:  tables,
+		Hints:   hints,
 		Dialect: spec.dialect,
+		Queries: queries,
 		Prune:   *prune,
 	}
 	if *check {
@@ -143,6 +205,24 @@ func splitTableNames(flagName, value string) ([]string, error) {
 		names = append(names, name)
 	}
 	return names, nil
+}
+
+// typedFlagSet holds the flags one run named on the command line.
+type typedFlagSet map[string]struct{}
+
+func (t typedFlagSet) has(name string) bool {
+	_, typed := t[name]
+	return typed
+}
+
+// typedFlags reports which flags this run actually named, so a settings
+// file fills in only what the command line left alone. flag.Visit walks
+// exactly the flags that were set, which is the one way to tell a "-prune
+// false" the user typed from a -prune nobody typed.
+func typedFlags(flags *flag.FlagSet) typedFlagSet {
+	typed := make(typedFlagSet)
+	flags.Visit(func(f *flag.Flag) { typed[f.Name] = struct{}{} })
+	return typed
 }
 
 func pluralTables(count int) string {

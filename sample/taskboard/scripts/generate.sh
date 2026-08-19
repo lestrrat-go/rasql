@@ -15,9 +15,7 @@ go run ../../cmd/rasql migrate apply \
   -dialect sqlite \
   -dsn "$schema_dsn"
 
+# Everything but the DSN comes from rasql.json at the module root.
 go run ../../cmd/rasql codegen generate \
   -dsn "$schema_dsn" \
-  -dialect sqlite \
-  -package store \
-  -output internal/store \
   "$@"
