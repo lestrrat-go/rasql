@@ -14,20 +14,21 @@ Then run `rasql migrate <command> [flags]`. The standalone `rasqlmigrate` binary
 
 ## Migration directories
 
-Keep a separate migration root for every database dialect. Each first-level directory is one migration ID, and it holds a `.up.sql` source for every step forward with the `.down.sql` that undoes it beside it.
+One application keeps one migration root. Each first-level directory in it is one migration ID, and it holds a `.up.sql` source for every step forward with the `.down.sql` that undoes it beside it.
 
 ```text
 db/migrations/
-  sqlite/
-    001_initial/
-      001_create_users.up.sql
-      001_create_users.down.sql
-      002_users_email_index.up.sql
-      002_users_email_index.down.sql
-    002_add_user_nickname/
-      001_add_nickname.up.sql
-      001_add_nickname.down.sql
+  001_initial/
+    001_create_users.up.sql
+    001_create_users.down.sql
+    002_users_email_index.up.sql
+    002_users_email_index.down.sql
+  002_add_user_nickname/
+    001_add_nickname.up.sql
+    001_add_nickname.down.sql
 ```
+
+Give each engine its own root, such as `db/migrations/postgresql` and `db/migrations/sqlite`, only when the same application really ships DDL for more than one engine. Two engines mean two histories that must not share a root, and each `rasql migrate` run then names the one it is for with `-dir`. An application on a single engine needs no such level.
 
 Each `.sql` file contains one native database statement. `rasql migrate` sends its bytes unchanged to the database driver. It does not parse, split, or render SQL, so a migration can use the database's own DDL syntax.
 
@@ -58,10 +59,10 @@ The engine enforces the rest at apply time, against the history table rather tha
 Create the directory and add numbered SQL source files:
 
 ```sh
-mkdir -p db/migrations/sqlite/002_add_user_nickname
+mkdir -p db/migrations/002_add_user_nickname
 ```
 
-For example, `db/migrations/sqlite/002_add_user_nickname/001_add_nickname.up.sql` can contain:
+For example, `db/migrations/002_add_user_nickname/001_add_nickname.up.sql` can contain:
 
 ```sql
 ALTER TABLE "users" ADD COLUMN "nickname" TEXT;
@@ -77,7 +78,7 @@ Review the ordered sources without opening a database connection:
 
 ```sh
 rasql migrate plan \
-  -dir db/migrations/sqlite
+  -dir db/migrations
 ```
 
 ## Apply and check migrations
@@ -87,17 +88,17 @@ For SQLite, store the database file outside the migration root.
 
 ```sh
 rasql migrate apply \
-  -dir db/migrations/sqlite \
+  -dir db/migrations \
   -dialect sqlite \
   -dsn "$DATABASE_URL"
 
 rasql migrate status \
-  -dir db/migrations/sqlite \
+  -dir db/migrations \
   -dialect sqlite \
   -dsn "$DATABASE_URL"
 
 rasql migrate verify \
-  -dir db/migrations/sqlite \
+  -dir db/migrations \
   -dialect sqlite \
   -dsn "$DATABASE_URL"
 ```
@@ -110,13 +111,13 @@ rasql migrate verify \
 
 ```sh
 rasql migrate down \
-  -dir db/migrations/sqlite \
+  -dir db/migrations \
   -dialect sqlite \
   -dsn "$DATABASE_URL" \
   -steps 1
 
 rasql migrate down \
-  -dir db/migrations/sqlite \
+  -dir db/migrations \
   -dialect sqlite \
   -dsn "$DATABASE_URL" \
   -to 001_initial
