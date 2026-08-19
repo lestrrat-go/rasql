@@ -12,25 +12,33 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 )
 
-// initDialect names the driver import path, the sql.Open driver name, and
-// the dialect.*() call written into the scaffold for one -dialect value.
-type initDialect struct {
+// dialectSpec holds everything the two commands need for one -dialect
+// value: the driver import path and the dialect.*() call init writes into
+// the scaffold, the sql.Open driver name both the scaffold and generate
+// open with, and the dialect value generate hands to catalog and generate.
+type dialectSpec struct {
 	driverImport string
 	openName     string
 	dialectCall  string
+	dialect      dialect.Dialect
 }
 
-// initDialects maps each supported dialect to the driver import, sql.Open
-// name, and dialect.*() call that init writes into the scaffold.
-var initDialects = map[string]initDialect{
-	"postgres":   {driverImport: "github.com/jackc/pgx/v5/stdlib", openName: "pgx", dialectCall: "dialect.PostgreSQL()"},
-	"postgresql": {driverImport: "github.com/jackc/pgx/v5/stdlib", openName: "pgx", dialectCall: "dialect.PostgreSQL()"},
-	"mysql":      {driverImport: "github.com/go-sql-driver/mysql", openName: "mysql", dialectCall: "dialect.MySQL()"},
-	"sqlite":     {driverImport: "modernc.org/sqlite", openName: "sqlite", dialectCall: "dialect.SQLite()"},
+// supportedDialects maps every accepted -dialect spelling to its spec. One
+// table serves init and generate, so the two commands can never come to
+// disagree about which spellings exist or what each one selects.
+//
+// A dialect.Dialect is an immutable value, so holding one here rather than
+// calling for it per run is safe to share across concurrent runs.
+var supportedDialects = map[string]dialectSpec{
+	"postgres":   {driverImport: "github.com/jackc/pgx/v5/stdlib", openName: "pgx", dialectCall: "dialect.PostgreSQL()", dialect: dialect.PostgreSQL()},
+	"postgresql": {driverImport: "github.com/jackc/pgx/v5/stdlib", openName: "pgx", dialectCall: "dialect.PostgreSQL()", dialect: dialect.PostgreSQL()},
+	"mysql":      {driverImport: "github.com/go-sql-driver/mysql", openName: "mysql", dialectCall: "dialect.MySQL()", dialect: dialect.MySQL()},
+	"sqlite":     {driverImport: "modernc.org/sqlite", openName: "sqlite", dialectCall: "dialect.SQLite()", dialect: dialect.SQLite()},
 }
 
 // initScaffoldTemplate renders gen/main.go. It is parsed once at package
@@ -144,7 +152,7 @@ func run(ctx context.Context, check bool) error {
 // output directory -- see cli/rasqlgen/init.go's package-level doc, and
 // §3.1 of the phase 5 specification, for why.
 func (c command) runInit(args []string) error {
-	flags := c.newFlagSet(c.initFlagSetName)
+	flags := c.newFlagSet(c.flagSetPrefix + "init")
 	dialectName := flags.String("dialect", "", "postgresql (or postgres), mysql, or sqlite")
 	packageName := flags.String("package", "", "generated package name")
 	output := flags.String("output", "", "the generated package's directory, module-root-relative")
@@ -154,7 +162,7 @@ func (c command) runInit(args []string) error {
 		return err
 	}
 
-	spec, ok := initDialects[*dialectName]
+	spec, ok := supportedDialects[*dialectName]
 	if !ok {
 		return fmt.Errorf("init: unsupported -dialect %q; want postgresql, postgres, mysql, or sqlite", *dialectName)
 	}
@@ -480,7 +488,7 @@ func symlinkTarget(path string) (string, bool) {
 // -package and -output combination and formats the result with gofmt, so
 // the file init writes is gofmt-clean by construction rather than by
 // convention.
-func renderInitScaffold(spec initDialect, program, packageName, output string) ([]byte, error) {
+func renderInitScaffold(spec dialectSpec, program, packageName, output string) ([]byte, error) {
 	slashed := filepath.ToSlash(output)
 	data := struct {
 		DriverImport  string

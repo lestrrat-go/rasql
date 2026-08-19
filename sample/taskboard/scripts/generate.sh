@@ -1,6 +1,6 @@
 #!/bin/sh
 # Rebuild the throwaway schema database from the checked-in migrations, then
-# run the owned generator over it. Pass -check to report whether the checked-in
+# generate the store from it. Pass -check to report whether the checked-in
 # store is current instead of writing it.
 set -eu
 
@@ -15,4 +15,9 @@ go run ../../cmd/rasql migrate apply \
   -dialect sqlite \
   -dsn "$schema_dsn"
 
-TASKBOARD_SCHEMA_DSN="$schema_dsn" go run ./gen "$@"
+go run ../../cmd/rasql codegen generate \
+  -dsn "$schema_dsn" \
+  -dialect sqlite \
+  -package store \
+  -output internal/store \
+  "$@"

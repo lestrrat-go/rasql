@@ -1,4 +1,4 @@
-package main
+package store_test
 
 import (
 	"os"
@@ -10,11 +10,12 @@ import (
 )
 
 // generateScript runs scripts/generate.sh with the given arguments and
-// returns its combined output. The script owns the migration step, so the
-// test drives the same path the documentation tells a reader to run.
+// returns its combined output. The script owns the migration step and the
+// generate command, so these tests drive the same path the documentation
+// tells a reader to run.
 func generateScript(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
-	command := exec.Command(filepath.Join("..", "scripts", "generate.sh"), args...)
+	command := exec.CommandContext(t.Context(), filepath.Join("..", "..", "scripts", "generate.sh"), args...)
 	output, err := command.CombinedOutput()
 	return output, err
 }
@@ -25,7 +26,7 @@ func TestGenerateScriptReportsCurrentStore(t *testing.T) {
 }
 
 func TestGenerateScriptReportsStaleStore(t *testing.T) {
-	path := filepath.Join("..", storeDirectory, "schema_gen.go")
+	path := "schema_gen.go"
 	original, err := os.ReadFile(path)
 	require.NoError(t, err)
 	t.Cleanup(func() {

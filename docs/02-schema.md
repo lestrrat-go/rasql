@@ -1,6 +1,6 @@
 # Schemas
 
-A schema descriptor is the single description of a table that `rasql` uses everywhere. It generates DDL, validates dynamic queries, and tells the decoder which columns a result holds. Write it by hand, generate it with an owned program created by [`rasql codegen init`](06-rasqlgen.md#recommended-workflow-own-genmaingo), or read it out of a live database.
+A schema descriptor is the single description of a table that `rasql` uses everywhere. It generates DDL, validates dynamic queries, and tells the decoder which columns a result holds. Write it by hand, generate it with [`rasql codegen generate`](06-rasqlgen.md#generate-run-the-command) or an owned program created by [`rasql codegen init`](06-rasqlgen.md#init-own-genmaingo), or read it out of a live database.
 
 The recommended generator calls `catalog.FromDatabase` and passes the descriptors to `generate.Store`. That program can select tables with `catalog.Options.Include`, `Exclude`, and `HistoryTable`, apply Go-only `schema.TableHint` values, compile static queries, choose whether to prune owned files, and expose both write and check modes.
 

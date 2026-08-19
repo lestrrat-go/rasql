@@ -1,5 +1,12 @@
 package store
 
+// The generated files beside this one come from the checked-in migrations,
+// through scripts/generate.sh. The directive lives here because every other
+// file in this package is generated, and a regenerating run would overwrite
+// it there.
+//
+//go:generate ../../scripts/generate.sh
+
 import (
 	"context"
 	"fmt"

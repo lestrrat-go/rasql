@@ -18,6 +18,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/internal/dsnredact"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
@@ -197,7 +198,7 @@ func runDiffLive(args []string) error {
 		return database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
 	})
 	if err != nil {
-		return redactError(fmt.Errorf("begin live inspection transaction: %w", err), *dsn)
+		return dsnredact.Error(fmt.Errorf("begin live inspection transaction: %w", err), *dsn)
 	}
 	defer func() {
 		if ctx.Err() == nil {
@@ -206,7 +207,7 @@ func runDiffLive(args []string) error {
 	}()
 	analyzer, err := liveSchemaAnalyzer(ctx, transaction, d.Name())
 	if err != nil {
-		return redactError(err, *dsn)
+		return dsnredact.Error(err, *dsn)
 	}
 	liveAnalyzer, ok := analyzer.(diff.LiveAnalyzer)
 	if !ok {
@@ -220,7 +221,7 @@ func runDiffLive(args []string) error {
 		return inspector.Table(ctx, *tableName)
 	})
 	if err != nil {
-		return redactError(err, *dsn)
+		return dsnredact.Error(err, *dsn)
 	}
 	liveSources, err := liveAnalyzer.LiveSources(liveTable)
 	if err != nil {
@@ -358,7 +359,7 @@ func runApply(args []string) error {
 	}
 	defer closeDatabase()
 	if err := runner.Apply(context.Background(), migrations...); err != nil {
-		return redactError(err, *dsn)
+		return dsnredact.Error(err, *dsn)
 	}
 	_, _ = fmt.Fprintln(commandOutput, "migration apply completed")
 	return nil
@@ -380,7 +381,7 @@ func runStatus(args []string) error {
 	defer closeDatabase()
 	entries, err := runner.Status(context.Background(), migrations...)
 	if err != nil {
-		return redactError(err, *dsn)
+		return dsnredact.Error(err, *dsn)
 	}
 	for _, entry := range entries {
 		_, _ = fmt.Fprintf(commandOutput, "%s\t%s\n", entry.State, entry.ID)
@@ -404,7 +405,7 @@ func runVerify(args []string) error {
 	defer closeDatabase()
 	entries, err := runner.Status(context.Background(), migrations...)
 	if err != nil {
-		return redactError(err, *dsn)
+		return dsnredact.Error(err, *dsn)
 	}
 	for _, entry := range entries {
 		if entry.State != migrate.StatusApplied {
@@ -472,7 +473,7 @@ func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (
 	}
 	database, err := openDatabase(driverName, dsn)
 	if err != nil {
-		return nil, func() {}, fmt.Errorf("open database: %w", redactError(err, dsn))
+		return nil, func() {}, fmt.Errorf("open database: %w", dsnredact.Error(err, dsn))
 	}
 	closeDatabase := func() {
 		_ = database.Close()
@@ -483,7 +484,7 @@ func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (
 		if ctx.Err() == nil {
 			closeDatabase()
 		}
-		return nil, func() {}, fmt.Errorf("connect to database: %w", redactError(err, dsn))
+		return nil, func() {}, fmt.Errorf("connect to database: %w", dsnredact.Error(err, dsn))
 	}
 	return database, closeDatabase, nil
 }
@@ -565,27 +566,4 @@ func writeDiffPlan(output io.Writer, plan diff.Plan) {
 			_, _ = fmt.Fprintln(output)
 		}
 	}
-}
-
-func redactError(err error, dsn string) error {
-	if err == nil || dsn == "" {
-		return err
-	}
-	return redactedError{
-		message: strings.ReplaceAll(err.Error(), dsn, "[redacted]"),
-		cause:   err,
-	}
-}
-
-type redactedError struct {
-	message string
-	cause   error
-}
-
-func (e redactedError) Error() string {
-	return e.message
-}
-
-func (e redactedError) Unwrap() error {
-	return e.cause
 }

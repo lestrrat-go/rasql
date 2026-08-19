@@ -12,14 +12,14 @@ import (
 
 func TestRunRejectsNoArguments(t *testing.T) {
 	err := RunLegacy(nil, bytes.NewBuffer(nil))
-	require.EqualError(t, err, "usage: rasqlgen <init> [flags]")
+	require.EqualError(t, err, "usage: rasqlgen <generate|init> [flags]")
 }
 
 func TestRunRejectsRemovedCommands(t *testing.T) {
 	for _, command := range []string{"bootstrap", "schema", "query"} {
 		t.Run(command, func(t *testing.T) {
 			err := RunLegacy([]string{command}, bytes.NewBuffer(nil))
-			require.EqualError(t, err, "unknown rasqlgen command \""+command+"\"; expected init")
+			require.EqualError(t, err, "unknown rasqlgen command \""+command+"\"; expected generate or init")
 		})
 	}
 }
@@ -69,6 +69,7 @@ func TestRunHelp(t *testing.T) {
 	err := RunLegacy([]string{"-h"}, &output)
 	require.ErrorIs(t, err, flag.ErrHelp)
 	require.Contains(t, output.String(), "Usage: rasqlgen <command> [flags]")
+	require.Contains(t, output.String(), "generate  Generate the store package from a live database")
 	require.Contains(t, output.String(), "init      Scaffold the generator program, gen/main.go")
 	require.NotContains(t, output.String(), "bootstrap")
 	require.NotContains(t, output.String(), "schema")
