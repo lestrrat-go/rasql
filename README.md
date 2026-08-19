@@ -316,6 +316,7 @@ The [documentation index](docs/) groups these pages by layer: the core layer bui
 | [Dynamic rows](docs/core/05-dynamic.md) | Reading and writing rows for a column name known only as a string at run time. |
 | [Static templates](docs/core/06-templates.md) | Compiling SQL text with named binds into parameterized statements. |
 | [Migrations](docs/core/07-migrations.md) | Applying ordered DDL migrations, and reverting them. |
+| [Inspection-only facts](docs/core/08-inspection-facts.md) | Reference for the facts inspection reads that rasql cannot write back as DDL. |
 | **ORM layer** | |
 | [`rasql codegen`](docs/orm/01-codegen.md) | Running the generator and configuring it with `rasql.json`. |
 | [The generated store](docs/orm/02-generated-store.md) | The row types, table types, column accessors, and static query functions it writes. |

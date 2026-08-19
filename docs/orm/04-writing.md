@@ -92,6 +92,8 @@ source: [examples/rasql_insert_example_test.go](https://github.com/lestrrat-go/r
 
 The value must carry one exported tagged field for every column of the table, so a row that omits a column is a compile-time or validation problem rather than a silent `NULL`. A generated row type has no tags and supplies its column values through a `ColumnValue` method instead, which [the mapping methods](02-generated-store.md#the-mapping-and-scan-methods) covers. `Insert` returns the driver's `sql.Result`, which reports rows affected and, on databases that support it, the last inserted id.
 
+A generated column, one whose value the database computes from an expression, is left out of every write these helpers build. `rasql.Insert`, `rasql.InsertMany`, `rasql.Update`, and `rasql.UpdateMany` all drop it from their column list on their own, because a database rejects a statement that writes to one. Naming a generated column through `rasql.UpdateColumns` is refused up front. [Generated columns](../core/08-inspection-facts.md#generated-columns) covers how a descriptor records one.
+
 `rasql.InsertMany` applies the same mapping to a slice of values and emits one parameterized multi-row `INSERT`. `InsertManyWithOptions` accepts `DefaultColumns` and omits those columns from every row; when every column is selected, it executes one dialect-rendered default-values `INSERT` per row. An empty slice is rejected, and callers that need to split a very large batch should make several calls so each statement stays under the database's parameter limit.
 
 ## Use database defaults
