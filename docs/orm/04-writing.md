@@ -94,7 +94,7 @@ The value must carry one exported tagged field for every column of the table, so
 
 A generated column, one whose value the database computes from an expression, is left out of every write these helpers build. `rasql.Insert`, `rasql.InsertMany`, `rasql.Update`, and `rasql.UpdateMany` all drop it from their column list on their own, because a database rejects a statement that writes to one. Naming a generated column through `rasql.UpdateColumns` is refused up front. [Generated columns](../core/08-inspection-facts.md#generated-columns) covers how a descriptor records one.
 
-`rasql.InsertMany` applies the same mapping to a slice of values and emits one parameterized multi-row `INSERT`. `InsertManyWithOptions` accepts `DefaultColumns` and omits those columns from every row; when every column is selected, it executes one dialect-rendered default-values `INSERT` per row. An empty slice is rejected, and callers that need to split a very large batch should make several calls so each statement stays under the database's parameter limit.
+`rasql.InsertMany` applies the same mapping to a slice of values and emits one parameterized multi-row `INSERT`. `InsertManyWithOptions` accepts `DefaultColumns` and omits those columns from every row. When every column is selected, it executes one dialect-rendered default-values `INSERT` per row. An empty slice is rejected, and callers that need to split a very large batch should make several calls so each statement stays under the database's parameter limit.
 
 ## Use database defaults
 
@@ -267,17 +267,17 @@ func Example_rasql_update() {
 source: [examples/rasql_update_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_update_example_test.go)
 <!-- END INCLUDE -->
 
-The row identifies itself, so there is no separate predicate to keep in step with it. A table without a primary key cannot be updated this way; build an `UPDATE` through the `query` package instead.
+The row identifies itself, so there is no separate predicate to keep in step with it. A table without a primary key cannot be updated this way. Build an `UPDATE` through the `query` package instead.
 
 ## Update selected fields or many rows
 
-`rasql.UpdateWithOptions` keeps the typed mapping while selecting only the fields to assign. `UpdateColumns` names the non-primary-key fields to write, so a partial row value can omit every other field. Without `UpdateWhere`, the primary-key fields still identify one row. `UpdateWhere` replaces that primary-key predicate with an explicit, parameterized `query.Expression`, which updates every matching row. The typed helper rejects an unconditional update; use the lower-level `query` package when that behavior is intentional.
+`rasql.UpdateWithOptions` keeps the typed mapping while selecting only the fields to assign. `UpdateColumns` names the non-primary-key fields to write, so a partial row value can omit every other field. Without `UpdateWhere`, the primary-key fields still identify one row. `UpdateWhere` replaces that primary-key predicate with an explicit, parameterized `query.Expression`, which updates every matching row. The typed helper rejects an unconditional update. Use the lower-level `query` package when that behavior is intentional.
 
 Use `rasql.UpdateMany` when the operation is intentionally bulk. It requires `UpdateWhere`, so omitting the predicate fails before execution.
 
 ## Delete rows
 
-`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` and `WhereIn` take a `query.ColumnRef` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate; call `AllowAll` to state a full-table delete explicitly. `WhereIn` needs at least one value; `Build` and `Exec` return an error for an empty list rather than rendering `IN ()`, which is not valid SQL in any supported dialect. Call `Returning` to read deleted rows on dialects that support `RETURNING`.
+`rasql.DeleteFrom` starts a fluent builder that mirrors the select builder: `WhereEqual` and `WhereIn` take a `query.ColumnRef` of the target table, `Where` takes any predicate from the `query` package, and `Exec` runs the statement. `Build` and `Exec` reject a builder that carries no predicate. Call `AllowAll` to state a full-table delete explicitly. `WhereIn` needs at least one value. `Build` and `Exec` return an error for an empty list rather than rendering `IN ()`, which is not valid SQL in any supported dialect. Call `Returning` to read deleted rows on dialects that support `RETURNING`.
 
 <!-- INCLUDE(examples/rasql_delete_example_test.go) -->
 ```go
@@ -380,7 +380,7 @@ func Example_rasql_delete() {
 source: [examples/rasql_delete_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_delete_example_test.go)
 <!-- END INCLUDE -->
 
-A delete matches whatever the predicate matches, so it is not tied to a primary key the way `Update` is. `Build` renders the statement without executing it when you want to see the SQL first; combine it with `AllowAll` to render a full-table delete.
+A delete matches whatever the predicate matches, so it is not tied to a primary key the way `Update` is. `Build` renders the statement without executing it when you want to see the SQL first. Combine it with `AllowAll` to render a full-table delete.
 
 ## Next
 

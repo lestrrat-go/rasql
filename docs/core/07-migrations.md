@@ -43,7 +43,7 @@ Create these directories yourself with `mkdir`. There is no command that scaffol
 - The root passed as `-dir` holds directories and nothing else. A file sitting directly in it fails the load, so a stray `notes.txt` is reported rather than skipped.
 - A directory's name is the migration ID that the history table records. It may be any non-empty valid UTF-8 text up to 255 bytes, with no NUL.
 - Migrations run in the sort order of those names, compared as bytes rather than as numbers. `10_x` sorts before `9_x`, so pad the numbers: `001`, `002`, `010`.
-- A migration directory holds sources and no subdirectories. Every source ends in `.up.sql` or `.down.sql`; any other name fails the load, a plain `.sql` included, which is what turns a misspelled `001_add_nickname.dwon.sql` into an error rather than a silent extra forward source.
+- A migration directory holds sources and no subdirectories. Every source ends in `.up.sql` or `.down.sql`. Any other name fails the load, a plain `.sql` included, which is what turns a misspelled `001_add_nickname.dwon.sql` into an error rather than a silent extra forward source.
 - A migration's forward sources run in ascending filename order, with the same byte comparison and the same need for padding.
 - Its reverse sources run in **descending** filename order, so the migration is undone in the reverse of the order it was done.
 - Every migration needs at least one `.up.sql` and at least one `.down.sql`. A migration with no reverse source fails the load, so `apply` refuses it too and a reverse script cannot be missing on the day it is needed. A change that destroys data still writes the reverse that rebuilds the structure, such as re-adding a dropped column without its rows.
@@ -103,7 +103,7 @@ rasql migrate verify \
   -dsn "$DATABASE_URL"
 ```
 
-`apply` runs every pending migration, oldest first, and prints one `applied<TAB>ID` line per migration followed by a count. Pass `-to ID` to stop at a chosen migration, which applies `ID` and every pending migration before it and leaves the rest pending; naming a migration that is already applied applies nothing. Pass `-dry-run` to print the forward SQL the run would execute without running it. That dry run reads the history table, so it prints only what is still pending, while [`plan`](#create-and-review-a-migration) prints every supplied source and never opens a database.
+`apply` runs every pending migration, oldest first, and prints one `applied<TAB>ID` line per migration followed by a count. Pass `-to ID` to stop at a chosen migration, which applies `ID` and every pending migration before it and leaves the rest pending. Naming a migration that is already applied applies nothing. Pass `-dry-run` to print the forward SQL the run would execute without running it. That dry run reads the history table, so it prints only what is still pending, while [`plan`](#create-and-review-a-migration) prints every supplied source and never opens a database.
 
 `status` reports `applied`, `pending`, `changed`, `out_of_order`, and `unknown` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
 
@@ -125,13 +125,13 @@ rasql migrate revert \
   -to 001_initial
 ```
 
-`-steps N` reverts the N newest applied migrations, and it has no counterpart on `apply`, which counts forward from a named migration instead. `-to ID` leaves the database at the point where `ID` was applied, so `ID` itself stays applied and every migration after it is reverted; naming the newest applied migration reverts nothing. Add `-dry-run` to print the reverse SQL the run would execute without opening a transaction.
+`-steps N` reverts the N newest applied migrations, and it has no counterpart on `apply`, which counts forward from a named migration instead. `-to ID` leaves the database at the point where `ID` was applied, so `ID` itself stays applied and every migration after it is reverted. Naming the newest applied migration reverts nothing. Add `-dry-run` to print the reverse SQL the run would execute without opening a transaction.
 
 A reverted migration becomes `pending` again, so `apply` runs it once more. That is the fix-and-reapply loop: revert the migration, correct its sources, apply it again.
 
 The whole run is refused, before any statement runs, when a selected migration's forward sources no longer match their recorded checksum, when `-to` names a migration that is not applied, when `-steps` exceeds the number applied, or when the history disagrees with the supplied migrations. A refused run changes nothing.
 
-PostgreSQL and SQLite revert a migration atomically, so a failed revert leaves the database as it was. MySQL commits DDL implicitly, so a revert that fails partway can leave a schema half undone with the migration still recorded; resolve that state by hand before running `revert` again. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go`.
+PostgreSQL and SQLite revert a migration atomically, so a failed revert leaves the database as it was. MySQL commits DDL implicitly, so a revert that fails partway can leave a schema half undone with the migration still recorded. Resolve that state by hand before running `revert` again. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go`.
 
 ## Generate PostgreSQL, MySQL, and SQLite migrations
 
@@ -217,10 +217,10 @@ rasql migrate diff-live \
 
 `-dialect`, `-dsn`, `-table`, and `-to` are all required. The command reads the whole comparison inside one transaction, rolls that transaction back, and reports `no schema changes` when the live table already matches. It refuses a plan whose statements touch any table other than `-table`, and it applies the same restrictions the `diff` command does, so a rename, a removal, or a changed column is still written by hand. The command redacts the exact DSN from returned errors.
 
-Any live-schema comparison that uses `inspect` requires complete metadata privileges. MySQL filters `information_schema.columns` by column privileges, so a partial grant can create a false baseline; use table- or database-level `SELECT` (or equivalent full column visibility) before running `diff-live`. The inspector returns `inspect.ErrIncompleteMetadata` when the visible column count does not match the full `SHOW CREATE TABLE` definition.
+Any live-schema comparison that uses `inspect` requires complete metadata privileges. MySQL filters `information_schema.columns` by column privileges, so a partial grant can create a false baseline. Use table- or database-level `SELECT` (or equivalent full column visibility) before running `diff-live`. The inspector returns `inspect.ErrIncompleteMetadata` when the visible column count does not match the full `SHOW CREATE TABLE` definition.
 
 ## Go API
 
-`migrate.Runner` is available when an application needs to embed migration execution in a separate administrative program. Each `migrate.Statement` holds a source name and native SQL text. Supply the complete migration set to `Runner.Apply` with a target built by `migrate.AllPending` or `migrate.ApplyThrough`; it orders migrations by ID, returns what it applied, and rejects duplicate IDs, missing recorded migrations, skipped migrations, and changed source checksums. `Runner.ApplyPlan` reports the same selection without running it, and `Runner.Revert` and `Runner.RevertPlan` mirror both with `migrate.Through` and `migrate.Steps`.
+`migrate.Runner` is available when an application needs to embed migration execution in a separate administrative program. Each `migrate.Statement` holds a source name and native SQL text. Supply the complete migration set to `Runner.Apply` with a target built by `migrate.AllPending` or `migrate.ApplyThrough`. It orders migrations by ID, returns what it applied, and rejects duplicate IDs, missing recorded migrations, skipped migrations, and changed source checksums. `Runner.ApplyPlan` reports the same selection without running it, and `Runner.Revert` and `Runner.RevertPlan` mirror both with `migrate.Through` and `migrate.Steps`.
 
 The runner does not infer migrations from Go table descriptors, compare live schemas, or repair a database automatically. The PostgreSQL diff command compares checked-in desired-schema sources instead. `inspect` can still compare supported metadata outside the migration runner.

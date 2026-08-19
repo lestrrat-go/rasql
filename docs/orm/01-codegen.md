@@ -30,7 +30,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate -dsn "$DATABASE_U
 A `go:generate` directive in a hand-written file of the generated package puts
 the same run behind `go generate ./...`. The Taskboard sample does this from
 `internal/store/repository.go`, through a script that first applies its
-migrations to a throwaway database; see `sample/taskboard`.
+migrations to a throwaway database. See `sample/taskboard`.
 
 ## The settings file
 
@@ -60,7 +60,7 @@ resolved against the module root unless `root` names a different base.
 `dialect` is `postgresql` (or `postgres`), `mysql`, or `sqlite`.
 
 `tables.include` names the only tables to generate, and `tables.exclude` names
-tables to skip; a sweep otherwise covers every visible base table.
+tables to skip. A sweep otherwise covers every visible base table.
 `tables.history_table` names the migration history table to skip when it is
 not `rasql_schema_migrations`. `tables.row_names` overrides a generated row
 type: the generator derives `UsersRow` from a `users` table on its own, and
