@@ -20,9 +20,9 @@ func TestGoRunHelp(t *testing.T) {
 			expected: "Usage: rasqlgen <command> [flags]",
 		},
 		{
-			name:     "init",
-			args:     []string{"init", "-h"},
-			expected: "Usage of init:",
+			name:     "generate",
+			args:     []string{"generate", "-h"},
+			expected: "Usage of generate:",
 		},
 	}
 

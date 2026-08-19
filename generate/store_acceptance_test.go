@@ -20,7 +20,7 @@ import (
 // Query, instead of through WritePackage plus a hand-assembled query file.
 // A single "go test ./..." in the scratch module then compiles every
 // generated file as one package and drives a real SQLite round trip through
-// it, which is the shape a user's own gen/main.go produces.
+// it, which is the shape `rasql codegen generate` produces.
 func TestStoreWriteProducesAWorkingPackage(t *testing.T) {
 	moduleDir := t.TempDir()
 

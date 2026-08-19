@@ -25,7 +25,7 @@ import (
 // It closes that gap from the root module alone, with no subprocess and
 // without touching sample/taskboard itself: it builds a throwaway SQLite
 // database in t.TempDir() from sample/taskboard's own migrations, sweeps it
-// with catalog.FromDatabase exactly the way sample/taskboard/gen/main.go
+// with catalog.FromDatabase exactly the way `rasql codegen generate`
 // will, and checks the result against sample/taskboard/internal/store
 // through the same directory comparison requireGeneratedDirectoryMatches
 // performs for examples/store. Nothing here rewrites the directory being

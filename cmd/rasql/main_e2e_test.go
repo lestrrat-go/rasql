@@ -21,14 +21,14 @@ func TestGoRunSeparatesDiagnosticsFromOutput(t *testing.T) {
 		succeeds bool
 		expected string
 	}{
-		{name: "codegen refused flag", args: []string{"codegen", "init", "-unknown"}, expected: "flag provided but not defined: -unknown"},
+		{name: "codegen refused flag", args: []string{"codegen", "generate", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 		{name: "migrate refused flag", args: []string{"migrate", "plan", "-unknown"}, expected: "flag provided but not defined: -unknown"},
-		{name: "codegen help", args: []string{"codegen", "init", "-h"}, succeeds: true, expected: "Usage of rasql codegen init:"},
+		{name: "codegen help", args: []string{"codegen", "generate", "-h"}, succeeds: true, expected: "Usage of rasql codegen generate:"},
 		{name: "migrate help", args: []string{"migrate", "plan", "-h"}, succeeds: true, expected: "Usage of plan:"},
 		{name: "command help", args: []string{"-h"}, succeeds: true, expected: "Usage: rasql <context> <command> [flags]"},
 		// A "-h" a flag value consumed is not a help request, so the failure
 		// that follows it stays on standard error like any other failure.
-		{name: "codegen help token as flag value", args: []string{"codegen", "init", "-dialect", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
+		{name: "codegen help token as flag value", args: []string{"codegen", "generate", "-dialect", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 		{name: "migrate help token as flag value", args: []string{"migrate", "plan", "-dir", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

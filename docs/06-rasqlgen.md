@@ -2,50 +2,29 @@
 
 `rasql codegen` writes the typed store package from live database metadata. It
 reads that metadata with `catalog.FromDatabase` and writes deterministic Go
-source through `generate.Store`, either directly through `generate` or through
-a generator program the application owns, which `init` scaffolds. The
-standalone `rasqlgen` binary still accepts the same commands under its own
-name.
+source through `generate.Store`. The standalone `rasqlgen` binary accepts the
+same command under its own name.
 
-Use `generate` when flags describe the whole job, which is the common case.
-Use `init` when the project must state something no flag carries: a Go-side
-hint, or a static SQL template compiled into the package. Both routes call the
-same two packages and write the same files from the same database, so a
-project can move from one to the other without its generated output changing.
+There is one command, `generate`, and one settings file. A project needs no
+generator program of its own.
 
-## `generate`: run the command
+## Run the command
 
 Run it from the module root whenever the source database changes:
 
 ```sh
-go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate \
-  -dsn "$DATABASE_URL" \
-  -dialect postgresql \
-  -package store \
-  -output internal/store
+go get github.com/lestrrat-go/rasql/cmd/rasql@latest
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate -dsn "$DATABASE_URL"
 ```
 
 The command opens the database itself, so the project needs no driver import
-of its own for generation. `-output` is resolved against the module root above
-the working directory, and `-root` names a different base.
-
-`-include` and `-exclude` take comma-separated table names and narrow the
-sweep, which otherwise covers every visible base table. `-history-table` names
-the migration history table to skip when it is not `rasql_schema_migrations`.
-`-prune=false` refuses a run that would delete a generated file it no longer
-writes, naming the file instead of removing it. `-timeout` bounds the whole
-run, and defaults to 30 seconds.
+of its own for generation.
 
 Add `-check` to report whether the checked-in package is current instead of
 writing it, which is what a CI job runs:
 
 ```sh
-go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate \
-  -dsn "$DATABASE_URL" \
-  -dialect postgresql \
-  -package store \
-  -output internal/store \
-  -check
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate -dsn "$DATABASE_URL" -check
 ```
 
 A `go:generate` directive in a hand-written file of the generated package puts
@@ -53,47 +32,72 @@ the same run behind `go generate ./...`. The Taskboard sample does this from
 `internal/store/repository.go`, through a script that first applies its
 migrations to a throwaway database; see `sample/taskboard`.
 
-## `init`: own `gen/main.go`
+## The settings file
 
-Run `init` once from the module root:
+Everything that stays the same from run to run lives in `rasql.json` at the
+module root. Write it once and check it in:
 
-```sh
-go get github.com/lestrrat-go/rasql/cmd/rasql@latest
-go run github.com/lestrrat-go/rasql/cmd/rasql codegen init \
-  -dialect postgresql \
-  -package store \
-  -output internal/store
-go get github.com/jackc/pgx/v5/stdlib
+```json
+{
+  "package": "store",
+  "output": "internal/store",
+  "dialect": "sqlite",
+  "prune": true,
+  "tables": {
+    "exclude": ["audit_log"],
+    "history_table": "schema_migrations",
+    "row_names": {"users": "User"}
+  },
+  "queries": [
+    {"input": "queries/user_by_email.sql", "function": "UserByEmail"}
+  ]
+}
 ```
 
-`init` writes only `gen/main.go`. It does not open a database or create the
-generated output directory. Check the scaffold into the application and edit
-it when the project needs different generation behavior.
+`package` names the generated package and `output` names its directory,
+resolved against the module root unless `root` names a different base.
+`dialect` is `postgresql` (or `postgres`), `mysql`, or `sqlite`.
 
-The scaffold owns the database driver, database URL policy, table selection,
-Go-side hints, static query list, pruning policy, and drift check. It starts
-with every visible base table except the migration history table.
+`tables.include` names the only tables to generate, and `tables.exclude` names
+tables to skip; a sweep otherwise covers every visible base table.
+`tables.history_table` names the migration history table to skip when it is
+not `rasql_schema_migrations`. `tables.row_names` overrides a generated row
+type: the generator derives `UsersRow` from a `users` table on its own, and
+`"users": "User"` makes it `User` instead. State one when the derived name
+reads badly, and when it collides with another table's generated names, which
+refuses the run.
 
-`catalog.Options` supports `Include`, `Exclude`, and `HistoryTable` when the
-store should use a narrower or differently named selection. `schema.TableHint`
-supplies Go-only facts such as a row type name. `generate.Store.Queries`
-compiles static SQL templates into generated functions beside the table code.
+`queries` compiles static SQL templates into generated functions beside the
+table code. Each entry names its `input` template, resolved against the same
+root, and the `function` to generate. It may also name the `output` file;
+leaving that out derives it from the input, so `queries/user_by_email.sql`
+becomes `user_by_email_gen.go`.
 
-## Generate and check through the owned program
+`prune` lets a run delete a generated file it no longer writes, such as the
+per-table file of a dropped table. Setting it to `false` refuses the run and
+names the file instead.
 
-The scaffold includes a `go:generate` directive. Run it whenever the source
-database changes:
+A key the file does not define is refused rather than ignored, so a
+misspelling is a message rather than a setting that silently does nothing.
 
-```sh
-DATABASE_URL="$DATABASE_URL" go generate ./...
-DATABASE_URL="$DATABASE_URL" go run ./gen -check
-```
+## What stays on the command line
 
-The normal run calls `store.Write()`. The check run calls `store.Check()` and
-reports stale generated files without changing them. `codegen generate -check`
-reports the same thing for a project that owns no program. `generate.Store` keeps
-generated files under one plan, so table code, descriptors, relationships, and
-static query functions are updated together.
+`-dsn` is never read from the settings file, because that file is checked in
+and a connection string carries a credential. Keep it in an environment
+variable or a secret store.
+
+`-check` stays a flag too, since it selects what one run does rather than what
+the project is, and so does `-timeout`, which bounds the whole run and
+defaults to 30 seconds.
+
+`-config` reads a settings file somewhere other than `rasql.json` at the
+module root. A project with no settings file at all is fine, as long as the
+flags say everything.
+
+Every setting in the file has a matching flag: `-package`, `-output`, `-root`,
+`-dialect`, `-include`, `-exclude`, `-history-table`, and `-prune`. A flag you
+type wins over the file, so a one-off run needs no edit to it. The two list
+flags take comma-separated names.
 
 ## Generated store
 
@@ -301,8 +305,8 @@ accessor would spell the fixed function name `schema_gen_test.go` declares.
 
 ## Static query functions
 
-Add a `generate.Query` entry to the scaffold's `Store.Queries` list with the
-template path, function name, output filename, and selected dialect.
+Add an entry to the settings file's `queries` list with the template path and
+the function name.
 
 The template contains SQL and named bind actions:
 

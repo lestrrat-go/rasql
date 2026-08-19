@@ -83,7 +83,7 @@ type command struct {
 
 func (c command) run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: %s <generate|init> [flags]", c.program)
+		return fmt.Errorf("usage: %s <generate> [flags]", c.program)
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -91,10 +91,8 @@ func (c command) run(args []string) error {
 		return flag.ErrHelp
 	case "generate":
 		return c.runGenerate(args[1:])
-	case "init":
-		return c.runInit(args[1:])
 	default:
-		return fmt.Errorf("unknown %s command %q; expected generate or init", c.program, args[0])
+		return fmt.Errorf("unknown %s command %q; expected generate", c.program, args[0])
 	}
 }
 
@@ -103,7 +101,10 @@ func (c command) printUsage() {
 	_, _ = fmt.Fprintln(c.output)
 	_, _ = fmt.Fprintln(c.output, "Commands:")
 	_, _ = fmt.Fprintln(c.output, "  generate  Generate the store package from a live database")
-	_, _ = fmt.Fprintln(c.output, "  init      Scaffold the generator program, gen/main.go")
+	_, _ = fmt.Fprintln(c.output)
+	_, _ = fmt.Fprintln(c.output, "Settings live in rasql.json at the module root: the package name, the output")
+	_, _ = fmt.Fprintln(c.output, "directory, the dialect, the table selection, row-type names, and static queries.")
+	_, _ = fmt.Fprintln(c.output, "A flag overrides what that file says. The DSN is never read from it.")
 	_, _ = fmt.Fprintln(c.output)
 	_, _ = fmt.Fprintf(c.output, "Run '%s <command> -h' for command flags.\n", c.program)
 }

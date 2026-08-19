@@ -33,7 +33,7 @@ The migration package applies ordered native SQL migrations for PostgreSQL, MySQ
 | `migrate/diff/postgresql` | Compares supported PostgreSQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-pg/query` |
 | `migrate/diff/sqlite` | Compares supported SQLite desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-sqlite/query` |
 | `cli/rasqlmigrate` and `cmd/rasqlmigrate` | Run checked-in SQL migration directories and generate reviewed dialect-specific migrations without application Go code. | `migrate`, `migrate/diff`, supported database drivers |
-| `template`, `catalog`, `generate`, `cli/rasqlgen`, and `cmd/rasqlgen` | Compile static query templates and live catalog metadata into Go source, through a command or a project-owned generator. | public packages, and supported database drivers in the CLI |
+| `template`, `catalog`, `generate`, `cli/rasqlgen`, and `cmd/rasqlgen` | Compile static query templates and live catalog metadata into Go source through one command. | public packages, and supported database drivers in the CLI |
 | `cli/rasql` and `cmd/rasql` | Offer both contexts under one command, as `rasql codegen` and `rasql migrate`. | `cli/rasqlgen`, `cli/rasqlmigrate` |
 
 The dependency flow is deliberately one-way:
@@ -78,11 +78,11 @@ Inspectors use a small adapter for each database metadata surface. They normaliz
 
 ## Code generation workflow
 
-`rasql codegen generate` opens the database, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`. Its flags carry the package name, the output directory, the dialect, the table selection, and the pruning policy, and `-check` reports drift without writing. A project whose generation these flags describe needs no Go program of its own, and a `go:generate` directive in a hand-written file of the generated package puts the run behind `go generate ./...`.
+`rasql codegen generate` opens the database, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`. A checked-in `rasql.json` at the module root carries the package name, the output directory, the dialect, the table selection, the row-type names, the static queries, and the pruning policy, and every one of those has a matching flag that overrides it for one run. A `go:generate` directive in a hand-written file of the generated package puts the run behind `go generate ./...`.
 
-`rasql codegen init` creates `gen/main.go` for a project that must state what no flag carries: `schema.TableHint` values, and `generate.Query` entries compiling static SQL templates into the package. That program is checked into the application repository, where the compiler checks those values and `git diff` shows them. It calls the same two packages the command calls, so both routes write the same files from the same database.
+Two inputs are deliberately kept off that file. The DSN stays on the command line or in the environment, because the file is checked in and a connection string carries a credential. `-check`, which reports drift without writing, stays a flag because it selects what one run does rather than what the project is.
 
-The generator CLI exposes `generate` and `init`, and nothing else. Both are thin: every decision about what the generated package contains belongs to `catalog` and `generate`, so a command and an owned program can never generate differently.
+The generator CLI exposes `generate` and nothing else, and a project owns no generator program. The command is thin: every decision about what the generated package contains belongs to `catalog` and `generate`.
 
 ## Errors and observability
 
