@@ -182,8 +182,6 @@ SELECT id, name FROM projects ORDER BY id;"
 ```
 
 ```text
-INSERT 0 2
-INSERT 0 2
  id |     name
 ----+--------------
   1 | Ada Lovelace

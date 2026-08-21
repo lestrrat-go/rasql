@@ -87,10 +87,6 @@ The image creates a `rasql` database of its own on first start. Leave it alone a
 podman exec rasql-postgres psql -U rasql -d postgres -c 'CREATE DATABASE taskboard_walkthrough;'
 ```
 
-```text
-CREATE DATABASE
-```
-
 Export its connection string as `TASKBOARD_DSN`. That is the name every later chapter reads it under, and chapter 3's first `rasql` call already expects it:
 
 ```sh
@@ -144,11 +140,6 @@ All three tables want a machine-assigned integer key. PostgreSQL offers two spel
 ```sql
 CREATE TABLE probe_serial (id serial PRIMARY KEY, name text NOT NULL);
 CREATE TABLE probe_identity (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text NOT NULL);
-```
-
-```text
-CREATE TABLE
-CREATE TABLE
 ```
 
 They look almost the same from `\d`:
@@ -210,10 +201,6 @@ The difference that decides it is what happens when application code supplies it
 INSERT INTO probe_serial (id, name) VALUES (100, 'explicit');
 ```
 
-```text
-INSERT 0 1
-```
-
 An identity column declared `generated always` refuses it:
 
 ```sql
@@ -239,7 +226,6 @@ SELECT last_value FROM probe_serial_id_seq;
   1
 (1 row)
 
-INSERT 0 1
  last_value
 ------------
           1
@@ -259,16 +245,11 @@ ROLLBACK;
 ```
 
 ```text
-BEGIN
-DROP TABLE
-CREATE TABLE
-INSERT 0 1
  id
 ----
   1
 (1 row)
 
-INSERT 0 1
 ERROR:  duplicate key value violates unique constraint "probe_serial_pkey"
 DETAIL:  Key (id)=(2) already exists.
 ```
@@ -388,15 +369,10 @@ ROLLBACK;
 ```
 
 ```text
-BEGIN
-CREATE TABLE
-INSERT 0 1
  text_bytes | varchar_bytes
 ------------+---------------
          14 |            14
 (1 row)
-
-ROLLBACK
 ```
 
 What the limit buys is a rejected insert when a title runs long. A limit the application does not also enforce in its own form handling turns a typo into a 500, and Taskboard's page has no length rule of its own to enforce. Taskboard uses `text`.
@@ -628,9 +604,6 @@ ROLLBACK;
 ```
 
 ```text
-BEGIN
-DROP TABLE
-DELETE 1
  id |       title        | assignee_id
 ----+--------------------+-------------
   1 | Write the copy     |
@@ -638,13 +611,10 @@ DELETE 1
   3 | Reconcile invoices |           2
 (3 rows)
 
-DELETE 1
  id |       title        | project_id
 ----+--------------------+------------
   3 | Reconcile invoices |          2
 (1 row)
-
-ROLLBACK
 ```
 
 Deleting Ada emptied her tasks' `assignee_id` and left the rows. Deleting the Website project removed both of its tasks. Both clauses do exactly what they say.
@@ -664,9 +634,6 @@ ROLLBACK;
 ```
 
 ```text
-BEGIN
-CREATE TABLE
-INSERT 0 1
 ERROR:  null value in column "assignee_id" of relation "probe_setnull_notnull" violates not-null constraint
 DETAIL:  Failing row contains (1, null, Write the copy).
 CONTEXT:  SQL statement "UPDATE ONLY "public"."probe_setnull_notnull" SET "assignee_id" = NULL WHERE $1 OPERATOR(pg_catalog.=) "assignee_id""
@@ -872,13 +839,6 @@ Run it:
 
 ```sh
 ./scripts/psql.sh -f - < db/shape.sql
-```
-
-```text
-CREATE TABLE
-CREATE TABLE
-CREATE TABLE
-CREATE INDEX
 ```
 
 Read the result back:

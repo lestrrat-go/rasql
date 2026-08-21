@@ -143,10 +143,6 @@ A captured migration is only worth anything if applying it produces the schema i
 podman exec rasql-postgres psql -U rasql -d postgres -c 'CREATE DATABASE taskboard_verify;'
 ```
 
-```text
-CREATE DATABASE
-```
-
 Apply the migration to it:
 
 ```sh
