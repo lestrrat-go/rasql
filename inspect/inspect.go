@@ -2358,9 +2358,11 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		var generationExpression sql.NullString
 		var postgreSQLIsGenerated string
 		var postgreSQLGeneratedKind sql.NullString
+		var postgreSQLIsIdentity string
+		var postgreSQLIdentityGeneration sql.NullString
 		var mysqlExtra string
 		if postgreSQL {
-			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale, &characterMaximumLength, &postgreSQLIsGenerated, &generationExpression, &postgreSQLGeneratedKind); err != nil {
+			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale, &characterMaximumLength, &postgreSQLIsGenerated, &generationExpression, &postgreSQLGeneratedKind, &postgreSQLIsIdentity, &postgreSQLIdentityGeneration); err != nil {
 				return nil, fmt.Errorf("inspect: scan column: %w", err)
 			}
 		} else {
@@ -2404,12 +2406,24 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 				column.GeneratedExpression = generationExpression.String
 				column.GeneratedStorage = storage
 			}
-		} else if storage, generated := mysqlGeneratedColumnStorage(mysqlExtra); generated {
-			if !generationExpression.Valid || generationExpression.String == "" {
-				return nil, fmt.Errorf("inspect: column %q: generated column has no generation_expression to record", name)
+			if postgreSQLIsIdentity == "YES" {
+				identity, err := postgreSQLIdentity(postgreSQLIdentityGeneration)
+				if err != nil {
+					return nil, fmt.Errorf("inspect: column %q: %w", name, err)
+				}
+				column.Identity = identity
 			}
-			column.GeneratedExpression = generationExpression.String
-			column.GeneratedStorage = storage
+		} else {
+			if storage, generated := mysqlGeneratedColumnStorage(mysqlExtra); generated {
+				if !generationExpression.Valid || generationExpression.String == "" {
+					return nil, fmt.Errorf("inspect: column %q: generated column has no generation_expression to record", name)
+				}
+				column.GeneratedExpression = generationExpression.String
+				column.GeneratedStorage = storage
+			}
+			if mysqlAutoIncrement(mysqlExtra) {
+				column.Identity = schema.IdentityByDefault
+			}
 		}
 		columns = append(columns, column)
 	}
@@ -2438,6 +2452,35 @@ func postgreSQLGeneratedStorage(kind sql.NullString) (schema.GeneratedStorage, e
 	default:
 		return "", fmt.Errorf("unsupported postgresql generated column storage kind %q", kind.String)
 	}
+}
+
+// postgreSQLIdentity maps information_schema.columns.identity_generation,
+// selected alongside is_identity in the PostgreSQL columns query, to a
+// schema.IdentityGeneration. PostgreSQL spells the two generations "ALWAYS"
+// and "BY DEFAULT" for a column already reported is_identity = 'YES'; any
+// other identity_generation value on such a column is an error rather than
+// a guess, the same shape postgreSQLGeneratedStorage already uses.
+func postgreSQLIdentity(generation sql.NullString) (schema.IdentityGeneration, error) {
+	if !generation.Valid {
+		return "", fmt.Errorf("identity column has no identity_generation to record")
+	}
+	switch generation.String {
+	case "ALWAYS":
+		return schema.IdentityAlways, nil
+	case "BY DEFAULT":
+		return schema.IdentityByDefault, nil
+	default:
+		return "", fmt.Errorf("unsupported postgresql identity generation %q", generation.String)
+	}
+}
+
+// mysqlAutoIncrement reports whether extra, MySQL's
+// information_schema.columns.EXTRA value, names an AUTO_INCREMENT column.
+// MySQL reports it lowercase, "auto_increment", unlike the uppercase
+// "STORED GENERATED" / "VIRTUAL GENERATED" mysqlGeneratedColumnStorage
+// matches on the same column.
+func mysqlAutoIncrement(extra string) bool {
+	return strings.EqualFold(extra, "auto_increment")
 }
 
 // mysqlGeneratedColumnStorage reports whether extra, MySQL's
@@ -3135,7 +3178,7 @@ func postgreSQLInformationQueries(version int) informationQueries {
 	temporal := postgreSQLCatalogBoolean(version, postgreSQL18Version, "constraint_data.conperiod")
 
 	return informationQueries{
-		columns:              "SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema.columns AS column_data JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.nspname = column_data.table_schema JOIN pg_catalog.pg_class AS table_data ON table_data.relnamespace = table_namespace.oid AND table_data.relname = column_data.table_name LEFT JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = table_data.oid AND attribute.attname = column_data.column_name WHERE column_data.table_schema = current_schema() AND column_data.table_name = $1 ORDER BY column_data.ordinal_position",
+		columns:              "SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema.columns AS column_data JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.nspname = column_data.table_schema JOIN pg_catalog.pg_class AS table_data ON table_data.relnamespace = table_namespace.oid AND table_data.relname = column_data.table_name LEFT JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = table_data.oid AND attribute.attname = column_data.column_name WHERE column_data.table_schema = current_schema() AND column_data.table_name = $1 ORDER BY column_data.ordinal_position",
 		primaryKey:           "SELECT attribute.attname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'p' ORDER BY key_column.ordinal_position",
 		uniqueConstraints:    "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", (SELECT string_agg(pg_catalog.pg_get_indexdef(index_metadata.indexrelid, included_column.ordinal_position::int, true), ',' ORDER BY included_column.ordinal_position) FROM generate_series(index_metadata.indnkeyatts + 1, index_metadata.indnatts) AS included_column(ordinal_position)), " + temporal + ", array_to_string(index_data.reloptions, ','), index_tablespace.spcname, index_metadata.indisreplident, CASE WHEN (index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation) THEN collation_metadata.collname ELSE NULL END FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid LEFT JOIN pg_catalog.pg_tablespace AS index_tablespace ON index_tablespace.oid = index_data.reltablespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position LEFT JOIN pg_catalog.pg_collation AS collation_metadata ON collation_metadata.oid = index_collation.collation_oid WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
 		checks:               "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",

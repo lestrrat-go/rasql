@@ -74,15 +74,17 @@ func TestLiveSourcesRejectsNonDefaultIndexMethod(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
-// TestLiveSourcesRejectsPartialIndex proves that an inspected table
-// carrying a partial index's predicate does not reach diff-live's generated
-// desired-schema sources as a silently downgraded unconditional index:
-// LiveSources renders through render.CreateIndexes, which refuses the
-// predicate, so the error surfaces here rather than a Plan going on to emit
-// a stricter index than the database actually has.
-func TestLiveSourcesRejectsPartialIndex(t *testing.T) {
+// TestDiffLiveMatchesPartialIndex proves that an inspected table carrying
+// a partial index's predicate now reaches diff-live's generated
+// desired-schema sources as the same partial index, rather than a
+// downgraded unconditional one: LiveSources renders through
+// render.CreateIndexes, which now renders a Predicate verbatim on
+// PostgreSQL, so a baseline stating the identical WHERE clause diffs to no
+// statements at all.
+func TestDiffLiveMatchesPartialIndex(t *testing.T) {
 	analyzer := postgresql.New()
-	_, err := analyzer.LiveSources(schema.TableDef{
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, status text NOT NULL); CREATE INDEX members_active_idx ON members (status) WHERE status = 'active';")
+	liveSources, err := analyzer.LiveSources(schema.TableDef{
 		Name:       "members",
 		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "status", Type: schema.TextType{}}},
 		PrimaryKey: []string{"id"},
@@ -92,8 +94,12 @@ func TestLiveSourcesRejectsPartialIndex(t *testing.T) {
 			Predicate: "status = 'active'",
 		}},
 	})
-	require.ErrorContains(t, err, `"members_active_idx"`)
-	require.ErrorContains(t, err, "can describe but not yet render")
+	require.NoError(t, err)
+	live := parseSources(t, analyzer, liveSources)
+
+	plan, err := analyzer.Diff(baseline, live)
+	require.NoError(t, err)
+	require.Empty(t, plan.Statements)
 }
 
 // TestLiveSourcesRejectsExpressionIndex proves that an inspected table

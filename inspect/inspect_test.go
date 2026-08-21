@@ -37,11 +37,11 @@ func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("email", "character varying", "YES", driver.Value(nil), nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("email", "character varying", "YES", driver.Value(nil), nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -87,13 +87,13 @@ func TestPostgreSQLInspectorRecordsGeneratedColumns(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("measurements").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("celsius", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("fahrenheit_stored", "bigint", "NO", nil, nil, nil, nil, "ALWAYS", "celsius * 9 / 5 + 32", "s").
-			AddRow("fahrenheit_virtual", "bigint", "NO", nil, nil, nil, nil, "ALWAYS", "celsius * 9 / 5 + 32", "v"))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("celsius", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("fahrenheit_stored", "bigint", "NO", nil, nil, nil, nil, "ALWAYS", "celsius * 9 / 5 + 32", "s", "NO", nil).
+			AddRow("fahrenheit_virtual", "bigint", "NO", nil, nil, nil, nil, "ALWAYS", "celsius * 9 / 5 + 32", "v", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "measurements", 4)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("measurements").
@@ -151,10 +151,10 @@ func TestPostgreSQLInspectorNormalizesTextWidth(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			inspector, mock := newPostgreSQLInspector(t)
 			expectPostgreSQLServerVersion(mock, "180000")
-			mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+			mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 				WithArgs("events").
-				WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-					AddRow("value", test.dataType, "NO", nil, nil, nil, test.characterMaximumLength, "NEVER", nil, ""))
+				WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+					AddRow("value", test.dataType, "NO", nil, nil, nil, test.characterMaximumLength, "NEVER", nil, "", "NO", nil))
 			expectPostgreSQLCatalogColumnCount(mock, "events", 1)
 			mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 				WithArgs("events").
@@ -190,11 +190,11 @@ func TestPostgreSQLInspectorRoundTripsTextWidthWithoutSpuriousDiff(t *testing.T)
 
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("email", "character varying", "NO", nil, nil, nil, int64(255), "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("email", "character varying", "NO", nil, nil, nil, int64(255), "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -239,11 +239,11 @@ func TestPostgreSQLInspectorRoundTripsCharacterWidthWithoutSpuriousDiff(t *testi
 
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("code", "character", "NO", nil, nil, nil, int64(10), "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("code", "character", "NO", nil, nil, nil, int64(10), "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -279,10 +279,10 @@ func TestPostgreSQLInspectorNormalizesNumericColumn(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("payments").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("amount", "numeric", "NO", nil, int64(19), int64(4), nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("amount", "numeric", "NO", nil, int64(19), int64(4), nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "payments", 1)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("payments").
@@ -308,10 +308,10 @@ func TestPostgreSQLInspectorRejectsUnconstrainedNumericColumn(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("payments").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("amount", "numeric", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("amount", "numeric", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 
 	_, err = inspector.Table(t.Context(), "payments")
 	require.ErrorContains(t, err, "unconstrained NUMERIC has no precision to record")
@@ -334,10 +334,10 @@ func TestPostgreSQLInspectorRejectsDecimalColumnWithoutScale(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("payments").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("amount", "numeric", "NO", nil, int64(10), nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("amount", "numeric", "NO", nil, int64(10), nil, nil, "NEVER", nil, "", "NO", nil))
 
 	_, err = inspector.Table(t.Context(), "payments")
 	require.ErrorContains(t, err, "reports no scale to record")
@@ -356,13 +356,13 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("tenant_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("tenant_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 4)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -545,11 +545,11 @@ func TestPostgreSQLInspectorRecordsExpressionIndex(t *testing.T) {
 func TestPostgreSQLInspectorRecordsIndexValidityStorageAndPlacement(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -595,11 +595,11 @@ func TestPostgreSQLInspectorRecordsIndexValidityStorageAndPlacement(t *testing.T
 func TestPostgreSQLInspectorRecordsIndexNullsFacts(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 2)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -640,13 +640,13 @@ func TestPostgreSQLInspectorRecordsIndexNullsFacts(t *testing.T) {
 func TestPostgreSQLInspectorRecordsIndexKeyDetails(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("bio", "text", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("name", "text", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("status", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("bio", "text", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("name", "text", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("status", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 4)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -711,14 +711,14 @@ func TestPostgreSQLInspectorUsesPostgreSQL14CatalogQueries(t *testing.T) {
 func TestPostgreSQLInspectorRecordsUniqueConstraintBackingIndexFacts(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("status", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("slug", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("code", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("status", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("slug", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("code", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 5)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -760,13 +760,13 @@ func TestPostgreSQLInspectorRecordsUniqueConstraintBackingIndexFacts(t *testing.
 func TestPostgreSQLInspectorRecordsUniqueConstraintFacts(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("status", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("slug", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("email", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("status", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("slug", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 4)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -831,12 +831,12 @@ func TestPostgreSQLInspectorRecordsCheckFacts(t *testing.T) {
 func TestPostgreSQLInspectorRecordsForeignKeyTemporalAndDeleteSetColumns(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("period_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("period_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 3)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -884,13 +884,13 @@ func TestPostgreSQLInspectorRejectsUnsupportedForeignKeyMatchType(t *testing.T) 
 func TestPostgreSQLInspectorRecordsForeignKeyFacts(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("owner_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("group_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("owner_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("group_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 4)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -926,13 +926,13 @@ func TestPostgreSQLInspectorRecordsForeignKeyFacts(t *testing.T) {
 func TestPostgreSQLInspectorRecordsExclusionConstraintFacts(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("reservations").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("room", "text", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("party_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("active", "boolean", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("room", "text", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("party_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("active", "boolean", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "reservations", 4)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("reservations").
@@ -972,12 +972,12 @@ func TestPostgreSQLInspectorRecordsExclusionConstraintFacts(t *testing.T) {
 func TestPostgreSQLInspectorRecordsForeignKeyValidationFacts(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("users").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("owner_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("owner_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "users", 3)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("users").
@@ -1014,10 +1014,10 @@ func newPostgreSQLInspector(t *testing.T) (inspect.Inspector, sqlmock.Sqlmock) {
 }
 
 func expectPostgreSQLColumnsAndPrimaryKey(mock sqlmock.Sqlmock, tableName string) {
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs(tableName).
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, tableName, 1)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs(tableName).
@@ -3725,9 +3725,9 @@ func TestPostgreSQLInspectorReportsTableNotFoundWhenAbsent(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}))
 	expectPostgreSQLCatalogColumnCountAbsent(mock, "widgets")
 
 	_, err = inspector.Table(t.Context(), "widgets")
@@ -3758,9 +3758,9 @@ func TestPostgreSQLInspectorReportsZeroColumnTableWhenPresent(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 0)
 
 	_, err = inspector.Table(t.Context(), "widgets")
@@ -3793,9 +3793,9 @@ func TestPostgreSQLInspectorReportsInvisibleColumnsWhenPresent(t *testing.T) {
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 3)
 
 	_, err = inspector.Table(t.Context(), "widgets")
@@ -3831,11 +3831,11 @@ func TestPostgreSQLInspectorReportsTruncatedColumnsWhenPartiallyVisible(t *testi
 	inspector, err := inspect.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("name", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("name", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 3)
 
 	table, err := inspector.Table(t.Context(), "widgets")
@@ -3856,11 +3856,11 @@ func TestPostgreSQLInspectorReportsTruncatedColumnsWhenPartiallyVisible(t *testi
 func TestPostgreSQLInspectorReturnsCompleteDescriptorWhenCountsAgree(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("name", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("name", "character varying", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 2)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint").
 		WithArgs("widgets").
@@ -3887,10 +3887,10 @@ func TestPostgreSQLInspectorReturnsCompleteDescriptorWhenCountsAgree(t *testing.
 func TestPostgreSQLInspectorReadsPrimaryKeyFromCatalogUnderReadOnlyGrant(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("widgets").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "widgets", 1)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("widgets").
@@ -3910,12 +3910,12 @@ func TestPostgreSQLInspectorReadsPrimaryKeyFromCatalogUnderReadOnlyGrant(t *test
 func TestPostgreSQLInspectorPreservesPrimaryKeyColumnOrder(t *testing.T) {
 	inspector, mock := newPostgreSQLInspector(t)
 	expectPostgreSQLServerVersion(mock, "180000")
-	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated FROM information_schema\\.columns").
+	mock.ExpectQuery("SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema\\.columns").
 		WithArgs("memberships").
-		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated"}).
-			AddRow("tenant_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "").
-			AddRow("user_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, ""))
+		WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable", "column_default", "numeric_precision", "numeric_scale", "character_maximum_length", "is_generated", "generation_expression", "attgenerated", "is_identity", "identity_generation"}).
+			AddRow("tenant_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("account_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil).
+			AddRow("user_id", "bigint", "NO", nil, nil, nil, nil, "NEVER", nil, "", "NO", nil))
 	expectPostgreSQLCatalogColumnCount(mock, "memberships", 3)
 	mock.ExpectQuery("SELECT attribute\\.attname FROM pg_catalog\\.pg_constraint.*constraint_data\\.contype = 'p'").
 		WithArgs("memberships").

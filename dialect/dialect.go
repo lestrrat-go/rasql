@@ -29,6 +29,11 @@ const (
 	// CapabilityQualifiedIndexName reports that CREATE INDEX qualifies the
 	// index name and leaves the indexed table bare, which is SQLite's form.
 	CapabilityQualifiedIndexName
+	// CapabilityPartialIndex reports that CREATE INDEX accepts a WHERE
+	// clause, restricting the index to rows matching a predicate.
+	// PostgreSQL and SQLite both have this; MySQL rejects a WHERE clause
+	// on CREATE INDEX with a syntax error.
+	CapabilityPartialIndex
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -66,7 +71,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex,
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
@@ -130,7 +135,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityQualifiedIndexName,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityQualifiedIndexName | CapabilityPartialIndex,
 		decimalName:  "TEXT",
 		// varcharText is left false: SQLite already drops schema.DecimalType's
 		// Precision and Scale for the same reason (see decimalTypeName below),

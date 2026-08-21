@@ -42,19 +42,24 @@ func (e *UnsupportedIndexMethodError) Unwrap() error {
 var ErrUnsupportedPartialIndex = errors.New("render: unsupported partial index")
 
 // UnsupportedPartialIndexError reports that an IndexDef names a
-// [schema.IndexDef.Predicate], making it a partial index. inspect can
-// describe such an index, and TableDef.Validate accepts it, but this
-// package does not yet know how to build DDL for a WHERE clause on an
-// index.
+// [schema.IndexDef.Predicate], making it a partial index, on a dialect
+// that has no [dialect.CapabilityPartialIndex]: MySQL, and any other
+// dialect that does not grant the capability. inspect can describe such an
+// index on any dialect, and TableDef.Validate accepts it, but this
+// package cannot express a WHERE clause on an index for a dialect lacking
+// the capability.
 type UnsupportedPartialIndexError struct {
 	// Index is the name of the index that named a predicate.
 	Index string
 	// Predicate is the WHERE-clause expression text the index named.
 	Predicate string
+	// Dialect is the name of the dialect that cannot express a partial
+	// index.
+	Dialect string
 }
 
 func (e *UnsupportedPartialIndexError) Error() string {
-	return fmt.Sprintf("index %q has predicate %q, which rasql can describe but not yet render", e.Index, e.Predicate)
+	return fmt.Sprintf("index %q has predicate %q, which the %s dialect cannot express: it has no partial index feature", e.Index, e.Predicate, e.Dialect)
 }
 
 // Unwrap exposes ErrUnsupportedPartialIndex so
@@ -980,6 +985,45 @@ func (e *UnsupportedGeneratedColumnError) Unwrap() error {
 	return ErrUnsupportedGeneratedColumn
 }
 
+// ErrUnsupportedIdentityColumn is the sentinel wrapped by every
+// [UnsupportedIdentityColumnError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedIdentityColumn = errors.New("render: unsupported identity column")
+
+// UnsupportedIdentityColumnError reports that a ColumnDef names a
+// [schema.ColumnDef.Identity] this package cannot render for the given
+// dialect. inspect can describe such a column, and TableDef.Validate
+// accepts it, but Reason distinguishes three different refusals that would
+// otherwise need three near-identical error types: a dialect with no
+// identity feature at all (every dialect but PostgreSQL and MySQL), a
+// dialect whose identity feature has no form that rejects an explicit
+// value (MySQL's AUTO_INCREMENT, which cannot render
+// [schema.IdentityAlways]), and MySQL's own requirement that an identity
+// column be the leading column of some key, and that at most one column
+// of a table be an identity column.
+type UnsupportedIdentityColumnError struct {
+	// Column is the name of the column that named an identity generation.
+	Column string
+	// Identity is the identity generation the column named.
+	Identity schema.IdentityGeneration
+	// Dialect is the name of the dialect that cannot render this column.
+	Dialect string
+	// Reason states, in one clause, why this dialect cannot render this
+	// column's identity generation.
+	Reason string
+}
+
+func (e *UnsupportedIdentityColumnError) Error() string {
+	return fmt.Sprintf("column %q is %s IDENTITY, which the %s dialect cannot render: %s", e.Column, e.Identity, e.Dialect, e.Reason)
+}
+
+// Unwrap exposes ErrUnsupportedIdentityColumn so
+// errors.Is(err, ErrUnsupportedIdentityColumn) works alongside errors.As
+// against *UnsupportedIdentityColumnError.
+func (e *UnsupportedIdentityColumnError) Unwrap() error {
+	return ErrUnsupportedIdentityColumn
+}
+
 // ErrUnsupportedIntegerDisplayWidth is the sentinel wrapped by every
 // [UnsupportedIntegerDisplayWidthError], so a caller that only needs a
 // presence check can use errors.Is instead of errors.As.
@@ -1151,6 +1195,11 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 	if table.WithoutRowID {
 		return &UnsupportedTableWithoutRowIDError{Table: table.Name}
 	}
+	if r.dialect.Name() == "mysql" {
+		if err := r.checkMySQLIdentityKeyness(table); err != nil {
+			return err
+		}
+	}
 	name, err := r.quoteQualified(table.Schema, table.Name)
 	if err != nil {
 		return err
@@ -1266,12 +1315,58 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 	return nil
 }
 
+// checkMySQLIdentityKeyness enforces, before any CREATE TABLE definition is
+// built, the two rules MySQL error 1075 ("there can be only one auto
+// column and it must be defined as a key") states about an AUTO_INCREMENT
+// column: at most one column of a table may be an identity column, and
+// that column must be the leading column of table.PrimaryKey or of some
+// table.UniqueConstraints entry. Checking this ahead of time, rather than
+// letting MySQL reject the resulting CREATE TABLE, matters because a
+// CREATE INDEX statement issued afterwards cannot rescue it: the failure
+// happens inside CREATE TABLE itself.
+func (r *renderer) checkMySQLIdentityKeyness(table schema.TableDef) error {
+	var identityColumns []schema.ColumnDef
+	for _, column := range table.Columns {
+		if column.Identity != "" {
+			identityColumns = append(identityColumns, column)
+		}
+	}
+	if len(identityColumns) == 0 {
+		return nil
+	}
+	if len(identityColumns) > 1 {
+		second := identityColumns[1]
+		return &UnsupportedIdentityColumnError{Column: second.Name, Identity: second.Identity, Dialect: r.dialect.Name(), Reason: "MySQL allows only one auto-increment column per table"}
+	}
+	identityColumn := identityColumns[0]
+	if mysqlIdentityColumnLeadsAKey(table, identityColumn.Name) {
+		return nil
+	}
+	return &UnsupportedIdentityColumnError{Column: identityColumn.Name, Identity: identityColumn.Identity, Dialect: r.dialect.Name(), Reason: "MySQL requires an auto-increment column to be the leading column of a key"}
+}
+
+// mysqlIdentityColumnLeadsAKey reports whether name is the first column of
+// table.PrimaryKey or the first column of some table.UniqueConstraints
+// entry, the shape MySQL's own "must be defined as a key" rule for an
+// AUTO_INCREMENT column requires.
+func mysqlIdentityColumnLeadsAKey(table schema.TableDef, name string) bool {
+	if len(table.PrimaryKey) > 0 && table.PrimaryKey[0] == name {
+		return true
+	}
+	for _, constraint := range table.UniqueConstraints {
+		if len(constraint.Columns) > 0 && constraint.Columns[0] == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef) error {
 	if index.Method != "" {
 		return &UnsupportedIndexMethodError{Index: index.Name, Method: index.Method}
 	}
-	if index.Predicate != "" {
-		return &UnsupportedPartialIndexError{Index: index.Name, Predicate: index.Predicate}
+	if index.Predicate != "" && !r.dialect.Supports(dialect.CapabilityPartialIndex) {
+		return &UnsupportedPartialIndexError{Index: index.Name, Predicate: index.Predicate, Dialect: r.dialect.Name()}
 	}
 	if len(index.Expressions) > 0 {
 		return &UnsupportedExpressionIndexError{Index: index.Name, Expressions: index.Expressions}
@@ -1322,6 +1417,10 @@ func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef
 	r.builder.WriteString(" (")
 	r.builder.WriteString(strings.Join(columns, ", "))
 	r.builder.WriteByte(')')
+	if index.Predicate != "" {
+		r.builder.WriteString(" WHERE ")
+		r.builder.WriteString(index.Predicate)
+	}
 	return nil
 }
 
@@ -1446,7 +1545,44 @@ func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
 	if column.Default != "" {
 		definition += " DEFAULT " + column.Default
 	}
+	if column.Identity != "" {
+		clause, err := r.identityClause(column)
+		if err != nil {
+			return "", err
+		}
+		definition += clause
+	}
 	return definition, nil
+}
+
+// identityClause returns the DDL fragment, including its own leading
+// space, that renders column.Identity on the current dialect, appended
+// after a column's type, NOT NULL, and DEFAULT clauses — the order both
+// PostgreSQL and MySQL accept.
+//
+// PostgreSQL renders either generation as its own GENERATED ... AS
+// IDENTITY clause. MySQL renders schema.IdentityByDefault as AUTO_INCREMENT,
+// since that is the only MySQL form and it is BY DEFAULT-shaped: it accepts
+// an explicit value. MySQL has no form that rejects an explicit value, so
+// schema.IdentityAlways is refused rather than rendered as AUTO_INCREMENT,
+// which would silently weaken the column. Every other dialect, SQLite
+// included, has no identity feature at all and refuses both generations.
+func (r *renderer) identityClause(column schema.ColumnDef) (string, error) {
+	switch r.dialect.Name() {
+	case "postgresql":
+		switch column.Identity {
+		case schema.IdentityAlways:
+			return " GENERATED ALWAYS AS IDENTITY", nil
+		case schema.IdentityByDefault:
+			return " GENERATED BY DEFAULT AS IDENTITY", nil
+		}
+	case "mysql":
+		if column.Identity == schema.IdentityByDefault {
+			return " AUTO_INCREMENT", nil
+		}
+		return "", &UnsupportedIdentityColumnError{Column: column.Name, Identity: column.Identity, Dialect: r.dialect.Name(), Reason: "MySQL's AUTO_INCREMENT has no form that rejects an explicit value"}
+	}
+	return "", &UnsupportedIdentityColumnError{Column: column.Name, Identity: column.Identity, Dialect: r.dialect.Name(), Reason: "this dialect has no identity column feature"}
 }
 
 // qualifiedReferencedTable returns the quoted REFERENCES target for key,
