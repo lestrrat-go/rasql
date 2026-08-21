@@ -95,8 +95,7 @@ func requireGeneratedDirectoryIsCurrent(t *testing.T, store generate.Store, dir 
 
 // requireGeneratedDirectoryMatches is the comparison
 // requireGeneratedDirectoryIsCurrent performs, and the one a caller whose
-// directory -update-docs must never write into (TestTaskboardStoreIsCurrent)
-// uses directly instead.
+// directory -update-docs must never write into uses directly instead.
 //
 // It plans store, reads dir as it stands now, and requires the two to match
 // through requireGeneratedFilesMatch. It also requires store.Plan to report
