@@ -62,7 +62,7 @@ Chapter 3 captures that settled shape into a checked-in migration. Chapter 4 add
 
 Chapter 7 makes the schema change described above, regenerates, and walks the compile errors that fall out into fixed Go. Chapter 8 shows three ways to build on generated code. Chapter 9 covers the tests and the day-to-day migration commands.
 
-Every command shown in those chapters was run, and every block of output shown is what that command actually printed.
+Every block of output shown in those chapters is what the command above it actually printed. Two commands are exceptions, and each of them says so where it appears: the `podman run` that starts the database in chapter 2, and the `go install` in chapter 3.
 
 ## Next
 

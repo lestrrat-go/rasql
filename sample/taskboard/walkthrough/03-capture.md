@@ -12,7 +12,7 @@ Everything from here on runs through the `rasql` command:
 go install github.com/lestrrat-go/rasql/cmd/rasql@latest
 ```
 
-`rasql migrate dump`, which this chapter is about, is newer than the latest tagged release, so this walkthrough ran a `rasql` built from a checkout of the repository instead. Once `dump` reaches a release the line above is all it takes.
+That line was not run for this walkthrough, and running it today would install a `rasql` without the command this chapter is about. `rasql migrate dump` is newer than the latest tagged release, so every `rasql` call below was made against a binary built from a checkout of the repository with `go build ./cmd/rasql`. Once `dump` reaches a release, the line above is all it takes.
 
 ## What `rasql migrate dump` reads and writes
 

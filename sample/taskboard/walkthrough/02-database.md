@@ -19,6 +19,8 @@ podman run -d --name rasql-postgres \
   docker.io/library/postgres:17-alpine
 ```
 
+That `podman run` is the command that creates the container, and it is the one command on this page that was not run for the walkthrough: the server used here was already up, which is what the `Up 2 days` below reports. Everything after it is a transcript.
+
 Check that it is listening:
 
 ```sh
