@@ -133,7 +133,7 @@ git commit -m 'add a psql helper for the working database'
 
 ## Ask rasql what it sees
 
-Half of each decision below is what PostgreSQL does with it. The other half is what rasql's inspection reports back, because that descriptor is what the code generator in chapter 4 reads.
+Every choice below is checked twice. Try it on the server and read back what PostgreSQL made of it, then ask rasql's inspection what descriptor it produces for the result, because that descriptor is what the code generator in chapter 4 reads.
 
 The transcripts labelled *rasql descriptor* come from a throwaway program written for this chapter and thrown away at the end of it. It opens the working database through pgx's `database/sql` driver, builds an inspector with `inspect.New(db, dialect.PostgreSQL())`, calls `Table` for the table being examined, prints the returned `schema.TableDef` as indented JSON, and then feeds that descriptor straight back into `render.CreateTable` and `render.CreateIndexes` to see what DDL rasql would rebuild it from. The finished application does none of this. The program is a way of looking at the database, and it is thrown away with the probe tables.
 
