@@ -305,7 +305,7 @@ CREATE TABLE "probe_int" ("small" BIGINT NOT NULL, "plain" BIGINT NOT NULL, "big
 
 rasql has one integer kind and no column width on it, so `smallint`, `integer`, and `bigint` are the same thing to it. Running chapter 4's generator over this same probe table confirms what that means in Go:
 
-```text
+```go
 type ProbeIntRow struct {
 	Small int64
 	Plain int64

@@ -61,7 +61,7 @@ One file per table, plus two the whole package shares.
 
 `members_gen.go` is the shortest of the three, and it has every part the other two do. It opens with the row struct:
 
-```text
+```go
 type MembersRow struct {
 	ID   int64
 	Name string
@@ -72,7 +72,7 @@ Two required columns, two plain fields. Chapter 1 predicted that: nothing in thi
 
 Below it comes the table type and one method per column:
 
-```text
+```go
 // MembersTable is the generated table type for the "members" table.
 type MembersTable struct {
 	rasql.Table[MembersRow]
@@ -94,7 +94,7 @@ Those accessors are the reason chapter 5's queries never spell a column as a str
 
 The rest of the file is scanning support and the relationships. `members` is referenced by `tasks`, so the generator gives it the other side of that link:
 
-```text
+```go
 // Tasks returns the generated relationship descriptor.
 func (t MembersTable) Tasks() MembersTableTasksRelation {
 	child := Tasks()
