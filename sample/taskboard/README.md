@@ -56,7 +56,9 @@ depends on a released rasql.
 - `cmd/taskboard` opens the database and runs the server.
 - `rasql.json` holds the codegen settings, which is everything but the DSN.
 - `scripts` wraps the `rasql` calls, so a step is run rather than retyped.
-- `walkthrough` is the nine chapters that produced all of the above.
+- `walkthrough` is the nine chapters that produced all of the above, and
+  `walkthrough/steps.bundle` is the repository they were followed in, one commit
+  per step, in a single file. `git clone` expands it.
 
 ## What running it needs
 

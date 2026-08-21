@@ -52,6 +52,25 @@ cd sample/taskboard && go build ./... && TASKBOARD_TEST_DSN="$TASKBOARD_DSN" go 
 
 The walkthrough under `sample/taskboard/walkthrough` is the story of building that module, and its Go blocks are include blocks like every other page's. A change to the sample's source that a chapter quotes is stale in that chapter until `go test ./examples/ -update-docs` rewrites it.
 
+### Rebuilding the walkthrough's application
+
+`sample/taskboard` is the application the walkthrough produced by being followed, one commit per step, against a live PostgreSQL server. `sample/taskboard/walkthrough/steps.bundle` holds that repository whole, in one file. Clone it to get the project back at any step:
+
+```sh
+git clone sample/taskboard/walkthrough/steps.bundle ../taskboard-steps
+git -C ../taskboard-steps log --oneline
+```
+
+Changing a chapter that produces code means redoing that step and the ones after it, rather than editing `sample/taskboard` on its own, because each later chapter reports what the earlier steps actually left behind. Check out the commit before the change, rerun the chapter's commands against a live server, carry the remaining steps forward, copy the result back over `sample/taskboard`, and rebuild the bundle in the same commit:
+
+```sh
+git -C ../taskboard-steps bundle create "$PWD/sample/taskboard/walkthrough/steps.bundle" --all
+```
+
+`TestWalkthroughBundleMatchesSample` compares the bundle's last commit with the checked-in copy and fails when the two part company, so editing one without the other stops a green test run. It ignores the `// BEGIN(name)` and `// END(name)` markers, which the checked-in copy carries so a chapter can include part of a file and which a reader following the walkthrough never types. `bundleDivergences` in that test owns the short list of paths allowed to differ, and the sample's own README section "Two things this copy spells differently" says why the scripts are on it.
+
+A chapter that changes only prose needs none of this.
+
 ## Live database tests
 
 A handful of tests run against a real PostgreSQL or MySQL server rather than a mock, such as `TestDatabaseIntegration` at the repository root and the privilege tests in `inspect/`. Any package can add one: `internal/dbtest` gives a test in any package a live `*sql.DB` or an already-parsed connection config (`*pgx.ConnConfig` / `*mysql.Config`) for PostgreSQL and MySQL, resolved a single way:
