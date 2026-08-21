@@ -16,10 +16,11 @@ import (
 
 // BEGIN(open_tx)
 // openTx returns a repository over a transaction that is rolled back when
-// the test ends. rasql.Handle is satisfied by *sql.Tx as well as *sql.DB, so
-// every write below reaches a real PostgreSQL server and none of them
-// survives the test.
-func openTx(t *testing.T) store.Repository {
+// the test ends, and the rasql.DB it was built on for the tests that write a
+// row the repository has no method for. rasql.Handle is satisfied by *sql.Tx
+// as well as *sql.DB, so every write below reaches a real PostgreSQL server
+// and none of them survives the test.
+func openTx(t *testing.T) (store.Repository, rasql.DB) {
 	t.Helper()
 	dsn := os.Getenv("TASKBOARD_TEST_DSN")
 	if dsn == "" {
@@ -42,7 +43,7 @@ func openTx(t *testing.T) store.Repository {
 	if err != nil {
 		t.Fatalf("create the rasql db: %s", err)
 	}
-	return store.New(db)
+	return store.New(db), db
 }
 
 // END(open_tx)
@@ -64,9 +65,42 @@ func seed(ctx context.Context, t *testing.T, repository store.Repository) (proje
 	return projects[0].ID, members[0].ID
 }
 
+// BEGIN(add_task_due_on)
+// addTaskDueOn files one open task with a due date. AddTask leaves due_on
+// alone, so a test that needs one writes the row itself, through the same
+// generated table the repository uses and over the same rolled-back
+// transaction.
+func addTaskDueOn(ctx context.Context, t *testing.T, db rasql.DB, projectID int64, assigneeID int64, title string, dueOn time.Time) {
+	t.Helper()
+	row := store.TasksRow{ProjectID: projectID, AssigneeID: &assigneeID, Title: title, DueOn: &dueOn}
+	if _, err := rasql.InsertWithOptions(ctx, db, store.Tasks(), row,
+		rasql.DefaultColumns("is_open", "created_at"),
+	); err != nil {
+		t.Fatalf("insert task %q: %s", title, err)
+	}
+}
+
+// END(add_task_due_on)
+
+// openTaskID returns the id of the open task titled title.
+func openTaskID(ctx context.Context, t *testing.T, repository store.Repository, title string) int64 {
+	t.Helper()
+	tasks, err := repository.OpenTasks(ctx)
+	if err != nil {
+		t.Fatalf("read open tasks: %s", err)
+	}
+	for _, task := range tasks {
+		if task.Title == title {
+			return task.TaskID
+		}
+	}
+	t.Fatalf("no open task titled %q", title)
+	return 0
+}
+
 func TestAddTaskAndCloseTask(t *testing.T) {
 	ctx := t.Context()
-	repository := openTx(t)
+	repository, _ := openTx(t)
 	projectID, memberID := seed(ctx, t, repository)
 
 	before, err := repository.OpenTasks(ctx)
@@ -124,7 +158,7 @@ func TestAddTaskAndCloseTask(t *testing.T) {
 }
 
 func TestCloseTaskOnAMissingTaskIsNotAnError(t *testing.T) {
-	repository := openTx(t)
+	repository, _ := openTx(t)
 	if err := repository.CloseTask(t.Context(), -1); err != nil {
 		t.Fatalf("close a task that does not exist: %s", err)
 	}
@@ -132,7 +166,7 @@ func TestCloseTaskOnAMissingTaskIsNotAnError(t *testing.T) {
 
 func TestCountOverdue(t *testing.T) {
 	ctx := t.Context()
-	repository := openTx(t)
+	repository, _ := openTx(t)
 	projectID, memberID := seed(ctx, t, repository)
 
 	before, err := repository.CountOverdue(ctx, time.Now())
@@ -153,3 +187,63 @@ func TestCountOverdue(t *testing.T) {
 		t.Errorf("the overdue count moved from %d to %d after adding a task with no due date", before, after)
 	}
 }
+
+// BEGIN(overdue_boundary)
+// TestCountOverdueCountsATaskOnlyAfterItsDueDate pins the boundary that
+// CountOverdue's cast draws. due_on is a date and on is an instant, so the two
+// meet only once one of them is narrowed, and narrowing on is what keeps a
+// task due today out of the count until the day is over. Naming the instant
+// rather than reading the clock is what the bound parameter is for.
+//
+// The instant carries a location as well as a day, and the count follows the
+// location. Eight in the evening on 2026-03-16 in a zone nine hours behind UTC
+// is already 2026-03-17 in UTC, so the day the caller is having is the one the
+// count has to use, and an instant that late in its own day is also the case a
+// comparison against the raw timestamp gets wrong.
+func TestCountOverdueCountsATaskOnlyAfterItsDueDate(t *testing.T) {
+	ctx := t.Context()
+	repository, db := openTx(t)
+	projectID, memberID := seed(ctx, t, repository)
+
+	zone := time.FixedZone("UTC-9", -9*60*60)
+	on := time.Date(2026, 3, 16, 20, 0, 0, 0, zone)
+	today := time.Date(2026, 3, 16, 0, 0, 0, 0, zone)
+	yesterday := today.AddDate(0, 0, -1)
+
+	before, err := repository.CountOverdue(ctx, on)
+	if err != nil {
+		t.Fatalf("count overdue tasks: %s", err)
+	}
+
+	addTaskDueOn(ctx, t, db, projectID, memberID, "Due today", today)
+	afterToday, err := repository.CountOverdue(ctx, on)
+	if err != nil {
+		t.Fatalf("count overdue tasks: %s", err)
+	}
+	if afterToday != before {
+		t.Errorf("the overdue count moved from %d to %d after adding a task due today; a task is past its due date only once the day is over", before, afterToday)
+	}
+
+	addTaskDueOn(ctx, t, db, projectID, memberID, "Due yesterday", yesterday)
+	afterYesterday, err := repository.CountOverdue(ctx, on)
+	if err != nil {
+		t.Fatalf("count overdue tasks: %s", err)
+	}
+	if afterYesterday != before+1 {
+		t.Errorf("the overdue count went from %d to %d after adding a task due yesterday, want %d", before, afterYesterday, before+1)
+	}
+
+	addTaskDueOn(ctx, t, db, projectID, memberID, "Closed and late", yesterday)
+	if err := repository.CloseTask(ctx, openTaskID(ctx, t, repository, "Closed and late")); err != nil {
+		t.Fatalf("close the late task: %s", err)
+	}
+	afterClosed, err := repository.CountOverdue(ctx, on)
+	if err != nil {
+		t.Fatalf("count overdue tasks: %s", err)
+	}
+	if afterClosed != afterYesterday {
+		t.Errorf("the overdue count moved from %d to %d after a late task was closed; a closed task is nobody's problem", afterYesterday, afterClosed)
+	}
+}
+
+// END(overdue_boundary)
