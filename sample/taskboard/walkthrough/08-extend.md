@@ -49,7 +49,13 @@ git commit -m 'add an open predicate to the generated table type'
 
 Some statements are easier to read as SQL than as a builder chain, and some cannot be built at all. Rather than write them as string literals scattered through the application, declare them in `rasql.json` and let the generator compile them into typed functions. The extension then goes through the generator instead of around it.
 
-The page should say how many open tasks are past their due date. Counting them is a single aggregate over a nullable column, and it reads better as SQL. Write `queries/overdue_count.sql`:
+The page should say how many open tasks are past their due date. Counting them is a single aggregate over a nullable column, and it reads better as SQL. Create the directory the project has not needed until now:
+
+```sh
+mkdir -p queries
+```
+
+Write `queries/overdue_count.sql` in it:
 
 ```sql
 SELECT COUNT(*) AS overdue

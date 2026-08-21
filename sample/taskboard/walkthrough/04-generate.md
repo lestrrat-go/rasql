@@ -6,13 +6,15 @@ The schema is in the database and in `db/migrations`. This chapter turns it into
 
 The project has been a `go.mod` and some SQL until now. The generated code and the application both import `github.com/lestrrat-go/rasql`, so the module needs it as a dependency.
 
-The walkthrough builds against a checkout of the repository rather than a release, for the reason [chapter 3](03-capture.md#get-the-rasql-command) gave, so its `go.mod` names the dependency and then redirects it at that checkout:
+The walkthrough builds against a checkout of the repository rather than a release, for the reason [chapter 3](03-capture.md#get-the-rasql-command) gave, so its `go.mod` names the dependency and then redirects it at that checkout. Clone the repository beside the project directory, and the checkout is one level up under its own name:
 
 ```text
 require github.com/lestrrat-go/rasql v0.0.0
 
-replace github.com/lestrrat-go/rasql => ../..
+replace github.com/lestrrat-go/rasql => ../rasql
 ```
+
+Go resolves a `replace` path relative to the directory holding `go.mod`, so a checkout kept somewhere else takes the path that reaches it from the project.
 
 A project using a released rasql adds the dependency with `go get github.com/lestrrat-go/rasql` and needs no `replace` line.
 
@@ -206,12 +208,12 @@ rasql migrate apply -dir db/migrations -dialect postgresql -dsn "$dsn"
 exec rasql codegen generate -dsn "$dsn" "$@"
 ```
 
-`-check` is passed straight through to `rasql codegen generate`, which then reports whether the checked-in package is current instead of writing it. Point the script at the verified database and ask:
+`-check` is passed straight through to `rasql codegen generate`, which then reports whether the checked-in package is current instead of writing it. Export the schema database's DSN, point the script at it, and ask:
 
 ```sh
 chmod +x scripts/generate.sh
-TASKBOARD_SCHEMA_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_verify?sslmode=disable' \
-  ./scripts/generate.sh -check
+export TASKBOARD_SCHEMA_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_verify?sslmode=disable'
+./scripts/generate.sh -check
 ```
 
 ```text
@@ -220,6 +222,8 @@ internal/store is up to date
 ```
 
 Nothing was pending, because chapter 3 already applied the migration to that database. The generated package matches, byte for byte, what the migrations produce.
+
+The `export` is what lets every later call be the bare `./scripts/generate.sh` that chapters 7 and 8 write. The script reads `TASKBOARD_SCHEMA_DSN` from its own environment and stops with the message its `:?` line spells out when the variable is unset, so a fresh shell exports it again before it runs the script.
 
 That is the check worth running in CI, and it is what chapter 7 leans on: after a schema change, `./scripts/generate.sh` rewrites the store from the new migrations, and the compiler reports every place the old shape was assumed.
 
