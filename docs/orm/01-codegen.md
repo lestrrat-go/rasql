@@ -30,7 +30,7 @@ go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate -dsn "$DATABASE_U
 A `go:generate` directive in a hand-written file of the generated package puts
 the same run behind `go generate ./...`. The Taskboard sample does this from
 `internal/store/repository.go`, through a script that first applies its
-migrations to a throwaway database. See `sample/taskboard`.
+migrations to the database it then generates from. See `sample/taskboard`.
 
 ## The settings file
 

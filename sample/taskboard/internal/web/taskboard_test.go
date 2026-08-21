@@ -2,174 +2,134 @@ package web_test
 
 import (
 	"context"
-	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/require"
-
-	"example.com/taskboard/internal/taskboard"
+	"example.com/taskboard/internal/store"
 	"example.com/taskboard/internal/web"
 )
 
-func TestTaskboardHandlerRendersOpenTasks(t *testing.T) {
-	reader := &fakeTaskReader{
-		tasks: []taskboard.Summary{{Title: "Draft rollout plan", Priority: 1}},
-	}
-	handler, err := web.NewTaskboardHandler(reader)
-	require.NoError(t, err)
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	response := httptest.NewRecorder()
+// fakeRepository stands in for store.Repository. The handler names what it
+// needs as two interfaces, so this needs no database and no rasql.
+type fakeRepository struct {
+	tasks       []store.OpenTask
+	overdue     int64
+	addedTitle  string
+	addedOwner  *int64
+	closedTask  int64
+	closeCalled bool
+}
 
-	handler.ServeHTTP(response, request)
+func (f *fakeRepository) OpenTasks(context.Context) ([]store.OpenTask, error) {
+	return f.tasks, nil
+}
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
+func (f *fakeRepository) AllProjects(context.Context) ([]store.ProjectsRow, error) {
+	return []store.ProjectsRow{{ID: 1, Name: "Website refresh"}}, nil
+}
+
+func (f *fakeRepository) AllMembers(context.Context) ([]store.MembersRow, error) {
+	return []store.MembersRow{{ID: 1, Name: "Ada Lovelace"}}, nil
+}
+
+func (f *fakeRepository) CountOverdue(context.Context, time.Time) (int64, error) {
+	return f.overdue, nil
+}
+
+func (f *fakeRepository) AddTask(_ context.Context, _ int64, assigneeID *int64, title string) error {
+	f.addedTitle = title
+	f.addedOwner = assigneeID
+	return nil
+}
+
+func (f *fakeRepository) CloseTask(_ context.Context, taskID int64) error {
+	f.closedTask = taskID
+	f.closeCalled = true
+	return nil
+}
+
+func newTestHandler(repository *fakeRepository) http.Handler {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return web.NewHandler(repository, repository, logger).Routes()
+}
+
+func TestShowPage(t *testing.T) {
+	ada := "Ada Lovelace"
+	repository := &fakeRepository{
+		tasks: []store.OpenTask{
+			{ProjectID: 1, ProjectName: "Website refresh", TaskID: 7, Title: "Draft the rollout plan", AssigneeName: &ada},
+			{ProjectID: 1, ProjectName: "Website refresh", TaskID: 8, Title: "Pick a heading typeface"},
+		},
+		overdue: 2,
 	}
-	if contentType := response.Header().Get("Content-Type"); contentType != "text/html; charset=utf-8" {
-		t.Errorf("Content-Type = %q, want HTML", contentType)
+	recorder := httptest.NewRecorder()
+	newTestHandler(repository).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET / returned %d, want 200", recorder.Code)
 	}
-	if !strings.Contains(response.Body.String(), "P1 Draft rollout plan") {
-		t.Errorf("response body = %q, want task", response.Body.String())
-	}
-	if reader.limit != 51 || reader.offset != 0 {
-		t.Errorf("page = limit %d, offset %d, want limit 51, offset 0", reader.limit, reader.offset)
+	body := recorder.Body.String()
+	for _, want := range []string{"Website refresh", "Draft the rollout plan", "unassigned", "Past their due date: 2"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page does not contain %q", want)
+		}
 	}
 }
 
-func TestTaskboardHandlerHidesStoreErrors(t *testing.T) {
-	handler, err := web.NewTaskboardHandler(&fakeTaskReader{err: errors.New("database failed")})
-	require.NoError(t, err)
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	response := httptest.NewRecorder()
+// BEGIN(add_no_owner)
+func TestAddTaskWithNoOwner(t *testing.T) {
+	repository := &fakeRepository{}
+	form := url.Values{"project_id": {"1"}, "assignee_id": {""}, "title": {"Find an owner"}}
+	request := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	newTestHandler(repository).ServeHTTP(recorder, request)
 
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("response = %d, want %d", response.Code, http.StatusInternalServerError)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST /tasks returned %d, want 303", recorder.Code)
 	}
-	if strings.Contains(response.Body.String(), "database failed") {
-		t.Errorf("response exposes internal error: %q", response.Body.String())
+	if repository.addedTitle != "Find an owner" {
+		t.Errorf("AddTask got title %q, want \"Find an owner\"", repository.addedTitle)
 	}
-}
-
-func TestTaskboardHandlerRequestsSelectedPage(t *testing.T) {
-	reader := &fakeTaskReader{tasks: []taskboard.Summary{{Title: "Review onboarding emails", Priority: 2}}}
-	handler, err := web.NewTaskboardHandler(reader)
-	require.NoError(t, err)
-	request := httptest.NewRequest(http.MethodGet, "/?page=2", nil)
-	response := httptest.NewRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
-	}
-	if reader.limit != 51 || reader.offset != 50 {
-		t.Errorf("page = limit %d, offset %d, want limit 51, offset 50", reader.limit, reader.offset)
+	if repository.addedOwner != nil {
+		t.Errorf("AddTask got owner %v, want nil for an empty assignee_id", *repository.addedOwner)
 	}
 }
 
-func TestTaskboardHandlerHidesNextOnFinalFullPage(t *testing.T) {
-	reader := &fakeTaskReader{tasks: make([]taskboard.Summary, 50)}
-	handler, err := web.NewTaskboardHandler(reader)
-	require.NoError(t, err)
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	response := httptest.NewRecorder()
+// END(add_no_owner)
 
-	handler.ServeHTTP(response, request)
+func TestAddTaskRejectsABadProjectID(t *testing.T) {
+	repository := &fakeRepository{}
+	form := url.Values{"project_id": {"one"}, "title": {"x"}}
+	request := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	newTestHandler(repository).ServeHTTP(recorder, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST /tasks returned %d, want 400", recorder.Code)
 	}
-	if reader.limit != 51 {
-		t.Errorf("limit = %d, want 51", reader.limit)
-	}
-	if strings.Contains(response.Body.String(), ">Next</a>") {
-		t.Errorf("response body = %q, want no next page", response.Body.String())
+	if repository.addedTitle != "" {
+		t.Error("AddTask ran for a request the handler should have rejected")
 	}
 }
 
-func TestTaskboardHandlerShowsNextForFollowingPage(t *testing.T) {
-	tasks := append(make([]taskboard.Summary, 50), taskboard.Summary{Title: "Following task"})
-	reader := &fakeTaskReader{tasks: tasks}
-	handler, err := web.NewTaskboardHandler(reader)
-	require.NoError(t, err)
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	response := httptest.NewRecorder()
+func TestCloseTask(t *testing.T) {
+	repository := &fakeRepository{}
+	request := httptest.NewRequest(http.MethodPost, "/tasks/42/close", nil)
+	recorder := httptest.NewRecorder()
+	newTestHandler(repository).ServeHTTP(recorder, request)
 
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST /tasks/42/close returned %d, want 303", recorder.Code)
 	}
-	if !strings.Contains(response.Body.String(), ">Next</a>") {
-		t.Errorf("response body = %q, want next page", response.Body.String())
+	if !repository.closeCalled || repository.closedTask != 42 {
+		t.Errorf("CloseTask got %d (called: %t), want 42", repository.closedTask, repository.closeCalled)
 	}
-	if strings.Count(response.Body.String(), "<li>") != 50 {
-		t.Errorf("response body = %q, want 50 tasks", response.Body.String())
-	}
-	if strings.Contains(response.Body.String(), "Following task") {
-		t.Errorf("response body = %q, rendered task from following page", response.Body.String())
-	}
-}
-
-func TestTaskboardHandlerHidesNextOnMaximumPage(t *testing.T) {
-	tasks := append(make([]taskboard.Summary, 50), taskboard.Summary{Title: "Following task"})
-	reader := &fakeTaskReader{tasks: tasks}
-	handler, err := web.NewTaskboardHandler(reader)
-	require.NoError(t, err)
-	maxOffset := int(^uint(0) >> 1)
-	maximumPage := maxOffset/50 + 1
-	request := httptest.NewRequest(http.MethodGet, "/?page="+strconv.Itoa(maximumPage), nil)
-	response := httptest.NewRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("response = %d, want %d", response.Code, http.StatusOK)
-	}
-	if strings.Contains(response.Body.String(), ">Next</a>") {
-		t.Errorf("response body = %q, want no next page", response.Body.String())
-	}
-}
-
-func TestTaskboardHandlerRejectsInvalidPage(t *testing.T) {
-	reader := &fakeTaskReader{}
-	handler, err := web.NewTaskboardHandler(reader)
-	require.NoError(t, err)
-	request := httptest.NewRequest(http.MethodGet, "/?page=0", nil)
-	response := httptest.NewRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("response = %d, want %d", response.Code, http.StatusBadRequest)
-	}
-	if reader.limit != 0 || reader.offset != 0 {
-		t.Errorf("reader was called with limit %d and offset %d", reader.limit, reader.offset)
-	}
-}
-
-func TestNewTaskboardHandlerRejectsNilTaskReader(t *testing.T) {
-	handler, err := web.NewTaskboardHandler(nil)
-
-	require.Error(t, err)
-	require.Nil(t, handler)
-}
-
-type fakeTaskReader struct {
-	tasks  []taskboard.Summary
-	err    error
-	limit  int
-	offset int
-}
-
-func (reader *fakeTaskReader) OpenTasks(_ context.Context, _ int64, limit int, offset int) ([]taskboard.Summary, error) {
-	reader.limit = limit
-	reader.offset = offset
-	return reader.tasks, reader.err
 }

@@ -544,26 +544,49 @@ func TestDocsQualifyExecWithReturningRule(t *testing.T) {
 	})
 }
 
+// documentationTrees are the directories every markdown file under them is a
+// documentation page. The pages are grouped into per-layer directories, so the
+// walk descends rather than globbing one level: a page moved into a new group
+// would otherwise drop out of every check on this list without failing one.
+// The sample's walkthrough is here for the same reason the sample's source is
+// an include target: its chapters show that module's own Go, and a chapter
+// quoting it by hand would drift from the module the moment either moved.
+var documentationTrees = [][]string{
+	{"docs"},
+	{"sample", "taskboard", "walkthrough"},
+}
+
+// documentationIndexPages are the pages that open a tree rather than sit
+// inside one.
+var documentationIndexPages = [][]string{
+	{"README.md"},
+	{"sample", "taskboard", "README.md"},
+}
+
 // documentationPages lists every markdown file that may include an example.
 func documentationPages(t *testing.T) []string {
 	t.Helper()
 
-	// The pages are grouped into per-layer directories, so the walk descends
-	// rather than globbing one level: a page moved into a new group would
-	// otherwise drop out of every check on this list without failing one.
 	var pages []string
-	err := filepath.WalkDir(filepath.Join(repositoryRoot, "docs"), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !entry.IsDir() && strings.HasSuffix(path, ".md") {
-			pages = append(pages, path)
-		}
-		return nil
-	})
-	require.NoError(t, err)
+	for _, tree := range documentationTrees {
+		err := filepath.WalkDir(filepath.Join(append([]string{repositoryRoot}, tree...)...), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() && strings.HasSuffix(path, ".md") {
+				pages = append(pages, path)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+	}
 	sort.Strings(pages)
-	return append([]string{filepath.Join(repositoryRoot, "README.md")}, pages...)
+
+	index := make([]string, 0, len(documentationIndexPages))
+	for _, page := range documentationIndexPages {
+		index = append(index, filepath.Join(append([]string{repositoryRoot}, page...)...))
+	}
+	return append(index, pages...)
 }
 
 // renderInclude creates the body of an include block: the included source in a
@@ -899,17 +922,16 @@ var migrateCommandPackagePath = regexp.MustCompile("`(?:cmd|cli)/rasqlmigrate`")
 var standaloneBinaryNote = regexp.MustCompile("standalone `rasqlmigrate` binary")
 
 // migrationInvocationPages lists every page that may tell a reader how to run
-// migrations. It is documentationPages, which already covers README.md and
-// every page under docs/, plus the three pages outside that set which may name
-// the command: the architecture overview, the contributor guide, and the
-// sample's own README.
+// migrations. It is documentationPages, which already covers both READMEs,
+// every page under docs/, and every chapter of the sample's walkthrough, plus
+// the two pages outside that set which may name the command: the architecture
+// overview and the contributor guide.
 func migrationInvocationPages(t *testing.T) []string {
 	t.Helper()
 
 	return append(documentationPages(t),
 		filepath.Join(repositoryRoot, "DESIGN.md"),
 		filepath.Join(repositoryRoot, "CONTRIBUTING.md"),
-		filepath.Join(repositoryRoot, "sample", "taskboard", "README.md"),
 	)
 }
 

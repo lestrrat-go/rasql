@@ -297,15 +297,20 @@ The two SQLite-only lines are the `:memory:` DSN and `SetMaxOpenConns(1)`, since
 
 ## Sample application
 
-The [Taskboard sample](sample/taskboard/) is a standalone HTTP application built on checked-in SQLite migrations and a generated store. Its Taskboard page shows typed descriptors, inserts, an update, and a joined query in one small application. It is a module of its own, `example.com/taskboard`, so it reaches rasql only through the public API a real project has.
+The [Taskboard sample](sample/taskboard/) is an HTTP application on PostgreSQL, built on checked-in migrations and a generated store. Its page shows typed descriptors, a joined read, an insert, an update, and a compiled SQL query in one small application. It is a module of its own, `example.com/taskboard`, so it reaches rasql only through the public API a real project has.
+
+Its [nine-chapter walkthrough](sample/taskboard/walkthrough/01-design.md) is how the code got there. It settles the schema against a running PostgreSQL server, captures it into a migration, generates the Go, writes the application on top, and then changes the schema and follows the compiler through what breaks.
+
+Running it needs a PostgreSQL server and a database on it:
 
 ```sh
 cd sample/taskboard
-./scripts/migrate.sh
-TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
+export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable'
+./scripts/migrate.sh apply
+go run ./cmd/taskboard
 ```
 
-`scripts/migrate.sh` applies the migrations with `rasql migrate apply`, and the application then seeds rows into them and serves the page. Open <http://127.0.0.1:8080/> in another terminal.
+`scripts/migrate.sh` applies the migrations with `rasql migrate apply`, and the application then serves the page over whatever rows the database holds. Open <http://127.0.0.1:8080/> in another terminal. [The sample's README](sample/taskboard/README.md) covers the rest, including the two rows to insert before the add form has a project and an owner to offer.
 
 ## Documentation
 

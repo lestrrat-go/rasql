@@ -1,21 +1,17 @@
 #!/bin/sh
-# Rebuild the throwaway schema database from the checked-in migrations, then
-# generate the store from it. Pass -check to report whether the checked-in
-# store is current instead of writing it.
+# Rebuild internal/store from the checked-in migrations.
+#
+# It applies db/migrations to the database TASKBOARD_SCHEMA_DSN names, then
+# runs rasql codegen generate against that database, so the generated store
+# describes whatever the migrations build and not whatever a developer last
+# typed into psql. Pass -check to report staleness instead of writing:
+#
+#   ./scripts/generate.sh
+#   ./scripts/generate.sh -check
 set -eu
-
-root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-cd "$root"
-
-schema_dsn=internal/store/.taskboard-schema.db
-rm -f "$schema_dsn" "$schema_dsn-wal" "$schema_dsn-shm"
-
-go run ../../cmd/rasql migrate apply \
-  -dir migrations \
-  -dialect sqlite \
-  -dsn "$schema_dsn"
-
-# Everything but the DSN comes from rasql.json at the module root.
-go run ../../cmd/rasql codegen generate \
-  -dsn "$schema_dsn" \
-  "$@"
+# Run from the module root, so `go generate ./...` reaches the same migrations
+# and writes the same package as a run started here by hand.
+cd "$(dirname "$0")/.."
+dsn="${TASKBOARD_SCHEMA_DSN:?set TASKBOARD_SCHEMA_DSN to a schema database this script may rebuild}"
+./scripts/rasql.sh migrate apply -dir db/migrations -dialect postgresql -dsn "$dsn"
+exec ./scripts/rasql.sh codegen generate -dsn "$dsn" "$@"

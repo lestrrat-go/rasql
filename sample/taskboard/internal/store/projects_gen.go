@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
@@ -10,27 +11,23 @@ import (
 )
 
 type ProjectsRow struct {
-	ID       int64
-	OwnerID  int64
-	Name     string
-	Archived bool
+	ID   int64
+	Name string
 }
 
 // ScanRow scans each result column directly into its field.
 func (r *ProjectsRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.OwnerID, &r.Name, &r.Archived)
+	return src.Scan(&r.ID, &r.Name)
 }
 
 // ScanDestinations maps result-column names to fields on r.
 func (r *ProjectsRow) ScanDestinations(columns []string) ([]any, error) {
 	const (
 		scanIndexID = iota
-		scanIndexOwnerID
 		scanIndexName
-		scanIndexArchived
 	)
 	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(4)
+	scanned := rasql.NewScanMask(2)
 	var discard any
 	for index, column := range columns {
 		switch column {
@@ -39,21 +36,11 @@ func (r *ProjectsRow) ScanDestinations(columns []string) ([]any, error) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
 			destinations[index] = &r.ID
-		case "owner_id":
-			if !scanned.Mark(scanIndexOwnerID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.OwnerID
 		case "name":
 			if !scanned.Mark(scanIndexName) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
 			destinations[index] = &r.Name
-		case "archived":
-			if !scanned.Mark(scanIndexArchived) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Archived
 		default:
 			destinations[index] = &discard
 		}
@@ -66,12 +53,8 @@ func (r ProjectsRow) ColumnValue(name string) (any, bool) {
 	switch name {
 	case "id":
 		return r.ID, true
-	case "owner_id":
-		return r.OwnerID, true
 	case "name":
 		return r.Name, true
-	case "archived":
-		return r.Archived, true
 	}
 	return nil, false
 }
@@ -84,14 +67,8 @@ type ProjectsTable struct {
 // ID returns a reference to the "id" column.
 func (t ProjectsTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
-// OwnerID returns a reference to the "owner_id" column.
-func (t ProjectsTable) OwnerID() query.ColumnRef { return rasql.ColumnOf(t.Table, "owner_id") }
-
 // Name returns a reference to the "name" column.
 func (t ProjectsTable) Name() query.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
-
-// Archived returns a reference to the "archived" column.
-func (t ProjectsTable) Archived() query.ColumnRef { return rasql.ColumnOf(t.Table, "archived") }
 
 // Projects returns the descriptor for the "projects" table.
 func Projects() ProjectsTable {
@@ -105,4 +82,29 @@ func (t ProjectsTable) As(alias string) (ProjectsTable, error) {
 		return ProjectsTable{}, err
 	}
 	return ProjectsTable{Table: aliased}, nil
+}
+
+// ProjectsTableTasksRelation describes the Tasks relationship from ProjectsTable.
+type ProjectsTableTasksRelation struct {
+	Parent    ProjectsTable
+	Child     TasksTable
+	ParentKey query.ColumnRef
+	ChildKey  query.ColumnRef
+}
+
+// Tasks returns the generated relationship descriptor.
+func (t ProjectsTable) Tasks() ProjectsTableTasksRelation {
+	child := Tasks()
+	parent := t
+	return ProjectsTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.ID(), ChildKey: child.ProjectID()}
+}
+
+// Join returns an INNER JOIN for the relationship.
+func (r ProjectsTableTasksRelation) Join() query.Join {
+	return rasql.InnerJoin(r.Child, query.Equal(r.ParentKey, r.ChildKey))
+}
+
+// Load fetches all children for parents in one query and groups them by parent key.
+func (r ProjectsTableTasksRelation) Load(ctx context.Context, db rasql.DB, parents []ProjectsRow) (map[int64][]TasksRow, error) {
+	return rasql.LoadHasMany[ProjectsRow, TasksRow, int64](ctx, db, r.Child, r.ChildKey, parents, func(row ProjectsRow) int64 { return row.ID }, func(row TasksRow) int64 { return row.ProjectID })
 }
