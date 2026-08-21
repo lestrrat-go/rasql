@@ -43,7 +43,7 @@ A `rasql.DB` pairs a database handle with the dialect used to render SQL, and it
 
 The page shows a task's title, the project it sits under, and the owner's name. Those come from three tables, so the result has a shape no single table's row type describes. Declare that shape:
 
-```text
+```go
 // OpenTask is one line of the page's list: an open task, the project it
 // sits under, and the member who owns it.
 type OpenTask struct {
@@ -57,7 +57,7 @@ type OpenTask struct {
 
 `rasql.SelectFrom` decodes into a table's own row type. `rasql.DecodeFrom` takes the type instead, which is what a join needs:
 
-```text
+```go
 // OpenTasks returns every open task, ordered by project and then by task,
 // which is the order the page prints them in.
 func (repository Repository) OpenTasks(ctx context.Context) ([]OpenTask, error) {
@@ -106,7 +106,7 @@ One statement, one argument, both joins spelled out from the foreign keys.
 
 A new task supplies three values. The other three columns are the database's business: `id` is an identity column, `is_open` defaults to true, and `created_at` defaults to `now()`.
 
-```text
+```go
 // AddTask files one open task against projectID, owned by assigneeID.
 func (repository Repository) AddTask(ctx context.Context, projectID int64, assigneeID int64, title string) error {
 	tasks := Tasks()

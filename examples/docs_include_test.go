@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -61,34 +62,186 @@ func TestDocExamplesMatchSource(t *testing.T) {
 	require.NotZero(t, blocks, "no example blocks found in the documentation")
 }
 
-// goFence matches one fenced Go block, which is the only kind of block that
-// has to come from a compiled example.
-var goFence = regexp.MustCompile("(?m)^```go$")
+// goFence matches one fenced Go block, capturing the source between the
+// opening and closing fence. A Go block is the only kind of block that has to
+// come from a file the compiler sees.
+var goFence = regexp.MustCompile("(?ms)^```go$\n(.*?)\n^```$")
 
 // TestDocGoBlocksComeFromExamples holds every Go block in the documentation to
 // a file the compiler and `go test` see. A snippet written straight into a page
 // answers to nothing and drifts from the API it describes, so the fence has to
 // sit inside an include block rather than be maintained by hand.
+//
+// The walkthrough's chapters are the one place a Go block may stand outside an
+// include block, because most of them show the Taskboard project as it stood at
+// an earlier step and no current file holds those versions. They answer to the
+// recorded repository instead, which TestWalkthroughGoBlocksComeFromSteps
+// checks.
 func TestDocGoBlocksComeFromExamples(t *testing.T) {
 	for _, page := range documentationPages(t) {
+		if isWalkthroughPage(page) {
+			continue
+		}
+
 		contents, err := os.ReadFile(page)
 		require.NoError(t, err)
 
 		text := string(contents)
 		included := includeBlock.FindAllStringIndex(text, -1)
 		for _, fence := range goFence.FindAllStringIndex(text, -1) {
-			within := false
-			for _, block := range included {
-				if fence[0] > block[0] && fence[0] < block[1] {
-					within = true
-					break
-				}
-			}
-			require.True(t, within,
+			require.True(t, fenceWithinInclude(fence, included),
 				"%s holds a hand-written Go block at line %d; move the code into an example under examples/ and include it with <!-- INCLUDE(examples/…) -->",
 				page, strings.Count(text[:fence[0]], "\n")+1)
 		}
 	}
+}
+
+// TestWalkthroughGoBlocksComeFromSteps holds every Go block in the walkthrough
+// to the repository the walkthrough itself records. A chapter shows the
+// Taskboard project as it stood at the step that chapter reaches, which is a
+// version no current file holds once a later chapter changes it, so an include
+// block cannot cover these the way it covers the rest of the documentation. The
+// recorded repository does hold them: steps.bundle carries one commit per step,
+// and a snippet a chapter shows appears verbatim in the commit for that step.
+// A snippet that drifts from every recorded step then fails here, which is the
+// protection the include rule gives everywhere else.
+//
+// A chapter may still put a Go block inside an include block, and chapters 8
+// and 9 do, since they show the project as it is left standing at the end.
+func TestWalkthroughGoBlocksComeFromSteps(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not on PATH")
+	}
+
+	sources := walkthroughStepSources(t)
+	checked := 0
+	for _, page := range documentationPages(t) {
+		if !isWalkthroughPage(page) {
+			continue
+		}
+
+		contents, err := os.ReadFile(page)
+		require.NoError(t, err)
+
+		text := string(contents)
+		included := includeBlock.FindAllStringIndex(text, -1)
+		for _, fence := range goFence.FindAllStringSubmatchIndex(text, -1) {
+			if fenceWithinInclude(fence, included) {
+				continue
+			}
+
+			body := text[fence[2]:fence[3]]
+			line := strings.Count(text[:fence[0]], "\n") + 1
+			if isProbeTypeBlock(page, body) {
+				continue
+			}
+			checked++
+			require.True(t, sourcesHold(sources, body),
+				"%s holds a Go block at line %d that no commit in %s carries verbatim; rebuild the block from the step it belongs to, or redo the walkthrough's steps so a commit holds it",
+				page, line, bundlePath)
+		}
+	}
+	require.NotZero(t, checked, "the walkthrough holds no Go block outside an include block")
+}
+
+// fenceWithinInclude reports whether a fence match starts inside one of the
+// include blocks a page holds.
+func fenceWithinInclude(fence []int, included [][]int) bool {
+	for _, block := range included {
+		if fence[0] > block[0] && fence[0] < block[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// sourcesHold reports whether any recorded step carries the snippet verbatim.
+func sourcesHold(sources []string, body string) bool {
+	for _, source := range sources {
+		if strings.Contains(source, body) {
+			return true
+		}
+	}
+	return false
+}
+
+// probeTypeBlocks are the generated row types a chapter shows to illustrate how
+// rasql maps a column type. Each one comes from a throwaway probe table created
+// and dropped inside that chapter's own database session, so it never became
+// project code and no recorded step can hold it. An entry names the chapter and
+// the snippet's first line together, so rewriting the snippet drops it out of
+// this table rather than staying excused.
+var probeTypeBlocks = []struct {
+	page    string
+	opening string
+}{
+	{page: "02-database.md", opening: "type ProbeIntRow struct {"},
+}
+
+// isProbeTypeBlock reports whether a block is one of the probe row types listed
+// above.
+func isProbeTypeBlock(page, body string) bool {
+	name := filepath.Base(page)
+	opening, _, _ := strings.Cut(body, "\n")
+	for _, block := range probeTypeBlocks {
+		if block.page == name && block.opening == opening {
+			return true
+		}
+	}
+	return false
+}
+
+// walkthroughStepSources returns the Go source every commit in the
+// walkthrough's recorded repository holds, one entry per distinct blob. The
+// bundle is cloned once and each blob is read once, since a git process per
+// file per commit is slow enough to be felt.
+func walkthroughStepSources(t *testing.T) []string {
+	t.Helper()
+
+	clone := t.TempDir()
+	output, err := exec.Command("git", "clone", "--quiet", bundlePath, clone).CombinedOutput()
+	require.NoError(t, err, "clone %s: %s", bundlePath, output)
+
+	commits, err := exec.Command("git", "-C", clone, "rev-list", "HEAD").Output()
+	require.NoError(t, err, "list the commits in %s", bundlePath)
+
+	seen := map[string]struct{}{}
+	var sources []string
+	for _, commit := range strings.Fields(string(commits)) {
+		listed, err := exec.Command("git", "-C", clone, "ls-tree", "-r", commit).Output()
+		require.NoError(t, err, "list the files of %s", commit)
+
+		for _, entry := range strings.Split(strings.TrimRight(string(listed), "\n"), "\n") {
+			object, path, found := strings.Cut(entry, "\t")
+			if !found || !strings.HasSuffix(path, ".go") {
+				continue
+			}
+			fields := strings.Fields(object)
+			if len(fields) != 3 || fields[1] != "blob" {
+				continue
+			}
+			if _, read := seen[fields[2]]; read {
+				continue
+			}
+			seen[fields[2]] = struct{}{}
+
+			body, err := exec.Command("git", "-C", clone, "cat-file", "blob", fields[2]).Output()
+			require.NoError(t, err, "read %s at %s", path, commit)
+			sources = append(sources, string(body))
+		}
+	}
+	require.NotZero(t, len(sources), "%s holds no Go source", bundlePath)
+	return sources
+}
+
+// walkthroughTree is the documentation tree whose pages answer to the recorded
+// repository rather than to an example under examples/.
+var walkthroughTree = []string{"sample", "taskboard", "walkthrough"}
+
+// isWalkthroughPage reports whether a page is one of the walkthrough's
+// chapters.
+func isWalkthroughPage(page string) bool {
+	return strings.HasPrefix(filepath.ToSlash(page)+"/", filepath.ToSlash(filepath.Join(append([]string{repositoryRoot}, walkthroughTree...)...))+"/")
 }
 
 // TestDocRegionsAreIncluded fails on a region no page includes. A marker left
@@ -553,7 +706,7 @@ func TestDocsQualifyExecWithReturningRule(t *testing.T) {
 // quoting it by hand would drift from the module the moment either moved.
 var documentationTrees = [][]string{
 	{"docs"},
-	{"sample", "taskboard", "walkthrough"},
+	walkthroughTree,
 }
 
 // documentationIndexPages are the pages that open a tree rather than sit

@@ -6,7 +6,7 @@ The repository returns a flat list of open tasks. The page prints them grouped u
 
 `internal/taskboard` holds what the page shows. It imports the store for its row types and knows nothing about HTTP or SQL, which is what makes it the easy part of the application to reason about.
 
-```text
+```go
 // Task is one open task as the page prints it.
 type Task struct {
 	ID       int64
@@ -37,7 +37,7 @@ type Page struct {
 
 The grouping is one pass over the rows:
 
-```text
+```go
 // GroupByProject folds rows into one Group per project. It relies on the
 // rows arriving in project order, which is the order
 // store.Repository.OpenTasks returns them in, so it starts a new group
@@ -117,7 +117,7 @@ source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat
 
 The handler names what it needs from the repository as two interfaces rather than taking the concrete type:
 
-```text
+```go
 // Reader supplies everything the page shows.
 type Reader interface {
 	OpenTasks(context.Context) ([]store.OpenTask, error)
@@ -154,7 +154,7 @@ source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat
 
 Drawing the page is three reads and one execute:
 
-```text
+```go
 func (h Handler) showPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	rows, err := h.reader.OpenTasks(ctx)
@@ -188,7 +188,7 @@ Each read passes `r.Context()`, so a browser that gives up cancels the query rat
 
 Both writes parse the form, call the repository, and answer `303 See Other`:
 
-```text
+```go
 func (h Handler) addTask(w http.ResponseWriter, r *http.Request) {
 	projectID, err := strconv.ParseInt(r.FormValue("project_id"), 10, 64)
 	if err != nil {

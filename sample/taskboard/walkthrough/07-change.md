@@ -239,7 +239,7 @@ internal/store/repository.go:68:52: cannot use assigneeID (variable of type int6
 
 `AddTask` took an `int64`. It has to take a pointer now, and a nil pointer has a meaning worth naming:
 
-```text
+```go
 // AddTask files one open task against projectID. A nil assigneeID files it
 // with nobody on it.
 func (repository Repository) AddTask(ctx context.Context, projectID int64, assigneeID *int64, title string) error {
