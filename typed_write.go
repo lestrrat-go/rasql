@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/method"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // ColumnValuer is implemented by row types that supply their own column values.
@@ -385,6 +386,15 @@ func typedInsertMany[T any](table Table[T], values []T, defaultColumns map[strin
 		if definitionColumn.GeneratedExpression != "" {
 			continue
 		}
+		// An ALWAYS identity column cannot be written to either: PostgreSQL
+		// rejects an explicit value for one ("cannot insert a non-DEFAULT
+		// value"). A BY DEFAULT identity column stays in the list, since it
+		// accepts an explicit value; a caller who wants the sequence to
+		// supply one names it in DefaultColumns instead, the same way they
+		// already do for a BIGSERIAL column.
+		if definitionColumn.Identity == schema.IdentityAlways {
+			continue
+		}
 		column, err := reference.Column(definitionColumn.Name)
 		if err != nil {
 			return query.Insert{}, err
@@ -487,6 +497,13 @@ func typedUpdateWithOptions[T any](table Table[T], value T, config updateConfig)
 			if selectedColumn.GeneratedExpression != "" {
 				return query.Update{}, fmt.Errorf("column %q is generated and cannot be updated", name)
 			}
+			// An ALWAYS identity column is refused the same way: PostgreSQL
+			// rejects an UPDATE naming one ("can only be updated to
+			// DEFAULT"). A BY DEFAULT identity column is left untouched
+			// here, since it is updatable like any other column.
+			if selectedColumn.Identity == schema.IdentityAlways {
+				return query.Update{}, fmt.Errorf("column %q is an ALWAYS identity column and cannot be updated", name)
+			}
 		}
 	} else {
 		selected = make([]string, 0, len(definition.Columns))
@@ -498,6 +515,11 @@ func typedUpdateWithOptions[T any](table Table[T], value T, config updateConfig)
 			// column never belongs in a write statement, so it is excluded
 			// from the default selection the same way a primary key is.
 			if column.GeneratedExpression != "" {
+				continue
+			}
+			// See the matching comment above: an ALWAYS identity column is
+			// skipped from the default assignment list the same way.
+			if column.Identity == schema.IdentityAlways {
 				continue
 			}
 			selected = append(selected, column.Name)

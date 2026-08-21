@@ -298,4 +298,8 @@ func TestBuiltinCapabilities(t *testing.T) {
 	require.False(t, dialect.SQLite().Supports(dialect.CapabilityQualifiedReference))
 	require.False(t, dialect.SQLite().Supports(dialect.CapabilityQualifiedIndexTarget))
 	require.True(t, dialect.SQLite().Supports(dialect.CapabilityQualifiedIndexName))
+
+	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityPartialIndex))
+	require.True(t, dialect.SQLite().Supports(dialect.CapabilityPartialIndex))
+	require.False(t, dialect.MySQL().Supports(dialect.CapabilityPartialIndex))
 }

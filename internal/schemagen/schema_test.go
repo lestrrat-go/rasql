@@ -910,6 +910,33 @@ func TestSchemaGeneratesGeneratedColumns(t *testing.T) {
 	require.Contains(t, string(source), `{Name: "fahrenheit", Type: schema.IntegerType{}, GeneratedExpression: "celsius * 9 / 5 + 32", GeneratedStorage: schema.GeneratedStored}`)
 }
 
+// TestSchemaGeneratesIdentityColumns pins the generator's mapping for an
+// identity column: Identity restates in the generated descriptor literal,
+// so regenerating from the generated source reproduces the same identity
+// column rather than silently turning it into a plain writable one. The
+// row type still gets an ordinary field for it, since an identity column
+// reads back like any other column and an UPDATE/DELETE by primary key
+// needs it; the restated field is what typedInsertMany in the root
+// package reads to leave an ALWAYS identity primary key out of the
+// default INSERT column list automatically, with no per-store code and no
+// caller opt-in.
+func TestSchemaGeneratesIdentityColumns(t *testing.T) {
+	members := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+			{Name: "legacy_id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	source, err := schemagen.PackageSource("generated", members)
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*ID\s+int64$`, string(source))
+	require.Contains(t, string(source), `{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways}`)
+	require.Contains(t, string(source), `{Name: "legacy_id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault}`)
+}
+
 // TestSchemaGeneratesTextWidthColumns pins the generator's text-width
 // mapping. A stated width restates schema.NewTextWidth(n) in the generated
 // descriptor literal, so regenerating from the generated source produces the
