@@ -310,14 +310,11 @@ func TestCreateIndexesRejectsNonDefaultMethod(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestCreateIndexesRejectsPartialIndex proves that an IndexDef naming a
-// Predicate, such as a partial index inspect now describes instead of
-// rejecting, is refused at render time with a typed error rather than
-// silently rendered as a plain unconditional index: rendering a plain index
-// in a partial index's place would build a stricter index than the one the
-// database actually has, which is the exact wrong-DDL failure this refusal
-// exists to prevent.
-func TestCreateIndexesRejectsPartialIndex(t *testing.T) {
+// TestCreateIndexesRendersPartialIndexOnDialectsWithTheCapability proves
+// that an IndexDef naming a Predicate, such as a partial index inspect
+// describes, renders a WHERE clause verbatim on a dialect that has
+// dialect.CapabilityPartialIndex: PostgreSQL and SQLite.
+func TestCreateIndexesRendersPartialIndexOnDialectsWithTheCapability(t *testing.T) {
 	table := schema.TableDef{
 		Name: "documents",
 		Columns: []schema.ColumnDef{
@@ -332,21 +329,58 @@ func TestCreateIndexesRejectsPartialIndex(t *testing.T) {
 		}},
 	}
 
-	_, err := render.CreateIndexes(dialect.PostgreSQL(), table)
-	require.ErrorContains(t, err, `"documents_active_idx"`)
-	require.ErrorContains(t, err, `"status = 'active'"`)
-	require.ErrorContains(t, err, "can describe but not yet render")
+	postgreSQLIndexes, err := render.CreateIndexes(dialect.PostgreSQL(), table)
+	require.NoError(t, err)
+	require.Equal(t, []string{`CREATE INDEX "documents_active_idx" ON "documents" ("status") WHERE status = 'active'`}, sqls(postgreSQLIndexes))
 
-	var predicateErr *render.UnsupportedPartialIndexError
-	require.ErrorAs(t, err, &predicateErr)
-	require.Equal(t, "documents_active_idx", predicateErr.Index)
-	require.Equal(t, "status = 'active'", predicateErr.Predicate)
-	require.ErrorIs(t, err, render.ErrUnsupportedPartialIndex)
+	sqliteIndexes, err := render.CreateIndexes(dialect.SQLite(), table)
+	require.NoError(t, err)
+	require.Equal(t, []string{`CREATE INDEX "documents_active_idx" ON "documents" ("status") WHERE status = 'active'`}, sqls(sqliteIndexes))
 
 	// CreateTable never reaches an index's Predicate: indexes render as
 	// separate CREATE INDEX statements, never inline in CREATE TABLE, so
 	// the same table's partial index does not stop it from rendering.
 	_, err = render.CreateTable(dialect.PostgreSQL(), table)
+	require.NoError(t, err)
+}
+
+// TestCreateIndexesRejectsPartialIndexOnMySQL proves that an IndexDef
+// naming a Predicate is refused at render time on MySQL, which has no
+// dialect.CapabilityPartialIndex: MySQL rejects a WHERE clause on CREATE
+// INDEX with a syntax error, so rendering one anyway would build DDL MySQL
+// cannot execute, and rendering a plain unconditional index in its place
+// would build a stricter index than the one the database actually has.
+func TestCreateIndexesRejectsPartialIndexOnMySQL(t *testing.T) {
+	table := schema.TableDef{
+		Name: "documents",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{{
+			Name:      "documents_active_idx",
+			Columns:   []string{"status"},
+			Predicate: "status = 'active'",
+		}},
+	}
+
+	_, err := render.CreateIndexes(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"documents_active_idx"`)
+	require.ErrorContains(t, err, `"status = 'active'"`)
+	require.ErrorContains(t, err, "mysql")
+
+	var predicateErr *render.UnsupportedPartialIndexError
+	require.ErrorAs(t, err, &predicateErr)
+	require.Equal(t, "documents_active_idx", predicateErr.Index)
+	require.Equal(t, "status = 'active'", predicateErr.Predicate)
+	require.Equal(t, "mysql", predicateErr.Dialect)
+	require.ErrorIs(t, err, render.ErrUnsupportedPartialIndex)
+
+	// CreateTable never reaches an index's Predicate: indexes render as
+	// separate CREATE INDEX statements, never inline in CREATE TABLE, so
+	// the same table's partial index does not stop it from rendering.
+	_, err = render.CreateTable(dialect.MySQL(), table)
 	require.NoError(t, err)
 }
 
@@ -1204,6 +1238,163 @@ func TestCreateTableRejectsGeneratedColumn(t *testing.T) {
 	require.Equal(t, "celsius * 9 / 5 + 32", generatedErr.Expression)
 	require.Equal(t, schema.GeneratedStored, generatedErr.Storage)
 	require.ErrorIs(t, err, render.ErrUnsupportedGeneratedColumn)
+}
+
+// TestCreateTableRendersIdentityColumnOnPostgreSQL proves that both
+// IdentityGeneration values render their own GENERATED ... AS IDENTITY
+// clause on PostgreSQL, appended after a column's type and NOT NULL.
+func TestCreateTableRendersIdentityColumnOnPostgreSQL(t *testing.T) {
+	table := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+			{Name: "legacy_id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	rendered, err := render.CreateTable(dialect.PostgreSQL(), table)
+	require.NoError(t, err)
+	require.Equal(t, `CREATE TABLE "members" ("id" BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY, "legacy_id" BIGINT NOT NULL GENERATED BY DEFAULT AS IDENTITY, PRIMARY KEY ("id"))`, rendered.SQL())
+}
+
+// TestCreateTableRendersIdentityByDefaultAsAutoIncrementOnMySQL proves
+// that IdentityByDefault renders AUTO_INCREMENT on MySQL, since MySQL's
+// AUTO_INCREMENT is BY DEFAULT-shaped: it accepts an explicit value.
+func TestCreateTableRendersIdentityByDefaultAsAutoIncrementOnMySQL(t *testing.T) {
+	table := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	rendered, err := render.CreateTable(dialect.MySQL(), table)
+	require.NoError(t, err)
+	require.Equal(t, "CREATE TABLE `members` (`id` BIGINT NOT NULL AUTO_INCREMENT, PRIMARY KEY (`id`))", rendered.SQL())
+}
+
+// TestCreateTableRejectsIdentityAlwaysOnMySQL proves that IdentityAlways
+// is refused on MySQL rather than rendered as AUTO_INCREMENT: MySQL has no
+// form that rejects an explicit value, so rendering AUTO_INCREMENT for
+// IdentityAlways would silently weaken the column.
+func TestCreateTableRejectsIdentityAlwaysOnMySQL(t *testing.T) {
+	table := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := render.CreateTable(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"id"`)
+	require.ErrorContains(t, err, "ALWAYS")
+
+	var identityErr *render.UnsupportedIdentityColumnError
+	require.ErrorAs(t, err, &identityErr)
+	require.Equal(t, "id", identityErr.Column)
+	require.Equal(t, schema.IdentityAlways, identityErr.Identity)
+	require.Equal(t, "mysql", identityErr.Dialect)
+	require.ErrorIs(t, err, render.ErrUnsupportedIdentityColumn)
+}
+
+// TestCreateTableRejectsIdentityColumnOnSQLite proves that SQLite, which
+// has no per-column identity feature at all, refuses either generation.
+func TestCreateTableRejectsIdentityColumnOnSQLite(t *testing.T) {
+	table := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := render.CreateTable(dialect.SQLite(), table)
+	require.ErrorContains(t, err, `"id"`)
+
+	var identityErr *render.UnsupportedIdentityColumnError
+	require.ErrorAs(t, err, &identityErr)
+	require.Equal(t, "id", identityErr.Column)
+	require.Equal(t, schema.IdentityAlways, identityErr.Identity)
+	require.Equal(t, "sqlite", identityErr.Dialect)
+	require.ErrorIs(t, err, render.ErrUnsupportedIdentityColumn)
+}
+
+// TestCreateTableRejectsUnkeyedIdentityColumnOnMySQL proves that MySQL
+// error 1075 ("there can be only one auto column and it must be defined as
+// a key") is enforced before any CREATE TABLE definition is built: an
+// identity column that is not the leading column of the primary key or of
+// any unique constraint is refused, rather than left for MySQL itself to
+// reject.
+func TestCreateTableRejectsUnkeyedIdentityColumnOnMySQL(t *testing.T) {
+	table := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "tenant_id", Type: schema.IntegerType{}},
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault},
+		},
+		PrimaryKey: []string{"tenant_id", "id"},
+	}
+
+	_, err := render.CreateTable(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"id"`)
+	require.ErrorContains(t, err, "leading column")
+
+	var identityErr *render.UnsupportedIdentityColumnError
+	require.ErrorAs(t, err, &identityErr)
+	require.Equal(t, "id", identityErr.Column)
+	require.Equal(t, "mysql", identityErr.Dialect)
+	require.ErrorIs(t, err, render.ErrUnsupportedIdentityColumn)
+}
+
+// TestCreateTableAcceptsIdentityColumnLeadingAUniqueConstraintOnMySQL is
+// the positive counterpart to TestCreateTableRejectsUnkeyedIdentityColumnOnMySQL:
+// an identity column need not lead the primary key, as long as it leads
+// some unique constraint.
+func TestCreateTableAcceptsIdentityColumnLeadingAUniqueConstraintOnMySQL(t *testing.T) {
+	table := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "tenant_id", Type: schema.IntegerType{}},
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault},
+		},
+		PrimaryKey: []string{"tenant_id"},
+		UniqueConstraints: []schema.UniqueDef{{
+			Name:    "members_id_key",
+			Columns: []string{"id"},
+		}},
+	}
+
+	rendered, err := render.CreateTable(dialect.MySQL(), table)
+	require.NoError(t, err)
+	require.Contains(t, rendered.SQL(), "AUTO_INCREMENT")
+}
+
+// TestCreateTableRejectsSecondIdentityColumnOnMySQL proves that MySQL
+// error 1075's "only one auto column" rule is enforced the same way: a
+// second identity column is refused even when the first is properly
+// keyed.
+func TestCreateTableRejectsSecondIdentityColumnOnMySQL(t *testing.T) {
+	table := schema.TableDef{
+		Name: "members",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault},
+			{Name: "legacy_id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault},
+		},
+		PrimaryKey: []string{"id"},
+	}
+
+	_, err := render.CreateTable(dialect.MySQL(), table)
+	require.ErrorContains(t, err, `"legacy_id"`)
+	require.ErrorContains(t, err, "only one auto-increment column")
+
+	var identityErr *render.UnsupportedIdentityColumnError
+	require.ErrorAs(t, err, &identityErr)
+	require.Equal(t, "legacy_id", identityErr.Column)
+	require.Equal(t, "mysql", identityErr.Dialect)
+	require.ErrorIs(t, err, render.ErrUnsupportedIdentityColumn)
 }
 
 // TestCreateTableRejectsIntegerDisplayWidth proves that an IntegerType

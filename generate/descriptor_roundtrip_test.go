@@ -59,8 +59,9 @@ func TestSchemaDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 // newTableDefFixture returns a schema.TableDef covering every TableDef field
 // that can coexist with a primary key, indexes, and constraints: every
 // column type with its own type-specific options, both generated-column
-// storage kinds, a table-level primary key with AUTOINCREMENT and an ON
-// CONFLICT clause, a STRICT WITHOUT ROWID table, a column-based and a
+// storage kinds, an ALWAYS identity column, a table-level primary key with
+// AUTOINCREMENT and an ON CONFLICT clause, a STRICT WITHOUT ROWID table, a
+// column-based and a
 // Keys-based unique constraint, a check, an exclusion constraint, a
 // column-based, an expression-based, and a Keys-based index, a foreign key
 // naming every one of its own options, and a relationship matching it.
@@ -99,6 +100,11 @@ func newTableDefFixture() schema.TableDef {
 			{Name: "created_at", Type: schema.TimeType{}},
 			{Name: "meta", Type: schema.JSONType{}},
 			{Name: "uid", Type: schema.UUIDType{}},
+			{
+				Name:     "external_id",
+				Type:     schema.IntegerType{},
+				Identity: schema.IdentityAlways,
+			},
 			{
 				Name:                "full_name",
 				Type:                schema.TextType{},

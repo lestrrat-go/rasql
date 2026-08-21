@@ -407,6 +407,39 @@ func TestDumpSQLiteTypeAllowed(t *testing.T) {
 	}
 }
 
+// TestDumpColumnFactHasDefaultIdentitySequence pins the guard
+// applyDumpGuards' PostgreSQL branch uses to decide whether an identity
+// column's sequence is safe to dump: render emits a bare
+// GENERATED ... AS IDENTITY clause with no START WITH or INCREMENT BY, so
+// only bigint's own defaults (start 1, increment 1, minimum 1, maximum
+// 9223372036854775807, cycle NO) replay identically. Any one fact stated
+// differently, such as a START WITH 100 INCREMENT BY 5 identity column,
+// must refuse.
+func TestDumpColumnFactHasDefaultIdentitySequence(t *testing.T) {
+	defaultSequence := dumpColumnFact{
+		IdentityStart:     sql.NullString{String: "1", Valid: true},
+		IdentityIncrement: sql.NullString{String: "1", Valid: true},
+		IdentityMinimum:   sql.NullString{String: "1", Valid: true},
+		IdentityMaximum:   sql.NullString{String: "9223372036854775807", Valid: true},
+		IdentityCycle:     sql.NullString{String: "NO", Valid: true},
+	}
+	require.True(t, defaultSequence.hasDefaultIdentitySequence())
+
+	nonDefaultCases := map[string]dumpColumnFact{
+		"start":     {IdentityStart: sql.NullString{String: "100", Valid: true}, IdentityIncrement: defaultSequence.IdentityIncrement, IdentityMinimum: defaultSequence.IdentityMinimum, IdentityMaximum: defaultSequence.IdentityMaximum, IdentityCycle: defaultSequence.IdentityCycle},
+		"increment": {IdentityStart: defaultSequence.IdentityStart, IdentityIncrement: sql.NullString{String: "5", Valid: true}, IdentityMinimum: defaultSequence.IdentityMinimum, IdentityMaximum: defaultSequence.IdentityMaximum, IdentityCycle: defaultSequence.IdentityCycle},
+		"minimum":   {IdentityStart: defaultSequence.IdentityStart, IdentityIncrement: defaultSequence.IdentityIncrement, IdentityMinimum: sql.NullString{String: "0", Valid: true}, IdentityMaximum: defaultSequence.IdentityMaximum, IdentityCycle: defaultSequence.IdentityCycle},
+		"maximum":   {IdentityStart: defaultSequence.IdentityStart, IdentityIncrement: defaultSequence.IdentityIncrement, IdentityMinimum: defaultSequence.IdentityMinimum, IdentityMaximum: sql.NullString{String: "1000", Valid: true}, IdentityCycle: defaultSequence.IdentityCycle},
+		"cycle":     {IdentityStart: defaultSequence.IdentityStart, IdentityIncrement: defaultSequence.IdentityIncrement, IdentityMinimum: defaultSequence.IdentityMinimum, IdentityMaximum: defaultSequence.IdentityMaximum, IdentityCycle: sql.NullString{String: "YES", Valid: true}},
+		"unset":     {},
+	}
+	for name, fact := range nonDefaultCases {
+		t.Run("refused/"+name, func(t *testing.T) {
+			require.False(t, fact.hasDefaultIdentitySequence())
+		})
+	}
+}
+
 func TestFirstTypeViolationAndTypeGateError(t *testing.T) {
 	teams := schema.TableDef{
 		Name: "teams",
