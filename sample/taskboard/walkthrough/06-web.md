@@ -55,7 +55,7 @@ func GroupByProject(rows []store.OpenTask) []Group {
 }
 ```
 
-This is where [chapter 5's `ORDER BY`](05-queries.md#the-read-the-page-is-drawn-from) is spent. The query orders by `project_id`, so every project's rows arrive together, and the fold compares each row against the group it is currently filling instead of keeping a map of projects it has seen. Chapter 5's ordering and this loop are one decision made in two files, which the comment says out loud so that a later change to either one has a reason to check the other.
+This is where [chapter 5's `ORDER BY`](05-queries.md#read-the-open-tasks) is spent. The query orders by `project_id`, so every project's rows arrive together, and the fold compares each row against the group it is currently filling instead of keeping a map of projects it has seen. Chapter 5's ordering and this loop are one decision made in two files, which the comment says out loud so that a later change to either one has a reason to check the other.
 
 `ProjectChoices` and `MemberChoices` turn the two whole-table reads into the form's lists.
 
@@ -452,4 +452,4 @@ Chapter 7 changes the schema underneath all of that and follows the compiler thr
 
 ## Next
 
-Chapter 7 adds a due date to tasks and lets a task go unowned.
+[Change the schema](07-change.md).

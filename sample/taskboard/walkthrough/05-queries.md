@@ -1,6 +1,6 @@
 # 5. Build the repository
 
-[Chapter 4](04-generate.md) generated the types. This chapter writes the three operations the page needs on top of them: the joined read that draws the list, the insert behind the add form, and the update behind the close button.
+[Chapter 4](04-generate.md) generated the types. This chapter writes the operations the page needs on top of them: reading the open tasks, adding a task, closing one, and reading the two lists the add form offers.
 
 ## Where the repository lives
 
@@ -39,7 +39,7 @@ source: [sample/taskboard/internal/store/repository.go](https://github.com/lestr
 
 A `rasql.DB` pairs a database handle with the dialect used to render SQL, and it is a plain value, so there is nothing here to close. [Chapter 6](06-web.md) is where one gets built.
 
-## The read the page is drawn from
+## Read the open tasks
 
 The page shows a task's title, the project it sits under, and the owner's name. Those come from three tables, so the result has a shape no single table's row type describes. Declare that shape:
 
@@ -102,7 +102,7 @@ true
 
 One statement, one argument, both joins spelled out from the foreign keys.
 
-## The insert behind the add form
+## Add a task
 
 A new task supplies three values. The other three columns are the database's business: `id` is an identity column, `is_open` defaults to true, and `created_at` defaults to `now()`.
 
@@ -124,7 +124,7 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 
 `id` is not in that list, and it does not need to be. The descriptor chapter 4 generated marks it `Identity: schema.IdentityAlways`, and rasql's write path drops such a column from an insert on its own, because PostgreSQL rejects an explicit value for one. [Chapter 2](02-database.md#the-primary-key-identity-or-serial) is where that rejection was first seen, from the other side.
 
-## The update behind the close button
+## Close a task
 
 Closing a task changes one column of one row. `rasql.Update` writes a whole row addressed by its primary key, which would mean reading the task first only to write it back. `rasql.UpdateMany` states the change and the predicate instead:
 
@@ -148,7 +148,7 @@ source: [sample/taskboard/internal/store/repository.go](https://github.com/lestr
 
 `rasql.UpdateColumns` limits the statement to `is_open`, so the rest of the passed row is never read and its zero values never reach the database. `rasql.UpdateWhere` supplies the predicate. Naming a task that does not exist, or one that is closed already, updates no rows and reports no error, which is the right answer for a button somebody clicked twice.
 
-## The two lists the form needs
+## Read the projects and members
 
 The add form offers a project and an owner to pick from. Both are whole-table reads of a row type that already exists, so both go through `rasql.SelectFrom`:
 
