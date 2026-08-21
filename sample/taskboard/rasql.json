@@ -1,5 +1,8 @@
 {
   "package": "store",
   "output": "internal/store",
-  "dialect": "sqlite"
+  "dialect": "postgresql",
+  "queries": [
+    {"input": "queries/overdue_count.sql", "function": "OverdueCount"}
+  ]
 }

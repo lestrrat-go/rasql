@@ -1,85 +1,87 @@
+// Command taskboard serves the Taskboard page over HTTP.
 package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/dialect"
 	"example.com/taskboard/internal/store"
 	"example.com/taskboard/internal/web"
-	_ "modernc.org/sqlite"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "taskboard: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	dsn := os.Getenv("TASKBOARD_DSN")
+	if dsn == "" {
+		return errors.New("set TASKBOARD_DSN to the taskboard connection string")
+	}
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("parse TASKBOARD_DSN: %w", err)
+	}
+	database := stdlib.OpenDB(*config)
+	defer func() { _ = database.Close() }()
+
+	// A rasql.DB pairs the handle with the dialect used to render SQL.
+	db, err := rasql.New(database, dialect.PostgreSQL())
+	if err != nil {
+		return fmt.Errorf("create the rasql db: %w", err)
+	}
+
+	address := os.Getenv("TASKBOARD_ADDR")
+	if address == "" {
+		address = "127.0.0.1:8080"
+	}
+	repository := store.New(db)
+	handler := web.NewHandler(repository, repository, logger)
+	server := &http.Server{
+		Addr:              address,
+		Handler:           handler.Routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	server, database, err := newServer(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "taskboard: %s\n", err)
-		os.Exit(1)
-	}
-	defer database.Close()
+	listening := make(chan error, 1)
+	go func() {
+		logger.Info("taskboard is listening", slog.String("address", address))
+		listening <- server.ListenAndServe()
+	}()
 
-	controller, err := server.Run(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "taskboard: %s\n", err)
-		os.Exit(1)
+	select {
+	case err := <-listening:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
 	}
-	fmt.Printf("Taskboard is listening at http://%s\n", controller.Addr())
-	if err := controller.Wait(); err != nil && !errors.Is(err, web.ErrServerClosed) {
-		fmt.Fprintf(os.Stderr, "taskboard: %s\n", err)
-		os.Exit(1)
-	}
-}
 
-func newServer(ctx context.Context) (web.Server, *sql.DB, error) {
-	database, err := sql.Open("sqlite", databaseDSN())
-	if err != nil {
-		return web.Server{}, nil, fmt.Errorf("open SQLite database: %w", err)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shut down: %w", err)
 	}
-	database.SetMaxOpenConns(1)
-
-	// SQLite enables foreign keys per connection, so keep its configuration on
-	// the application's single connection.
-	if _, err := database.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-		_ = database.Close()
-		return web.Server{}, nil, fmt.Errorf("enable SQLite foreign keys: %w", err)
-	}
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		_ = database.Close()
-		return web.Server{}, nil, fmt.Errorf("create rasql db: %w", err)
-	}
-	repository := store.New(db)
-	if err := repository.SeedDemo(ctx); err != nil {
-		_ = database.Close()
-		return web.Server{}, nil, fmt.Errorf("seed taskboard: %w", err)
-	}
-	handler, err := web.NewTaskboardHandler(repository)
-	if err != nil {
-		_ = database.Close()
-		return web.Server{}, nil, fmt.Errorf("create taskboard handler: %w", err)
-	}
-	return web.NewServer(listenAddress(), handler), database, nil
-}
-
-func listenAddress() string {
-	if address := os.Getenv("TASKBOARD_ADDR"); address != "" {
-		return address
-	}
-	return "127.0.0.1:8080"
-}
-
-func databaseDSN() string {
-	if dsn := os.Getenv("TASKBOARD_DSN"); dsn != "" {
-		return dsn
-	}
-	return "taskboard.db"
+	logger.Info("taskboard stopped")
+	return nil
 }

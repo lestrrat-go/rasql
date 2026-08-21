@@ -8,17 +8,12 @@ import (
 )
 
 var membersDef = schema.TableDef{
-	Schema: "main",
-	Name:   "members",
+	Name: "members",
 	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
 		{Name: "name", Type: schema.TextType{}},
-		{Name: "email", Type: schema.TextType{}},
 	},
 	PrimaryKey: []string{"id"},
-	UniqueConstraints: []schema.UniqueDef{
-		{Columns: []string{"email"}},
-	},
 }
 
 var membersTable = MembersTable{rasql.TableFrom[MembersRow](membersDef)}
@@ -27,21 +22,12 @@ var membersTable = MembersTable{rasql.TableFrom[MembersRow](membersDef)}
 func MembersDef() schema.TableDef { return membersDef.Clone() }
 
 var projectsDef = schema.TableDef{
-	Schema: "main",
-	Name:   "projects",
+	Name: "projects",
 	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "owner_id", Type: schema.IntegerType{}},
+		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
 		{Name: "name", Type: schema.TextType{}},
-		{Name: "archived", Type: schema.BooleanType{}, Default: "FALSE"},
 	},
 	PrimaryKey: []string{"id"},
-	ForeignKeys: []schema.ForeignKeyDef{
-		{Columns: []string{"owner_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}, OnDelete: schema.NoAction, OnUpdate: schema.NoAction},
-	},
-	Relationships: []schema.RelationshipDef{
-		{Name: "Owner", Kind: schema.RelationshipBelongsTo, Columns: []string{"owner_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},
-	},
 }
 
 var projectsTable = ProjectsTable{rasql.TableFrom[ProjectsRow](projectsDef)}
@@ -50,26 +36,23 @@ var projectsTable = ProjectsTable{rasql.TableFrom[ProjectsRow](projectsDef)}
 func ProjectsDef() schema.TableDef { return projectsDef.Clone() }
 
 var tasksDef = schema.TableDef{
-	Schema: "main",
-	Name:   "tasks",
+	Name: "tasks",
 	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
 		{Name: "project_id", Type: schema.IntegerType{}},
-		{Name: "assignee_id", Type: schema.IntegerType{}},
+		{Name: "assignee_id", Type: schema.IntegerType{}, Nullable: true},
 		{Name: "title", Type: schema.TextType{}},
-		{Name: "status", Type: schema.TextType{}},
-		{Name: "priority", Type: schema.IntegerType{}},
+		{Name: "is_open", Type: schema.BooleanType{}, Default: "true"},
+		{Name: "created_at", Type: schema.TimeType{}, Default: "now()"},
+		{Name: "due_on", Type: schema.TimeType{}, Nullable: true},
 	},
 	PrimaryKey: []string{"id"},
-	Checks: []schema.CheckDef{
-		{Expression: "status IN ('todo', 'in_progress', 'done')"},
-	},
 	Indexes: []schema.IndexDef{
-		{Name: "tasks_open_by_project", Columns: []string{"project_id", "status", "priority"}},
+		{Name: "tasks_open_by_project", Columns: []string{"project_id", "id"}, Predicate: "is_open"},
 	},
 	ForeignKeys: []schema.ForeignKeyDef{
-		{Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}, OnDelete: schema.NoAction, OnUpdate: schema.NoAction},
-		{Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}, OnDelete: schema.NoAction, OnUpdate: schema.NoAction},
+		{Name: "tasks_assignee_id_fkey", Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}, OnDelete: schema.SetNull, OnUpdate: schema.NoAction},
+		{Name: "tasks_project_id_fkey", Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction},
 	},
 	Relationships: []schema.RelationshipDef{
 		{Name: "Assignee", Kind: schema.RelationshipBelongsTo, Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},

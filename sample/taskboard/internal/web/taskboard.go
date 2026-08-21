@@ -1,133 +1,143 @@
+// Package web turns HTTP requests into repository calls and draws the
+// Taskboard page from the view model.
 package web
 
 import (
-	"fmt"
+	"context"
+	_ "embed"
 	"html/template"
 	"log/slog"
 	"net/http"
-	"reflect"
 	"strconv"
+	"time"
 
+	"example.com/taskboard/internal/store"
 	"example.com/taskboard/internal/taskboard"
 )
 
-const taskboardTemplate = `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Taskboard</title></head>
-<body>
-<main>
-<h1>Website refresh</h1>
-<ul>{{range .Tasks}}<li>P{{.Priority}} {{.Title}}</li>{{end}}</ul>
-<nav>{{if .PreviousPage}}<a href="/?page={{.PreviousPage}}">Previous</a>{{end}}{{if .NextPage}}<a href="/?page={{.NextPage}}">Next</a>{{end}}</nav>
-</main>
-</body>
-</html>`
+//go:embed page.html
+var pageSource string
 
-const taskboardPageSize = 50
+var pageTemplate = template.Must(template.New("page").Parse(pageSource))
 
-type taskboardPage struct {
-	Tasks        []taskboard.Summary
-	PreviousPage int
-	NextPage     int
+// Reader supplies everything the page shows.
+type Reader interface {
+	OpenTasks(context.Context) ([]store.OpenTask, error)
+	AllProjects(context.Context) ([]store.ProjectsRow, error)
+	AllMembers(context.Context) ([]store.MembersRow, error)
+	CountOverdue(ctx context.Context, on time.Time) (int64, error)
 }
 
-type taskboardHandler struct {
-	tasks  taskboard.TaskReader
-	page   *template.Template
+// Writer takes the two changes the page can make.
+type Writer interface {
+	AddTask(ctx context.Context, projectID int64, assigneeID *int64, title string) error
+	CloseTask(ctx context.Context, taskID int64) error
+}
+
+// Handler serves the Taskboard page and its two forms.
+type Handler struct {
+	reader Reader
+	writer Writer
 	logger *slog.Logger
 }
 
-// NewTaskboardHandler returns the Taskboard HTTP routes. It returns an error
-// if tasks is nil.
-func NewTaskboardHandler(tasks taskboard.TaskReader) (http.Handler, error) {
-	return newTaskboardHandler(tasks, slog.Default())
+// NewHandler creates a handler over a reader and a writer. store.Repository
+// satisfies both, so an application passes it twice; a test passes whatever
+// it needs to stand in for either half.
+func NewHandler(reader Reader, writer Writer, logger *slog.Logger) Handler {
+	return Handler{reader: reader, writer: writer, logger: logger}
 }
 
-func newTaskboardHandler(tasks taskboard.TaskReader, logger *slog.Logger) (http.Handler, error) {
-	if isNilTaskReader(tasks) {
-		return nil, fmt.Errorf("taskboard: tasks must not be nil")
-	}
-	handler := taskboardHandler{
-		tasks:  tasks,
-		page:   template.Must(template.New("taskboard").Parse(taskboardTemplate)),
-		logger: logger,
-	}
+// Routes returns the mux serving the application.
+func (h Handler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", handler.showTasks)
-	mux.HandleFunc("GET /healthz", health)
-	return mux, nil
+	mux.HandleFunc("GET /{$}", h.showPage)
+	mux.HandleFunc("POST /tasks", h.addTask)
+	mux.HandleFunc("POST /tasks/{id}/close", h.closeTask)
+	return mux
 }
 
-// isNilTaskReader reports whether tasks is a nil interface value or a
-// non-nil interface holding a nil pointer, map, slice, chan, or func.
-func isNilTaskReader(tasks taskboard.TaskReader) bool {
-	if tasks == nil {
-		return true
+func (h Handler) showPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	rows, err := h.reader.OpenTasks(ctx)
+	if err != nil {
+		h.fail(w, r, "read open tasks", err)
+		return
 	}
-	value := reflect.ValueOf(tasks)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
+	projects, err := h.reader.AllProjects(ctx)
+	if err != nil {
+		h.fail(w, r, "read projects", err)
+		return
+	}
+	members, err := h.reader.AllMembers(ctx)
+	if err != nil {
+		h.fail(w, r, "read members", err)
+		return
+	}
+	overdue, err := h.reader.CountOverdue(ctx, time.Now())
+	if err != nil {
+		h.fail(w, r, "count overdue tasks", err)
+		return
+	}
+	page := taskboard.Page{
+		Groups:   taskboard.GroupByProject(rows),
+		Overdue:  overdue,
+		Projects: taskboard.ProjectChoices(projects),
+		Members:  taskboard.MemberChoices(members),
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := pageTemplate.Execute(w, page); err != nil {
+		h.logger.ErrorContext(ctx, "failed to draw the taskboard page", slog.String("error", err.Error()))
 	}
 }
 
-func (handler taskboardHandler) showTasks(response http.ResponseWriter, request *http.Request) {
-	offset, err := taskboardOffset(request)
+func (h Handler) addTask(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(r.FormValue("project_id"), 10, 64)
 	if err != nil {
-		http.Error(response, "page must be a positive integer", http.StatusBadRequest)
+		http.Error(w, "project_id must be a number", http.StatusBadRequest)
 		return
 	}
-	tasks, err := handler.tasks.OpenTasks(request.Context(), 100, taskboardPageSize+1, offset)
-	if err != nil {
-		handler.logger.Error("read open tasks", "error", err)
-		http.Error(response, "taskboard is unavailable", http.StatusInternalServerError)
-		return
-	}
-	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	page := taskboardPage{Tasks: tasks}
-	if offset > 0 {
-		page.PreviousPage = offset / taskboardPageSize
-	}
-	if len(tasks) > taskboardPageSize {
-		page.Tasks = tasks[:taskboardPageSize]
-		nextPage := offset/taskboardPageSize + 2
-		if nextPage <= maximumTaskboardPage() {
-			page.NextPage = nextPage
+	// An empty assignee_id is the form's way of saying nobody owns this yet.
+	var assigneeID *int64
+	if raw := r.FormValue("assignee_id"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			http.Error(w, "assignee_id must be a number", http.StatusBadRequest)
+			return
 		}
+		assigneeID = &parsed
 	}
-	if err := handler.page.Execute(response, page); err != nil {
+	title := r.FormValue("title")
+	if title == "" {
+		http.Error(w, "title must not be empty", http.StatusBadRequest)
 		return
 	}
-}
-
-func taskboardOffset(request *http.Request) (int, error) {
-	value := request.URL.Query().Get("page")
-	if value == "" {
-		return 0, nil
-	}
-	page, err := strconv.Atoi(value)
-	if err != nil || page < 1 {
-		return 0, fmt.Errorf("invalid page %q", value)
-	}
-	if page > maximumTaskboardPage() {
-		return 0, fmt.Errorf("invalid page %q", value)
-	}
-	return (page - 1) * taskboardPageSize, nil
-}
-
-func maximumTaskboardPage() int {
-	maxOffset := int(^uint(0) >> 1)
-	return maxOffset/taskboardPageSize + 1
-}
-
-// health serves /healthz, a liveness probe reporting only that the process
-// is up. It deliberately does not query the database: a liveness probe that
-// depended on the store would let a store outage restart or kill an
-// otherwise healthy process instead of letting it recover on its own.
-func health(response http.ResponseWriter, _ *http.Request) {
-	if _, err := fmt.Fprintln(response, "ok"); err != nil {
+	if err := h.writer.AddTask(r.Context(), projectID, assigneeID, title); err != nil {
+		h.fail(w, r, "add task", err)
 		return
 	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (h Handler) closeTask(w http.ResponseWriter, r *http.Request) {
+	taskID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "task id must be a number", http.StatusBadRequest)
+		return
+	}
+	if err := h.writer.CloseTask(r.Context(), taskID); err != nil {
+		h.fail(w, r, "close task", err)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// fail logs the cause and returns a response that repeats none of it, so a
+// database error never reaches the browser.
+func (h Handler) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
+	h.logger.ErrorContext(r.Context(), "taskboard request failed",
+		slog.String("operation", what),
+		slog.String("error", err.Error()),
+	)
+	http.Error(w, "taskboard is unavailable", http.StatusInternalServerError)
 }

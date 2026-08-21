@@ -32,21 +32,25 @@ New generator examples should use `rasql codegen generate`, which reads the data
 
 The same flag rewrites the checked-in generated files the documentation shows. `examples/store/users_gen.go`, `examples/store/schema_gen.go`, `examples/store/schema_gen_test.go`, and `examples/store/user_by_email_gen.go` are checked by `TestGeneratedStoreIsCurrent`, which plans a `generate.Store` over the same table and query the files were generated from, reads the directory itself rather than a hardcoded file list, and requires the two to name the same generated files with the same bytes.
 
-The five files under `sample/taskboard/internal/store` are generated too. `TestTaskboardStoreIsCurrent`, in the root module, checks them against a `generate.Store` built from a throwaway in-process SQLite database, but it never writes into that directory, not even under `-update-docs`. The Taskboard module generates through `rasql codegen generate` and owns no generator program; refresh it with `./scripts/generate.sh` from `sample/taskboard`, then verify it with `./scripts/generate.sh -check`.
+The six files under `sample/taskboard/internal/store` are generated too. The Taskboard module generates through `rasql codegen generate` and owns no generator program; refresh it with `./scripts/generate.sh` from `sample/taskboard`, then verify it with `./scripts/generate.sh -check`. That module runs on PostgreSQL, so both commands need a live server.
 
 ### Generated files outside the root module
 
-`sample/taskboard` is a separate module with checked-in generated output, and nothing in `go test ./...` regenerates it. `TestTaskboardStoreIsCurrent` does check it, from the root module, by building a throwaway SQLite database from every migration under `sample/taskboard/migrations` and sweeping it with `catalog.FromDatabase`, so a change to the generator that leaves `sample/taskboard/internal/store/{members,projects,tasks}_gen.go`, `schema_gen.go`, or `schema_gen_test.go` stale now fails a fully green root test run instead of passing silently. It reads the migration tree with `internal/migrationdir` and applies it with `migrate.Runner`, which is what the sample's own script does through `rasql migrate apply`, so adding a migration directory does not leave the test pinning the schema the module used to have. That test only compares, though; it never writes there. Refresh the checked-in files themselves in the same commit:
+`sample/taskboard` is a separate module with checked-in generated output, and nothing in the root `go test ./...` regenerates or checks it. Its own script does both, against a PostgreSQL database it may apply migrations to. Set `TASKBOARD_SCHEMA_DSN` to that database and refresh the checked-in files in the same commit as the migration that moved them:
 
 ```sh
 cd sample/taskboard && ./scripts/generate.sh
 ```
 
-That script applies `sample/taskboard/migrations` to a throwaway SQLite database with `rasql migrate apply`, then runs `rasql codegen generate` over it to regenerate the store; `sample/taskboard/internal/store/.taskboard-schema.db` is ignored by Git. The script is what pairs the two commands, since the sample module cannot import `internal/migrationdir` the way the root module's own test does. Then run the sample module's own build and tests, which the root `go test ./...` never reaches:
+The script applies `sample/taskboard/db/migrations` with `rasql migrate apply` and then runs `rasql codegen generate` over the result, so the generated store describes whatever the checked-in migrations build. `./scripts/generate.sh -check` reports staleness instead of writing, which is the gate CI runs. The sample's `//go:generate` directive in `internal/store/repository.go` runs the same script, so `go generate ./...` from that module does the same work.
+
+Then run the sample module's own build and tests, which the root `go test ./...` never reaches. Its live tests read `TASKBOARD_TEST_DSN` and skip without it:
 
 ```sh
-cd sample/taskboard && go build ./... && go test ./...
+cd sample/taskboard && go build ./... && TASKBOARD_TEST_DSN="$TASKBOARD_DSN" go test ./...
 ```
+
+The walkthrough under `sample/taskboard/walkthrough` is the story of building that module, and its Go blocks are include blocks like every other page's. A change to the sample's source that a chapter quotes is stale in that chapter until `go test ./examples/ -update-docs` rewrites it.
 
 ## Live database tests
 

@@ -10,14 +10,13 @@ import (
 )
 
 type MembersRow struct {
-	ID    int64
-	Name  string
-	Email string
+	ID   int64
+	Name string
 }
 
 // ScanRow scans each result column directly into its field.
 func (r *MembersRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.Name, &r.Email)
+	return src.Scan(&r.ID, &r.Name)
 }
 
 // ScanDestinations maps result-column names to fields on r.
@@ -25,10 +24,9 @@ func (r *MembersRow) ScanDestinations(columns []string) ([]any, error) {
 	const (
 		scanIndexID = iota
 		scanIndexName
-		scanIndexEmail
 	)
 	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(3)
+	scanned := rasql.NewScanMask(2)
 	var discard any
 	for index, column := range columns {
 		switch column {
@@ -42,11 +40,6 @@ func (r *MembersRow) ScanDestinations(columns []string) ([]any, error) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
 			destinations[index] = &r.Name
-		case "email":
-			if !scanned.Mark(scanIndexEmail) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Email
 		default:
 			destinations[index] = &discard
 		}
@@ -61,8 +54,6 @@ func (r MembersRow) ColumnValue(name string) (any, bool) {
 		return r.ID, true
 	case "name":
 		return r.Name, true
-	case "email":
-		return r.Email, true
 	}
 	return nil, false
 }
@@ -77,9 +68,6 @@ func (t MembersTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id"
 
 // Name returns a reference to the "name" column.
 func (t MembersTable) Name() query.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
-
-// Email returns a reference to the "email" column.
-func (t MembersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
 
 // Members returns the descriptor for the "members" table.
 func Members() MembersTable {

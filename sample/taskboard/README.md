@@ -1,44 +1,132 @@
-# Taskboard sample application
+# Taskboard
 
-This is a standalone module that runs a small SQLite Taskboard web application. Its module path is `example.com/taskboard` rather than a path under `github.com/lestrrat-go/rasql`, so it reaches rasql only through the public API a real project has, and a copy of this directory is a working starting point.
+A team runs projects, each project holds tasks, and a task is owned by one
+member of the team or by nobody. One HTML page lists the open tasks grouped by
+project, prints each task's owner and due date, counts the tasks that are past
+that date, offers a form to add a task, and offers a button to close one.
 
-- `cmd/taskboard` opens the SQLite database, then wires the rasql db and HTTP server.
-- `migrations` holds the ordered schema changes.
-- `scripts` wraps every call to the `rasql` command, so a step is run rather than retyped.
-- `internal/store` holds the generated store and the persistence code built on it.
-- `rasql.json` holds the codegen settings, which is everything but the DSN.
-- `internal/taskboard` owns the taskboard view model.
-- `internal/web` owns HTTP request handling and server lifecycle.
+The database is PostgreSQL. The schema lives in `db/migrations` and is applied
+by `rasql migrate apply`. The Go that reads it is generated from that schema by
+`rasql codegen generate`, and the application is written on top of what the
+generator wrote.
 
-Create the runtime database and start the application from this directory:
+Taskboard is a module of its own, `example.com/taskboard`, so it reaches
+[rasql](https://github.com/lestrrat-go/rasql) only through the public API a
+real project has.
 
-```sh
-./scripts/migrate.sh
-TASKBOARD_DSN=taskboard.db go run ./cmd/taskboard
+## How this project was built
+
+[The walkthrough](walkthrough/01-design.md) is nine chapters long and builds
+this application from an empty directory: it settles the schema against a
+running PostgreSQL server, captures it into a migration, generates the store,
+writes the repository, draws the page, changes the schema and follows the
+compiler through the fallout, and ends on the tests and the migration commands.
+Every command it shows was run, and the code below is what running them
+produced.
+
+## Two things this copy spells differently
+
+The walkthrough tells a reader to build Taskboard as a standalone project
+beside a rasql checkout. This copy is checked into the rasql repository
+instead, two directories below its root, so two lines differ from the ones the
+chapters show.
+
+`go.mod` redirects the dependency at the checkout above it rather than at a
+path of its own:
+
+```
+replace github.com/lestrrat-go/rasql => ../..
 ```
 
-`scripts/migrate.sh` applies `migrations` with `rasql migrate apply`, against `taskboard.db` or whatever `TASKBOARD_DSN` names.
+And the scripts run the `rasql` command out of that checkout rather than one
+`go install` put on the PATH. `scripts/rasql.sh` is the one file that knows
+this: it builds `../../cmd/rasql` and runs the result, and `scripts/migrate.sh`
+and `scripts/generate.sh` call it instead of naming `rasql` directly. Nothing
+else about the project changes, and neither line is needed by a project that
+depends on a released rasql.
 
-Regenerate the checked-in store after adding a migration:
+## What is in here
+
+- `db/migrations` holds the schema, one directory per migration.
+- `queries` holds the SQL templates `rasql.json` compiles into Go functions.
+- `internal/store` holds the generated store, the repository built on it, and
+  the one method added to a generated table type.
+- `internal/taskboard` holds the view model the page is drawn from.
+- `internal/web` holds the handler and the page template.
+- `cmd/taskboard` opens the database and runs the server.
+- `rasql.json` holds the codegen settings, which is everything but the DSN.
+- `scripts` wraps the `rasql` calls, so a step is run rather than retyped.
+- `walkthrough` is the nine chapters that produced all of the above.
+
+## What running it needs
+
+A PostgreSQL server, and a database on it for this application. The walkthrough
+runs one under podman:
 
 ```sh
+podman run -d --name rasql-postgres \
+  -e POSTGRES_USER=rasql \
+  -e POSTGRES_PASSWORD=rasql \
+  -e POSTGRES_DB=rasql \
+  -p 5432:5432 \
+  docker.io/library/postgres:17-alpine
+```
+
+```sh
+podman exec rasql-postgres psql -U rasql -d postgres -c 'CREATE DATABASE taskboard;'
+```
+
+`scripts/psql.sh` opens `psql` on that database inside that container, and
+takes `TASKBOARD_CONTAINER` and `TASKBOARD_DATABASE` to reach another one.
+
+## Run it
+
+Apply the schema, then start the server:
+
+```sh
+export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable'
+./scripts/migrate.sh apply
+go run ./cmd/taskboard
+```
+
+Open <http://127.0.0.1:8080/> to see the page. `TASKBOARD_ADDR` listens
+somewhere else.
+
+The page files tasks against a project and an owner that already exist, and
+writes no rows of its own at startup, so put a project and a member in before
+the form has anything to offer:
+
+```sh
+./scripts/psql.sh -c "
+INSERT INTO members (name) VALUES ('Ada Lovelace'), ('Grace Hopper');
+INSERT INTO projects (name) VALUES ('Website refresh'), ('Billing cleanup');"
+```
+
+## Regenerate the store
+
+`internal/store`'s generated files are checked in. Rebuild them after adding a
+migration, against a schema database the script may apply migrations to:
+
+```sh
+export TASKBOARD_SCHEMA_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_schema?sslmode=disable'
 ./scripts/generate.sh
 ```
 
-`scripts/generate.sh` rebuilds a throwaway schema database from the same migrations, then runs `rasql codegen generate` against it, which reads `rasql.json` and writes one `<table>_gen.go` file per table. The throwaway database is `internal/store/.taskboard-schema.db` and is ignored by Git. `go generate ./...` runs the same script through the directive in `internal/store/repository.go`.
+`./scripts/generate.sh -check` reports whether the checked-in package is
+current instead of writing it, which is what CI runs.
 
-Report whether the checked-in store is current without writing files:
+## Run the tests
 
-```sh
-./scripts/generate.sh -check
-```
-
-Open <http://127.0.0.1:8080/> to see the Taskboard page. Set `TASKBOARD_ADDR` to use another listener address. Set `TASKBOARD_DSN` to use a different SQLite database path.
-
-`GET /healthz` is a liveness probe reporting process health. It always returns `200 ok` without querying the database, so a store outage does not restart or kill an otherwise healthy process.
-
-Run its integration test with:
+Everything but `internal/store` runs without a database:
 
 ```sh
 go test ./...
+```
+
+`internal/store`'s tests need a migrated PostgreSQL database and skip
+themselves without one. They run inside a transaction that is rolled back, so
+they leave nothing behind:
+
+```sh
+TASKBOARD_TEST_DSN="$TASKBOARD_DSN" go test ./...
 ```
