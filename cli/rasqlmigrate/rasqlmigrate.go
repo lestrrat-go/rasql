@@ -73,7 +73,7 @@ func run(args []string) error {
 
 func runNamed(args []string, program string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: %s <diff|diff-live|plan|apply|revert|status|verify> [flags]", program)
+		return fmt.Errorf("usage: %s <diff|diff-live|dump|plan|apply|revert|status|verify> [flags]", program)
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -83,6 +83,8 @@ func runNamed(args []string, program string) error {
 		return runDiff(args[1:])
 	case "diff-live":
 		return runDiffLive(args[1:])
+	case "dump":
+		return runDump(args[1:])
 	case "plan":
 		return runPlan(args[1:])
 	case "apply":
@@ -104,6 +106,7 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "Commands:")
 	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
 	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
+	_, _ = fmt.Fprintln(output, "  dump     Write rasql's own schema descriptor for a live database")
 	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
 	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations, oldest first")
 	_, _ = fmt.Fprintln(output, "  revert   Revert applied migrations, newest first")

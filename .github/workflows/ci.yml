@@ -80,4 +80,4 @@ jobs:
         # accepts -- and it reads the flags it allows for their effective
         # value, since go's own parsing lets a later assignment overturn an
         # earlier one.
-        run: go test -count=1 -v ./catalog/... ./cli/rasqlgen/... ./generate/... ./inspect/... ./migrate/... .
+        run: go test -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./migrate/... .

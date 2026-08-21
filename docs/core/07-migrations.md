@@ -219,6 +219,55 @@ rasql migrate diff-live \
 
 Any live-schema comparison that uses `inspect` requires complete metadata privileges. MySQL filters `information_schema.columns` by column privileges, so a partial grant can create a false baseline. Use table- or database-level `SELECT` (or equivalent full column visibility) before running `diff-live`. The inspector returns `inspect.ErrIncompleteMetadata` when the visible column count does not match the full `SHOW CREATE TABLE` definition.
 
+## Dump a live schema
+
+`rasql migrate dump` sweeps a live PostgreSQL, MySQL, or SQLite database and writes rasql's own schema descriptor for it, ordered so the result replays. It is not a faithful `pg_dump` or `mysqldump`: it writes the same DDL `diff-live` already builds for one table, swept over every table `-table`/`-exclude` select and ordered by foreign key so a table is created after every other table in the dump it references.
+
+Run it with `-format schema` to write one file per table, the directory `migrate diff -from`/`-to` reads:
+
+```sh
+rasql migrate dump \
+  -dialect postgresql \
+  -dsn "$DATABASE_URL" \
+  -output db/schema/postgresql-v1
+```
+
+That leaves one `<table>.sql` file per table (`<schema>__<table>.sql` when the table is schema-qualified), each holding the table's `CREATE TABLE` statement and then its `CREATE INDEX` statements:
+
+```text
+db/schema/postgresql-v1/
+  teams.sql
+  members.sql
+  audits.sql
+```
+
+Run it with `-format migration` to write a numbered migration directory instead, ready for `rasql migrate apply`:
+
+```sh
+rasql migrate dump \
+  -dialect postgresql \
+  -dsn "$DATABASE_URL" \
+  -format migration \
+  -output db/migrations/postgresql/001_initial
+```
+
+That leaves one `.up.sql`/`.down.sql` pair per `CREATE TABLE` statement and one `.up.sql` per `CREATE INDEX` statement, numbered in the same dependency order, with no `.down.sql` for an index step since dropping its table already drops it:
+
+```text
+db/migrations/postgresql/001_initial/
+  001_create_teams.up.sql
+  001_create_teams.down.sql
+  002_create_members.up.sql
+  002_create_members.down.sql
+  003_create_index_members_team_id_idx.up.sql
+```
+
+`-dialect` and `-dsn` are required. `-table` names a comma-separated list of tables to dump instead of every base table; `-exclude` names tables to skip during a sweep, and is refused together with `-table`. `-history-table` names a migration history table a sweep skips (`rasql_schema_migrations` by default). `-format` is `schema` or `migration` (`schema` by default). `-timeout` bounds the whole run (`30s` by default). Omit `-output` to preview the files a run would write, headed by their own path, without writing anything to disk. The command reads the whole sweep inside one read-only transaction, rolls it back, and redacts the exact DSN from returned errors. `-output` must be missing or empty; a dump never overwrites checked-in DDL, and there is no `-force` flag.
+
+A dump refuses, by table and column, whatever it cannot capture faithfully, rather than writing DDL that builds a different database than the one it read: a PostgreSQL identity column, a MySQL `AUTO_INCREMENT` column, and a MySQL string default `information_schema` reports unquoted that rasql cannot safely re-quote. It also refuses any column whose declared type is not on a short, per-dialect allow-list of types this repository has verified render back exactly as declared -- PostgreSQL's `bigint`, `boolean`, `text`, `character varying`, `character`, `numeric`, `double precision`, `timestamp with time zone`, `bytea`, `uuid`, and `jsonb`; MySQL's `bigint` (optionally `unsigned`), `text`, `varchar`, `char`, `decimal`, `double`, `datetime`, `blob`, `json`, and a column declared `boolean` (MySQL's own `tinyint(1)`); and SQLite's `INTEGER`, `TEXT`, `REAL`, and `BLOB`. A `smallint`, an `integer`, a PostgreSQL `date` or `timestamp`, a MySQL `float`, or a SQLite `VARCHAR(n)` all fall outside those lists today, because rasql's schema model cannot state the difference between them and the type it would render instead, and dumping one anyway would build a column that quietly means something else. A foreign-key cycle between two tables in the same dump is refused too, since no `CREATE TABLE` order can satisfy it; write that migration by hand. `render.CreateTable` and `render.CreateIndexes`'s own refusals -- a generated column, a partial or expression index, and the rest -- pass through unchanged.
+
+The one PostgreSQL rewrite a dump does make is turning a sequence-backed default into a plain `BIGSERIAL` column. The sequence itself is never part of what a dump writes, so the original `DEFAULT nextval(...)` text would otherwise reference a sequence the run never created. This reaches a `BIGSERIAL` column and a `bigint` column wired to a sequence by hand; a `SERIAL` or `SMALLSERIAL` column reports `integer` or `smallint` to the catalog and so is already refused by the type allow-list above.
+
 ## Go API
 
 `migrate.Runner` is available when an application needs to embed migration execution in a separate administrative program. Each `migrate.Statement` holds a source name and native SQL text. Supply the complete migration set to `Runner.Apply` with a target built by `migrate.AllPending` or `migrate.ApplyThrough`. It orders migrations by ID, returns what it applied, and rejects duplicate IDs, missing recorded migrations, skipped migrations, and changed source checksums. `Runner.ApplyPlan` reports the same selection without running it, and `Runner.Revert` and `Runner.RevertPlan` mirror both with `migrate.Through` and `migrate.Steps`.
