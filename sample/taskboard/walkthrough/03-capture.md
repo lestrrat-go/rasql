@@ -4,15 +4,11 @@
 
 That file is not yet a schema anyone can rely on. It works only against an empty database, so it cannot be re-run. Nothing anywhere records whether it has been run, so a second developer cloning the project has no way to find out what state their database is in. Chapter 2 ended by naming the SQL as the schema of record, and this chapter turns that SQL into a migration `rasql migrate` can apply, re-apply safely, report on, and undo.
 
-## Get the rasql command
+## Build rasql from a checkout
 
-Everything from here on runs through the `rasql` command:
+Everything from here on runs through the `rasql` command. [Chapter 2](02-database.md#get-rasql) gave the `go install` line that puts a released one on the PATH, and said that line was not run for this walkthrough. This is the reason. `rasql migrate dump` is newer than the latest tagged release, so running that line today would install a `rasql` without the command this chapter is about.
 
-```sh
-go install github.com/lestrrat-go/rasql/cmd/rasql@latest
-```
-
-That line was not run for this walkthrough, and running it today would install a `rasql` without the command this chapter is about. `rasql migrate dump` is newer than the latest tagged release, so every `rasql` call below was made against a binary built from a checkout of the repository with `go build ./cmd/rasql`. Once `dump` reaches a release, the line above is all it takes.
+Every `rasql` call below was made against a binary built with `go build ./cmd/rasql` inside the checkout chapter 2 cloned. Once `dump` reaches a release, chapter 2's `go install` line is all it takes.
 
 ## What `rasql migrate dump` reads and writes
 
