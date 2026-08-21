@@ -60,10 +60,12 @@ Write `queries/overdue_count.sql` in it:
 ```sql
 SELECT COUNT(*) AS overdue
 FROM tasks
-WHERE is_open AND due_on IS NOT NULL AND due_on < {{bind "on"}}
+WHERE is_open AND due_on IS NOT NULL AND due_on < CAST({{bind "on"}} AS date)
 ```
 
 `{{bind "on"}}` marks a value the caller supplies. It is not string interpolation: the generator turns it into the dialect's own placeholder and gives the function a parameter, so the value stays an argument and never becomes SQL text.
+
+The cast around it settles which day the count is about. `due_on` is a `date` and the caller has an instant, so one of the two has to give way, and `CAST(... AS date)` narrows the instant to the day it fell on. A task due that day then sits on the boundary rather than under it, which is what "past their due date" says: the day has to be over first. Write the cast even where the database would have reached the same answer on its own, because a reader of the query can see a cast and cannot see an inference rule.
 
 Name the query in `rasql.json`:
 
@@ -102,7 +104,7 @@ package store
 import rasqlrender "github.com/lestrrat-go/rasql/render"
 
 func OverdueCount(on any) (rasqlrender.Statement, error) {
-	return rasqlrender.Precompiled("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < $1\n", on)
+	return rasqlrender.Precompiled("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
 }
 ```
 source: [sample/taskboard/internal/store/overdue_count_gen.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/overdue_count_gen.go)
@@ -133,7 +135,12 @@ type overdueRow struct {
 	Overdue int64
 }
 
-// CountOverdue returns how many open tasks had a due date before on.
+// CountOverdue returns how many open tasks fell due before the calendar day
+// on names. A task due on that day is not counted, because a task is past its
+// due date only once the day is over. The query casts the bound value to a
+// date, and the driver reads that date off on in on's own location, so the
+// caller decides which day it is and the database session's time zone does
+// not.
 func (repository Repository) CountOverdue(ctx context.Context, on time.Time) (int64, error) {
 	statement, err := OverdueCount(on)
 	if err != nil {
@@ -148,6 +155,8 @@ func (repository Repository) CountOverdue(ctx context.Context, on time.Time) (in
 ```
 source: [sample/taskboard/internal/store/repository.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository.go)
 <!-- END INCLUDE -->
+
+The method takes an instant and the query narrows it, so the caller is the one who says which day the count is about. The driver reads that day off the value's own location, which leaves the decision with the process holding the clock instead of with whatever time zone the database session happens to be in.
 
 `rasql.QueryRenderedOne` runs a rendered statement and decodes exactly one row, reporting `rasql.ErrNoRows` for none and `rasql.ErrMultipleRows` for more. `QueryRenderedAll` and `QueryRendered` are the same call for a slice and for an iterator.
 

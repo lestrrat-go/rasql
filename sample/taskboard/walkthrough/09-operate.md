@@ -99,10 +99,11 @@ The whole of the setup is a transaction that gets rolled back:
 <!-- INCLUDE(sample/taskboard/internal/store/repository_test.go#open_tx) -->
 ```go
 // openTx returns a repository over a transaction that is rolled back when
-// the test ends. rasql.Handle is satisfied by *sql.Tx as well as *sql.DB, so
-// every write below reaches a real PostgreSQL server and none of them
-// survives the test.
-func openTx(t *testing.T) store.Repository {
+// the test ends, and the rasql.DB it was built on for the tests that write a
+// row the repository has no method for. rasql.Handle is satisfied by *sql.Tx
+// as well as *sql.DB, so every write below reaches a real PostgreSQL server
+// and none of them survives the test.
+func openTx(t *testing.T) (store.Repository, rasql.DB) {
 	t.Helper()
 	dsn := os.Getenv("TASKBOARD_TEST_DSN")
 	if dsn == "" {
@@ -125,7 +126,7 @@ func openTx(t *testing.T) store.Repository {
 	if err != nil {
 		t.Fatalf("create the rasql db: %s", err)
 	}
-	return store.New(db)
+	return store.New(db), db
 }
 ```
 source: [sample/taskboard/internal/store/repository_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository_test.go)
@@ -134,6 +135,29 @@ source: [sample/taskboard/internal/store/repository_test.go](https://github.com/
 `rasql.New` takes anything satisfying `rasql.Handle`, and `*sql.Tx` satisfies it as well as `*sql.DB` does. The repository never learns which one it got. Every insert and update below runs against a real server and none of them is committed, so the tests can be run against a database that has data in it without changing it.
 
 An unset `TASKBOARD_TEST_DSN` skips rather than fails, so `go test ./...` works on a laptop with no server running.
+
+`openTx` hands back the `rasql.DB` alongside the repository because one test needs a row the repository cannot file. `AddTask` leaves `due_on` alone, and a test about due dates has to set one, so it writes through the generated table itself:
+
+<!-- INCLUDE(sample/taskboard/internal/store/repository_test.go#add_task_due_on) -->
+```go
+// addTaskDueOn files one open task with a due date. AddTask leaves due_on
+// alone, so a test that needs one writes the row itself, through the same
+// generated table the repository uses and over the same rolled-back
+// transaction.
+func addTaskDueOn(ctx context.Context, t *testing.T, db rasql.DB, projectID int64, assigneeID int64, title string, dueOn time.Time) {
+	t.Helper()
+	row := store.TasksRow{ProjectID: projectID, AssigneeID: &assigneeID, Title: title, DueOn: &dueOn}
+	if _, err := rasql.InsertWithOptions(ctx, db, store.Tasks(), row,
+		rasql.DefaultColumns("is_open", "created_at"),
+	); err != nil {
+		t.Fatalf("insert task %q: %s", title, err)
+	}
+}
+```
+source: [sample/taskboard/internal/store/repository_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository_test.go)
+<!-- END INCLUDE -->
+
+That is the same table `OpenTasks` reads and the same transaction everything else in the test runs in, so the row is rolled back with the rest.
 
 The tests are the three operations and the one thing a fake cannot check, which is what the database does with a `NULL`:
 
@@ -149,7 +173,7 @@ if unowned.AssigneeName != nil {
 source: [sample/taskboard/internal/store/repository_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository_test.go)
 <!-- END INCLUDE -->
 
-`CountOverdue` gets its own test, because it is the one query in the application the compiler does not check against the schema. Chapter 8 named that as the price of declaring SQL; this is what pays it. The test asserts a relationship rather than a number, so it holds whatever the database already contains:
+`CountOverdue` gets two tests of its own, because it is the one query in the application the compiler does not check against the schema. Chapter 8 named that as the price of declaring SQL; these are what pay it. The first asserts a relationship rather than a number, so it holds whatever the database already contains:
 
 <!-- INCLUDE(sample/taskboard/internal/store/repository_test.go#overdue_unmoved) -->
 ```go
@@ -161,6 +185,72 @@ after, err := repository.CountOverdue(ctx, time.Now())
 ```
 source: [sample/taskboard/internal/store/repository_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository_test.go)
 <!-- END INCLUDE -->
+
+The second pins the boundary that [chapter 8's cast](08-extend.md#2-a-declared-query-in-rasqljson) draws, which is the part of the count a reader is most likely to get wrong and the database is least likely to complain about. It hands `CountOverdue` an instant of its own choosing rather than the clock, which is what turns "a task due today is not late yet" into something a test can state:
+
+<!-- INCLUDE(sample/taskboard/internal/store/repository_test.go#overdue_boundary) -->
+```go
+// TestCountOverdueCountsATaskOnlyAfterItsDueDate pins the boundary that
+// CountOverdue's cast draws. due_on is a date and on is an instant, so the two
+// meet only once one of them is narrowed, and narrowing on is what keeps a
+// task due today out of the count until the day is over. Naming the instant
+// rather than reading the clock is what the bound parameter is for.
+//
+// The instant carries a location as well as a day, and the count follows the
+// location. Eight in the evening on 2026-03-16 in a zone nine hours behind UTC
+// is already 2026-03-17 in UTC, so the day the caller is having is the one the
+// count has to use, and an instant that late in its own day is also the case a
+// comparison against the raw timestamp gets wrong.
+func TestCountOverdueCountsATaskOnlyAfterItsDueDate(t *testing.T) {
+	ctx := t.Context()
+	repository, db := openTx(t)
+	projectID, memberID := seed(ctx, t, repository)
+
+	zone := time.FixedZone("UTC-9", -9*60*60)
+	on := time.Date(2026, 3, 16, 20, 0, 0, 0, zone)
+	today := time.Date(2026, 3, 16, 0, 0, 0, 0, zone)
+	yesterday := today.AddDate(0, 0, -1)
+
+	before, err := repository.CountOverdue(ctx, on)
+	if err != nil {
+		t.Fatalf("count overdue tasks: %s", err)
+	}
+
+	addTaskDueOn(ctx, t, db, projectID, memberID, "Due today", today)
+	afterToday, err := repository.CountOverdue(ctx, on)
+	if err != nil {
+		t.Fatalf("count overdue tasks: %s", err)
+	}
+	if afterToday != before {
+		t.Errorf("the overdue count moved from %d to %d after adding a task due today; a task is past its due date only once the day is over", before, afterToday)
+	}
+
+	addTaskDueOn(ctx, t, db, projectID, memberID, "Due yesterday", yesterday)
+	afterYesterday, err := repository.CountOverdue(ctx, on)
+	if err != nil {
+		t.Fatalf("count overdue tasks: %s", err)
+	}
+	if afterYesterday != before+1 {
+		t.Errorf("the overdue count went from %d to %d after adding a task due yesterday, want %d", before, afterYesterday, before+1)
+	}
+
+	addTaskDueOn(ctx, t, db, projectID, memberID, "Closed and late", yesterday)
+	if err := repository.CloseTask(ctx, openTaskID(ctx, t, repository, "Closed and late")); err != nil {
+		t.Fatalf("close the late task: %s", err)
+	}
+	afterClosed, err := repository.CountOverdue(ctx, on)
+	if err != nil {
+		t.Fatalf("count overdue tasks: %s", err)
+	}
+	if afterClosed != afterYesterday {
+		t.Errorf("the overdue count moved from %d to %d after a late task was closed; a closed task is nobody's problem", afterYesterday, afterClosed)
+	}
+}
+```
+source: [sample/taskboard/internal/store/repository_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository_test.go)
+<!-- END INCLUDE -->
+
+Three assertions, and each one fails on a different mistake. Comparing the raw instant against the `date` column promotes the date to midnight and makes today's task late; reading the day in UTC rather than in the caller's location moves the whole boundary by a day; dropping `is_open` from the query counts work somebody already finished.
 
 ## Run them
 
@@ -187,13 +277,15 @@ TASKBOARD_TEST_DSN="$TASKBOARD_DSN" go test ./internal/store/ -v -count=1
 === RUN   TestRasqlgenGeneratedDefinitionsAreValid
 --- PASS: TestRasqlgenGeneratedDefinitionsAreValid (0.00s)
 === RUN   TestAddTaskAndCloseTask
---- PASS: TestAddTaskAndCloseTask (0.01s)
+--- PASS: TestAddTaskAndCloseTask (0.02s)
 === RUN   TestCloseTaskOnAMissingTaskIsNotAnError
 --- PASS: TestCloseTaskOnAMissingTaskIsNotAnError (0.01s)
 === RUN   TestCountOverdue
 --- PASS: TestCountOverdue (0.01s)
+=== RUN   TestCountOverdueCountsATaskOnlyAfterItsDueDate
+--- PASS: TestCountOverdueCountsATaskOnlyAfterItsDueDate (0.01s)
 PASS
-ok  	example.com/taskboard/internal/store	0.035s
+ok  	example.com/taskboard/internal/store	0.051s
 ```
 
 `TestRasqlgenGeneratedDefinitionsAreValid` is the generator's own test from `schema_gen_test.go`, and it needs no server, so it is the one test in that package that ran in the block above as well.

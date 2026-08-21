@@ -5,5 +5,5 @@ package store
 import rasqlrender "github.com/lestrrat-go/rasql/render"
 
 func OverdueCount(on any) (rasqlrender.Statement, error) {
-	return rasqlrender.Precompiled("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < $1\n", on)
+	return rasqlrender.Precompiled("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
 }
