@@ -163,11 +163,12 @@ Task 2 has no owner. Nothing in the Go code knows that is possible yet.
 ```
 
 ```text
-migration apply completed: 0 applied
+applied	002_due_dates_and_unowned_tasks
+migration apply completed: 1 applied
 wrote internal/store from 3 tables
 ```
 
-Nothing was pending, because the schema database took the new migration on its own run of the same script. The store was rewritten from it.
+The script applies `db/migrations` before it generates, so this run is where the schema database takes `002` as well. The store was then rewritten from it.
 
 Three things changed in `internal/store`. The row type gained a field and changed one:
 
