@@ -55,7 +55,12 @@ func NewHandler(reader Reader, writer Writer, logger *slog.Logger) Handler {
 source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
 <!-- END INCLUDE -->
 
-`main` now says `web.NewHandler(repository, repository, logger)`, which is repetitive and honest about what is going on.
+`main` now says `web.NewHandler(repository, repository, logger)`, which is repetitive and honest about what is going on. That change is the application's, not the tests', so it lands on its own:
+
+```sh
+git add internal/web/taskboard.go cmd/taskboard/main.go
+git commit -m 'take the handler dependencies as interfaces'
+```
 
 The fake is a struct with the six methods and a few fields to record what it was asked:
 
@@ -179,12 +184,19 @@ TASKBOARD_TEST_DSN="$TASKBOARD_DSN" go test ./internal/store/ -v -count=1
 ```
 
 ```text
+=== RUN   TestRasqlgenGeneratedDefinitionsAreValid
+--- PASS: TestRasqlgenGeneratedDefinitionsAreValid (0.00s)
 === RUN   TestAddTaskAndCloseTask
 --- PASS: TestAddTaskAndCloseTask (0.01s)
+=== RUN   TestCloseTaskOnAMissingTaskIsNotAnError
+--- PASS: TestCloseTaskOnAMissingTaskIsNotAnError (0.01s)
 === RUN   TestCountOverdue
 --- PASS: TestCountOverdue (0.01s)
-ok  	example.com/taskboard/internal/store	0.028s
+PASS
+ok  	example.com/taskboard/internal/store	0.035s
 ```
+
+`TestRasqlgenGeneratedDefinitionsAreValid` is the generator's own test from `schema_gen_test.go`, and it needs no server, so it is the one test in that package that ran in the block above as well.
 
 The task count is the same before and after that run, which is the rollback doing its job:
 
@@ -267,7 +279,59 @@ ALTER TABLE "tasks" DROP COLUMN "due_on";
 
 That is [chapter 7's](07-change.md#write-this-migration-by-hand) three steps in descending filename order, which is the order that works: the foreign key goes back to `NO ACTION` before the column goes back to `NOT NULL`.
 
-Do it:
+Read the middle statement again before running any of it. `TASKBOARD_DSN` still names `taskboard_walkthrough`, the working database, and chapter 7 filed a task there that nobody owns. Run the revert against it and `SET NOT NULL` finds that row:
+
+```sh
+./scripts/migrate.sh revert -steps 1
+```
+
+```text
+migrate: execute migration "002_due_dates_and_unowned_tasks" reverse SQL source "002_relax_assignee.down.sql": ERROR: column "assignee_id" of relation "tasks" contains null values (SQLSTATE 23502)
+```
+
+That is what relaxing a column costs. The migration is reversible only while nothing has taken up the freedom it granted, and chapter 7 took it up on the same page that granted it. `revert` runs the whole migration in one transaction, so the database is where it was before the command:
+
+```sh
+./scripts/migrate.sh status
+```
+
+```text
+applied	001_initial
+applied	002_due_dates_and_unowned_tasks
+```
+
+```sh
+./scripts/psql.sh -c '\d tasks'
+```
+
+```text
+                                     Table "public.tasks"
+   Column    |           Type           | Collation | Nullable |           Default
+-------------+--------------------------+-----------+----------+------------------------------
+ id          | bigint                   |           | not null | generated always as identity
+ project_id  | bigint                   |           | not null |
+ assignee_id | bigint                   |           |          |
+ title       | text                     |           | not null |
+ is_open     | boolean                  |           | not null | true
+ created_at  | timestamp with time zone |           | not null | now()
+ due_on      | date                     |           |          |
+Indexes:
+    "tasks_pkey" PRIMARY KEY, btree (id)
+    "tasks_open_by_project" btree (project_id, id) WHERE is_open
+Foreign-key constraints:
+    "tasks_assignee_id_fkey" FOREIGN KEY (assignee_id) REFERENCES members(id) ON DELETE SET NULL
+    "tasks_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+```
+
+`due_on` is still there, `assignee_id` is still nullable, and the foreign key still reads `ON DELETE SET NULL`, even though the statement that put it back to `NO ACTION` had already succeeded when the next one failed. A half-reverted schema is the thing that would have been hard to clean up, and there isn't one.
+
+So point the migrate calls at the schema database, which was built by applying these same migrations and holds no rows for `SET NOT NULL` to find:
+
+```sh
+export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_verify?sslmode=disable'
+```
+
+Now do it:
 
 ```sh
 ./scripts/migrate.sh revert -steps 1
@@ -314,7 +378,7 @@ Reverting was the demonstration, so put it back:
 ```sh
 ./scripts/migrate.sh apply
 ./scripts/migrate.sh verify
-TASKBOARD_SCHEMA_DSN="$TASKBOARD_DSN" ./scripts/generate.sh -check
+./scripts/generate.sh -check
 ```
 
 ```text
@@ -325,9 +389,11 @@ migration apply completed: 0 applied
 internal/store is up to date
 ```
 
-Both gates are green again.
+Both gates are green again. Put the working database back in front of the shell, so the next `./scripts/migrate.sh` goes where the rest of the walkthrough sent it:
 
-Run all of this against the schema database rather than the one holding data. This walkthrough reverted `taskboard_verify`, which has the schema and no rows. Reverting `002` against a database that has acquired an unowned task fails on `SET NOT NULL`, which chapter 7 said it would.
+```sh
+export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable'
+```
 
 A reverted migration becomes `pending` again, so `apply` runs it once more. That is the fix-and-reapply loop: revert it, correct its sources, apply it again. It is available only while the migration is the newest applied one and nothing depends on it, which is why the review before the first `apply` is the one that matters.
 
