@@ -2,11 +2,9 @@
 
 The schema is in the database and in `db/migrations`. This chapter turns it into Go: row structs, table types, one accessor per column, and a join for each foreign key. None of it is typed by hand, and none of it is edited afterwards.
 
-## Point the module at rasql
+## Why `go.mod` has a `replace` line
 
-The project has been a `go.mod` and some SQL until now. The generated code and the application both import `github.com/lestrrat-go/rasql`, so the module needs it as a dependency.
-
-The walkthrough builds against a checkout of the repository rather than a release, for the reason [chapter 3](03-capture.md#get-the-rasql-command) gave, so its `go.mod` names the dependency and then redirects it at that checkout. Clone the repository beside the project directory, and the checkout is one level up under its own name:
+[Chapter 2](02-database.md#get-rasql) put both lines the module needs into `go.mod`:
 
 ```text
 require github.com/lestrrat-go/rasql v0.0.0
@@ -14,7 +12,9 @@ require github.com/lestrrat-go/rasql v0.0.0
 replace github.com/lestrrat-go/rasql => ../rasql
 ```
 
-Go resolves a `replace` path relative to the directory holding `go.mod`, so a checkout kept somewhere else takes the path that reaches it from the project.
+The code generated below imports `github.com/lestrrat-go/rasql`, which is what makes `go mod tidy` keep the `require` line from here on.
+
+The `replace` line redirects that dependency at a checkout of the repository rather than a release, for the reason [chapter 3](03-capture.md#build-rasql-from-a-checkout) gave. Go resolves a `replace` path relative to the directory holding `go.mod`, so a checkout kept somewhere else takes the path that reaches it from the project.
 
 A project using a released rasql adds the dependency with `go get github.com/lestrrat-go/rasql` and needs no `replace` line.
 

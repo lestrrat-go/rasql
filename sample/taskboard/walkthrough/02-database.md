@@ -32,14 +32,42 @@ The database is PostgreSQL. The application is built on
 [rasql](https://github.com/lestrrat-go/rasql).
 ```
 
+Chapter 6 comes back to that README and adds the commands that run the finished application.
+
+## Get rasql
+
+rasql is a library and a command, and the walkthrough uses both. The inspection program later in this chapter imports the library, and so does the code chapter 4 generates. Chapter 3 applies migrations with the command, and chapter 4 runs the generator with it.
+
+Clone the repository beside the project directory, so both come out of one checkout:
+
+```sh
+git clone https://github.com/lestrrat-go/rasql ../rasql
+```
+
+Name the library in `go.mod` and redirect it at that checkout, which sits one level up under its own name:
+
+```text
+require github.com/lestrrat-go/rasql v0.0.0
+
+replace github.com/lestrrat-go/rasql => ../rasql
+```
+
+Run `go mod tidy` any time before chapter 4 generates code and it takes that `require` line straight back out, because nothing in the project imports rasql yet. Leave the line alone until then.
+
+Put the command on the PATH:
+
+```sh
+go install github.com/lestrrat-go/rasql/cmd/rasql@latest
+```
+
+That line was not run for this walkthrough. [Chapter 3](03-capture.md#build-rasql-from-a-checkout) says what was run in its place, and why.
+
 Commit the two files that now exist:
 
 ```sh
 git add README.md go.mod
 git commit -m 'start the taskboard project'
 ```
-
-Chapter 6 comes back to that README and adds the commands that run the finished application.
 
 ## Start PostgreSQL
 
@@ -131,7 +159,7 @@ git commit -m 'add a psql helper for the working database'
 
 Every choice below is checked twice. Try it on the server and read back what PostgreSQL made of it, then ask rasql's inspection what descriptor it produces for the result, because that descriptor is what the code generator in chapter 4 reads.
 
-The transcripts labelled *rasql descriptor* come from a throwaway program written for this chapter and thrown away at the end of it. It opens the working database through pgx's `database/sql` driver, builds an inspector with `inspect.New(db, dialect.PostgreSQL())`, calls `Table` for the table being examined, prints the returned `schema.TableDef` as indented JSON, and then feeds that descriptor straight back into `render.CreateTable` and `render.CreateIndexes` to see what DDL rasql would rebuild it from. The finished application does none of this. The program is a way of looking at the database, and it is thrown away with the probe tables.
+The transcripts labelled *rasql descriptor* come from a throwaway program written for this chapter and thrown away at the end of it. It imports the rasql the module named above, opens the working database through pgx's `database/sql` driver, builds an inspector with `inspect.New(db, dialect.PostgreSQL())`, calls `Table` for the table being examined, prints the returned `schema.TableDef` as indented JSON, and then feeds that descriptor straight back into `render.CreateTable` and `render.CreateIndexes` to see what DDL rasql would rebuild it from. The finished application does none of this. The program is a way of looking at the database, and it is thrown away with the probe tables.
 
 ## The primary key: identity or serial
 

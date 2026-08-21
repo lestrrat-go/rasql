@@ -62,7 +62,7 @@ Chapter 3 captures that settled shape into a checked-in migration. Chapter 4 add
 
 Chapter 7 makes the schema change described above, regenerates, and walks the compile errors that fall out into fixed Go. Chapter 8 shows three ways to build on generated code. Chapter 9 covers the tests and the day-to-day migration commands.
 
-Every block of output shown in those chapters is what the command above it actually printed, cut down to the lines that carry something to read. `psql` acknowledges every statement it runs, and a block leaves out the acknowledgements the passage has nothing to say about, such as a bare `CREATE TABLE` or `BEGIN`, so running the commands prints a few more lines than the page shows. Two commands are exceptions, and each of them says so where it appears: the `podman run` that starts the database in chapter 2, and the `go install` in chapter 3.
+Every block of output shown in those chapters is what the command above it actually printed, cut down to the lines that carry something to read. `psql` acknowledges every statement it runs, and a block leaves out the acknowledgements the passage has nothing to say about, such as a bare `CREATE TABLE` or `BEGIN`, so running the commands prints a few more lines than the page shows. Two commands are exceptions, and each of them says so where it appears: the `podman run` that starts the database, and the `go install` that puts a released `rasql` on the PATH, both in chapter 2.
 
 ## Next
 
