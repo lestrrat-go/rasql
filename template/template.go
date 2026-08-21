@@ -18,7 +18,6 @@ import (
 // Template is SQL text containing {{bind "name"}} actions.
 type Template struct {
 	name        string
-	text        string
 	parts       []templatePart
 	parameters  []string
 	uniqueNames []string
@@ -39,7 +38,6 @@ func Parse(name string, source string) (Template, error) {
 		return Template{}, fmt.Errorf("template %q: source must not be empty", name)
 	}
 
-	var text strings.Builder
 	parts := make([]templatePart, 0)
 	parameters := make([]string, 0)
 	uniqueNames := make([]string, 0)
@@ -48,12 +46,10 @@ func Parse(name string, source string) (Template, error) {
 	for remaining != "" {
 		start := strings.Index(remaining, "{{")
 		if start < 0 {
-			text.WriteString(remaining)
 			parts = append(parts, templatePart{text: remaining})
 			break
 		}
 		literal := remaining[:start]
-		text.WriteString(literal)
 		if literal != "" {
 			parts = append(parts, templatePart{text: literal})
 		}
@@ -67,7 +63,6 @@ func Parse(name string, source string) (Template, error) {
 			return Template{}, fmt.Errorf("template %q: %w", name, err)
 		}
 		bindIndex := len(parameters)
-		text.WriteString(marker(bindIndex))
 		parts = append(parts, templatePart{bindIndex: bindIndex, isBindPart: true})
 		parameters = append(parameters, parameter)
 		if _, exists := seen[parameter]; !exists {
@@ -76,7 +71,7 @@ func Parse(name string, source string) (Template, error) {
 		}
 		remaining = remaining[end+2:]
 	}
-	return Template{name: name, text: text.String(), parts: parts, parameters: parameters, uniqueNames: uniqueNames}, nil
+	return Template{name: name, parts: parts, parameters: parameters, uniqueNames: uniqueNames}, nil
 }
 
 func parseBindAction(action string) (string, error) {
@@ -115,7 +110,7 @@ func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
 	if isNilDialect(d) {
 		return Compiled{}, fmt.Errorf("template %q: dialect must not be nil", t.name)
 	}
-	if t.name == "" || t.text == "" {
+	if t.name == "" || len(t.parts) == 0 {
 		return Compiled{}, fmt.Errorf("template: invalid template")
 	}
 	placeholders := make([]string, len(t.parameters))
@@ -264,10 +259,6 @@ func availableGoIdentifier(base string, reserved map[string]struct{}) string {
 			return name
 		}
 	}
-}
-
-func marker(index int) string {
-	return fmt.Sprintf("\x00rasql-bind-%d\x00", index)
 }
 
 func renderTemplateParts(parts []templatePart, placeholders []string) string {
