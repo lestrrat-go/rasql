@@ -299,6 +299,15 @@ func TestNullableAndDefaultColumnOptions(t *testing.T) {
 	require.Equal(t, "CURRENT_TIMESTAMP", table.Columns[2].Default)
 }
 
+func TestIdentityColumnOption(t *testing.T) {
+	table, err := schema.NewTableDef("users",
+		schema.Integer("id", schema.Identity(schema.IdentityAlways)),
+		schema.PrimaryKey("id"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, schema.IdentityAlways, table.Columns[0].Identity)
+}
+
 func TestNewTableRejectsNilForeignKeyOption(t *testing.T) {
 	_, err := schema.NewTableDef("orders",
 		schema.Integer("id"),

@@ -36,11 +36,12 @@ jobs:
           go-version: '1.26.x'
       - run: go test ./...
       - run: go vet ./...
+      # The sample runs on PostgreSQL, so its tests and its generated-store
+      # check both need a live server and run in the "integration" job. This
+      # job has no database, and builds it.
       - name: Sample module
         working-directory: sample/taskboard
-        run: |
-          go build ./...
-          go test ./...
+        run: go build ./...
 
   integration:
     name: Database integration
@@ -80,4 +81,43 @@ jobs:
         # accepts -- and it reads the flags it allows for their effective
         # value, since go's own parsing lets a later assignment overturn an
         # earlier one.
-        run: go test -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./migrate/... .
+        run: go test -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./migrate/... ./render/... .
+
+      # sample/taskboard is a module of its own that runs on PostgreSQL. Its
+      # two gates are the tests and ./scripts/generate.sh -check, and both
+      # need the server this job already brought up. Each gets a database of
+      # its own: the generate script applies migrations to the one it is
+      # pointed at, so pointing it at the database the tests use would leave
+      # the two steps writing to the same schema.
+      - name: Create the sample's databases
+        run: |
+          docker compose exec -T postgres psql -U rasql -d postgres \
+            -c 'CREATE DATABASE taskboard;' \
+            -c 'CREATE DATABASE taskboard_schema;'
+
+      - name: Check the sample's generated store
+        working-directory: sample/taskboard
+        env:
+          TASKBOARD_SCHEMA_DSN: postgres://rasql:rasql@127.0.0.1:5432/taskboard_schema?sslmode=disable
+        run: ./scripts/generate.sh -check
+
+      - name: Migrate the sample's test database
+        working-directory: sample/taskboard
+        env:
+          TASKBOARD_DSN: postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable
+        run: ./scripts/migrate.sh apply
+
+      # The sample's live tests file a task against a project and a member
+      # that already exist, and skip when the database holds neither. Without
+      # these two rows the step below reports ok having proved nothing.
+      - name: Give the sample's live tests a project and a member
+        run: |
+          docker compose exec -T postgres psql -U rasql -d taskboard \
+            -c "INSERT INTO members (name) VALUES ('Ada Lovelace');" \
+            -c "INSERT INTO projects (name) VALUES ('Website refresh');"
+
+      - name: Run the sample's tests against a live database
+        working-directory: sample/taskboard
+        env:
+          TASKBOARD_TEST_DSN: postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable
+        run: go test -count=1 -v ./...

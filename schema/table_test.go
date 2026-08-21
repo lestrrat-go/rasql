@@ -1422,6 +1422,72 @@ func TestTableValidateRejectsGeneratedColumnWithDefault(t *testing.T) {
 	require.ErrorContains(t, err, "must not also state a Default")
 }
 
+// TestTableValidateAcceptsIdentityColumn proves that a ColumnDef naming
+// either IdentityGeneration, such as what inspect now records for a live
+// PostgreSQL GENERATED ... AS IDENTITY column or a MySQL AUTO_INCREMENT
+// column, is valid input.
+func TestTableValidateAcceptsIdentityColumn(t *testing.T) {
+	always := validTable()
+	always.Columns[1].Identity = schema.IdentityAlways
+	require.NoError(t, always.Validate())
+
+	byDefault := validTable()
+	byDefault.Columns[1].Identity = schema.IdentityByDefault
+	require.NoError(t, byDefault.Validate())
+}
+
+func TestTableValidateRejectsInvalidIdentity(t *testing.T) {
+	table := validTable()
+	table.Columns[1].Identity = schema.IdentityGeneration("bogus")
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "unsupported identity generation")
+}
+
+// TestTableValidateRejectsIdentityWithGeneratedExpression proves that
+// Identity and GeneratedExpression stated on the same column are rejected:
+// they are different features, and no engine this package renders accepts
+// both on one column.
+func TestTableValidateRejectsIdentityWithGeneratedExpression(t *testing.T) {
+	table := validTable()
+	table.Columns[1].Identity = schema.IdentityAlways
+	table.Columns[1].GeneratedExpression = "1"
+	table.Columns[1].GeneratedStorage = schema.GeneratedStored
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "must not also state a GeneratedExpression")
+}
+
+// TestTableValidateRejectsIdentityWithDefault proves that an identity
+// column stating a Default is rejected: PostgreSQL forbids a DEFAULT
+// clause on a GENERATED ... AS IDENTITY column, and MySQL forbids one on
+// AUTO_INCREMENT.
+func TestTableValidateRejectsIdentityWithDefault(t *testing.T) {
+	table := validTable()
+	table.Columns[1].Identity = schema.IdentityByDefault
+	table.Columns[1].Default = "0"
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "must not also state a Default")
+}
+
+// TestTableValidateRejectsNullableIdentity proves that an identity column
+// stating Nullable is rejected: both PostgreSQL and MySQL report
+// is_nullable = NO for an identity column, so a descriptor claiming
+// otherwise describes no real column.
+func TestTableValidateRejectsNullableIdentity(t *testing.T) {
+	table := validTable()
+	table.Columns[1].Identity = schema.IdentityAlways
+	table.Columns[1].Nullable = true
+
+	err := table.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "must not be Nullable")
+}
+
 // TestTableValidateAcceptsTextWidth is the positive counterpart to "text
 // column with negative width" in TestTableValidate: a stated width of zero
 // and an ordinary positive one both validate cleanly, and so does a column
@@ -1470,6 +1536,40 @@ func TestColumnUnsignedJSON(t *testing.T) {
 	// The old flat type representation is no longer accepted.
 	decoded = schema.TableDef{}
 	require.Error(t, json.Unmarshal([]byte(`{"Name":"events","Columns":[{"Name":"id","Type":"integer"}],"PrimaryKey":["id"]}`), &decoded))
+}
+
+// TestColumnIdentityJSON proves a column carrying Identity round-trips
+// through JSON, and that a descriptor snapshot written before Identity
+// existed -- carrying no "Identity" key at all -- decodes as the empty
+// IdentityGeneration, the same backward-compatible read
+// TestColumnUnsignedJSON pins for Unsigned.
+func TestColumnIdentityJSON(t *testing.T) {
+	table := schema.TableDef{
+		Name: "events",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+			{Name: "external_id", Type: schema.IntegerType{}, Identity: schema.IdentityByDefault},
+			{Name: "sequence", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	require.NoError(t, table.Validate())
+
+	encoded, err := json.Marshal(table)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"Identity":"ALWAYS"`)
+	require.Contains(t, string(encoded), `"Identity":"BY DEFAULT"`)
+
+	var decoded schema.TableDef
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.Equal(t, table, decoded)
+	require.NoError(t, decoded.Validate())
+
+	// A snapshot written before Identity existed carries no "Identity" key
+	// at all, and decodes as the empty IdentityGeneration.
+	var noIdentity schema.TableDef
+	require.NoError(t, json.Unmarshal([]byte(`{"Name":"events","Columns":[{"Name":"id","Type":{"Kind":"integer"}}],"PrimaryKey":["id"]}`), &noIdentity))
+	require.Equal(t, schema.IdentityGeneration(""), noIdentity.Columns[0].Identity)
 }
 
 // TestRowNameJSON pins the snapshot form rasqlgen's -input reads: a

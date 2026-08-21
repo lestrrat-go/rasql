@@ -3,7 +3,9 @@
 package store
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
@@ -12,15 +14,28 @@ import (
 type TasksRow struct {
 	ID         int64
 	ProjectID  int64
-	AssigneeID int64
+	AssigneeID *int64
 	Title      string
-	Status     string
-	Priority   int64
+	IsOpen     bool
+	CreatedAt  time.Time
+	DueOn      *time.Time
+}
+
+type tasksTimeScanner func(any) error
+
+func (s tasksTimeScanner) Scan(value any) error {
+	return s(value)
 }
 
 // ScanRow scans each result column directly into its field.
 func (r *TasksRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.ProjectID, &r.AssigneeID, &r.Title, &r.Status, &r.Priority)
+	timeScanner5 := tasksTimeScanner(func(value any) error {
+		return rasql.ScanValue(&r.CreatedAt, value)
+	})
+	timeScanner6 := tasksTimeScanner(func(value any) error {
+		return rasql.ScanValue(&r.DueOn, value)
+	})
+	return src.Scan(&r.ID, &r.ProjectID, &r.AssigneeID, &r.Title, &r.IsOpen, &timeScanner5, &timeScanner6)
 }
 
 // ScanDestinations maps result-column names to fields on r.
@@ -30,11 +45,18 @@ func (r *TasksRow) ScanDestinations(columns []string) ([]any, error) {
 		scanIndexProjectID
 		scanIndexAssigneeID
 		scanIndexTitle
-		scanIndexStatus
-		scanIndexPriority
+		scanIndexIsOpen
+		scanIndexCreatedAt
+		scanIndexDueOn
 	)
+	timeScanner5 := tasksTimeScanner(func(value any) error {
+		return rasql.ScanValue(&r.CreatedAt, value)
+	})
+	timeScanner6 := tasksTimeScanner(func(value any) error {
+		return rasql.ScanValue(&r.DueOn, value)
+	})
 	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(6)
+	scanned := rasql.NewScanMask(7)
 	var discard any
 	for index, column := range columns {
 		switch column {
@@ -58,16 +80,21 @@ func (r *TasksRow) ScanDestinations(columns []string) ([]any, error) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
 			destinations[index] = &r.Title
-		case "status":
-			if !scanned.Mark(scanIndexStatus) {
+		case "is_open":
+			if !scanned.Mark(scanIndexIsOpen) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			destinations[index] = &r.Status
-		case "priority":
-			if !scanned.Mark(scanIndexPriority) {
+			destinations[index] = &r.IsOpen
+		case "created_at":
+			if !scanned.Mark(scanIndexCreatedAt) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
-			destinations[index] = &r.Priority
+			destinations[index] = &timeScanner5
+		case "due_on":
+			if !scanned.Mark(scanIndexDueOn) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &timeScanner6
 		default:
 			destinations[index] = &discard
 		}
@@ -86,10 +113,12 @@ func (r TasksRow) ColumnValue(name string) (any, bool) {
 		return r.AssigneeID, true
 	case "title":
 		return r.Title, true
-	case "status":
-		return r.Status, true
-	case "priority":
-		return r.Priority, true
+	case "is_open":
+		return r.IsOpen, true
+	case "created_at":
+		return r.CreatedAt, true
+	case "due_on":
+		return r.DueOn, true
 	}
 	return nil, false
 }
@@ -111,11 +140,14 @@ func (t TasksTable) AssigneeID() query.ColumnRef { return rasql.ColumnOf(t.Table
 // Title returns a reference to the "title" column.
 func (t TasksTable) Title() query.ColumnRef { return rasql.ColumnOf(t.Table, "title") }
 
-// Status returns a reference to the "status" column.
-func (t TasksTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+// IsOpen returns a reference to the "is_open" column.
+func (t TasksTable) IsOpen() query.ColumnRef { return rasql.ColumnOf(t.Table, "is_open") }
 
-// Priority returns a reference to the "priority" column.
-func (t TasksTable) Priority() query.ColumnRef { return rasql.ColumnOf(t.Table, "priority") }
+// CreatedAt returns a reference to the "created_at" column.
+func (t TasksTable) CreatedAt() query.ColumnRef { return rasql.ColumnOf(t.Table, "created_at") }
+
+// DueOn returns a reference to the "due_on" column.
+func (t TasksTable) DueOn() query.ColumnRef { return rasql.ColumnOf(t.Table, "due_on") }
 
 // Tasks returns the descriptor for the "tasks" table.
 func Tasks() TasksTable {
@@ -129,4 +161,29 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 		return TasksTable{}, err
 	}
 	return TasksTable{Table: aliased}, nil
+}
+
+// TasksTableProjectRelation describes the Project relationship from TasksTable.
+type TasksTableProjectRelation struct {
+	Parent    ProjectsTable
+	Child     TasksTable
+	ParentKey query.ColumnRef
+	ChildKey  query.ColumnRef
+}
+
+// Project returns the generated relationship descriptor.
+func (t TasksTable) Project() TasksTableProjectRelation {
+	child := t
+	parent := Projects()
+	return TasksTableProjectRelation{Parent: parent, Child: child, ParentKey: parent.ID(), ChildKey: child.ProjectID()}
+}
+
+// Join returns an INNER JOIN for the relationship.
+func (r TasksTableProjectRelation) Join() query.Join {
+	return rasql.InnerJoin(r.Parent, query.Equal(r.ParentKey, r.ChildKey))
+}
+
+// Load fetches all related parents for children in one query and groups them by foreign-key value.
+func (r TasksTableProjectRelation) Load(ctx context.Context, db rasql.DB, children []TasksRow) (map[int64]ProjectsRow, error) {
+	return rasql.LoadBelongsTo[TasksRow, ProjectsRow, int64](ctx, db, r.Parent, r.ParentKey, children, func(row TasksRow) int64 { return row.ProjectID }, func(row ProjectsRow) int64 { return row.ID })
 }

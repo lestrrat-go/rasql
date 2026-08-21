@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Taskboard</title>
+</head>
+<body>
+<h1>Taskboard</h1>
+{{if .Overdue}}<p>Past their due date: {{.Overdue}}</p>{{end}}
+
+{{range .Groups}}
+<h2>{{.ProjectName}}</h2>
+<ul>
+{{range .Tasks}}
+  <li>
+    {{.Title}} &mdash; {{.Assignee}}{{if .DueOn}} (due {{.DueOn}}){{end}}
+    <form method="post" action="/tasks/{{.ID}}/close"><button type="submit">close</button></form>
+  </li>
+{{end}}
+</ul>
+{{else}}
+<p>No open tasks.</p>
+{{end}}
+
+<h2>Add a task</h2>
+<form method="post" action="/tasks">
+  <label>Project
+    <select name="project_id">
+      {{range .Projects}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+    </select>
+  </label>
+  <label>Owner
+    <select name="assignee_id">
+      <option value="">unassigned</option>
+      {{range .Members}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+    </select>
+  </label>
+  <label>Title <input type="text" name="title" required></label>
+  <button type="submit">add</button>
+</form>
+</body>
+</html>

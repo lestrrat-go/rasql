@@ -1772,6 +1772,10 @@ func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
 		source.WriteString(", GeneratedStorage: ")
 		source.WriteString(generatedStorageConstant(column.GeneratedStorage))
 	}
+	if column.Identity != "" {
+		source.WriteString(", Identity: ")
+		source.WriteString(identityGenerationConstant(column.Identity))
+	}
 	if column.Hidden {
 		source.WriteString(", Hidden: true")
 	}
@@ -1786,6 +1790,17 @@ func generatedStorageConstant(storage schema.GeneratedStorage) string {
 		return "schema.GeneratedVirtual"
 	default:
 		return "schema.GeneratedStorage(" + quote(string(storage)) + ")"
+	}
+}
+
+func identityGenerationConstant(generation schema.IdentityGeneration) string {
+	switch generation {
+	case schema.IdentityAlways:
+		return "schema.IdentityAlways"
+	case schema.IdentityByDefault:
+		return "schema.IdentityByDefault"
+	default:
+		return "schema.IdentityGeneration(" + quote(string(generation)) + ")"
 	}
 }
 

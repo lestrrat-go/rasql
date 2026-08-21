@@ -116,6 +116,22 @@ func (o defaultColumnOption) applyColumn(c *ColumnDef) error {
 	return nil
 }
 
+// identityColumnOption states a column's identity generation.
+type identityColumnOption IdentityGeneration
+
+// Identity marks a column as an identity column of the given generation,
+// rendered by a dialect that supports it. See IdentityGeneration's own doc
+// for what IdentityAlways and IdentityByDefault each mean and which
+// engines produce and accept them.
+func Identity(generation IdentityGeneration) ColumnOption {
+	return identityColumnOption(generation)
+}
+
+func (o identityColumnOption) applyColumn(c *ColumnDef) error {
+	c.Identity = IdentityGeneration(o)
+	return nil
+}
+
 // unsignedColumnOption marks an integer column unsigned.
 type unsignedColumnOption struct{}
 
