@@ -24,26 +24,29 @@ compiler through the fallout, and ends on the tests and the migration commands.
 Every command it shows was run, and the code below is what running them
 produced.
 
-## Two things this copy spells differently
+## What this copy spells differently
 
-The walkthrough tells a reader to build Taskboard as a standalone project
-beside a rasql checkout. This copy is checked into the rasql repository
-instead, two directories below its root, so two lines differ from the ones the
-chapters show.
+The walkthrough builds Taskboard as a standalone project beside a rasql
+checkout, so its `go.mod` redirects the dependency one directory up:
 
-`go.mod` redirects the dependency at the checkout above it rather than at a
-path of its own:
+```
+replace github.com/lestrrat-go/rasql => ../rasql
+```
+
+This copy is checked into the rasql repository itself, two directories below
+its root, so its `go.mod` redirects the dependency there instead:
 
 ```
 replace github.com/lestrrat-go/rasql => ../..
 ```
 
-And the scripts run the `rasql` command out of that checkout rather than one
-`go install` put on the PATH. `scripts/rasql.sh` is the one file that knows
-this: it builds `../../cmd/rasql` and runs the result, and `scripts/migrate.sh`
-and `scripts/generate.sh` call it instead of naming `rasql` directly. Nothing
-else about the project changes, and neither line is needed by a project that
-depends on a released rasql.
+The scripts differ for the same reason: they run the `rasql` command out of
+that checkout rather than one `go install` put on the PATH. `scripts/rasql.sh`
+is a whole file the walkthrough never shows: it builds `../../cmd/rasql` and
+runs the result. `scripts/generate.sh` and `scripts/migrate.sh` each add a line
+to run from the module root and call `scripts/rasql.sh` instead of naming
+`rasql` directly. Nothing else about the project changes, and none of this is
+needed by a project that depends on a released rasql.
 
 ## What is in here
 
@@ -78,8 +81,10 @@ podman run -d --name rasql-postgres \
 podman exec rasql-postgres psql -U rasql -d postgres -c 'CREATE DATABASE taskboard;'
 ```
 
-`scripts/psql.sh` opens `psql` on that database inside that container, and
-takes `TASKBOARD_CONTAINER` and `TASKBOARD_DATABASE` to reach another one.
+`scripts/psql.sh` opens `psql` on the database `TASKBOARD_DATABASE` names,
+defaulting to `taskboard_walkthrough` rather than the database just created,
+and takes `TASKBOARD_CONTAINER` to reach another container. Set
+`TASKBOARD_DATABASE` to `taskboard` to reach this one.
 
 ## Run it
 
@@ -87,6 +92,7 @@ Apply the schema, then start the server:
 
 ```sh
 export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable'
+export TASKBOARD_DATABASE=taskboard
 ./scripts/migrate.sh apply
 go run ./cmd/taskboard
 ```
