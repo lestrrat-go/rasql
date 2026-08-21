@@ -78,6 +78,33 @@ func TestWalkthroughBundleMatchesSample(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotZero(t, compared, "the bundle holds no files to compare")
+
+	// The walk above only checks that every file the bundle holds also exists
+	// in the checked-in copy. A file added to sample/taskboard and never
+	// carried into the walkthrough's steps is invisible to it, so this walks
+	// the other direction: every tracked file under sample/taskboard, except
+	// walkthrough/ itself and the paths bundleDivergences excuses, must exist
+	// in the bundle clone. git ls-files drives this rather than a filesystem
+	// walk so a stale untracked file some working copies carry (such as
+	// internal/store/.taskboard-schema.db) can't fail a check about what's
+	// checked in.
+	tracked, err := exec.Command("git", "-C", "..", "ls-files", "--", "sample/taskboard").CombinedOutput()
+	require.NoError(t, err, "git ls-files sample/taskboard: %s", tracked)
+
+	for _, line := range strings.Split(strings.TrimRight(string(tracked), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		relative := strings.TrimPrefix(line, "sample/taskboard/")
+		if strings.HasPrefix(relative, "walkthrough/") {
+			continue
+		}
+		if _, diverges := bundleDivergences[relative]; diverges {
+			continue
+		}
+		_, err := os.Stat(filepath.Join(clone, filepath.FromSlash(relative)))
+		require.NoError(t, err, "%s is in %s and not in the bundle; see CONTRIBUTING.md's \"Rebuilding the walkthrough's application\"", relative, samplePath)
+	}
 }
 
 // withoutRegionMarkers drops the include-block markers the checked-in copy
