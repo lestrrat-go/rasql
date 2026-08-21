@@ -60,7 +60,7 @@ The three steps are separate because each one has a different lifetime.
 2. `Compile` turns each named bind into the dialect's placeholder syntax, so `{{bind "email"}}` becomes `$1` for PostgreSQL and `?` for MySQL or SQLite. A parsed template can be compiled for several dialects.
 3. `Bind` supplies the values. It requires each name exactly once, and returns a `render.Statement` holding the SQL and its arguments in order.
 
-`Compiled.SQL()` returns the placeholder SQL for logging, and `Compiled.ParameterNames()` lists the names in first-use order, which is useful for checking a template against the values an application intends to pass.
+`Compiled.SQL()` returns the placeholder SQL for logging, and `Compiled.ParameterNames()` yields the names in first-use order, which is useful for checking a template against the values an application intends to pass.
 
 ## Execute a bound statement
 

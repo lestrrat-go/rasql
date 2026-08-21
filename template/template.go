@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"go/format"
 	"go/token"
+	"iter"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -143,9 +145,9 @@ func (c Compiled) SQL() string {
 	return c.sql
 }
 
-// ParameterNames returns unique parameters in first-use order.
-func (c Compiled) ParameterNames() []string {
-	return append([]string(nil), c.uniqueNames...)
+// ParameterNames yields the unique parameter names in first-use order.
+func (c Compiled) ParameterNames() iter.Seq[string] {
+	return slices.Values(c.uniqueNames)
 }
 
 // Bind supplies all named values and returns a parameterized statement.

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ func TestTemplateCompilesAndBindsInPlaceholderOrder(t *testing.T) {
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
 	require.Equal(t, "SELECT id FROM users WHERE email = $1 OR backup_email = $2 AND active = $3", compiled.SQL())
-	require.Equal(t, []string{"email", "active"}, compiled.ParameterNames())
+	require.Equal(t, []string{"email", "active"}, slices.Collect(compiled.ParameterNames()))
 
 	statement, err := compiled.Bind(map[string]any{"email": "ada@example.com", "active": true})
 	require.NoError(t, err)
