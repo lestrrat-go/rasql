@@ -6,6 +6,41 @@ It settles it by trying each choice on a running PostgreSQL server and reading b
 
 Every transcript below is what the server printed. The engine was PostgreSQL 17.10.
 
+## Start the project
+
+Chapter 1 wrote nothing down, so there is no project yet. Make the directory the application lives in, put it under git, and give it a Go module path:
+
+```sh
+mkdir taskboard
+cd taskboard
+git init
+go mod init example.com/taskboard
+```
+
+Every command from here to the end of the walkthrough runs in that directory.
+
+Write chapter 1's description of the application into `README.md`, so the first file a reader opens says what this is:
+
+```text
+# Taskboard
+
+A team runs projects, each project holds tasks, and every task is owned by one
+member of the team. One HTML page lists the open tasks grouped by project with
+the owner's name, offers a form to add a task, and offers a button to close one.
+
+The database is PostgreSQL. The application is built on
+[rasql](https://github.com/lestrrat-go/rasql).
+```
+
+Commit the two files that now exist:
+
+```sh
+git add README.md go.mod
+git commit -m 'start the taskboard project'
+```
+
+Chapter 6 comes back to that README and adds the commands that run the finished application.
+
 ## Start PostgreSQL
 
 The walkthrough runs PostgreSQL in a container. Start one under podman:
@@ -56,15 +91,23 @@ podman exec rasql-postgres psql -U rasql -d postgres -c 'CREATE DATABASE taskboa
 CREATE DATABASE
 ```
 
-Its connection string is the one every later chapter uses:
+Export its connection string as `TASKBOARD_DSN`. That is the name every later chapter reads it under, and chapter 3's first `rasql` call already expects it:
 
-```text
-postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable
+```sh
+export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable'
 ```
+
+The export lives in the shell that ran it, so a new terminal needs the same line again.
 
 ## Give the psql calls a shorter name
 
-Every command in this chapter reaches `psql` through the same long `podman exec` prefix. Put that prefix in a script once, so the rest of the chapter is the SQL and not the plumbing. Create `scripts/psql.sh`:
+Every command in this chapter reaches `psql` through the same long `podman exec` prefix. Put that prefix in a script once, so the rest of the chapter is the SQL and not the plumbing. Make the directory the project's scripts live in:
+
+```sh
+mkdir -p scripts
+```
+
+Create `scripts/psql.sh`:
 
 ```sh
 #!/bin/sh
@@ -203,10 +246,11 @@ INSERT 0 1
 (1 row)
 ```
 
-The table now holds `id` 100 and `id` 1, and the sequence is at 1. It will keep counting up into keys nobody has used, and one day it will reach 100. Bring that day forward by repeating the whole thing with 2 in place of 100, inside a transaction that gets rolled back:
+The table now holds `id` 100 and `id` 1, and the sequence is at 1. It will keep counting up into keys nobody has used, and one day it will reach 100. Bring that day forward by repeating the whole thing with 2 in place of 100. Drop the probe and build it again inside a transaction, and roll that transaction back, which puts the table and its two rows back for the sections below.
 
 ```sql
 BEGIN;
+DROP TABLE probe_serial;
 CREATE TABLE probe_serial (id serial PRIMARY KEY, name text NOT NULL);
 INSERT INTO probe_serial (id, name) VALUES (2, 'explicit');
 INSERT INTO probe_serial (name) VALUES ('first generated') RETURNING id;
@@ -216,6 +260,7 @@ ROLLBACK;
 
 ```text
 BEGIN
+DROP TABLE
 CREATE TABLE
 INSERT 0 1
  id
@@ -788,6 +833,12 @@ Did not find any relations.
 ```
 
 ## The shape
+
+Make the directory the project's SQL lives in:
+
+```sh
+mkdir -p db
+```
 
 Write the settled shape down as `db/shape.sql`:
 
