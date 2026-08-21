@@ -26,6 +26,15 @@ func (s Statement) Args() []any {
 	return append([]any(nil), s.args...)
 }
 
+// BoundArgs returns the bound arguments in placeholder order without copying
+// them. The returned slice aliases the statement's own storage, so a caller
+// that writes to it changes what the statement sends to the database; use
+// Args for a copy that is safe to modify. It exists so an execution path can
+// hand the arguments straight to database/sql without a per-execution copy.
+func (s Statement) BoundArgs() []any {
+	return s.args
+}
+
 // Error describes a failure while rendering SQL.
 type Error struct {
 	Dialect string
