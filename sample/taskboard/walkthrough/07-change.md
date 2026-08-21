@@ -220,12 +220,15 @@ Two errors, and they are the two changes stated back in Go. Take them one at a t
 
 Write the join out, as a left join:
 
-```text
-		Join(
-			tasks.Project().Join(),
-			rasql.LeftJoin(members, query.Equal(members.ID(), tasks.AssigneeID())),
-		).
+<!-- INCLUDE(sample/taskboard/internal/store/repository.go#leftjoin) -->
+```go
+Join(
+	tasks.Project().Join(),
+	rasql.LeftJoin(members, query.Equal(members.ID(), tasks.AssigneeID())),
+).
 ```
+source: [sample/taskboard/internal/store/repository.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository.go)
+<!-- END INCLUDE -->
 
 `tasks.Project().Join()` stays generated. Only the optional half is hand-written, and it is hand-written because a person had to choose.
 
@@ -261,18 +264,21 @@ A schema change has reached the HTTP layer, and the compiler named the exact met
 
 Widen the interface to match, and then answer the question the change actually asks: what does the form send when no owner is picked? An empty string, which is not a number and never was:
 
-```text
-	// An empty assignee_id is the form's way of saying nobody owns this yet.
-	var assigneeID *int64
-	if raw := r.FormValue("assignee_id"); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			http.Error(w, "assignee_id must be a number", http.StatusBadRequest)
-			return
-		}
-		assigneeID = &parsed
+<!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#empty_assignee) -->
+```go
+// An empty assignee_id is the form's way of saying nobody owns this yet.
+var assigneeID *int64
+if raw := r.FormValue("assignee_id"); raw != "" {
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		http.Error(w, "assignee_id must be a number", http.StatusBadRequest)
+		return
 	}
+	assigneeID = &parsed
+}
 ```
+source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
+<!-- END INCLUDE -->
 
 The old code returned `400` for an empty value, because an empty value was a mistake. Now it is a choice.
 
@@ -308,7 +314,8 @@ Chapter 6's error handling is what made this readable. The handler logged the ca
 
 Make the type say what the query can now return, and take the new column while there:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/store/repository.go#opentask) -->
+```go
 // OpenTask is one line of the page's list: an open task, the project it
 // sits under, and the member who owns it. AssigneeName is nil when nobody
 // owns the task, and DueOn is nil when it has no due date.
@@ -321,6 +328,8 @@ type OpenTask struct {
 	DueOn        *time.Time
 }
 ```
+source: [sample/taskboard/internal/store/repository.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository.go)
+<!-- END INCLUDE -->
 
 ```text
 			query.Project(tasks.DueOn()).As("due_on"),
@@ -337,7 +346,8 @@ internal/taskboard/taskboard.go:45:86: cannot use row.AssigneeName (variable of 
 
 That error is in the view model, and the view model is the right place to answer it. What the page prints for a task with no owner is a presentation decision, not a storage one, so the nil never reaches the template:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/taskboard/taskboard.go#task_text) -->
+```go
 // Task is one open task as the page prints it. Both Assignee and DueOn are
 // already the text the page shows, so the template never asks whether a
 // task has an owner or a due date; this package answers that once.
@@ -365,6 +375,8 @@ func dueText(due *time.Time) string {
 	return due.Format(time.DateOnly)
 }
 ```
+source: [sample/taskboard/internal/taskboard/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/taskboard/taskboard.go)
+<!-- END INCLUDE -->
 
 The template shows the due date when there is one, and offers the new choice in the form:
 

@@ -104,12 +104,16 @@ The add form posts the three values `AddTask` takes:
 
 `internal/web` embeds the template at build time and parses it once:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#template) -->
+```go
+//
 //go:embed page.html
 var pageSource string
 
 var pageTemplate = template.Must(template.New("page").Parse(pageSource))
 ```
+source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
+<!-- END INCLUDE -->
 
 The handler names what it needs from the repository as two interfaces rather than taking the concrete type:
 
@@ -132,7 +136,8 @@ type Writer interface {
 
 Routing uses the method-and-pattern form the standard mux takes:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#routes) -->
+```go
 // Routes returns the mux serving the application.
 func (h Handler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
@@ -142,6 +147,8 @@ func (h Handler) Routes() *http.ServeMux {
 	return mux
 }
 ```
+source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
+<!-- END INCLUDE -->
 
 `GET /{$}` matches the root and nothing below it, so a request for `/favicon.ico` gets a 404 rather than the page. `{id}` in the third pattern is read back with `r.PathValue("id")`.
 
@@ -210,7 +217,8 @@ A redirect after a successful post is what stops a browser reload from filing th
 
 The two failure paths are told apart deliberately. A form value that is not a number is the caller's mistake and gets a `400` saying which field. A repository error is the server's problem, and the reply says only that:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#fail) -->
+```go
 // fail logs the cause and returns a response that repeats none of it, so a
 // database error never reaches the browser.
 func (h Handler) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
@@ -221,6 +229,8 @@ func (h Handler) fail(w http.ResponseWriter, r *http.Request, what string, err e
 	http.Error(w, "taskboard is unavailable", http.StatusInternalServerError)
 }
 ```
+source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
+<!-- END INCLUDE -->
 
 A rasql error can quote the SQL it failed on, and the browser is the wrong place for that. The log gets the cause; the response gets one sentence.
 
@@ -228,50 +238,56 @@ A rasql error can quote the SQL it failed on, and the browser is the wrong place
 
 `cmd/taskboard/main.go` is the only file that knows the application runs on PostgreSQL. It opens the handle, pairs it with the dialect, and hands the result to the repository:
 
-```text
-	config, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		return fmt.Errorf("parse TASKBOARD_DSN: %w", err)
-	}
-	database := stdlib.OpenDB(*config)
-	defer func() { _ = database.Close() }()
+<!-- INCLUDE(sample/taskboard/cmd/taskboard/main.go#open_database) -->
+```go
+config, err := pgx.ParseConfig(dsn)
+if err != nil {
+	return fmt.Errorf("parse TASKBOARD_DSN: %w", err)
+}
+database := stdlib.OpenDB(*config)
+defer func() { _ = database.Close() }()
 
-	// A rasql.DB pairs the handle with the dialect used to render SQL.
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	if err != nil {
-		return fmt.Errorf("create the rasql db: %w", err)
-	}
+// A rasql.DB pairs the handle with the dialect used to render SQL.
+db, err := rasql.New(database, dialect.PostgreSQL())
+if err != nil {
+	return fmt.Errorf("create the rasql db: %w", err)
+}
 ```
+source: [sample/taskboard/cmd/taskboard/main.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/cmd/taskboard/main.go)
+<!-- END INCLUDE -->
 
 `rasql.New` wraps a handle somebody else opened, so the driver, the pool settings, and the closing all stay where they were. Changing engines would change `dialect.PostgreSQL()` and the driver above it, and nothing in `internal/store`, `internal/taskboard`, or `internal/web`.
 
 The server is started on a goroutine and shut down on a signal, so an interrupt drains the requests in flight instead of cutting them off:
 
-```text
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+<!-- INCLUDE(sample/taskboard/cmd/taskboard/main.go#serve) -->
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
 
-	listening := make(chan error, 1)
-	go func() {
-		logger.Info("taskboard is listening", slog.String("address", address))
-		listening <- server.ListenAndServe()
-	}()
+listening := make(chan error, 1)
+go func() {
+	logger.Info("taskboard is listening", slog.String("address", address))
+	listening <- server.ListenAndServe()
+}()
 
-	select {
-	case err := <-listening:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return fmt.Errorf("serve: %w", err)
-	case <-ctx.Done():
+select {
+case err := <-listening:
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
 	}
+	return fmt.Errorf("serve: %w", err)
+case <-ctx.Done():
+}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shut down: %w", err)
-	}
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := server.Shutdown(shutdownCtx); err != nil {
+	return fmt.Errorf("shut down: %w", err)
+}
 ```
+source: [sample/taskboard/cmd/taskboard/main.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/cmd/taskboard/main.go)
+<!-- END INCLUDE -->
 
 Reading from `listening` is what reports a failure to bind. Without that arm, a port already in use would leave the process sitting on `ctx.Done()` forever, listening to nothing.
 

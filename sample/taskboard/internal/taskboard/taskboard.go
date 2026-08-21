@@ -8,6 +8,7 @@ import (
 	"example.com/taskboard/internal/store"
 )
 
+// BEGIN(task_text)
 // Task is one open task as the page prints it. Both Assignee and DueOn are
 // already the text the page shows, so the template never asks whether a
 // task has an owner or a due date; this package answers that once.
@@ -35,6 +36,8 @@ func dueText(due *time.Time) string {
 	return due.Format(time.DateOnly)
 }
 
+// END(task_text)
+
 // Group is one project's block of open tasks.
 type Group struct {
 	ProjectID   int64
@@ -48,6 +51,7 @@ type Choice struct {
 	Name string
 }
 
+// BEGIN(page)
 // Page is everything one drawing of the page needs.
 type Page struct {
 	Groups   []Group
@@ -55,6 +59,8 @@ type Page struct {
 	Projects []Choice
 	Members  []Choice
 }
+
+// END(page)
 
 // GroupByProject folds rows into one Group per project. It relies on the
 // rows arriving in project order, which is the order

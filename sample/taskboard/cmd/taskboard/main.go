@@ -34,6 +34,7 @@ func run() error {
 	if dsn == "" {
 		return errors.New("set TASKBOARD_DSN to the taskboard connection string")
 	}
+	// BEGIN(open_database)
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return fmt.Errorf("parse TASKBOARD_DSN: %w", err)
@@ -46,6 +47,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create the rasql db: %w", err)
 	}
+	// END(open_database)
 
 	address := os.Getenv("TASKBOARD_ADDR")
 	if address == "" {
@@ -59,6 +61,7 @@ func run() error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	// BEGIN(serve)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -82,6 +85,7 @@ func run() error {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shut down: %w", err)
 	}
+	// END(serve)
 	logger.Info("taskboard stopped")
 	return nil
 }

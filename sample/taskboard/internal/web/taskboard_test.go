@@ -82,6 +82,7 @@ func TestShowPage(t *testing.T) {
 	}
 }
 
+// BEGIN(add_no_owner)
 func TestAddTaskWithNoOwner(t *testing.T) {
 	repository := &fakeRepository{}
 	form := url.Values{"project_id": {"1"}, "assignee_id": {""}, "title": {"Find an owner"}}
@@ -100,6 +101,8 @@ func TestAddTaskWithNoOwner(t *testing.T) {
 		t.Errorf("AddTask got owner %v, want nil for an empty assignee_id", *repository.addedOwner)
 	}
 }
+
+// END(add_no_owner)
 
 func TestAddTaskRejectsABadProjectID(t *testing.T) {
 	repository := &fakeRepository{}

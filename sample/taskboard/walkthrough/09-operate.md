@@ -12,7 +12,8 @@ That leaves three things. The view model turns rows into what the page prints, a
 
 `GroupByProject` decides how the page is grouped, and [chapter 6](06-web.md#the-view-model) built it on an assumption the query has to keep:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/taskboard/taskboard_test.go#repeated_projects) -->
+```go
 func TestGroupByProjectSeparatesRepeatedProjects(t *testing.T) {
 	// The fold trusts the query's ORDER BY. Rows that arrive out of project
 	// order produce one group per run, which is what this pins: the day
@@ -27,6 +28,8 @@ func TestGroupByProjectSeparatesRepeatedProjects(t *testing.T) {
 	}
 }
 ```
+source: [sample/taskboard/internal/taskboard/taskboard_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/taskboard/taskboard_test.go)
+<!-- END INCLUDE -->
 
 The test asserts the behaviour rather than wishing it away. Out-of-order rows produce three groups, and writing that down is what turns a silent page-layout bug into a failing test if the `ORDER BY` ever goes.
 
@@ -40,7 +43,8 @@ internal/web/taskboard_test.go:59:13: undefined: web.NewHandlerFrom
 
 `NewHandler` took a `store.Repository` while the struct it built held two interfaces, so nothing could stand in for either half. The fix is one line and makes the declaration true:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#newhandler) -->
+```go
 // NewHandler creates a handler over a reader and a writer. store.Repository
 // satisfies both, so an application passes it twice; a test passes whatever
 // it needs to stand in for either half.
@@ -48,12 +52,15 @@ func NewHandler(reader Reader, writer Writer, logger *slog.Logger) Handler {
 	return Handler{reader: reader, writer: writer, logger: logger}
 }
 ```
+source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
+<!-- END INCLUDE -->
 
 `main` now says `web.NewHandler(repository, repository, logger)`, which is repetitive and honest about what is going on.
 
 The fake is a struct with the six methods and a few fields to record what it was asked:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/web/taskboard_test.go#add_no_owner) -->
+```go
 func TestAddTaskWithNoOwner(t *testing.T) {
 	repository := &fakeRepository{}
 	form := url.Values{"project_id": {"1"}, "assignee_id": {""}, "title": {"Find an owner"}}
@@ -73,6 +80,8 @@ func TestAddTaskWithNoOwner(t *testing.T) {
 	}
 }
 ```
+source: [sample/taskboard/internal/web/taskboard_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard_test.go)
+<!-- END INCLUDE -->
 
 That is chapter 7's change stated as a test: an empty `assignee_id` has to reach the repository as a nil pointer and not as a `400`.
 
@@ -82,7 +91,8 @@ The repository is where rasql meets PostgreSQL, and a fake would only prove that
 
 The whole of the setup is a transaction that gets rolled back:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/store/repository_test.go#open_tx) -->
+```go
 // openTx returns a repository over a transaction that is rolled back when
 // the test ends. rasql.Handle is satisfied by *sql.Tx as well as *sql.DB, so
 // every write below reaches a real PostgreSQL server and none of them
@@ -113,6 +123,8 @@ func openTx(t *testing.T) store.Repository {
 	return store.New(db)
 }
 ```
+source: [sample/taskboard/internal/store/repository_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository_test.go)
+<!-- END INCLUDE -->
 
 `rasql.New` takes anything satisfying `rasql.Handle`, and `*sql.Tx` satisfies it as well as `*sql.DB` does. The repository never learns which one it got. Every insert and update below runs against a real server and none of them is committed, so the tests can be run against a database that has data in it without changing it.
 
@@ -120,24 +132,30 @@ An unset `TASKBOARD_TEST_DSN` skips rather than fails, so `go test ./...` works 
 
 The tests are the three operations and the one thing a fake cannot check, which is what the database does with a `NULL`:
 
-```text
-	if owned.AssigneeName == nil {
-		t.Error("the owned task came back with no assignee name")
-	}
-	if unowned.AssigneeName != nil {
-		t.Errorf("the unowned task came back with assignee %q, want none", *unowned.AssigneeName)
-	}
+<!-- INCLUDE(sample/taskboard/internal/store/repository_test.go#null_assignee) -->
+```go
+if owned.AssigneeName == nil {
+	t.Error("the owned task came back with no assignee name")
+}
+if unowned.AssigneeName != nil {
+	t.Errorf("the unowned task came back with assignee %q, want none", *unowned.AssigneeName)
+}
 ```
+source: [sample/taskboard/internal/store/repository_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository_test.go)
+<!-- END INCLUDE -->
 
 `CountOverdue` gets its own test, because it is the one query in the application the compiler does not check against the schema. Chapter 8 named that as the price of declaring SQL; this is what pays it. The test asserts a relationship rather than a number, so it holds whatever the database already contains:
 
-```text
-	// AddTask files a task with no due date, so the count must not move.
-	if err := repository.AddTask(ctx, projectID, &memberID, "No due date"); err != nil {
-		t.Fatalf("add a task: %s", err)
-	}
-	after, err := repository.CountOverdue(ctx, time.Now())
+<!-- INCLUDE(sample/taskboard/internal/store/repository_test.go#overdue_unmoved) -->
+```go
+// AddTask files a task with no due date, so the count must not move.
+if err := repository.AddTask(ctx, projectID, &memberID, "No due date"); err != nil {
+	t.Fatalf("add a task: %s", err)
+}
+after, err := repository.CountOverdue(ctx, time.Now())
 ```
+source: [sample/taskboard/internal/store/repository_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository_test.go)
+<!-- END INCLUDE -->
 
 ## Run them
 

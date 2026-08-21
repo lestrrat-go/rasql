@@ -14,6 +14,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 )
 
+// BEGIN(open_tx)
 // openTx returns a repository over a transaction that is rolled back when
 // the test ends. rasql.Handle is satisfied by *sql.Tx as well as *sql.DB, so
 // every write below reaches a real PostgreSQL server and none of them
@@ -43,6 +44,8 @@ func openTx(t *testing.T) store.Repository {
 	}
 	return store.New(db)
 }
+
+// END(open_tx)
 
 // seed writes one member, one project, and returns their ids.
 func seed(ctx context.Context, t *testing.T, repository store.Repository) (projectID int64, memberID int64) {
@@ -97,12 +100,14 @@ func TestAddTaskAndCloseTask(t *testing.T) {
 	if owned == nil || unowned == nil {
 		t.Fatal("one of the two new tasks is missing from the open list")
 	}
+	// BEGIN(null_assignee)
 	if owned.AssigneeName == nil {
 		t.Error("the owned task came back with no assignee name")
 	}
 	if unowned.AssigneeName != nil {
 		t.Errorf("the unowned task came back with assignee %q, want none", *unowned.AssigneeName)
 	}
+	// END(null_assignee)
 
 	if err := repository.CloseTask(ctx, unowned.TaskID); err != nil {
 		t.Fatalf("close the unowned task: %s", err)
@@ -134,11 +139,13 @@ func TestCountOverdue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count overdue tasks: %s", err)
 	}
+	// BEGIN(overdue_unmoved)
 	// AddTask files a task with no due date, so the count must not move.
 	if err := repository.AddTask(ctx, projectID, &memberID, "No due date"); err != nil {
 		t.Fatalf("add a task: %s", err)
 	}
 	after, err := repository.CountOverdue(ctx, time.Now())
+	// END(overdue_unmoved)
 	if err != nil {
 		t.Fatalf("count overdue tasks: %s", err)
 	}

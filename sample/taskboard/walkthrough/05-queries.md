@@ -8,9 +8,8 @@ The hand-written code goes in `internal/store/repository.go`, beside the generat
 
 That leaves one file in the package the generator does not write, which is where the `go:generate` directive belongs:
 
-```text
-package store
-
+<!-- INCLUDE(sample/taskboard/internal/store/repository.go#generate) -->
+```go
 // The generated files beside this one are rebuilt from the checked-in
 // migrations by scripts/generate.sh. The directive lives here because every
 // other file in this package is generated, and a regenerating run would
@@ -18,10 +17,13 @@ package store
 //
 //go:generate ../../scripts/generate.sh
 ```
+source: [sample/taskboard/internal/store/repository.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository.go)
+<!-- END INCLUDE -->
 
 The repository itself is a value over a `rasql.DB`:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/store/repository.go#repository) -->
+```go
 // Repository reads and writes Taskboard's tables through rasql.
 type Repository struct {
 	db rasql.DB
@@ -32,6 +34,8 @@ func New(db rasql.DB) Repository {
 	return Repository{db: db}
 }
 ```
+source: [sample/taskboard/internal/store/repository.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository.go)
+<!-- END INCLUDE -->
 
 A `rasql.DB` pairs a database handle with the dialect used to render SQL, and it is a plain value, so there is nothing here to close. [Chapter 6](06-web.md) is where one gets built.
 
@@ -124,7 +128,8 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 
 Closing a task changes one column of one row. `rasql.Update` writes a whole row addressed by its primary key, which would mean reading the task first only to write it back. `rasql.UpdateMany` states the change and the predicate instead:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/store/repository.go#closetask) -->
+```go
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
@@ -138,6 +143,8 @@ func (repository Repository) CloseTask(ctx context.Context, taskID int64) error 
 	return nil
 }
 ```
+source: [sample/taskboard/internal/store/repository.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository.go)
+<!-- END INCLUDE -->
 
 `rasql.UpdateColumns` limits the statement to `is_open`, so the rest of the passed row is never read and its zero values never reach the database. `rasql.UpdateWhere` supplies the predicate. Naming a task that does not exist, or one that is closed already, updates no rows and reports no error, which is the right answer for a button somebody clicked twice.
 
@@ -145,7 +152,8 @@ func (repository Repository) CloseTask(ctx context.Context, taskID int64) error 
 
 The add form offers a project and an owner to pick from. Both are whole-table reads of a row type that already exists, so both go through `rasql.SelectFrom`:
 
-```text
+<!-- INCLUDE(sample/taskboard/internal/store/repository.go#allprojects) -->
+```go
 // AllProjects returns every project in id order, for the form's project list.
 func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, error) {
 	projects := Projects()
@@ -156,6 +164,8 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 	return rows, nil
 }
 ```
+source: [sample/taskboard/internal/store/repository.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository.go)
+<!-- END INCLUDE -->
 
 `AllMembers` is the same call against `members`.
 

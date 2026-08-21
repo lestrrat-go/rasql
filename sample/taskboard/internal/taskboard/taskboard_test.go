@@ -36,6 +36,7 @@ func TestGroupByProject(t *testing.T) {
 	}
 }
 
+// BEGIN(repeated_projects)
 func TestGroupByProjectSeparatesRepeatedProjects(t *testing.T) {
 	// The fold trusts the query's ORDER BY. Rows that arrive out of project
 	// order produce one group per run, which is what this pins: the day
@@ -49,6 +50,8 @@ func TestGroupByProjectSeparatesRepeatedProjects(t *testing.T) {
 		t.Fatalf("GroupByProject returned %d groups, want 3", len(groups))
 	}
 }
+
+// END(repeated_projects)
 
 func TestGroupByProjectOnNoRows(t *testing.T) {
 	if groups := taskboard.GroupByProject(nil); len(groups) != 0 {

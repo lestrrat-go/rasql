@@ -1,11 +1,13 @@
 package store
 
+// BEGIN(generate)
 // The generated files beside this one are rebuilt from the checked-in
 // migrations by scripts/generate.sh. The directive lives here because every
 // other file in this package is generated, and a regenerating run would
 // overwrite it there.
 //
 //go:generate ../../scripts/generate.sh
+// END(generate)
 
 import (
 	"context"
@@ -16,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/query"
 )
 
+// BEGIN(repository)
 // Repository reads and writes Taskboard's tables through rasql.
 type Repository struct {
 	db rasql.DB
@@ -26,6 +29,9 @@ func New(db rasql.DB) Repository {
 	return Repository{db: db}
 }
 
+// END(repository)
+
+// BEGIN(opentask)
 // OpenTask is one line of the page's list: an open task, the project it
 // sits under, and the member who owns it. AssigneeName is nil when nobody
 // owns the task, and DueOn is nil when it has no due date.
@@ -38,6 +44,8 @@ type OpenTask struct {
 	DueOn        *time.Time
 }
 
+// END(opentask)
+
 // OpenTasks returns every open task, ordered by project and then by task,
 // which is the order the page prints them in.
 func (repository Repository) OpenTasks(ctx context.Context) ([]OpenTask, error) {
@@ -45,10 +53,12 @@ func (repository Repository) OpenTasks(ctx context.Context) ([]OpenTask, error) 
 	projects := Projects()
 	members := Members()
 	rows, err := rasql.DecodeFrom[OpenTask](tasks).
+		// BEGIN(leftjoin)
 		Join(
 			tasks.Project().Join(),
 			rasql.LeftJoin(members, query.Equal(members.ID(), tasks.AssigneeID())),
 		).
+		// END(leftjoin)
 		Project(
 			query.Project(tasks.ProjectID()).As("project_id"),
 			query.Project(projects.Name()).As("project_name"),
@@ -79,6 +89,7 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 	return nil
 }
 
+// BEGIN(closetask)
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
@@ -92,6 +103,9 @@ func (repository Repository) CloseTask(ctx context.Context, taskID int64) error 
 	return nil
 }
 
+// END(closetask)
+
+// BEGIN(allprojects)
 // AllProjects returns every project in id order, for the form's project list.
 func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, error) {
 	projects := Projects()
@@ -101,6 +115,8 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 	}
 	return rows, nil
 }
+
+// END(allprojects)
 
 // AllMembers returns every member in id order, for the form's member list.
 func (repository Repository) AllMembers(ctx context.Context) ([]MembersRow, error) {
@@ -112,6 +128,7 @@ func (repository Repository) AllMembers(ctx context.Context) ([]MembersRow, erro
 	return rows, nil
 }
 
+// BEGIN(countoverdue)
 // overdueRow decodes the single column OverdueCount selects.
 type overdueRow struct {
 	Overdue int64
@@ -129,3 +146,5 @@ func (repository Repository) CountOverdue(ctx context.Context, on time.Time) (in
 	}
 	return row.Overdue, nil
 }
+
+// END(countoverdue)
