@@ -215,7 +215,7 @@ func (db DB) QueryRendered(ctx context.Context, statement render.Statement) (*sq
 	if err != nil {
 		return nil, afterHooks(ctx, operation, entered, err)
 	}
-	rows, err := db.handle.QueryContext(ctx, statement.SQL(), statement.Args()...)
+	rows, err := db.handle.QueryContext(ctx, statement.SQL(), statement.BoundArgs()...)
 	if err != nil {
 		err = fmt.Errorf("rasql: execute query: %w", err)
 	}
@@ -240,7 +240,7 @@ func (db DB) ExecRendered(ctx context.Context, statement render.Statement) (sql.
 	if err != nil {
 		return nil, afterHooks(ctx, operation, entered, err)
 	}
-	result, err := db.handle.ExecContext(ctx, statement.SQL(), statement.Args()...)
+	result, err := db.handle.ExecContext(ctx, statement.SQL(), statement.BoundArgs()...)
 	if err != nil {
 		err = fmt.Errorf("rasql: execute statement: %w", err)
 	}
