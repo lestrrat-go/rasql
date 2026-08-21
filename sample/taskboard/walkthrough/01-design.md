@@ -56,7 +56,7 @@ Both foreign keys sit on required columns, so both of them get a generated relat
 
 ## What the rest of the walkthrough does
 
-[Chapter 2](02-database.md) starts PostgreSQL and settles every column type, constraint, and index by trying it against the server and reading back what the server and rasql's own inspection report.
+[Chapter 2](02-database.md) creates the project directory, starts PostgreSQL, and settles every column type, constraint, and index by trying it against the server and reading back what the server and rasql's own inspection report.
 
 Chapter 3 captures that settled shape into a checked-in migration. Chapter 4 adds the codegen settings file and generates the store. Chapter 5 builds the repository on the generated store, and chapter 6 adds the view model and the HTTP layer that draw the page.
 

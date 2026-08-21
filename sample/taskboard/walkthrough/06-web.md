@@ -427,13 +427,15 @@ git commit -m 'serve the taskboard page over http'
 
 ## Finish the README
 
-The project now runs. Say how, in the file somebody reads first:
+The project now runs. Write how to run it into `README.md`, beneath the description chapter 2 put there:
 
 ```sh
 export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable'
 ./scripts/migrate.sh apply
 go run ./cmd/taskboard
 ```
+
+That export is a line for the next person to open the project, not a step to run again here. Chapter 2 already set `TASKBOARD_DSN` in this shell.
 
 ```sh
 git add README.md
