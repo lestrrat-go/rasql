@@ -208,10 +208,6 @@ Add a task that is already late, and ask for the page:
 ./scripts/psql.sh -c "INSERT INTO tasks (project_id, assignee_id, title, due_on) VALUES (2, 2, 'Send the July statements', DATE '2026-08-01');"
 ```
 
-```text
-INSERT 0 1
-```
-
 ```sh
 curl -s http://127.0.0.1:18080/ | sed -n '/Taskboard<\/h1>/,/Add a task/p'
 ```

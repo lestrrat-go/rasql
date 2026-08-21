@@ -81,11 +81,6 @@ podman exec rasql-postgres psql -U rasql -d postgres \
   -c 'CREATE DATABASE taskboard_walkthrough;'
 ```
 
-```text
-DROP DATABASE
-CREATE DATABASE
-```
-
 ```sh
 ./scripts/migrate.sh apply
 ```
