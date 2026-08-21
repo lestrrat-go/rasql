@@ -12,7 +12,7 @@ Both changes land in the database first. What makes this chapter worth reading i
 
 The schema now lives in `db/migrations`. Shaping the live database again and capturing the difference would mean the change existed somewhere untracked first, and it would leave the two databases this walkthrough uses disagreeing until somebody remembered to fix the other. Writing the migration first inverts that: the change exists in the repository before it exists anywhere else, and every database gets it the same way.
 
-`rasql migrate diff` is the middle road, comparing two checked-in desired-schema directories and proposing a migration between them. It is worth reaching for on a large schema. Three `ALTER TABLE` statements do not need it.
+`rasql migrate diff` is the middle road, comparing two checked-in desired-schema directories and proposing a migration between them. Reach for it on a large schema. Three `ALTER TABLE` statements do not need it.
 
 Create the directory and write the three steps:
 
@@ -467,7 +467,7 @@ The regeneration and the fixes are one commit, because the tree does not build b
 
 ## The schema can no longer be captured
 
-One thing this migration cost, and it is worth stating plainly. `due_on` is a `date`, and [chapter 3](03-capture.md#what-the-command-refuses-to-capture) showed that `date` is not on `rasql migrate dump`'s allow-list:
+Adding `due_on` cost this schema its capture. The column is a `date`, and [chapter 3](03-capture.md#what-the-command-refuses-to-capture) showed that `date` is not on `rasql migrate dump`'s allow-list:
 
 ```sh
 rasql migrate dump -dialect postgresql -dsn "$TASKBOARD_DSN"
