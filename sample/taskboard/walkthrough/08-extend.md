@@ -160,7 +160,7 @@ The method takes an instant and the query narrows it, so the caller is the one w
 
 `rasql.QueryRenderedOne` runs a rendered statement and decodes exactly one row, reporting `rasql.ErrNoRows` for none and `rasql.ErrMultipleRows` for more. `QueryRenderedAll` and `QueryRendered` are the same call for a slice and for an iterator.
 
-What the repository adds over calling `OverdueCount` from the handler is the boundary. `overdueRow` and `render.Statement` stop here, the method returns an `int64`, and the two errors it can produce are wrapped with what was being attempted. [Chapter 5's `OpenTasks`](05-queries.md#the-read-the-page-is-drawn-from) does the same for the joined read: it returns `[]OpenTask`, and nothing above it has ever seen a `query.ColumnRef`.
+What the repository adds over calling `OverdueCount` from the handler is the boundary. `overdueRow` and `render.Statement` stop here, the method returns an `int64`, and the two errors it can produce are wrapped with what was being attempted. [Chapter 5's `OpenTasks`](05-queries.md#read-the-open-tasks) does the same for the joined read: it returns `[]OpenTask`, and nothing above it has ever seen a `query.ColumnRef`.
 
 That boundary is what let chapter 7 change the schema without the HTTP layer learning about foreign keys. When `assignee_id` became nullable, the handler changed because the *meaning* changed, and not because a join had.
 
