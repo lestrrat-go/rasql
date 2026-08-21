@@ -61,6 +61,8 @@ git clone sample/taskboard/walkthrough/steps.bundle ../taskboard-steps
 git -C ../taskboard-steps log --oneline
 ```
 
+That command puts the clone beside this checkout, which is where its `go.mod` expects to find rasql: the bundle carries the `replace github.com/lestrrat-go/rasql => ../rasql` line chapter 4 tells a reader to write, so `go build ./...` in the clone resolves the dependency to a sibling directory named `rasql`. Clone it somewhere else, or work in a checkout directory under another name, and edit the `replace` path in the clone to reach the checkout from there.
+
 Changing a chapter that produces code means redoing that step and the ones after it, rather than editing `sample/taskboard` on its own, because each later chapter reports what the earlier steps actually left behind. Check out the commit before the change, rerun the chapter's commands against a live server, carry the remaining steps forward, copy the result back over `sample/taskboard`, and rebuild the bundle in the same commit:
 
 ```sh

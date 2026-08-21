@@ -24,6 +24,7 @@ const samplePath = "../sample/taskboard"
 // walkthrough's application" section owns why each one differs.
 var bundleDivergences = map[string]struct{}{
 	"README.md":           {},
+	"go.mod":              {},
 	"scripts/generate.sh": {},
 	"scripts/migrate.sh":  {},
 	"scripts/rasql.sh":    {},
