@@ -313,7 +313,7 @@ func (s Store) Plan() (Plan, error) {
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorTestFilename), Source: descriptorTestSource})
 
 	for index, q := range s.Queries {
-		file, err := s.planQuery(root, dir, q, filenames, identifiers)
+		file, err := s.planQuery(root, dir, q, sorted, filenames, identifiers)
 		if err != nil {
 			return Plan{}, fmt.Errorf("generate: query[%d]: %w", index, err)
 		}
@@ -422,8 +422,10 @@ func (s Store) Check() error {
 // against filenames -- the file names every table and the descriptor file
 // already claim -- and its function name against identifiers -- the
 // package-level names the generated files already declare -- and recording
-// both once they pass, so a later query is checked against them too.
-func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[string]string) (File, error) {
+// both once they pass, so a later query is checked against them too. tables
+// is the hint-applied, validated, name-sorted set the generated package
+// declares; a bind that names a column resolves against it.
+func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string) (File, error) {
 	if q.Input == "" && q.SQL == "" {
 		return File{}, errors.New("input or sql is required")
 	}
@@ -479,7 +481,7 @@ func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[s
 	if err != nil {
 		return File{}, err
 	}
-	source, err := compiled.GoSource(s.Package, q.Function)
+	source, err := compiled.GoSource(s.Package, q.Function, tables...)
 	if err != nil {
 		return File{}, err
 	}

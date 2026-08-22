@@ -67,6 +67,84 @@ func TestStoreCompilesInlineQuery(t *testing.T) {
 	require.NoError(t, store.Check())
 }
 
+// TestStoreCompilesTypedQuery requires a bind that names a column to
+// generate that column's Go type instead of any.
+func TestStoreCompilesTypedQuery(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users WHERE email = {{bind "email" users.email}}`,
+			Function: "UserByEmail",
+			Output:   "user_by_email_gen.go",
+		}},
+	}
+
+	require.NoError(t, store.Write())
+	generated, err := os.ReadFile(filepath.Join(root, "store", "user_by_email_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(generated), "func UserByEmail(email string)")
+	require.NoError(t, store.Check())
+}
+
+// TestStoreRejectsTypedBindNamingAnAbsentTable requires Plan to fail, naming
+// the query and the reference, when a bind names a table this store's
+// Tables does not include.
+func TestStoreRejectsTypedBindNamingAnAbsentTable(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM orders WHERE id = {{bind "id" orders.id}}`,
+			Function: "OrderByID",
+			Output:   "order_by_id_gen.go",
+		}},
+	}
+
+	_, err := store.Plan()
+	require.ErrorContains(t, err, "query[0]")
+	require.ErrorContains(t, err, "orders.id")
+}
+
+// TestStoreTypedBindIgnoresTableOrder requires the lookup to run against
+// Plan's hint-applied, sorted table set rather than the caller's Tables
+// order, so the same descriptors given in a different order plan identical
+// bytes.
+func TestStoreTypedBindIgnoresTableOrder(t *testing.T) {
+	root := t.TempDir()
+	base := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users WHERE email = {{bind "email" users.email}}`,
+			Function: "UserByEmail",
+			Output:   "user_by_email_gen.go",
+		}},
+	}
+
+	forward := base
+	forward.Tables = []schema.TableDef{usersTableDef(), ordersTableDef()}
+	plannedForward, err := forward.Plan()
+	require.NoError(t, err)
+
+	reversed := base
+	reversed.Tables = []schema.TableDef{ordersTableDef(), usersTableDef()}
+	plannedReversed, err := reversed.Plan()
+	require.NoError(t, err)
+
+	require.Equal(t, plannedForward.Files(), plannedReversed.Files())
+}
+
 // TestStoreRejectsQueryTemplateCount requires a query to carry its template in
 // exactly one of Input and SQL.
 func TestStoreRejectsQueryTemplateCount(t *testing.T) {

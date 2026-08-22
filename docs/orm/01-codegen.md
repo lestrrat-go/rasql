@@ -82,6 +82,12 @@ input, so `queries/user_by_email.sql` becomes `user_by_email_gen.go`, and
 derives it from the function for an entry stating `sql`, so `CountUsers`
 becomes `count_users_gen.go`.
 
+A `{{bind "name"}}` action may also name a column, as `{{bind "name"
+users.email}}`: the generated parameter's Go type then comes from that
+column's descriptor instead of `any`. The table must be one this run
+generates, so a `tables.include` or `tables.exclude` that leaves it out makes
+the reference an error rather than an untyped parameter.
+
 A template held in `input` is read again before the run writes anything, so an
 edit made while a run was in flight is caught rather than committed around. A
 template held in `sql` is already in hand, so nothing has to be re-read.

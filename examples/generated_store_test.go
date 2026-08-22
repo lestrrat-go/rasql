@@ -17,12 +17,19 @@ import (
 )
 
 // queryTemplate, queryFunction, queryPackage and generatedQuery describe the
-// one compiled query examples/store holds.
+// one compiled, untyped query examples/store holds. typedQueryTemplate,
+// typedQueryFunction and typedGeneratedQuery describe the second, typed
+// query beside it: its bind names the column it stands for, so the
+// generator emits that column's Go type instead of any.
 const (
 	queryTemplate  = "user_by_email.sql"
 	queryFunction  = "UserByEmail"
 	queryPackage   = "store"
 	generatedQuery = "user_by_email_gen.go"
+
+	typedQueryTemplate  = "user_by_id.sql"
+	typedQueryFunction  = "UserByID"
+	typedGeneratedQuery = "user_by_id_gen.go"
 )
 
 const staleDriftLine = "\n// invented drift line, written only by a test that expects this file to be reported stale\n"
@@ -55,12 +62,20 @@ func exampleStore(t *testing.T) generate.Store {
 		Root:    repositoryRootAbs(t),
 		Dir:     filepath.Join("examples", "store"),
 		Tables:  []schema.TableDef{users},
-		Queries: []generate.Query{{
-			Input:    filepath.Join("examples", "store", queryTemplate),
-			Function: queryFunction,
-			Output:   generatedQuery,
-			Dialect:  dialect.PostgreSQL(),
-		}},
+		Queries: []generate.Query{
+			{
+				Input:    filepath.Join("examples", "store", queryTemplate),
+				Function: queryFunction,
+				Output:   generatedQuery,
+				Dialect:  dialect.PostgreSQL(),
+			},
+			{
+				Input:    filepath.Join("examples", "store", typedQueryTemplate),
+				Function: typedQueryFunction,
+				Output:   typedGeneratedQuery,
+				Dialect:  dialect.PostgreSQL(),
+			},
+		},
 	}
 }
 
