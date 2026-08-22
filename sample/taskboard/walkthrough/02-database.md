@@ -155,7 +155,7 @@ git commit -m 'add a psql helper for the working database'
 
 `-v ON_ERROR_STOP=1` is what makes a failing statement stop the run instead of letting the next one go ahead against a half-built table.
 
-## Ask rasql what it sees
+## How each choice below is checked
 
 Every choice below is checked twice. Try it on the server and read back what PostgreSQL made of it, then ask rasql's inspection what descriptor it produces for the result, because that descriptor is what the code generator in chapter 4 reads.
 
@@ -827,7 +827,7 @@ Confirm nothing is left:
 Did not find any relations.
 ```
 
-## The shape
+## Write the settled shape to `db/shape.sql`
 
 Make the directory the project's SQL lives in:
 
@@ -922,7 +922,7 @@ git add db/shape.sql
 git commit -m 'record the schema shape settled in psql'
 ```
 
-## What survived, and what has to live in SQL
+## What rasql's inspection keeps, and what it drops
 
 Three of this chapter's decisions come back through rasql's inspection exactly as they went in. Nullability does, so the generator can tell a required column from an optional one. Both foreign keys do, actions included, so the generator can turn them into relationship accessors. Text width and fixedness do, so a `varchar(40)` stays a `varchar(40)`.
 
