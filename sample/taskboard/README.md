@@ -82,7 +82,7 @@ podman exec rasql-postgres psql -U rasql -d postgres -c 'CREATE DATABASE taskboa
 ```
 
 `scripts/psql.sh` opens `psql` on the database `TASKBOARD_DATABASE` names,
-defaulting to `taskboard_walkthrough` rather than the database just created,
+defaulting to `rasql_taskboard` rather than the database just created,
 and takes `TASKBOARD_CONTAINER` to reach another container. Set
 `TASKBOARD_DATABASE` to `taskboard` to reach this one.
 

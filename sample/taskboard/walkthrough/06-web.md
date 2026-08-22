@@ -294,7 +294,7 @@ Reading from `listening` is what reports a failure to bind. Without that arm, a 
 ## Run it
 
 ```sh
-TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable' \
+TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/rasql_taskboard?sslmode=disable' \
 TASKBOARD_ADDR=127.0.0.1:18080 \
   go run ./cmd/taskboard
 ```
@@ -430,7 +430,7 @@ git commit -m 'serve the taskboard page over http'
 The project now runs. Write how to run it into `README.md`, beneath the description chapter 2 put there:
 
 ```sh
-export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable'
+export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/rasql_taskboard?sslmode=disable'
 ./scripts/migrate.sh apply
 go run ./cmd/taskboard
 ```

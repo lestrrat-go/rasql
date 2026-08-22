@@ -77,8 +77,8 @@ That is the last consequence of shaping a database by hand, and the fix is to st
 
 ```sh
 podman exec rasql-postgres psql -U rasql -d postgres \
-  -c 'DROP DATABASE taskboard_walkthrough;' \
-  -c 'CREATE DATABASE taskboard_walkthrough;'
+  -c 'DROP DATABASE rasql_taskboard;' \
+  -c 'CREATE DATABASE rasql_taskboard;'
 ```
 
 ```sh

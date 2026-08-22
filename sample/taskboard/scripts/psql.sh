@@ -6,4 +6,4 @@
 #   ./scripts/psql.sh -c '\d tasks'
 set -eu
 exec podman exec -i "${TASKBOARD_CONTAINER:-rasql-postgres}" \
-	psql -U rasql -d "${TASKBOARD_DATABASE:-taskboard_walkthrough}" -v ON_ERROR_STOP=1 "$@"
+	psql -U rasql -d "${TASKBOARD_DATABASE:-rasql_taskboard}" -v ON_ERROR_STOP=1 "$@"
