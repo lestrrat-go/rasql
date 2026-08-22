@@ -115,7 +115,7 @@ The template became `$1`, PostgreSQL's placeholder, and the bind name became the
 The template is checked when the generator runs, so a malformed one fails there rather than at the first request. Writing `{{bind}}` with no name, for instance:
 
 ```text
-generate: query[0]: template "OverdueCount": actions must use bind with one quoted parameter name
+generate: query[0]: namedsql "OverdueCount": actions must use bind with one quoted parameter name
 ```
 
 What is not checked is the SQL against the schema. `Precompiled` holds the statement as text and hands it to PostgreSQL unread, so a column a later migration renames leaves this query referring to something that no longer exists, and the database is what says so. That is the trade for writing SQL: the compiler cannot help the way it helped in chapter 7. [Chapter 9](09-operate.md#the-tests-that-need-a-database) is where a live test covers it instead.

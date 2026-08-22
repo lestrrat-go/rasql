@@ -1,10 +1,10 @@
-package template_test
+package namedsql_test
 
 import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 )
 
 // BenchmarkCompiledParameterNames measures ranging Compiled.ParameterNames
@@ -13,7 +13,7 @@ import (
 // back to a copying implementation shows up here as a jump from 0 to 1
 // alloc/op.
 func BenchmarkCompiledParameterNames(b *testing.B) {
-	parsed, err := template.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}} OR backup_email = {{ bind \"email\" }} AND active = {{bind \"active\"}}")
+	parsed, err := namedsql.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}} OR backup_email = {{ bind \"email\" }} AND active = {{bind \"active\"}}")
 	if err != nil {
 		b.Fatal(err)
 	}

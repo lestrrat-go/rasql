@@ -11,7 +11,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/genfile"
-	querytemplate "github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +90,7 @@ func TestQueryPackageMatchesTemplateOutput(t *testing.T) {
 	}).Plan()
 	require.NoError(t, err)
 
-	parsed, err := querytemplate.Parse("UserByID", source)
+	parsed, err := namedsql.Parse("UserByID", source)
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)

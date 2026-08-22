@@ -17,7 +17,7 @@ Most applications start with the ORM layer. [Getting started](docs/01-getting-st
 * **Query builder.** The `query` package builds a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. Both packages import only `schema` and `dialect`, so this layer runs with no database handle and no Go row type. See [The SQL builder](docs/core/02-sql-builder.md).
 * **ORM.** Run `rasql codegen generate` against the database you already have, and it reads the live metadata and writes typed row structs, table types, column accessors, and static query functions as checked-in Go source. `rasql.SelectFrom`, `rasql.Insert`, `rasql.Update`, and `rasql.DeleteFrom` then build statements over those tables and decode results straight into the row type. See [`rasql codegen`](docs/orm/01-codegen.md), [Typed queries](docs/orm/03-typed-queries.md), and [Writing rows](docs/orm/04-writing.md).
 * **Rows without a Go type.** `rasql/dynamic` runs the same statements against a table that has no row type, naming its columns as strings and yielding `dynamic.Row` values. See [Dynamic rows](docs/core/05-dynamic.md).
-* **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Static templates](docs/core/06-templates.md).
+* **Static query templates.** Compile SQL text with named binds into parameterized statements. See [Named SQL](docs/core/06-named-sql.md).
 * **Schema description and inspection.** Write table definitions as Go code, or read them back from a live database. See [Schemas](docs/core/01-schema.md).
 * **PostgreSQL, MySQL, and SQLite.** The same application code runs against all three. Only the driver and the DSN change.
 
@@ -70,7 +70,7 @@ The [documentation index](docs/) groups these pages by layer: the core layer bui
 | [Write statements](docs/core/03-write-statements.md) | Building inserts, updates, deletes, and upserts, and reading a `RETURNING` clause. |
 | [The database handle](docs/core/04-database.md) | Running a rendered statement, installing hooks, and starting a transaction. |
 | [Dynamic rows](docs/core/05-dynamic.md) | Reading and writing rows for a column name known only as a string at run time. |
-| [Static templates](docs/core/06-templates.md) | Compiling SQL text with named binds into parameterized statements. |
+| [Named SQL](docs/core/06-named-sql.md) | Compiling SQL text with named binds into parameterized statements. |
 | [Migrations](docs/core/07-migrations.md) | Applying ordered DDL migrations, and reverting them. |
 | [Inspection-only facts](docs/core/08-inspection-facts.md) | Reference for the facts inspection reads that rasql cannot write back as DDL. |
 | **ORM layer** | |
@@ -96,7 +96,7 @@ Most applications only import the root `rasql` package plus `dialect` and `schem
 | `inspect` | Reads live database metadata into `schema` descriptors. |
 | `catalog` | Reads a whole live catalog in one transaction and applies table selection. |
 | `migrate` | Plans, executes, and reverts DDL migrations with durable history. |
-| `template`, `generate` | Compile templates and descriptors into deterministic Go source. |
+| `namedsql`, `generate` | Compile templates and descriptors into deterministic Go source. |
 | `cmd/rasql` | Scaffolds the generator program and applies migrations, as `rasql codegen` and `rasql migrate`. |
 | `cmd/rasqlgen`, `cmd/rasqlmigrate` | Accept the same commands as the unified `rasql` command, under their own names. |
 

@@ -40,7 +40,7 @@ This table enumerates the typed layer in `rasql`. [Dynamic rows](../core/05-dyna
 | `CREATE TABLE` plus its indexes | `rasql.CreateTable(ctx, db, table)` | `error` |
 | Upsert | `query.New…` then `rasql.Exec(ctx, db, statement)` | `sql.Result` |
 | Write with `RETURNING`, decoded | `query.New….WithReturning(...)` then `rasql.QueryWriteAll[T]` / `rasql.QueryWriteOne[T]` | `[]T` / `T` |
-| Compiled [static template](../core/06-templates.md) | `db.ExecRendered(ctx, statement)` | `sql.Result` |
+| Compiled [static template](../core/06-named-sql.md) | `db.ExecRendered(ctx, statement)` | `sql.Result` |
 
 [Writing rows](04-writing.md) covers the writes. The rest of this page covers reads.
 
@@ -1112,4 +1112,4 @@ When only the SQL is wanted and no execution at all, `Build(d)` returns it from 
 
 ## Next
 
-[Writing rows](04-writing.md) covers inserts, updates, and deletes, and [Static templates](../core/06-templates.md) covers fixed SQL text with named binds.
+[Writing rows](04-writing.md) covers inserts, updates, and deletes, and [Named SQL](../core/06-named-sql.md) covers fixed SQL text with named binds.

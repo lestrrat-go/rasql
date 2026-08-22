@@ -9,8 +9,8 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
-	querytemplate "github.com/lestrrat-go/rasql/template"
 	"github.com/stretchr/testify/require"
 )
 
@@ -317,7 +317,7 @@ func TestGeneratedStorePackageCompilesAndRuns(t *testing.T) {
 	// Generate a query function file beside the store package, so the test
 	// covers the real layout: rasqlgen writes a query function into the same
 	// directory as the schema it was compiled against.
-	parsed, err := querytemplate.Parse("UserByEmail", `SELECT id, email FROM users WHERE email = {{bind "email"}}`)
+	parsed, err := namedsql.Parse("UserByEmail", `SELECT id, email FROM users WHERE email = {{bind "email"}}`)
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.SQLite())
 	require.NoError(t, err)

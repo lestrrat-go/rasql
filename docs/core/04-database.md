@@ -160,4 +160,4 @@ source: [examples/rasql_transaction_example_test.go](https://github.com/lestrrat
 
 ## Next
 
-[Static templates](06-templates.md) covers fixed SQL text with named binds, which this handle runs like any other rendered statement.
+[Named SQL](06-named-sql.md) covers fixed SQL text with named binds, which this handle runs like any other rendered statement.

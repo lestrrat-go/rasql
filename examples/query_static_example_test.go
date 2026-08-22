@@ -4,14 +4,14 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	querytemplate "github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 )
 
 func Example_query_static() {
 	// This example compiles a named static query and binds one value to it.
 	// Templates accept SQL text and only {{bind "name"}} actions. Values cannot
 	// become SQL text because every action becomes a dialect placeholder.
-	parsed, err := querytemplate.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}}")
+	parsed, err := namedsql.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}}")
 	if err != nil {
 		fmt.Printf("failed to parse template: %s\n", err)
 		return

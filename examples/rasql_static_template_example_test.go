@@ -8,7 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/dynamic"
-	querytemplate "github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -45,7 +45,7 @@ func Example_rasql_static_template() {
 	}
 
 	// Parse accepts only SQL text and named bind actions.
-	parsed, err := querytemplate.Parse("user_by_email", "SELECT id, email FROM users WHERE email = {{bind \"email\"}}")
+	parsed, err := namedsql.Parse("user_by_email", "SELECT id, email FROM users WHERE email = {{bind \"email\"}}")
 	if err != nil {
 		fmt.Printf("failed to parse template: %s\n", err)
 		return

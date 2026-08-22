@@ -16,8 +16,8 @@ import (
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/internal/schemagen"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/template"
 )
 
 const maxQueryInputBytes = 64 << 20
@@ -443,7 +443,7 @@ func (s Store) planQuery(root, dir string, q Query, filenames, identifiers map[s
 		}
 		text = string(data)
 	}
-	parsed, err := template.Parse(q.Function, text)
+	parsed, err := namedsql.Parse(q.Function, text)
 	if err != nil {
 		return File{}, err
 	}

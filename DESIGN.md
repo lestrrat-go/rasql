@@ -33,7 +33,7 @@ The migration package applies ordered native SQL migrations for PostgreSQL, MySQ
 | `migrate/diff/postgresql` | Compares supported PostgreSQL desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-pg/query` |
 | `migrate/diff/sqlite` | Compares supported SQLite desired schemas and renders safe additive SQL. | `migrate/diff`, `rasql-sqlite/query` |
 | `cli/rasqlmigrate` and `cmd/rasqlmigrate` | Run checked-in SQL migration directories and generate reviewed dialect-specific migrations without application Go code. | `migrate`, `migrate/diff`, supported database drivers |
-| `template`, `catalog`, `generate`, `cli/rasqlgen`, and `cmd/rasqlgen` | Compile static query templates and live catalog metadata into Go source through one command. | public packages, and supported database drivers in the CLI |
+| `namedsql`, `catalog`, `generate`, `cli/rasqlgen`, and `cmd/rasqlgen` | Compile static query templates and live catalog metadata into Go source through one command. | public packages, and supported database drivers in the CLI |
 | `cli/rasql` and `cmd/rasql` | Offer both contexts under one command, as `rasql codegen` and `rasql migrate`. | `cli/rasqlgen`, `cli/rasqlmigrate` |
 
 The dependency flow is deliberately one-way:
@@ -43,7 +43,7 @@ schema ──> dialect ──┐
    │                 ├──> render ──┐
    ├────> query ────┘              │
    ├────> inspect                  ├──> rasql ──> database/sql
-   └────> template / rasqlgen      │
+   └────> namedsql / rasqlgen      │
                 │                  │
                 └──> generated Go ┘
 ```

@@ -1,6 +1,6 @@
-# Static templates
+# Named SQL
 
-A static template is SQL text written by hand, with named placeholders for the values. Use it when a query is fixed and reads better as SQL than as builder calls, or when it uses syntax the `query` package does not model.
+The `namedsql` package compiles SQL text written by hand into a statement carrying a dialect's placeholders, with the bound values in placeholder order. Use it when a query is fixed and reads better as SQL than as builder calls, or when it uses syntax the `query` package does not model.
 
 Compiling and binding a template belongs to the same layer as [the SQL builder](02-sql-builder.md): both end at a `render.Statement`, and neither needs a generated table or a Go row type. The examples below create and seed their fixture rows with the typed helpers because that is the shortest setup, and `rasql.QueryRenderedAll[T]` decodes a result into a Go type when the selected names line up with its fields.
 
@@ -16,14 +16,14 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	querytemplate "github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 )
 
 func Example_query_static() {
 	// This example compiles a named static query and binds one value to it.
 	// Templates accept SQL text and only {{bind "name"}} actions. Values cannot
 	// become SQL text because every action becomes a dialect placeholder.
-	parsed, err := querytemplate.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}}")
+	parsed, err := namedsql.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}}")
 	if err != nil {
 		fmt.Printf("failed to parse template: %s\n", err)
 		return
@@ -78,7 +78,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/dynamic"
-	querytemplate "github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -115,7 +115,7 @@ func Example_rasql_static_template() {
 	}
 
 	// Parse accepts only SQL text and named bind actions.
-	parsed, err := querytemplate.Parse("user_by_email", "SELECT id, email FROM users WHERE email = {{bind \"email\"}}")
+	parsed, err := namedsql.Parse("user_by_email", "SELECT id, email FROM users WHERE email = {{bind \"email\"}}")
 	if err != nil {
 		fmt.Printf("failed to parse template: %s\n", err)
 		return
@@ -173,7 +173,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	querytemplate "github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -215,7 +215,7 @@ func Example_rasql_typed_static_template() {
 		}
 	}
 
-	parsed, err := querytemplate.Parse("ranked_users", `WITH ranked_users AS (
+	parsed, err := namedsql.Parse("ranked_users", `WITH ranked_users AS (
 		SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank
 		FROM users
 	)
