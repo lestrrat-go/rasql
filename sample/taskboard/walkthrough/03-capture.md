@@ -4,6 +4,16 @@
 
 That file is not yet a schema anyone can rely on. It works only against an empty database, so it cannot be re-run. Nothing anywhere records whether it has been run, so a second developer cloning the project has no way to find out what state their database is in. Chapter 2 ended by naming the SQL as the schema of record, and this chapter turns that SQL into a migration `rasql migrate` can apply, re-apply safely, report on, and undo.
 
+## What a migration is
+
+A migration is a directory of SQL files that carries a schema one step forward, with the SQL that undoes that step beside it. Each forward file ends in `.up.sql`, and the file that reverses it shares its stem and ends in `.down.sql`. Both hold ordinary PostgreSQL statements, and `rasql migrate` sends their bytes to the driver unchanged, so a migration may use any DDL the engine understands.
+
+One application keeps one migration root, which is `db/migrations` for this project. The root's first-level entries are the migrations, and each entry's name is that migration's ID. `rasql migrate apply` runs them in the sort order of those IDs, comparing the names byte by byte rather than as numbers, which is why they are padded: `010_x` sorts after `009_x`, while an unpadded `10_x` would sort before `9_x`. The schema at any moment is the result of running every migration in that order.
+
+Applying a migration writes its ID into a history table in the database itself, `rasql_schema_migrations` by default, together with a SHA-256 checksum of the forward sources that ran. That record is the answer `db/shape.sql` had none for. A second developer clones the project and runs `apply`, and the command reads the history table to find which migrations that particular database has already had, then runs only the rest. Running `apply` twice is therefore safe, and `status` reports the same comparison without touching the schema.
+
+Because the checksum covers the forward sources, an applied migration is finished. Editing, renaming, or adding to one leaves the checksum no longer matching what was recorded, and `apply` reports that rather than guessing which version is right. Every later change becomes a new migration directory instead, which is what [chapter 7](07-change.md) does when a task has to be allowed to have no assignee. [Migrations](../../../docs/core/07-migrations.md#migration-directories) is the reference for the full set of rules a root follows.
+
 ## Build rasql from a checkout
 
 Everything from here on runs through the `rasql` command. [Chapter 2](02-database.md#get-rasql) gave the `go install` line that puts a released one on the PATH, and said that line was not run for this walkthrough. This is the reason. `rasql migrate dump` is newer than the latest tagged release, so running that line today would install a `rasql` without the command this chapter is about.
