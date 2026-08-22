@@ -371,7 +371,7 @@ ALTER TABLE "tasks" DROP COLUMN "due_on";
 
 That is [chapter 7's](07-change.md#write-this-migration-by-hand) three steps in descending filename order, which is the order that works: the foreign key goes back to `NO ACTION` before the column goes back to `NOT NULL`.
 
-Read the middle statement again before running any of it. `TASKBOARD_DSN` still names `taskboard_walkthrough`, the working database, and chapter 7 filed a task there that nobody owns. Run the revert against it and `SET NOT NULL` finds that row:
+Read the middle statement again before running any of it. `TASKBOARD_DSN` still names `rasql_taskboard`, the working database, and chapter 7 filed a task there that nobody owns. Run the revert against it and `SET NOT NULL` finds that row:
 
 ```sh
 ./scripts/migrate.sh revert -steps 1
@@ -484,7 +484,7 @@ internal/store is up to date
 Both gates are green again. Put the working database back in front of the shell, so the next `./scripts/migrate.sh` goes where the rest of the walkthrough sent it:
 
 ```sh
-export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable'
+export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/rasql_taskboard?sslmode=disable'
 ```
 
 A reverted migration becomes `pending` again, so `apply` runs it once more. That is the fix-and-reapply loop: revert it, correct its sources, apply it again. It is available only while the migration is the newest applied one and nothing depends on it, which is why the review before the first `apply` is the one that matters.

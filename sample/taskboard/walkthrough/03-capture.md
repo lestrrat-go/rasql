@@ -189,7 +189,7 @@ That is the table chapter 2 ended with, column for column. Reading two `\d` outp
 
 ```sh
 rasql migrate dump -dialect postgresql \
-  -dsn 'postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable' > shaped.sql
+  -dsn 'postgres://rasql:rasql@127.0.0.1:5432/rasql_taskboard?sslmode=disable' > shaped.sql
 rasql migrate dump -dialect postgresql \
   -dsn 'postgres://rasql:rasql@127.0.0.1:5432/taskboard_verify?sslmode=disable' > applied.sql
 diff shaped.sql applied.sql

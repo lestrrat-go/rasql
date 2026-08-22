@@ -112,13 +112,13 @@ podman exec rasql-postgres psql -U rasql -d postgres -c 'SELECT version();'
 The image creates a `rasql` database of its own on first start. Leave it alone and make one for this application, so that dropping and rebuilding the working database never touches anything else on the server:
 
 ```sh
-podman exec rasql-postgres psql -U rasql -d postgres -c 'CREATE DATABASE taskboard_walkthrough;'
+podman exec rasql-postgres psql -U rasql -d postgres -c 'CREATE DATABASE rasql_taskboard;'
 ```
 
 Export its connection string as `TASKBOARD_DSN`. That is the name every later chapter reads it under, and chapter 3's first `rasql` call already expects it:
 
 ```sh
-export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_walkthrough?sslmode=disable'
+export TASKBOARD_DSN='postgres://rasql:rasql@127.0.0.1:5432/rasql_taskboard?sslmode=disable'
 ```
 
 The export lives in the shell that ran it, so a new terminal needs the same line again.
@@ -142,7 +142,7 @@ Create `scripts/psql.sh`:
 #   ./scripts/psql.sh -c '\d tasks'
 set -eu
 exec podman exec -i "${TASKBOARD_CONTAINER:-rasql-postgres}" \
-	psql -U rasql -d "${TASKBOARD_DATABASE:-taskboard_walkthrough}" -v ON_ERROR_STOP=1 "$@"
+	psql -U rasql -d "${TASKBOARD_DATABASE:-rasql_taskboard}" -v ON_ERROR_STOP=1 "$@"
 ```
 
 Make it executable and commit it:

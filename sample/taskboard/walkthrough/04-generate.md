@@ -187,7 +187,7 @@ git commit -m 'generate the store from the schema'
 
 ## Regenerate from the migrations, not from the database
 
-The store above was generated from `taskboard_walkthrough`, the database chapter 2 shaped by hand. That worked, and it is the wrong habit. A developer who tries something in `psql` and forgets to undo it would generate a store describing their experiment, and nothing would notice.
+The store above was generated from `rasql_taskboard`, the database chapter 2 shaped by hand. That worked, and it is the wrong habit. A developer who tries something in `psql` and forgets to undo it would generate a store describing their experiment, and nothing would notice.
 
 Generate from a database built by the checked-in migrations instead. Chapter 3 already created one, `taskboard_verify`, and proved it matches. Wrap the two commands so the pairing is not something anybody has to remember. Create `scripts/generate.sh`:
 
