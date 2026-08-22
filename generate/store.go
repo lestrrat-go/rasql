@@ -67,7 +67,7 @@ type Store struct {
 	// therefore comes back out of the store's own Tables(). Deleting a
 	// hint from this map does not un-set it for a run generated from
 	// that store; it does for a run generated from a database.
-	Hints map[string]schema.TableHint
+	Hints map[string]TableHint
 
 	// Dialect selects the placeholder style for a Query that does not
 	// name its own. Required when any Query leaves Dialect nil, ignored
@@ -84,6 +84,34 @@ type Store struct {
 	// dropped, say. False refuses the run instead, naming every such
 	// file. See Plan.Orphans.
 	Prune bool
+}
+
+// TableHint carries a Go-side generation override that no live database can
+// supply. An owned generator can keep its hints in a hand-owned map keyed by
+// table name and apply each one to a schema.TableDef before passing the
+// descriptors to Store.
+//
+// The hint surface starts deliberately small. RowName is the one override
+// no database can ever recover: a table's generated row type name is a
+// Go-side fact the server never records, unlike, say, SQLite's Strict or
+// WithoutRowID, which inspection already reads from the live schema itself
+// and therefore never needs a hand-maintained override.
+type TableHint struct {
+	// RowName overrides the generated row type exactly like the RowNamed
+	// TableOption does; see TableDef.RowName's own doc for what setting it
+	// means and what rejects an invalid value. The zero value, an empty
+	// string, applies no override, leaving TableDef.RowName exactly as
+	// inspection or an earlier-applied hint left it.
+	RowName string
+}
+
+// Apply returns table with hint's non-zero fields overlaid onto it. An
+// empty TableHint returns table unchanged.
+func (hint TableHint) Apply(table schema.TableDef) schema.TableDef {
+	if hint.RowName != "" {
+		table.RowName = hint.RowName
+	}
+	return table
 }
 
 // Query is one static SQL template compiled into a generated function
@@ -530,7 +558,7 @@ func isExportedGoIdentifier(name string) bool {
 // leaving tables itself untouched. A hint key that names no table, or that
 // names more than one -- which two same-named tables in different schemas
 // can produce -- is an error.
-func applyHints(tables []schema.TableDef, hints map[string]schema.TableHint) ([]schema.TableDef, error) {
+func applyHints(tables []schema.TableDef, hints map[string]TableHint) ([]schema.TableDef, error) {
 	clones := make([]schema.TableDef, len(tables))
 	for i, table := range tables {
 		clones[i] = table.Clone()

@@ -146,7 +146,7 @@ func TestStorePlanAppliesHints(t *testing.T) {
 		Package: "store",
 		Dir:     t.TempDir(),
 		Tables:  []schema.TableDef{usersTableDef()},
-		Hints:   map[string]schema.TableHint{"users": {RowName: "User"}},
+		Hints:   map[string]generate.TableHint{"users": {RowName: "User"}},
 	}
 	plan, err := store.Plan()
 	require.NoError(t, err)
@@ -171,7 +171,7 @@ func TestStorePlanRejectsAnUnknownHintKey(t *testing.T) {
 		Package: "store",
 		Dir:     t.TempDir(),
 		Tables:  []schema.TableDef{usersTableDef()},
-		Hints:   map[string]schema.TableHint{"nope": {RowName: "User"}},
+		Hints:   map[string]generate.TableHint{"nope": {RowName: "User"}},
 	}
 	_, err := store.Plan()
 	require.ErrorContains(t, err, `hint key "nope"`)
@@ -189,7 +189,7 @@ func TestStorePlanRejectsAHintKeyMatchingTwoTables(t *testing.T) {
 		Package: "store",
 		Dir:     t.TempDir(),
 		Tables:  []schema.TableDef{publicUsers, auditUsers},
-		Hints:   map[string]schema.TableHint{"users": {RowName: "User"}},
+		Hints:   map[string]generate.TableHint{"users": {RowName: "User"}},
 	}
 	_, err := store.Plan()
 	require.ErrorContains(t, err, `hint key "users"`)

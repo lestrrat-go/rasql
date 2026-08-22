@@ -13,7 +13,6 @@ import (
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/modroot"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 // defaultConfigName is the file a run reads when -config names none. It sits
@@ -168,11 +167,11 @@ func loadConfig(path string) (config, error) {
 // hints turns the row-name overrides into the map generate.Store takes. A
 // blank override is refused rather than ignored, since a key written with no
 // value is a half-finished edit rather than a request for the default.
-func (c config) hints() (map[string]schema.TableHint, error) {
+func (c config) hints() (map[string]generate.TableHint, error) {
 	if len(c.Tables.RowNames) == 0 {
 		return nil, nil
 	}
-	hints := make(map[string]schema.TableHint, len(c.Tables.RowNames))
+	hints := make(map[string]generate.TableHint, len(c.Tables.RowNames))
 	for table, rowName := range c.Tables.RowNames {
 		if table == "" {
 			return nil, errors.New("generate: config states a row name for an empty table name")
@@ -180,7 +179,7 @@ func (c config) hints() (map[string]schema.TableHint, error) {
 		if rowName == "" {
 			return nil, fmt.Errorf("generate: config states an empty row name for table %q", table)
 		}
-		hints[table] = schema.TableHint{RowName: rowName}
+		hints[table] = generate.TableHint{RowName: rowName}
 	}
 	return hints, nil
 }
