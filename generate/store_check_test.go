@@ -368,12 +368,12 @@ func TestStoreCheckNamesAFileOutsideRootAbsolutely(t *testing.T) {
 // does not mistake it for a bug.
 func TestStoreCheckIsCleanForHintedTables(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "store")
-	hints := map[string]schema.TableHint{"users": {RowName: "User"}}
+	hints := map[string]generate.TableHint{"users": {RowName: "User"}}
 	store := generate.Store{Package: "store", Dir: dir, Tables: []schema.TableDef{usersTableDef()}, Hints: hints}
 	require.NoError(t, store.Write())
 	require.NoError(t, store.Check())
 
-	// The generated package's own descriptor is what schema.TableHint.Apply
+	// The generated package's own descriptor is what generate.TableHint.Apply
 	// produces: the overlay this store already applied at Write time. That
 	// is exactly what the generated package's own Tables() would hand back,
 	// without needing to compile and run the generated code to get it.
