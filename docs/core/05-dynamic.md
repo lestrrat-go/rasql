@@ -47,7 +47,7 @@ Predicates, aggregates, and statement constructors are the same ones [the SQL bu
 
 ## Read a row
 
-A `dynamic.Row` holds one result row with its column names. `dynamic.Scan` turns the `*sql.Rows` a `db.QueryRendered` call returns into the same rangeable sequence the builders yield, so a [static template](06-templates.md) reads its results the same way a builder does:
+A `dynamic.Row` holds one result row with its column names. `dynamic.Scan` turns the `*sql.Rows` a `db.QueryRendered` call returns into the same rangeable sequence the builders yield, so a [static template](06-named-sql.md) reads its results the same way a builder does:
 
 <!-- INCLUDE(examples/rasql_static_template_example_test.go#read_dynamic_rows) -->
 ```go

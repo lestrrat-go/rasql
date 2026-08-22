@@ -7,7 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	querytemplate "github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -49,7 +49,7 @@ func Example_rasql_typed_static_template() {
 		}
 	}
 
-	parsed, err := querytemplate.Parse("ranked_users", `WITH ranked_users AS (
+	parsed, err := namedsql.Parse("ranked_users", `WITH ranked_users AS (
 		SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank
 		FROM users
 	)

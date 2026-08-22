@@ -18,7 +18,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/genfile"
-	querytemplate "github.com/lestrrat-go/rasql/template"
+	"github.com/lestrrat-go/rasql/namedsql"
 )
 
 // QueryPackage describes a generated package made only from static SQL
@@ -705,7 +705,7 @@ func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functi
 		}
 		text = string(input.data)
 	}
-	parsed, err := querytemplate.Parse(query.Function, text)
+	parsed, err := namedsql.Parse(query.Function, text)
 	if err != nil {
 		return File{}, fmt.Errorf("generate: validate query %q: %w", query.Function, err)
 	}

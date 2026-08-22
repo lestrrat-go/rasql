@@ -1,4 +1,4 @@
-package template_test
+package namedsql_test
 
 import (
 	"fmt"
@@ -10,13 +10,13 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/template"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTemplateCompilesAndBindsInPlaceholderOrder(t *testing.T) {
-	parsed, err := template.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}} OR backup_email = {{ bind \"email\" }} AND active = {{bind \"active\"}}")
+	parsed, err := namedsql.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}} OR backup_email = {{ bind \"email\" }} AND active = {{bind \"active\"}}")
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
@@ -36,7 +36,7 @@ func TestTemplateCompilesAndBindsInPlaceholderOrder(t *testing.T) {
 
 func TestTemplateCompilePreservesCompleteLiteralMarker(t *testing.T) {
 	const literalMarker = "\x00rasql-bind-0\x00"
-	parsed, err := template.Parse("marker_collision", literalMarker+"{{bind \"a\"}}")
+	parsed, err := namedsql.Parse("marker_collision", literalMarker+"{{bind \"a\"}}")
 	require.NoError(t, err)
 
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
@@ -46,7 +46,7 @@ func TestTemplateCompilePreservesCompleteLiteralMarker(t *testing.T) {
 
 func TestTemplateCompilePreservesLiteralMarkerBeforeBinds(t *testing.T) {
 	const literalMarker = "\x00rasql-bind-1\x00"
-	parsed, err := template.Parse("marker_collision", literalMarker+"{{bind \"a\"}}{{bind \"b\"}}")
+	parsed, err := namedsql.Parse("marker_collision", literalMarker+"{{bind \"a\"}}{{bind \"b\"}}")
 	require.NoError(t, err)
 
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
@@ -56,7 +56,7 @@ func TestTemplateCompilePreservesLiteralMarkerBeforeBinds(t *testing.T) {
 
 func TestTemplateCompilePreservesRepeatedLiteralMarker(t *testing.T) {
 	const literalMarker = "\x00rasql-bind-0\x00"
-	parsed, err := template.Parse("repeated_marker_collision", literalMarker+"{{bind \"a\"}}"+literalMarker+"{{bind \"b\"}}")
+	parsed, err := namedsql.Parse("repeated_marker_collision", literalMarker+"{{bind \"a\"}}"+literalMarker+"{{bind \"b\"}}")
 	require.NoError(t, err)
 
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
@@ -66,7 +66,7 @@ func TestTemplateCompilePreservesRepeatedLiteralMarker(t *testing.T) {
 
 func TestTemplateCompilePreservesMalformedMarkerPrefix(t *testing.T) {
 	const malformedMarkerPrefix = "\x00rasql-bind-junk"
-	parsed, err := template.Parse("malformed_marker_prefix", malformedMarkerPrefix+"{{bind \"a\"}}")
+	parsed, err := namedsql.Parse("malformed_marker_prefix", malformedMarkerPrefix+"{{bind \"a\"}}")
 	require.NoError(t, err)
 
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
@@ -108,7 +108,7 @@ func TestTemplateCompilePreservesCustomDialectMarkerPlaceholders(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			parsed, err := template.Parse("custom_dialect_marker", test.source)
+			parsed, err := namedsql.Parse("custom_dialect_marker", test.source)
 			require.NoError(t, err)
 
 			compiled, err := parsed.Compile(markerDialect{})
@@ -120,7 +120,7 @@ func TestTemplateCompilePreservesCustomDialectMarkerPlaceholders(t *testing.T) {
 
 func TestTemplateCompilePreservesMarkerReplacementOrderAcrossMarkerDialect(t *testing.T) {
 	const literalMarker = "\x00rasql-bind-1\x00"
-	parsed, err := template.Parse("cross_marker_collision", literalMarker+"{{bind \"a\"}}{{bind \"b\"}}")
+	parsed, err := namedsql.Parse("cross_marker_collision", literalMarker+"{{bind \"a\"}}{{bind \"b\"}}")
 	require.NoError(t, err)
 
 	compiled, err := parsed.Compile(crossMarkerDialect{})
@@ -130,7 +130,7 @@ func TestTemplateCompilePreservesMarkerReplacementOrderAcrossMarkerDialect(t *te
 
 func TestTemplateCompileRendersManyMarkersWithBoundedAllocations(t *testing.T) {
 	const bindCount = 128
-	parsed, err := template.Parse("many_binds", strings.Repeat("{{bind \"value\"}}", bindCount))
+	parsed, err := namedsql.Parse("many_binds", strings.Repeat("{{bind \"value\"}}", bindCount))
 	require.NoError(t, err)
 
 	var compileErr error
@@ -146,9 +146,9 @@ func TestTemplateCompileRendersManyMarkersWithBoundedAllocations(t *testing.T) {
 }
 
 func TestTemplateRejectsUnrestrictedActions(t *testing.T) {
-	_, err := template.Parse("bad", "SELECT {{ .Value }}")
+	_, err := namedsql.Parse("bad", "SELECT {{ .Value }}")
 	require.Error(t, err)
-	_, err = template.Parse("bad", "SELECT {{bind \"not-valid\"}}")
+	_, err = namedsql.Parse("bad", "SELECT {{bind \"not-valid\"}}")
 	require.Error(t, err)
 }
 
@@ -156,27 +156,27 @@ func TestTemplateCompileRejectsNilPointerDialect(t *testing.T) {
 	var nilDialect *nilPointerDialect
 
 	t.Run("with bind action", func(t *testing.T) {
-		parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+		parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
 		require.NoError(t, err)
 
-		var compiled template.Compiled
+		var compiled namedsql.Compiled
 		require.NotPanics(t, func() {
 			compiled, err = parsed.Compile(nilDialect)
 		})
 		require.Zero(t, compiled)
-		require.EqualError(t, err, `template "user_by_id": dialect must not be nil`)
+		require.EqualError(t, err, `namedsql "user_by_id": dialect must not be nil`)
 	})
 
 	t.Run("without bind action", func(t *testing.T) {
-		parsed, err := template.Parse("select_one", "SELECT 1")
+		parsed, err := namedsql.Parse("select_one", "SELECT 1")
 		require.NoError(t, err)
 
-		var compiled template.Compiled
+		var compiled namedsql.Compiled
 		require.NotPanics(t, func() {
 			compiled, err = parsed.Compile(nilDialect)
 		})
 		require.Zero(t, compiled)
-		require.EqualError(t, err, `template "select_one": dialect must not be nil`)
+		require.EqualError(t, err, `namedsql "select_one": dialect must not be nil`)
 	})
 }
 
@@ -238,7 +238,7 @@ func (markerDialect) Supports(dialect.Capability) bool {
 }
 
 func TestGoSourceCompiles(t *testing.T) {
-	parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
@@ -248,7 +248,7 @@ func TestGoSourceCompiles(t *testing.T) {
 }
 
 func TestGoSourceCompilesWithCollidingGeneratedNames(t *testing.T) {
-	parsed, err := template.Parse("user_by_values", "SELECT id FROM users WHERE first = {{bind \"render\"}} OR second = {{bind \"rasqlrender\"}} OR third = {{bind \"rasqlrender1\"}}")
+	parsed, err := namedsql.Parse("user_by_values", "SELECT id FROM users WHERE first = {{bind \"render\"}} OR second = {{bind \"rasqlrender\"}} OR third = {{bind \"rasqlrender1\"}}")
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
@@ -258,7 +258,7 @@ func TestGoSourceCompilesWithCollidingGeneratedNames(t *testing.T) {
 }
 
 func TestGoSourceCompilesWithPredeclaredFunctionNames(t *testing.T) {
-	parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
@@ -273,7 +273,7 @@ func TestGoSourceCompilesWithPredeclaredFunctionNames(t *testing.T) {
 }
 
 func TestGoSourceRejectsNamesThatCannotCompile(t *testing.T) {
-	parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
@@ -296,7 +296,7 @@ func TestGoSourceRejectsNamesThatCannotCompile(t *testing.T) {
 }
 
 func TestGoSourceRejectsBlankParameterName(t *testing.T) {
-	parsed, err := template.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"_\"}}")
+	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"_\"}}")
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
@@ -306,28 +306,28 @@ func TestGoSourceRejectsBlankParameterName(t *testing.T) {
 
 func TestGoSourceRejectsInvalidCompiledTemplate(t *testing.T) {
 	t.Run("zero value", func(t *testing.T) {
-		var compiled template.Compiled
+		var compiled namedsql.Compiled
 		source, err := compiled.GoSource("generated", "Query")
 		require.Nil(t, source)
-		require.EqualError(t, err, "template: invalid compiled template")
+		require.EqualError(t, err, "namedsql: invalid compiled template")
 	})
 
 	t.Run("blank placeholder", func(t *testing.T) {
-		parsed, err := template.Parse("user_by_id", "{{bind \"id\"}}")
+		parsed, err := namedsql.Parse("user_by_id", "{{bind \"id\"}}")
 		require.NoError(t, err)
 		compiled, err := parsed.Compile(blankPlaceholderDialect{})
 		require.NoError(t, err)
 
 		source, err := compiled.GoSource("generated", "Query")
 		require.Nil(t, source)
-		require.EqualError(t, err, "template: invalid compiled template")
+		require.EqualError(t, err, "namedsql: invalid compiled template")
 
 		_, err = compiled.Bind(map[string]any{"id": 1})
-		require.EqualError(t, err, "template: invalid compiled template")
+		require.EqualError(t, err, "namedsql: invalid compiled template")
 	})
 
 	t.Run("whitespace only sql", func(t *testing.T) {
-		parsed, err := template.Parse("whitespace_only", "{{bind \"id\"}}")
+		parsed, err := namedsql.Parse("whitespace_only", "{{bind \"id\"}}")
 		require.NoError(t, err)
 		compiled, err := parsed.Compile(whitespacePlaceholderDialect{})
 		require.NoError(t, err)
@@ -335,10 +335,10 @@ func TestGoSourceRejectsInvalidCompiledTemplate(t *testing.T) {
 
 		source, err := compiled.GoSource("generated", "Query")
 		require.Nil(t, source)
-		require.EqualError(t, err, "template: invalid compiled template")
+		require.EqualError(t, err, "namedsql: invalid compiled template")
 
 		_, err = compiled.Bind(map[string]any{"id": 1})
-		require.EqualError(t, err, "template: invalid compiled template")
+		require.EqualError(t, err, "namedsql: invalid compiled template")
 	})
 }
 
