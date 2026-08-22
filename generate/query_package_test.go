@@ -12,6 +12,7 @@ import (
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -645,6 +646,53 @@ func TestQueryPackageCompilesInlineQuery(t *testing.T) {
 		string(inline),
 		"the same template must render the same function body whether it comes from a file or from SQL")
 	require.NoError(t, queries.Check())
+}
+
+// TestQueryPackageTypesBindsFromTables requires a QueryPackage carrying
+// Tables to generate a typed parameter for a bind that names a column,
+// exactly as Store does.
+func TestQueryPackageTypesBindsFromTables(t *testing.T) {
+	root := t.TempDir()
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.PostgreSQL(),
+		Tables:  []schema.TableDef{usersTableDef()},
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users WHERE email = {{bind "email" users.email}}`,
+			Function: "UserByEmail",
+			Output:   "user_by_email_gen.go",
+		}},
+	}
+
+	require.NoError(t, queries.Write())
+	generated, err := os.ReadFile(filepath.Join(root, "store", "user_by_email_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(generated), "func UserByEmail(email string)")
+}
+
+// TestQueryPackageRejectsTypedBindWithoutTables pins the "error, never a
+// silent any" decision on the standalone path: a QueryPackage with no
+// Tables cannot resolve a bind that names a column, and Plan fails naming
+// the unresolvable reference rather than falling back to any.
+func TestQueryPackageRejectsTypedBindWithoutTables(t *testing.T) {
+	root := t.TempDir()
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users WHERE email = {{bind "email" users.email}}`,
+			Function: "UserByEmail",
+			Output:   "user_by_email_gen.go",
+		}},
+	}
+
+	_, err := queries.Plan()
+	require.ErrorContains(t, err, "users.email")
+	require.ErrorContains(t, err, "no table descriptors were supplied")
 }
 
 // TestQueryPackageInlineQuerySurvivesADeletedQueryDirectory requires an inline

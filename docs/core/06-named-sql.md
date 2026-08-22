@@ -4,7 +4,7 @@ The `namedsql` package compiles SQL text written by hand into a statement carryi
 
 Compiling and binding a template belongs to the same layer as [the SQL builder](02-sql-builder.md): both end at a `render.Statement`, and neither needs a generated table or a Go row type. The examples below create and seed their fixture rows with the typed helpers because that is the shortest setup, and `rasql.QueryRenderedAll[T]` decodes a result into a Go type when the selected names line up with its fields.
 
-The template language is deliberately tiny. Text is copied through as SQL, and the only action allowed is `{{bind "name"}}`. The `{{` delimiter is reserved, so SQL text and comments cannot contain that literal sequence. There is no way to write a template action that becomes SQL text, so a template cannot interpolate a value into the statement even by mistake.
+The template language is deliberately tiny. Text is copied through as SQL, and the only action is a bind: `{{bind "name"}}` binds a value and generates an `any` parameter, and `{{bind "name" users.email}}` additionally names the column the value stands for, which lets `rasqlgen` emit that column's Go type instead. The `{{` delimiter is reserved, so SQL text and comments cannot contain that literal sequence. There is no way to write a template action that becomes SQL text, so a template cannot interpolate a value into the statement even by mistake.
 
 ## Compile and bind
 
@@ -252,13 +252,13 @@ func Example_rasql_typed_static_template() {
 source: [examples/rasql_typed_static_template_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_typed_static_template_example_test.go)
 <!-- END INCLUDE -->
 
-The template parser still permits only `{{bind "name"}}` actions, and `Compile` still chooses placeholders from the selected dialect. `QueryRendered` does not parse or validate the SQL grammar, table names, column names, or database-specific features. The target database checks those when it executes the statement. The fluent builder remains the place for dialect-neutral validation of its supported syntax. CTEs, window functions, recursive queries, vendor-specific clauses, and other syntax not modeled by the builder must use a static template or `render.Precompiled` statement.
+The template parser still permits only bind actions, `{{bind "name"}}` or `{{bind "name" table.column}}`, and `Compile` still chooses placeholders from the selected dialect. `QueryRendered` does not parse or validate the SQL grammar, table names, column names, or database-specific features. The target database checks those when it executes the statement. The fluent builder remains the place for dialect-neutral validation of its supported syntax. CTEs, window functions, recursive queries, vendor-specific clauses, and other syntax not modeled by the builder must use a static template or `render.Precompiled` statement.
 
 [Read a row](05-dynamic.md#read-a-row) lists the three calls that read a value out of a `dynamic.Row`.
 
 ## Generate a function instead
 
-`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. Put the template in the `queries` list of `rasql.json`, which keeps table generation and static query generation in one command. See [`rasql codegen`](../orm/02-generated-store.md#static-query-functions).
+`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. Put the template in the `queries` list of `rasql.json`, which keeps table generation and static query generation in one command. A bind that names a column generates a typed parameter instead of `any`; the generated store page shows the generated function both ways. See [`rasql codegen`](../orm/02-generated-store.md#static-query-functions).
 
 ## Next
 

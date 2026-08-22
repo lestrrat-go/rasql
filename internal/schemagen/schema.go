@@ -700,7 +700,7 @@ func relationshipSupported(child, parent schema.TableDef, relationship schema.Re
 		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
 	}
 	keyType, ok := relationKeyType(parentColumn)
-	if !ok || keyType != rowFieldType(childColumn) {
+	if !ok || keyType != ColumnGoType(childColumn) {
 		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
 	}
 	return parentColumn, childColumn, keyType, true
@@ -917,7 +917,7 @@ func writeRowType(source *bytes.Buffer, table schema.TableDef) {
 		if column.Nullable {
 			source.WriteByte('*')
 		}
-		source.WriteString(rowFieldType(column))
+		source.WriteString(ColumnGoType(column))
 		source.WriteString("\n")
 	}
 	source.WriteString("}\n")
@@ -1087,7 +1087,7 @@ func relationshipTable(tables []schema.TableDef, referencedSchema, referencedNam
 }
 
 func relationKeyType(column schema.ColumnDef) (string, bool) {
-	fieldType := rowFieldType(column)
+	fieldType := ColumnGoType(column)
 	if fieldType == "[]byte" || column.Nullable {
 		return "", false
 	}
@@ -1388,11 +1388,16 @@ func writeRowColumnValue(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("\t}\n\treturn nil, false\n}\n")
 }
 
-// rowFieldType returns the Go type of the row field holding column. It takes
-// the whole column because signedness changes the answer: an unsigned integer
-// column reaches 18446744073709551615, which int64 cannot hold, so it generates
-// a uint64 field. Every other integer column keeps int64.
-func rowFieldType(column schema.ColumnDef) string {
+// ColumnGoType returns the Go type of a value held by column. It takes the
+// whole column because signedness changes the answer: an unsigned integer
+// column reaches 18446744073709551615, which int64 cannot hold, so it maps to
+// uint64. Every other integer column maps to int64.
+//
+// It is the one mapping from a schema column type to a Go type: a generated
+// row struct's field and a generated query function's parameter both take
+// their type from here, so a column whose type changes changes both on the
+// next run.
+func ColumnGoType(column schema.ColumnDef) string {
 	switch typed := column.Type.(type) {
 	case schema.IntegerType:
 		if typed.Unsigned {

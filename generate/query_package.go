@@ -19,11 +19,15 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // QueryPackage describes a generated package made only from static SQL
-// queries. It does not inspect a database and does not require any table
-// descriptors. Queries are rendered in output-name order, so their order in
+// queries. It does not inspect a database, so Tables is optional and the
+// usual case leaves it empty: a query whose binds only name a value, never a
+// column, needs no descriptor. A bind that also names a column resolves
+// against Tables instead, and is an error when Tables holds no matching
+// descriptor. Queries are rendered in output-name order, so their order in
 // the input slice does not affect the generated package.
 //
 // QueryPackage follows the same lifecycle as Store: Plan validates and
@@ -49,6 +53,14 @@ type QueryPackage struct {
 	// Queries are the static SQL templates to compile into the package.
 	// At least one query is required.
 	Queries []Query
+
+	// Tables are the descriptors a bind that names a column resolves
+	// against. A query package whose templates use only {{bind "name"}}
+	// needs none, which is the usual case: this type inspects no database
+	// and takes descriptors only so that a template can name a column and
+	// get a typed parameter. A bind naming a column no descriptor here
+	// holds is an error rather than an untyped parameter.
+	Tables []schema.TableDef
 }
 
 // QueryPlan is a rendered, uncommitted query package. Its files contain the
@@ -161,7 +173,7 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 	inputs := make(map[string]queryInputData, len(queries))
 	files := make([]File, 0, len(queries))
 	for _, query := range queries {
-		file, err := p.planQuery(root, dir, query, filenames, functions, inputs)
+		file, err := p.planQuery(root, dir, query, p.Tables, filenames, functions, inputs)
 		if err != nil {
 			return QueryPlan{}, err
 		}
@@ -652,7 +664,7 @@ func isGeneratedOutputName(name string) bool {
 	return strings.HasSuffix(name, "_gen.go") || strings.HasSuffix(name, "_gen_test.go")
 }
 
-func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functions map[string]string, inputs map[string]queryInputData) (File, error) {
+func (p QueryPackage) planQuery(root, dir string, query Query, tables []schema.TableDef, filenames, functions map[string]string, inputs map[string]queryInputData) (File, error) {
 	if query.Input == "" && query.SQL == "" {
 		return File{}, errors.New("generate: query input or sql is required")
 	}
@@ -713,7 +725,7 @@ func (p QueryPackage) planQuery(root, dir string, query Query, filenames, functi
 	if err != nil {
 		return File{}, fmt.Errorf("generate: compile query %q: %w", query.Function, err)
 	}
-	source, err := compiled.GoSource(p.Package, query.Function)
+	source, err := compiled.GoSource(p.Package, query.Function, tables...)
 	if err != nil {
 		return File{}, fmt.Errorf("generate: render query %q: %w", query.Function, err)
 	}
