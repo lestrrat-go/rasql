@@ -258,7 +258,7 @@ The template parser still permits only bind actions, `{{bind "name"}}` or `{{bin
 
 ## Generate a function instead
 
-`Compiled.GoSource` emits a Go function that builds the statement, so a template can be compiled at build time rather than at startup. Put the template in the `queries` list of `rasql.json`, which keeps table generation and static query generation in one command. A bind that names a column generates a typed parameter instead of `any`; the generated store page shows the generated function both ways. See [`rasql codegen`](../orm/02-generated-store.md#static-query-functions).
+Put the template in the `queries` list of `rasql.json` and run `rasql codegen generate`, which emits a Go function that builds the statement, so a template is compiled at build time rather than at startup. That one command generates the tables and the static queries together. A bind that names a column generates a typed parameter instead of `any`; the generated store page shows the generated function both ways. See [`rasql codegen`](../orm/02-generated-store.md#static-query-functions).
 
 ## Next
 

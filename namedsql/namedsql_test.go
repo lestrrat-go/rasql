@@ -2,9 +2,6 @@ package namedsql_test
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -237,90 +234,12 @@ func (markerDialect) Supports(dialect.Capability) bool {
 	return false
 }
 
-func TestGoSourceCompiles(t *testing.T) {
-	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-	source, err := compiled.GoSource("generated", "UserByID")
-	require.NoError(t, err)
-	requireGeneratedSourceCompiles(t, source)
-}
-
-func TestGoSourceCompilesWithCollidingGeneratedNames(t *testing.T) {
-	parsed, err := namedsql.Parse("user_by_values", "SELECT id FROM users WHERE first = {{bind \"render\"}} OR second = {{bind \"rasqlrender\"}} OR third = {{bind \"rasqlrender1\"}}")
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-	source, err := compiled.GoSource("generated", "rasqlrender2")
-	require.NoError(t, err)
-	requireGeneratedSourceCompiles(t, source)
-}
-
-func TestGoSourceCompilesWithPredeclaredFunctionNames(t *testing.T) {
-	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-
-	for _, functionName := range []string{"any", "error"} {
-		t.Run(functionName, func(t *testing.T) {
-			source, err := compiled.GoSource("generated", functionName)
-			require.NoError(t, err)
-			requireGeneratedSourceCompiles(t, source)
-		})
-	}
-}
-
-func TestGoSourceRejectsNamesThatCannotCompile(t *testing.T) {
-	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-
-	for _, test := range []struct {
-		name         string
-		packageName  string
-		functionName string
-	}{
-		{name: "blank package", packageName: "_", functionName: "UserByID"},
-		{name: "blank function", packageName: "generated", functionName: "_"},
-		{name: "init function", packageName: "generated", functionName: "init"},
-		{name: "main entry point", packageName: "main", functionName: "main"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := compiled.GoSource(test.packageName, test.functionName)
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestGoSourceRejectsBlankParameterName(t *testing.T) {
-	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"_\"}}")
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-	_, err = compiled.GoSource("generated", "UserByID")
-	require.Error(t, err)
-}
-
-func TestGoSourceRejectsInvalidCompiledTemplate(t *testing.T) {
-	t.Run("zero value", func(t *testing.T) {
-		var compiled namedsql.Compiled
-		source, err := compiled.GoSource("generated", "Query")
-		require.Nil(t, source)
-		require.EqualError(t, err, "namedsql: invalid compiled template")
-	})
-
+func TestBindRejectsInvalidCompiledTemplate(t *testing.T) {
 	t.Run("blank placeholder", func(t *testing.T) {
 		parsed, err := namedsql.Parse("user_by_id", "{{bind \"id\"}}")
 		require.NoError(t, err)
 		compiled, err := parsed.Compile(blankPlaceholderDialect{})
 		require.NoError(t, err)
-
-		source, err := compiled.GoSource("generated", "Query")
-		require.Nil(t, source)
-		require.EqualError(t, err, "namedsql: invalid compiled template")
 
 		_, err = compiled.Bind(map[string]any{"id": 1})
 		require.EqualError(t, err, "namedsql: invalid compiled template")
@@ -332,10 +251,7 @@ func TestGoSourceRejectsInvalidCompiledTemplate(t *testing.T) {
 		compiled, err := parsed.Compile(whitespacePlaceholderDialect{})
 		require.NoError(t, err)
 		require.Equal(t, "   ", compiled.SQL())
-
-		source, err := compiled.GoSource("generated", "Query")
-		require.Nil(t, source)
-		require.EqualError(t, err, "namedsql: invalid compiled template")
+		require.Equal(t, "   ", compiled.QueryDef().SQL)
 
 		_, err = compiled.Bind(map[string]any{"id": 1})
 		require.EqualError(t, err, "namedsql: invalid compiled template")
@@ -448,225 +364,34 @@ func TestCompileTypingDoesNotTouchRendering(t *testing.T) {
 	require.Equal(t, slices.Collect(compiledUntyped.ParameterNames()), slices.Collect(compiledTyped.ParameterNames()))
 }
 
-// TestGoSourceUntypedBindGoldenBytes pins the exact emitted bytes of an
-// untyped bind. This is the guard for the additive claim: a bind with no
-// column reference must keep generating exactly this, byte for byte, with
-// or without the typed-parameter feature.
-func TestGoSourceUntypedBindGoldenBytes(t *testing.T) {
-	parsed, err := namedsql.Parse("user_by_email", `SELECT id, email FROM users WHERE email = {{bind "email"}}`)
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-	source, err := compiled.GoSource("generated", "UserByEmail")
-	require.NoError(t, err)
-
-	const want = "// Code generated by rasqlgen; DO NOT EDIT.\n\n" +
-		"package generated\n\n" +
-		"import rasqlrender \"github.com/lestrrat-go/rasql/render\"\n\n" +
-		"func UserByEmail(email any) (rasqlrender.Statement, error) {\n" +
-		"\treturn rasqlrender.Precompiled(\"SELECT id, email FROM users WHERE email = $1\", email)\n" +
-		"}\n"
-	require.Equal(t, want, string(source))
-}
-
-// widgetsTableDef carries one column of every schema type ColumnGoType maps,
-// plus an unsigned-integer column, for the GoSource type-mapping tests.
-func widgetsTableDef() schema.TableDef {
-	return schema.TableDef{
-		Name: "widgets",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "owner_id", Type: schema.IntegerType{Unsigned: true}},
-			{Name: "active", Type: schema.BooleanType{}},
-			{Name: "weight", Type: schema.FloatType{}},
-			{Name: "name", Type: schema.TextType{}},
-			{Name: "external_id", Type: schema.UUIDType{}},
-			{Name: "payload", Type: schema.BytesType{}},
-			{Name: "attributes", Type: schema.JSONType{}},
-			{Name: "created_at", Type: schema.TimeType{}},
-			{Name: "price", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}},
-		},
-		PrimaryKey: []string{"id"},
-	}
-}
-
-func TestGoSourceTypedBindEmitsColumnType(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		column string
-		want   string
-	}{
-		{name: "integer", column: "id", want: "int64"},
-		{name: "unsigned integer", column: "owner_id", want: "uint64"},
-		{name: "boolean", column: "active", want: "bool"},
-		{name: "float", column: "weight", want: "float64"},
-		{name: "text", column: "name", want: "string"},
-		{name: "uuid", column: "external_id", want: "string"},
-		{name: "bytes", column: "payload", want: "[]byte"},
-		{name: "json", column: "attributes", want: "[]byte"},
-		{name: "decimal", column: "price", want: "string"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			source := `SELECT ` + test.column + ` FROM widgets WHERE ` + test.column + ` = {{bind "value" widgets.` + test.column + `}}`
-			parsed, err := namedsql.Parse("widget_query", source)
-			require.NoError(t, err)
-			compiled, err := parsed.Compile(dialect.PostgreSQL())
-			require.NoError(t, err)
-			generated, err := compiled.GoSource("generated", "WidgetQuery", widgetsTableDef())
-			require.NoError(t, err)
-			require.Contains(t, string(generated), "func WidgetQuery(value "+test.want+")")
-			requireGeneratedSourceCompiles(t, generated)
-		})
-	}
-}
-
-func TestGoSourceTypedBindEmitsTimeImport(t *testing.T) {
-	parsed, err := namedsql.Parse("widget_by_created_at", `SELECT id FROM widgets WHERE created_at = {{bind "createdAt" widgets.created_at}}`)
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-	generated, err := compiled.GoSource("generated", "WidgetByCreatedAt", widgetsTableDef())
-	require.NoError(t, err)
-	require.Contains(t, string(generated), `"time"`)
-	require.Contains(t, string(generated), "func WidgetByCreatedAt(createdAt time.Time)")
-	requireGeneratedSourceCompiles(t, generated)
-}
-
-// TestGoSourceTypedBindWithCollidingTimeName confirms a time-typed parameter
-// in a package or function literally named "time" still compiles, by
-// picking a non-colliding import identifier the same way GoSource already
-// does for the rasqlrender import.
-func TestGoSourceTypedBindWithCollidingTimeName(t *testing.T) {
-	t.Run("package named time", func(t *testing.T) {
-		parsed, err := namedsql.Parse("widget_by_created_at", `SELECT id FROM widgets WHERE created_at = {{bind "createdAt" widgets.created_at}}`)
-		require.NoError(t, err)
-		compiled, err := parsed.Compile(dialect.PostgreSQL())
-		require.NoError(t, err)
-		generated, err := compiled.GoSource("time", "WidgetByCreatedAt", widgetsTableDef())
-		require.NoError(t, err)
-		require.Contains(t, string(generated), `time1 "time"`)
-	})
-
-	t.Run("function named time", func(t *testing.T) {
-		parsed, err := namedsql.Parse("widget_by_created_at", `SELECT id FROM widgets WHERE created_at = {{bind "createdAt" widgets.created_at}}`)
-		require.NoError(t, err)
-		compiled, err := parsed.Compile(dialect.PostgreSQL())
-		require.NoError(t, err)
-		generated, err := compiled.GoSource("generated", "time", widgetsTableDef())
-		require.NoError(t, err)
-		require.Contains(t, string(generated), `time1 "time"`)
-		requireGeneratedSourceCompiles(t, generated)
-	})
-}
-
-func TestGoSourceRepeatedTypedBindEmitsOneParameterPassedTwice(t *testing.T) {
-	parsed, err := namedsql.Parse("widget_query", `SELECT id FROM widgets WHERE id = {{bind "id" widgets.id}} OR owner_id = {{bind "id" widgets.id}}`)
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-	generated, err := compiled.GoSource("generated", "WidgetQuery", widgetsTableDef())
-	require.NoError(t, err)
-	require.Contains(t, string(generated), "func WidgetQuery(id int64)")
-	require.Contains(t, string(generated), "Precompiled(\"SELECT id FROM widgets WHERE id = $1 OR owner_id = $2\", id, id)")
-	requireGeneratedSourceCompiles(t, generated)
-}
-
-func TestGoSourceTypedBindErrors(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		source  string
-		tables  []schema.TableDef
-		wantErr string
-	}{
-		{
-			name:    "no tables supplied",
-			source:  `SELECT id FROM widgets WHERE id = {{bind "id" widgets.id}}`,
-			tables:  nil,
-			wantErr: `no table descriptors were supplied`,
-		},
-		{
-			name:    "table absent",
-			source:  `SELECT id FROM orders WHERE id = {{bind "id" orders.id}}`,
-			tables:  []schema.TableDef{widgetsTableDef()},
-			wantErr: `no descriptor names table orders`,
-		},
-		{
-			name:    "column absent",
-			source:  `SELECT id FROM widgets WHERE id = {{bind "id" widgets.missing}}`,
-			tables:  []schema.TableDef{widgetsTableDef()},
-			wantErr: `table widgets has no column missing`,
-		},
-		{
-			name:   "unqualified name matches two descriptors in different schemas",
-			source: `SELECT id FROM widgets WHERE id = {{bind "id" widgets.id}}`,
-			tables: []schema.TableDef{
-				{Name: "widgets", Schema: "north", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}},
-				{Name: "widgets", Schema: "south", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}},
-			},
-			wantErr: `two descriptors name table widgets; qualify it as schema.table.column`,
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			parsed, err := namedsql.Parse("widget_query", test.source)
-			require.NoError(t, err)
-			compiled, err := parsed.Compile(dialect.PostgreSQL())
-			require.NoError(t, err)
-			_, err = compiled.GoSource("generated", "WidgetQuery", test.tables...)
-			require.ErrorContains(t, err, test.wantErr)
-			require.ErrorContains(t, err, `bind "id"`)
-		})
-	}
-}
-
-// TestGoSourceResolvesSchemaQualifiedReference confirms a three-part
-// reference matches TableDef.Schema and TableDef.Name together, and does
-// not match a same-named table carrying a different schema.
-func TestGoSourceResolvesSchemaQualifiedReference(t *testing.T) {
-	tables := []schema.TableDef{
-		{Name: "events", Schema: "audit", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}},
-		{Name: "events", Schema: "billing", Columns: []schema.ColumnDef{{Name: "id", Type: schema.TextType{}}}},
-	}
-
-	parsed, err := namedsql.Parse("event_by_id", `SELECT id FROM audit.events WHERE id = {{bind "id" audit.events.id}}`)
-	require.NoError(t, err)
-	compiled, err := parsed.Compile(dialect.PostgreSQL())
-	require.NoError(t, err)
-	generated, err := compiled.GoSource("generated", "EventByID", tables...)
-	require.NoError(t, err)
-	require.Contains(t, string(generated), "func EventByID(id int64)")
-}
-
-// TestGoSourceIsDeterministic confirms calling GoSource twice with the same
-// inputs returns identical bytes.
-func TestGoSourceIsDeterministic(t *testing.T) {
-	parsed, err := namedsql.Parse("widget_query", `SELECT id FROM widgets WHERE id = {{bind "id" widgets.id}}`)
+// TestQueryDefCarriesEverythingAGeneratorReads pins the hand-off contract
+// between namedsql and a code generator: QueryDef must carry exactly what
+// GoSource used to read off Compiled directly, and the slices it returns
+// must be copies so a caller cannot reach back into the Compiled.
+func TestQueryDefCarriesEverythingAGeneratorReads(t *testing.T) {
+	source := `SELECT id FROM widgets ` +
+		`WHERE id = {{bind "id" widgets.id}} OR owner_id = {{bind "id" widgets.id}} ` +
+		`OR name = {{bind "name"}} ` +
+		`OR audit_id = {{bind "auditId" audit.events.id}}`
+	parsed, err := namedsql.Parse("widget_query", source)
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
 
-	first, err := compiled.GoSource("generated", "WidgetQuery", widgetsTableDef())
-	require.NoError(t, err)
-	second, err := compiled.GoSource("generated", "WidgetQuery", widgetsTableDef())
-	require.NoError(t, err)
-	require.Equal(t, first, second)
-}
+	def := compiled.QueryDef()
+	require.Equal(t, "widget_query", def.Name)
+	require.Equal(t, compiled.SQL(), def.SQL)
+	require.Equal(t, []string{"id", "id", "name", "auditId"}, def.Parameters)
+	require.Equal(t, []namedsql.BindDef{
+		{Name: "id", Table: "widgets", Column: "id"},
+		{Name: "name"},
+		{Name: "auditId", Schema: "audit", Table: "events", Column: "id"},
+	}, def.Binds)
+	require.Len(t, def.Binds, len(slices.Collect(compiled.ParameterNames())))
 
-func requireGeneratedSourceCompiles(t *testing.T, source []byte) {
-	t.Helper()
-	directory := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "query.go"), source, 0o600))
-	repoGoMod, err := os.ReadFile("../go.mod")
-	require.NoError(t, err)
-	// The replace directive must be absolute: t.TempDir() no longer nests the
-	// scratch module under this package directory, so a relative ".." would
-	// resolve against the temp directory's own location instead of the repo.
-	repository, err := filepath.Abs("..")
-	require.NoError(t, err)
-	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/generated\n", 1)
-	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
-	command := exec.CommandContext(t.Context(), "go", "test", ".")
-	command.Dir = directory
-	output, err := command.CombinedOutput()
-	require.NoErrorf(t, err, "go test output:\n%s", output)
+	def.Parameters[0] = "mutated"
+	def.Binds[0].Name = "mutated"
+	again := compiled.QueryDef()
+	require.Equal(t, "id", again.Parameters[0])
+	require.Equal(t, "id", again.Binds[0].Name)
 }

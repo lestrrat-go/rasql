@@ -11,6 +11,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/genfile"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
@@ -95,7 +96,7 @@ func TestQueryPackageMatchesTemplateOutput(t *testing.T) {
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
 	require.NoError(t, err)
-	want, err := compiled.GoSource("store", "UserByID")
+	want, err := querygen.GoSource(compiled.QueryDef(), "store", "UserByID")
 	require.NoError(t, err)
 	require.Equal(t, want, plan.Files()[0].Source)
 }

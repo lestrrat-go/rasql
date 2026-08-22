@@ -2,15 +2,13 @@
 // statement carrying one dialect's placeholders, with the bound values in
 // placeholder order. The only action it accepts is {{bind "name"}}, so a
 // value can never become SQL text. A bind may also name the column it
-// stands for, {{bind "name" table.column}}, which lets GoSource generate
-// that column's Go type instead of any.
+// stands for, {{bind "name" table.column}}, which records the column a
+// parameter stands for so a code generator can give it that column's Go
+// type instead of any.
 package namedsql
 
 import (
-	"bytes"
 	"fmt"
-	"go/format"
-	"go/token"
 	"iter"
 	"reflect"
 	"slices"
@@ -18,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/internal/schemagen"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -44,15 +41,6 @@ type columnRef struct {
 }
 
 func (r columnRef) stated() bool { return r.column != "" }
-
-// tableString returns the table part of the reference as written: "table"
-// for an unqualified reference, "schema.table" for a qualified one.
-func (r columnRef) tableString() string {
-	if r.schemaName != "" {
-		return r.schemaName + "." + r.table
-	}
-	return r.table
-}
 
 // String returns the reference as written, for error messages.
 func (r columnRef) String() string {
@@ -241,6 +229,54 @@ func (c Compiled) ParameterNames() iter.Seq[string] {
 	return slices.Values(c.uniqueNames)
 }
 
+// QueryDef describes a compiled query in the terms a code generator needs:
+// the name to report in an error, the SQL to embed, the parameter list to
+// pass through, and what each parameter stands for. It is a plain
+// description with no behaviour, so a generator reads a stated shape
+// rather than this package's internals.
+type QueryDef struct {
+	// Name is the name the query was parsed under.
+	Name string
+	// SQL is the compiled statement, carrying this dialect's placeholders.
+	SQL string
+	// Parameters names the parameter each placeholder takes, in placeholder
+	// order. A name bound twice appears twice, because the generated call
+	// passes one argument per placeholder.
+	Parameters []string
+	// Binds describes each distinct parameter once, in first-use order.
+	Binds []BindDef
+}
+
+// BindDef is one distinct parameter of a query, and the column it names.
+// Table and Column are empty when the bind named no column, which keeps the
+// generated parameter typed any. Schema is empty unless the reference was
+// written schema-qualified.
+type BindDef struct {
+	Name   string
+	Schema string
+	Table  string
+	Column string
+}
+
+// QueryDef returns a description of this compiled query for a code
+// generator. The returned slices are copies, so the caller cannot reach
+// back into the Compiled.
+func (c Compiled) QueryDef() QueryDef {
+	// Parse appends to uniqueNames and columnRefs in the same branch, so
+	// the two are the same length for every Compiled Compile produces.
+	binds := make([]BindDef, len(c.uniqueNames))
+	for index, name := range c.uniqueNames {
+		ref := c.columnRefs[index]
+		binds[index] = BindDef{Name: name, Schema: ref.schemaName, Table: ref.table, Column: ref.column}
+	}
+	return QueryDef{
+		Name:       c.name,
+		SQL:        c.sql,
+		Parameters: append([]string(nil), c.parameters...),
+		Binds:      binds,
+	}
+}
+
 // Bind supplies all named values and returns a parameterized statement.
 func (c Compiled) Bind(values map[string]any) (render.Statement, error) {
 	if c.name == "" || strings.TrimSpace(c.sql) == "" {
@@ -264,181 +300,6 @@ func (c Compiled) Bind(values map[string]any) (render.Statement, error) {
 		return render.Statement{}, fmt.Errorf("namedsql %q: %w", c.name, err)
 	}
 	return statement, nil
-}
-
-// GoSource returns a Go function that creates this static statement. A bind
-// that names no column generates an any parameter, as it always has. A bind
-// that names a column resolves it against tables and generates that
-// column's Go type instead; tables is optional and needed only when at
-// least one bind names a column.
-func (c Compiled) GoSource(packageName string, functionName string, tables ...schema.TableDef) ([]byte, error) {
-	if c.name == "" || strings.TrimSpace(c.sql) == "" {
-		return nil, fmt.Errorf("namedsql: invalid compiled template")
-	}
-	if !isUsableGoIdentifier(packageName) {
-		return nil, fmt.Errorf("namedsql: invalid package name %q", packageName)
-	}
-	if !isUsableGoIdentifier(functionName) {
-		return nil, fmt.Errorf("namedsql %q: invalid function name %q", c.name, functionName)
-	}
-	if functionName == "init" || (packageName == "main" && functionName == "main") {
-		return nil, fmt.Errorf("namedsql %q: function name %q cannot be generated in package %q", c.name, functionName, packageName)
-	}
-	reservedNames := map[string]struct{}{
-		packageName:  {},
-		functionName: {},
-	}
-	for _, name := range c.uniqueNames {
-		if !isUsableGoIdentifier(name) {
-			return nil, fmt.Errorf("namedsql %q: parameter %q cannot be a Go identifier", c.name, name)
-		}
-		reservedNames[name] = struct{}{}
-	}
-	renderName := availableGoIdentifier("rasqlrender", reservedNames)
-	defaultParameterType := "any"
-	if functionName == "any" {
-		defaultParameterType = "interface{}"
-	}
-	errorType := "error"
-	if functionName == "error" {
-		errorType = "interface{ Error() string }"
-	}
-
-	parameterTypes := make([]string, len(c.uniqueNames))
-	needsTime := false
-	for index, ref := range c.columnRefs {
-		if !ref.stated() {
-			parameterTypes[index] = defaultParameterType
-			continue
-		}
-		column, err := resolveColumn(c.uniqueNames[index], ref, tables)
-		if err != nil {
-			return nil, fmt.Errorf("namedsql %q: %w", c.name, err)
-		}
-		goType := schemagen.ColumnGoType(column)
-		if goType == "time.Time" {
-			needsTime = true
-		}
-		parameterTypes[index] = goType
-	}
-
-	timeName := "time"
-	if needsTime {
-		timeName = availableGoIdentifier("time", reservedNames)
-		for index, parameterType := range parameterTypes {
-			if parameterType == "time.Time" {
-				parameterTypes[index] = timeName + ".Time"
-			}
-		}
-	}
-
-	var source bytes.Buffer
-	source.WriteString("// Code generated by rasqlgen; DO NOT EDIT.\n\n")
-	source.WriteString("package ")
-	source.WriteString(packageName)
-	source.WriteString("\n\n")
-	if needsTime {
-		source.WriteString("import (\n\t")
-		source.WriteString(renderName)
-		source.WriteString(" \"github.com/lestrrat-go/rasql/render\"\n\t")
-		if timeName != "time" {
-			source.WriteString(timeName)
-			source.WriteByte(' ')
-		}
-		source.WriteString("\"time\"\n)\n\n")
-	} else {
-		source.WriteString("import ")
-		source.WriteString(renderName)
-		source.WriteString(" \"github.com/lestrrat-go/rasql/render\"\n\n")
-	}
-	source.WriteString("func ")
-	source.WriteString(functionName)
-	source.WriteByte('(')
-	for index, name := range c.uniqueNames {
-		if index > 0 {
-			source.WriteString(", ")
-		}
-		source.WriteString(name)
-		source.WriteByte(' ')
-		source.WriteString(parameterTypes[index])
-	}
-	source.WriteString(") (")
-	source.WriteString(renderName)
-	source.WriteString(".Statement, ")
-	source.WriteString(errorType)
-	source.WriteString(") {\n\treturn ")
-	source.WriteString(renderName)
-	source.WriteString(".Precompiled(")
-	source.WriteString(strconv.Quote(c.sql))
-	for _, name := range c.parameters {
-		source.WriteString(", ")
-		source.WriteString(name)
-	}
-	source.WriteString(")\n}\n")
-	formatted, err := format.Source(source.Bytes())
-	if err != nil {
-		return nil, fmt.Errorf("namedsql %q: format source: %w", c.name, err)
-	}
-	return formatted, nil
-}
-
-// resolveColumn looks ref up among tables and returns the column it names.
-// Matching is exact and case-sensitive on schema name, table name and
-// column name: a descriptor's names come from inspection verbatim, and
-// folding case would guess wrong on some engine.
-//
-// A two-part reference matches on table name alone, ignoring
-// TableDef.Schema; two descriptors sharing that name is an error asking the
-// writer to qualify it, the same rule applyHints already applies to hint
-// keys. A three-part reference matches TableDef.Schema and TableDef.Name
-// together. A ref that does not resolve is always an error: there is no
-// fallback to any.
-func resolveColumn(bindName string, ref columnRef, tables []schema.TableDef) (schema.ColumnDef, error) {
-	if len(tables) == 0 {
-		return schema.ColumnDef{}, fmt.Errorf("bind %q names %s, but no table descriptors were supplied", bindName, ref)
-	}
-
-	matches := make([]schema.TableDef, 0, 1)
-	for _, table := range tables {
-		if ref.schemaName != "" {
-			if table.Schema == ref.schemaName && table.Name == ref.table {
-				matches = append(matches, table)
-			}
-			continue
-		}
-		if table.Name == ref.table {
-			matches = append(matches, table)
-		}
-	}
-
-	switch len(matches) {
-	case 0:
-		return schema.ColumnDef{}, fmt.Errorf("bind %q names %s: no descriptor names table %s", bindName, ref, ref.tableString())
-	case 1:
-		column, ok := matches[0].Column(ref.column)
-		if !ok {
-			return schema.ColumnDef{}, fmt.Errorf("bind %q names %s: table %s has no column %s", bindName, ref, ref.tableString(), ref.column)
-		}
-		return column, nil
-	default:
-		return schema.ColumnDef{}, fmt.Errorf("bind %q names %s: two descriptors name table %s; qualify it as schema.table.column", bindName, ref, ref.tableString())
-	}
-}
-
-func isUsableGoIdentifier(name string) bool {
-	return name != "_" && token.IsIdentifier(name)
-}
-
-func availableGoIdentifier(base string, reserved map[string]struct{}) string {
-	for index := 0; ; index++ {
-		name := base
-		if index > 0 {
-			name += strconv.Itoa(index)
-		}
-		if _, exists := reserved[name]; !exists {
-			return name
-		}
-	}
 }
 
 func renderTemplateParts(parts []templatePart, placeholders []string) string {
