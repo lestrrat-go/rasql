@@ -51,11 +51,11 @@ func Example_rasql_nested_predicates() {
 	// call, and the whole tree is one predicate. The builder is immutable, so
 	// the same value below renders the statement and then runs it.
 	selected := rasql.SelectFrom(users).
-		Where(query.Like(users.Email(), query.Bind("%@example.com"))).
+		Where(query.Like(users.Email(), "%@example.com")).
 		Where(query.Or(
-			query.LessThan(users.ID(), query.Bind(10)),
+			query.LessThan(users.ID(), 10),
 			query.And(
-				query.GreaterThan(users.ID(), query.Bind(20)),
+				query.GreaterThan(users.ID(), 20),
 				query.IsNotNull(users.Email()),
 			),
 		)).

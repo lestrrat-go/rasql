@@ -78,7 +78,7 @@ func Example_rasql_scalar_function() {
 	// SQL: SELECT members.id, COALESCE(members.nickname, members.email) AS name FROM members WHERE LOWER(members.email) = ? (argument: "ada@example.com")
 	byEmail, err := rasql.DecodeFrom[memberName](members).
 		Project(id, query.Coalesce(nickname, email).As("name")).
-		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
+		Where(query.Equal(query.Lower(email), "ada@example.com")).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query member by email: %s\n", err)

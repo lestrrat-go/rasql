@@ -28,7 +28,7 @@ func Example_query_render_select() {
 		fmt.Printf("failed to build the select: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.Equal(email, query.Bind("ada@example.com")))
+	statement, err = statement.WithWhere(query.Equal(email, "ada@example.com"))
 	if err != nil {
 		fmt.Printf("failed to add the predicate: %s\n", err)
 		return

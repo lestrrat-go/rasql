@@ -84,7 +84,7 @@ func Example_rasql_dynamic_projection() {
 	rows, err := rasql.DecodeFrom[orderSummary](users).
 		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orderUserID))).
 		Project(users.ID().As("user_id"), users.Email()).
-		Where(query.GreaterThan(total, query.Bind(20))).
+		Where(query.GreaterThan(total, 20)).
 		Order(query.Desc(total)).
 		Query(ctx, db)
 	if err != nil {

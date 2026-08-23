@@ -77,7 +77,7 @@ func Example_rasql_group_by() {
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
 		Project(status, query.CountAll().As("total")).
 		GroupBy(status).
-		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		Having(query.GreaterThan(query.CountAll(), 1)).
 		Order(query.Asc(status)).
 		Query(ctx, db)
 	if err != nil {
