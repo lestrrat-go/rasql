@@ -67,7 +67,7 @@ source: [examples/query_render_select_example_test.go](https://github.com/lestrr
 
 ## Run a rendered statement
 
-A `statement.Statement` carries the SQL text and the arguments, so `database/sql` runs it directly through `QueryContext` or `ExecContext`. [The database handle](04-database.md#run-a-rendered-statement) covers running one through a `rasql.DB` instead, which adds hooks and row decoding.
+A `stmt.Statement` carries the SQL text and the arguments, so `database/sql` runs it directly through `QueryContext` or `ExecContext`. [The database handle](04-database.md#run-a-rendered-statement) covers running one through a `rasql.DB` instead, which adds hooks and row decoding.
 
 ## Operation reference
 

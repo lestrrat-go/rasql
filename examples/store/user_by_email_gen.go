@@ -2,8 +2,8 @@
 
 package store
 
-import rasqlstatement "github.com/lestrrat-go/rasql/statement"
+import rasqlstmt "github.com/lestrrat-go/rasql/stmt"
 
-func UserByEmail(email any) rasqlstatement.Statement {
-	return rasqlstatement.New("SELECT id, email FROM users WHERE email = $1\n", email)
+func UserByEmail(email any) rasqlstmt.Statement {
+	return rasqlstmt.New("SELECT id, email FROM users WHERE email = $1\n", email)
 }

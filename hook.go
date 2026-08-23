@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // OperationKind identifies the database/sql method an Operation wraps.
@@ -36,7 +36,7 @@ func (k OperationKind) String() string {
 // what reaches database/sql. Hooks cannot replace the SQL or its arguments.
 type Operation struct {
 	kind OperationKind
-	stmt statement.Statement
+	stmt stmt.Statement
 }
 
 // Kind reports whether the operation is a query or an exec.

@@ -1,6 +1,6 @@
-// Package statement carries finished SQL text and its bound arguments from
+// Package stmt carries finished SQL text and its bound arguments from
 // whatever produced them to whatever executes them.
-package statement
+package stmt
 
 import "github.com/lestrrat-go/rasql/sqltext"
 

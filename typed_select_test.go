@@ -12,7 +12,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
 
@@ -732,11 +732,11 @@ func TestSelectAllReturnsEmptyNotNilForNoRows(t *testing.T) {
 
 		db, err := rasql.New(database, dialect.SQLite())
 		require.NoError(t, err)
-		stmt := statement.New("SELECT id, email FROM users")
-		mock.ExpectQuery(stmt.SQL()).
+		s := stmt.New("SELECT id, email FROM users")
+		mock.ExpectQuery(s.SQL()).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "email"}))
 
-		got, err := rasql.QueryRenderedAll[deleteUser](t.Context(), db, stmt)
+		got, err := rasql.QueryRenderedAll[deleteUser](t.Context(), db, s)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		require.Empty(t, got)

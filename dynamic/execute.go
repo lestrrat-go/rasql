@@ -9,20 +9,20 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
-// Query renders stmt for db's dialect and returns a rangeable sequence of
+// Query renders s for db's dialect and returns a rangeable sequence of
 // its rows. It reports validation and rendering errors before iteration starts
 // and yields an execution error instead of a row once iteration begins.
 // The statement runs when the sequence is first ranged over, not when Query
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
-func Query(ctx context.Context, db rasql.DB, stmt query.Select) (iter.Seq2[Row, error], error) {
+func Query(ctx context.Context, db rasql.DB, s query.Select) (iter.Seq2[Row, error], error) {
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
-	rendered, err := render.Select(db.Dialect(), stmt)
+	rendered, err := render.Select(db.Dialect(), s)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
@@ -37,36 +37,36 @@ func Query(ctx context.Context, db rasql.DB, stmt query.Select) (iter.Seq2[Row, 
 // rows never executes it. Like Query, it runs the statement when the sequence
 // is first ranged over rather than when QueryWrite returns, so a write whose
 // sequence is abandoned never reaches the database.
-func QueryWrite(ctx context.Context, db rasql.DB, stmt query.WriteStatement) (iter.Seq2[Row, error], error) {
-	rendered, err := renderQueryWrite(db, stmt)
+func QueryWrite(ctx context.Context, db rasql.DB, s query.WriteStatement) (iter.Seq2[Row, error], error) {
+	rendered, err := renderQueryWrite(db, s)
 	if err != nil {
 		return nil, err
 	}
 	return scanRendered(ctx, db, rendered), nil
 }
 
-func renderQueryWrite(db rasql.DB, stmt query.WriteStatement) (statement.Statement, error) {
+func renderQueryWrite(db rasql.DB, s query.WriteStatement) (stmt.Statement, error) {
 	if err := db.Validate(); err != nil {
-		return statement.Statement{}, err
+		return stmt.Statement{}, err
 	}
-	if isNil(stmt) || len(stmt.Returning()) == 0 {
-		return statement.Statement{}, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
+	if isNil(s) || len(s.Returning()) == 0 {
+		return stmt.Statement{}, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
 	}
-	rendered, err := render.Write(db.Dialect(), stmt)
+	rendered, err := render.Write(db.Dialect(), s)
 	if err != nil {
-		return statement.Statement{}, fmt.Errorf("rasql: render write statement: %w", err)
+		return stmt.Statement{}, fmt.Errorf("rasql: render write statement: %w", err)
 	}
 	return rendered, nil
 }
 
-// scanRendered defers running stmt until the returned sequence is ranged
+// scanRendered defers running s until the returned sequence is ranged
 // over, so obtaining a sequence and abandoning it opens no cursor. Every
 // terminal that hands result rows to Scan goes through it, which keeps the
 // rule in one place: the *sql.Rows is created and consumed inside the same
 // closure.
-func scanRendered(ctx context.Context, db rasql.DB, stmt statement.Statement) iter.Seq2[Row, error] {
+func scanRendered(ctx context.Context, db rasql.DB, s stmt.Statement) iter.Seq2[Row, error] {
 	return func(yield func(Row, error) bool) {
-		rows, err := db.QueryRendered(ctx, stmt)
+		rows, err := db.QueryRendered(ctx, s)
 		if err != nil {
 			yield(Row{}, err)
 			return
