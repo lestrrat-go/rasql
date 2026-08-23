@@ -18,6 +18,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/genfile"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -725,7 +726,7 @@ func (p QueryPackage) planQuery(root, dir string, query Query, tables []schema.T
 	if err != nil {
 		return File{}, fmt.Errorf("generate: compile query %q: %w", query.Function, err)
 	}
-	source, err := compiled.GoSource(p.Package, query.Function, tables...)
+	source, err := querygen.GoSource(compiled.QueryDef(), p.Package, query.Function, tables...)
 	if err != nil {
 		return File{}, fmt.Errorf("generate: render query %q: %w", query.Function, err)
 	}

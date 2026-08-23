@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
@@ -321,7 +322,7 @@ func TestGeneratedStorePackageCompilesAndRuns(t *testing.T) {
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.SQLite())
 	require.NoError(t, err)
-	querySource, err := compiled.GoSource("store", "UserByEmail")
+	querySource, err := querygen.GoSource(compiled.QueryDef(), "store", "UserByEmail")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "user_by_email_gen.go"), querySource, 0o600))
 
