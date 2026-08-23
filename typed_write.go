@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/internal/method"
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -141,7 +142,7 @@ type completeRow interface {
 }
 
 func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
-	if isNil(statement) || len(statement.Returning()) == 0 {
+	if nilcheck.Is(statement) || len(statement.Returning()) == 0 {
 		return nil
 	}
 	var result T
@@ -336,7 +337,7 @@ func (option updateWhereOption) applyUpdate(config *updateConfig) error {
 	if config.whereSet {
 		return fmt.Errorf("update predicate is selected more than once")
 	}
-	if isNil(option.expression) {
+	if nilcheck.Is(option.expression) {
 		return fmt.Errorf("update predicate must not be nil")
 	}
 	config.where = option.expression
@@ -347,7 +348,7 @@ func (option updateWhereOption) applyUpdate(config *updateConfig) error {
 func updateOptions(options []UpdateOption) (updateConfig, error) {
 	var config updateConfig
 	for _, option := range options {
-		if isNil(option) {
+		if nilcheck.Is(option) {
 			return updateConfig{}, fmt.Errorf("update option must not be nil")
 		}
 		if err := option.applyUpdate(&config); err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -51,7 +52,7 @@ func Exec(ctx context.Context, db DB, s query.WriteStatement) (sql.Result, error
 	if err := db.valid(); err != nil {
 		return nil, err
 	}
-	if !isNil(s) && len(s.Returning()) > 0 {
+	if !nilcheck.Is(s) && len(s.Returning()) > 0 {
 		return nil, fmt.Errorf("rasql: write statement has a RETURNING clause: use QueryWrite to read its rows")
 	}
 	rendered, err := render.Write(db.Dialect(), s)
@@ -65,7 +66,7 @@ func renderQueryWrite(db DB, s query.WriteStatement) (stmt.Statement, error) {
 	if err := db.valid(); err != nil {
 		return stmt.Statement{}, err
 	}
-	if isNil(s) || len(s.Returning()) == 0 {
+	if nilcheck.Is(s) || len(s.Returning()) == 0 {
 		return stmt.Statement{}, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
 	}
 	rendered, err := render.Write(db.Dialect(), s)

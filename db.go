@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -68,10 +68,10 @@ type DB struct {
 // unless narrowed or extended by WithHooks or by Begin's own hooks parameter,
 // every transaction Begin starts from it.
 func New(handle Handle, d dialect.Dialect, hooks ...Hook) (DB, error) {
-	if isNil(handle) {
+	if nilcheck.Is(handle) {
 		return DB{}, fmt.Errorf("rasql: handle must not be nil")
 	}
-	if isNil(d) {
+	if nilcheck.Is(d) {
 		return DB{}, fmt.Errorf("rasql: dialect must not be nil")
 	}
 	db := DB{handle: handle, dialect: d}
@@ -261,7 +261,7 @@ func (db DB) Validate() error {
 // valid reports whether db came from New rather than being a zero DB, so every
 // entry point answers a zero value with an error instead of a nil dereference.
 func (db DB) valid() error {
-	if isNil(db.handle) || isNil(db.dialect) {
+	if nilcheck.Is(db.handle) || nilcheck.Is(db.dialect) {
 		return fmt.Errorf("rasql: invalid DB: create one with rasql.New")
 	}
 	return nil
@@ -275,17 +275,4 @@ func (db DB) validStatement(s stmt.Statement) error {
 		return fmt.Errorf("rasql: statement SQL must not be empty")
 	}
 	return nil
-}
-
-func isNil(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflectValue := reflect.ValueOf(value)
-	switch reflectValue.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflectValue.IsNil()
-	default:
-		return false
-	}
 }

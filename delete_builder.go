@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -49,7 +50,7 @@ func (b DeleteBuilder) Where(expression query.Expression) DeleteBuilder {
 	if b.err != nil {
 		return b
 	}
-	if isNil(expression) {
+	if nilcheck.Is(expression) {
 		return b.withError(fmt.Errorf("rasql: WHERE expression must not be nil"))
 	}
 	b = b.clone()
