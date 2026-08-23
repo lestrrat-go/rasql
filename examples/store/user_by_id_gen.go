@@ -2,8 +2,8 @@
 
 package store
 
-import rasqlrender "github.com/lestrrat-go/rasql/render"
+import rasqlstatement "github.com/lestrrat-go/rasql/statement"
 
-func UserByID(id int64) (rasqlrender.Statement, error) {
-	return rasqlrender.Precompiled("SELECT id, email FROM users WHERE id = $1\n", id)
+func UserByID(id int64) rasqlstatement.Statement {
+	return rasqlstatement.New("SELECT id, email FROM users WHERE id = $1\n", id)
 }
