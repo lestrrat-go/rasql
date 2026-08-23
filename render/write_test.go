@@ -14,7 +14,7 @@ import (
 
 func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 	users, id, email := writeTable(t)
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
@@ -162,6 +162,29 @@ func TestUpdateRendersScalarFunctionAssignment(t *testing.T) {
 	}
 }
 
+// TestInsertRendersColumnsInAssignmentOrder pins the render-side half of the
+// rule that the rendered column list follows the argument order: the same
+// two assignments given in reverse order render the columns and VALUES items
+// in the reverse order too.
+func TestInsertRendersColumnsInAssignmentOrder(t *testing.T) {
+	users, id, email := writeTable(t)
+
+	idFirst, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
+	require.NoError(t, err)
+	emailFirst, err := query.NewInsert(users, query.Set(email, "ada@example.com"), query.Set(id, 1))
+	require.NoError(t, err)
+
+	renderedIDFirst, err := render.Insert(dialect.PostgreSQL(), idFirst)
+	require.NoError(t, err)
+	require.Equal(t, `INSERT INTO "users" ("id", "email") VALUES ($1, $2)`, renderedIDFirst.SQL())
+	require.Equal(t, []any{1, "ada@example.com"}, renderedIDFirst.Args())
+
+	renderedEmailFirst, err := render.Insert(dialect.PostgreSQL(), emailFirst)
+	require.NoError(t, err)
+	require.Equal(t, `INSERT INTO "users" ("email", "id") VALUES ($1, $2)`, renderedEmailFirst.SQL())
+	require.Equal(t, []any{"ada@example.com", 1}, renderedEmailFirst.Args())
+}
+
 // TestQualifiedWriteStatementsRenderForBuiltInDialects pins the exact
 // rendered SQL for INSERT, multi-row INSERT, UPDATE and DELETE against a
 // schema-qualified table across all three built-in dialects. Only the table
@@ -169,7 +192,7 @@ func TestUpdateRendersScalarFunctionAssignment(t *testing.T) {
 // unqualified columns because they belong to the statement's own table.
 func TestQualifiedWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 	events, id, userID, action := qualifiedWriteTable(t)
-	insert, err := query.NewInsert(events, []query.ColumnRef{userID, action}, 7, "created")
+	insert, err := query.NewInsert(events, query.Set(userID, 7), query.Set(action, "created"))
 	require.NoError(t, err)
 	update, err := query.NewUpdate(events, query.Set(action, query.Bind("closed")))
 	require.NoError(t, err)
@@ -243,7 +266,7 @@ func TestQualifiedWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 // reference.
 func TestQualifiedUpsertRendersDialectConflictSyntax(t *testing.T) {
 	events, id, _, action := qualifiedWriteTable(t)
-	insert, err := query.NewInsert(events, []query.ColumnRef{id, action}, 1, "created")
+	insert, err := query.NewInsert(events, query.Set(id, 1), query.Set(action, "created"))
 	require.NoError(t, err)
 	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(action, query.Excluded(action))})
 	require.NoError(t, err)
@@ -313,7 +336,7 @@ func TestDeleteRendersNotInForBuiltInDialects(t *testing.T) {
 
 func TestReturningRequiresDialectCapability(t *testing.T) {
 	users, id, email := writeTable(t)
-	statement, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	statement, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(id)
 	require.NoError(t, err)
@@ -337,7 +360,7 @@ func TestReturningRequiresDialectCapability(t *testing.T) {
 // renders the unqualified column name.
 func TestReturningRendersBareColumnRefUnqualified(t *testing.T) {
 	users, id, email := writeTable(t)
-	statement, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	statement, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(id)
 	require.NoError(t, err)
@@ -371,7 +394,7 @@ func TestMultiRowInsertRendersReturning(t *testing.T) {
 
 func TestDefaultInsertRendersDialectSyntax(t *testing.T) {
 	users, _, _ := writeTable(t)
-	statement, err := query.NewDefaultInsert(users)
+	statement, err := query.NewInsert(users, query.Defaults())
 	require.NoError(t, err)
 
 	tests := map[string]struct {
@@ -404,7 +427,7 @@ func TestDefaultInsertRendersDialectSyntax(t *testing.T) {
 
 func TestUpsertRendersDialectConflictSyntax(t *testing.T) {
 	users, id, email := writeTable(t)
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
 	require.NoError(t, err)
@@ -488,7 +511,7 @@ func TestMultiRowUpsertRendersDialectConflictSyntax(t *testing.T) {
 
 func TestMySQLUpsertRejectsConflictTarget(t *testing.T) {
 	users, id, email := writeTable(t)
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	withAssignments, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
 	require.NoError(t, err)
@@ -544,7 +567,7 @@ func (upsertOnlyDialect) Supports(capability dialect.Capability) bool {
 
 func TestUpsertReportsEveryUnsupportedFeature(t *testing.T) {
 	users, id, email := writeTable(t)
-	defaultInsert, err := query.NewDefaultInsert(users)
+	defaultInsert, err := query.NewInsert(users, query.Defaults())
 	require.NoError(t, err)
 	withAssignments, err := query.NewUpsert(defaultInsert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
 	require.NoError(t, err)
@@ -612,7 +635,7 @@ func TestSQLiteUpsertExecutes(t *testing.T) {
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY, \"email\" TEXT NOT NULL)")
 	require.NoError(t, err)
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
 	require.NoError(t, err)
@@ -621,7 +644,7 @@ func TestSQLiteUpsertExecutes(t *testing.T) {
 	_, err = database.ExecContext(t.Context(), rendered.SQL(), rendered.Args()...)
 	require.NoError(t, err)
 
-	insert, err = query.NewInsert(users, []query.ColumnRef{id, email}, 1, "grace@example.com")
+	insert, err = query.NewInsert(users, query.Set(id, 1), query.Set(email, "grace@example.com"))
 	require.NoError(t, err)
 	statement, err = query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
 	require.NoError(t, err)
@@ -643,7 +666,7 @@ func TestSQLiteUpsertExecutes(t *testing.T) {
 // any depth inside the value, across all three built-in dialects.
 func TestUpsertRendersNestedExcludedColumn(t *testing.T) {
 	users, id, email := writeTable(t)
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
 		query.Set(email, query.Coalesce(query.Excluded(email), query.Bind("unknown@example.com"))),
@@ -701,7 +724,7 @@ func TestSQLiteUpsertExecutesNestedExcludedColumn(t *testing.T) {
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY, \"email\" TEXT NOT NULL)")
 	require.NoError(t, err)
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
 		query.Set(email, query.Coalesce(query.Excluded(email), query.Bind("unknown@example.com"))),
@@ -712,7 +735,7 @@ func TestSQLiteUpsertExecutesNestedExcludedColumn(t *testing.T) {
 	_, err = database.ExecContext(t.Context(), rendered.SQL(), rendered.Args()...)
 	require.NoError(t, err)
 
-	insert, err = query.NewInsert(users, []query.ColumnRef{id, email}, 1, "grace@example.com")
+	insert, err = query.NewInsert(users, query.Set(id, 1), query.Set(email, "grace@example.com"))
 	require.NoError(t, err)
 	statement, err = query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
 		query.Set(email, query.Coalesce(query.Excluded(email), query.Bind("unknown@example.com"))),
@@ -791,7 +814,7 @@ func TestSQLiteMultiRowInsertExecutes(t *testing.T) {
 
 func TestSQLiteDefaultValuesUpsertIsRejected(t *testing.T) {
 	users, id, email := writeTable(t)
-	insert, err := query.NewDefaultInsert(users)
+	insert, err := query.NewInsert(users, query.Defaults())
 	require.NoError(t, err)
 	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
 	require.NoError(t, err)

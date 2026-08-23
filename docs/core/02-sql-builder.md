@@ -74,7 +74,8 @@ The builders cover the common statements. These constructors build the same stat
 | `query.NewSelect(from, projections…)` | `SELECT` |
 | `query.NewGroupedSelect(from, groupBy, projections…)` | `SELECT` that groups; needed when the projections mix an aggregate with a bare column, which `NewSelect` refuses. |
 | `query.NewJoinedSelect(from, joins, groupBy, projections…)` | `SELECT` that carries its joins from the start; needed when a projection or a grouping expression reads a joined table, which the other two refuse because they validate before `WithJoin` can run. Pass a nil `groupBy` when the statement does not group. |
-| `query.NewInsert(into, columns, values)` | `INSERT` |
+| `query.NewInsert(into, values…)` | `INSERT` of one row. Pass `query.Set(column, value)` per column, or `query.Defaults()` on its own to write the database default for every column. |
+| `query.NewInsertRows(into, columns, rows)` | `INSERT` of several rows against one column list, which the rows fill in order. |
 | `query.NewUpdate(table, assignments…)` | `UPDATE`, with `query.Set(column, expression)` per assignment. A statement without `WithWhere` requires `AllowAll` before rendering or execution. |
 | `query.NewDelete(from)` | `DELETE`. A statement without `WithWhere` requires `AllowAll` before rendering or execution. |
 | `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |

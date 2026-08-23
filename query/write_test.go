@@ -17,13 +17,18 @@ var (
 	_ query.WriteStatement = query.Upsert{}
 )
 
+var (
+	_ query.InsertValues = query.Assignment{}
+	_ query.InsertValues = query.Defaults()
+)
+
 func TestWriteStatementsReportReturning(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
@@ -72,7 +77,7 @@ func TestInsertRejectsNilReturningProjection(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 
 	_, err = insert.WithReturning(nil)
@@ -87,13 +92,13 @@ func TestWriteStatementsValidate(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	insert, err = insert.WithReturning(id)
 	require.NoError(t, err)
 	require.NoError(t, insert.Validate())
 
-	defaultInsert, err := query.NewDefaultInsert(users)
+	defaultInsert, err := query.NewInsert(users, query.Defaults())
 	require.NoError(t, err)
 	require.True(t, defaultInsert.UsesDefaultValues())
 	require.Empty(t, defaultInsert.Columns())
@@ -165,12 +170,18 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	// NewInsert with no values becomes one row of length zero against a
-	// non-empty column list, and must keep failing.
-	_, err = query.NewInsert(users, []query.ColumnRef{id})
-	require.Error(t, err)
-	_, err = query.NewInsert(users, []query.ColumnRef{id, id}, 1, 2)
-	require.Error(t, err)
+	// NewInsert with no values at all is an error: an empty argument list far
+	// more often means the caller forgot their values than that they wanted
+	// Defaults().
+	_, err = query.NewInsert(users)
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "values")
+	require.ErrorContains(t, err, "must not be empty")
+
+	_, err = query.NewInsert(users, query.Set(id, 1), query.Set(id, 2))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "columns[1]")
+	require.ErrorContains(t, err, `duplicates column "id"`)
 	_, err = query.NewUpdate(users)
 	require.Error(t, err)
 
@@ -184,7 +195,7 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	defaultInsert, err := query.NewDefaultInsert(users)
+	defaultInsert, err := query.NewInsert(users, query.Defaults())
 	require.NoError(t, err)
 	_, err = defaultInsert.WithRows([]any{1, "ada@example.com"})
 	require.Error(t, err)
@@ -294,7 +305,7 @@ func TestInsertRowValueRejectsTargetTableColumn(t *testing.T) {
 	email := users.Column("email")
 
 	t.Run("bare column", func(t *testing.T) {
-		_, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, email)
+		_, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, email))
 		requireQueryValidationError(t, err)
 		require.ErrorContains(t, err, `references column "email" of the target table`)
 		require.ErrorContains(t, err, "an INSERT VALUES row cannot read the target table's columns")
@@ -302,7 +313,7 @@ func TestInsertRowValueRejectsTargetTableColumn(t *testing.T) {
 	})
 
 	t.Run("nested in function call", func(t *testing.T) {
-		_, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, query.Lower(email))
+		_, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, query.Lower(email)))
 		requireQueryValidationError(t, err)
 		require.ErrorContains(t, err, `references column "email" of the target table`)
 		require.ErrorContains(t, err, "an INSERT VALUES row cannot read the target table's columns")
@@ -329,7 +340,7 @@ func TestWriteStatementsRejectAggregates(t *testing.T) {
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
@@ -342,7 +353,7 @@ func TestWriteStatementsRejectAggregates(t *testing.T) {
 	}{
 		"insert value": {
 			build: func() error {
-				_, err := query.NewInsert(users, []query.ColumnRef{id}, query.Count(id))
+				_, err := query.NewInsert(users, query.Set(id, query.Count(id)))
 				return err
 			},
 			message: `calls aggregate function "COUNT" in an INSERT value`,
@@ -404,7 +415,7 @@ func TestWriteStatementsAcceptScalarFunctions(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, query.Coalesce(query.Bind("ada@example.com"), query.Bind("")))
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, query.Coalesce(query.Bind("ada@example.com"), query.Bind(""))))
 	require.NoError(t, err)
 	require.NoError(t, insert.Validate())
 
@@ -433,7 +444,7 @@ func TestUpsertAcceptsNestedExcludedColumn(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 
 	upsert, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
@@ -461,7 +472,7 @@ func TestWriteStatementsRejectSubqueries(t *testing.T) {
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
@@ -476,7 +487,7 @@ func TestWriteStatementsRejectSubqueries(t *testing.T) {
 	}{
 		"insert value": {
 			build: func() error {
-				_, err := query.NewInsert(users, []query.ColumnRef{id}, query.Scalar(ids))
+				_, err := query.NewInsert(users, query.Set(id, query.Scalar(ids)))
 				return err
 			},
 		},
@@ -525,7 +536,7 @@ func TestUpsertValidatesConflictAssignments(t *testing.T) {
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 
 	upsert, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
@@ -560,11 +571,10 @@ func TestInsertBindsPlainValues(t *testing.T) {
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
-	cols := []query.ColumnRef{id, email}
 
-	plain, err := query.NewInsert(users, cols, 1, "ada@example.com")
+	plain, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
-	explicit, err := query.NewInsert(users, cols, query.Bind(1), query.Bind("ada@example.com"))
+	explicit, err := query.NewInsert(users, query.Set(id, query.Bind(1)), query.Set(email, query.Bind("ada@example.com")))
 	require.NoError(t, err)
 	require.Equal(t, explicit, plain)
 	require.Equal(t, [][]query.Expression{{query.Bind(1), query.Bind("ada@example.com")}}, plain.Rows())
@@ -576,7 +586,7 @@ func TestInsertRowBindsNil(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, nil)
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, nil))
 	require.NoError(t, err)
 	require.Equal(t, [][]query.Expression{{query.Bind(1), query.Bind(nil)}}, insert.Rows())
 	require.NoError(t, insert.Validate())
@@ -598,4 +608,134 @@ func TestInsertRowsCopiesCallerSlices(t *testing.T) {
 
 	rows[0][0] = 999
 	require.Equal(t, [][]query.Expression{{query.Bind(1), query.Bind("ada@example.com")}}, insert.Rows())
+}
+
+func TestInsertDefaultsWritesEveryColumnDefault(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+
+	insert, err := query.NewInsert(users, query.Defaults())
+	require.NoError(t, err)
+	require.True(t, insert.UsesDefaultValues())
+	require.Empty(t, insert.Columns())
+	require.Empty(t, insert.Rows())
+	require.NoError(t, insert.Validate())
+}
+
+func TestInsertTakesAssignments(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
+	require.NoError(t, err)
+	require.Equal(t, []query.ColumnRef{id, email}, insert.Columns())
+	require.Equal(t, [][]query.Expression{{query.Bind(1), query.Bind("ada@example.com")}}, insert.Rows())
+	require.False(t, insert.UsesDefaultValues())
+}
+
+// TestInsertColumnOrderFollowsArgumentOrder pins that the rendered column
+// list follows the argument order rather than any fixed table order: the
+// same two assignments given in reverse order produce columns and row values
+// in the reverse order too.
+func TestInsertColumnOrderFollowsArgumentOrder(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+
+	insert, err := query.NewInsert(users, query.Set(email, "ada@example.com"), query.Set(id, 1))
+	require.NoError(t, err)
+	require.Equal(t, []query.ColumnRef{email, id}, insert.Columns())
+	require.Equal(t, [][]query.Expression{{query.Bind("ada@example.com"), query.Bind(1)}}, insert.Rows())
+}
+
+// TestInsertRejectsDefaultsBesideAssignments pins that Defaults() must be the
+// only argument: an INSERT either names its columns with Set or writes the
+// database default for every column, never both.
+func TestInsertRejectsDefaultsBesideAssignments(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+
+	for name, testCase := range map[string]struct {
+		build func() (query.Insert, error)
+		path  string
+	}{
+		"defaults after set": {
+			build: func() (query.Insert, error) {
+				return query.NewInsert(users, query.Set(id, 1), query.Defaults())
+			},
+			path: "values[1]",
+		},
+		"defaults before set": {
+			build: func() (query.Insert, error) {
+				return query.NewInsert(users, query.Defaults(), query.Set(id, 1))
+			},
+			path: "values[0]",
+		},
+		"two defaults": {
+			build: func() (query.Insert, error) {
+				return query.NewInsert(users, query.Defaults(), query.Defaults())
+			},
+			path: "values[0]",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := testCase.build()
+			requireQueryValidationError(t, err)
+			require.ErrorContains(t, err, testCase.path)
+			require.ErrorContains(t, err, "must be the only argument")
+		})
+	}
+}
+
+// TestInsertMatchesTheOneRowInsertRowsForm pins that NewInsert lowers
+// assignments into the same columns-plus-rows representation NewInsertRows
+// builds directly, so a statement built either way is indistinguishable.
+func TestInsertMatchesTheOneRowInsertRowsForm(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+
+	fromAssignments, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
+	require.NoError(t, err)
+	fromRows, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]any{{1, "ada@example.com"}})
+	require.NoError(t, err)
+	require.Equal(t, fromRows, fromAssignments)
+}
+
+// TestInsertFromAssignmentsAppendsRows pins that WithRows still works on a
+// statement built from assignments, appending further rows against the
+// column list the assignments established.
+func TestInsertFromAssignmentsAppendsRows(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
+	require.NoError(t, err)
+
+	appended, err := insert.WithRows([]any{2, "grace@example.com"})
+	require.NoError(t, err)
+	require.Equal(t, [][]query.Expression{
+		{query.Bind(1), query.Bind("ada@example.com")},
+		{query.Bind(2), query.Bind("grace@example.com")},
+	}, appended.Rows())
+}
+
+// TestInsertRejectsNilValue pins that a nil InsertValues argument is reported
+// as a validation error rather than panicking: it lands in NewInsert's
+// default switch case, since a nil interface reaches there without a method
+// call.
+func TestInsertRejectsNilValue(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+
+	_, err = query.NewInsert(users, nil)
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "values[0]")
 }

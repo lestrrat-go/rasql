@@ -32,11 +32,12 @@ func Example_query_render_write() {
 	fmt.Println(ddl.SQL())
 
 	// query.NewInsert builds the statement; render.Insert turns it into SQL
-	// text and the arguments that go with it. A plain Go value is bound
-	// automatically, so the row values need no Bind wrapper.
+	// text and the arguments that go with it. Each query.Set pairs a column
+	// with the value written to it, so the two cannot fall out of step, and a
+	// plain Go value is bound without a Bind wrapper.
 	insert, err := query.NewInsert(accounts,
-		[]query.ColumnRef{id, email},
-		1, "ada@example.com",
+		query.Set(id, 1),
+		query.Set(email, "ada@example.com"),
 	)
 	if err != nil {
 		fmt.Printf("failed to build the insert: %s\n", err)

@@ -224,8 +224,10 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	thirdStored.Amount = "42.5000"
 	insert, err := query.NewInsert(
 		records.Ref(),
-		[]query.ColumnRef{recordID, recordActive, recordEmail, recordAmount},
-		third.ID, third.Active, third.Email, third.Amount,
+		query.Set(recordID, third.ID),
+		query.Set(recordActive, third.Active),
+		query.Set(recordEmail, third.Email),
+		query.Set(recordAmount, third.Amount),
 	)
 	require.NoError(t, err)
 	insert, err = insert.WithReturning(recordID, recordActive, recordEmail, recordAmount)
