@@ -274,8 +274,17 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 
 	_, err = statement.WithWhere(query.In(userID))
 	requireQueryValidationError(t, err)
-	_, err = statement.WithWhere(query.In(userID, query.Bind(1), nil))
+
+	// nil binds as a bound NULL, so it is accepted in a membership value list.
+	inWithNil := query.In(userID, query.Bind(1), nil)
+	_, err = statement.WithWhere(inWithNil)
+	require.NoError(t, err)
+	require.Equal(t, []query.Expression{query.Bind(1), query.Bind(nil)}, inWithNil.Values())
+
+	// nil is still refused in a slot that stays Expression-typed.
+	_, err = statement.WithWhere(query.And(query.Equal(userID, 1), nil))
 	requireQueryValidationError(t, err)
+
 	_, err = statement.WithWhere(query.In(otherID, query.Bind(1)))
 	requireQueryValidationError(t, err)
 
