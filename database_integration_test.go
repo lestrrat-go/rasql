@@ -225,7 +225,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	insert, err := query.NewInsert(
 		records.Ref(),
 		[]query.ColumnRef{recordID, recordActive, recordEmail, recordAmount},
-		[]query.Expression{query.Bind(third.ID), query.Bind(third.Active), query.Bind(third.Email), query.Bind(third.Amount)},
+		third.ID, third.Active, third.Email, third.Amount,
 	)
 	require.NoError(t, err)
 	insert, err = insert.WithReturning(recordID, recordActive, recordEmail, recordAmount)

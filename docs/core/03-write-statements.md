@@ -26,10 +26,11 @@ func Example_query_render_write() {
 	fmt.Println(ddl.SQL())
 
 	// query.NewInsert builds the statement; render.Insert turns it into SQL
-	// text and the arguments that go with it.
+	// text and the arguments that go with it. A plain Go value is bound
+	// automatically, so the row values need no Bind wrapper.
 	insert, err := query.NewInsert(accounts,
 		[]query.ColumnRef{id, email},
-		[]query.Expression{query.Bind(1), query.Bind("ada@example.com")},
+		1, "ada@example.com",
 	)
 	if err != nil {
 		fmt.Printf("failed to build the insert: %s\n", err)
@@ -44,12 +45,12 @@ func Example_query_render_write() {
 	fmt.Println(rendered.Args()...)
 
 	// An update is the same two steps. WithWhere keeps it off every row.
-	update, err := query.NewUpdate(accounts, query.Set(email, query.Bind("grace@example.com")))
+	update, err := query.NewUpdate(accounts, query.Set(email, "grace@example.com"))
 	if err != nil {
 		fmt.Printf("failed to build the update: %s\n", err)
 		return
 	}
-	update, err = update.WithWhere(query.Equal(id, query.Bind(1)))
+	update, err = update.WithWhere(query.Equal(id, 1))
 	if err != nil {
 		fmt.Printf("failed to add the predicate: %s\n", err)
 		return
@@ -79,16 +80,16 @@ Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is wh
 
 `NewUpdate` and `NewDelete` accept a missing predicate while a statement is being assembled, but rendering and execution reject that shape unless the intent is explicit. Call `statement.AllowAll()` and use the returned statement when every row should be changed. A predicate and `AllowAll` cannot be combined.
 
-`NewInsertRows` takes every row's values as one `[][]query.Expression` and renders them as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
+`NewInsertRows` takes every row's values as one `[][]any`, binding each plain Go value the same way `NewInsert` does, and renders the rows as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
 <!-- INCLUDE(examples/rasql_partial_update_example_test.go#partial_update) -->
 ```go
-statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email(), query.Bind("ada@example.com")))
+statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email(), "ada@example.com"))
 if err != nil {
 	fmt.Printf("failed to build update: %s\n", err)
 	return
 }
-statement, err = statement.WithWhere(query.LessThan(users.ID(), query.Bind(100)))
+statement, err = statement.WithWhere(query.LessThan(users.ID(), 100))
 if err != nil {
 	fmt.Printf("failed to filter update: %s\n", err)
 	return
@@ -158,7 +159,7 @@ func Example_rasql_returning() {
 
 	// id is assigned by the database and status by its column default, so both
 	// are named in the RETURNING clause alongside the column that was set.
-	statement, err := query.NewInsert(defaultUsers.Ref(), []query.ColumnRef{defaultUsers.Email()}, []query.Expression{query.Bind("ada@example.com")})
+	statement, err := query.NewInsert(defaultUsers.Ref(), []query.ColumnRef{defaultUsers.Email()}, "ada@example.com")
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return

@@ -60,7 +60,7 @@ func Example_rasql_delete() {
 
 	// Where takes any predicate built through the query package.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID(), query.Bind(2))).Exec(ctx, db)
+	result, err = rasql.DeleteFrom(users).Where(query.GreaterThan(users.ID(), 2)).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return

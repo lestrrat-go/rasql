@@ -32,10 +32,11 @@ func Example_query_render_write() {
 	fmt.Println(ddl.SQL())
 
 	// query.NewInsert builds the statement; render.Insert turns it into SQL
-	// text and the arguments that go with it.
+	// text and the arguments that go with it. A plain Go value is bound
+	// automatically, so the row values need no Bind wrapper.
 	insert, err := query.NewInsert(accounts,
 		[]query.ColumnRef{id, email},
-		[]query.Expression{query.Bind(1), query.Bind("ada@example.com")},
+		1, "ada@example.com",
 	)
 	if err != nil {
 		fmt.Printf("failed to build the insert: %s\n", err)
@@ -50,12 +51,12 @@ func Example_query_render_write() {
 	fmt.Println(rendered.Args()...)
 
 	// An update is the same two steps. WithWhere keeps it off every row.
-	update, err := query.NewUpdate(accounts, query.Set(email, query.Bind("grace@example.com")))
+	update, err := query.NewUpdate(accounts, query.Set(email, "grace@example.com"))
 	if err != nil {
 		fmt.Printf("failed to build the update: %s\n", err)
 		return
 	}
-	update, err = update.WithWhere(query.Equal(id, query.Bind(1)))
+	update, err = update.WithWhere(query.Equal(id, 1))
 	if err != nil {
 		fmt.Printf("failed to add the predicate: %s\n", err)
 		return

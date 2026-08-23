@@ -130,9 +130,11 @@ type Assignment struct {
 	value  Expression
 }
 
-// Set assigns value to column.
-func Set(column ColumnRef, value Expression) Assignment {
-	return Assignment{column: column, value: value}
+// Set assigns value to column. value may be a plain Go value, which is
+// bound, or an expression such as Excluded(column) or Lower(column), which
+// is used as it stands.
+func Set(column ColumnRef, value any) Assignment {
+	return Assignment{column: column, value: operand(value)}
 }
 
 // Column returns the assigned column.
@@ -159,8 +161,8 @@ func (Insert) writeStatement() {}
 
 // NewInsert creates a validated INSERT statement for one row. It is the one-row
 // form of NewInsertRows.
-func NewInsert(into TableRef, columns []ColumnRef, values []Expression) (Insert, error) {
-	return NewInsertRows(into, columns, [][]Expression{values})
+func NewInsert(into TableRef, columns []ColumnRef, values ...any) (Insert, error) {
+	return NewInsertRows(into, columns, [][]any{values})
 }
 
 // NewInsertRows creates a validated INSERT statement for one or more rows.
@@ -174,17 +176,17 @@ func NewInsert(into TableRef, columns []ColumnRef, values []Expression) (Insert,
 // rolls back the rows it already wrote, remain the caller's and the database's
 // responsibility: a non-transactional MySQL table keeps the earlier rows.
 // Wrap the call in a transaction when every row has to land or none of them.
-// Bound parameters are capped by the database. This insert costs R*C parameters
-// over R rows of C columns only when every row value is a single [Bind]; a row
-// value may be any Expression, and one that is not a single [Bind] costs
-// however many [Bind] values are nested inside it. See the Parameter limits
-// section of the package documentation for the caps and for how to stay under
-// them.
-func NewInsertRows(into TableRef, columns []ColumnRef, rows [][]Expression) (Insert, error) {
+// Bound parameters are capped by the database. This insert costs R*C
+// parameters over R rows of C columns only when every row value is a plain
+// Go value or a single [Bind]; a row value may also be any Expression, and
+// one that is not a plain value or a single [Bind] costs however many bound
+// values are nested inside it. See the Parameter limits section of the
+// package documentation for the caps and for how to stay under them.
+func NewInsertRows(into TableRef, columns []ColumnRef, rows [][]any) (Insert, error) {
 	statement := Insert{
 		into:    into,
 		columns: append([]ColumnRef(nil), columns...),
-		rows:    cloneRows(rows),
+		rows:    rowOperands(rows),
 	}
 	if err := statement.Validate(); err != nil {
 		return Insert{}, err
@@ -193,11 +195,11 @@ func NewInsertRows(into TableRef, columns []ColumnRef, rows [][]Expression) (Ins
 }
 
 // WithRows returns a copy of s with rows appended to the rows it already
-// inserts. Each row must supply one expression per column of s, and a
+// inserts. Each row must supply one value per column of s, and a
 // default-values insert accepts no rows at all.
-func (s Insert) WithRows(rows ...[]Expression) (Insert, error) {
+func (s Insert) WithRows(rows ...[]any) (Insert, error) {
 	copy := s.clone()
-	copy.rows = append(copy.rows, cloneRows(rows)...)
+	copy.rows = append(copy.rows, rowOperands(rows)...)
 	if err := copy.Validate(); err != nil {
 		return Insert{}, err
 	}
@@ -212,6 +214,19 @@ func cloneRows(rows [][]Expression) [][]Expression {
 		copy[i] = append([]Expression(nil), row...)
 	}
 	return copy
+}
+
+// rowOperands converts rows of plain Go values and expressions to rows of
+// expressions via operand, so a caller writes {1, "ada@example.com"} instead
+// of {Bind(1), Bind("ada@example.com")}. It always returns new slices, so a
+// caller's later write to rows or to one of its inner row slices cannot reach
+// inside a built statement.
+func rowOperands(rows [][]any) [][]Expression {
+	converted := make([][]Expression, len(rows))
+	for i, row := range rows {
+		converted[i] = operands(row)
+	}
+	return converted
 }
 
 // NewDefaultInsert creates a validated INSERT statement that uses the database

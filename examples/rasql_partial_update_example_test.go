@@ -43,12 +43,12 @@ func Example_rasql_partial_update() {
 
 	// SQL: UPDATE users SET email = ? WHERE users.id < ? (arguments: "ada@example.com", 100)
 	// BEGIN(partial_update)
-	statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email(), query.Bind("ada@example.com")))
+	statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email(), "ada@example.com"))
 	if err != nil {
 		fmt.Printf("failed to build update: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.LessThan(users.ID(), query.Bind(100)))
+	statement, err = statement.WithWhere(query.LessThan(users.ID(), 100))
 	if err != nil {
 		fmt.Printf("failed to filter update: %s\n", err)
 		return
