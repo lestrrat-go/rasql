@@ -48,21 +48,41 @@ func TestWriteStatementsReportReturning(t *testing.T) {
 		})
 	}
 
-	returningInsert, err := insert.WithReturning(query.Project(id), query.Project(email))
+	returningInsert, err := insert.WithReturning(id, email)
 	require.NoError(t, err)
-	require.Equal(t, []query.Projection{query.Project(id), query.Project(email)}, returningInsert.Returning())
+	require.Equal(t, []query.Projection{id, email}, returningInsert.Returning())
 
-	returningUpdate, err := update.WithReturning(query.Project(id))
+	returningUpdate, err := update.WithReturning(id)
 	require.NoError(t, err)
-	require.Equal(t, []query.Projection{query.Project(id)}, returningUpdate.Returning())
+	require.Equal(t, []query.Projection{id}, returningUpdate.Returning())
 
-	returningDelete, err := deleteStatement.WithReturning(query.Project(id))
+	returningDelete, err := deleteStatement.WithReturning(id)
 	require.NoError(t, err)
-	require.Equal(t, []query.Projection{query.Project(id)}, returningDelete.Returning())
+	require.Equal(t, []query.Projection{id}, returningDelete.Returning())
 
-	returningUpsert, err := upsert.WithReturning(query.Project(id))
+	returningUpsert, err := upsert.WithReturning(id)
 	require.NoError(t, err)
-	require.Equal(t, []query.Projection{query.Project(id)}, returningUpsert.Returning())
+	require.Equal(t, []query.Projection{id}, returningUpsert.Returning())
+}
+
+// TestInsertRejectsNilReturningProjection pins that a nil Projection element
+// in WithReturning reports a validation error naming its position, rather
+// than panicking when validation dereferences it.
+func TestInsertRejectsNilReturningProjection(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+
+	_, err = insert.WithReturning(nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "returning[0]")
+	require.ErrorContains(t, err, "must not be nil")
 }
 
 func TestWriteStatementsValidate(t *testing.T) {
@@ -75,7 +95,7 @@ func TestWriteStatementsValidate(t *testing.T) {
 
 	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	insert, err = insert.WithReturning(query.Project(id))
+	insert, err = insert.WithReturning(id)
 	require.NoError(t, err)
 	require.NoError(t, insert.Validate())
 
@@ -471,7 +491,7 @@ func TestWriteStatementsRejectSubqueries(t *testing.T) {
 	deleteStatement, err := query.NewDelete(users)
 	require.NoError(t, err)
 
-	ids, err := query.NewSelect(users, query.Project(id))
+	ids, err := query.NewSelect(users, id)
 	require.NoError(t, err)
 
 	tests := map[string]struct {

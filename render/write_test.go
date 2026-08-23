@@ -247,7 +247,7 @@ func TestQualifiedUpsertRendersDialectConflictSyntax(t *testing.T) {
 	require.NoError(t, err)
 	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(action, query.Excluded(action))})
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id), query.Project(action))
+	statement, err = statement.WithReturning(id, action)
 	require.NoError(t, err)
 	mysqlStatement, err := query.NewUpsert(insert, nil, []query.Assignment{query.Set(action, query.Excluded(action))})
 	require.NoError(t, err)
@@ -315,7 +315,7 @@ func TestReturningRequiresDialectCapability(t *testing.T) {
 	users, id, email := writeTable(t)
 	statement, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id))
+	statement, err = statement.WithReturning(id)
 	require.NoError(t, err)
 
 	rendered, err := render.Insert(dialect.PostgreSQL(), statement)
@@ -330,6 +330,23 @@ func TestReturningRequiresDialectCapability(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestReturningRendersBareColumnRefUnqualified pins the render/write.go
+// writeReturningProjection path: ColumnRef.ProjectedExpression returns the
+// receiver, so the type assertion there still succeeds for a bare column
+// passed to WithReturning with no query.Project wrapper, and RETURNING still
+// renders the unqualified column name.
+func TestReturningRendersBareColumnRefUnqualified(t *testing.T) {
+	users, id, email := writeTable(t)
+	statement, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(id)
+	require.NoError(t, err)
+
+	rendered, err := render.Insert(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(t, "INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2) RETURNING \"id\"", rendered.SQL())
+}
+
 func TestMultiRowInsertRendersReturning(t *testing.T) {
 	users, id, email := writeTable(t)
 	statement, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]query.Expression{
@@ -337,7 +354,7 @@ func TestMultiRowInsertRendersReturning(t *testing.T) {
 		{query.Bind(2), query.Bind("grace@example.com")},
 	})
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	statement, err = statement.WithReturning(id, email)
 	require.NoError(t, err)
 
 	rendered, err := render.Insert(dialect.PostgreSQL(), statement)

@@ -102,7 +102,7 @@ func TestDeleteReturningQuery(t *testing.T) {
 
 	sequence, err := dynamic.DeleteFrom(users).
 		WhereEqual(id, 42).
-		Returning(query.Project(id), query.Project(email)).
+		Returning(id, email).
 		Query(t.Context(), db)
 	rows := collectRows(t, sequence, err)
 	require.Len(t, rows, 1)
@@ -130,7 +130,7 @@ func TestDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
 
 	_, err = dynamic.DeleteFrom(users).
 		WhereEqual(id, 42).
-		Returning(query.Project(id)).
+		Returning(id).
 		Build(dialect.MySQL())
 	require.ErrorContains(t, err, "RETURNING is not supported")
 }

@@ -1,6 +1,10 @@
 package query
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
+)
 
 // WriteStatement is a validated statement that changes database rows.
 // Returning reports the projections of its RETURNING clause, and is empty when
@@ -557,12 +561,15 @@ func validateTargetColumn(column ColumnRef, table TableRef, path string) error {
 func validateProjections(projections []Projection, sources map[string]struct{}, path string) error {
 	for i, projection := range projections {
 		itemPath := fmt.Sprintf("%s[%d]", path, i)
-		if projection.alias != "" {
-			if err := validateAlias(projection.alias); err != nil {
+		if nilcheck.Is(projection) {
+			return validationError(itemPath, "must not be nil")
+		}
+		if alias := projection.ResultAlias(); alias != "" {
+			if err := validateAlias(alias); err != nil {
 				return validationError(itemPath+".alias", "%s", err)
 			}
 		}
-		if err := validateClauseExpression(projection.expression, sources, "a RETURNING projection", itemPath+".expression"); err != nil {
+		if err := validateClauseExpression(projection.ProjectedExpression(), sources, "a RETURNING projection", itemPath+".expression"); err != nil {
 			return err
 		}
 	}

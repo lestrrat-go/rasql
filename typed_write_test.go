@@ -396,7 +396,7 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 	require.NoError(t, err)
 	statement, err = statement.AllowAll()
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id))
+	statement, err = statement.WithReturning(id)
 	require.NoError(t, err)
 	mock.ExpectQuery("UPDATE \"users\" SET \"id\" = $1 RETURNING \"id\"").
 		WithArgs(int64(1)).
@@ -436,7 +436,7 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 	require.NoError(t, err)
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	statement, err = statement.WithReturning(id, email)
 	require.NoError(t, err)
 	mock.ExpectQuery("INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\"").
 		WithArgs("ada@example.com").
@@ -589,7 +589,7 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	require.NoError(t, err)
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	statement, err = statement.WithReturning(id, email)
 	require.NoError(t, err)
 	mock.ExpectQuery("INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\"").
 		WithArgs("ada@example.com").
@@ -626,7 +626,7 @@ func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 	require.NoError(t, err)
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	statement, err = statement.WithReturning(id, email)
 	require.NoError(t, err)
 	mock.ExpectQuery("INSERT INTO \"users\" (\"email\") VALUES ($1) RETURNING \"id\", \"email\"").
 		WithArgs("ada@example.com").
@@ -719,7 +719,7 @@ func deleteReturningStatement(t *testing.T) query.Delete {
 	require.NoError(t, err)
 	statement, err = statement.AllowAll()
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id))
+	statement, err = statement.WithReturning(id)
 	require.NoError(t, err)
 	return statement
 }

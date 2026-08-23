@@ -168,7 +168,7 @@ func TestGeneratedSelfJoinRendersAlias(t *testing.T) {
 	manager, err := users.As("manager")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users.Ref(), query.Project(users.ID()))
+	statement, err := query.NewSelect(users.Ref(), users.ID())
 	require.NoError(t, err)
 	statement, err = statement.WithJoin(rasql.InnerJoin(manager, query.Equal(users.ID(), manager.ID())))
 	require.NoError(t, err)

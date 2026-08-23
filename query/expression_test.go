@@ -39,7 +39,7 @@ func TestSubqueryKeepsItsStatement(t *testing.T) {
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 
 	subquery := query.Scalar(statement)
@@ -59,7 +59,7 @@ func TestMembershipReportsItsSubqueryForm(t *testing.T) {
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 
 	in := query.InSelect(userID, statement)

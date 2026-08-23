@@ -50,7 +50,7 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 
 | Method | Effect |
 | --- | --- |
-| `Project(projections…)` | Adds projections built with `query.Project`. |
+| `Project(projections…)` | Adds columns directly, and other expressions through `query.Project`. |
 | `Distinct()` | De-duplicates result rows. |
 | `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. |
 | `Where(expression)` | Adds a predicate from a `query` expression. |
@@ -503,7 +503,7 @@ func Example_rasql_subquery() {
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
 	// renders as its own SELECT.
-	domainUsers, err := query.NewSelect(users.Ref(), query.Project(users.ID()))
+	domainUsers, err := query.NewSelect(users.Ref(), users.ID())
 	if err != nil {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
@@ -538,7 +538,7 @@ func Example_rasql_subquery() {
 	// average of every order.
 	// SQL: SELECT orders.user_id, orders.amount FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.amount >= (SELECT AVG(all_orders.amount) FROM orders AS all_orders) ORDER BY orders.amount ASC (argument: "%@example.com")
 	rows, err := rasql.DecodeFrom[orderSummary](orders).
-		Project(query.Project(orderUserID).As("user_id"), query.Project(amount)).
+		Project(orderUserID.As("user_id"), amount).
 		Where(query.InSelect(orderUserID, domainUsers)).
 		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
 		Order(query.Asc(amount)).
@@ -734,7 +734,7 @@ func Example_rasql_group_by() {
 	// could not.
 	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
-		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
+		Project(status, query.Project(query.CountAll()).As("total")).
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Order(query.Asc(status)).
@@ -846,7 +846,7 @@ func Example_rasql_distinct() {
 	// which makes every row unique before DISTINCT runs.
 	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
 	rows, err := rasql.DecodeFrom[orderingUser](orders).
-		Project(query.Project(orderUserID).As("user_id")).
+		Project(orderUserID.As("user_id")).
 		Distinct().
 		Order(query.Asc(orderUserID)).
 		Query(ctx, db)
@@ -1012,7 +1012,7 @@ func Example_rasql_dynamic_projection() {
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
 		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orderUserID))).
-		Project(query.Project(users.ID()).As("user_id"), query.Project(users.Email())).
+		Project(users.ID().As("user_id"), users.Email()).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
 		Query(ctx, db)
@@ -1035,7 +1035,7 @@ func Example_rasql_dynamic_projection() {
 source: [examples/rasql_dynamic_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_dynamic_projection_example_test.go)
 <!-- END INCLUDE -->
 
-`Join` takes `rasql.InnerJoin` or `rasql.LeftJoin` with the join condition. The `query` versions take a `query.TableRef` for dynamic code. `Project` selects expressions rather than plain column names, and `As` renames one so it lines up with a field of the result type. Because the projection is explicit here, the result type only needs fields for the columns actually selected.
+`Join` takes `rasql.InnerJoin` or `rasql.LeftJoin` with the join condition. The `query` versions take a `query.TableRef` for dynamic code. `Project` takes the columns to select, and a column's `As` renames it so it lines up with a field of the result type. Because the projection is explicit here, the result type only needs fields for the columns actually selected.
 
 ## See the SQL without a database
 

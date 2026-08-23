@@ -295,7 +295,7 @@ func (r *renderer) writeReturning(projections []query.Projection) error {
 }
 
 func (r *renderer) writeReturningProjection(projection query.Projection) error {
-	column, ok := projection.Expression().(query.ColumnRef)
+	column, ok := projection.ProjectedExpression().(query.ColumnRef)
 	if !ok {
 		return r.writeProjection(projection)
 	}
@@ -304,10 +304,10 @@ func (r *renderer) writeReturningProjection(projection query.Projection) error {
 		return err
 	}
 	r.builder.WriteString(name)
-	if projection.Alias() == "" {
+	if projection.ResultAlias() == "" {
 		return nil
 	}
-	alias, err := r.quoteIdentifier(projection.Alias())
+	alias, err := r.quoteIdentifier(projection.ResultAlias())
 	if err != nil {
 		return err
 	}

@@ -1,31 +1,63 @@
 package query
 
-import "fmt"
+import (
+	"fmt"
 
-// Projection selects an expression, optionally with an alias.
-type Projection struct {
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
+)
+
+// Projection is one entry of a SELECT list or a RETURNING list: an expression
+// and the result name it is reported under. ColumnRef implements it, so a
+// column may be selected without a wrapper, and Project wraps any other
+// expression.
+//
+// The interface carries no unexported method, so code outside this package may
+// implement it. What such an implementation can express is still bounded:
+// Expression is sealed by its own unexported method, so the only expressions it
+// can return are ones this package built, and the alias it reports is checked
+// by the statement's validation and again by the dialect when the statement
+// renders.
+//
+// The methods are not named Expression and Alias. Order, Not, NullTest and
+// Membership already have an Expression() Expression method and would satisfy
+// the interface by accident, and TableRef.Alias names a table qualifier in the
+// FROM clause rather than a result name.
+type Projection interface {
+	// ProjectedExpression returns the expression the projection selects.
+	ProjectedExpression() Expression
+	// ResultAlias returns the result name, or an empty string when the
+	// projection is reported under whatever name the database picks for it.
+	ResultAlias() string
+}
+
+// ExpressionProjection projects an arbitrary expression, optionally under a
+// result name. Project builds it. A ColumnRef needs no wrapper, because it is a
+// Projection itself.
+type ExpressionProjection struct {
 	expression Expression
 	alias      string
 }
 
-// Project selects expression.
-func Project(expression Expression) Projection {
-	return Projection{expression: expression}
+// Project selects expression. Use it for what is not a plain column: an
+// aggregate, a function call, a bound value, or a scalar subquery. A ColumnRef
+// is already a Projection and is passed on its own.
+func Project(expression Expression) ExpressionProjection {
+	return ExpressionProjection{expression: expression}
 }
 
-// As returns a copy of p with alias as its result name.
-func (p Projection) As(alias string) Projection {
+// As returns a copy of p reported under alias.
+func (p ExpressionProjection) As(alias string) ExpressionProjection {
 	p.alias = alias
 	return p
 }
 
-// Expression returns the selected expression.
-func (p Projection) Expression() Expression {
+// ProjectedExpression returns the selected expression.
+func (p ExpressionProjection) ProjectedExpression() Expression {
 	return p.expression
 }
 
-// Alias returns the result alias, or an empty string when no alias is set.
-func (p Projection) Alias() string {
+// ResultAlias returns the result alias, or an empty string when no alias is set.
+func (p ExpressionProjection) ResultAlias() string {
 	return p.alias
 }
 
@@ -430,12 +462,15 @@ func (s Select) validateProjectionSet(sources map[string]struct{}, grouped bool)
 	)
 	for i, projection := range s.projections {
 		path := fmt.Sprintf("projections[%d]", i)
-		if projection.alias != "" {
-			if err := validateAlias(projection.alias); err != nil {
+		if nilcheck.Is(projection) {
+			return expressionUsage{}, validationError(path, "must not be nil")
+		}
+		if alias := projection.ResultAlias(); alias != "" {
+			if err := validateAlias(alias); err != nil {
 				return expressionUsage{}, validationError(path+".alias", "%s", err)
 			}
 		}
-		usage, err := validateExpression(projection.expression, projectionContext(sources), path+".expression")
+		usage, err := validateExpression(projection.ProjectedExpression(), projectionContext(sources), path+".expression")
 		if err != nil {
 			return expressionUsage{}, err
 		}

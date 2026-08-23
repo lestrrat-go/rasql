@@ -341,7 +341,7 @@ func TestDeleteReturningBuild(t *testing.T) {
 
 	statement, err := rasql.DeleteFrom(users).
 		WhereEqual(id, 42).
-		Returning(query.Project(id), query.Project(email)).
+		Returning(id, email).
 		Build(dbForBuild(t).Dialect())
 	require.NoError(t, err)
 	require.Equal(t, `DELETE FROM "users" WHERE ("users"."id" = $1) RETURNING "id", "email"`, statement.SQL())
@@ -372,7 +372,7 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 		rows, err := rasql.QueryDeleteAll[deleteUser](
 			t.Context(),
 			db,
-			rasql.DeleteFrom(users).WhereEqual(id, 42).Returning(query.Project(id), query.Project(email)),
+			rasql.DeleteFrom(users).WhereEqual(id, 42).Returning(id, email),
 		)
 		require.NoError(t, err)
 		require.Equal(t, []deleteUser{{ID: 42, Email: "ada@example.com"}}, rows)
@@ -401,7 +401,7 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 		user, err := rasql.QueryDeleteOne[deleteUser](
 			t.Context(),
 			db,
-			rasql.DeleteFrom(users).WhereEqual(id, 42).Returning(query.Project(id), query.Project(email)),
+			rasql.DeleteFrom(users).WhereEqual(id, 42).Returning(id, email),
 		)
 		require.NoError(t, err)
 		require.Equal(t, deleteUser{ID: 42, Email: "ada@example.com"}, user)
@@ -415,7 +415,7 @@ func TestDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
 
 	_, err = rasql.DeleteFrom(users).
 		WhereEqual(id, 42).
-		Returning(query.Project(id)).
+		Returning(id).
 		Build(dialect.MySQL())
 	require.ErrorContains(t, err, "RETURNING is not supported")
 }

@@ -147,7 +147,7 @@ func ambiguousSourceJoin(t *testing.T, from query.TableRef, joined query.TableRe
 	s, err := query.NewJoinedSelect(from,
 		[]query.Join{query.InnerJoin(joined, query.Equal(fromID, joinedID))},
 		nil,
-		query.Project(fromID),
+		fromID,
 	)
 	if err != nil {
 		return stmt.Statement{}, err

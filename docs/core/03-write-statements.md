@@ -171,7 +171,7 @@ func Example_rasql_returning() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	statement, err = statement.WithReturning(query.Project(defaultUsers.ID()), query.Project(defaultUsers.Email()), query.Project(defaultUsers.Status()))
+	statement, err = statement.WithReturning(defaultUsers.ID(), defaultUsers.Email(), defaultUsers.Status())
 	if err != nil {
 		fmt.Printf("failed to add RETURNING clause: %s\n", err)
 		return
@@ -202,7 +202,7 @@ A fluent delete uses the same dynamic and typed terminals:
 ```go
 builder := dynamic.DeleteFrom(users.Ref()).
 	WhereEqual(users.ID(), 42).
-	Returning(query.Project(users.ID()), query.Project(users.Email()))
+	Returning(users.ID(), users.Email())
 
 rows, err := builder.Query(ctx, db)
 ```
@@ -218,7 +218,7 @@ and `QueryWriteOne[T]`. Use one terminal per builder:
 ```go
 typed := rasql.DeleteFrom(users).
 	WhereEqual(users.ID(), 43).
-	Returning(query.Project(users.ID()), query.Project(users.Email()))
+	Returning(users.ID(), users.Email())
 
 deleted, err := rasql.QueryDeleteOne[UserRow](ctx, db, typed)
 ```

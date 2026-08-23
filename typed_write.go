@@ -157,9 +157,9 @@ func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
 	}
 	returned := make(map[string]struct{}, len(statement.Returning()))
 	for _, projection := range statement.Returning() {
-		name := projection.Alias()
+		name := projection.ResultAlias()
 		if name == "" {
-			column, ok := projection.Expression().(query.ColumnRef)
+			column, ok := projection.ProjectedExpression().(query.ColumnRef)
 			if !ok {
 				continue
 			}

@@ -1,6 +1,7 @@
 package render_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -113,7 +114,7 @@ func qualifiedJoinSelectStatement(t *testing.T) query.Select {
 	statement, err := query.NewJoinedSelect(events,
 		[]query.Join{query.InnerJoin(users, query.Equal(eventsUserID, usersID))},
 		nil,
-		query.Project(eventsID), query.Project(eventsAction),
+		eventsID, eventsAction,
 	)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.Equal(usersEmail, query.Bind("a@example.com")))
@@ -139,7 +140,7 @@ func TestSelectRendersAliasWithoutSchema(t *testing.T) {
 	id, err := aliased.Column("id")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(aliased, query.Project(id))
+	statement, err := query.NewSelect(aliased, id)
 	require.NoError(t, err)
 
 	rendered, err := render.Select(dialect.PostgreSQL(), statement)
@@ -166,7 +167,7 @@ func TestSelectRendersQualifiedTableInGroupedStatement(t *testing.T) {
 	require.NoError(t, err)
 
 	statement, err := query.NewGroupedSelect(events, []query.Expression{userID},
-		query.Project(userID),
+		userID,
 		query.Project(query.CountAll()),
 	)
 	require.NoError(t, err)
@@ -197,7 +198,7 @@ func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
 	require.NoError(t, err)
 	eventsUserID, err := events.Column("user_id")
 	require.NoError(t, err)
-	inner, err := query.NewSelect(events, query.Project(eventsUserID))
+	inner, err := query.NewSelect(events, eventsUserID)
 	require.NoError(t, err)
 
 	users, err := query.NewTableRef(schema.TableDef{
@@ -212,7 +213,7 @@ func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
 	usersID, err := users.Column("id")
 	require.NoError(t, err)
 
-	outer, err := query.NewSelect(users, query.Project(usersID))
+	outer, err := query.NewSelect(users, usersID)
 	require.NoError(t, err)
 	outer, err = outer.WithWhere(query.InSelect(usersID, inner))
 	require.NoError(t, err)
@@ -351,7 +352,7 @@ func distinctSelectStatement(t *testing.T) query.Select {
 	amount, err := orders.Column("amount")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID).As("user_id"))
+	statement, err := query.NewSelect(users, userID.As("user_id"))
 	require.NoError(t, err)
 	statement, err = statement.WithJoin(query.InnerJoin(orders, query.Equal(userID, orderUserID)))
 	require.NoError(t, err)
@@ -444,12 +445,12 @@ func TestSelectRendersDistinctSubquery(t *testing.T) {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
-	subquery, err := query.NewSelect(orders, query.Project(orderUserID))
+	subquery, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
 	subquery, err = subquery.WithDistinct()
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.And(
 		query.Equal(status, query.Bind("active")),
@@ -624,7 +625,7 @@ func groupedSelectStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 
 	statement, err := query.NewGroupedSelect(tasks, []query.Expression{status},
-		query.Project(status),
+		status,
 		query.Project(query.CountAll()).As("total"),
 	)
 	require.NoError(t, err)
@@ -686,6 +687,43 @@ func TestSelectRendersSubqueryInGroupedClauses(t *testing.T) {
 func TestSelectRejectsNilDialect(t *testing.T) {
 	_, err := render.Select(nil, selectStatement(t))
 	require.Error(t, err)
+}
+
+// upperCaseAliasProjection is a query.Projection implemented outside the
+// query package. It documents that the interface is deliberately open: code
+// downstream of query may implement Projection over an expression query
+// built, and render treats it exactly like query.ExpressionProjection.
+type upperCaseAliasProjection struct {
+	expression query.Expression
+	alias      string
+}
+
+func (p upperCaseAliasProjection) ProjectedExpression() query.Expression {
+	return p.expression
+}
+
+func (p upperCaseAliasProjection) ResultAlias() string {
+	return strings.ToUpper(p.alias)
+}
+
+func TestSelectRendersExternalProjectionImplementation(t *testing.T) {
+	users, err := query.NewTableRef(schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+
+	statement, err := query.NewSelect(users, upperCaseAliasProjection{expression: id, alias: "user_id"})
+	require.NoError(t, err)
+
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	require.NoError(t, err)
+	require.Equal(t, `SELECT "users"."id" AS "USER_ID" FROM "users"`, rendered.SQL())
 }
 
 func TestSelectRendersMembershipForBuiltInDialects(t *testing.T) {
@@ -817,12 +855,12 @@ func TestSelectRendersSubqueryPlaceholdersInOrder(t *testing.T) {
 	amount, err := orders.Column("amount")
 	require.NoError(t, err)
 
-	subquery, err := query.NewSelect(orders, query.Project(orderUserID))
+	subquery, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
 	subquery, err = subquery.WithWhere(query.GreaterThan(amount, query.Bind(2)))
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.And(
 		query.Equal(status, query.Bind(1)),
@@ -867,12 +905,12 @@ func TestSelectRejectsLimitedSubqueryInMembership(t *testing.T) {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
-	limited, err := query.NewSelect(orders, query.Project(orderUserID))
+	limited, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
 	limited, err = limited.WithLimit(1)
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.InSelect(userID, limited))
 	require.NoError(t, err)
@@ -890,7 +928,7 @@ func TestSelectRejectsLimitedSubqueryInMembership(t *testing.T) {
 		require.ErrorContains(t, err, "LIMIT")
 	})
 
-	scalarStatement, err := query.NewSelect(users, query.Project(userID))
+	scalarStatement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	scalarStatement, err = scalarStatement.WithWhere(query.GreaterThanOrEqual(userID, query.Scalar(limited)))
 	require.NoError(t, err)
@@ -942,7 +980,7 @@ func subqueryStatement(t *testing.T) query.Select {
 	projectOwnerID, err := projects.Column("owner_id")
 	require.NoError(t, err)
 
-	owned, err := query.NewSelect(projects, query.Project(projectID))
+	owned, err := query.NewSelect(projects, projectID)
 	require.NoError(t, err)
 	owned, err = owned.WithWhere(query.Equal(projectOwnerID, query.Bind(7)))
 	require.NoError(t, err)
@@ -954,7 +992,7 @@ func subqueryStatement(t *testing.T) query.Select {
 	average, err := query.NewSelect(allTasks, query.Project(query.Avg(allTasksPriority)))
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(tasks, query.Project(taskID), query.Project(taskTitle))
+	statement, err := query.NewSelect(tasks, taskID, taskTitle)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.And(
 		query.InSelect(taskProjectID, owned),
@@ -992,7 +1030,7 @@ func columnMembershipStatement(t *testing.T) query.Select {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	statement, err = statement.WithJoin(query.InnerJoin(orders, query.Equal(userID, orderUserID)))
 	require.NoError(t, err)
@@ -1020,7 +1058,7 @@ func membershipStatement(t *testing.T) query.Select {
 	email, err := users.Column("email")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(id), query.Project(email))
+	statement, err := query.NewSelect(users, id, email)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.And(
 		query.In(id, query.Bind(1), query.Bind(2), query.Bind(3)),
@@ -1062,7 +1100,7 @@ func selectStatement(t *testing.T) query.Select {
 	amount, err := orders.Column("amount")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID).As("user_id"))
+	statement, err := query.NewSelect(users, userID.As("user_id"))
 	require.NoError(t, err)
 	statement, err = statement.WithJoin(query.InnerJoin(orders, query.Equal(userID, orderUserID)))
 	require.NoError(t, err)

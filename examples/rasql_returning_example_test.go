@@ -41,7 +41,7 @@ func Example_rasql_returning() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	statement, err = statement.WithReturning(query.Project(defaultUsers.ID()), query.Project(defaultUsers.Email()), query.Project(defaultUsers.Status()))
+	statement, err = statement.WithReturning(defaultUsers.ID(), defaultUsers.Email(), defaultUsers.Status())
 	if err != nil {
 		fmt.Printf("failed to add RETURNING clause: %s\n", err)
 		return

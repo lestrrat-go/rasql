@@ -175,7 +175,7 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	highSpenders, err := query.NewSelect(orders.Ref(), query.Project(orderUserID))
+	highSpenders, err := query.NewSelect(orders.Ref(), orderUserID)
 	require.NoError(t, err)
 	highSpenders, err = highSpenders.WithWhere(query.GreaterThan(amount, query.Bind(50)))
 	require.NoError(t, err)
@@ -191,7 +191,7 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	require.NoError(t, err)
 
 	viaScalar, err := rasql.DecodeFrom[user](users).
-		Project(query.Project(userID), query.Project(userEmail)).
+		Project(userID, userEmail).
 		Join(rasql.InnerJoin(orders, query.Equal(userID, orderUserID))).
 		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
 		OrderAsc(userID).
@@ -268,7 +268,7 @@ func TestSQLiteTypedSelectScalarFunctionsFilterRows(t *testing.T) {
 		Score int64 `rasql:"score"`
 	}
 	decoded, err := rasql.DecodeFrom[scoreRow](users).
-		Project(query.Project(userID), query.Project(query.Coalesce(score, query.Bind(0))).As("score")).
+		Project(userID, query.Project(query.Coalesce(score, query.Bind(0))).As("score")).
 		OrderAsc(userID).
 		All(t.Context(), db)
 	require.NoError(t, err)
@@ -528,7 +528,7 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 		Total  int64 `rasql:"total"`
 	}
 	grouped, err := rasql.DecodeFrom[userEventCount](events).
-		Project(query.Project(userID), query.Project(query.CountAll()).As("total")).
+		Project(userID, query.Project(query.CountAll()).As("total")).
 		GroupBy(userID).
 		OrderAsc(userID).
 		All(t.Context(), db)
@@ -540,7 +540,7 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 
 	// A subquery naming the qualified table, both as the outer and inner
 	// statement.
-	prolific, err := query.NewSelect(queryEvents, query.Project(userID))
+	prolific, err := query.NewSelect(queryEvents, userID)
 	require.NoError(t, err)
 	prolific, err = prolific.WithGroupBy(userID)
 	require.NoError(t, err)
@@ -621,7 +621,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 
 	insert, err := query.NewInsert(queryUsers, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	insert, err = insert.WithReturning(query.Project(id), query.Project(email), query.Project(status))
+	insert, err = insert.WithReturning(id, email, status)
 	require.NoError(t, err)
 	inserted, err := rasql.QueryWriteOne[returningUser](t.Context(), db, insert)
 	require.NoError(t, err)
@@ -631,7 +631,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	update, err = update.WithWhere(query.Equal(id, query.Bind(inserted.ID)))
 	require.NoError(t, err)
-	update, err = update.WithReturning(query.Project(id), query.Project(email), query.Project(status))
+	update, err = update.WithReturning(id, email, status)
 	require.NoError(t, err)
 	updated, err := rasql.QueryWriteAll[returningUser](t.Context(), db, update)
 	require.NoError(t, err)
@@ -641,7 +641,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	deleteStatement, err = deleteStatement.WithWhere(query.Equal(id, query.Bind(inserted.ID)))
 	require.NoError(t, err)
-	deleteStatement, err = deleteStatement.WithReturning(query.Project(id))
+	deleteStatement, err = deleteStatement.WithReturning(id)
 	require.NoError(t, err)
 	type deletedRow struct {
 		ID int64 `rasql:"id"`

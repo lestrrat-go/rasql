@@ -161,7 +161,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		email, err := table.Column("email")
 		require.NoError(t, err)
 		grouped := render.SelectFrom(test.dialect, table).
-			Project(query.Project(email), query.Project(query.CountAll()).As("count")).
+			Project(email, query.Project(query.CountAll()).As("count")).
 			GroupBy(email)
 		statement, err := grouped.Build()
 		require.NoError(t, err)

@@ -52,7 +52,7 @@ func (b SelectBuilder) Select(columns ...string) SelectBuilder {
 		if err != nil {
 			return b.withError(err)
 		}
-		b.projections = append(b.projections, query.Project(column))
+		b.projections = append(b.projections, column)
 	}
 	return b
 }
