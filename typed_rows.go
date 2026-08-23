@@ -8,7 +8,7 @@ import (
 	"reflect"
 
 	"github.com/lestrrat-go/rasql/internal/rowvalue"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // scanTypedRows maps runtime result-column names to generated fields before
@@ -95,20 +95,20 @@ func scanTypedRowsStatic[T any](rows *sql.Rows) iter.Seq2[T, error] {
 
 // scanTypedRendered defers the query until iteration begins and maps each
 // result column to a generated row field at runtime.
-func scanTypedRendered[T any](ctx context.Context, db DB, stmt statement.Statement) iter.Seq2[T, error] {
-	return scanTypedRenderedWith(ctx, db, stmt, scanTypedRows[T])
+func scanTypedRendered[T any](ctx context.Context, db DB, s stmt.Statement) iter.Seq2[T, error] {
+	return scanTypedRenderedWith(ctx, db, s, scanTypedRows[T])
 }
 
 // scanTypedRenderedStatic defers the query until iteration begins and scans a
 // statically-known complete generated row projection directly into its fields.
-func scanTypedRenderedStatic[T any](ctx context.Context, db DB, stmt statement.Statement) iter.Seq2[T, error] {
-	return scanTypedRenderedWith(ctx, db, stmt, scanTypedRowsStatic[T])
+func scanTypedRenderedStatic[T any](ctx context.Context, db DB, s stmt.Statement) iter.Seq2[T, error] {
+	return scanTypedRenderedWith(ctx, db, s, scanTypedRowsStatic[T])
 }
 
-func scanTypedRenderedWith[T any](ctx context.Context, db DB, stmt statement.Statement, scan func(*sql.Rows) iter.Seq2[T, error]) iter.Seq2[T, error] {
+func scanTypedRenderedWith[T any](ctx context.Context, db DB, s stmt.Statement, scan func(*sql.Rows) iter.Seq2[T, error]) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
-		rows, err := db.QueryRendered(ctx, stmt)
+		rows, err := db.QueryRendered(ctx, s)
 		if err != nil {
 			yield(zero, err)
 			return

@@ -9,7 +9,7 @@ package sqltext_test
 // TestTextRejectsARuntimeStringWithoutConversion.
 //
 // Three call sites share this one test rather than being split across
-// statement and schema: statement.New, schema.Default and schema.Check all
+// stmt and schema: stmt.New, schema.Default and schema.Check all
 // take a sqltext.Text parameter, and one scratch module with one main.go
 // checks all three in a single "go build", which is cheaper than three
 // scratch modules making the same point three times.
@@ -23,14 +23,14 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
 
 // The positive half: an untyped string constant converts to sqltext.Text
 // implicitly, at every call site the barrier protects.
 var (
-	_ = statement.New("SELECT 1")
+	_ = stmt.New("SELECT 1")
 	_ = schema.Default("CURRENT_TIMESTAMP")
 	_ = schema.Check("balance >= 0")
 )
@@ -61,13 +61,13 @@ import (
 	"os"
 
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 func main() {
 	built := os.Getenv("BARRIER_TEST_SQL")
 
-	_ = statement.New(built)
+	_ = stmt.New(built)
 	_ = schema.Default(built)
 	_ = schema.Check(built)
 }
@@ -90,7 +90,7 @@ func main() {
 
 	require.Errorf(t, err, "a string variable must not compile against a sqltext.Text parameter without an explicit conversion, but the build succeeded:\n%s", output.String())
 	require.Contains(t, output.String(), "cannot use")
-	require.Contains(t, output.String(), "statement.New", "the statement.New call site must be named in the build failure")
+	require.Contains(t, output.String(), "stmt.New", "the stmt.New call site must be named in the build failure")
 	require.Contains(t, output.String(), "schema.Default", "the schema.Default call site must be named in the build failure")
 	require.Contains(t, output.String(), "schema.Check", "the schema.Check call site must be named in the build failure")
 }

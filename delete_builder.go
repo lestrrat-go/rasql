@@ -8,7 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // DeleteBuilder builds a DELETE statement through an immutable fluent API and
@@ -106,12 +106,12 @@ func (b DeleteBuilder) Returning(projections ...query.Projection) DeleteReturnin
 }
 
 // Build validates the statement and renders it for d without executing it.
-func (b DeleteBuilder) Build(d dialect.Dialect) (statement.Statement, error) {
-	stmt, err := b.statement()
+func (b DeleteBuilder) Build(d dialect.Dialect) (stmt.Statement, error) {
+	s, err := b.statement()
 	if err != nil {
-		return statement.Statement{}, err
+		return stmt.Statement{}, err
 	}
-	return render.Delete(d, stmt)
+	return render.Delete(d, s)
 }
 
 // Exec builds the statement and executes it.
@@ -119,11 +119,11 @@ func (b DeleteBuilder) Exec(ctx context.Context, db DB) (sql.Result, error) {
 	if err := db.valid(); err != nil {
 		return nil, err
 	}
-	stmt, err := b.statement()
+	s, err := b.statement()
 	if err != nil {
 		return nil, err
 	}
-	return Exec(ctx, db, stmt)
+	return Exec(ctx, db, s)
 }
 
 // Returning adds projections to an existing delete RETURNING builder.
@@ -140,48 +140,48 @@ func (b DeleteReturningBuilder) Returning(projections ...query.Projection) Delet
 }
 
 // Build validates and renders the delete with its RETURNING clause.
-func (b DeleteReturningBuilder) Build(d dialect.Dialect) (statement.Statement, error) {
-	stmt, err := b.statement()
+func (b DeleteReturningBuilder) Build(d dialect.Dialect) (stmt.Statement, error) {
+	s, err := b.statement()
 	if err != nil {
-		return statement.Statement{}, err
+		return stmt.Statement{}, err
 	}
-	return render.Delete(d, stmt)
+	return render.Delete(d, s)
 }
 
 // QueryDeleteAll runs a fluent delete with RETURNING and decodes every returned
 // row as T.
 func QueryDeleteAll[T any](ctx context.Context, db DB, b DeleteReturningBuilder) ([]T, error) {
-	stmt, err := b.statement()
+	s, err := b.statement()
 	if err != nil {
 		return nil, err
 	}
-	return QueryWriteAll[T](ctx, db, stmt)
+	return QueryWriteAll[T](ctx, db, s)
 }
 
 // QueryDeleteOne runs a fluent delete with RETURNING and decodes exactly one
 // returned row as T.
 func QueryDeleteOne[T any](ctx context.Context, db DB, b DeleteReturningBuilder) (T, error) {
 	var zero T
-	stmt, err := b.statement()
+	s, err := b.statement()
 	if err != nil {
 		return zero, err
 	}
-	return QueryWriteOne[T](ctx, db, stmt)
+	return QueryWriteOne[T](ctx, db, s)
 }
 
 func (b DeleteReturningBuilder) statement() (query.Delete, error) {
 	if b.err != nil {
 		return query.Delete{}, b.err
 	}
-	stmt, err := b.builder.statement()
+	s, err := b.builder.statement()
 	if err != nil {
 		return query.Delete{}, err
 	}
-	stmt, err = stmt.WithReturning(b.projections...)
+	s, err = s.WithReturning(b.projections...)
 	if err != nil {
 		return query.Delete{}, fmt.Errorf("rasql: build DELETE RETURNING: %w", err)
 	}
-	return stmt, nil
+	return s, nil
 }
 
 func (b DeleteReturningBuilder) withError(err error) DeleteReturningBuilder {
@@ -210,22 +210,22 @@ func (b DeleteBuilder) statement() (query.Delete, error) {
 	if !hasPredicate && !b.allowAll {
 		return query.Delete{}, fmt.Errorf("rasql: DELETE requires a WHERE predicate or an explicit AllowAll")
 	}
-	stmt, err := query.NewDelete(b.from)
+	s, err := query.NewDelete(b.from)
 	if err != nil {
 		return query.Delete{}, fmt.Errorf("rasql: build DELETE: %w", err)
 	}
 	if !hasPredicate {
-		stmt, err = stmt.AllowAll()
+		s, err = s.AllowAll()
 		if err != nil {
 			return query.Delete{}, fmt.Errorf("rasql: build DELETE: %w", err)
 		}
-		return stmt, nil
+		return s, nil
 	}
-	stmt, err = stmt.WithWhere(predicate)
+	s, err = s.WithWhere(predicate)
 	if err != nil {
 		return query.Delete{}, fmt.Errorf("rasql: build DELETE: %w", err)
 	}
-	return stmt, nil
+	return s, nil
 }
 
 func (b DeleteBuilder) withError(err error) DeleteBuilder {

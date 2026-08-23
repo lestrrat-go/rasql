@@ -8,7 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // SelectFrom starts a typed fluent SELECT builder for table.
@@ -209,9 +209,9 @@ func (b TypedSelectBuilder[T]) rowLimitHint() int {
 }
 
 // Build validates the statement and renders it for d without executing it.
-func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (statement.Statement, error) {
+func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (stmt.Statement, error) {
 	if b.err != nil {
-		return statement.Statement{}, b.err
+		return stmt.Statement{}, b.err
 	}
 	return b.builder.WithDialect(d).Build()
 }
@@ -225,14 +225,14 @@ func (b TypedSelectBuilder[T]) Query(ctx context.Context, db DB) (iter.Seq2[T, e
 	if err := db.valid(); err != nil {
 		return nil, err
 	}
-	stmt, err := b.Build(db.Dialect())
+	s, err := b.Build(db.Dialect())
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
 	if b.staticScan {
-		return scanTypedRenderedStatic[T](ctx, db, stmt), nil
+		return scanTypedRenderedStatic[T](ctx, db, s), nil
 	}
-	return scanTypedRendered[T](ctx, db, stmt), nil
+	return scanTypedRendered[T](ctx, db, s), nil
 }
 
 // All collects every row from Query.
@@ -257,7 +257,7 @@ func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) 
 	if b.err != nil {
 		return 0, b.err
 	}
-	stmt, err := b.builder.WithDialect(db.Dialect()).BuildCount()
+	s, err := b.builder.WithDialect(db.Dialect()).BuildCount()
 	if err != nil {
 		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
@@ -265,7 +265,7 @@ func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) 
 	// returns either way. It reads through the same static-scan path a
 	// generated row type takes, so the counted value never becomes an any this
 	// package owns.
-	counted, err := exactlyOne(scanTypedRenderedStatic[countRow](ctx, db, stmt))
+	counted, err := exactlyOne(scanTypedRenderedStatic[countRow](ctx, db, s))
 	if err != nil {
 		return 0, err
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,12 +54,12 @@ func TestClientHooksRunInOrderAndPreserveStatement(t *testing.T) {
 	}
 	db, err := rasql.New(database, dialect.PostgreSQL(), first, second)
 	require.NoError(t, err)
-	stmt := statement.New("INSERT INTO users (email) VALUES ($1)", "ada@example.com")
+	s := stmt.New("INSERT INTO users (email) VALUES ($1)", "ada@example.com")
 	mock.ExpectExec("INSERT INTO users (email) VALUES ($1)").
 		WithArgs("ada@example.com").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	_, err = db.ExecRendered(t.Context(), stmt)
+	_, err = db.ExecRendered(t.Context(), s)
 	require.NoError(t, err)
 	require.Equal(t, []string{"first before", "second before", "second after", "first after"}, events)
 }
@@ -83,12 +83,12 @@ func TestClientHooksObserveQuery(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	stmt := statement.New("SELECT id FROM users WHERE id = $1", 42)
+	s := stmt.New("SELECT id FROM users WHERE id = $1", 42)
 	mock.ExpectQuery("SELECT id FROM users WHERE id = $1").
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(42))
 
-	rows, err := db.QueryRendered(t.Context(), stmt)
+	rows, err := db.QueryRendered(t.Context(), s)
 	require.NoError(t, err)
 	require.NoError(t, rows.Close())
 	require.Equal(t, rasql.QueryOperation, observed.Kind())
@@ -113,9 +113,9 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		stmt := statement.New("DELETE FROM users")
+		s := stmt.New("DELETE FROM users")
 
-		_, err = db.ExecRendered(t.Context(), stmt)
+		_, err = db.ExecRendered(t.Context(), s)
 		require.ErrorIs(t, err, expected)
 		require.ErrorContains(t, err, "hook before exec")
 	})
@@ -137,12 +137,12 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		stmt := statement.New("DELETE FROM users WHERE id = ?", 42)
+		s := stmt.New("DELETE FROM users WHERE id = ?", 42)
 		mock.ExpectExec("DELETE FROM users WHERE id = ?").
 			WithArgs(42).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		_, err = db.ExecRendered(t.Context(), stmt)
+		_, err = db.ExecRendered(t.Context(), s)
 		require.ErrorIs(t, err, expected)
 		require.ErrorContains(t, err, "hook after exec")
 	})
@@ -181,8 +181,8 @@ func TestHooksRunInsideExplicitTransaction(t *testing.T) {
 	require.NoError(t, err)
 	tx, err = tx.WithHooks(hook)
 	require.NoError(t, err)
-	stmt := statement.New("UPDATE users SET email = ? WHERE id = ?", "grace@example.com", 42)
-	_, err = tx.ExecRendered(t.Context(), stmt)
+	s := stmt.New("UPDATE users SET email = ? WHERE id = ?", "grace@example.com", 42)
+	_, err = tx.ExecRendered(t.Context(), s)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 	require.Equal(t, []string{"before exec", "after exec"}, events)

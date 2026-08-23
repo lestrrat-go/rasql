@@ -18,7 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // Template is SQL text containing {{bind "name"}} actions, each optionally
@@ -279,24 +279,24 @@ func (c Compiled) QueryDef() QueryDef {
 }
 
 // Bind supplies all named values and returns a parameterized statement.
-func (c Compiled) Bind(values map[string]any) (statement.Statement, error) {
+func (c Compiled) Bind(values map[string]any) (stmt.Statement, error) {
 	if c.name == "" || strings.TrimSpace(c.sql) == "" {
-		return statement.Statement{}, fmt.Errorf("namedsql: invalid compiled template")
+		return stmt.Statement{}, fmt.Errorf("namedsql: invalid compiled template")
 	}
 	args := make([]any, len(c.parameters))
 	for index, name := range c.parameters {
 		value, ok := values[name]
 		if !ok {
-			return statement.Statement{}, fmt.Errorf("namedsql %q: missing value for %q", c.name, name)
+			return stmt.Statement{}, fmt.Errorf("namedsql %q: missing value for %q", c.name, name)
 		}
 		args[index] = value
 	}
 	for name := range values {
 		if !contains(c.uniqueNames, name) {
-			return statement.Statement{}, fmt.Errorf("namedsql %q: unused value %q", c.name, name)
+			return stmt.Statement{}, fmt.Errorf("namedsql %q: unused value %q", c.name, name)
 		}
 	}
-	return statement.New(sqltext.Text(c.sql), args...), nil
+	return stmt.New(sqltext.Text(c.sql), args...), nil
 }
 
 func renderTemplateParts(parts []templatePart, placeholders []string) string {

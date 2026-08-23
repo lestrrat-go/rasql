@@ -8,7 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // ErrUnsupportedIndexMethod is the sentinel wrapped by every
@@ -1154,35 +1154,35 @@ func (e *UnsupportedExclusionConstraintError) Unwrap() error {
 }
 
 // CreateTable renders a CREATE TABLE statement for table.
-func CreateTable(d dialect.Dialect, table schema.TableDef) (statement.Statement, error) {
+func CreateTable(d dialect.Dialect, table schema.TableDef) (stmt.Statement, error) {
 	if isNilDialect(d) {
-		return statement.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
+		return stmt.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := table.Validate(); err != nil {
-		return statement.Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid table: %w", err)}
+		return stmt.Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid table: %w", err)}
 	}
 	renderer := renderer{dialect: d}
 	if err := renderer.writeCreateTable(table); err != nil {
-		return statement.Statement{}, &Error{Dialect: d.Name(), Err: err}
+		return stmt.Statement{}, &Error{Dialect: d.Name(), Err: err}
 	}
-	return statement.New(sqltext.Text(renderer.builder.String())), nil
+	return stmt.New(sqltext.Text(renderer.builder.String())), nil
 }
 
 // CreateIndexes renders the CREATE INDEX statements for table.
-func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]statement.Statement, error) {
+func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]stmt.Statement, error) {
 	if isNilDialect(d) {
 		return nil, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := table.Validate(); err != nil {
 		return nil, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid table: %w", err)}
 	}
-	statements := make([]statement.Statement, len(table.Indexes))
+	statements := make([]stmt.Statement, len(table.Indexes))
 	for i, index := range table.Indexes {
 		renderer := renderer{dialect: d}
 		if err := renderer.writeCreateIndex(table, index); err != nil {
 			return nil, &Error{Dialect: d.Name(), Err: err}
 		}
-		statements[i] = statement.New(sqltext.Text(renderer.builder.String()))
+		statements[i] = stmt.New(sqltext.Text(renderer.builder.String()))
 	}
 	return statements, nil
 }

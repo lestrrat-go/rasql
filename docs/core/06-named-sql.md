@@ -2,7 +2,7 @@
 
 The `namedsql` package compiles SQL text written by hand into a statement carrying a dialect's placeholders, with the bound values in placeholder order. Use it when a query is fixed and reads better as SQL than as builder calls, or when it uses syntax the `query` package does not model.
 
-Compiling and binding a template belongs to the same layer as [the SQL builder](02-sql-builder.md): both end at a `statement.Statement`, and neither needs a generated table or a Go row type. The examples below create and seed their fixture rows with the typed helpers because that is the shortest setup, and `rasql.QueryRenderedAll[T]` decodes a result into a Go type when the selected names line up with its fields.
+Compiling and binding a template belongs to the same layer as [the SQL builder](02-sql-builder.md): both end at a `stmt.Statement`, and neither needs a generated table or a Go row type. The examples below create and seed their fixture rows with the typed helpers because that is the shortest setup, and `rasql.QueryRenderedAll[T]` decodes a result into a Go type when the selected names line up with its fields.
 
 The template language is deliberately tiny. Text is copied through as SQL, and the only action is a bind: `{{bind "name"}}` binds a value and generates an `any` parameter, and `{{bind "name" users.email}}` additionally names the column the value stands for, which lets `rasqlgen` emit that column's Go type instead. The `{{` delimiter is reserved, so SQL text and comments cannot contain that literal sequence. There is no way to write a template action that becomes SQL text, so a template cannot interpolate a value into the statement even by mistake.
 
@@ -58,13 +58,13 @@ The three steps are separate because each one has a different lifetime.
 
 1. `Parse` validates the text once, at startup or at generation time. It rejects any action other than a bind. The name is used in error messages.
 2. `Compile` turns each named bind into the dialect's placeholder syntax, so `{{bind "email"}}` becomes `$1` for PostgreSQL and `?` for MySQL or SQLite. A parsed template can be compiled for several dialects.
-3. `Bind` supplies the values. It requires each name exactly once, and returns a `statement.Statement` holding the SQL and its arguments in order.
+3. `Bind` supplies the values. It requires each name exactly once, and returns a `stmt.Statement` holding the SQL and its arguments in order.
 
 `Compiled.SQL()` returns the placeholder SQL for logging, and `Compiled.ParameterNames()` yields the names in first-use order, which is useful for checking a template against the values an application intends to pass.
 
 ## Execute a bound statement
 
-A bound statement is the same `statement.Statement` the builders produce, so the same `DB` runs it.
+A bound statement is the same `stmt.Statement` the builders produce, so the same `DB` runs it.
 
 <!-- INCLUDE(examples/rasql_static_template_example_test.go) -->
 ```go
@@ -252,7 +252,7 @@ func Example_rasql_typed_static_template() {
 source: [examples/rasql_typed_static_template_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_typed_static_template_example_test.go)
 <!-- END INCLUDE -->
 
-The template parser still permits only bind actions, `{{bind "name"}}` or `{{bind "name" table.column}}`, and `Compile` still chooses placeholders from the selected dialect. `QueryRendered` does not parse or validate the SQL grammar, table names, column names, or database-specific features. The target database checks those when it executes the statement. The fluent builder remains the place for dialect-neutral validation of its supported syntax. CTEs, window functions, recursive queries, vendor-specific clauses, and other syntax not modeled by the builder must use a static template, or a statement built directly with `statement.New`.
+The template parser still permits only bind actions, `{{bind "name"}}` or `{{bind "name" table.column}}`, and `Compile` still chooses placeholders from the selected dialect. `QueryRendered` does not parse or validate the SQL grammar, table names, column names, or database-specific features. The target database checks those when it executes the statement. The fluent builder remains the place for dialect-neutral validation of its supported syntax. CTEs, window functions, recursive queries, vendor-specific clauses, and other syntax not modeled by the builder must use a static template, or a statement built directly with `stmt.New`.
 
 [Read a row](05-dynamic.md#read-a-row) lists the three calls that read a value out of a `dynamic.Row`.
 

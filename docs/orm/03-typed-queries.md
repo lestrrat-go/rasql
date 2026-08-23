@@ -61,7 +61,7 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 | `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. |
 | `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.ColumnRef`. |
 | `Limit(n)`, `Offset(n)` | Pages the result. |
-| `Build(d)` | Renders `statement.Statement` for a `dialect.Dialect` without executing. |
+| `Build(d)` | Renders `stmt.Statement` for a `dialect.Dialect` without executing. |
 | `Query(ctx, db)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. |
 | `All(ctx, db)` | Executes and collects `[]T`; use it when the whole result fits in memory. |
 | `One(ctx, db)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. |
@@ -84,7 +84,7 @@ which is not valid SQL in any supported dialect. The same two rules hold on
 | `WhereEqual(column, value)` | Adds `column = value` for a `query.ColumnRef` of the target table. |
 | `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.ColumnRef` of the target table, one placeholder per value. |
 | `Returning(projections…)` | Adds a `RETURNING` clause and returns `DeleteReturningBuilder`; MySQL does not support it. |
-| `Build(d)` | Renders `statement.Statement` for a `dialect.Dialect` without executing. |
+| `Build(d)` | Renders `stmt.Statement` for a `dialect.Dialect` without executing. |
 | `Exec(ctx, db)` | Executes and returns `sql.Result`. |
 
 Pass the builder to `rasql.QueryDeleteAll[T]` or `rasql.QueryDeleteOne[T]` to
@@ -192,7 +192,7 @@ if errors.Is(err, rasql.ErrNoRows) {
 source: [examples/rasql_no_rows_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_no_rows_example_test.go)
 <!-- END INCLUDE -->
 
-`Build(d)` skips execution and returns the rendered `statement.Statement`, which carries the SQL text and its ordered arguments. It takes a `dialect.Dialect` rather than a `rasql.DB`, because rendering needs the dialect and nothing else. It is the direct way to log or test a statement.
+`Build(d)` skips execution and returns the rendered `stmt.Statement`, which carries the SQL text and its ordered arguments. It takes a `dialect.Dialect` rather than a `rasql.DB`, because rendering needs the dialect and nothing else. It is the direct way to log or test a statement.
 
 ## Filter, order, and page
 

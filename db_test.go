@@ -9,7 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,8 +141,8 @@ func TestTransactionWriteReachesTransactionAndCommits(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
-	stmt := statement.New("INSERT INTO users (id) VALUES (?)", 42)
-	result, err := tx.ExecRendered(t.Context(), stmt)
+	s := stmt.New("INSERT INTO users (id) VALUES (?)", 42)
+	result, err := tx.ExecRendered(t.Context(), s)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -372,12 +372,12 @@ func buildOnlyDB(t *testing.T) rasql.DB {
 	return db
 }
 
-func renderedSelectStatement(t *testing.T) statement.Statement {
+func renderedSelectStatement(t *testing.T) stmt.Statement {
 	t.Helper()
-	return statement.New("SELECT id FROM users")
+	return stmt.New("SELECT id FROM users")
 }
 
-func renderedDeleteStatement(t *testing.T) statement.Statement {
+func renderedDeleteStatement(t *testing.T) stmt.Statement {
 	t.Helper()
-	return statement.New("DELETE FROM users")
+	return stmt.New("DELETE FROM users")
 }

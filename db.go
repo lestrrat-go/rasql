@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // Handle is a database/sql handle that both reads rows and executes
@@ -207,16 +207,16 @@ func (db DB) Rollback() error {
 // The caller owns the returned rows: hand them to dynamic.Scan, which closes
 // them, or close them directly. A debug Handle that logs the statement instead
 // of running it may return nil rows, which dynamic.Scan reads as no result rows.
-func (db DB) QueryRendered(ctx context.Context, stmt statement.Statement) (*sql.Rows, error) {
-	if err := db.validStatement(stmt); err != nil {
+func (db DB) QueryRendered(ctx context.Context, s stmt.Statement) (*sql.Rows, error) {
+	if err := db.validStatement(s); err != nil {
 		return nil, err
 	}
-	operation := Operation{kind: QueryOperation, stmt: stmt}
+	operation := Operation{kind: QueryOperation, stmt: s}
 	entered, err := db.beforeHooks(ctx, operation)
 	if err != nil {
 		return nil, afterHooks(ctx, operation, entered, err)
 	}
-	rows, err := db.handle.QueryContext(ctx, stmt.SQL(), stmt.BoundArgs()...)
+	rows, err := db.handle.QueryContext(ctx, s.SQL(), s.BoundArgs()...)
 	if err != nil {
 		err = fmt.Errorf("rasql: execute query: %w", err)
 	}
@@ -232,16 +232,16 @@ func (db DB) QueryRendered(ctx context.Context, stmt statement.Statement) (*sql.
 }
 
 // ExecRendered executes a pre-rendered parameterized statement.
-func (db DB) ExecRendered(ctx context.Context, stmt statement.Statement) (sql.Result, error) {
-	if err := db.validStatement(stmt); err != nil {
+func (db DB) ExecRendered(ctx context.Context, s stmt.Statement) (sql.Result, error) {
+	if err := db.validStatement(s); err != nil {
 		return nil, err
 	}
-	operation := Operation{kind: ExecOperation, stmt: stmt}
+	operation := Operation{kind: ExecOperation, stmt: s}
 	entered, err := db.beforeHooks(ctx, operation)
 	if err != nil {
 		return nil, afterHooks(ctx, operation, entered, err)
 	}
-	result, err := db.handle.ExecContext(ctx, stmt.SQL(), stmt.BoundArgs()...)
+	result, err := db.handle.ExecContext(ctx, s.SQL(), s.BoundArgs()...)
 	if err != nil {
 		err = fmt.Errorf("rasql: execute statement: %w", err)
 	}
@@ -267,11 +267,11 @@ func (db DB) valid() error {
 	return nil
 }
 
-func (db DB) validStatement(stmt statement.Statement) error {
+func (db DB) validStatement(s stmt.Statement) error {
 	if err := db.valid(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(stmt.SQL()) == "" {
+	if strings.TrimSpace(s.SQL()) == "" {
 		return fmt.Errorf("rasql: statement SQL must not be empty")
 	}
 	return nil

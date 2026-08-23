@@ -9,7 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/sqltext"
-	"github.com/lestrrat-go/rasql/statement"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // Error describes a failure while rendering SQL.
@@ -29,25 +29,25 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-// Select renders stmt for d.
-func Select(d dialect.Dialect, stmt query.Select) (statement.Statement, error) {
-	return renderStatement(d, "SELECT", stmt.Validate, func(renderer *renderer) error {
-		return renderer.writeSelect(stmt)
+// Select renders s for d.
+func Select(d dialect.Dialect, s query.Select) (stmt.Statement, error) {
+	return renderStatement(d, "SELECT", s.Validate, func(renderer *renderer) error {
+		return renderer.writeSelect(s)
 	})
 }
 
-func renderStatement(d dialect.Dialect, operation string, validate func() error, write func(*renderer) error) (statement.Statement, error) {
+func renderStatement(d dialect.Dialect, operation string, validate func() error, write func(*renderer) error) (stmt.Statement, error) {
 	if isNilDialect(d) {
-		return statement.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
+		return stmt.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := validate(); err != nil {
-		return statement.Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid %s statement: %w", operation, err)}
+		return stmt.Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid %s statement: %w", operation, err)}
 	}
 	renderer := renderer{dialect: d}
 	if err := write(&renderer); err != nil {
-		return statement.Statement{}, &Error{Dialect: d.Name(), Err: err}
+		return stmt.Statement{}, &Error{Dialect: d.Name(), Err: err}
 	}
-	return statement.New(sqltext.Text(renderer.builder.String()), renderer.args...), nil
+	return stmt.New(sqltext.Text(renderer.builder.String()), renderer.args...), nil
 }
 
 type renderer struct {
@@ -66,12 +66,12 @@ type renderer struct {
 	inExcluded    bool
 }
 
-func (r *renderer) writeSelect(stmt query.Select) error {
+func (r *renderer) writeSelect(s query.Select) error {
 	r.builder.WriteString("SELECT ")
-	if stmt.Distinct() {
+	if s.Distinct() {
 		r.builder.WriteString("DISTINCT ")
 	}
-	for i, projection := range stmt.Projections() {
+	for i, projection := range s.Projections() {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
@@ -81,10 +81,10 @@ func (r *renderer) writeSelect(stmt query.Select) error {
 	}
 
 	r.builder.WriteString(" FROM ")
-	if err := r.writeTable(stmt.From()); err != nil {
+	if err := r.writeTable(s.From()); err != nil {
 		return err
 	}
-	for _, join := range stmt.Joins() {
+	for _, join := range s.Joins() {
 		r.builder.WriteByte(' ')
 		r.builder.WriteString(string(join.Type()))
 		r.builder.WriteString(" JOIN ")
@@ -96,14 +96,14 @@ func (r *renderer) writeSelect(stmt query.Select) error {
 			return err
 		}
 	}
-	if where := stmt.Where(); where != nil {
+	if where := s.Where(); where != nil {
 		r.builder.WriteString(" WHERE ")
 		if err := r.writeExpression(where); err != nil {
 			return err
 		}
 	}
 
-	groupBy := stmt.GroupBy()
+	groupBy := s.GroupBy()
 	if len(groupBy) > 0 {
 		r.builder.WriteString(" GROUP BY ")
 		for i, expression := range groupBy {
@@ -115,14 +115,14 @@ func (r *renderer) writeSelect(stmt query.Select) error {
 			}
 		}
 	}
-	if having := stmt.Having(); having != nil {
+	if having := s.Having(); having != nil {
 		r.builder.WriteString(" HAVING ")
 		if err := r.writeExpression(having); err != nil {
 			return err
 		}
 	}
 
-	orders := stmt.OrderBy()
+	orders := s.OrderBy()
 	if len(orders) > 0 {
 		r.builder.WriteString(" ORDER BY ")
 		for i, order := range orders {
@@ -137,13 +137,13 @@ func (r *renderer) writeSelect(stmt query.Select) error {
 			}
 		}
 	}
-	if limit, ok := stmt.Limit(); ok {
+	if limit, ok := s.Limit(); ok {
 		r.builder.WriteString(" LIMIT ")
 		if err := r.writeArgument(limit); err != nil {
 			return err
 		}
 	}
-	if offset, ok := stmt.Offset(); ok {
+	if offset, ok := s.Offset(); ok {
 		r.builder.WriteString(" OFFSET ")
 		if err := r.writeArgument(offset); err != nil {
 			return err
