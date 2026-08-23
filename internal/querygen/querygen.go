@@ -88,14 +88,18 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		stmtImport = stmtName + " " + stmtImport
 	}
 	if needsTime {
+		// The standard library goes in its own group above rasql's, which is
+		// what gofmt's convention and every hand-written file here do. gofmt
+		// sorts within a group but never splits one, so emitting the blank
+		// line is this generator's job rather than the formatter's.
 		source.WriteString("import (\n\t")
-		source.WriteString(stmtImport)
-		source.WriteString("\n\t")
 		if timeName != "time" {
 			source.WriteString(timeName)
 			source.WriteByte(' ')
 		}
-		source.WriteString("\"time\"\n)\n\n")
+		source.WriteString("\"time\"\n\n\t")
+		source.WriteString(stmtImport)
+		source.WriteString("\n)\n\n")
 	} else {
 		source.WriteString("import ")
 		source.WriteString(stmtImport)

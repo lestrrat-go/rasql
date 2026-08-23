@@ -104,8 +104,9 @@ wrote internal/store from 3 tables
 package store
 
 import (
-	"github.com/lestrrat-go/rasql/stmt"
 	"time"
+
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 func OverdueCount(on time.Time) stmt.Statement {
