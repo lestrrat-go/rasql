@@ -222,16 +222,6 @@ func TestTable(t *testing.T) {
 	})
 }
 
-func TestMustColumn(t *testing.T) {
-	table, err := rasql.TableOf[staffRow](staffDefinition())
-	require.NoError(t, err)
-
-	require.Equal(t, "id", rasql.MustColumn(table, "id").Name())
-	require.Panics(t, func() {
-		rasql.MustColumn(table, "missing")
-	})
-}
-
 func TestColumnOf(t *testing.T) {
 	t.Run("zero ColumnRef for a nil table", func(t *testing.T) {
 		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](nil, "id"))
@@ -256,13 +246,6 @@ func TestColumnOf(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf(table, "missing"))
-	})
-
-	t.Run("same ColumnRef as MustColumn on a valid table", func(t *testing.T) {
-		table, err := rasql.TableOf[staffRow](staffDefinition())
-		require.NoError(t, err)
-
-		require.Equal(t, rasql.MustColumn(table, "id"), rasql.ColumnOf(table, "id"))
 	})
 
 	t.Run("a zero generated-shape wrapper's accessor fails at Build, not a panic", func(t *testing.T) {
@@ -345,8 +328,9 @@ type nilTableEntryPoint[Wrapper rasql.Table[staffRow]] struct {
 }
 
 // nilTableEntryPoints returns every entry point that reaches a table through
-// rasql.Table[staffRow]. MustColumn is missing because it panics by contract;
-// requireNilTableRejected covers it separately.
+// rasql.Table[staffRow]. ColumnOf is missing because it returns the zero
+// ColumnRef rather than reporting an error; requireNilTableRejected covers it
+// separately.
 func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[Wrapper] {
 	return []nilTableEntryPoint[Wrapper]{
 		{
@@ -453,10 +437,8 @@ func requireNilTableRejected[Wrapper rasql.Table[staffRow]](t *testing.T, name s
 			})
 		}
 
-		t.Run("MustColumn", func(t *testing.T) {
-			require.PanicsWithValue(t, "rasql: table column: table must not be nil", func() {
-				rasql.MustColumn[staffRow](table, "id")
-			})
+		t.Run("ColumnOf", func(t *testing.T) {
+			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](table, "id"))
 		})
 	})
 }
@@ -488,7 +470,7 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 		require.NoError(t, err)
 		require.Equal(t, "alias", aliased.Ref().Qualifier())
 
-		require.Equal(t, "email", rasql.MustColumn[staffRow](table, "email").Name())
+		require.Equal(t, "email", rasql.ColumnOf[staffRow](table, "email").Name())
 
 		others := contractors(t)
 		othersID, err := others.Column("id")
@@ -553,7 +535,7 @@ func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
 	buggy := buggyStaffTable{Table: nil}
 
 	require.PanicsWithValue(t, staffTableBug, func() {
-		rasql.MustColumn[staffRow](buggy, "id")
+		rasql.ColumnOf[staffRow](buggy, "id")
 	})
 	require.PanicsWithValue(t, staffTableBug, func() {
 		_, _ = rasql.As[staffRow](buggy, "alias")
@@ -622,9 +604,9 @@ func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
 func TestTableGuardDoesNotRelabelAFabricatedNilDereference(t *testing.T) {
 	buggy := fabricatedRuntimeErrorStaffTable{}
 
-	t.Run("MustColumn", func(t *testing.T) {
+	t.Run("ColumnOf", func(t *testing.T) {
 		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
-			rasql.MustColumn[staffRow](buggy, "id")
+			rasql.ColumnOf[staffRow](buggy, "id")
 		})
 	})
 
