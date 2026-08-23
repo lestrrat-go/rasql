@@ -206,35 +206,10 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
-
-// MemberRow is one row of the members table. Nickname is nullable, so the
-// COALESCE below has a real NULL to fall back from.
-type MemberRow struct {
-	ID       int64   `rasql:"id"`
-	Email    string  `rasql:"email"`
-	Nickname *string `rasql:"nickname"`
-}
-
-// MembersTable has the shape rasqlgen emits: the typed table plus one
-// accessor method per column.
-type MembersTable struct {
-	rasql.Table[MemberRow]
-}
-
-func (t MembersTable) ID() query.ColumnRef       { return rasql.ColumnOf(t.Table, "id") }
-func (t MembersTable) Email() query.ColumnRef    { return rasql.ColumnOf(t.Table, "email") }
-func (t MembersTable) Nickname() query.ColumnRef { return rasql.ColumnOf(t.Table, "nickname") }
-
-var members = MembersTable{rasql.MustTableOf[MemberRow](schema.MustTableDef("members",
-	schema.Integer("id"),
-	schema.Text("email"),
-	schema.Text("nickname", schema.Nullable()),
-	schema.PrimaryKey("id"),
-))}
 
 func Example_rasql_scalar_function() {
 	// This example looks a member up by email regardless of case with LOWER,
@@ -256,6 +231,7 @@ func Example_rasql_scalar_function() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	members := store.Members()
 	// A local result type holds the decoded id and display name.
 	type memberName struct {
 		ID   int64
@@ -267,7 +243,7 @@ func Example_rasql_scalar_function() {
 	}
 
 	nick := "Ada"
-	for _, member := range []MemberRow{
+	for _, member := range []store.MembersRow{
 		{ID: 1, Email: "Ada@Example.com", Nickname: &nick},
 		{ID: 2, Email: "bob@example.com", Nickname: nil},
 	} {

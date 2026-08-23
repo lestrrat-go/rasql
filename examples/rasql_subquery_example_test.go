@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -14,10 +15,6 @@ import (
 func Example_rasql_subquery() {
 	// This example selects orders placed by a user reachable by email domain,
 	// then narrows to orders at or above the average total across every order.
-	// Both tables and their row types are declared in
-	// query_example_tables_test.go with the shape rasqlgen emits; an
-	// application that generated into package store would write store.Users()
-	// and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -34,6 +31,8 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
+	orders := store.Orders()
 	// A local result type projects only orders columns, so no join is needed:
 	// both subqueries below run as their own SELECT, never as part of this one.
 	type orderSummary struct {
@@ -50,7 +49,7 @@ func Example_rasql_subquery() {
 		return
 	}
 
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@other.example"},
@@ -60,7 +59,7 @@ func Example_rasql_subquery() {
 			return
 		}
 	}
-	for _, order := range []OrderRow{
+	for _, order := range []store.OrdersRow{
 		{ID: 1, UserID: 1, Total: 80},
 		{ID: 2, UserID: 2, Total: 20},
 		{ID: 3, UserID: 3, Total: 100},

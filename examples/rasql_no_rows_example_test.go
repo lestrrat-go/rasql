@@ -8,15 +8,13 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_no_rows() {
 	// This example queries an empty users table and shows how to branch on a
-	// missing row. users and UserRow are declared in
-	// query_example_tables_test.go with the shape rasqlgen emits; an
-	// application that generated into package store would write
-	// store.Users() and store.UsersRow instead.
+	// missing row.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -33,6 +31,7 @@ func Example_rasql_no_rows() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the users table, but never insert into it, so One matches no row.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)

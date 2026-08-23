@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 )
 
 // statementPrinter is a debug-only rasql.Handle. It follows the same
@@ -34,9 +35,8 @@ func Example_rasql_debug_query() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 
-	// users is declared in query_example_tables_test.go with the shape rasqlgen
-	// emits; an application would write store.Users() instead.
 	count := 0
 	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).Query(context.Background(), db)
 	if err != nil {

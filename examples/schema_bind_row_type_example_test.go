@@ -9,9 +9,9 @@ import (
 )
 
 // Example_schema_bind_row_type pairs a table description with the Go type of
-// one of its rows. The row type is declared inside the example so it stands on
-// its own; the other examples share the generated-shape descriptor in
-// query_example_tables_test.go instead.
+// one of its rows, which is the binding rasqlgen performs for a generated
+// table. The row type is written out here so the example stands on its own;
+// the other examples read the tables generated into examples/store.
 func Example_schema_bind_row_type() {
 	definition := schema.MustTableDef("users",
 		schema.Integer("id"),

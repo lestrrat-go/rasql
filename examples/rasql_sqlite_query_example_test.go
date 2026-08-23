@@ -7,14 +7,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_sqlite_query() {
 	// This example creates, inserts, and reads one generated row with SQLite.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -33,6 +31,13 @@ func Example_rasql_sqlite_query() {
 		return
 	}
 	// END(new_db)
+
+	// store.Users() returns the generated table value, which carries the row
+	// type and one accessor method per column.
+	// BEGIN(bind_table)
+	users := store.Users()
+	// END(bind_table)
+
 	// Create the schema described by the generated table descriptor.
 	// BEGIN(create_table)
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
@@ -40,13 +45,15 @@ func Example_rasql_sqlite_query() {
 		return
 	}
 	// END(create_table)
-	// Insert encodes UserRow's tagged fields as bound values.
-	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	// Insert encodes the row's fields as bound values, through the mapping
+	// method the generated row type carries.
+	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
-	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	// SelectFrom knows the row type from the generated table, so One returns a
+	// decoded store.UsersRow.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
 	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).One(ctx, db)
 	if err != nil {

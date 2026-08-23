@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -29,11 +30,12 @@ func Example_rasql_query_errors() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

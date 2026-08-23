@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -30,12 +31,13 @@ func Example_rasql_partial_update() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	for id, email := range map[int64]string{42: "old@example.com", 512: "keep@example.com"} {
-		if _, err := rasql.Insert(ctx, db, users, UserRow{ID: id, Email: email}); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: id, Email: email}); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}

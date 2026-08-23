@@ -7,15 +7,13 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_transaction() {
 	// This example writes two rows and reads them back inside one transaction,
 	// then reads them again through the plain db after it commits.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -32,6 +30,7 @@ func Example_rasql_transaction() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the table before any transaction starts.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
@@ -51,12 +50,12 @@ func Example_rasql_transaction() {
 	defer func() { _ = tx.Rollback() }()
 
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 1, "ada@example.com")
-	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, tx, users, store.UsersRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 2, "grace@example.com")
-	if _, err := rasql.Insert(ctx, tx, users, UserRow{ID: 2, Email: "grace@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, tx, users, store.UsersRow{ID: 2, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

@@ -7,16 +7,14 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_distinct() {
 	// This example lists the users who have placed at least one order,
-	// without repeating a user who placed more than one. orders and OrderRow
-	// are declared in query_example_tables_test.go with the shape rasqlgen
-	// emits; an application that generated into package store would write
-	// store.Orders() and store.OrdersRow instead.
+	// without repeating a user who placed more than one.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -33,6 +31,7 @@ func Example_rasql_distinct() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	orders := store.Orders()
 
 	// A local result type holds one row per distinct user id.
 	type orderingUser struct {
@@ -42,7 +41,7 @@ func Example_rasql_distinct() {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
-	for _, order := range []OrderRow{
+	for _, order := range []store.OrdersRow{
 		{ID: 1, UserID: 1},
 		{ID: 2, UserID: 2},
 		{ID: 3, UserID: 1},

@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/namedsql"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -34,11 +35,12 @@ func Example_rasql_typed_static_template() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},

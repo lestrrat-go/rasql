@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -31,11 +32,12 @@ func Example_rasql_nested_predicates() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 5, Email: "ada@example.com"},
 		{ID: 7, Email: "linus@other.org"},
 		{ID: 15, Email: "grace@example.com"},

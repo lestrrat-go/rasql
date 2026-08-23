@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -29,6 +30,7 @@ func Example_rasql_returning() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	defaultUsers := store.DefaultUsers()
 	if err := rasql.CreateTable(ctx, db, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
@@ -48,7 +50,7 @@ func Example_rasql_returning() {
 	}
 
 	// SQL: INSERT INTO default_users (email) VALUES (?) RETURNING id, email, status (argument: "ada@example.com")
-	user, err := rasql.QueryWriteOne[defaultUserRow](ctx, db, statement)
+	user, err := rasql.QueryWriteOne[store.DefaultUsersRow](ctx, db, statement)
 	if err != nil {
 		fmt.Printf("failed to query inserted user: %s\n", err)
 		return

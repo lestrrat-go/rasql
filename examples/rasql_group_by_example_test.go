@@ -7,31 +7,10 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
-
-// TaskRow is one row of the tasks table.
-type TaskRow struct {
-	ID     int64  `rasql:"id"`
-	Status string `rasql:"status"`
-}
-
-// TasksTable has the shape rasqlgen emits: the typed table plus one accessor
-// method per column.
-type TasksTable struct {
-	rasql.Table[TaskRow]
-}
-
-func (t TasksTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t TasksTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
-
-var tasks = TasksTable{rasql.MustTableOf[TaskRow](schema.MustTableDef("tasks",
-	schema.Integer("id"),
-	schema.Text("status"),
-	schema.PrimaryKey("id"),
-))}
 
 func Example_rasql_group_by() {
 	// This example counts tasks per status and keeps only the statuses with
@@ -52,6 +31,7 @@ func Example_rasql_group_by() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	tasks := store.Tasks()
 
 	// A local result type holds one row per group.
 	type statusCount struct {
@@ -62,7 +42,7 @@ func Example_rasql_group_by() {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
-	for _, task := range []TaskRow{
+	for _, task := range []store.TasksRow{
 		{ID: 1, Status: "open"},
 		{ID: 2, Status: "open"},
 		{ID: 3, Status: "done"},
