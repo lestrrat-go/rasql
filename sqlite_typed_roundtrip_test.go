@@ -600,7 +600,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	status := queryUsers.Column("status")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 
-	insert, err := query.NewInsert(queryUsers, []query.ColumnRef{email}, "ada@example.com")
+	insert, err := query.NewInsert(queryUsers, query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	insert, err = insert.WithReturning(id, email, status)
 	require.NoError(t, err)

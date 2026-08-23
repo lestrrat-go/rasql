@@ -405,7 +405,7 @@ func typedInsertMany[T any](table Table[T], values []T, defaultColumns map[strin
 				return query.Insert{}, fmt.Errorf("row %d: %w", i, err)
 			}
 		}
-		return query.NewDefaultInsert(reference)
+		return query.NewInsert(reference, query.Defaults())
 	}
 
 	rows := make([][]any, len(values))

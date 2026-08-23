@@ -124,15 +124,17 @@ func (s Upsert) clone() Upsert {
 	return copy
 }
 
-// Assignment sets column to expression in an UPDATE statement.
+// Assignment sets column to expression in an INSERT, an UPDATE, or an upsert
+// conflict-update list.
 type Assignment struct {
 	column ColumnRef
 	value  Expression
 }
 
 // Set assigns value to column. value may be a plain Go value, which is
-// bound, or an expression such as Excluded(column) or Lower(column), which
-// is used as it stands.
+// bound, or an expression such as Lower(column), which is used as it
+// stands. Excluded(column) is a valid value only in an upsert
+// conflict-update assignment.
 func Set(column ColumnRef, value any) Assignment {
 	return Assignment{column: column, value: operand(value)}
 }
@@ -147,6 +149,8 @@ func (a Assignment) Value() Expression {
 	return a.value
 }
 
+func (Assignment) insertValues() {}
+
 // Insert is an immutable INSERT statement. It inserts one or more rows, or the
 // database defaults for every column.
 type Insert struct {
@@ -159,10 +163,64 @@ type Insert struct {
 
 func (Insert) writeStatement() {}
 
-// NewInsert creates a validated INSERT statement for one row. It is the one-row
-// form of NewInsertRows.
-func NewInsert(into TableRef, columns []ColumnRef, values ...any) (Insert, error) {
-	return NewInsertRows(into, columns, [][]any{values})
+// InsertValues is what NewInsert accepts for the row it writes: an Assignment
+// built by Set, which names one column, or Defaults(), which asks the database
+// for every column's default. Only this package implements it.
+type InsertValues interface {
+	insertValues()
+}
+
+// defaultValuesMarker is the Defaults() argument. It carries no data; its only
+// job is to be distinguishable from an Assignment in NewInsert's argument list.
+type defaultValuesMarker struct{}
+
+func (defaultValuesMarker) insertValues() {}
+
+// Defaults asks NewInsert for a statement that writes the database default for
+// every column of the target table, which renders as DEFAULT VALUES on a
+// dialect that has dialect.CapabilityDefaultValues. It is the whole argument
+// list: a statement either names its columns with Set or takes every default,
+// never both.
+func Defaults() InsertValues {
+	return defaultValuesMarker{}
+}
+
+// NewInsert creates a validated INSERT statement for one row. Each value is
+// either an assignment built by Set, pairing a column with what is written to
+// it exactly as NewUpdate's assignments do, or Defaults(), which writes the
+// database default for every column of the target table.
+//
+// Set binds a plain Go value and uses an expression as it stands. The rendered
+// column list follows the argument order: the first assignment becomes the
+// first column of INSERT INTO t (...), and its value the first item of the
+// VALUES group. Validation describes the statement that was built rather than
+// the arguments that built it, so a problem with the second assignment is
+// reported at columns[1] or at rows[0].values[1].
+//
+// Defaults() must stand alone, since a statement either names its columns or
+// takes every default. A call with no values at all is an error.
+// NewInsertRows supplies several rows against one column list.
+func NewInsert(into TableRef, values ...InsertValues) (Insert, error) {
+	if len(values) == 0 {
+		return Insert{}, validationError("values", "must not be empty; Defaults() writes the database default for every column")
+	}
+	columns := make([]ColumnRef, 0, len(values))
+	row := make([]Expression, 0, len(values))
+	for i, value := range values {
+		switch value := value.(type) {
+		case Assignment:
+			columns = append(columns, value.column)
+			row = append(row, value.value)
+		case defaultValuesMarker:
+			if len(values) > 1 {
+				return Insert{}, validationError(fmt.Sprintf("values[%d]", i), "Defaults() must be the only argument: an INSERT either names its columns with Set or writes the database default for every column")
+			}
+			return validatedInsert(Insert{into: into, defaultValues: true})
+		default:
+			return Insert{}, validationError(fmt.Sprintf("values[%d]", i), "must be a Set assignment or Defaults()")
+		}
+	}
+	return validatedInsert(Insert{into: into, columns: columns, rows: [][]Expression{row}})
 }
 
 // NewInsertRows creates a validated INSERT statement for one or more rows.
@@ -170,6 +228,10 @@ func NewInsert(into TableRef, columns []ColumnRef, values ...any) (Insert, error
 // column, in the order of columns, and each expression renders in that column's
 // position. Validation reports an error for an empty rows slice, because
 // VALUES with no row is not valid SQL in any supported dialect.
+//
+// It keeps a separate column list rather than taking assignments the way
+// NewInsert does, because an INSERT names its columns once and supplies every
+// row against that one list.
 //
 // The rows render as a single statement, but that on its own does not make the
 // insert atomic. Transaction scope, and whether a statement that fails partway
@@ -188,6 +250,12 @@ func NewInsertRows(into TableRef, columns []ColumnRef, rows [][]any) (Insert, er
 		columns: append([]ColumnRef(nil), columns...),
 		rows:    rowOperands(rows),
 	}
+	return validatedInsert(statement)
+}
+
+// validatedInsert validates statement and returns it, or the zero Insert and
+// the validation error.
+func validatedInsert(statement Insert) (Insert, error) {
 	if err := statement.Validate(); err != nil {
 		return Insert{}, err
 	}
@@ -227,16 +295,6 @@ func rowOperands(rows [][]any) [][]Expression {
 		converted[i] = operands(row)
 	}
 	return converted
-}
-
-// NewDefaultInsert creates a validated INSERT statement that uses the database
-// defaults for every column.
-func NewDefaultInsert(into TableRef) (Insert, error) {
-	statement := Insert{into: into, defaultValues: true}
-	if err := statement.Validate(); err != nil {
-		return Insert{}, err
-	}
-	return statement, nil
 }
 
 // WithReturning returns a copy of s with returning projections.

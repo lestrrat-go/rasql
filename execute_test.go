@@ -400,7 +400,7 @@ func TestDBExecExecutesParameterizedInsert(t *testing.T) {
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
-	statement, err := query.NewInsert(users, []query.ColumnRef{id, email}, 42, "ada@example.com")
+	statement, err := query.NewInsert(users, query.Set(id, 42), query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
 		WithArgs(42, "ada@example.com").
@@ -516,7 +516,7 @@ func TestDBExecStillAcceptsStatementWithoutReturning(t *testing.T) {
 
 	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	statement, err := query.NewInsert(usersWriteTable(t), []query.ColumnRef{usersEmailColumn(t)}, "ada@example.com")
+	statement, err := query.NewInsert(usersWriteTable(t), query.Set(usersEmailColumn(t), "ada@example.com"))
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES ($1)").
 		WithArgs("ada@example.com").
@@ -654,7 +654,7 @@ func insertReturningStatement(t *testing.T) query.Insert {
 	users := usersWriteTable(t)
 	id := users.Column("id")
 	email := users.Column("email")
-	statement, err := query.NewInsert(users, []query.ColumnRef{email}, "ada@example.com")
+	statement, err := query.NewInsert(users, query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(id, email)
 	require.NoError(t, err)
@@ -667,7 +667,7 @@ func insertStatement(t *testing.T) query.Insert {
 	t.Helper()
 	users := usersWriteTable(t)
 	email := users.Column("email")
-	statement, err := query.NewInsert(users, []query.ColumnRef{email}, "ada@example.com")
+	statement, err := query.NewInsert(users, query.Set(email, "ada@example.com"))
 	require.NoError(t, err)
 	return statement
 }

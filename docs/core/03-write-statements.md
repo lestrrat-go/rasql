@@ -26,11 +26,12 @@ func Example_query_render_write() {
 	fmt.Println(ddl.SQL())
 
 	// query.NewInsert builds the statement; render.Insert turns it into SQL
-	// text and the arguments that go with it. A plain Go value is bound
-	// automatically, so the row values need no Bind wrapper.
+	// text and the arguments that go with it. Each query.Set pairs a column
+	// with the value written to it, so the two cannot fall out of step, and a
+	// plain Go value is bound without a Bind wrapper.
 	insert, err := query.NewInsert(accounts,
-		[]query.ColumnRef{id, email},
-		1, "ada@example.com",
+		query.Set(id, 1),
+		query.Set(email, "ada@example.com"),
 	)
 	if err != nil {
 		fmt.Printf("failed to build the insert: %s\n", err)
@@ -80,7 +81,9 @@ Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is wh
 
 `NewUpdate` and `NewDelete` accept a missing predicate while a statement is being assembled, but rendering and execution reject that shape unless the intent is explicit. Call `statement.AllowAll()` and use the returned statement when every row should be changed. A predicate and `AllowAll` cannot be combined.
 
-`NewInsertRows` takes every row's values as one `[][]any`, binding each plain Go value the same way `NewInsert` does, and renders the rows as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
+`NewInsert` pairs each column with its value through `query.Set`, the same call `NewUpdate` takes, so the two cannot fall out of step. The rendered column list follows the order the assignments were given in. Passing `query.Defaults()` on its own writes the database default for every column instead. `NewInsertRows` keeps a separate column list because an `INSERT` names its columns once and supplies every row against that one list.
+
+`NewInsertRows` names its columns once, takes every row's values as one `[][]any`, binds each plain Go value the way `Set` does, and renders the rows as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
 <!-- INCLUDE(examples/rasql_partial_update_example_test.go#partial_update) -->
 ```go
@@ -159,7 +162,7 @@ func Example_rasql_returning() {
 
 	// id is assigned by the database and status by its column default, so both
 	// are named in the RETURNING clause alongside the column that was set.
-	statement, err := query.NewInsert(defaultUsers.Ref(), []query.ColumnRef{defaultUsers.Email()}, "ada@example.com")
+	statement, err := query.NewInsert(defaultUsers.Ref(), query.Set(defaultUsers.Email(), "ada@example.com"))
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
