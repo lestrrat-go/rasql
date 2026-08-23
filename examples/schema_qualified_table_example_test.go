@@ -7,15 +7,26 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// eventRow maps the qualified "audit.events" table this example queries.
-type eventRow struct {
+// EventRow maps the qualified "audit.events" table this example queries.
+type EventRow struct {
 	ID     int64  `rasql:"id"`
 	Action string `rasql:"action"`
 }
+
+// EventsTable has the shape rasqlgen emits: the typed table plus one accessor
+// method per column. The descriptor itself stays inside the example below,
+// because how the table is qualified is what this example teaches.
+type EventsTable struct {
+	rasql.Table[EventRow]
+}
+
+func (t EventsTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
+func (t EventsTable) Action() query.ColumnRef { return rasql.ColumnOf(t.Table, "action") }
 
 func Example_schema_qualified_table() {
 	// This example creates and queries a table through a schema-qualified
@@ -47,12 +58,12 @@ func Example_schema_qualified_table() {
 	}
 
 	// InSchema qualifies the table without changing how any other option works.
-	events := rasql.MustTableOf[eventRow](schema.MustTableDef("events",
+	events := EventsTable{rasql.MustTableOf[EventRow](schema.MustTableDef("events",
 		schema.InSchema("audit"),
 		schema.Integer("id"),
 		schema.Text("action"),
 		schema.PrimaryKey("id"),
-	))
+	))}
 
 	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
 	if err := rasql.CreateTable(ctx, db, events); err != nil {
@@ -61,13 +72,13 @@ func Example_schema_qualified_table() {
 	}
 
 	// SQL: INSERT INTO audit.events (id, action) VALUES (?, ?) (arguments: 1, "created")
-	if _, err := rasql.Insert(ctx, db, events, eventRow{ID: 1, Action: "created"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, events, EventRow{ID: 1, Action: "created"}); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
 		return
 	}
 
 	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
-	event, err := rasql.SelectFrom(events).WhereEqual(events.Column("id"), int64(1)).One(ctx, db)
+	event, err := rasql.SelectFrom(events).WhereEqual(events.ID(), int64(1)).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)
 		return

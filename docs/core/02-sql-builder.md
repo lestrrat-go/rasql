@@ -210,6 +210,31 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// MemberRow is one row of the members table. Nickname is nullable, so the
+// COALESCE below has a real NULL to fall back from.
+type MemberRow struct {
+	ID       int64   `rasql:"id"`
+	Email    string  `rasql:"email"`
+	Nickname *string `rasql:"nickname"`
+}
+
+// MembersTable has the shape rasqlgen emits: the typed table plus one
+// accessor method per column.
+type MembersTable struct {
+	rasql.Table[MemberRow]
+}
+
+func (t MembersTable) ID() query.ColumnRef       { return rasql.ColumnOf(t.Table, "id") }
+func (t MembersTable) Email() query.ColumnRef    { return rasql.ColumnOf(t.Table, "email") }
+func (t MembersTable) Nickname() query.ColumnRef { return rasql.ColumnOf(t.Table, "nickname") }
+
+var members = MembersTable{rasql.MustTableOf[MemberRow](schema.MustTableDef("members",
+	schema.Integer("id"),
+	schema.Text("email"),
+	schema.Text("nickname", schema.Nullable()),
+	schema.PrimaryKey("id"),
+))}
+
 func Example_rasql_scalar_function() {
 	// This example looks a member up by email regardless of case with LOWER,
 	// then reads every member's display name, falling back to their email
@@ -230,38 +255,18 @@ func Example_rasql_scalar_function() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	// A typed descriptor makes members usable with rasql.Insert. Nickname is
-	// nullable, so COALESCE below has a real NULL to fall back from.
-	type memberRow struct {
-		ID       int     `rasql:"id"`
-		Email    string  `rasql:"email"`
-		Nickname *string `rasql:"nickname"`
-	}
 	// A local result type holds the decoded id and display name.
 	type memberName struct {
 		ID   int64
 		Name string
 	}
-	members := rasql.MustTableOf[memberRow](schema.MustTableDef("members",
-		schema.Integer("id"),
-		schema.Text("email"),
-		schema.Text("nickname", schema.Nullable()),
-		schema.PrimaryKey("id"),
-	))
 	if err := rasql.CreateTable(ctx, db, members); err != nil {
 		fmt.Printf("failed to create members table: %s\n", err)
 		return
 	}
 
-	// members has no generated column accessors, so its columns are looked up
-	// by name. That lookup validates them against the descriptor as the query
-	// is assembled.
-	id := members.Column("id")
-	email := members.Column("email")
-	nickname := members.Column("nickname")
-
 	nick := "Ada"
-	for _, member := range []memberRow{
+	for _, member := range []MemberRow{
 		{ID: 1, Email: "Ada@Example.com", Nickname: &nick},
 		{ID: 2, Email: "bob@example.com", Nickname: nil},
 	} {
@@ -275,8 +280,8 @@ func Example_rasql_scalar_function() {
 	// caller would type, regardless of how the stored value was cased.
 	// SQL: SELECT members.id, COALESCE(members.nickname, members.email) AS name FROM members WHERE LOWER(members.email) = ? (argument: "ada@example.com")
 	byEmail, err := rasql.DecodeFrom[memberName](members).
-		Project(id, query.Coalesce(nickname, email).As("name")).
-		Where(query.Equal(query.Lower(email), "ada@example.com")).
+		Project(members.ID(), query.Coalesce(members.Nickname(), members.Email()).As("name")).
+		Where(query.Equal(query.Lower(members.Email()), "ada@example.com")).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query member by email: %s\n", err)
@@ -294,8 +299,8 @@ func Example_rasql_scalar_function() {
 	// back to the email once nickname is NULL.
 	// SQL: SELECT members.id, COALESCE(members.nickname, members.email) AS name FROM members ORDER BY members.id ASC
 	names, err := rasql.DecodeFrom[memberName](members).
-		Project(id, query.Coalesce(nickname, email).As("name")).
-		OrderAsc(id).
+		Project(members.ID(), query.Coalesce(members.Nickname(), members.Email()).As("name")).
+		OrderAsc(members.ID()).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query member names: %s\n", err)

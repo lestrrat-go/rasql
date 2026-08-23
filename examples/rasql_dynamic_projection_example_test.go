@@ -8,15 +8,15 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_dynamic_projection() {
 	// This example joins users and orders, then reads an ad hoc result shape.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
+	// Both tables and their row types are declared in
+	// query_example_tables_test.go with the shape rasqlgen emits; an
+	// application that generated into package store would write store.Users()
+	// and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -33,23 +33,11 @@ func Example_rasql_dynamic_projection() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	// A typed descriptor makes orders usable with rasql.Insert as well.
-	type orderRow struct {
-		ID     int `rasql:"id"`
-		UserID int `rasql:"user_id"`
-		Total  int `rasql:"total"`
-	}
 	// A local result type makes the custom projection as easy to read as a table row.
 	type orderSummary struct {
 		UserID int64
 		Email  string
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("user_id"),
-		schema.Integer("total"),
-		schema.PrimaryKey("id"),
-	))
 	// Create both descriptors before querying their joined rows.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
@@ -60,16 +48,12 @@ func Example_rasql_dynamic_projection() {
 		return
 	}
 
-	// orders has no generated column accessors, so its columns are looked up by name.
-	// That lookup validates them against the descriptor as the query is assembled.
-	orderUserID := orders.Column("user_id")
-	total := orders.Column("total")
 	// Populate both tables through the typed rasql API.
 	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	for _, order := range []orderRow{
+	for _, order := range []OrderRow{
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {
@@ -82,10 +66,10 @@ func Example_rasql_dynamic_projection() {
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
-		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orderUserID))).
+		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orders.UserID()))).
 		Project(users.ID().As("user_id"), users.Email()).
-		Where(query.GreaterThan(total, 20)).
-		Order(query.Desc(total)).
+		Where(query.GreaterThan(orders.Total(), 20)).
+		Order(query.Desc(orders.Total())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to build order totals query: %s\n", err)

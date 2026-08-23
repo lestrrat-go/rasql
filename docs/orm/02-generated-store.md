@@ -200,6 +200,14 @@ column := users.Column("emial")
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->
 
+`Column` is an escape hatch rather than a second way to write a query. Reach
+for it when the name arrives as data, and reach for the accessor everywhere
+else: the two build the same `query.ColumnRef`, so writing the string where an
+accessor exists costs the compiler's check and buys nothing back. That is why
+the rest of these pages name every column through an accessor, and why a table
+written by hand is worth giving the same wrapper and the same accessor methods
+`rasqlgen` would emit for it.
+
 The generator fails rather than emitting doubtful code when a table or column
 name cannot become a Go identifier, or when two names collide after
 conversion. A column also fails when its generated name would be `Table`,

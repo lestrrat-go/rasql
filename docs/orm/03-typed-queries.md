@@ -412,16 +412,16 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_subquery() {
 	// This example selects orders placed by a user reachable by email domain,
-	// then narrows to orders at or above the average amount across every order.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
+	// then narrows to orders at or above the average total across every order.
+	// Both tables and their row types are declared in
+	// query_example_tables_test.go with the shape rasqlgen emits; an
+	// application that generated into package store would write store.Users()
+	// and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -438,24 +438,12 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	// A typed descriptor makes orders usable with rasql.Insert as well.
-	type orderRow struct {
-		ID     int `rasql:"id"`
-		UserID int `rasql:"user_id"`
-		Amount int `rasql:"amount"`
-	}
 	// A local result type projects only orders columns, so no join is needed:
 	// both subqueries below run as their own SELECT, never as part of this one.
 	type orderSummary struct {
 		UserID int64
-		Amount int64
+		Total  int64
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("user_id"),
-		schema.Integer("amount"),
-		schema.PrimaryKey("id"),
-	))
 	// Create both descriptors before querying orders against the users subquery.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
@@ -465,11 +453,6 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
-
-	// orders has no generated column accessors, so its columns are looked up by name.
-	// That lookup validates them against the descriptor as the query is assembled.
-	orderUserID := orders.Column("user_id")
-	amount := orders.Column("amount")
 
 	for _, user := range []UserRow{
 		{ID: 1, Email: "ada@example.com"},
@@ -481,10 +464,10 @@ func Example_rasql_subquery() {
 			return
 		}
 	}
-	for _, order := range []orderRow{
-		{ID: 1, UserID: 1, Amount: 80},
-		{ID: 2, UserID: 2, Amount: 20},
-		{ID: 3, UserID: 3, Amount: 100},
+	for _, order := range []OrderRow{
+		{ID: 1, UserID: 1, Total: 80},
+		{ID: 2, UserID: 2, Total: 20},
+		{ID: 3, UserID: 3, Total: 100},
 	} {
 		if _, err := rasql.Insert(ctx, db, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
@@ -509,26 +492,26 @@ func Example_rasql_subquery() {
 	// allOrders aliases orders so the average subquery is a separate scope from
 	// the orders read by the enclosing statement, even though it names the same
 	// table.
-	allOrders, err := rasql.As(orders, "all_orders")
+	allOrders, err := orders.As("all_orders")
 	if err != nil {
 		fmt.Printf("failed to alias orders: %s\n", err)
 		return
 	}
-	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrders.Column("amount")))
+	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrders.Total()))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
 		return
 	}
 
 	// InSelect keeps orders placed by a domain user without costing one
-	// argument per candidate id, and Scalar compares amount against the
+	// argument per candidate id, and Scalar compares the total against the
 	// average of every order.
-	// SQL: SELECT orders.user_id, orders.amount FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.amount >= (SELECT AVG(all_orders.amount) FROM orders AS all_orders) ORDER BY orders.amount ASC (argument: "%@example.com")
+	// SQL: SELECT orders.user_id, orders.total FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.total >= (SELECT AVG(all_orders.total) FROM orders AS all_orders) ORDER BY orders.total ASC (argument: "%@example.com")
 	rows, err := rasql.DecodeFrom[orderSummary](orders).
-		Project(orderUserID.As("user_id"), amount).
-		Where(query.InSelect(orderUserID, domainUsers)).
-		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
-		Order(query.Asc(amount)).
+		Project(orders.UserID().As("user_id"), orders.Total()).
+		Where(query.InSelect(orders.UserID(), domainUsers)).
+		Where(query.GreaterThanOrEqual(orders.Total(), query.Scalar(average))).
+		Order(query.Asc(orders.Total())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
@@ -539,7 +522,7 @@ func Example_rasql_subquery() {
 			fmt.Printf("failed to query orders: %s\n", err)
 			return
 		}
-		fmt.Println(summary.UserID, summary.Amount)
+		fmt.Println(summary.UserID, summary.Total)
 	}
 
 	// Output:
@@ -654,6 +637,27 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// TaskRow is one row of the tasks table.
+type TaskRow struct {
+	ID     int64  `rasql:"id"`
+	Status string `rasql:"status"`
+}
+
+// TasksTable has the shape rasqlgen emits: the typed table plus one accessor
+// method per column.
+type TasksTable struct {
+	rasql.Table[TaskRow]
+}
+
+func (t TasksTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
+func (t TasksTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+
+var tasks = TasksTable{rasql.MustTableOf[TaskRow](schema.MustTableDef("tasks",
+	schema.Integer("id"),
+	schema.Text("status"),
+	schema.PrimaryKey("id"),
+))}
+
 func Example_rasql_group_by() {
 	// This example counts tasks per status and keeps only the statuses with
 	// more than one task, using GROUP BY and HAVING together.
@@ -674,26 +678,16 @@ func Example_rasql_group_by() {
 		return
 	}
 
-	// A typed descriptor makes tasks usable with rasql.Insert.
-	type taskRow struct {
-		ID     int    `rasql:"id"`
-		Status string `rasql:"status"`
-	}
 	// A local result type holds one row per group.
 	type statusCount struct {
 		Status string
 		Total  int64
 	}
-	tasks := rasql.MustTableOf[taskRow](schema.MustTableDef("tasks",
-		schema.Integer("id"),
-		schema.Text("status"),
-		schema.PrimaryKey("id"),
-	))
 	if err := rasql.CreateTable(ctx, db, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
-	for _, task := range []taskRow{
+	for _, task := range []TaskRow{
 		{ID: 1, Status: "open"},
 		{ID: 2, Status: "open"},
 		{ID: 3, Status: "done"},
@@ -706,21 +700,16 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	// tasks has no generated column accessor for status, so it is looked up
-	// by name. That lookup validates it against the descriptor as the query is
-	// assembled.
-	status := tasks.Column("status")
-
 	// GroupBy adds the GROUP BY clause the mixed projection below needs: a
 	// bare column beside COUNT(*) is refused without one. Having filters
 	// groups after aggregation, so it may call an aggregate a WHERE clause
 	// could not.
 	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
-		Project(status, query.CountAll().As("total")).
-		GroupBy(status).
+		Project(tasks.Status(), query.CountAll().As("total")).
+		GroupBy(tasks.Status()).
 		Having(query.GreaterThan(query.CountAll(), 1)).
-		Order(query.Asc(status)).
+		Order(query.Asc(tasks.Status())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)
@@ -762,13 +751,15 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_distinct() {
 	// This example lists the users who have placed at least one order,
-	// without repeating a user who placed more than one.
+	// without repeating a user who placed more than one. orders and OrderRow
+	// are declared in query_example_tables_test.go with the shape rasqlgen
+	// emits; an application that generated into package store would write
+	// store.Orders() and store.OrdersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -786,25 +777,15 @@ func Example_rasql_distinct() {
 		return
 	}
 
-	// A typed descriptor makes orders usable with rasql.Insert.
-	type orderRow struct {
-		ID     int `rasql:"id"`
-		UserID int `rasql:"user_id"`
-	}
 	// A local result type holds one row per distinct user id.
 	type orderingUser struct {
 		UserID int64 `rasql:"user_id"`
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("user_id"),
-		schema.PrimaryKey("id"),
-	))
 	if err := rasql.CreateTable(ctx, db, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
-	for _, order := range []orderRow{
+	for _, order := range []OrderRow{
 		{ID: 1, UserID: 1},
 		{ID: 2, UserID: 2},
 		{ID: 3, UserID: 1},
@@ -815,19 +796,14 @@ func Example_rasql_distinct() {
 		}
 	}
 
-	// orders has no generated column accessor for user_id, so it is looked up
-	// by name. That lookup validates it against the descriptor as the query is
-	// assembled.
-	orderUserID := orders.Column("user_id")
-
 	// Distinct is meaningful here because Project narrows the result to
 	// user_id alone; SelectFrom would already select the orders primary key,
 	// which makes every row unique before DISTINCT runs.
 	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
 	rows, err := rasql.DecodeFrom[orderingUser](orders).
-		Project(orderUserID.As("user_id")).
+		Project(orders.UserID().As("user_id")).
 		Distinct().
-		Order(query.Asc(orderUserID)).
+		Order(query.Asc(orders.UserID())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)
@@ -908,15 +884,15 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_dynamic_projection() {
 	// This example joins users and orders, then reads an ad hoc result shape.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
+	// Both tables and their row types are declared in
+	// query_example_tables_test.go with the shape rasqlgen emits; an
+	// application that generated into package store would write store.Users()
+	// and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -933,23 +909,11 @@ func Example_rasql_dynamic_projection() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	// A typed descriptor makes orders usable with rasql.Insert as well.
-	type orderRow struct {
-		ID     int `rasql:"id"`
-		UserID int `rasql:"user_id"`
-		Total  int `rasql:"total"`
-	}
 	// A local result type makes the custom projection as easy to read as a table row.
 	type orderSummary struct {
 		UserID int64
 		Email  string
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("user_id"),
-		schema.Integer("total"),
-		schema.PrimaryKey("id"),
-	))
 	// Create both descriptors before querying their joined rows.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
@@ -960,16 +924,12 @@ func Example_rasql_dynamic_projection() {
 		return
 	}
 
-	// orders has no generated column accessors, so its columns are looked up by name.
-	// That lookup validates them against the descriptor as the query is assembled.
-	orderUserID := orders.Column("user_id")
-	total := orders.Column("total")
 	// Populate both tables through the typed rasql API.
 	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	for _, order := range []orderRow{
+	for _, order := range []OrderRow{
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {
@@ -982,10 +942,10 @@ func Example_rasql_dynamic_projection() {
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
-		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orderUserID))).
+		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orders.UserID()))).
 		Project(users.ID().As("user_id"), users.Email()).
-		Where(query.GreaterThan(total, 20)).
-		Order(query.Desc(total)).
+		Where(query.GreaterThan(orders.Total(), 20)).
+		Order(query.Desc(orders.Total())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to build order totals query: %s\n", err)

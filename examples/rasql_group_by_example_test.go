@@ -12,6 +12,27 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// TaskRow is one row of the tasks table.
+type TaskRow struct {
+	ID     int64  `rasql:"id"`
+	Status string `rasql:"status"`
+}
+
+// TasksTable has the shape rasqlgen emits: the typed table plus one accessor
+// method per column.
+type TasksTable struct {
+	rasql.Table[TaskRow]
+}
+
+func (t TasksTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
+func (t TasksTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+
+var tasks = TasksTable{rasql.MustTableOf[TaskRow](schema.MustTableDef("tasks",
+	schema.Integer("id"),
+	schema.Text("status"),
+	schema.PrimaryKey("id"),
+))}
+
 func Example_rasql_group_by() {
 	// This example counts tasks per status and keeps only the statuses with
 	// more than one task, using GROUP BY and HAVING together.
@@ -32,26 +53,16 @@ func Example_rasql_group_by() {
 		return
 	}
 
-	// A typed descriptor makes tasks usable with rasql.Insert.
-	type taskRow struct {
-		ID     int    `rasql:"id"`
-		Status string `rasql:"status"`
-	}
 	// A local result type holds one row per group.
 	type statusCount struct {
 		Status string
 		Total  int64
 	}
-	tasks := rasql.MustTableOf[taskRow](schema.MustTableDef("tasks",
-		schema.Integer("id"),
-		schema.Text("status"),
-		schema.PrimaryKey("id"),
-	))
 	if err := rasql.CreateTable(ctx, db, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
-	for _, task := range []taskRow{
+	for _, task := range []TaskRow{
 		{ID: 1, Status: "open"},
 		{ID: 2, Status: "open"},
 		{ID: 3, Status: "done"},
@@ -64,21 +75,16 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	// tasks has no generated column accessor for status, so it is looked up
-	// by name. That lookup validates it against the descriptor as the query is
-	// assembled.
-	status := tasks.Column("status")
-
 	// GroupBy adds the GROUP BY clause the mixed projection below needs: a
 	// bare column beside COUNT(*) is refused without one. Having filters
 	// groups after aggregation, so it may call an aggregate a WHERE clause
 	// could not.
 	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
-		Project(status, query.CountAll().As("total")).
-		GroupBy(status).
+		Project(tasks.Status(), query.CountAll().As("total")).
+		GroupBy(tasks.Status()).
 		Having(query.GreaterThan(query.CountAll(), 1)).
-		Order(query.Asc(status)).
+		Order(query.Asc(tasks.Status())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)

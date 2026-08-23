@@ -8,13 +8,15 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_distinct() {
 	// This example lists the users who have placed at least one order,
-	// without repeating a user who placed more than one.
+	// without repeating a user who placed more than one. orders and OrderRow
+	// are declared in query_example_tables_test.go with the shape rasqlgen
+	// emits; an application that generated into package store would write
+	// store.Orders() and store.OrdersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -32,25 +34,15 @@ func Example_rasql_distinct() {
 		return
 	}
 
-	// A typed descriptor makes orders usable with rasql.Insert.
-	type orderRow struct {
-		ID     int `rasql:"id"`
-		UserID int `rasql:"user_id"`
-	}
 	// A local result type holds one row per distinct user id.
 	type orderingUser struct {
 		UserID int64 `rasql:"user_id"`
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("user_id"),
-		schema.PrimaryKey("id"),
-	))
 	if err := rasql.CreateTable(ctx, db, orders); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
-	for _, order := range []orderRow{
+	for _, order := range []OrderRow{
 		{ID: 1, UserID: 1},
 		{ID: 2, UserID: 2},
 		{ID: 3, UserID: 1},
@@ -61,19 +53,14 @@ func Example_rasql_distinct() {
 		}
 	}
 
-	// orders has no generated column accessor for user_id, so it is looked up
-	// by name. That lookup validates it against the descriptor as the query is
-	// assembled.
-	orderUserID := orders.Column("user_id")
-
 	// Distinct is meaningful here because Project narrows the result to
 	// user_id alone; SelectFrom would already select the orders primary key,
 	// which makes every row unique before DISTINCT runs.
 	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
 	rows, err := rasql.DecodeFrom[orderingUser](orders).
-		Project(orderUserID.As("user_id")).
+		Project(orders.UserID().As("user_id")).
 		Distinct().
-		Order(query.Asc(orderUserID)).
+		Order(query.Asc(orders.UserID())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)
