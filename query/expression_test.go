@@ -1,11 +1,30 @@
 package query_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/stretchr/testify/require"
 )
+
+// TestColumnRefValidate pins ColumnRef.Validate for a valid column and for
+// the zero ColumnRef, whose nil source is reported rather than collapsed into
+// the missing-column message. The missing-column cases, including the
+// qualified and aliased table forms, live in expression_internal_test.go:
+// TableRef.Column still zeroes its result on a bad name until PR 3 lands, so
+// no exported constructor can build a ColumnRef pairing a valid source with a
+// name it does not hold.
+func TestColumnRefValidate(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	require.NoError(t, id.Validate())
+
+	var zero query.ColumnRef
+	require.True(t, errors.Is(zero.Validate(), query.ErrNilTable))
+}
 
 func TestMembershipKeepsOperands(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())

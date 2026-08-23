@@ -1,5 +1,7 @@
 package query
 
+import "fmt"
+
 // Expression is a dialect-neutral SQL expression.
 type Expression interface {
 	expression()
@@ -12,6 +14,22 @@ type ColumnRef struct {
 }
 
 func (ColumnRef) expression() {}
+
+// Validate reports whether c names a column its source table holds.
+//
+// A statement runs this check itself, so a ColumnRef built from a name written
+// into Go source needs no call here. It exists for a caller that takes a column
+// name while the program runs and wants the bad name reported at the call that
+// supplied it rather than at the statement that carries it.
+func (c ColumnRef) Validate() error {
+	if err := c.source.validate(); err != nil {
+		return fmt.Errorf("query column: %q: %w", c.name, err)
+	}
+	if _, ok := c.source.column(c.name); !ok {
+		return fmt.Errorf("query column: table %q has no column %q", c.source.QualifiedName(), c.name)
+	}
+	return nil
+}
 
 // Name returns the column name.
 func (c ColumnRef) Name() string {
