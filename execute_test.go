@@ -11,8 +11,8 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/statement"
 	"github.com/stretchr/testify/require"
 )
 
@@ -437,12 +437,11 @@ func TestDBQueryRenderedExecutesStaticStatement(t *testing.T) {
 	})
 	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	statement, err := render.Precompiled("SELECT id FROM users WHERE id = $1", 42)
-	require.NoError(t, err)
+	stmt := statement.New("SELECT id FROM users WHERE id = $1", 42)
 	mock.ExpectQuery("SELECT id FROM users WHERE id = $1").WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
 
-	sqlRows, err := db.QueryRendered(t.Context(), statement)
+	sqlRows, err := db.QueryRendered(t.Context(), stmt)
 	rows := collectRows(t, rowvalue.Scan(sqlRows), err)
 	require.Len(t, rows, 1)
 	require.NoError(t, mock.ExpectationsWereMet())

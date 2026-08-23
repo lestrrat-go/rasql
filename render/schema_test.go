@@ -8,6 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
+	"github.com/lestrrat-go/rasql/statement"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -2101,10 +2102,10 @@ func TestCreateTableRejectsForeignKeyDeleteSetColumns(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedForeignKeyDeleteSetColumns)
 }
 
-func sqls(statements []render.Statement) []string {
+func sqls(statements []statement.Statement) []string {
 	sql := make([]string, len(statements))
-	for i, statement := range statements {
-		sql[i] = statement.SQL()
+	for i, stmt := range statements {
+		sql[i] = stmt.SQL()
 	}
 	return sql
 }

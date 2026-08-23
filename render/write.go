@@ -7,70 +7,71 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/statement"
 )
 
-// Insert renders statement for d.
-func Insert(d dialect.Dialect, statement query.Insert) (Statement, error) {
-	return renderStatement(d, "INSERT", statement.Validate, func(renderer *renderer) error {
-		return renderer.writeInsert(statement)
+// Insert renders stmt for d.
+func Insert(d dialect.Dialect, stmt query.Insert) (statement.Statement, error) {
+	return renderStatement(d, "INSERT", stmt.Validate, func(renderer *renderer) error {
+		return renderer.writeInsert(stmt)
 	})
 }
 
-// Update renders statement for d.
-func Update(d dialect.Dialect, statement query.Update) (Statement, error) {
-	return renderStatement(d, "UPDATE", statement.Validate, func(renderer *renderer) error {
-		return renderer.writeUpdate(statement)
+// Update renders stmt for d.
+func Update(d dialect.Dialect, stmt query.Update) (statement.Statement, error) {
+	return renderStatement(d, "UPDATE", stmt.Validate, func(renderer *renderer) error {
+		return renderer.writeUpdate(stmt)
 	})
 }
 
-// Delete renders statement for d.
-func Delete(d dialect.Dialect, statement query.Delete) (Statement, error) {
-	return renderStatement(d, "DELETE", statement.Validate, func(renderer *renderer) error {
-		return renderer.writeDelete(statement)
+// Delete renders stmt for d.
+func Delete(d dialect.Dialect, stmt query.Delete) (statement.Statement, error) {
+	return renderStatement(d, "DELETE", stmt.Validate, func(renderer *renderer) error {
+		return renderer.writeDelete(stmt)
 	})
 }
 
-// Upsert renders statement for d.
-func Upsert(d dialect.Dialect, statement query.Upsert) (Statement, error) {
-	return renderStatement(d, "UPSERT", statement.Validate, func(renderer *renderer) error {
-		return renderer.writeUpsert(statement)
+// Upsert renders stmt for d.
+func Upsert(d dialect.Dialect, stmt query.Upsert) (statement.Statement, error) {
+	return renderStatement(d, "UPSERT", stmt.Validate, func(renderer *renderer) error {
+		return renderer.writeUpsert(stmt)
 	})
 }
 
-// Write renders a statement that changes database rows.
-func Write(d dialect.Dialect, statement query.WriteStatement) (Statement, error) {
-	switch statement := statement.(type) {
+// Write renders a stmt that changes database rows.
+func Write(d dialect.Dialect, stmt query.WriteStatement) (statement.Statement, error) {
+	switch stmt := stmt.(type) {
 	case query.Insert:
-		return Insert(d, statement)
+		return Insert(d, stmt)
 	case query.Update:
-		return Update(d, statement)
+		return Update(d, stmt)
 	case query.Delete:
-		return Delete(d, statement)
+		return Delete(d, stmt)
 	case query.Upsert:
-		return Upsert(d, statement)
+		return Upsert(d, stmt)
 	default:
-		if statement == nil {
-			return Statement{}, &Error{Err: fmt.Errorf("write statement must not be nil")}
+		if stmt == nil {
+			return statement.Statement{}, &Error{Err: fmt.Errorf("write statement must not be nil")}
 		}
-		return Statement{}, &Error{Err: fmt.Errorf("unsupported write statement %T", statement)}
+		return statement.Statement{}, &Error{Err: fmt.Errorf("unsupported write statement %T", stmt)}
 	}
 }
 
-func (r *renderer) writeInsert(statement query.Insert) error {
-	if err := r.writeInsertBase(statement); err != nil {
+func (r *renderer) writeInsert(stmt query.Insert) error {
+	if err := r.writeInsertBase(stmt); err != nil {
 		return err
 	}
-	return r.writeReturning(statement.Returning())
+	return r.writeReturning(stmt.Returning())
 }
 
-func (r *renderer) writeInsertBase(statement query.Insert) error {
-	table, err := r.quoteQualified(statement.Into().Schema(), statement.Into().Name())
+func (r *renderer) writeInsertBase(stmt query.Insert) error {
+	table, err := r.quoteQualified(stmt.Into().Schema(), stmt.Into().Name())
 	if err != nil {
 		return err
 	}
 	r.builder.WriteString("INSERT INTO ")
 	r.builder.WriteString(table)
-	if statement.UsesDefaultValues() {
+	if stmt.UsesDefaultValues() {
 		switch {
 		case r.dialect.Supports(dialect.CapabilityDefaultValues):
 			r.builder.WriteString(" DEFAULT VALUES")
@@ -82,7 +83,7 @@ func (r *renderer) writeInsertBase(statement query.Insert) error {
 		return nil
 	}
 	r.builder.WriteString(" (")
-	for i, column := range statement.Columns() {
+	for i, column := range stmt.Columns() {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
@@ -93,7 +94,7 @@ func (r *renderer) writeInsertBase(statement query.Insert) error {
 		r.builder.WriteString(name)
 	}
 	r.builder.WriteString(") VALUES ")
-	for i, values := range statement.Rows() {
+	for i, values := range stmt.Rows() {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
@@ -113,7 +114,7 @@ func (r *renderer) writeInsertBase(statement query.Insert) error {
 
 // Each upsertMessage constant below is the only definition of its error text.
 // The conflict-target check in writeUpsert joins its own message with the other
-// problems that apply to the same statement, so none of these texts may be
+// problems that apply to the same stmt, so none of these texts may be
 // copied anywhere else.
 const (
 	upsertConflictTargetMessage = "explicit conflict target is not supported: this dialect lacks dialect.CapabilityConflictTarget"
@@ -121,13 +122,13 @@ const (
 	upsertNoAssignmentsMessage  = "upsert without assignments is not supported"
 )
 
-func (r *renderer) writeUpsert(statement query.Upsert) error {
+func (r *renderer) writeUpsert(stmt query.Upsert) error {
 	style := r.dialect.UpsertStyle()
 	if !r.dialect.Supports(dialect.CapabilityUpsert) || style == dialect.UpsertUnsupported {
 		return fmt.Errorf("upsert is not supported")
 	}
-	defaultValuesRejected := statement.Insert().UsesDefaultValues() && !r.dialect.Supports(dialect.CapabilityDefaultValuesUpsert)
-	if len(statement.ConflictColumns()) > 0 && !r.dialect.Supports(dialect.CapabilityConflictTarget) {
+	defaultValuesRejected := stmt.Insert().UsesDefaultValues() && !r.dialect.Supports(dialect.CapabilityDefaultValuesUpsert)
+	if len(stmt.ConflictColumns()) > 0 && !r.dialect.Supports(dialect.CapabilityConflictTarget) {
 		// This check runs before the default-values check and the style switch on
 		// purpose: an explicit conflict target is unusable on this dialect for any
 		// insert and any assignment list, while the other two problems are
@@ -140,7 +141,7 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 		if defaultValuesRejected {
 			problems = append(problems, upsertDefaultValuesMessage)
 		}
-		if style == dialect.UpsertDuplicateKey && len(statement.Assignments()) == 0 {
+		if style == dialect.UpsertDuplicateKey && len(stmt.Assignments()) == 0 {
 			problems = append(problems, upsertNoAssignmentsMessage)
 		}
 		return errors.New(strings.Join(problems, "; "))
@@ -148,13 +149,13 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 	if defaultValuesRejected {
 		return errors.New(upsertDefaultValuesMessage)
 	}
-	if err := r.writeInsertBase(statement.Insert()); err != nil {
+	if err := r.writeInsertBase(stmt.Insert()); err != nil {
 		return err
 	}
 	switch style {
 	case dialect.UpsertOnConflict:
-		conflict := statement.ConflictColumns()
-		assignments := statement.Assignments()
+		conflict := stmt.ConflictColumns()
+		assignments := stmt.Assignments()
 		if len(conflict) == 0 && len(assignments) > 0 {
 			return fmt.Errorf("upsert update requires a conflict target")
 		}
@@ -182,7 +183,7 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 			}
 		}
 	case dialect.UpsertDuplicateKey:
-		assignments := statement.Assignments()
+		assignments := stmt.Assignments()
 		if len(assignments) == 0 {
 			return errors.New(upsertNoAssignmentsMessage)
 		}
@@ -193,7 +194,7 @@ func (r *renderer) writeUpsert(statement query.Upsert) error {
 	default:
 		return fmt.Errorf("unsupported upsert style %d", style)
 	}
-	return r.writeReturning(statement.Returning())
+	return r.writeReturning(stmt.Returning())
 }
 
 // writeUpsertAssignments renders each assignment's value through the ordinary
@@ -221,18 +222,18 @@ func (r *renderer) writeUpsertAssignments(assignments []query.Assignment, style 
 	return nil
 }
 
-func (r *renderer) writeUpdate(statement query.Update) error {
-	if statement.Where() == nil && !statement.AllowsAll() {
+func (r *renderer) writeUpdate(stmt query.Update) error {
+	if stmt.Where() == nil && !stmt.AllowsAll() {
 		return fmt.Errorf("UPDATE requires a WHERE predicate or an explicit AllowAll")
 	}
-	table, err := r.quoteQualified(statement.Table().Schema(), statement.Table().Name())
+	table, err := r.quoteQualified(stmt.Table().Schema(), stmt.Table().Name())
 	if err != nil {
 		return err
 	}
 	r.builder.WriteString("UPDATE ")
 	r.builder.WriteString(table)
 	r.builder.WriteString(" SET ")
-	for i, assignment := range statement.Assignments() {
+	for i, assignment := range stmt.Assignments() {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
@@ -246,32 +247,32 @@ func (r *renderer) writeUpdate(statement query.Update) error {
 			return err
 		}
 	}
-	if where := statement.Where(); where != nil {
+	if where := stmt.Where(); where != nil {
 		r.builder.WriteString(" WHERE ")
 		if err := r.writeExpression(where); err != nil {
 			return err
 		}
 	}
-	return r.writeReturning(statement.Returning())
+	return r.writeReturning(stmt.Returning())
 }
 
-func (r *renderer) writeDelete(statement query.Delete) error {
-	if statement.Where() == nil && !statement.AllowsAll() {
+func (r *renderer) writeDelete(stmt query.Delete) error {
+	if stmt.Where() == nil && !stmt.AllowsAll() {
 		return fmt.Errorf("DELETE requires a WHERE predicate or an explicit AllowAll")
 	}
-	table, err := r.quoteQualified(statement.From().Schema(), statement.From().Name())
+	table, err := r.quoteQualified(stmt.From().Schema(), stmt.From().Name())
 	if err != nil {
 		return err
 	}
 	r.builder.WriteString("DELETE FROM ")
 	r.builder.WriteString(table)
-	if where := statement.Where(); where != nil {
+	if where := stmt.Where(); where != nil {
 		r.builder.WriteString(" WHERE ")
 		if err := r.writeExpression(where); err != nil {
 			return err
 		}
 	}
-	return r.writeReturning(statement.Returning())
+	return r.writeReturning(stmt.Returning())
 }
 
 func (r *renderer) writeReturning(projections []query.Projection) error {

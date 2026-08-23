@@ -107,10 +107,7 @@ func TestGeneratedStoreRunsAgainstSQLite(t *testing.T) {
 		t.Fatalf("Tables() second call Columns[0].Name was mutated by an earlier caller; Clone must produce an independent copy")
 	}
 
-	statement, err := store.UserByEmail("ada@example.com")
-	if err != nil {
-		t.Fatalf("UserByEmail: %s", err)
-	}
+	statement := store.UserByEmail("ada@example.com")
 	if !strings.Contains(statement.SQL(), "SELECT id, email FROM users WHERE email =") {
 		t.Fatalf("UserByEmail SQL = %q, want it to contain %q", statement.SQL(), "SELECT id, email FROM users WHERE email =")
 	}

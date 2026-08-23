@@ -8,6 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/statement"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -136,22 +137,22 @@ func ambiguousSourceAlias(t *testing.T, definition schema.TableDef, alias string
 // ambiguousSourceJoin renders an inner join of from and joined on their id
 // columns, and returns whatever render.Select produced so a caller can require
 // that a refused statement carries no SQL.
-func ambiguousSourceJoin(t *testing.T, from query.TableRef, joined query.TableRef) (render.Statement, error) {
+func ambiguousSourceJoin(t *testing.T, from query.TableRef, joined query.TableRef) (statement.Statement, error) {
 	t.Helper()
 	fromID, err := from.Column("id")
 	require.NoError(t, err)
 	joinedID, err := joined.Column("id")
 	require.NoError(t, err)
 
-	statement, err := query.NewJoinedSelect(from,
+	stmt, err := query.NewJoinedSelect(from,
 		[]query.Join{query.InnerJoin(joined, query.Equal(fromID, joinedID))},
 		nil,
 		query.Project(fromID),
 	)
 	if err != nil {
-		return render.Statement{}, err
+		return statement.Statement{}, err
 	}
-	return render.Select(dialect.SQLite(), statement)
+	return render.Select(dialect.SQLite(), stmt)
 }
 
 // ambiguousSourceFixture opens an in-memory SQLite database holding an

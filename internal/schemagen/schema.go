@@ -211,7 +211,6 @@ func schemaSource(packageName string, tables, allTables []schema.TableDef, descr
 		}
 		source.WriteString("\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
-		source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
 		// The descriptor literal is the only thing here that names the
 		// schema package, so leaving it out leaves the import out too.
 		if descriptors == withDescriptors {
@@ -889,7 +888,7 @@ func writeTableColumns(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString(typeName)
 		source.WriteString(") ")
 		source.WriteString(method)
-		source.WriteString("() query.ColumnRef { return rasql.ColumnOf(t.Table, ")
+		source.WriteString("() rasql.ColumnRef { return rasql.ColumnOf(t.Table, ")
 		source.WriteString(quote(column.Name))
 		source.WriteString(") }\n")
 	}
@@ -1147,7 +1146,7 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 		source.WriteString(tableTypeName(relationship.parent.Name))
 		source.WriteString("\n\tChild ")
 		source.WriteString(tableTypeName(relationship.child.Name))
-		source.WriteString("\n\tParentKey query.ColumnRef\n\tChildKey query.ColumnRef\n}\n\n")
+		source.WriteString("\n\tParentKey rasql.ColumnRef\n\tChildKey rasql.ColumnRef\n}\n\n")
 
 		source.WriteString("// ")
 		source.WriteString(relationship.method)
@@ -1192,13 +1191,13 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 		source.WriteString("// Join returns an INNER JOIN for the relationship.\n")
 		source.WriteString("func (r ")
 		source.WriteString(relationship.typeName)
-		source.WriteString(") Join() query.Join {\n\treturn rasql.InnerJoin(r.")
+		source.WriteString(") Join() rasql.Join {\n\treturn rasql.InnerJoin(r.")
 		if relationship.kind == schema.RelationshipHasMany {
 			source.WriteString("Child")
 		} else {
 			source.WriteString("Parent")
 		}
-		source.WriteString(", query.Equal(r.ParentKey, r.ChildKey))\n}\n\n")
+		source.WriteString(", rasql.Equal(r.ParentKey, r.ChildKey))\n}\n\n")
 		writeRelationshipLoad(source, relationship)
 	}
 }

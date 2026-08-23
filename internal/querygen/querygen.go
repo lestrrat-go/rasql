@@ -44,14 +44,10 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		}
 		reservedNames[bind.Name] = struct{}{}
 	}
-	renderName := availableGoIdentifier("rasqlrender", reservedNames)
+	statementName := availableGoIdentifier("rasqlstatement", reservedNames)
 	defaultParameterType := "any"
 	if functionName == "any" {
 		defaultParameterType = "interface{}"
-	}
-	errorType := "error"
-	if functionName == "error" {
-		errorType = "interface{ Error() string }"
 	}
 
 	parameterTypes := make([]string, len(def.Binds))
@@ -89,8 +85,8 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 	source.WriteString("\n\n")
 	if needsTime {
 		source.WriteString("import (\n\t")
-		source.WriteString(renderName)
-		source.WriteString(" \"github.com/lestrrat-go/rasql/render\"\n\t")
+		source.WriteString(statementName)
+		source.WriteString(" \"github.com/lestrrat-go/rasql/statement\"\n\t")
 		if timeName != "time" {
 			source.WriteString(timeName)
 			source.WriteByte(' ')
@@ -98,8 +94,8 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		source.WriteString("\"time\"\n)\n\n")
 	} else {
 		source.WriteString("import ")
-		source.WriteString(renderName)
-		source.WriteString(" \"github.com/lestrrat-go/rasql/render\"\n\n")
+		source.WriteString(statementName)
+		source.WriteString(" \"github.com/lestrrat-go/rasql/statement\"\n\n")
 	}
 	source.WriteString("func ")
 	source.WriteString(functionName)
@@ -112,13 +108,11 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		source.WriteByte(' ')
 		source.WriteString(parameterTypes[index])
 	}
-	source.WriteString(") (")
-	source.WriteString(renderName)
-	source.WriteString(".Statement, ")
-	source.WriteString(errorType)
-	source.WriteString(") {\n\treturn ")
-	source.WriteString(renderName)
-	source.WriteString(".Precompiled(")
+	source.WriteString(") ")
+	source.WriteString(statementName)
+	source.WriteString(".Statement {\n\treturn ")
+	source.WriteString(statementName)
+	source.WriteString(".New(")
 	source.WriteString(strconv.Quote(def.SQL))
 	for _, name := range def.Parameters {
 		source.WriteString(", ")
