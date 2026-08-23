@@ -328,7 +328,7 @@ source: [sample/taskboard/internal/store/repository.go](https://github.com/lestr
 <!-- END INCLUDE -->
 
 ```text
-			query.Project(tasks.DueOn()).As("due_on"),
+			tasks.DueOn().As("due_on"),
 ```
 
 Build, and the compiler finds the next place that assumed an owner:

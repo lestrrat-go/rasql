@@ -67,11 +67,11 @@ func (repository Repository) OpenTasks(ctx context.Context) ([]OpenTask, error) 
 	rows, err := rasql.DecodeFrom[OpenTask](tasks).
 		Join(tasks.Project().Join(), tasks.Assignee().Join()).
 		Project(
-			query.Project(tasks.ProjectID()).As("project_id"),
-			query.Project(projects.Name()).As("project_name"),
-			query.Project(tasks.ID()).As("task_id"),
-			query.Project(tasks.Title()).As("title"),
-			query.Project(members.Name()).As("assignee_name"),
+			tasks.ProjectID().As("project_id"),
+			projects.Name().As("project_name"),
+			tasks.ID().As("task_id"),
+			tasks.Title().As("title"),
+			members.Name().As("assignee_name"),
 		).
 		Where(query.Equal(tasks.IsOpen(), query.Bind(true))).
 		Order(query.Asc(tasks.ProjectID()), query.Asc(tasks.ID())).
