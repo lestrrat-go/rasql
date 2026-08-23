@@ -486,10 +486,10 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	action := queryEvents.Column("action")
 
 	// Multi-row INSERT into the qualified table.
-	insertRows, err := query.NewInsertRows(queryEvents, []query.ColumnRef{id, userID, action}, [][]query.Expression{
-		{query.Bind(int64(1)), query.Bind(int64(10)), query.Bind("created")},
-		{query.Bind(int64(2)), query.Bind(int64(10)), query.Bind("updated")},
-		{query.Bind(int64(3)), query.Bind(int64(11)), query.Bind("created")},
+	insertRows, err := query.NewInsertRows(queryEvents, []query.ColumnRef{id, userID, action}, [][]any{
+		{int64(1), int64(10), "created"},
+		{int64(2), int64(10), "updated"},
+		{int64(3), int64(11), "created"},
 	})
 	require.NoError(t, err)
 	_, err = rasql.Exec(t.Context(), db, insertRows)
@@ -600,7 +600,7 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	status := queryUsers.Column("status")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 
-	insert, err := query.NewInsert(queryUsers, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(queryUsers, []query.ColumnRef{email}, "ada@example.com")
 	require.NoError(t, err)
 	insert, err = insert.WithReturning(id, email, status)
 	require.NoError(t, err)

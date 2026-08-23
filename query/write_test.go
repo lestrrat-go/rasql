@@ -23,7 +23,7 @@ func TestWriteStatementsReportReturning(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
 	require.NoError(t, err)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestInsertRejectsNilReturningProjection(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
 	require.NoError(t, err)
 
 	_, err = insert.WithReturning(nil)
@@ -87,7 +87,7 @@ func TestWriteStatementsValidate(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
 	require.NoError(t, err)
 	insert, err = insert.WithReturning(id)
 	require.NoError(t, err)
@@ -165,28 +165,28 @@ func TestWriteStatementsRejectInvalidInput(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	// NewInsert with nil values becomes one row of length zero against a
+	// NewInsert with no values becomes one row of length zero against a
 	// non-empty column list, and must keep failing.
-	_, err = query.NewInsert(users, []query.ColumnRef{id}, nil)
+	_, err = query.NewInsert(users, []query.ColumnRef{id})
 	require.Error(t, err)
-	_, err = query.NewInsert(users, []query.ColumnRef{id, id}, []query.Expression{query.Bind(1), query.Bind(2)})
+	_, err = query.NewInsert(users, []query.ColumnRef{id, id}, 1, 2)
 	require.Error(t, err)
 	_, err = query.NewUpdate(users)
 	require.Error(t, err)
 
 	_, err = query.NewInsertRows(users, []query.ColumnRef{id, email}, nil)
 	require.Error(t, err)
-	_, err = query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]query.Expression{})
+	_, err = query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]any{})
 	require.Error(t, err)
-	_, err = query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]query.Expression{
-		{query.Bind(1), query.Bind("ada@example.com")},
-		{query.Bind(2)},
+	_, err = query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]any{
+		{1, "ada@example.com"},
+		{2},
 	})
 	require.Error(t, err)
 
 	defaultInsert, err := query.NewDefaultInsert(users)
 	require.NoError(t, err)
-	_, err = defaultInsert.WithRows([]query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	_, err = defaultInsert.WithRows([]any{1, "ada@example.com"})
 	require.Error(t, err)
 
 	aliased, err := users.As("u")
@@ -222,21 +222,26 @@ func TestInsertHoldsMultipleRows(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	rows := [][]query.Expression{
+	rows := [][]any{
+		{1, "ada@example.com"},
+		{2, "grace@example.com"},
+		{3, "edsger@example.com"},
+	}
+	insert, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, rows)
+	require.NoError(t, err)
+	expected := [][]query.Expression{
 		{query.Bind(1), query.Bind("ada@example.com")},
 		{query.Bind(2), query.Bind("grace@example.com")},
 		{query.Bind(3), query.Bind("edsger@example.com")},
 	}
-	insert, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, rows)
-	require.NoError(t, err)
-	require.Equal(t, rows, insert.Rows())
+	require.Equal(t, expected, insert.Rows())
 
 	// Rows returns an independent copy: appending to the returned outer slice
 	// and mutating one of its inner slices must not reach the statement.
 	returned := insert.Rows()
 	returned = append(returned, []query.Expression{query.Bind(4), query.Bind("grete@example.com")})
 	returned[0][0] = query.Bind(999)
-	require.Equal(t, rows, insert.Rows())
+	require.Equal(t, expected, insert.Rows())
 }
 
 func TestInsertAppendsRowsImmutably(t *testing.T) {
@@ -245,11 +250,11 @@ func TestInsertAppendsRowsImmutably(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	first := [][]query.Expression{{query.Bind(1), query.Bind("ada@example.com")}}
+	first := [][]any{{1, "ada@example.com"}}
 	insert, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, first)
 	require.NoError(t, err)
 
-	appended, err := insert.WithRows([]query.Expression{query.Bind(2), query.Bind("grace@example.com")})
+	appended, err := insert.WithRows([]any{2, "grace@example.com"})
 	require.NoError(t, err)
 
 	require.Len(t, insert.Rows(), 1)
@@ -266,10 +271,10 @@ func TestInsertValidatesEveryRowExpression(t *testing.T) {
 	require.NoError(t, err)
 	orderID := orders.Column("id")
 
-	_, err = query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]query.Expression{
-		{query.Bind(1), query.Bind("ada@example.com")},
-		{query.Bind(2), query.Bind("grace@example.com")},
-		{orderID, query.Bind("edsger@example.com")},
+	_, err = query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]any{
+		{1, "ada@example.com"},
+		{2, "grace@example.com"},
+		{orderID, "edsger@example.com"},
 	})
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "references table")
@@ -289,7 +294,7 @@ func TestInsertRowValueRejectsTargetTableColumn(t *testing.T) {
 	email := users.Column("email")
 
 	t.Run("bare column", func(t *testing.T) {
-		_, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), email})
+		_, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, email)
 		requireQueryValidationError(t, err)
 		require.ErrorContains(t, err, `references column "email" of the target table`)
 		require.ErrorContains(t, err, "an INSERT VALUES row cannot read the target table's columns")
@@ -297,7 +302,7 @@ func TestInsertRowValueRejectsTargetTableColumn(t *testing.T) {
 	})
 
 	t.Run("nested in function call", func(t *testing.T) {
-		_, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Lower(email)})
+		_, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, query.Lower(email))
 		requireQueryValidationError(t, err)
 		require.ErrorContains(t, err, `references column "email" of the target table`)
 		require.ErrorContains(t, err, "an INSERT VALUES row cannot read the target table's columns")
@@ -305,9 +310,9 @@ func TestInsertRowValueRejectsTargetTableColumn(t *testing.T) {
 	})
 
 	t.Run("NewInsertRows form", func(t *testing.T) {
-		_, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]query.Expression{
-			{query.Bind(1), query.Bind("ada@example.com")},
-			{query.Bind(2), email},
+		_, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, [][]any{
+			{1, "ada@example.com"},
+			{2, email},
 		})
 		requireQueryValidationError(t, err)
 		require.ErrorContains(t, err, `references column "email" of the target table`)
@@ -324,7 +329,7 @@ func TestWriteStatementsRejectAggregates(t *testing.T) {
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
 	require.NoError(t, err)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
@@ -337,7 +342,7 @@ func TestWriteStatementsRejectAggregates(t *testing.T) {
 	}{
 		"insert value": {
 			build: func() error {
-				_, err := query.NewInsert(users, []query.ColumnRef{id}, []query.Expression{query.Count(id)})
+				_, err := query.NewInsert(users, []query.ColumnRef{id}, query.Count(id))
 				return err
 			},
 			message: `calls aggregate function "COUNT" in an INSERT value`,
@@ -399,7 +404,7 @@ func TestWriteStatementsAcceptScalarFunctions(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Coalesce(query.Bind("ada@example.com"), query.Bind(""))})
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, query.Coalesce(query.Bind("ada@example.com"), query.Bind("")))
 	require.NoError(t, err)
 	require.NoError(t, insert.Validate())
 
@@ -428,7 +433,7 @@ func TestUpsertAcceptsNestedExcludedColumn(t *testing.T) {
 	id := users.Column("id")
 	email := users.Column("email")
 
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
 	require.NoError(t, err)
 
 	upsert, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
@@ -456,7 +461,7 @@ func TestWriteStatementsRejectSubqueries(t *testing.T) {
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
 	require.NoError(t, err)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
@@ -471,7 +476,7 @@ func TestWriteStatementsRejectSubqueries(t *testing.T) {
 	}{
 		"insert value": {
 			build: func() error {
-				_, err := query.NewInsert(users, []query.ColumnRef{id}, []query.Expression{query.Scalar(ids)})
+				_, err := query.NewInsert(users, []query.ColumnRef{id}, query.Scalar(ids))
 				return err
 			},
 		},
@@ -520,7 +525,7 @@ func TestUpsertValidatesConflictAssignments(t *testing.T) {
 	require.NoError(t, err)
 	id := users.Column("id")
 	email := users.Column("email")
-	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(1), query.Bind("ada@example.com")})
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, "ada@example.com")
 	require.NoError(t, err)
 
 	upsert, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
@@ -531,4 +536,66 @@ func TestUpsertValidatesConflictAssignments(t *testing.T) {
 	require.Error(t, err)
 	_, err = query.NewUpsert(insert, []query.ColumnRef{id, id}, nil)
 	require.Error(t, err)
+}
+
+func TestSetBindsPlainValue(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	email := users.Column("email")
+
+	require.Equal(t, query.Bind("grace@example.com"), query.Set(email, "grace@example.com").Value())
+}
+
+func TestSetKeepsExpression(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	email := users.Column("email")
+
+	require.Equal(t, query.Excluded(email), query.Set(email, query.Excluded(email)).Value())
+	require.Equal(t, query.Lower(email), query.Set(email, query.Lower(email)).Value())
+}
+
+func TestInsertBindsPlainValues(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+	cols := []query.ColumnRef{id, email}
+
+	plain, err := query.NewInsert(users, cols, 1, "ada@example.com")
+	require.NoError(t, err)
+	explicit, err := query.NewInsert(users, cols, query.Bind(1), query.Bind("ada@example.com"))
+	require.NoError(t, err)
+	require.Equal(t, explicit, plain)
+	require.Equal(t, [][]query.Expression{{query.Bind(1), query.Bind("ada@example.com")}}, plain.Rows())
+}
+
+func TestInsertRowBindsNil(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+
+	insert, err := query.NewInsert(users, []query.ColumnRef{id, email}, 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, [][]query.Expression{{query.Bind(1), query.Bind(nil)}}, insert.Rows())
+	require.NoError(t, insert.Validate())
+}
+
+// TestInsertRowsCopiesCallerSlices pins that rowOperands, which now runs on
+// the construction path in place of cloneRows, still copies the caller's
+// rows: a later write into the caller's slice must not reach the built
+// statement.
+func TestInsertRowsCopiesCallerSlices(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+
+	rows := [][]any{{1, "ada@example.com"}}
+	insert, err := query.NewInsertRows(users, []query.ColumnRef{id, email}, rows)
+	require.NoError(t, err)
+
+	rows[0][0] = 999
+	require.Equal(t, [][]query.Expression{{query.Bind(1), query.Bind("ada@example.com")}}, insert.Rows())
 }

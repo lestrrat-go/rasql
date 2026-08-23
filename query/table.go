@@ -2,19 +2,22 @@
 //
 // # Parameter limits
 //
-// A rendered statement's parameter count is the number of [Bind] values it
-// carries, plus one for a LIMIT and one for an OFFSET. Every [Bind] value
-// renders as its own placeholder and costs one parameter, while an expression
-// that binds nothing, such as a column reference, costs none. A LIMIT and an
-// OFFSET each bind a placeholder of their own, so [Select.WithLimit] and
-// [Select.WithOffset] add one parameter each even when the statement holds no
-// [Bind] at all.
+// A rendered statement's parameter count is the number of bound values it
+// carries, however they were written, plus one for a LIMIT and one for an
+// OFFSET. A plain Go value passed to a comparison, a membership test, [Set],
+// an insert row, [Call], [Func], or [Coalesce] becomes one, the same as an
+// explicit [Bind]; each renders as its own placeholder and costs one
+// parameter, while an expression that binds nothing, such as a column
+// reference, costs none. A LIMIT and an OFFSET each bind a placeholder of
+// their own, so [Select.WithLimit] and [Select.WithOffset] add one parameter
+// each even when the statement holds no bound value at all.
 //
 // A list of N bound values given to [In] or [NotIn] therefore costs N.
-// [NewInsertRows] over R rows of C columns costs R*C only when every row value
-// is a single [Bind]. A row value may be any [Expression], and one that is not
-// a single [Bind] costs however many [Bind] values are nested inside it: a
-// column reference costs none, and Equal(Bind(x), Bind(y)) costs two.
+// [NewInsertRows] over R rows of C columns costs R*C only when every row
+// value is a plain Go value or a single [Bind]. A row value may be any
+// [Expression], and one that is not a plain value or a single [Bind] costs
+// however many bound values are nested inside it: a column reference costs
+// none, and Equal(Bind(x), Bind(y)) costs two.
 //
 // The database caps that count, at 65535 for PostgreSQL and MySQL and at 32766
 // for SQLite through modernc.org/sqlite. This package neither counts parameters

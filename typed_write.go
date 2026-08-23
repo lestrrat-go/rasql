@@ -408,7 +408,7 @@ func typedInsertMany[T any](table Table[T], values []T, defaultColumns map[strin
 		return query.NewDefaultInsert(reference)
 	}
 
-	rows := make([][]query.Expression, len(values))
+	rows := make([][]any, len(values))
 	rows[0] = typedInsertValues(columns, fields)
 	for i := 1; i < len(values); i++ {
 		_, fields, err = typedRowFields(table, values[i])
@@ -420,10 +420,10 @@ func typedInsertMany[T any](table Table[T], values []T, defaultColumns map[strin
 	return query.NewInsertRows(reference, columns, rows)
 }
 
-func typedInsertValues(columns []query.ColumnRef, fields map[string]any) []query.Expression {
-	values := make([]query.Expression, 0, len(columns))
+func typedInsertValues(columns []query.ColumnRef, fields map[string]any) []any {
+	values := make([]any, 0, len(columns))
 	for _, column := range columns {
-		values = append(values, query.Bind(fields[column.Name()]))
+		values = append(values, fields[column.Name()])
 	}
 	return values
 }
@@ -544,7 +544,7 @@ func typedUpdateWithOptions[T any](table Table[T], value T, config updateConfig)
 	assignments := make([]query.Assignment, 0, len(selected))
 	for _, name := range selected {
 		column := reference.Column(name)
-		assignments = append(assignments, query.Set(column, query.Bind(fields[name])))
+		assignments = append(assignments, query.Set(column, fields[name]))
 	}
 	if len(assignments) == 0 {
 		return query.Update{}, fmt.Errorf("table %q has no non-primary-key columns", definition.QualifiedName())
@@ -564,7 +564,7 @@ func typedUpdateWithOptions[T any](table Table[T], value T, config updateConfig)
 	predicates := make([]query.Expression, 0, len(definition.PrimaryKey))
 	for _, name := range definition.PrimaryKey {
 		column := reference.Column(name)
-		predicates = append(predicates, query.Equal(column, query.Bind(fields[name])))
+		predicates = append(predicates, query.Equal(column, fields[name]))
 	}
 	if len(predicates) == 1 {
 		return statement.WithWhere(predicates[0])

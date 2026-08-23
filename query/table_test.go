@@ -43,7 +43,7 @@ func TestZeroTableRefErrorsInsteadOfPanicking(t *testing.T) {
 	t.Run("NewInsertRows", func(t *testing.T) {
 		var err error
 		require.NotPanics(t, func() {
-			_, err = query.NewInsertRows(zero, []query.ColumnRef{validColumn}, [][]query.Expression{{query.Bind(1)}})
+			_, err = query.NewInsertRows(zero, []query.ColumnRef{validColumn}, [][]any{{1}})
 		})
 		require.ErrorContains(t, err, "must not be nil")
 	})
