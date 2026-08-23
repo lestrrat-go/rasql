@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
 )
 
 type MembersRow struct {
@@ -64,10 +63,10 @@ type MembersTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t MembersTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t MembersTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // Name returns a reference to the "name" column.
-func (t MembersTable) Name() query.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
+func (t MembersTable) Name() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
 
 // Members returns the descriptor for the "members" table.
 func Members() MembersTable {

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
 )
 
 type TasksRow struct {
@@ -129,25 +128,25 @@ type TasksTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t TasksTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t TasksTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // ProjectID returns a reference to the "project_id" column.
-func (t TasksTable) ProjectID() query.ColumnRef { return rasql.ColumnOf(t.Table, "project_id") }
+func (t TasksTable) ProjectID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "project_id") }
 
 // AssigneeID returns a reference to the "assignee_id" column.
-func (t TasksTable) AssigneeID() query.ColumnRef { return rasql.ColumnOf(t.Table, "assignee_id") }
+func (t TasksTable) AssigneeID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "assignee_id") }
 
 // Title returns a reference to the "title" column.
-func (t TasksTable) Title() query.ColumnRef { return rasql.ColumnOf(t.Table, "title") }
+func (t TasksTable) Title() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "title") }
 
 // IsOpen returns a reference to the "is_open" column.
-func (t TasksTable) IsOpen() query.ColumnRef { return rasql.ColumnOf(t.Table, "is_open") }
+func (t TasksTable) IsOpen() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "is_open") }
 
 // CreatedAt returns a reference to the "created_at" column.
-func (t TasksTable) CreatedAt() query.ColumnRef { return rasql.ColumnOf(t.Table, "created_at") }
+func (t TasksTable) CreatedAt() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "created_at") }
 
 // DueOn returns a reference to the "due_on" column.
-func (t TasksTable) DueOn() query.ColumnRef { return rasql.ColumnOf(t.Table, "due_on") }
+func (t TasksTable) DueOn() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "due_on") }
 
 // Tasks returns the descriptor for the "tasks" table.
 func Tasks() TasksTable {
@@ -167,8 +166,8 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 type TasksTableProjectRelation struct {
 	Parent    ProjectsTable
 	Child     TasksTable
-	ParentKey query.ColumnRef
-	ChildKey  query.ColumnRef
+	ParentKey rasql.ColumnRef
+	ChildKey  rasql.ColumnRef
 }
 
 // Project returns the generated relationship descriptor.
@@ -179,8 +178,8 @@ func (t TasksTable) Project() TasksTableProjectRelation {
 }
 
 // Join returns an INNER JOIN for the relationship.
-func (r TasksTableProjectRelation) Join() query.Join {
-	return rasql.InnerJoin(r.Parent, query.Equal(r.ParentKey, r.ChildKey))
+func (r TasksTableProjectRelation) Join() rasql.Join {
+	return rasql.InnerJoin(r.Parent, rasql.Equal(r.ParentKey, r.ChildKey))
 }
 
 // Load fetches all related parents for children in one query and groups them by foreign-key value.

@@ -79,10 +79,10 @@ type MembersTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t MembersTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t MembersTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // Name returns a reference to the "name" column.
-func (t MembersTable) Name() query.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
+func (t MembersTable) Name() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
 
 // Members returns the descriptor for the "members" table.
 func Members() MembersTable {
@@ -90,7 +90,7 @@ func Members() MembersTable {
 }
 ```
 
-Those accessors are the reason chapter 5's queries never spell a column as a string. `members.Name()` is a `query.ColumnRef` already bound to the `members` table; `members.Nmae()` does not compile.
+Those accessors are the reason chapter 5's queries never spell a column as a string. `members.Name()` is a `rasql.ColumnRef` already bound to the `members` table; `members.Nmae()` does not compile.
 
 The rest of the file is scanning support and the relationships. `members` is referenced by `tasks`, so the generator gives it the other side of that link:
 
@@ -103,8 +103,8 @@ func (t MembersTable) Tasks() MembersTableTasksRelation {
 }
 
 // Join returns an INNER JOIN for the relationship.
-func (r MembersTableTasksRelation) Join() query.Join {
-	return rasql.InnerJoin(r.Child, query.Equal(r.ParentKey, r.ChildKey))
+func (r MembersTableTasksRelation) Join() rasql.Join {
+	return rasql.InnerJoin(r.Child, rasql.Equal(r.ParentKey, r.ChildKey))
 }
 ```
 
