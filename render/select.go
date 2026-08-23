@@ -8,32 +8,9 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/sqltext"
+	"github.com/lestrrat-go/rasql/statement"
 )
-
-// Statement is parameterized SQL ready for execution.
-type Statement struct {
-	sql  string
-	args []any
-}
-
-// SQL returns the rendered SQL text.
-func (s Statement) SQL() string {
-	return s.sql
-}
-
-// Args returns a copy of the bound arguments in placeholder order.
-func (s Statement) Args() []any {
-	return append([]any(nil), s.args...)
-}
-
-// BoundArgs returns the bound arguments in placeholder order without copying
-// them. The returned slice aliases the statement's own storage, so a caller
-// that writes to it changes what the statement sends to the database; use
-// Args for a copy that is safe to modify. It exists so an execution path can
-// hand the arguments straight to database/sql without a per-execution copy.
-func (s Statement) BoundArgs() []any {
-	return s.args
-}
 
 // Error describes a failure while rendering SQL.
 type Error struct {
@@ -52,25 +29,25 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-// Select renders statement for d.
-func Select(d dialect.Dialect, statement query.Select) (Statement, error) {
-	return renderStatement(d, "SELECT", statement.Validate, func(renderer *renderer) error {
-		return renderer.writeSelect(statement)
+// Select renders stmt for d.
+func Select(d dialect.Dialect, stmt query.Select) (statement.Statement, error) {
+	return renderStatement(d, "SELECT", stmt.Validate, func(renderer *renderer) error {
+		return renderer.writeSelect(stmt)
 	})
 }
 
-func renderStatement(d dialect.Dialect, operation string, validate func() error, write func(*renderer) error) (Statement, error) {
+func renderStatement(d dialect.Dialect, operation string, validate func() error, write func(*renderer) error) (statement.Statement, error) {
 	if isNilDialect(d) {
-		return Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
+		return statement.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := validate(); err != nil {
-		return Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid %s statement: %w", operation, err)}
+		return statement.Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid %s statement: %w", operation, err)}
 	}
 	renderer := renderer{dialect: d}
 	if err := write(&renderer); err != nil {
-		return Statement{}, &Error{Dialect: d.Name(), Err: err}
+		return statement.Statement{}, &Error{Dialect: d.Name(), Err: err}
 	}
-	return Statement{sql: renderer.builder.String(), args: renderer.args}, nil
+	return statement.New(sqltext.Text(renderer.builder.String()), renderer.args...), nil
 }
 
 type renderer struct {
@@ -89,12 +66,12 @@ type renderer struct {
 	inExcluded    bool
 }
 
-func (r *renderer) writeSelect(statement query.Select) error {
+func (r *renderer) writeSelect(stmt query.Select) error {
 	r.builder.WriteString("SELECT ")
-	if statement.Distinct() {
+	if stmt.Distinct() {
 		r.builder.WriteString("DISTINCT ")
 	}
-	for i, projection := range statement.Projections() {
+	for i, projection := range stmt.Projections() {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
@@ -104,10 +81,10 @@ func (r *renderer) writeSelect(statement query.Select) error {
 	}
 
 	r.builder.WriteString(" FROM ")
-	if err := r.writeTable(statement.From()); err != nil {
+	if err := r.writeTable(stmt.From()); err != nil {
 		return err
 	}
-	for _, join := range statement.Joins() {
+	for _, join := range stmt.Joins() {
 		r.builder.WriteByte(' ')
 		r.builder.WriteString(string(join.Type()))
 		r.builder.WriteString(" JOIN ")
@@ -119,14 +96,14 @@ func (r *renderer) writeSelect(statement query.Select) error {
 			return err
 		}
 	}
-	if where := statement.Where(); where != nil {
+	if where := stmt.Where(); where != nil {
 		r.builder.WriteString(" WHERE ")
 		if err := r.writeExpression(where); err != nil {
 			return err
 		}
 	}
 
-	groupBy := statement.GroupBy()
+	groupBy := stmt.GroupBy()
 	if len(groupBy) > 0 {
 		r.builder.WriteString(" GROUP BY ")
 		for i, expression := range groupBy {
@@ -138,14 +115,14 @@ func (r *renderer) writeSelect(statement query.Select) error {
 			}
 		}
 	}
-	if having := statement.Having(); having != nil {
+	if having := stmt.Having(); having != nil {
 		r.builder.WriteString(" HAVING ")
 		if err := r.writeExpression(having); err != nil {
 			return err
 		}
 	}
 
-	orders := statement.OrderBy()
+	orders := stmt.OrderBy()
 	if len(orders) > 0 {
 		r.builder.WriteString(" ORDER BY ")
 		for i, order := range orders {
@@ -160,13 +137,13 @@ func (r *renderer) writeSelect(statement query.Select) error {
 			}
 		}
 	}
-	if limit, ok := statement.Limit(); ok {
+	if limit, ok := stmt.Limit(); ok {
 		r.builder.WriteString(" LIMIT ")
 		if err := r.writeArgument(limit); err != nil {
 			return err
 		}
 	}
-	if offset, ok := statement.Offset(); ok {
+	if offset, ok := stmt.Offset(); ok {
 		r.builder.WriteString(" OFFSET ")
 		if err := r.writeArgument(offset); err != nil {
 			return err

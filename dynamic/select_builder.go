@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/statement"
 )
 
 // SelectBuilder builds a SELECT statement through an immutable fluent API and
@@ -126,7 +127,7 @@ func (b SelectBuilder) Offset(offset int) SelectBuilder {
 }
 
 // Build validates the statement and renders it for d without executing it.
-func (b SelectBuilder) Build(d dialect.Dialect) (render.Statement, error) {
+func (b SelectBuilder) Build(d dialect.Dialect) (statement.Statement, error) {
 	return b.builder.WithDialect(d).Build()
 }
 
@@ -140,11 +141,11 @@ func (b SelectBuilder) Query(ctx context.Context, db rasql.DB) (iter.Seq2[Row, e
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
-	statement, err := b.Build(db.Dialect())
+	stmt, err := b.Build(db.Dialect())
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	return scanRendered(ctx, db, statement), nil
+	return scanRendered(ctx, db, stmt), nil
 }
 
 // Count executes COUNT(*) over the rows the statement matches.
@@ -157,14 +158,14 @@ func (b SelectBuilder) Count(ctx context.Context, db rasql.DB) (int64, error) {
 	if err := db.Validate(); err != nil {
 		return 0, err
 	}
-	statement, err := b.builder.WithDialect(db.Dialect()).BuildCount()
+	stmt, err := b.builder.WithDialect(db.Dialect()).BuildCount()
 	if err != nil {
 		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
 	// Count consumes the sequence itself, so the statement runs before Count
 	// returns either way. It goes through scanRendered so that no call site
 	// outside that one closure holds a *sql.Rows.
-	return exactlyOne(countValues(scanRendered(ctx, db, statement)))
+	return exactlyOne(countValues(scanRendered(ctx, db, stmt)))
 }
 
 // countValues adapts a sequence of result rows into the int64 held by each

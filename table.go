@@ -24,7 +24,7 @@ type Table[T any] interface {
 	// Ref returns the dialect-neutral table backing the descriptor.
 	Ref() query.TableRef
 	// Column returns a reference to a named column of the table.
-	Column(name string) (query.ColumnRef, error)
+	Column(name string) (ColumnRef, error)
 	// tableRow keeps T inferable and stops implementations outside this package.
 	tableRow() T
 }
@@ -87,9 +87,23 @@ func As[T any](table Table[T], alias string) (Table[T], error) {
 	return typedTable[T]{source: aliased}, nil
 }
 
+// ColumnRef is a reference to one column of one table. It is query.ColumnRef
+// under a name generated code can reach without importing query.
+type ColumnRef = query.ColumnRef
+
+// Join is a table joined into a FROM clause. It is query.Join under a name
+// generated code can reach without importing query.
+type Join = query.Join
+
+// Equal compares left and right for equality. It is query.Equal under a name
+// generated code can reach without importing query.
+func Equal(left query.Expression, right query.Expression) query.Binary {
+	return query.Equal(left, right)
+}
+
 // MustColumn looks up name on table and panics when it is absent.
 // It exists for generated code, where the name comes from the descriptor itself.
-func MustColumn[T any](table Table[T], name string) query.ColumnRef {
+func MustColumn[T any](table Table[T], name string) ColumnRef {
 	if isNilTable(table) {
 		panic("rasql: table column: table must not be nil")
 	}
@@ -111,13 +125,13 @@ func MustColumn[T any](table Table[T], name string) query.ColumnRef {
 // a zero wrapper nor a typed nil pointer to one is the nil interface, and
 // comparing against nil would let both reach Column and dereference a nil
 // embedded field. MustColumn guards the same way.
-func ColumnOf[T any](table Table[T], name string) query.ColumnRef {
+func ColumnOf[T any](table Table[T], name string) ColumnRef {
 	if isNilTable(table) {
-		return query.ColumnRef{}
+		return ColumnRef{}
 	}
 	column, err := table.Column(name)
 	if err != nil {
-		return query.ColumnRef{}
+		return ColumnRef{}
 	}
 	return column
 }
@@ -128,7 +142,7 @@ func (t typedTable[T]) Ref() query.TableRef {
 }
 
 // Column returns a reference to a named column of the table.
-func (t typedTable[T]) Column(name string) (query.ColumnRef, error) {
+func (t typedTable[T]) Column(name string) (ColumnRef, error) {
 	return t.source.Column(name)
 }
 

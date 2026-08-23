@@ -6,7 +6,7 @@ A `rasql.DB` pairs a database handle with the dialect used to render SQL. Both b
 
 ## Run a rendered statement
 
-[The SQL builder](02-sql-builder.md) ends at a `render.Statement`, which holds SQL text and its arguments. `database/sql` runs one directly. Running it through a `rasql.DB` instead applies the registered hooks and decodes the rows:
+[The SQL builder](02-sql-builder.md) ends at a `statement.Statement`, which holds SQL text and its arguments. `database/sql` runs one directly. Running it through a `rasql.DB` instead applies the registered hooks and decodes the rows:
 
 | Call | Runs |
 | --- | --- |

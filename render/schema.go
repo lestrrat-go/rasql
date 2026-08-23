@@ -7,6 +7,8 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
+	"github.com/lestrrat-go/rasql/statement"
 )
 
 // ErrUnsupportedIndexMethod is the sentinel wrapped by every
@@ -1152,35 +1154,35 @@ func (e *UnsupportedExclusionConstraintError) Unwrap() error {
 }
 
 // CreateTable renders a CREATE TABLE statement for table.
-func CreateTable(d dialect.Dialect, table schema.TableDef) (Statement, error) {
+func CreateTable(d dialect.Dialect, table schema.TableDef) (statement.Statement, error) {
 	if isNilDialect(d) {
-		return Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
+		return statement.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := table.Validate(); err != nil {
-		return Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid table: %w", err)}
+		return statement.Statement{}, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid table: %w", err)}
 	}
 	renderer := renderer{dialect: d}
 	if err := renderer.writeCreateTable(table); err != nil {
-		return Statement{}, &Error{Dialect: d.Name(), Err: err}
+		return statement.Statement{}, &Error{Dialect: d.Name(), Err: err}
 	}
-	return Statement{sql: renderer.builder.String()}, nil
+	return statement.New(sqltext.Text(renderer.builder.String())), nil
 }
 
 // CreateIndexes renders the CREATE INDEX statements for table.
-func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]Statement, error) {
+func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]statement.Statement, error) {
 	if isNilDialect(d) {
 		return nil, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := table.Validate(); err != nil {
 		return nil, &Error{Dialect: d.Name(), Err: fmt.Errorf("invalid table: %w", err)}
 	}
-	statements := make([]Statement, len(table.Indexes))
+	statements := make([]statement.Statement, len(table.Indexes))
 	for i, index := range table.Indexes {
 		renderer := renderer{dialect: d}
 		if err := renderer.writeCreateIndex(table, index); err != nil {
 			return nil, &Error{Dialect: d.Name(), Err: err}
 		}
-		statements[i] = Statement{sql: renderer.builder.String()}
+		statements[i] = statement.New(sqltext.Text(renderer.builder.String()))
 	}
 	return statements, nil
 }

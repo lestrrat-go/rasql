@@ -101,16 +101,16 @@ wrote internal/store from 3 tables
 
 package store
 
-import rasqlrender "github.com/lestrrat-go/rasql/render"
+import rasqlstatement "github.com/lestrrat-go/rasql/statement"
 
-func OverdueCount(on any) (rasqlrender.Statement, error) {
-	return rasqlrender.Precompiled("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
+func OverdueCount(on any) rasqlstatement.Statement {
+	return rasqlstatement.New("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
 }
 ```
 source: [sample/taskboard/internal/store/overdue_count_gen.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/overdue_count_gen.go)
 <!-- END INCLUDE -->
 
-The template became `$1`, PostgreSQL's placeholder, and the bind name became the parameter. The function hands back a `render.Statement` rather than running anything, so choosing the handle, the context, and the row type is still the caller's business.
+The template became `$1`, PostgreSQL's placeholder, and the bind name became the parameter. The function hands back a `statement.Statement` rather than running anything, so choosing the handle, the context, and the row type is still the caller's business.
 
 The template is checked when the generator runs, so a malformed one fails there rather than at the first request. Writing `{{bind}}` with no name, for instance:
 
@@ -118,7 +118,7 @@ The template is checked when the generator runs, so a malformed one fails there 
 generate: query[0]: namedsql "OverdueCount": actions must use bind with one quoted parameter name
 ```
 
-What is not checked is the SQL against the schema. `Precompiled` holds the statement as text and hands it to PostgreSQL unread, so a column a later migration renames leaves this query referring to something that no longer exists, and the database is what says so. That is the trade for writing SQL: the compiler cannot help the way it helped in chapter 7. [Chapter 9](09-operate.md#the-tests-that-need-a-database) is where a live test covers it instead.
+What is not checked is the SQL against the schema. `statement.New` holds the statement as text and hands it to PostgreSQL unread, so a column a later migration renames leaves this query referring to something that no longer exists, and the database is what says so. That is the trade for writing SQL: the compiler cannot help the way it helped in chapter 7. [Chapter 9](09-operate.md#the-tests-that-need-a-database) is where a live test covers it instead.
 
 Use this for aggregates, window functions, recursive CTEs, and anything else where the SQL is the clearest statement of what is wanted.
 
@@ -142,10 +142,7 @@ type overdueRow struct {
 // caller decides which day it is and the database session's time zone does
 // not.
 func (repository Repository) CountOverdue(ctx context.Context, on time.Time) (int64, error) {
-	statement, err := OverdueCount(on)
-	if err != nil {
-		return 0, fmt.Errorf("build the overdue count: %w", err)
-	}
+	statement := OverdueCount(on)
 	row, err := rasql.QueryRenderedOne[overdueRow](ctx, repository.db, statement)
 	if err != nil {
 		return 0, fmt.Errorf("count overdue tasks: %w", err)
@@ -160,7 +157,7 @@ The method takes an instant and the query narrows it, so the caller is the one w
 
 `rasql.QueryRenderedOne` runs a rendered statement and decodes exactly one row, reporting `rasql.ErrNoRows` for none and `rasql.ErrMultipleRows` for more. `QueryRenderedAll` and `QueryRendered` are the same call for a slice and for an iterator.
 
-What the repository adds over calling `OverdueCount` from the handler is the boundary. `overdueRow` and `render.Statement` stop here, the method returns an `int64`, and the two errors it can produce are wrapped with what was being attempted. [Chapter 5's `OpenTasks`](05-queries.md#read-the-open-tasks) does the same for the joined read: it returns `[]OpenTask`, and nothing above it has ever seen a `query.ColumnRef`.
+What the repository adds over calling `OverdueCount` from the handler is the boundary. `overdueRow` and `statement.Statement` stop here, the method returns an `int64`, and the one error it can produce is wrapped with what was being attempted. [Chapter 5's `OpenTasks`](05-queries.md#read-the-open-tasks) does the same for the joined read: it returns `[]OpenTask`, and nothing above it has ever seen a `rasql.ColumnRef`.
 
 That boundary is what let chapter 7 change the schema without the HTTP layer learning about foreign keys. When `assignee_id` became nullable, the handler changed because the *meaning* changed, and not because a join had.
 

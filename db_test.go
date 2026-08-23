@@ -9,7 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/statement"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,9 +141,8 @@ func TestTransactionWriteReachesTransactionAndCommits(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
-	statement, err := render.Precompiled("INSERT INTO users (id) VALUES (?)", 42)
-	require.NoError(t, err)
-	result, err := tx.ExecRendered(t.Context(), statement)
+	stmt := statement.New("INSERT INTO users (id) VALUES (?)", 42)
+	result, err := tx.ExecRendered(t.Context(), stmt)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -373,16 +372,12 @@ func buildOnlyDB(t *testing.T) rasql.DB {
 	return db
 }
 
-func renderedSelectStatement(t *testing.T) render.Statement {
+func renderedSelectStatement(t *testing.T) statement.Statement {
 	t.Helper()
-	statement, err := render.Precompiled("SELECT id FROM users")
-	require.NoError(t, err)
-	return statement
+	return statement.New("SELECT id FROM users")
 }
 
-func renderedDeleteStatement(t *testing.T) render.Statement {
+func renderedDeleteStatement(t *testing.T) statement.Statement {
 	t.Helper()
-	statement, err := render.Precompiled("DELETE FROM users")
-	require.NoError(t, err)
-	return statement
+	return statement.New("DELETE FROM users")
 }

@@ -24,7 +24,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
 )
 
 type UsersRow struct {
@@ -82,10 +81,10 @@ type UsersTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t UsersTable) ID() query.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t UsersTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // Email returns a reference to the "email" column.
-func (t UsersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
+func (t UsersTable) Email() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {
@@ -231,10 +230,10 @@ The generated function returns a parameterized statement:
 
 package store
 
-import rasqlrender "github.com/lestrrat-go/rasql/render"
+import rasqlstatement "github.com/lestrrat-go/rasql/statement"
 
-func UserByEmail(email any) (rasqlrender.Statement, error) {
-	return rasqlrender.Precompiled("SELECT id, email FROM users WHERE email = $1\n", email)
+func UserByEmail(email any) rasqlstatement.Statement {
+	return rasqlstatement.New("SELECT id, email FROM users WHERE email = $1\n", email)
 }
 ```
 source: [examples/store/user_by_email_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/user_by_email_gen.go)
@@ -259,10 +258,10 @@ source: [examples/store/user_by_id.sql](https://github.com/lestrrat-go/rasql/blo
 
 package store
 
-import rasqlrender "github.com/lestrrat-go/rasql/render"
+import rasqlstatement "github.com/lestrrat-go/rasql/statement"
 
-func UserByID(id int64) (rasqlrender.Statement, error) {
-	return rasqlrender.Precompiled("SELECT id, email FROM users WHERE id = $1\n", id)
+func UserByID(id int64) rasqlstatement.Statement {
+	return rasqlstatement.New("SELECT id, email FROM users WHERE id = $1\n", id)
 }
 ```
 source: [examples/store/user_by_id_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/user_by_id_gen.go)

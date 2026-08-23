@@ -41,23 +41,6 @@ func TestSelectRendersForBuiltInDialects(t *testing.T) {
 	}
 }
 
-// TestStatementBoundArgsAliasesStorage pins the contract that separates
-// BoundArgs from Args: BoundArgs hands out the statement's own arg slice, so
-// a caller that writes into it changes what the statement holds, while Args
-// hands out a copy that a later write leaves untouched.
-func TestStatementBoundArgsAliasesStorage(t *testing.T) {
-	statement, err := render.Precompiled("SELECT * FROM users WHERE id = ?", 1)
-	require.NoError(t, err)
-
-	boundArgs := statement.BoundArgs()
-	boundArgs[0] = 99
-	require.Equal(t, []any{99}, statement.BoundArgs(), "BoundArgs must alias the statement's storage")
-
-	copied := statement.Args()
-	copied[0] = 7
-	require.Equal(t, []any{99}, statement.BoundArgs(), "Args must return a copy that leaves the statement's storage untouched")
-}
-
 // TestSelectRendersQualifiedJoin pins the exact rendered SQL for a select
 // that joins a schema-qualified table to another schema-qualified table,
 // across all three built-in dialects: quoting each of Schema and Name as a

@@ -5,12 +5,12 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/statement"
 )
 
 // BenchmarkQueryRenderedBoundArgs pins the allocation win of QueryRendered
 // handing database/sql the statement's own argument slice through
-// render.Statement.BoundArgs instead of a fresh copy through Args. Against
+// statement.Statement.BoundArgs instead of a fresh copy through Args. Against
 // this benchmark's fake driver, which pays no allocations of its own inside
 // QueryContext, every alloc/op this benchmark reports comes from
 // QueryRendered's own path. If QueryRendered ever goes back to calling Args
@@ -33,15 +33,12 @@ func BenchmarkQueryRenderedBoundArgs(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	statement, err := render.Precompiled(benchmarkFullQuery, int64(7), "Ada Lovelace", "ada@example.com")
-	if err != nil {
-		b.Fatal(err)
-	}
+	stmt := statement.New(benchmarkFullQuery, int64(7), "Ada Lovelace", "ada@example.com")
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
-		rows, err := db.QueryRendered(b.Context(), statement)
+		rows, err := db.QueryRendered(b.Context(), stmt)
 		if err != nil {
 			b.Fatal(err)
 		}

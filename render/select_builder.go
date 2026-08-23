@@ -5,6 +5,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/statement"
 )
 
 // SelectBuilder builds parameterized SQL through an immutable fluent API.
@@ -226,45 +227,45 @@ func (b SelectBuilder) Offset(offset int) SelectBuilder {
 }
 
 // Build validates b and returns its parameterized SQL statement.
-func (b SelectBuilder) Build() (Statement, error) {
+func (b SelectBuilder) Build() (statement.Statement, error) {
 	if b.err != nil {
-		return Statement{}, b.err
+		return statement.Statement{}, b.err
 	}
-	statement, err := b.buildFromJoinsWhere(b.projections...)
+	stmt, err := b.buildFromJoinsWhere(b.projections...)
 	if err != nil {
-		return Statement{}, err
+		return statement.Statement{}, err
 	}
 	if b.distinct {
-		statement, err = statement.WithDistinct()
+		stmt, err = stmt.WithDistinct()
 		if err != nil {
-			return Statement{}, err
+			return statement.Statement{}, err
 		}
 	}
 	if predicate, ok := combinePredicates(b.havingPredicates); ok {
-		statement, err = statement.WithHaving(predicate)
+		stmt, err = stmt.WithHaving(predicate)
 		if err != nil {
-			return Statement{}, err
+			return statement.Statement{}, err
 		}
 	}
 	if len(b.orders) > 0 {
-		statement, err = statement.WithOrder(b.orders...)
+		stmt, err = stmt.WithOrder(b.orders...)
 		if err != nil {
-			return Statement{}, err
+			return statement.Statement{}, err
 		}
 	}
 	if b.hasLimit {
-		statement, err = statement.WithLimit(b.limit)
+		stmt, err = stmt.WithLimit(b.limit)
 		if err != nil {
-			return Statement{}, err
+			return statement.Statement{}, err
 		}
 	}
 	if b.hasOffset {
-		statement, err = statement.WithOffset(b.offset)
+		stmt, err = stmt.WithOffset(b.offset)
 		if err != nil {
-			return Statement{}, err
+			return statement.Statement{}, err
 		}
 	}
-	return Select(b.dialect, statement)
+	return Select(b.dialect, stmt)
 }
 
 // BuildCount validates b and returns a parameterized statement that counts the
@@ -281,30 +282,30 @@ func (b SelectBuilder) Build() (Statement, error) {
 // offer in its place: query.Count(column).WithDistinct() renders
 // COUNT(DISTINCT column), which counts the distinct non-NULL values of one
 // column rather than the rows SELECT DISTINCT returns.
-func (b SelectBuilder) BuildCount() (Statement, error) {
+func (b SelectBuilder) BuildCount() (statement.Statement, error) {
 	if b.err != nil {
-		return Statement{}, b.err
+		return statement.Statement{}, b.err
 	}
 	if b.hasLimit {
-		return Statement{}, fmt.Errorf("cannot count a statement with a limit")
+		return statement.Statement{}, fmt.Errorf("cannot count a statement with a limit")
 	}
 	if b.hasOffset {
-		return Statement{}, fmt.Errorf("cannot count a statement with an offset")
+		return statement.Statement{}, fmt.Errorf("cannot count a statement with an offset")
 	}
 	if len(b.groupBy) > 0 {
-		return Statement{}, fmt.Errorf("cannot count a grouped statement")
+		return statement.Statement{}, fmt.Errorf("cannot count a grouped statement")
 	}
 	if len(b.havingPredicates) > 0 {
-		return Statement{}, fmt.Errorf("cannot count a statement with a HAVING clause")
+		return statement.Statement{}, fmt.Errorf("cannot count a statement with a HAVING clause")
 	}
 	if b.distinct {
-		return Statement{}, fmt.Errorf("cannot count a distinct statement")
+		return statement.Statement{}, fmt.Errorf("cannot count a distinct statement")
 	}
-	statement, err := b.buildFromJoinsWhere(query.Project(query.CountAll()).As("count"))
+	stmt, err := b.buildFromJoinsWhere(query.Project(query.CountAll()).As("count"))
 	if err != nil {
-		return Statement{}, err
+		return statement.Statement{}, err
 	}
-	return Select(b.dialect, statement)
+	return Select(b.dialect, stmt)
 }
 
 // buildFromJoinsWhere assembles a query.Select from b's from, joins, and
@@ -321,17 +322,17 @@ func (b SelectBuilder) BuildCount() (Statement, error) {
 // statement, WHERE here and HAVING, ORDER BY, LIMIT and OFFSET in Build, are
 // attached afterwards.
 func (b SelectBuilder) buildFromJoinsWhere(projections ...query.Projection) (query.Select, error) {
-	statement, err := query.NewJoinedSelect(b.from, b.joins, b.groupBy, projections...)
+	stmt, err := query.NewJoinedSelect(b.from, b.joins, b.groupBy, projections...)
 	if err != nil {
 		return query.Select{}, err
 	}
 	if predicate, ok := combinePredicates(b.predicates); ok {
-		statement, err = statement.WithWhere(predicate)
+		stmt, err = stmt.WithWhere(predicate)
 		if err != nil {
 			return query.Select{}, err
 		}
 	}
-	return statement, nil
+	return stmt, nil
 }
 
 func (b SelectBuilder) orderColumn(name string, descending bool) SelectBuilder {

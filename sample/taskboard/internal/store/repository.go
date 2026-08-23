@@ -141,10 +141,7 @@ type overdueRow struct {
 // caller decides which day it is and the database session's time zone does
 // not.
 func (repository Repository) CountOverdue(ctx context.Context, on time.Time) (int64, error) {
-	statement, err := OverdueCount(on)
-	if err != nil {
-		return 0, fmt.Errorf("build the overdue count: %w", err)
-	}
+	statement := OverdueCount(on)
 	row, err := rasql.QueryRenderedOne[overdueRow](ctx, repository.db, statement)
 	if err != nil {
 		return 0, fmt.Errorf("count overdue tasks: %w", err)

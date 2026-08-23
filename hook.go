@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/statement"
 )
 
 // OperationKind identifies the database/sql method an Operation wraps.
@@ -35,8 +35,8 @@ func (k OperationKind) String() string {
 // Args returns a copy, so a hook can inspect bound values without changing
 // what reaches database/sql. Hooks cannot replace the SQL or its arguments.
 type Operation struct {
-	kind      OperationKind
-	statement render.Statement
+	kind OperationKind
+	stmt statement.Statement
 }
 
 // Kind reports whether the operation is a query or an exec.
@@ -46,12 +46,12 @@ func (o Operation) Kind() OperationKind {
 
 // SQL returns the bound SQL text exactly as it will be sent to database/sql.
 func (o Operation) SQL() string {
-	return o.statement.SQL()
+	return o.stmt.SQL()
 }
 
 // Args returns a copy of the bound arguments in placeholder order.
 func (o Operation) Args() []any {
-	return o.statement.Args()
+	return o.stmt.Args()
 }
 
 // Hook observes and optionally rejects rendered database operations.
