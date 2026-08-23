@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -95,7 +96,7 @@ func appendHooks(current []Hook, additions []Hook) ([]Hook, error) {
 	hooks := make([]Hook, 0, len(current)+len(additions))
 	hooks = append(hooks, current...)
 	for _, hook := range additions {
-		if isNil(hook) {
+		if nilcheck.Is(hook) {
 			return nil, fmt.Errorf("rasql: hook must not be nil")
 		}
 		hooks = append(hooks, hook)

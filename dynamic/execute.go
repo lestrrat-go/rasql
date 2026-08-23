@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"iter"
-	"reflect"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -49,7 +49,7 @@ func renderQueryWrite(db rasql.DB, s query.WriteStatement) (stmt.Statement, erro
 	if err := db.Validate(); err != nil {
 		return stmt.Statement{}, err
 	}
-	if isNil(s) || len(s.Returning()) == 0 {
+	if nilcheck.Is(s) || len(s.Returning()) == 0 {
 		return stmt.Statement{}, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
 	}
 	rendered, err := render.Write(db.Dialect(), s)
@@ -97,21 +97,4 @@ func exactlyOne[T any](rows iter.Seq2[T, error]) (T, error) {
 		return zero, rasql.ErrNoRows
 	}
 	return result, nil
-}
-
-// isNil is a verbatim copy of root's reflect-based nil check. Ten lines of
-// duplication is the accepted cost of the one-way import rule: dynamic
-// imports rasql for DB, so rasql can never import dynamic, and root keeps its
-// own unexported copy rather than exporting one for this package alone.
-func isNil(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflectValue := reflect.ValueOf(value)
-	switch reflectValue.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflectValue.IsNil()
-	default:
-		return false
-	}
 }

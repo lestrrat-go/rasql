@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
@@ -187,13 +188,14 @@ func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
 // point taking a Table[T] can reject it instead of panicking. It is the one
 // place this rule lives; every such entry point calls it.
 //
-// It catches more than the nil interface and the typed nil pointer isNil covers.
-// A table wrapper embeds Table[T] and reaches every Table method through that
-// embedded field, so a zero wrapper satisfies Table[T] while the field behind
-// each promoted method is nil. That value is a struct, which isNil reports as
-// not nil, and it needs no hand-written type to exist: rasqlgen emits an
-// exported wrapper struct that embeds Table[T] under the exported field name
-// Table, and a generated As returns a zero wrapper along with its error.
+// It catches more than the nil interface and the typed nil pointer nilcheck.Is
+// covers. A table wrapper embeds Table[T] and reaches every Table method
+// through that embedded field, so a zero wrapper satisfies Table[T] while the
+// field behind each promoted method is nil. That value is a struct, which
+// nilcheck.Is reports as not nil, and it needs no hand-written type to exist:
+// rasqlgen emits an exported wrapper struct that embeds Table[T] under the
+// exported field name Table, and a generated As returns a zero wrapper along
+// with its error.
 //
 // The nil field is not what makes such a value unusable, and the fields cannot
 // decide the question either way. A type can supply its own Ref and
@@ -228,7 +230,7 @@ func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
 // gives no way to attribute a recovered nil dereference to the frame that raised
 // it. That one shape is outside what this guard can promise.
 func isNilTable[T any](table Table[T]) bool {
-	if isNil(table) {
+	if nilcheck.Is(table) {
 		return true
 	}
 	if !dereferencesNil(func() { table.tableRow() }) {
