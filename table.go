@@ -102,30 +102,16 @@ func Equal(left query.Expression, right query.Expression) query.Binary {
 	return query.Equal(left, right)
 }
 
-// MustColumn looks up name on table and panics when it is absent.
-// It exists for generated code, where the name comes from the descriptor itself.
-func MustColumn[T any](table Table[T], name string) ColumnRef {
-	if isNilTable(table) {
-		panic("rasql: table column: table must not be nil")
-	}
-	column, err := table.Column(name)
-	if err != nil {
-		panic(fmt.Sprintf("rasql: table column: %s", err))
-	}
-	return column
-}
-
 // ColumnOf returns the named column of table. It returns the zero ColumnRef
 // when table has no typed table behind it or has no such column, so a wrapper
 // that never reached a constructor fails at Build rather than at the point of
-// the column reference. Hand-written code that wants the failure immediately
-// uses MustColumn.
+// the column reference.
 //
 // It asks isNilTable rather than comparing table against nil. A generated
 // wrapper reaches every Table method through an embedded Table[T], so neither
 // a zero wrapper nor a typed nil pointer to one is the nil interface, and
 // comparing against nil would let both reach Column and dereference a nil
-// embedded field. MustColumn guards the same way.
+// embedded field.
 func ColumnOf[T any](table Table[T], name string) ColumnRef {
 	if isNilTable(table) {
 		return ColumnRef{}
