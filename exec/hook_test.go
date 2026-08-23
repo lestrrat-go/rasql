@@ -1,4 +1,4 @@
-package rasql_test
+package exec_test
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
@@ -22,37 +22,37 @@ func TestClientHooksRunInOrderAndPreserveStatement(t *testing.T) {
 	})
 
 	events := make([]string, 0, 4)
-	first := rasql.HookFunc{
-		BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
+	first := exec.HookFunc{
+		BeforeFunc: func(_ context.Context, operation exec.Operation) error {
 			events = append(events, "first before")
-			require.Equal(t, rasql.ExecOperation, operation.Kind())
+			require.Equal(t, exec.ExecOperation, operation.Kind())
 			require.Equal(t, "INSERT INTO users (email) VALUES ($1)", operation.SQL())
 			args := operation.Args()
 			require.Equal(t, []any{"ada@example.com"}, args)
 			args[0] = "rewritten by hook"
 			return nil
 		},
-		AfterFunc: func(_ context.Context, operation rasql.Operation, err error) error {
+		AfterFunc: func(_ context.Context, operation exec.Operation, err error) error {
 			events = append(events, "first after")
 			require.NoError(t, err)
 			require.Equal(t, []any{"ada@example.com"}, operation.Args())
 			return nil
 		},
 	}
-	second := rasql.HookFunc{
-		BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
+	second := exec.HookFunc{
+		BeforeFunc: func(_ context.Context, operation exec.Operation) error {
 			events = append(events, "second before")
-			require.Equal(t, rasql.ExecOperation, operation.Kind())
+			require.Equal(t, exec.ExecOperation, operation.Kind())
 			return nil
 		},
-		AfterFunc: func(_ context.Context, operation rasql.Operation, err error) error {
+		AfterFunc: func(_ context.Context, operation exec.Operation, err error) error {
 			events = append(events, "second after")
 			require.NoError(t, err)
 			require.Equal(t, "INSERT INTO users (email) VALUES ($1)", operation.SQL())
 			return nil
 		},
 	}
-	db, err := rasql.New(database, dialect.PostgreSQL(), first, second)
+	db, err := exec.New(database, dialect.PostgreSQL(), first, second)
 	require.NoError(t, err)
 	s := stmt.New("INSERT INTO users (email) VALUES ($1)", "ada@example.com")
 	mock.ExpectExec("INSERT INTO users (email) VALUES ($1)").
@@ -73,11 +73,11 @@ func TestClientHooksObserveQuery(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	var observed rasql.Operation
-	db, err := rasql.New(database, dialect.PostgreSQL())
+	var observed exec.Operation
+	db, err := exec.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	db, err = db.WithHooks(rasql.HookFunc{
-		BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
+	db, err = db.WithHooks(exec.HookFunc{
+		BeforeFunc: func(_ context.Context, operation exec.Operation) error {
 			observed = operation
 			return nil
 		},
@@ -91,7 +91,7 @@ func TestClientHooksObserveQuery(t *testing.T) {
 	rows, err := db.QueryRendered(t.Context(), s)
 	require.NoError(t, err)
 	require.NoError(t, rows.Close())
-	require.Equal(t, rasql.QueryOperation, observed.Kind())
+	require.Equal(t, exec.QueryOperation, observed.Kind())
 	require.Equal(t, "SELECT id FROM users WHERE id = $1", observed.SQL())
 	require.Equal(t, []any{42}, observed.Args())
 }
@@ -106,9 +106,9 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 		expected := errors.New("policy denied")
-		db, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{
-			BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
-				require.Equal(t, rasql.ExecOperation, operation.Kind())
+		db, err := exec.New(database, dialect.SQLite(), exec.HookFunc{
+			BeforeFunc: func(_ context.Context, operation exec.Operation) error {
+				require.Equal(t, exec.ExecOperation, operation.Kind())
 				return expected
 			},
 		})
@@ -129,10 +129,10 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 		expected := errors.New("metrics sink unavailable")
-		db, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{
-			AfterFunc: func(_ context.Context, operation rasql.Operation, err error) error {
+		db, err := exec.New(database, dialect.SQLite(), exec.HookFunc{
+			AfterFunc: func(_ context.Context, operation exec.Operation, err error) error {
 				require.NoError(t, err)
-				require.Equal(t, rasql.ExecOperation, operation.Kind())
+				require.Equal(t, exec.ExecOperation, operation.Kind())
 				return expected
 			},
 		})
@@ -158,12 +158,12 @@ func TestHooksRunInsideExplicitTransaction(t *testing.T) {
 	})
 
 	events := make([]string, 0, 2)
-	hook := rasql.HookFunc{
-		BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
+	hook := exec.HookFunc{
+		BeforeFunc: func(_ context.Context, operation exec.Operation) error {
 			events = append(events, "before "+operation.Kind().String())
 			return nil
 		},
-		AfterFunc: func(_ context.Context, operation rasql.Operation, err error) error {
+		AfterFunc: func(_ context.Context, operation exec.Operation, err error) error {
 			require.NoError(t, err)
 			events = append(events, "after "+operation.Kind().String())
 			return nil
@@ -175,7 +175,7 @@ func TestHooksRunInsideExplicitTransaction(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := exec.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)

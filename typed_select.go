@@ -222,7 +222,7 @@ func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (stmt.Statement, error) 
 // when the sequence is first ranged over, not when Query returns, so a sequence
 // that is never ranged opens no cursor to leak.
 func (b TypedSelectBuilder[T]) Query(ctx context.Context, db DB) (iter.Seq2[T, error], error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	s, err := b.Build(db.Dialect())
@@ -251,7 +251,7 @@ func (b TypedSelectBuilder[T]) All(ctx context.Context, db DB) ([]T, error) {
 // Like [TypedSelectBuilder.One], it reports [ErrNoRows] or [ErrMultipleRows]
 // when the database returns anything other than the one row COUNT(*) produces.
 func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return 0, err
 	}
 	if b.err != nil {

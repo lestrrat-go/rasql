@@ -17,9 +17,10 @@
 // clause is read with dynamic.QueryWrite, or the typed QueryWriteAll and
 // QueryWriteOne, instead of Exec, which rejects it.
 //
-// The schema, query, render, row, dynamic, and dialect packages expose
-// lower-level APIs for schema generation, dynamic queries, rendering, and
-// result handling. A column name known only as a string at run time is
-// served by rasql/dynamic, which imports this package; this package never
-// imports it.
+// This package re-exports DB, Handle, the hooks and the shared error
+// sentinels from rasql/exec, so ordinary use needs this import alone. The
+// schema, query, render, dynamic, and dialect packages expose lower-level
+// APIs for schema generation, dynamic queries, rendering, and result
+// handling. A column name known only as a string at run time is served by
+// rasql/dynamic, which imports rasql/exec rather than this package.
 package rasql

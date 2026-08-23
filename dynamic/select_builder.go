@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"iter"
 
-	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -137,7 +137,7 @@ func (b SelectBuilder) Build(d dialect.Dialect) (stmt.Statement, error) {
 // The statement runs when the sequence is first ranged over, not when Query
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
-func (b SelectBuilder) Query(ctx context.Context, db rasql.DB) (iter.Seq2[Row, error], error) {
+func (b SelectBuilder) Query(ctx context.Context, db exec.DB) (iter.Seq2[Row, error], error) {
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ func (b SelectBuilder) Query(ctx context.Context, db rasql.DB) (iter.Seq2[Row, e
 // A COUNT(*) statement returns exactly one row, so Count reports the same
 // [rasql.ErrNoRows] and [rasql.ErrMultipleRows] as every other single-row read
 // when the database returns anything else.
-func (b SelectBuilder) Count(ctx context.Context, db rasql.DB) (int64, error) {
+func (b SelectBuilder) Count(ctx context.Context, db exec.DB) (int64, error) {
 	if err := db.Validate(); err != nil {
 		return 0, err
 	}

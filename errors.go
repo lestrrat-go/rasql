@@ -1,9 +1,6 @@
 package rasql
 
-import (
-	"database/sql"
-	"errors"
-)
+import "github.com/lestrrat-go/rasql/exec"
 
 // ErrNoRows is returned by [TypedSelectBuilder.One], [QueryWriteOne],
 // [QueryDeleteOne], and the Count methods when the statement matched no rows.
@@ -25,7 +22,7 @@ import (
 // Only the methods that expect one row report it. All and [QueryWriteAll]
 // return an empty slice for an empty result, and Query yields no values at all,
 // because none of them treats an empty result as a failure.
-var ErrNoRows error = noRowsError{}
+var ErrNoRows = exec.ErrNoRows
 
 // ErrMultipleRows is returned by [TypedSelectBuilder.One], [QueryWriteOne],
 // [QueryDeleteOne], and the Count methods when the statement matched more than
@@ -37,16 +34,4 @@ var ErrNoRows error = noRowsError{}
 //
 // They all stop reading at the second row and do not drain the result, so they
 // report that more than one row matched without reporting how many.
-var ErrMultipleRows = errors.New("rasql: expected one row, got more than one")
-
-// noRowsError gives ErrNoRows a message of its own while still unwrapping to
-// database/sql.ErrNoRows. Declaring the sentinel as
-// fmt.Errorf("...: %w", sql.ErrNoRows) would append the standard library's
-// text to the message of every error One returns for an empty result.
-type noRowsError struct{}
-
-func (noRowsError) Error() string { return "rasql: expected one row, got none" }
-
-// Unwrap exposes database/sql.ErrNoRows so errors.Is(err, sql.ErrNoRows) holds
-// for an empty result, matching what a caller gets from sql.Row.Scan.
-func (noRowsError) Unwrap() error { return sql.ErrNoRows }
+var ErrMultipleRows = exec.ErrMultipleRows

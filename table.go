@@ -162,7 +162,7 @@ func CreateTable[T any](ctx context.Context, db DB, table Table[T]) error {
 }
 
 func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return err
 	}
 	statement, err := render.CreateTable(db.Dialect(), table)

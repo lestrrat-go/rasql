@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"iter"
 
-	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
@@ -114,7 +114,7 @@ func (b DeleteBuilder) Build(d dialect.Dialect) (stmt.Statement, error) {
 }
 
 // Exec builds the statement and executes it.
-func (b DeleteBuilder) Exec(ctx context.Context, db rasql.DB) (sql.Result, error) {
+func (b DeleteBuilder) Exec(ctx context.Context, db exec.DB) (sql.Result, error) {
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func (b DeleteBuilder) Exec(ctx context.Context, db rasql.DB) (sql.Result, error
 	if err != nil {
 		return nil, err
 	}
-	return rasql.Exec(ctx, db, s)
+	return exec.Write(ctx, db, s)
 }
 
 // Returning adds projections to an existing delete RETURNING builder.
@@ -149,7 +149,7 @@ func (b DeleteReturningBuilder) Build(d dialect.Dialect) (stmt.Statement, error)
 
 // Query runs the delete and returns its RETURNING rows as a rangeable sequence
 // of dynamic rows. The statement runs when the sequence is first ranged.
-func (b DeleteReturningBuilder) Query(ctx context.Context, db rasql.DB) (iter.Seq2[Row, error], error) {
+func (b DeleteReturningBuilder) Query(ctx context.Context, db exec.DB) (iter.Seq2[Row, error], error) {
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}

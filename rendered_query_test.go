@@ -104,8 +104,8 @@ func TestQueryRenderedValidatesBeforeReturningSequence(t *testing.T) {
 
 // TestQueryRenderedRejectsWhitespaceOnlySQL pins that a statement whose SQL is
 // only whitespace is rejected the same way an empty one is, now that the
-// blank check lives in DB.validStatement rather than in a constructor that
-// used to trim before storing. This is where render.Precompiled's own
+// blank check lives in exec.DB.ValidateStatement rather than in a constructor
+// that used to trim before storing. This is where render.Precompiled's own
 // blank-SQL subtests landed after Precompiled was deleted.
 func TestQueryRenderedRejectsWhitespaceOnlySQL(t *testing.T) {
 	database, mock, err := sqlmock.New()
