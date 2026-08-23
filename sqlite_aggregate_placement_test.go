@@ -52,8 +52,7 @@ func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
 	t.Run("validation refuses to render them", func(t *testing.T) {
 		table, err := query.NewTableRef(definition)
 		require.NoError(t, err)
-		id, err := table.Column("id")
-		require.NoError(t, err)
+		id := table.Column("id")
 		base := render.SelectFrom(dialect.SQLite(), table)
 
 		tests := map[string]render.SelectBuilder{
@@ -92,8 +91,7 @@ func TestSQLiteOrdersAnAggregateStatement(t *testing.T) {
 
 	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
-	id, err := table.Column("id")
-	require.NoError(t, err)
+	id := table.Column("id")
 	// Every builder below projects the same aggregate-only set, so only the
 	// ordering differs between the accepted and the refused shapes.
 	counted := render.SelectFrom(dialect.SQLite(), table).Project(query.CountAll().As("count"))
@@ -156,10 +154,8 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 	database, definition := aggregatePlacementFixture(t)
 	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
-	id, err := table.Column("id")
-	require.NoError(t, err)
-	email, err := table.Column("email")
-	require.NoError(t, err)
+	id := table.Column("id")
+	email := table.Column("email")
 
 	t.Run("a grouped mixed projection returns one row per group", func(t *testing.T) {
 		statement, err := query.NewGroupedSelect(table, []query.Expression{email},
@@ -222,10 +218,8 @@ func TestSQLiteRunsScalarFunctionsBesideAggregates(t *testing.T) {
 	database, definition := aggregatePlacementFixture(t)
 	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
-	id, err := table.Column("id")
-	require.NoError(t, err)
-	email, err := table.Column("email")
-	require.NoError(t, err)
+	id := table.Column("id")
+	email := table.Column("email")
 
 	statement, err := query.NewGroupedSelect(table, []query.Expression{query.Lower(email)},
 		query.Lower(email).As("email"),

@@ -17,8 +17,7 @@ import (
 func TestZeroTableRefErrorsInsteadOfPanicking(t *testing.T) {
 	var zero query.TableRef
 
-	validColumn, err := query.MustTableRef(usersTable()).Column("id")
-	require.NoError(t, err)
+	validColumn := query.MustTableRef(usersTable()).Column("id")
 
 	valid, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
@@ -76,7 +75,7 @@ func TestZeroTableRefErrorsInsteadOfPanicking(t *testing.T) {
 	t.Run("Column", func(t *testing.T) {
 		var err error
 		require.NotPanics(t, func() {
-			_, err = zero.Column("id")
+			err = zero.Column("id").Validate()
 		})
 		require.ErrorContains(t, err, "must not be nil")
 	})
@@ -108,12 +107,10 @@ func TestTableRefDefinitionIsIndependent(t *testing.T) {
 	definition.Columns[0].Name = "changed"
 	definition.PrimaryKey[0] = "changed"
 
-	_, err = users.Column("id")
-	require.NoError(t, err)
+	require.NoError(t, users.Column("id").Validate())
 	require.Equal(t, []string{"id"}, users.Definition().PrimaryKey)
 
-	_, err = users.Column("changed")
-	require.Error(t, err)
+	require.Error(t, users.Column("changed").Validate())
 }
 
 // TestZeroTableRefDefinitionDoesNotPanic pins that Definition on a zero ref
@@ -141,11 +138,9 @@ func TestTableRefFromMatchesNewTableRef(t *testing.T) {
 	require.Equal(t, validated.QualifiedName(), trusted.QualifiedName())
 
 	for _, name := range []string{"id", "email"} {
-		_, err := trusted.Column(name)
-		require.NoError(t, err)
+		require.NoError(t, trusted.Column(name).Validate())
 	}
-	_, err = trusted.Column("missing")
-	require.Error(t, err)
+	require.Error(t, trusted.Column("missing").Validate())
 
 	validatedAlias, err := validated.As("u")
 	require.NoError(t, err)
@@ -156,10 +151,8 @@ func TestTableRefFromMatchesNewTableRef(t *testing.T) {
 	// key() is unexported, so pin it indirectly: the same SELECT built over
 	// each ref renders identical SQL, and joining a ref to itself is still
 	// rejected as a duplicate source either way.
-	validatedID, err := validated.Column("id")
-	require.NoError(t, err)
-	trustedID, err := trusted.Column("id")
-	require.NoError(t, err)
+	validatedID := validated.Column("id")
+	trustedID := trusted.Column("id")
 
 	validatedStatement, err := render.SelectFrom(dialect.PostgreSQL(), validated).Select("id", "email").Build()
 	require.NoError(t, err)
@@ -182,15 +175,12 @@ func TestTableRefFromDoesNotClone(t *testing.T) {
 	definition := usersTable()
 	trusted := query.TableRefFrom(definition)
 
-	_, err := trusted.Column("email")
-	require.NoError(t, err)
+	require.NoError(t, trusted.Column("email").Validate())
 
 	definition.Columns[1].Name = "changed"
 
-	_, err = trusted.Column("email")
-	require.Error(t, err, "TableRefFrom shares the caller's slices, so the rename is visible")
-	_, err = trusted.Column("changed")
-	require.NoError(t, err)
+	require.Error(t, trusted.Column("email").Validate(), "TableRefFrom shares the caller's slices, so the rename is visible")
+	require.NoError(t, trusted.Column("changed").Validate())
 
 	// Contrast: the same mutation is invisible through a validated ref, because
 	// NewTableRef clones its input.
@@ -199,8 +189,7 @@ func TestTableRefFromDoesNotClone(t *testing.T) {
 	require.NoError(t, err)
 	validatedDefinition.Columns[1].Name = "changed"
 
-	_, err = validated.Column("email")
-	require.NoError(t, err)
+	require.NoError(t, validated.Column("email").Validate())
 }
 
 // TestTableRefStaysComparable requires what TableRef's own doc states: a
@@ -229,8 +218,8 @@ func TestTableRefStaysComparable(t *testing.T) {
 // have, through the validating and the trusting constructor alike. The lookup
 // reads an index built once per table rather than walking the columns, and a
 // column the index placed wrongly or dropped would show up here as a wrong
-// answer instead of only as a slow one. BenchmarkTableRefColumn covers the cost
-// this pins the correctness of.
+// answer instead of only as a slow one. BenchmarkColumnRefValidate covers the
+// cost this pins the correctness of.
 func TestTableRefColumnResolvesEveryPosition(t *testing.T) {
 	const width = 64
 	definition := benchmarkTableDef(width)
@@ -249,13 +238,11 @@ func TestTableRefColumnResolvesEveryPosition(t *testing.T) {
 		t.Run(ref.name, func(t *testing.T) {
 			for i := range width {
 				name := fmt.Sprintf("c%d", i)
-				column, err := ref.table.Column(name)
-				require.NoError(t, err)
+				column := ref.table.Column(name)
 				require.Equal(t, name, column.Name())
 			}
 
-			_, err := ref.table.Column("absent")
-			require.ErrorContains(t, err, `has no column "absent"`)
+			require.ErrorContains(t, ref.table.Column("absent").Validate(), `has no column "absent"`)
 		})
 	}
 }
@@ -274,8 +261,8 @@ func TestTableRefFromInvalidDescriptorStillFailsBeforeReachingAServer(t *testing
 	require.Error(t, err)
 
 	trusted := query.TableRefFrom(bad)
-	column, err := trusted.Column("")
-	require.NoError(t, err, "TableRefFrom validates nothing, so an empty column name is accepted here")
+	// TableRefFrom validates nothing, so an empty column name is accepted here.
+	column := trusted.Column("")
 
 	_, err = render.SelectFrom(dialect.PostgreSQL(), trusted).Project(column).Build()
 	require.Error(t, err, "dialect.QuoteIdentifier catches the empty identifier at render time")

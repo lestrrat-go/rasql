@@ -62,16 +62,8 @@ func Example_rasql_dynamic_projection() {
 
 	// orders has no generated column accessors, so its columns are looked up by name.
 	// That lookup validates them against the descriptor as the query is assembled.
-	orderUserID, err := orders.Column("user_id")
-	if err != nil {
-		fmt.Printf("failed to find orders.user_id: %s\n", err)
-		return
-	}
-	total, err := orders.Column("total")
-	if err != nil {
-		fmt.Printf("failed to find orders.total: %s\n", err)
-		return
-	}
+	orderUserID := orders.Column("user_id")
+	total := orders.Column("total")
 	// Populate both tables through the typed rasql API.
 	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)

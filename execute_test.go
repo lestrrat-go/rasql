@@ -39,10 +39,8 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 
 	orders, err := query.NewTableRef(schema.TableDef{
 		Name: "orders",
@@ -54,10 +52,8 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
-	orderStatus, err := orders.Column("status")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
+	orderStatus := orders.Column("status")
 
 	activeOrders, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
@@ -107,8 +103,7 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	}
 	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
@@ -143,10 +138,8 @@ func TestDecodeFromRefDecodesProjectedRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	mock.ExpectQuery("SELECT \"users\".\"id\" AS \"user_id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "email"}).AddRow(int64(42), "ada@example.com"))
@@ -195,8 +188,7 @@ func TestDecodeFromDecodesGroupedRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	status, err := tasks.Column("status")
-	require.NoError(t, err)
+	status := tasks.Column("status")
 
 	type statusCount struct {
 		Status string `rasql:"status"`
@@ -250,8 +242,7 @@ func TestDecodeFromDecodesDistinctRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	status, err := tasks.Column("status")
-	require.NoError(t, err)
+	status := tasks.Column("status")
 
 	type statusOnly struct {
 		Status string `rasql:"status"`
@@ -300,8 +291,7 @@ func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 	}
 	users, err := rasql.TableOf[user](table)
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 	// Count must not select the table's columns, unlike every other typed
 	// query; only COUNT(*) AS "count" reaches the database.
 	mock.ExpectQuery("SELECT COUNT(*) AS \"count\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
@@ -379,8 +369,7 @@ func TestTypedSelectBuilderRejectsEmptyIn(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
 	_, err = rasql.SelectFrom(users).WhereIn(id).Build(dbForBuild(t).Dialect())
 	require.EqualError(t, err, "rasql: IN requires at least one value")
@@ -409,10 +398,8 @@ func TestDBExecExecutesParameterizedInsert(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewInsert(users, []query.ColumnRef{id, email}, []query.Expression{query.Bind(42), query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").
@@ -541,8 +528,7 @@ func TestDBExecStillAcceptsStatementWithoutReturning(t *testing.T) {
 
 func TestExecRejectsUnconditionalMutations(t *testing.T) {
 	users := usersWriteTable(t)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 
 	tests := []struct {
 		name      string
@@ -598,10 +584,8 @@ func TestExecRunsTargetedAndExplicitlyAllowedMutations(t *testing.T) {
 	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users := usersWriteTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 
 	targetedUpdate, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
@@ -659,8 +643,7 @@ func usersWriteTable(t *testing.T) query.TableRef {
 
 func usersEmailColumn(t *testing.T) query.ColumnRef {
 	t.Helper()
-	email, err := usersWriteTable(t).Column("email")
-	require.NoError(t, err)
+	email := usersWriteTable(t).Column("email")
 	return email
 }
 
@@ -669,10 +652,8 @@ func usersEmailColumn(t *testing.T) query.ColumnRef {
 func insertReturningStatement(t *testing.T) query.Insert {
 	t.Helper()
 	users := usersWriteTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(id, email)
@@ -685,8 +666,7 @@ func insertReturningStatement(t *testing.T) query.Insert {
 func insertStatement(t *testing.T) query.Insert {
 	t.Helper()
 	users := usersWriteTable(t)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	return statement

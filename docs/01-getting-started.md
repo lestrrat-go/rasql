@@ -174,16 +174,8 @@ func Example_query_render_select() {
 		schema.Text("email"),
 		schema.PrimaryKey("id"),
 	))
-	id, err := accounts.Column("id")
-	if err != nil {
-		fmt.Printf("failed to reference the id column: %s\n", err)
-		return
-	}
-	email, err := accounts.Column("email")
-	if err != nil {
-		fmt.Printf("failed to reference the email column: %s\n", err)
-		return
-	}
+	id := accounts.Column("id")
+	email := accounts.Column("email")
 
 	// query.NewSelect validates the statement as it builds it.
 	statement, err := query.NewSelect(accounts, id, email)

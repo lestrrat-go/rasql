@@ -390,8 +390,7 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 	statement, err := query.NewUpdate(users, query.Set(id, query.Bind(int64(1))))
 	require.NoError(t, err)
 	statement, err = statement.AllowAll()
@@ -430,10 +429,8 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(id, email)
@@ -583,10 +580,8 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(id, email)
@@ -620,10 +615,8 @@ func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(id, email)
@@ -713,8 +706,7 @@ func deleteReturningStatement(t *testing.T) query.Delete {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 	statement, err := query.NewDelete(users)
 	require.NoError(t, err)
 	statement, err = statement.AllowAll()
@@ -823,8 +815,7 @@ func TestUpdateManyBulkUpdatesPartialRowByPredicate(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 	mock.ExpectExec(`UPDATE "users" SET "email" = $1 WHERE ("users"."id" IN ($2, $3))`).
 		WithArgs("review@example.com", int64(1), int64(2)).
 		WillReturnResult(sqlmock.NewResult(0, 2))

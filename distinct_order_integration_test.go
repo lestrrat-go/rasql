@@ -83,10 +83,8 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 
 	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
-	city, err := table.Column("city")
-	require.NoError(t, err)
-	age, err := table.Column("age")
-	require.NoError(t, err)
+	city := table.Column("city")
+	age := table.Column("age")
 
 	t.Run("the server refuses ORDER BY on a column the distinct projections do not select", func(t *testing.T) {
 		// query.Select places no Go-side rule here (see the WithDistinct doc

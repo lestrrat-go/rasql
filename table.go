@@ -25,7 +25,7 @@ type Table[T any] interface {
 	// Ref returns the dialect-neutral table backing the descriptor.
 	Ref() query.TableRef
 	// Column returns a reference to a named column of the table.
-	Column(name string) (ColumnRef, error)
+	Column(name string) ColumnRef
 	// tableRow keeps T inferable and stops implementations outside this package.
 	tableRow() T
 }
@@ -102,10 +102,12 @@ func Equal(left query.Expression, right query.Expression) query.Binary {
 	return query.Equal(left, right)
 }
 
-// ColumnOf returns the named column of table. It returns the zero ColumnRef
-// when table has no typed table behind it or has no such column, so a wrapper
-// that never reached a constructor fails at Build rather than at the point of
-// the column reference.
+// ColumnOf returns the named column of table. It returns the zero ColumnRef only
+// when table has no typed table behind it, so a wrapper that never reached a
+// constructor fails at Build rather than at the point of the column reference.
+// A name the table does not hold is not that case: the returned ColumnRef keeps
+// its source and its name, and the statement carrying it reports the name it
+// could not find.
 //
 // It asks isNilTable rather than comparing table against nil. A generated
 // wrapper reaches every Table method through an embedded Table[T], so neither
@@ -116,11 +118,7 @@ func ColumnOf[T any](table Table[T], name string) ColumnRef {
 	if isNilTable(table) {
 		return ColumnRef{}
 	}
-	column, err := table.Column(name)
-	if err != nil {
-		return ColumnRef{}
-	}
-	return column
+	return table.Column(name)
 }
 
 // Ref returns the dialect-neutral table backing the descriptor.
@@ -129,7 +127,7 @@ func (t typedTable[T]) Ref() query.TableRef {
 }
 
 // Column returns a reference to a named column of the table.
-func (t typedTable[T]) Column(name string) (ColumnRef, error) {
+func (t typedTable[T]) Column(name string) ColumnRef {
 	return t.source.Column(name)
 }
 

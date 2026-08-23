@@ -122,8 +122,7 @@ func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 
 	mock.ExpectQuery("SELECT \"users\".\"email\" FROM \"users\"").
 		WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("ada@example.com"))
@@ -185,8 +184,7 @@ func TestTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	name, err := users.Column("name")
-	require.NoError(t, err)
+	name := users.Column("name")
 	plannedScanCalls = 0
 	mock.ExpectQuery("SELECT \"users\".\"name\" FROM \"users\"").
 		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("Ada Lovelace").AddRow("Grace Hopper"))
@@ -316,8 +314,7 @@ func TestOneSentinelsAreDistinct(t *testing.T) {
 // than running a query, since dbForBuild sets no mock expectation for one.
 func TestTypedSelectGroupBy(t *testing.T) {
 	users := deleteUsersTable(t)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 
 	type emailCount struct {
 		Email string `rasql:"email"`
@@ -349,8 +346,7 @@ func TestTypedSelectGroupBy(t *testing.T) {
 // distinct rows.
 func TestTypedSelectDistinct(t *testing.T) {
 	users := deleteUsersTable(t)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 
 	type emailOnly struct {
 		Email string `rasql:"email"`
@@ -379,10 +375,8 @@ func TestTypedSelectDistinct(t *testing.T) {
 func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
 	users := deleteUsersTable(t)
 	orders := selectOrdersTable(t)
-	id, err := users.Ref().Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	id := users.Ref().Column("id")
+	orderUserID := orders.Column("user_id")
 
 	type userOrderCount struct {
 		UserID int64 `rasql:"user_id"`
@@ -405,10 +399,8 @@ func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
 func TestTypedSelectCombinesPredicates(t *testing.T) {
 	t.Run("WhereEqual then Where combine with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 
 		statement, err := rasql.SelectFrom(users).
 			WhereEqual(id, 42).
@@ -423,8 +415,7 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 
 	t.Run("a lone Or predicate survives unwrapped", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		email := users.Column("email")
 
 		statement, err := rasql.SelectFrom(users).
 			Where(query.Or(
@@ -440,10 +431,8 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 
 	t.Run("WhereEqual after a lone Or wraps it in AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 
 		statement, err := rasql.SelectFrom(users).
 			Where(query.Or(
@@ -461,10 +450,8 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 
 	t.Run("WhereIn after WhereEqual combine with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 
 		statement, err := rasql.SelectFrom(users).
 			WhereEqual(email, "ada@example.com").
@@ -492,10 +479,8 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		userID, err := users.Column("id")
-		require.NoError(t, err)
-		ordersUserID, err := orders.Column("user_id")
-		require.NoError(t, err)
+		userID := users.Column("id")
+		ordersUserID := orders.Column("user_id")
 
 		// WhereEqual takes a primary-table column, Where takes a column of the
 		// joined table; accumulating them must not bypass the "column must be
@@ -536,8 +521,7 @@ func TestTypedSelectWhereIn(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		id, err := users.Column("id")
-		require.NoError(t, err)
+		id := users.Column("id")
 		mock.ExpectQuery("SELECT \"users\".\"id\" FROM \"users\" WHERE (\"users\".\"id\" IN ($1, $2))").
 			WithArgs(1, 2).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)).AddRow(int64(2)))
@@ -569,8 +553,7 @@ func TestTypedSelectWhereIn(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		id, err := users.Column("id")
-		require.NoError(t, err)
+		id := users.Column("id")
 
 		_, err = rasql.SelectFrom(users).WhereIn(id).One(t.Context(), db)
 		require.ErrorContains(t, err, "at least one value")

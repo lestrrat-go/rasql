@@ -63,8 +63,7 @@ func TestDeleteRejectsNilPredicate(t *testing.T) {
 // copied out of root rather than shared with it.
 func TestDeleteFromMatchesTypedDelete(t *testing.T) {
 	users := typedUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 	d := dbForBuild(t).Dialect()
 
 	fromDynamic, err := dynamic.DeleteFrom(users.Ref()).WhereEqual(id, 42).Build(d)
@@ -92,10 +91,8 @@ func TestDeleteReturningQuery(t *testing.T) {
 	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users := dynamicUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	mock.ExpectQuery("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1) RETURNING \"id\", \"email\"").
 		WithArgs(42).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
@@ -116,19 +113,17 @@ func TestDeleteReturningQuery(t *testing.T) {
 
 func TestDeleteReturningRequiresProjection(t *testing.T) {
 	users := dynamicUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
-	_, err = dynamic.DeleteFrom(users).WhereEqual(id, 42).Returning().Build(dialect.PostgreSQL())
+	_, err := dynamic.DeleteFrom(users).WhereEqual(id, 42).Returning().Build(dialect.PostgreSQL())
 	require.EqualError(t, err, "rasql: RETURNING requires at least one projection")
 }
 
 func TestDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
 	users := dynamicUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
-	_, err = dynamic.DeleteFrom(users).
+	_, err := dynamic.DeleteFrom(users).
 		WhereEqual(id, 42).
 		Returning(id).
 		Build(dialect.MySQL())

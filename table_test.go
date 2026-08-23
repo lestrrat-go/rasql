@@ -76,7 +76,7 @@ func (t selfMethodStaffTable) Ref() query.TableRef {
 	return t.source
 }
 
-func (t selfMethodStaffTable) Column(name string) (query.ColumnRef, error) {
+func (t selfMethodStaffTable) Column(name string) query.ColumnRef {
 	return t.source.Column(name)
 }
 
@@ -196,13 +196,11 @@ func TestTable(t *testing.T) {
 		table, err := rasql.TableOf[staffRow](staffDefinition())
 		require.NoError(t, err)
 
-		column, err := table.Column("email")
-		require.NoError(t, err)
+		column := table.Column("email")
 		require.Equal(t, "email", column.Name())
 		require.Equal(t, "staff", column.Source().Qualifier())
 
-		_, err = table.Column("missing")
-		require.ErrorContains(t, err, "missing")
+		require.ErrorContains(t, table.Column("missing").Validate(), "missing")
 	})
 
 	t.Run("Ref exposes the validated definition", func(t *testing.T) {
@@ -241,11 +239,16 @@ func TestColumnOf(t *testing.T) {
 		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](staffTable{}, "id"))
 	})
 
-	t.Run("zero ColumnRef for a column the table does not have", func(t *testing.T) {
+	t.Run("keeps name and source for a column the table does not have", func(t *testing.T) {
 		table, err := rasql.TableOf[staffRow](staffDefinition())
 		require.NoError(t, err)
 
-		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf(table, "missing"))
+		column := rasql.ColumnOf(table, "missing")
+		require.Equal(t, "missing", column.Name())
+		require.Equal(t, table.Ref(), column.Source())
+
+		_, err = query.NewSelect(table.Ref(), column)
+		require.ErrorContains(t, err, `references unknown column "missing"`)
 	})
 
 	t.Run("a zero generated-shape wrapper's accessor fails at Build, not a panic", func(t *testing.T) {
@@ -307,10 +310,9 @@ func TestAs(t *testing.T) {
 }
 
 func TestTypedSelectBuilderRejectsForeignColumn(t *testing.T) {
-	contractorID, err := contractors(t).Column("id")
-	require.NoError(t, err)
+	contractorID := contractors(t).Column("id")
 
-	_, err = rasql.SelectFrom(staff(t)).WhereEqual(contractorID, 1).Build(dbForBuild(t).Dialect())
+	_, err := rasql.SelectFrom(staff(t)).WhereEqual(contractorID, 1).Build(dbForBuild(t).Dialect())
 	require.ErrorContains(t, err, "contractors")
 }
 
@@ -456,8 +458,7 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 		require.Contains(t, selected.SQL(), `FROM "staff"`)
 
 		// DecodeFrom projects nothing by default, so this one names a column.
-		email, err := table.Column("email")
-		require.NoError(t, err)
+		email := table.Column("email")
 		decoded, err := rasql.DecodeFrom[staffRow, staffRow](table).Project(email).Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, decoded.SQL(), `FROM "staff"`)
@@ -473,8 +474,7 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 		require.Equal(t, "email", rasql.ColumnOf[staffRow](table, "email").Name())
 
 		others := contractors(t)
-		othersID, err := others.Column("id")
-		require.NoError(t, err)
+		othersID := others.Column("id")
 
 		joined, err := rasql.SelectFrom(others).
 			Join(rasql.InnerJoin[staffRow](table, query.Equal(othersID, query.Bind(1)))).

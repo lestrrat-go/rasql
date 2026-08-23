@@ -190,11 +190,12 @@ rasql.SelectFrom(users).WhereEqual
 
 Three mistakes still reach run time. A column of another table is a valid
 `query.ColumnRef`, so it fails when the statement is built. A lookup by name
-is checked when it runs, since the name is only known then:
+is checked when the statement is built too, or on demand through
+`query.ColumnRef.Validate`:
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#column_lookup) -->
 ```go
-column, err := users.Column("emial")
+column := users.Column("emial")
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->

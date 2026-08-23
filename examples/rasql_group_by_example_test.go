@@ -67,11 +67,7 @@ func Example_rasql_group_by() {
 	// tasks has no generated column accessor for status, so it is looked up
 	// by name. That lookup validates it against the descriptor as the query is
 	// assembled.
-	status, err := tasks.Column("status")
-	if err != nil {
-		fmt.Printf("failed to find tasks.status: %s\n", err)
-		return
-	}
+	status := tasks.Column("status")
 
 	// GroupBy adds the GROUP BY clause the mixed projection below needs: a
 	// bare column beside COUNT(*) is refused without one. Having filters

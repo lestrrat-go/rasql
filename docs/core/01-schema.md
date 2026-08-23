@@ -267,13 +267,8 @@ func Example_schema_qualified_table() {
 		return
 	}
 
-	eventID, err := events.Column("id")
-	if err != nil {
-		fmt.Printf("failed to reference id column: %s\n", err)
-		return
-	}
 	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
-	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(ctx, db)
+	event, err := rasql.SelectFrom(events).WhereEqual(events.Column("id"), int64(1)).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)
 		return
@@ -392,13 +387,8 @@ func Example_schema_decimal_column() {
 		return
 	}
 
-	invoiceID, err := invoices.Column("id")
-	if err != nil {
-		fmt.Printf("failed to reference id column: %s\n", err)
-		return
-	}
 	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
-	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoiceID, int64(1)).One(ctx, db)
+	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoices.Column("id"), int64(1)).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)
 		return
@@ -532,7 +522,7 @@ Each field's `rasql` tag names the column it holds. `rasql.MustTableOf` panics o
 
 A `rasql.Table[T]` is half of a table value rather than the whole of it. Wrap it in a type with one accessor method per column, calling `rasql.ColumnOf`, so that `users.ID()` is the column reference the builders take. That is the shape [`rasqlgen`](../orm/01-codegen.md) emits, the shape every example on these pages uses, and the shape a hand-written table should have too. [Getting started](../01-getting-started.md#the-table-used-throughout-the-documentation) shows the full wrapper for the `users` table, and [What the column accessors catch](../orm/02-generated-store.md#what-the-column-accessors-catch) shows what the accessors are worth.
 
-Two methods remain for code that only learns a column name while it runs. `users.Column(name)` looks a column up and returns a `query.ColumnRef` with an error, and `users.Ref()` returns the underlying `query.TableRef` that the lower-level `query` package works in terms of, which [The SQL builder](02-sql-builder.md) works in terms of.
+Two methods remain for code that only learns a column name while it runs. `users.Column(name)` returns a `query.ColumnRef` for that name; call `ColumnRef.Validate` to check the name at the lookup rather than waiting for the statement that carries it. `users.Ref()` returns the underlying `query.TableRef` that the lower-level `query` package works in terms of, which [The SQL builder](02-sql-builder.md) works in terms of.
 
 ## Read a table out of a database
 

@@ -251,8 +251,7 @@ func TestDBQueryWriteRejectsStatementWithoutReturning(t *testing.T) {
 	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	users := dynamicUsersTable(t)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 
@@ -285,10 +284,9 @@ func TestDBQueryWriteRejectsUnsupportedDialect(t *testing.T) {
 func TestEveryDynamicEntryPointRejectsAZeroDB(t *testing.T) {
 	var zero rasql.DB
 	users := dynamicUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
-	_, err = dynamic.Query(t.Context(), zero, selectStatement(t))
+	_, err := dynamic.Query(t.Context(), zero, selectStatement(t))
 	require.ErrorContains(t, err, "rasql: invalid DB")
 
 	_, err = dynamic.QueryWrite(t.Context(), zero, insertReturningStatement(t))
@@ -357,8 +355,7 @@ func requireLazyRowSequence[T any](t *testing.T, mock sqlmock.Sqlmock, expect fu
 func TestQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 	db, mock := leakTestDB(t)
 	users := dynamicUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 	statement, err := query.NewSelect(users, id)
 	require.NoError(t, err)
 
@@ -376,10 +373,8 @@ func TestQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 func TestQueryWriteRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 	db, mock := leakTestDB(t)
 	users := dynamicUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	insert, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err := insert.WithReturning(id)
@@ -417,10 +412,8 @@ func TestSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 func insertReturningStatement(t *testing.T) query.Insert {
 	t.Helper()
 	users := dynamicUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
 	statement, err = statement.WithReturning(id, email)
@@ -431,10 +424,8 @@ func insertReturningStatement(t *testing.T) query.Insert {
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
 	users := dynamicUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewSelect(users, id, email)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.Equal(id, query.Bind(42)))

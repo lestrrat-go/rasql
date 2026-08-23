@@ -13,7 +13,7 @@ The [typed builder](orm/03-typed-queries.md) is the ORM layer, and it lives in t
 | Packages | `query`, `render` | `rasql`, plus `rasql/dynamic` |
 | Needs a generated table | No | Yes, or a hand-written one of the same shape |
 | Needs a database handle | No | Yes, at the call that executes |
-| Names a column as | `accounts.Column("id")`, checked against the descriptor at run time | `users.ID()`, checked by the compiler |
+| Names a column as | `accounts.Column("id")`, checked when the statement is built | `users.ID()`, checked by the compiler |
 | Produces | `stmt.Statement`, holding SQL text and arguments | Decoded rows of the Go row type |
 
 ## Which one to reach for

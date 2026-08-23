@@ -51,8 +51,7 @@ func TestLoadHasManyGroupsRowsByParentKey(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	userID := orders.Column("user_id")
 
 	mock.ExpectQuery(`SELECT "orders"."id", "orders"."user_id" FROM "orders" WHERE ("orders"."user_id" IN ($1, $2))`).
 		WithArgs(int64(1), int64(2)).
@@ -87,8 +86,7 @@ func TestLoadBelongsToGroupsRowsByForeignKey(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 
 	mock.ExpectQuery(`SELECT "users"."id" FROM "users" WHERE ("users"."id" IN ($1, $2))`).
 		WithArgs(int64(1), int64(2)).
@@ -129,10 +127,8 @@ func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	orderUserID := orders.Column("user_id")
 
 	const key = uint64(1 << 63)
 	const keyText = "9223372036854775808"
@@ -176,10 +172,8 @@ func TestLoadRelationshipsSkipsEmptyInput(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	orderUserID := orders.Column("user_id")
 
 	// A zero DB proves the empty input short-circuits before either loader
 	// looks at the database at all.

@@ -18,16 +18,8 @@ func Example_query_render_select() {
 		schema.Text("email"),
 		schema.PrimaryKey("id"),
 	))
-	id, err := accounts.Column("id")
-	if err != nil {
-		fmt.Printf("failed to reference the id column: %s\n", err)
-		return
-	}
-	email, err := accounts.Column("email")
-	if err != nil {
-		fmt.Printf("failed to reference the email column: %s\n", err)
-		return
-	}
+	id := accounts.Column("id")
+	email := accounts.Column("email")
 
 	// query.NewSelect validates the statement as it builds it.
 	statement, err := query.NewSelect(accounts, id, email)
@@ -63,7 +55,7 @@ func Example_query_render_select() {
 source: [examples/query_render_select_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_render_select_example_test.go)
 <!-- END INCLUDE -->
 
-`query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` looks the column up in that description and reports an error for a name it does not hold.
+`query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` builds the reference, and `query.NewSelect` reports a name the table does not hold.
 
 ## Run a rendered statement
 
@@ -121,7 +113,7 @@ The value list of `query.In` and `query.NotIn` takes expressions, the same freed
 | Constructor | Produces |
 | --- | --- |
 | `table.Field()` | A generated column accessor, such as `users.ID()`, checked by the compiler. |
-| `table.Column(name)` | A column looked up by name and validated against the descriptor. |
+| `table.Column(name)` | A column looked up by name. The statement it is carried in checks it against the descriptor. |
 | `query.Bind(value)` | A bound argument, rendered as the dialect's placeholder. |
 | `query.Excluded(column)` | The proposed value of a column in an upsert. |
 
@@ -261,21 +253,9 @@ func Example_rasql_scalar_function() {
 	// members has no generated column accessors, so its columns are looked up
 	// by name. That lookup validates them against the descriptor as the query
 	// is assembled.
-	id, err := members.Column("id")
-	if err != nil {
-		fmt.Printf("failed to find members.id: %s\n", err)
-		return
-	}
-	email, err := members.Column("email")
-	if err != nil {
-		fmt.Printf("failed to find members.email: %s\n", err)
-		return
-	}
-	nickname, err := members.Column("nickname")
-	if err != nil {
-		fmt.Printf("failed to find members.nickname: %s\n", err)
-		return
-	}
+	id := members.Column("id")
+	email := members.Column("email")
+	nickname := members.Column("nickname")
 
 	nick := "Ada"
 	for _, member := range []memberRow{

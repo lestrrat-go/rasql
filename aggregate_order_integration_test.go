@@ -134,8 +134,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 
 	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
-	id, err := table.Column("id")
-	require.NoError(t, err)
+	id := table.Column("id")
 	counted := render.SelectFrom(test.dialect, table).Project(query.CountAll().As("count"))
 
 	t.Run("the database runs an aggregate ordering", func(t *testing.T) {
@@ -158,8 +157,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		// TestSQLiteRunsGroupedStatements proves the same shape against
 		// SQLite; this proves it against the two servers SQLite cannot speak
 		// for.
-		email, err := table.Column("email")
-		require.NoError(t, err)
+		email := table.Column("email")
 		grouped := render.SelectFrom(test.dialect, table).
 			Project(email, query.CountAll().As("count")).
 			GroupBy(email)

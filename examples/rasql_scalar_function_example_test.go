@@ -58,21 +58,9 @@ func Example_rasql_scalar_function() {
 	// members has no generated column accessors, so its columns are looked up
 	// by name. That lookup validates them against the descriptor as the query
 	// is assembled.
-	id, err := members.Column("id")
-	if err != nil {
-		fmt.Printf("failed to find members.id: %s\n", err)
-		return
-	}
-	email, err := members.Column("email")
-	if err != nil {
-		fmt.Printf("failed to find members.email: %s\n", err)
-		return
-	}
-	nickname, err := members.Column("nickname")
-	if err != nil {
-		fmt.Printf("failed to find members.nickname: %s\n", err)
-		return
-	}
+	id := members.Column("id")
+	email := members.Column("email")
+	nickname := members.Column("nickname")
 
 	nick := "Ada"
 	for _, member := range []memberRow{

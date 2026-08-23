@@ -64,16 +64,8 @@ func Example_rasql_subquery() {
 
 	// orders has no generated column accessors, so its columns are looked up by name.
 	// That lookup validates them against the descriptor as the query is assembled.
-	orderUserID, err := orders.Column("user_id")
-	if err != nil {
-		fmt.Printf("failed to find orders.user_id: %s\n", err)
-		return
-	}
-	amount, err := orders.Column("amount")
-	if err != nil {
-		fmt.Printf("failed to find orders.amount: %s\n", err)
-		return
-	}
+	orderUserID := orders.Column("user_id")
+	amount := orders.Column("amount")
 
 	for _, user := range []UserRow{
 		{ID: 1, Email: "ada@example.com"},
@@ -118,12 +110,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to alias orders: %s\n", err)
 		return
 	}
-	allOrdersAmount, err := allOrders.Column("amount")
-	if err != nil {
-		fmt.Printf("failed to find all_orders.amount: %s\n", err)
-		return
-	}
-	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrdersAmount))
+	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrders.Column("amount")))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
 		return

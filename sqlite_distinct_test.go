@@ -20,8 +20,7 @@ func TestSQLiteRunsDistinctStatements(t *testing.T) {
 	database, definition := distinctFixture(t)
 	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
-	city, err := table.Column("city")
-	require.NoError(t, err)
+	city := table.Column("city")
 
 	t.Run("distinct removes duplicate rows", func(t *testing.T) {
 		statement, err := query.NewSelect(table, city)
@@ -127,8 +126,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 
 	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
-	city, err := table.Column("city")
-	require.NoError(t, err)
+	city := table.Column("city")
 
 	t.Run("SELECT DISTINCT keeps NULL as a value", func(t *testing.T) {
 		statement, err := query.NewSelect(table, city)
@@ -176,10 +174,8 @@ func TestSQLiteAnswersUnprojectedDistinctOrderArbitrarily(t *testing.T) {
 	database, definition := distinctFixture(t)
 	table, err := query.NewTableRef(definition)
 	require.NoError(t, err)
-	city, err := table.Column("city")
-	require.NoError(t, err)
-	age, err := table.Column("age")
-	require.NoError(t, err)
+	city := table.Column("city")
+	age := table.Column("age")
 
 	// The builder renders this statement rather than refusing it: rasql places
 	// no Go-side rule on which ORDER BY expressions a distinct statement may

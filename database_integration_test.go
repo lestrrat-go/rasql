@@ -75,8 +75,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	tableName := dbtest.UniqueName(t, "rasql_integration_records")
 	records, err := rasql.TableOf[record](integrationTable(tableName))
 	require.NoError(t, err)
-	recordID, err := records.Column("id")
-	require.NoError(t, err)
+	recordID := records.Column("id")
 
 	_, err = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 	require.NoError(t, err)
@@ -129,8 +128,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// change had to fit without a capability gap. The row it reads back comes
 	// from the server, so it carries the padded amount for the same reason the
 	// two expectations above do -- expect firstStored, never first.
-	recordActive, err := records.Column("active")
-	require.NoError(t, err)
+	recordActive := records.Column("active")
 	activeIDs, err := query.NewSelect(records.Ref(), recordID)
 	require.NoError(t, err)
 	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActive, query.Bind(true)))
@@ -148,10 +146,8 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// because all three engines spell these functions identically, and this
 	// is what proves that argument against MySQL and PostgreSQL rather than
 	// only against the SQLite-backed tests elsewhere in this repository.
-	scalarEmail, err := records.Column("email")
-	require.NoError(t, err)
-	scalarAmount, err := records.Column("amount")
-	require.NoError(t, err)
+	scalarEmail := records.Column("email")
+	scalarAmount := records.Column("amount")
 	viaLower, err := rasql.SelectFrom(records).
 		Where(query.Equal(query.Lower(scalarEmail), query.Bind(firstStored.Email))).
 		All(t.Context(), db)
@@ -218,10 +214,8 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// RETURNING is PostgreSQL-only among the two live dialects this test runs
 	// against, so QueryWrite is exercised over the real pgx driver on
 	// PostgreSQL and pinned as a build-time rejection on MySQL.
-	recordEmail, err := records.Column("email")
-	require.NoError(t, err)
-	recordAmount, err := records.Column("amount")
-	require.NoError(t, err)
+	recordEmail := records.Column("email")
+	recordAmount := records.Column("amount")
 	third := record{ID: 3, Active: true, Email: "grace@example.com", Amount: "42.50"}
 	// RETURNING reads the row back from the server, so the decimal arrives in
 	// the column's declared scale for the same reason the two expectations
@@ -369,8 +363,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	_, err = rasql.Insert(t.Context(), db, orders, orderRow{ID: 1, CustomerID: 1})
 	require.NoError(t, err)
 
-	ordersID, err := orders.Column("id")
-	require.NoError(t, err)
+	ordersID := orders.Column("id")
 	order, err := rasql.SelectFrom(orders).WhereEqual(ordersID, int64(1)).One(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, orderRow{ID: 1, CustomerID: 1}, order)
@@ -441,8 +434,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 	_, err = rasql.Insert(t.Context(), db, events, eventRow{ID: 1, ActorID: 7, Action: "created"})
 	require.NoError(t, err)
 
-	eventID, err := events.Column("id")
-	require.NoError(t, err)
+	eventID := events.Column("id")
 	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, eventRow{ID: 1, ActorID: 7, Action: "created"}, event)

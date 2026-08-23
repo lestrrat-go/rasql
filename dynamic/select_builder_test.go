@@ -31,8 +31,7 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("Where after WhereEqual combines with AND", func(t *testing.T) {
 		users := dynamicUsersTable(t)
 		db := dbForBuild(t)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		email := users.Column("email")
 		statement, err := dynamic.SelectFrom(users).
 			Select("id", "email").
 			WhereEqual("id", 42).
@@ -83,10 +82,8 @@ func TestSelectBuilder(t *testing.T) {
 	t.Run("GroupBy accepts a joined table's column", func(t *testing.T) {
 		users := dynamicUsersTable(t)
 		orders := dynamicOrdersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		orderUserID, err := orders.Column("user_id")
-		require.NoError(t, err)
+		id := users.Column("id")
+		orderUserID := orders.Column("user_id")
 
 		statement, err := dynamic.SelectFrom(users).
 			Project(orderUserID, query.CountAll().As("total")).
