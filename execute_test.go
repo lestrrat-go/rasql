@@ -761,10 +761,20 @@ func TestTypedSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T
 		})
 }
 
+// buildOnlyDB returns a DB over a handle that runs nothing, for tests that
+// assert on an error raised while a statement is built, before it would reach
+// the database. A zero DB{} cannot serve that purpose: every entry point
+// rejects one before it builds anything.
+func buildOnlyDB(t *testing.T) rasql.DB {
+	t.Helper()
+	db, err := rasql.New(&debugQueryer{}, dialect.PostgreSQL())
+	require.NoError(t, err)
+	return db
+}
+
 // debugQueryer is a Handle that logs the statement it is given instead of
-// running it. db_test.go uses it for a handle that cannot start a
-// transaction; the tests below use it to prove a logged statement never
-// reaches the database.
+// running it. buildOnlyDB above uses it for a handle that runs nothing; the
+// tests below use it to prove a logged statement never reaches the database.
 type debugQueryer struct {
 	query     string
 	arguments []any

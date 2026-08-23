@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/internal/method"
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
@@ -31,7 +32,7 @@ type ColumnValuer interface {
 // Value must have one exported tagged field for every table column,
 // or implement ColumnValuer.
 func Insert[T any](ctx context.Context, db DB, table Table[T], value T) (sql.Result, error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	return InsertWithOptions(ctx, db, table, value)
@@ -42,7 +43,7 @@ func Insert[T any](ctx context.Context, db DB, table Table[T], value T) (sql.Res
 // or implement ColumnValuer. DefaultColumns omits named columns so the
 // database applies their defaults.
 func InsertWithOptions[T any](ctx context.Context, db DB, table Table[T], value T, options ...InsertOption) (sql.Result, error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	defaults, err := insertDefaults(options)
@@ -60,7 +61,7 @@ func InsertWithOptions[T any](ctx context.Context, db DB, table Table[T], value 
 // parameterized INSERT statement. Every value must have one exported tagged
 // field for every table column, or implement ColumnValuer.
 func InsertMany[T any](ctx context.Context, db DB, table Table[T], values []T) (sql.Result, error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	return InsertManyWithOptions(ctx, db, table, values)
@@ -72,7 +73,7 @@ func InsertMany[T any](ctx context.Context, db DB, table Table[T], values []T) (
 // uses a database default, it executes one default-values INSERT per row because
 // the supported dialects do not share a multi-row default-values syntax.
 func InsertManyWithOptions[T any](ctx context.Context, db DB, table Table[T], values []T, options ...InsertOption) (sql.Result, error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	defaults, err := insertDefaults(options)
@@ -215,7 +216,7 @@ func QueryWriteAll[T any](ctx context.Context, db DB, statement query.WriteState
 	if err := validateTypedWriteReturning[T](statement); err != nil {
 		return nil, err
 	}
-	rendered, err := renderQueryWrite(db, statement)
+	rendered, err := exec.RenderWrite(db, statement)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +233,7 @@ func QueryWriteOne[T any](ctx context.Context, db DB, statement query.WriteState
 	if err := validateTypedWriteReturning[T](statement); err != nil {
 		return zero, err
 	}
-	rendered, err := renderQueryWrite(db, statement)
+	rendered, err := exec.RenderWrite(db, statement)
 	if err != nil {
 		return zero, err
 	}
@@ -254,7 +255,7 @@ func Update[T any](ctx context.Context, db DB, table Table[T], value T) (sql.Res
 // supplied without UpdateColumns, all non-primary-key columns are assigned.
 // Values are always passed to the query builder as bound parameters.
 func UpdateWithOptions[T any](ctx context.Context, db DB, table Table[T], value T, options ...UpdateOption) (sql.Result, error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	config, err := updateOptions(options)
@@ -272,7 +273,7 @@ func UpdateWithOptions[T any](ctx context.Context, db DB, table Table[T], value 
 // explicit UpdateWhere option. It rejects calls without UpdateWhere so a bulk
 // operation cannot silently fall back to a primary-key update.
 func UpdateMany[T any](ctx context.Context, db DB, table Table[T], value T, options ...UpdateOption) (sql.Result, error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	config, err := updateOptions(options)

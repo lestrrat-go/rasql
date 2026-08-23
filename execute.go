@@ -3,12 +3,10 @@ package rasql
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"iter"
 
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -17,7 +15,7 @@ import (
 // does not model. The statement must already contain dialect-specific
 // placeholders and bound arguments.
 func QueryRendered[T any](ctx context.Context, db DB, s stmt.Statement) (iter.Seq2[T, error], error) {
-	if err := db.validStatement(s); err != nil {
+	if err := db.ValidateStatement(s); err != nil {
 		return nil, err
 	}
 	return scanTypedRendered[T](ctx, db, s), nil
@@ -49,29 +47,5 @@ func QueryRenderedOne[T any](ctx context.Context, db DB, s stmt.Statement) (T, e
 // It rejects a statement carrying a RETURNING clause, because ExecContext
 // discards result rows; QueryWrite reads them instead.
 func Exec(ctx context.Context, db DB, s query.WriteStatement) (sql.Result, error) {
-	if err := db.valid(); err != nil {
-		return nil, err
-	}
-	if !nilcheck.Is(s) && len(s.Returning()) > 0 {
-		return nil, fmt.Errorf("rasql: write statement has a RETURNING clause: use QueryWrite to read its rows")
-	}
-	rendered, err := render.Write(db.Dialect(), s)
-	if err != nil {
-		return nil, fmt.Errorf("rasql: render write statement: %w", err)
-	}
-	return db.ExecRendered(ctx, rendered)
-}
-
-func renderQueryWrite(db DB, s query.WriteStatement) (stmt.Statement, error) {
-	if err := db.valid(); err != nil {
-		return stmt.Statement{}, err
-	}
-	if nilcheck.Is(s) || len(s.Returning()) == 0 {
-		return stmt.Statement{}, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
-	}
-	rendered, err := render.Write(db.Dialect(), s)
-	if err != nil {
-		return stmt.Statement{}, fmt.Errorf("rasql: render write statement: %w", err)
-	}
-	return rendered, nil
+	return exec.Write(ctx, db, s)
 }

@@ -3,8 +3,9 @@
 //
 // It is the counterpart to the root rasql package: a type you declare in Go
 // stays in rasql, and a column name you only know as a string comes here. Its
-// builders and execute functions take a rasql.DB, which is why the dependency
-// runs one way only -- dynamic imports rasql, and rasql never imports dynamic.
+// builders and execute functions take an exec.DB, so this package depends on
+// the runtime rather than on the typed facade, and neither this package nor
+// rasql imports the other.
 package dynamic
 
 import (

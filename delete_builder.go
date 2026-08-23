@@ -117,7 +117,7 @@ func (b DeleteBuilder) Build(d dialect.Dialect) (stmt.Statement, error) {
 
 // Exec builds the statement and executes it.
 func (b DeleteBuilder) Exec(ctx context.Context, db DB) (sql.Result, error) {
-	if err := db.valid(); err != nil {
+	if err := db.Validate(); err != nil {
 		return nil, err
 	}
 	s, err := b.statement()
