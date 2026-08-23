@@ -51,3 +51,37 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 	}
 	return UsersTable{Table: aliased}, nil
 }
+
+// OrderRow is one row of the orders table, which the join, projection, and
+// subquery examples read beside users.
+type OrderRow struct {
+	ID     int64 `rasql:"id"`
+	UserID int64 `rasql:"user_id"`
+	Total  int64 `rasql:"total"`
+}
+
+// OrdersTable has the same shape as UsersTable: the typed table plus one
+// accessor method per column.
+type OrdersTable struct {
+	rasql.Table[OrderRow]
+}
+
+func (t OrdersTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
+func (t OrdersTable) UserID() query.ColumnRef { return rasql.ColumnOf(t.Table, "user_id") }
+func (t OrdersTable) Total() query.ColumnRef  { return rasql.ColumnOf(t.Table, "total") }
+
+var orders = OrdersTable{rasql.MustTableOf[OrderRow](schema.MustTableDef("orders",
+	schema.Integer("id"),
+	schema.Integer("user_id"),
+	schema.Integer("total"),
+	schema.PrimaryKey("id"),
+))}
+
+// As returns the table under alias.
+func (t OrdersTable) As(alias string) (OrdersTable, error) {
+	aliased, err := rasql.As(t.Table, alias)
+	if err != nil {
+		return OrdersTable{}, err
+	}
+	return OrdersTable{Table: aliased}, nil
+}

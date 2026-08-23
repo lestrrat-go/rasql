@@ -8,16 +8,16 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_subquery() {
 	// This example selects orders placed by a user reachable by email domain,
-	// then narrows to orders at or above the average amount across every order.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
+	// then narrows to orders at or above the average total across every order.
+	// Both tables and their row types are declared in
+	// query_example_tables_test.go with the shape rasqlgen emits; an
+	// application that generated into package store would write store.Users()
+	// and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -34,24 +34,12 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	// A typed descriptor makes orders usable with rasql.Insert as well.
-	type orderRow struct {
-		ID     int `rasql:"id"`
-		UserID int `rasql:"user_id"`
-		Amount int `rasql:"amount"`
-	}
 	// A local result type projects only orders columns, so no join is needed:
 	// both subqueries below run as their own SELECT, never as part of this one.
 	type orderSummary struct {
 		UserID int64
-		Amount int64
+		Total  int64
 	}
-	orders := rasql.MustTableOf[orderRow](schema.MustTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("user_id"),
-		schema.Integer("amount"),
-		schema.PrimaryKey("id"),
-	))
 	// Create both descriptors before querying orders against the users subquery.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
@@ -61,11 +49,6 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
-
-	// orders has no generated column accessors, so its columns are looked up by name.
-	// That lookup validates them against the descriptor as the query is assembled.
-	orderUserID := orders.Column("user_id")
-	amount := orders.Column("amount")
 
 	for _, user := range []UserRow{
 		{ID: 1, Email: "ada@example.com"},
@@ -77,10 +60,10 @@ func Example_rasql_subquery() {
 			return
 		}
 	}
-	for _, order := range []orderRow{
-		{ID: 1, UserID: 1, Amount: 80},
-		{ID: 2, UserID: 2, Amount: 20},
-		{ID: 3, UserID: 3, Amount: 100},
+	for _, order := range []OrderRow{
+		{ID: 1, UserID: 1, Total: 80},
+		{ID: 2, UserID: 2, Total: 20},
+		{ID: 3, UserID: 3, Total: 100},
 	} {
 		if _, err := rasql.Insert(ctx, db, orders, order); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
@@ -105,26 +88,26 @@ func Example_rasql_subquery() {
 	// allOrders aliases orders so the average subquery is a separate scope from
 	// the orders read by the enclosing statement, even though it names the same
 	// table.
-	allOrders, err := rasql.As(orders, "all_orders")
+	allOrders, err := orders.As("all_orders")
 	if err != nil {
 		fmt.Printf("failed to alias orders: %s\n", err)
 		return
 	}
-	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrders.Column("amount")))
+	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrders.Total()))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
 		return
 	}
 
 	// InSelect keeps orders placed by a domain user without costing one
-	// argument per candidate id, and Scalar compares amount against the
+	// argument per candidate id, and Scalar compares the total against the
 	// average of every order.
-	// SQL: SELECT orders.user_id, orders.amount FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.amount >= (SELECT AVG(all_orders.amount) FROM orders AS all_orders) ORDER BY orders.amount ASC (argument: "%@example.com")
+	// SQL: SELECT orders.user_id, orders.total FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.total >= (SELECT AVG(all_orders.total) FROM orders AS all_orders) ORDER BY orders.total ASC (argument: "%@example.com")
 	rows, err := rasql.DecodeFrom[orderSummary](orders).
-		Project(orderUserID.As("user_id"), amount).
-		Where(query.InSelect(orderUserID, domainUsers)).
-		Where(query.GreaterThanOrEqual(amount, query.Scalar(average))).
-		Order(query.Asc(amount)).
+		Project(orders.UserID().As("user_id"), orders.Total()).
+		Where(query.InSelect(orders.UserID(), domainUsers)).
+		Where(query.GreaterThanOrEqual(orders.Total(), query.Scalar(average))).
+		Order(query.Asc(orders.Total())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
@@ -135,7 +118,7 @@ func Example_rasql_subquery() {
 			fmt.Printf("failed to query orders: %s\n", err)
 			return
 		}
-		fmt.Println(summary.UserID, summary.Amount)
+		fmt.Println(summary.UserID, summary.Total)
 	}
 
 	// Output:

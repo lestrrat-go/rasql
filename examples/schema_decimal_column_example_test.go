@@ -7,19 +7,31 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// invoiceRow maps the one schema.DecimalType column this example declares.
+// InvoiceRow maps the one schema.DecimalType column this example declares.
 // The column decodes into a Go string on every dialect. This example runs on
 // SQLite, which stores such a column as TEXT and hands back the exact digits
 // inserted; PostgreSQL and MySQL instead return the value in the column's
 // declared scale, so the same "19.99" reads back as "19.9900" there.
-type invoiceRow struct {
+type InvoiceRow struct {
 	ID     int64  `rasql:"id"`
 	Amount string `rasql:"amount"`
 }
+
+// InvoicesTable has the shape rasqlgen emits: the typed table plus one
+// accessor method per column. The descriptor itself stays inside the example
+// below, because how the decimal column is declared is what this example
+// teaches.
+type InvoicesTable struct {
+	rasql.Table[InvoiceRow]
+}
+
+func (t InvoicesTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
+func (t InvoicesTable) Amount() query.ColumnRef { return rasql.ColumnOf(t.Table, "amount") }
 
 func Example_schema_decimal_column() {
 	// This example declares a schema.DecimalType column, creates its table in
@@ -45,11 +57,11 @@ func Example_schema_decimal_column() {
 	// either: stating both here makes an incomplete decimal column impossible
 	// to construct in the first place instead of merely rejected once
 	// assembled.
-	invoices := rasql.MustTableOf[invoiceRow](schema.MustTableDef("invoices",
+	invoices := InvoicesTable{rasql.MustTableOf[InvoiceRow](schema.MustTableDef("invoices",
 		schema.Integer("id"),
 		schema.Decimal("amount", 19, 4),
 		schema.PrimaryKey("id"),
-	))
+	))}
 	// SQLite has no exact decimal storage class, so the dialect declares this
 	// column TEXT rather than NUMERIC(19,4), which would round through REAL.
 	// SQL: CREATE TABLE invoices (id INTEGER NOT NULL, amount TEXT NOT NULL, PRIMARY KEY (id))
@@ -59,13 +71,13 @@ func Example_schema_decimal_column() {
 	}
 
 	// SQL: INSERT INTO invoices (id, amount) VALUES (?, ?) (arguments: 1, "19.99")
-	if _, err := rasql.Insert(ctx, db, invoices, invoiceRow{ID: 1, Amount: "19.99"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, invoices, InvoiceRow{ID: 1, Amount: "19.99"}); err != nil {
 		fmt.Printf("failed to insert invoice: %s\n", err)
 		return
 	}
 
 	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
-	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoices.Column("id"), int64(1)).One(ctx, db)
+	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoices.ID(), int64(1)).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)
 		return
