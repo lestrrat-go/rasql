@@ -186,7 +186,7 @@ func Example_query_render_select() {
 	}
 
 	// query.NewSelect validates the statement as it builds it.
-	statement, err := query.NewSelect(accounts, query.Project(id), query.Project(email))
+	statement, err := query.NewSelect(accounts, id, email)
 	if err != nil {
 		fmt.Printf("failed to build the select: %s\n", err)
 		return

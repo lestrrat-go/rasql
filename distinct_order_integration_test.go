@@ -93,7 +93,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 		// comment at query/select.go), so the builder renders this statement
 		// and lets the server report its own error rather than refusing it
 		// before rendering, the way it does for a misplaced aggregate.
-		statement, err := query.NewSelect(table, query.Project(city))
+		statement, err := query.NewSelect(table, city)
 		require.NoError(t, err)
 		statement, err = statement.WithDistinct()
 		require.NoError(t, err)
@@ -110,7 +110,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 	})
 
 	t.Run("the database runs a distinct statement ordered by a projected column", func(t *testing.T) {
-		statement, err := query.NewSelect(table, query.Project(city))
+		statement, err := query.NewSelect(table, city)
 		require.NoError(t, err)
 		statement, err = statement.WithDistinct()
 		require.NoError(t, err)

@@ -23,7 +23,7 @@ func TestZeroTableRefErrorsInsteadOfPanicking(t *testing.T) {
 	valid, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 	cond := query.Equal(validColumn, validColumn)
-	projection := query.Project(validColumn)
+	projection := validColumn
 
 	t.Run("NewSelect", func(t *testing.T) {
 		var err error
@@ -167,12 +167,12 @@ func TestTableRefFromMatchesNewTableRef(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, validatedStatement.SQL(), trustedStatement.SQL())
 
-	_, err = query.NewSelect(validated, query.Project(validatedID))
+	_, err = query.NewSelect(validated, validatedID)
 	require.NoError(t, err)
-	_, err = query.NewJoinedSelect(validated, []query.Join{query.InnerJoin(validated, query.Equal(validatedID, validatedID))}, nil, query.Project(validatedID))
+	_, err = query.NewJoinedSelect(validated, []query.Join{query.InnerJoin(validated, query.Equal(validatedID, validatedID))}, nil, validatedID)
 	require.ErrorContains(t, err, "duplicates table reference")
 
-	_, err = query.NewJoinedSelect(trusted, []query.Join{query.InnerJoin(trusted, query.Equal(trustedID, trustedID))}, nil, query.Project(trustedID))
+	_, err = query.NewJoinedSelect(trusted, []query.Join{query.InnerJoin(trusted, query.Equal(trustedID, trustedID))}, nil, trustedID)
 	require.ErrorContains(t, err, "duplicates table reference")
 }
 
@@ -277,7 +277,7 @@ func TestTableRefFromInvalidDescriptorStillFailsBeforeReachingAServer(t *testing
 	column, err := trusted.Column("")
 	require.NoError(t, err, "TableRefFrom validates nothing, so an empty column name is accepted here")
 
-	_, err = render.SelectFrom(dialect.PostgreSQL(), trusted).Project(query.Project(column)).Build()
+	_, err = render.SelectFrom(dialect.PostgreSQL(), trusted).Project(column).Build()
 	require.Error(t, err, "dialect.QuoteIdentifier catches the empty identifier at render time")
 
 	// Not caught at all: a descriptor repeating a column name renders as SQL a

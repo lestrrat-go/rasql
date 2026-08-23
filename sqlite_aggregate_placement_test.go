@@ -163,7 +163,7 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 
 	t.Run("a grouped mixed projection returns one row per group", func(t *testing.T) {
 		statement, err := query.NewGroupedSelect(table, []query.Expression{email},
-			query.Project(email),
+			email,
 			query.Project(query.CountAll()).As("total"),
 		)
 		require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 
 	t.Run("a grouped HAVING filters groups", func(t *testing.T) {
 		statement, err := query.NewGroupedSelect(table, []query.Expression{id},
-			query.Project(id),
+			id,
 			query.Project(query.CountAll()).As("total"),
 		)
 		require.NoError(t, err)

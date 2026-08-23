@@ -300,7 +300,7 @@ func TestEveryDynamicEntryPointRejectsAZeroDB(t *testing.T) {
 	_, err = dynamic.DeleteFrom(users).WhereEqual(id, 1).Exec(t.Context(), zero)
 	require.ErrorContains(t, err, "rasql: invalid DB")
 
-	_, err = dynamic.DeleteFrom(users).WhereEqual(id, 1).Returning(query.Project(id)).Query(t.Context(), zero)
+	_, err = dynamic.DeleteFrom(users).WhereEqual(id, 1).Returning(id).Query(t.Context(), zero)
 	require.ErrorContains(t, err, "rasql: invalid DB")
 }
 
@@ -359,7 +359,7 @@ func TestQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 	users := dynamicUsersTable(t)
 	id, err := users.Column("id")
 	require.NoError(t, err)
-	statement, err := query.NewSelect(users, query.Project(id))
+	statement, err := query.NewSelect(users, id)
 	require.NoError(t, err)
 
 	requireLazyRowSequence(t, mock,
@@ -382,7 +382,7 @@ func TestQueryWriteRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 	require.NoError(t, err)
 	insert, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	statement, err := insert.WithReturning(query.Project(id))
+	statement, err := insert.WithReturning(id)
 	require.NoError(t, err)
 
 	requireLazyRowSequence(t, mock,
@@ -423,7 +423,7 @@ func insertReturningStatement(t *testing.T) query.Insert {
 	require.NoError(t, err)
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	statement, err = statement.WithReturning(id, email)
 	require.NoError(t, err)
 	return statement
 }
@@ -435,7 +435,7 @@ func selectStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	statement, err := query.NewSelect(users, query.Project(id), query.Project(email))
+	statement, err := query.NewSelect(users, id, email)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.Equal(id, query.Bind(42)))
 	require.NoError(t, err)

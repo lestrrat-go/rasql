@@ -129,7 +129,7 @@ func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("ada@example.com"))
 
 	result, err := rasql.DecodeFrom[directScanUser](users).
-		Project(query.Project(email)).
+		Project(email).
 		One(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, directScanUser{Email: "ada@example.com"}, result)
@@ -192,7 +192,7 @@ func TestTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("Ada Lovelace").AddRow("Grace Hopper"))
 
 	rows, err := rasql.DecodeFrom[plannedScanUser](users).
-		Project(query.Project(name)).
+		Project(name).
 		All(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, []plannedScanUser{{Name: "Ada Lovelace"}, {Name: "Grace Hopper"}}, rows)
@@ -326,7 +326,7 @@ func TestTypedSelectGroupBy(t *testing.T) {
 
 	db := dbForBuild(t)
 	statement, err := rasql.DecodeFrom[emailCount](users).
-		Project(query.Project(email), query.Project(query.CountAll()).As("total")).
+		Project(email, query.Project(query.CountAll()).As("total")).
 		GroupBy(email).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Build(db.Dialect())
@@ -358,14 +358,14 @@ func TestTypedSelectDistinct(t *testing.T) {
 
 	db := dbForBuild(t)
 	statement, err := rasql.DecodeFrom[emailOnly](users).
-		Project(query.Project(email)).
+		Project(email).
 		Distinct().
 		Build(db.Dialect())
 	require.NoError(t, err)
 	require.Equal(t, `SELECT DISTINCT "users"."email" FROM "users"`, statement.SQL())
 
 	_, err = rasql.DecodeFrom[emailOnly](users).
-		Project(query.Project(email)).
+		Project(email).
 		Distinct().
 		Count(t.Context(), db)
 	require.Error(t, err)
@@ -390,7 +390,7 @@ func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
 	}
 
 	statement, err := rasql.DecodeFrom[userOrderCount](users).
-		Project(query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
+		Project(orderUserID, query.Project(query.CountAll()).As("total")).
 		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
 		GroupBy(orderUserID).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).

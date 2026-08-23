@@ -23,6 +23,26 @@ func (c ColumnRef) Source() TableRef {
 	return c.source
 }
 
+// ProjectedExpression returns c, so a column is selected without a wrapper.
+func (c ColumnRef) ProjectedExpression() Expression {
+	return c
+}
+
+// ResultAlias returns an empty string, because an unaliased column is reported
+// under its own name.
+func (ColumnRef) ResultAlias() string {
+	return ""
+}
+
+// As returns the column projected under alias. It reports no error, because
+// the alias is checked when the statement carrying the projection is
+// validated, exactly as the alias given to ExpressionProjection.As is.
+// TableRef.As is a different operation: it names the table itself in the FROM
+// clause, and it validates the alias immediately.
+func (c ColumnRef) As(alias string) Projection {
+	return ExpressionProjection{expression: c, alias: alias}
+}
+
 // ExcludedColumn references the incoming value of a column during an upsert.
 type ExcludedColumn struct {
 	column ColumnRef

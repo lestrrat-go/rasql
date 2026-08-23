@@ -8,7 +8,6 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/examples/store"
-	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -48,7 +47,7 @@ func Example_rasqlgen_embedded_row() {
 
 	users := store.Users()
 	wrapped, err := rasql.DecodeFrom[userWithRole](users).
-		Project(query.Project(users.ID()), query.Project(users.Email())).
+		Project(users.ID(), users.Email()).
 		One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)

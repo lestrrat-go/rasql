@@ -26,7 +26,7 @@ func TestSelectBuildsImmutableStatement(t *testing.T) {
 	amount, err := orders.Column("amount")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID).As("user_id"))
+	statement, err := query.NewSelect(users, userID.As("user_id"))
 	require.NoError(t, err)
 	statement, err = statement.WithJoin(query.InnerJoin(orders, query.Equal(userID, orderUserID)))
 	require.NoError(t, err)
@@ -63,7 +63,7 @@ func TestSelectAcceptsDistinctStatements(t *testing.T) {
 	email, err := users.Column("email")
 	require.NoError(t, err)
 
-	base, err := query.NewSelect(users, query.Project(email))
+	base, err := query.NewSelect(users, email)
 	require.NoError(t, err)
 	require.False(t, base.Distinct())
 
@@ -89,7 +89,7 @@ func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
 	userID, err := users.Column("id")
 	require.NoError(t, err)
 
-	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(email))
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, email)
 	require.NoError(t, err)
 	grouped, err = grouped.WithHaving(query.NotEqual(email, query.Bind("done")))
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
 
 	// The reverse call order, WithDistinct before the other clauses, reaches
 	// the same accepted statement.
-	reversed, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(email))
+	reversed, err := query.NewGroupedSelect(users, []query.Expression{email}, email)
 	require.NoError(t, err)
 	reversed, err = reversed.WithDistinct()
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
 	// A distinct statement ordered by a column outside its projections
 	// validates in both call orders: rasql renders it and leaves the
 	// PostgreSQL/MySQL refusal to the server.
-	distinctFirst, err := query.NewSelect(users, query.Project(email))
+	distinctFirst, err := query.NewSelect(users, email)
 	require.NoError(t, err)
 	distinctFirst, err = distinctFirst.WithDistinct()
 	require.NoError(t, err)
@@ -127,7 +127,7 @@ func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, distinctFirst.Validate())
 
-	orderFirst, err := query.NewSelect(users, query.Project(email))
+	orderFirst, err := query.NewSelect(users, email)
 	require.NoError(t, err)
 	orderFirst, err = orderFirst.WithOrder(query.Asc(userID))
 	require.NoError(t, err)
@@ -208,7 +208,7 @@ func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
 
 	// A Func call stays scalar with the modifier attached, so it reaches a
 	// WHERE clause where an aggregate would be refused.
-	statement, err = query.NewSelect(users, query.Project(userID))
+	statement, err = query.NewSelect(users, userID)
 	require.NoError(t, err)
 	_, err = statement.WithWhere(query.Equal(query.Func("any_value", email).WithDistinct(), query.Bind("a")))
 	require.NoError(t, err)
@@ -269,7 +269,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	_, err = query.NewSelect(users)
 	requireQueryValidationError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 
 	_, err = statement.WithWhere(query.And(userID))
@@ -303,7 +303,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "from")
 
-	twoProjections, err := query.NewSelect(users, query.Project(userID), query.Project(query.Bind(1)))
+	twoProjections, err := query.NewSelect(users, userID, query.Project(query.Bind(1)))
 	require.NoError(t, err)
 	_, err = statement.WithWhere(query.GreaterThan(userID, query.Scalar(twoProjections)))
 	requireQueryValidationError(t, err)
@@ -318,7 +318,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	// same "outside the statement" error the table-scope check already reports
 	// for any expression, before the subquery is even nested inside another
 	// statement.
-	correlated, err := query.NewSelect(other, query.Project(otherID))
+	correlated, err := query.NewSelect(other, otherID)
 	require.NoError(t, err)
 	_, err = correlated.WithWhere(query.Equal(userID, query.Bind(1)))
 	requireQueryValidationError(t, err)
@@ -351,7 +351,7 @@ func TestSelectAcceptsMembershipPredicate(t *testing.T) {
 	require.NoError(t, err)
 	userID, err := users.Column("id")
 	require.NoError(t, err)
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 
 	in := query.In(userID, query.Bind(1), query.Bind(2), query.Bind(3))
@@ -382,10 +382,10 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 	amount, err := orders.Column("amount")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(userID))
+	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 
-	orderedUserIDs, err := query.NewSelect(orders, query.Project(orderUserID))
+	orderedUserIDs, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.InSelect(userID, orderedUserIDs))
 	require.NoError(t, err)
@@ -398,7 +398,7 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
 
-	notInStatement, err := query.NewSelect(users, query.Project(userID))
+	notInStatement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	notInStatement, err = notInStatement.WithWhere(query.NotInSelect(userID, orderedUserIDs))
 	require.NoError(t, err)
@@ -406,15 +406,15 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 
 	// A subquery two levels deep: the outer statement's InSelect reads a
 	// statement whose own WHERE runs another InSelect.
-	innermost, err := query.NewSelect(orders, query.Project(orderID))
+	innermost, err := query.NewSelect(orders, orderID)
 	require.NoError(t, err)
 	innermost, err = innermost.WithWhere(query.GreaterThan(amount, query.Bind(10)))
 	require.NoError(t, err)
-	nested, err := query.NewSelect(orders, query.Project(orderUserID))
+	nested, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
 	nested, err = nested.WithWhere(query.InSelect(orderID, innermost))
 	require.NoError(t, err)
-	deep, err := query.NewSelect(users, query.Project(userID))
+	deep, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	deep, err = deep.WithWhere(query.InSelect(userID, nested))
 	require.NoError(t, err)
@@ -435,7 +435,7 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
-	base, err := query.NewSelect(users, query.Project(userID))
+	base, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 
 	tests := map[string]struct {
@@ -512,7 +512,7 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 		},
 		"column projected beside an aggregate": {
 			build: func() error {
-				_, err := query.NewSelect(users, query.Project(userID), query.Project(query.CountAll()))
+				_, err := query.NewSelect(users, userID, query.Project(query.CountAll()))
 				return err
 			},
 			message: "reads a column outside an aggregate function while projections[1] aggregates",
@@ -526,7 +526,7 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 		},
 		"group by": {
 			build: func() error {
-				_, err := query.NewGroupedSelect(users, []query.Expression{query.Count(userID)}, query.Project(userID))
+				_, err := query.NewGroupedSelect(users, []query.Expression{query.Count(userID)}, userID)
 				return err
 			},
 			message: `calls aggregate function "COUNT" in a GROUP BY clause`,
@@ -586,7 +586,7 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 
 	// A projection set that never aggregates keeps reading columns freely, in
 	// the projections and in the ordering alike.
-	columns, err := query.NewSelect(users, query.Project(userID), query.Project(email))
+	columns, err := query.NewSelect(users, userID, email)
 	require.NoError(t, err)
 	columns, err = columns.WithOrder(query.Asc(email))
 	require.NoError(t, err)
@@ -616,14 +616,14 @@ func TestSelectAcceptsScalarFunctions(t *testing.T) {
 	require.NoError(t, projected.Validate())
 
 	// A scalar call in WHERE, which an aggregate call is refused in.
-	filtered, err := query.NewSelect(users, query.Project(userID))
+	filtered, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	filtered, err = filtered.WithWhere(query.Equal(query.Lower(email), query.Bind("ada@example.com")))
 	require.NoError(t, err)
 	require.NoError(t, filtered.Validate())
 
 	// A scalar call in a JOIN ON condition.
-	joined, err := query.NewSelect(users, query.Project(userID))
+	joined, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	joined, err = joined.WithJoin(query.InnerJoin(orders, query.Equal(userID, query.Abs(orderUserID))))
 	require.NoError(t, err)
@@ -636,14 +636,14 @@ func TestSelectAcceptsScalarFunctions(t *testing.T) {
 
 	// A scalar call in an ORDER BY clause of an ungrouped, non-aggregating
 	// statement.
-	ordered, err := query.NewSelect(users, query.Project(userID))
+	ordered, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	ordered, err = ordered.WithOrder(query.Asc(query.Lower(email)))
 	require.NoError(t, err)
 	require.NoError(t, ordered.Validate())
 
 	// A scalar call in a HAVING clause of a statement that groups.
-	having, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(email))
+	having, err := query.NewGroupedSelect(users, []query.Expression{email}, email)
 	require.NoError(t, err)
 	having, err = having.WithHaving(query.NotEqual(query.Lower(email), query.Bind("done")))
 	require.NoError(t, err)
@@ -717,7 +717,7 @@ func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
 
 	// The same call is refused in WHERE: the nested aggregate sees
 	// allowsAggregate false.
-	base, err := query.NewSelect(users, query.Project(userID))
+	base, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	_, err = base.WithWhere(query.GreaterThan(query.Coalesce(query.Sum(userID), query.Bind(0)), query.Bind(0)))
 	requireQueryValidationError(t, err)
@@ -771,7 +771,7 @@ func TestFuncValidatesEscapeHatchName(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
 
-	base, err := query.NewSelect(users, query.Project(userID))
+	base, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	filtered, err := base.WithWhere(query.Equal(query.Func("SUM", userID), query.Bind(1)))
 	require.NoError(t, err)
@@ -801,7 +801,7 @@ func TestSelectGroupsAndFilters(t *testing.T) {
 	require.NoError(t, err)
 
 	grouped, err := query.NewGroupedSelect(users, []query.Expression{email},
-		query.Project(email),
+		email,
 		query.Project(query.CountAll()).As("total"),
 	)
 	require.NoError(t, err)
@@ -844,7 +844,7 @@ func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
 	join := query.InnerJoin(orders, query.Equal(userID, orderUserID))
 
 	grouped, err := query.NewJoinedSelect(users, []query.Join{join}, []query.Expression{orderUserID},
-		query.Project(orderUserID),
+		orderUserID,
 		query.Project(query.CountAll()).As("total"),
 	)
 	require.NoError(t, err)
@@ -854,8 +854,8 @@ func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
 	// A nil grouping leaves the statement ungrouped, which is where the
 	// projection of a joined column also needs the join up front.
 	ungrouped, err := query.NewJoinedSelect(users, []query.Join{join}, nil,
-		query.Project(userID),
-		query.Project(orderUserID),
+		userID,
+		orderUserID,
 	)
 	require.NoError(t, err)
 	require.Empty(t, ungrouped.GroupBy())
@@ -863,7 +863,7 @@ func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
 	// The joins the caller passes are copied, so a later write to their slice
 	// must not reach the statement.
 	joins := []query.Join{join}
-	copied, err := query.NewJoinedSelect(users, joins, nil, query.Project(userID))
+	copied, err := query.NewJoinedSelect(users, joins, nil, userID)
 	require.NoError(t, err)
 	joins[0] = query.Join{}
 	require.Equal(t, []query.Join{join}, copied.Joins())
@@ -887,22 +887,22 @@ func TestSelectRejectsInvalidGrouping(t *testing.T) {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
-	_, err = query.NewGroupedSelect(users, []query.Expression{query.CountAll()}, query.Project(userID))
+	_, err = query.NewGroupedSelect(users, []query.Expression{query.CountAll()}, userID)
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `calls aggregate function "COUNT" in a GROUP BY clause`)
 
-	_, err = query.NewGroupedSelect(users, []query.Expression{orderUserID}, query.Project(userID))
+	_, err = query.NewGroupedSelect(users, []query.Expression{orderUserID}, userID)
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "references table")
 	require.ErrorContains(t, err, "outside the statement")
 
-	_, err = query.NewGroupedSelect(users, []query.Expression{query.Bind(1)}, query.Project(userID))
+	_, err = query.NewGroupedSelect(users, []query.Expression{query.Bind(1)}, userID)
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "must not be a bound value")
 
 	// A grouping expression that merely contains a bound value, rather than
 	// being one, is a real grouping key and stays legal.
-	nested, err := query.NewGroupedSelect(users, []query.Expression{query.GreaterThan(userID, query.Bind(3))}, query.Project(userID))
+	nested, err := query.NewGroupedSelect(users, []query.Expression{query.GreaterThan(userID, query.Bind(3))}, userID)
 	require.NoError(t, err)
 	require.NoError(t, nested.Validate())
 
@@ -910,9 +910,9 @@ func TestSelectRejectsInvalidGrouping(t *testing.T) {
 	// leaves the statement ungrouped, so a mixed projection set is refused with
 	// the identical message NewSelect gives, rather than being silently
 	// accepted because the call went through the grouped constructor.
-	_, errFromNewSelect := query.NewSelect(users, query.Project(userID), query.Project(query.CountAll()))
+	_, errFromNewSelect := query.NewSelect(users, userID, query.Project(query.CountAll()))
 	requireQueryValidationError(t, errFromNewSelect)
-	_, errFromEmptyGroup := query.NewGroupedSelect(users, nil, query.Project(userID), query.Project(query.CountAll()))
+	_, errFromEmptyGroup := query.NewGroupedSelect(users, nil, userID, query.Project(query.CountAll()))
 	requireQueryValidationError(t, errFromEmptyGroup)
 	require.Equal(t, errFromNewSelect.Error(), errFromEmptyGroup.Error())
 }
@@ -933,7 +933,7 @@ func TestSelectRejectsInvalidHaving(t *testing.T) {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
-	plain, err := query.NewSelect(users, query.Project(userID))
+	plain, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	_, err = plain.WithHaving(query.GreaterThan(userID, query.Bind(1)))
 	requireQueryValidationError(t, err)
@@ -954,7 +954,7 @@ func TestSelectRejectsInvalidHaving(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `calls aggregate function "MAX" inside another aggregate function`)
 
-	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(email), query.Project(query.CountAll()))
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, email, query.Project(query.CountAll()))
 	require.NoError(t, err)
 	withHaving, err := grouped.WithHaving(query.NotEqual(email, query.Bind("done")))
 	require.NoError(t, err)
@@ -971,7 +971,7 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 
 	// A grouped statement may mix a bare column with an aggregate.
 	statement, err := query.NewGroupedSelect(users, []query.Expression{email},
-		query.Project(email),
+		email,
 		query.Project(query.CountAll()).As("total"),
 	)
 	require.NoError(t, err)
@@ -1050,7 +1050,7 @@ func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
 	email, err := users.Column("email")
 	require.NoError(t, err)
 
-	base, err := query.NewSelect(users, query.Project(userID))
+	base, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 	aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
 	require.NoError(t, err)
@@ -1218,7 +1218,7 @@ func TestSelectJoinsSameNameTablesFromDifferentSchemas(t *testing.T) {
 	require.NoError(t, err)
 
 	join := query.InnerJoin(tenantB, query.Equal(tenantAID, tenantBID))
-	_, err = query.NewJoinedSelect(tenantA, []query.Join{join}, nil, query.Project(tenantAID))
+	_, err = query.NewJoinedSelect(tenantA, []query.Join{join}, nil, tenantAID)
 	require.NoError(t, err)
 }
 
@@ -1239,7 +1239,7 @@ func TestSelectNamesQualifiedTableInDuplicateSourceError(t *testing.T) {
 	require.NoError(t, err)
 
 	join := query.InnerJoin(other, query.Equal(fromID, otherID))
-	_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, query.Project(fromID))
+	_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, fromID)
 	require.ErrorContains(t, err, `duplicates table reference "audit.users"`)
 }
 
@@ -1355,7 +1355,7 @@ func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
 			require.NoError(t, err)
 
 			join := query.InnerJoin(joined, query.Equal(fromID, joinedID))
-			_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, query.Project(fromID))
+			_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, fromID)
 			requireQueryValidationError(t, err)
 			require.ErrorContains(t, err, testCase.message)
 		})
@@ -1395,7 +1395,7 @@ func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
 			require.NoError(t, err)
 
 			join := query.InnerJoin(joined, query.Equal(fromID, joinedID))
-			_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, query.Project(fromID))
+			_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, fromID)
 			require.NoError(t, err)
 		})
 	}
@@ -1414,11 +1414,55 @@ func TestSelectRejectsSharedNameAddedByWithJoin(t *testing.T) {
 	tenantID, err := tenantUsers.Column("id")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(usersID))
+	statement, err := query.NewSelect(users, usersID)
 	require.NoError(t, err)
 
 	_, err = statement.WithJoin(query.InnerJoin(tenantUsers, query.Equal(usersID, tenantID)))
 	require.ErrorContains(t, err, `table "tenant_a.users" is referred to as "users", which already refers to table "users"`)
+}
+
+var (
+	_ query.Projection = query.ColumnRef{}
+	_ query.Projection = query.ExpressionProjection{}
+)
+
+// TestBareColumnRefIsAProjection pins that a ColumnRef needs no query.Project
+// wrapper: passed to NewSelect directly, it builds the same statement
+// query.Project(column) built before ColumnRef satisfied Projection, and
+// column.As sets the result alias the same way Project(column).As did.
+func TestBareColumnRefIsAProjection(t *testing.T) {
+	users := query.MustTableRef(usersTable())
+	id, err := users.Column("id")
+	require.NoError(t, err)
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	bare, err := query.NewSelect(users, id, email.As("user_email"))
+	require.NoError(t, err)
+
+	projections := bare.Projections()
+	require.Len(t, projections, 2)
+	require.Equal(t, "", projections[0].ResultAlias())
+	require.Equal(t, query.Expression(id), projections[0].ProjectedExpression())
+	require.Equal(t, "user_email", projections[1].ResultAlias())
+	require.Equal(t, query.Expression(email), projections[1].ProjectedExpression())
+
+	wrapped, err := query.NewSelect(users, query.Project(id), query.Project(email).As("user_email"))
+	require.NoError(t, err)
+	require.Equal(t, wrapped.Projections()[0].ProjectedExpression(), bare.Projections()[0].ProjectedExpression())
+	require.Equal(t, wrapped.Projections()[1].ResultAlias(), bare.Projections()[1].ResultAlias())
+}
+
+// TestSelectRejectsNilProjection pins that a nil Projection element reports a
+// validation error naming its position, rather than panicking when validation
+// dereferences it.
+func TestSelectRejectsNilProjection(t *testing.T) {
+	users := query.MustTableRef(usersTable())
+
+	_, err := query.NewSelect(users, nil)
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "projections[0]")
+	require.ErrorContains(t, err, "must not be nil")
 }
 
 func requireQueryValidationError(t *testing.T, err error) {

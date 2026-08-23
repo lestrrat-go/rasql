@@ -7,7 +7,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -85,7 +84,7 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 	report, err := rasql.DecodeFrom[userReport](people).
-		Project(query.Project(email), query.Project(first), query.Project(last)).
+		Project(email, first, last).
 		One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query people: %s\n", err)

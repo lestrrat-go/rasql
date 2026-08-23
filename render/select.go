@@ -171,13 +171,13 @@ func (r *renderer) writeTable(table query.TableRef) error {
 }
 
 func (r *renderer) writeProjection(projection query.Projection) error {
-	if err := r.writeExpression(projection.Expression()); err != nil {
+	if err := r.writeExpression(projection.ProjectedExpression()); err != nil {
 		return err
 	}
-	if projection.Alias() == "" {
+	if projection.ResultAlias() == "" {
 		return nil
 	}
-	alias, err := r.quoteIdentifier(projection.Alias())
+	alias, err := r.quoteIdentifier(projection.ResultAlias())
 	if err != nil {
 		return err
 	}

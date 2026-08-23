@@ -23,7 +23,7 @@ Predicates, aggregates, and statement constructors are the same ones [the SQL bu
 | Method | Effect |
 | --- | --- |
 | `Select(names…)` | Adds primary-table columns by name. |
-| `Project(projections…)` | Adds projections built with `query.Project`. |
+| `Project(projections…)` | Adds columns directly, and other expressions through `query.Project`. |
 | `Distinct()` | De-duplicates result rows. |
 | `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. |
 | `Where(expression)` | Adds a predicate from a `query` expression. |

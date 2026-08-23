@@ -131,7 +131,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// two expectations above do -- expect firstStored, never first.
 	recordActive, err := records.Column("active")
 	require.NoError(t, err)
-	activeIDs, err := query.NewSelect(records.Ref(), query.Project(recordID))
+	activeIDs, err := query.NewSelect(records.Ref(), recordID)
 	require.NoError(t, err)
 	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActive, query.Bind(true)))
 	require.NoError(t, err)
@@ -175,7 +175,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// widening, but this projection exists to exercise a bound fallback, so it
 	// states both exact strings instead.
 	viaCoalesce, err := rasql.DecodeFrom[amountRow](records).
-		Project(query.Project(recordID), query.Project(query.Coalesce(scalarAmount, query.Bind("0.0000"))).As("amount")).
+		Project(recordID, query.Project(query.Coalesce(scalarAmount, query.Bind("0.0000"))).As("amount")).
 		OrderAsc(recordID).
 		All(t.Context(), db)
 	require.NoError(t, err)
@@ -202,7 +202,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// per-dialect pair of its own. Neither amount equals the bound "0.0000",
 	// so NULLIF returns the column value on every row.
 	viaNullIf, err := rasql.DecodeFrom[amountRow](records).
-		Project(query.Project(recordID), query.Project(query.Func("NULLIF", scalarAmount, query.Bind("0.0000"))).As("amount")).
+		Project(recordID, query.Project(query.Func("NULLIF", scalarAmount, query.Bind("0.0000"))).As("amount")).
 		OrderAsc(recordID).
 		All(t.Context(), db)
 	require.NoError(t, err)
@@ -234,7 +234,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		[]query.Expression{query.Bind(third.ID), query.Bind(third.Active), query.Bind(third.Email), query.Bind(third.Amount)},
 	)
 	require.NoError(t, err)
-	insert, err = insert.WithReturning(query.Project(recordID), query.Project(recordActive), query.Project(recordEmail), query.Project(recordAmount))
+	insert, err = insert.WithReturning(recordID, recordActive, recordEmail, recordAmount)
 	require.NoError(t, err)
 	if d.Supports(dialect.CapabilityReturning) {
 		inserted, err := rasql.QueryWriteOne[record](t.Context(), db, insert)

@@ -89,7 +89,7 @@ func TestSelectBuilder(t *testing.T) {
 		require.NoError(t, err)
 
 		statement, err := dynamic.SelectFrom(users).
-			Project(query.Project(orderUserID), query.Project(query.CountAll()).As("total")).
+			Project(orderUserID, query.Project(query.CountAll()).As("total")).
 			Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
 			GroupBy(orderUserID).
 			Build(dbForBuild(t).Dialect())

@@ -476,7 +476,7 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 		// DecodeFrom projects nothing by default, so this one names a column.
 		email, err := table.Column("email")
 		require.NoError(t, err)
-		decoded, err := rasql.DecodeFrom[staffRow, staffRow](table).Project(query.Project(email)).Build(dbForBuild(t).Dialect())
+		decoded, err := rasql.DecodeFrom[staffRow, staffRow](table).Project(email).Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
 		require.Contains(t, decoded.SQL(), `FROM "staff"`)
 

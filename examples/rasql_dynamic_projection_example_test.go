@@ -91,7 +91,7 @@ func Example_rasql_dynamic_projection() {
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
 		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orderUserID))).
-		Project(query.Project(users.ID()).As("user_id"), query.Project(users.Email())).
+		Project(users.ID().As("user_id"), users.Email()).
 		Where(query.GreaterThan(total, query.Bind(20))).
 		Order(query.Desc(total)).
 		Query(ctx, db)

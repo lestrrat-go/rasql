@@ -59,7 +59,7 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	orderStatus, err := orders.Column("status")
 	require.NoError(t, err)
 
-	activeOrders, err := query.NewSelect(orders, query.Project(orderUserID))
+	activeOrders, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
 	activeOrders, err = activeOrders.WithWhere(query.Equal(orderStatus, query.Bind(7)))
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 			AddRow(int64(2), "bob@example.com"))
 
 	rows, err := rasql.DecodeFrom[user](users).
-		Project(query.Project(id), query.Project(email)).
+		Project(id, email).
 		Where(query.InSelect(id, activeOrders)).
 		Query(t.Context(), db)
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestDecodeFromRefDecodesProjectedRows(t *testing.T) {
 		Email  string
 	}
 	rows, err := rasql.DecodeFromRef[summary](users).
-		Project(query.Project(id).As("user_id"), query.Project(email)).
+		Project(id.As("user_id"), email).
 		Where(query.Equal(id, query.Bind(42))).
 		Query(t.Context(), db)
 	require.NoError(t, err)
@@ -210,7 +210,7 @@ func TestDecodeFromDecodesGroupedRows(t *testing.T) {
 			AddRow("done", int64(5)))
 
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
-		Project(query.Project(status), query.Project(query.CountAll()).As("total")).
+		Project(status, query.Project(query.CountAll()).As("total")).
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Query(t.Context(), db)
@@ -263,7 +263,7 @@ func TestDecodeFromDecodesDistinctRows(t *testing.T) {
 			AddRow("done"))
 
 	rows, err := rasql.DecodeFrom[statusOnly](tasks).
-		Project(query.Project(status)).
+		Project(status).
 		Distinct().
 		Query(t.Context(), db)
 	require.NoError(t, err)
@@ -675,7 +675,7 @@ func insertReturningStatement(t *testing.T) query.Insert {
 	require.NoError(t, err)
 	statement, err := query.NewInsert(users, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})
 	require.NoError(t, err)
-	statement, err = statement.WithReturning(query.Project(id), query.Project(email))
+	statement, err = statement.WithReturning(id, email)
 	require.NoError(t, err)
 	return statement
 }
