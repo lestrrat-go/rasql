@@ -547,3 +547,24 @@ func (f Function) Aggregates() bool {
 	spec, ok := functionSpecs[f.name]
 	return ok && spec.aggregate
 }
+
+// ProjectedExpression returns f, so a function call is selected without a
+// wrapper. A column and a function call are what a SELECT list mostly holds,
+// and both project themselves; Project wraps everything else.
+func (f Function) ProjectedExpression() Expression {
+	return f
+}
+
+// ResultAlias returns an empty string, because an unaliased call is reported
+// under whatever name the database picks for it. That name is not portable, so
+// a caller reading the result by name should give the call an alias with As.
+func (Function) ResultAlias() string {
+	return ""
+}
+
+// As returns the call projected under alias. It reports no error, because the
+// alias is checked when the statement carrying the projection is validated,
+// exactly as the alias given to ColumnRef.As is.
+func (f Function) As(alias string) Projection {
+	return ExpressionProjection{expression: f, alias: alias}
+}

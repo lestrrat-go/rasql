@@ -292,7 +292,7 @@ func Example_rasql_scalar_function() {
 	// caller would type, regardless of how the stored value was cased.
 	// SQL: SELECT members.id, COALESCE(members.nickname, members.email) AS name FROM members WHERE LOWER(members.email) = ? (argument: "ada@example.com")
 	byEmail, err := rasql.DecodeFrom[memberName](members).
-		Project(id, query.Project(query.Coalesce(nickname, email)).As("name")).
+		Project(id, query.Coalesce(nickname, email).As("name")).
 		Where(query.Equal(query.Lower(email), query.Bind("ada@example.com"))).
 		Query(ctx, db)
 	if err != nil {
@@ -311,7 +311,7 @@ func Example_rasql_scalar_function() {
 	// back to the email once nickname is NULL.
 	// SQL: SELECT members.id, COALESCE(members.nickname, members.email) AS name FROM members ORDER BY members.id ASC
 	names, err := rasql.DecodeFrom[memberName](members).
-		Project(id, query.Project(query.Coalesce(nickname, email)).As("name")).
+		Project(id, query.Coalesce(nickname, email).As("name")).
 		OrderAsc(id).
 		Query(ctx, db)
 	if err != nil {
@@ -359,7 +359,9 @@ A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `G
 | --- | --- |
 | `column` | A column projected under its own name; a `query.ColumnRef` is a projection already. |
 | `column.As(alias)` | The same column under a result name. |
-| `query.Project(expression)` | A projected expression, for anything that is not a plain column. |
+| `query.Count(expression)` and the other function constructors | A function call projected under whatever name the database picks; a `query.Function` is a projection already. |
+| `query.Lower(expression).As(alias)` | The same call under a result name. |
+| `query.Project(expression)` | A projected expression, for anything that is neither a column nor a function call. |
 | `query.Project(expression).As(alias)` | The same projection under a result name. |
 | `rasql.InnerJoin(table, on)` | An inner join on a typed table with its condition. |
 | `rasql.LeftJoin(table, on)` | A left outer join on a typed table with its condition. |

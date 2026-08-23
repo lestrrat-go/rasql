@@ -198,7 +198,7 @@ func TestSelectBuilderBuildsGroupedStatement(t *testing.T) {
 	require.NoError(t, err)
 
 	rendered, err := render.SelectFrom(dialect.PostgreSQL(), users).
-		Project(id, query.Project(query.CountAll()).As("total")).
+		Project(id, query.CountAll().As("total")).
 		GroupByColumns("id").
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Having(query.LessThan(query.CountAll(), query.Bind(100))).
@@ -210,7 +210,7 @@ func TestSelectBuilderBuildsGroupedStatement(t *testing.T) {
 	require.Equal(t, []any{1, 100}, rendered.Args())
 
 	viaExpression, err := render.SelectFrom(dialect.PostgreSQL(), users).
-		Project(id, query.Project(query.CountAll()).As("total")).
+		Project(id, query.CountAll().As("total")).
 		GroupBy(id).
 		Build()
 	require.NoError(t, err)
@@ -239,7 +239,7 @@ func TestSelectBuilderGroupsByJoinedColumn(t *testing.T) {
 	require.NoError(t, err)
 
 	rendered, err := render.SelectFrom(dialect.PostgreSQL(), users).
-		Project(orderUserID, query.Project(query.CountAll()).As("total")).
+		Project(orderUserID, query.CountAll().As("total")).
 		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
 		GroupBy(orderUserID).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
@@ -253,7 +253,7 @@ func TestSelectBuilderGroupsByJoinedColumn(t *testing.T) {
 	// GroupByColumns names a primary-table column, so grouping by it beside a
 	// joined projection has to survive the same assembly order.
 	mixed, err := render.SelectFrom(dialect.PostgreSQL(), users).
-		Project(id, orderUserID, query.Project(query.CountAll()).As("total")).
+		Project(id, orderUserID, query.CountAll().As("total")).
 		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
 		GroupByColumns("id").
 		GroupBy(orderUserID).
@@ -275,7 +275,7 @@ func TestSelectBuilderGroupsByJoinedColumn(t *testing.T) {
 	// A grouping expression that reads a table the statement never selects from
 	// is still refused.
 	_, err = render.SelectFrom(dialect.PostgreSQL(), users).
-		Project(orderUserID, query.Project(query.CountAll()).As("total")).
+		Project(orderUserID, query.CountAll().As("total")).
 		GroupBy(orderUserID).
 		Build()
 	require.ErrorContains(t, err, `references table "orders" outside the statement`)
@@ -287,7 +287,7 @@ func TestSelectBuilderGroupingIsImmutable(t *testing.T) {
 	require.NoError(t, err)
 
 	base := render.SelectFrom(dialect.PostgreSQL(), users).
-		Project(id, query.Project(query.CountAll()).As("total")).
+		Project(id, query.CountAll().As("total")).
 		GroupByColumns("id")
 	havingAdded := base.Having(query.GreaterThan(query.CountAll(), query.Bind(1)))
 

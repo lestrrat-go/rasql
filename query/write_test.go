@@ -366,7 +366,7 @@ func TestWriteStatementsRejectAggregates(t *testing.T) {
 		},
 		"insert returning": {
 			build: func() error {
-				_, err := insert.WithReturning(query.Project(query.CountAll()))
+				_, err := insert.WithReturning(query.CountAll())
 				return err
 			},
 			message: `calls aggregate function "COUNT" in a RETURNING projection`,
@@ -427,7 +427,7 @@ func TestWriteStatementsAcceptScalarFunctions(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, insert.Validate())
 
-	returning, err := insert.WithReturning(query.Project(query.Lower(email)).As("lower_email"))
+	returning, err := insert.WithReturning(query.Lower(email).As("lower_email"))
 	require.NoError(t, err)
 	require.NoError(t, returning.Validate())
 

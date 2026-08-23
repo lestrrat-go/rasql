@@ -168,7 +168,7 @@ func TestSelectRendersQualifiedTableInGroupedStatement(t *testing.T) {
 
 	statement, err := query.NewGroupedSelect(events, []query.Expression{userID},
 		userID,
-		query.Project(query.CountAll()),
+		query.CountAll(),
 	)
 	require.NoError(t, err)
 	statement, err = statement.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
@@ -275,8 +275,8 @@ func aggregateSelectStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 
 	statement, err := query.NewSelect(orders,
-		query.Project(query.CountAll()).As("total"),
-		query.Project(query.Max(amount)).As("top"),
+		query.CountAll().As("total"),
+		query.Max(amount).As("top"),
 	)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.NotEqual(amount, query.Bind("done")))
@@ -385,7 +385,7 @@ func TestSelectRendersDistinctFunctionArgument(t *testing.T) {
 	orderUserID, err := orders.Column("user_id")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(orders, query.Project(query.Count(orderUserID).WithDistinct()).As("distinct_users"))
+	statement, err := query.NewSelect(orders, query.Count(orderUserID).WithDistinct().As("distinct_users"))
 	require.NoError(t, err)
 
 	tests := map[string]struct {
@@ -487,9 +487,9 @@ func TestSelectRendersScalarFunctions(t *testing.T) {
 	require.NoError(t, err)
 
 	statement, err := query.NewSelect(users,
-		query.Project(query.Lower(email)).As("lower_email"),
-		query.Project(query.Upper(email)).As("upper_email"),
-		query.Project(query.Abs(score)).As("abs_score"),
+		query.Lower(email).As("lower_email"),
+		query.Upper(email).As("upper_email"),
+		query.Abs(score).As("abs_score"),
 	)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.Equal(
@@ -541,7 +541,7 @@ func TestSelectRendersScalarFunctionEscapeHatch(t *testing.T) {
 	doc, err := users.Column("doc")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(query.Func("jsonb_path_query", doc, query.Bind("$.a"))).As("matched"))
+	statement, err := query.NewSelect(users, query.Func("jsonb_path_query", doc, query.Bind("$.a")).As("matched"))
 	require.NoError(t, err)
 
 	rendered, err := render.Select(dialect.PostgreSQL(), statement)
@@ -568,7 +568,7 @@ func TestSelectRendersDistinctEscapeHatchArgument(t *testing.T) {
 	tag, err := posts.Column("tag")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(posts, query.Project(query.Func("group_concat", tag).WithDistinct()).As("tags"))
+	statement, err := query.NewSelect(posts, query.Func("group_concat", tag).WithDistinct().As("tags"))
 	require.NoError(t, err)
 
 	rendered, err := render.Select(dialect.SQLite(), statement)
@@ -626,7 +626,7 @@ func groupedSelectStatement(t *testing.T) query.Select {
 
 	statement, err := query.NewGroupedSelect(tasks, []query.Expression{status},
 		status,
-		query.Project(query.CountAll()).As("total"),
+		query.CountAll().As("total"),
 	)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.NotEqual(status, query.Bind("done")))
@@ -661,14 +661,14 @@ func TestSelectRendersSubqueryInGroupedClauses(t *testing.T) {
 	allPriority, err := allTasks.Column("priority")
 	require.NoError(t, err)
 
-	average, err := query.NewSelect(allTasks, query.Project(query.Avg(allPriority)))
+	average, err := query.NewSelect(allTasks, query.Avg(allPriority))
 	require.NoError(t, err)
 	average, err = average.WithWhere(query.GreaterThan(allPriority, query.Bind(0)))
 	require.NoError(t, err)
 
 	statement, err := query.NewGroupedSelect(tasks,
 		[]query.Expression{query.GreaterThan(priority, query.Scalar(average))},
-		query.Project(query.CountAll()).As("total"),
+		query.CountAll().As("total"),
 	)
 	require.NoError(t, err)
 	statement, err = statement.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
@@ -989,7 +989,7 @@ func subqueryStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 	allTasksPriority, err := allTasks.Column("priority")
 	require.NoError(t, err)
-	average, err := query.NewSelect(allTasks, query.Project(query.Avg(allTasksPriority)))
+	average, err := query.NewSelect(allTasks, query.Avg(allTasksPriority))
 	require.NoError(t, err)
 
 	statement, err := query.NewSelect(tasks, taskID, taskTitle)

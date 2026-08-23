@@ -136,7 +136,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	require.NoError(t, err)
 	id, err := table.Column("id")
 	require.NoError(t, err)
-	counted := render.SelectFrom(test.dialect, table).Project(query.Project(query.CountAll()).As("count"))
+	counted := render.SelectFrom(test.dialect, table).Project(query.CountAll().As("count"))
 
 	t.Run("the database runs an aggregate ordering", func(t *testing.T) {
 		for name, builder := range map[string]render.SelectBuilder{
@@ -161,7 +161,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		email, err := table.Column("email")
 		require.NoError(t, err)
 		grouped := render.SelectFrom(test.dialect, table).
-			Project(email, query.Project(query.CountAll()).As("count")).
+			Project(email, query.CountAll().As("count")).
 			GroupBy(email)
 		statement, err := grouped.Build()
 		require.NoError(t, err)

@@ -187,7 +187,7 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []user{insertedUsers[0], insertedUsers[2]}, viaInSelect)
 
-	average, err := query.NewSelect(orders.Ref(), query.Project(query.Avg(amount)))
+	average, err := query.NewSelect(orders.Ref(), query.Avg(amount))
 	require.NoError(t, err)
 
 	viaScalar, err := rasql.DecodeFrom[user](users).
@@ -268,7 +268,7 @@ func TestSQLiteTypedSelectScalarFunctionsFilterRows(t *testing.T) {
 		Score int64 `rasql:"score"`
 	}
 	decoded, err := rasql.DecodeFrom[scoreRow](users).
-		Project(userID, query.Project(query.Coalesce(score, query.Bind(0))).As("score")).
+		Project(userID, query.Coalesce(score, query.Bind(0)).As("score")).
 		OrderAsc(userID).
 		All(t.Context(), db)
 	require.NoError(t, err)
@@ -528,7 +528,7 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 		Total  int64 `rasql:"total"`
 	}
 	grouped, err := rasql.DecodeFrom[userEventCount](events).
-		Project(userID, query.Project(query.CountAll()).As("total")).
+		Project(userID, query.CountAll().As("total")).
 		GroupBy(userID).
 		OrderAsc(userID).
 		All(t.Context(), db)

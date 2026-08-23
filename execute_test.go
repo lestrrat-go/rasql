@@ -210,7 +210,7 @@ func TestDecodeFromDecodesGroupedRows(t *testing.T) {
 			AddRow("done", int64(5)))
 
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
-		Project(status, query.Project(query.CountAll()).As("total")).
+		Project(status, query.CountAll().As("total")).
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Query(t.Context(), db)
