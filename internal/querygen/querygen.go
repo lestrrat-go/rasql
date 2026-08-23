@@ -44,7 +44,7 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		}
 		reservedNames[bind.Name] = struct{}{}
 	}
-	stmtName := availableGoIdentifier("rasqlstmt", reservedNames)
+	stmtName := availableGoIdentifier("stmt", reservedNames)
 	defaultParameterType := "any"
 	if functionName == "any" {
 		defaultParameterType = "interface{}"
@@ -83,10 +83,14 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 	source.WriteString("package ")
 	source.WriteString(packageName)
 	source.WriteString("\n\n")
+	stmtImport := "\"github.com/lestrrat-go/rasql/stmt\""
+	if stmtName != "stmt" {
+		stmtImport = stmtName + " " + stmtImport
+	}
 	if needsTime {
 		source.WriteString("import (\n\t")
-		source.WriteString(stmtName)
-		source.WriteString(" \"github.com/lestrrat-go/rasql/stmt\"\n\t")
+		source.WriteString(stmtImport)
+		source.WriteString("\n\t")
 		if timeName != "time" {
 			source.WriteString(timeName)
 			source.WriteByte(' ')
@@ -94,8 +98,8 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		source.WriteString("\"time\"\n)\n\n")
 	} else {
 		source.WriteString("import ")
-		source.WriteString(stmtName)
-		source.WriteString(" \"github.com/lestrrat-go/rasql/stmt\"\n\n")
+		source.WriteString(stmtImport)
+		source.WriteString("\n\n")
 	}
 	source.WriteString("func ")
 	source.WriteString(functionName)

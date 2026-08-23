@@ -2,8 +2,11 @@
 
 package store
 
-import rasqlstmt "github.com/lestrrat-go/rasql/stmt"
+import (
+	"github.com/lestrrat-go/rasql/stmt"
+	"time"
+)
 
-func OverdueCount(on any) rasqlstmt.Statement {
-	return rasqlstmt.New("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
+func OverdueCount(on time.Time) stmt.Statement {
+	return stmt.New("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
 }

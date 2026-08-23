@@ -60,10 +60,12 @@ Write `queries/overdue_count.sql` in it:
 ```sql
 SELECT COUNT(*) AS overdue
 FROM tasks
-WHERE is_open AND due_on IS NOT NULL AND due_on < CAST({{bind "on"}} AS date)
+WHERE is_open AND due_on IS NOT NULL AND due_on < CAST({{bind "on" tasks.due_on}} AS date)
 ```
 
-`{{bind "on"}}` marks a value the caller supplies. It is not string interpolation: the generator turns it into the dialect's own placeholder and gives the function a parameter, so the value stays an argument and never becomes SQL text.
+`{{bind "on" tasks.due_on}}` marks a value the caller supplies. It is not string interpolation: the generator turns it into the dialect's own placeholder and gives the function a parameter, so the value stays an argument and never becomes SQL text.
+
+Naming `tasks.due_on` after the bind's own name is what decides the parameter's Go type. `{{bind "on"}}` alone would still compile, but the generator would have nothing to type the parameter with and would fall back to `any`, pushing the type check on the caller's argument out to runtime. Naming the column tells the generator to look it up among the tables it already read and reuse the same mapping that gives a generated row's own fields their types, so the parameter comes out as `time.Time` instead.
 
 The cast around it settles which day the count is about. `due_on` is a `date` and the caller has an instant, so one of the two has to give way, and `CAST(... AS date)` narrows the instant to the day it fell on. A task due that day then sits on the boundary rather than under it, which is what "past their due date" says: the day has to be over first. Write the cast even where the database would have reached the same answer on its own, because a reader of the query can see a cast and cannot see an inference rule.
 
@@ -101,16 +103,19 @@ wrote internal/store from 3 tables
 
 package store
 
-import rasqlstmt "github.com/lestrrat-go/rasql/stmt"
+import (
+	"github.com/lestrrat-go/rasql/stmt"
+	"time"
+)
 
-func OverdueCount(on any) rasqlstmt.Statement {
-	return rasqlstmt.New("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
+func OverdueCount(on time.Time) stmt.Statement {
+	return stmt.New("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
 }
 ```
 source: [sample/taskboard/internal/store/overdue_count_gen.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/overdue_count_gen.go)
 <!-- END INCLUDE -->
 
-The template became `$1`, PostgreSQL's placeholder, and the bind name became the parameter. The function hands back a `stmt.Statement` rather than running anything, so choosing the handle, the context, and the row type is still the caller's business.
+The template became `$1`, PostgreSQL's placeholder, and the bind name became the parameter, typed as `time.Time` because the bind named `tasks.due_on`. The function hands back a `stmt.Statement` rather than running anything, so choosing the handle, the context, and the row type is still the caller's business.
 
 The template is checked when the generator runs, so a malformed one fails there rather than at the first request. Writing `{{bind}}` with no name, for instance:
 
