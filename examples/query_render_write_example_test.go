@@ -20,16 +20,8 @@ func Example_query_render_write() {
 		schema.PrimaryKey("id"),
 	)
 	accounts := query.MustTableRef(definition)
-	id, err := accounts.Column("id")
-	if err != nil {
-		fmt.Printf("failed to reference the id column: %s\n", err)
-		return
-	}
-	email, err := accounts.Column("email")
-	if err != nil {
-		fmt.Printf("failed to reference the email column: %s\n", err)
-		return
-	}
+	id := accounts.Column("id")
+	email := accounts.Column("email")
 
 	// render.CreateTable turns the description into DDL for one dialect.
 	ddl, err := render.CreateTable(dialect.PostgreSQL(), definition)

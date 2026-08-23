@@ -40,16 +40,16 @@ func Example_rasqlgen_column_fields() {
 	}
 	fmt.Println(built.SQL())
 
-	// A name looked up while the program runs is checked when the lookup runs,
-	// since that is the first moment the name exists.
+	// A name looked up while the program runs is checked by calling Validate,
+	// which reports a bad one at the call that supplied it.
 	// BEGIN(column_lookup)
-	column, err := users.Column("emial")
+	column := users.Column("emial")
 	// END(column_lookup)
-	fmt.Println(column.Name(), err)
+	fmt.Println(column.Name(), column.Validate())
 
 	// Output:
 	// SELECT "users"."id" FROM "users" WHERE ("users"."id" = $1)
 	// query column: table "users" has no column "emial"
 	// SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)
-	//  query column: table "users" has no column "emial"
+	// emial query column: table "users" has no column "emial"
 }

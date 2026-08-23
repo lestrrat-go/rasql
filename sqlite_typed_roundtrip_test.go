@@ -38,8 +38,7 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	eventID, err := events.Column("id")
-	require.NoError(t, err)
+	eventID := events.Column("id")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, events))
 
 	expected := event{
@@ -82,8 +81,7 @@ func TestSQLiteTypedSelectWhereInFiltersRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 
 	inserted := []user{
@@ -130,10 +128,8 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	userEmail, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	userEmail := users.Column("email")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 
 	type orderRow struct {
@@ -151,10 +147,8 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
-	amount, err := orders.Column("amount")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
+	amount := orders.Column("amount")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
 
 	insertedUsers := []user{
@@ -231,12 +225,9 @@ func TestSQLiteTypedSelectScalarFunctionsFilterRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
-	score, err := users.Column("score")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
+	score := users.Column("score")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 
 	ten := int64(10)
@@ -301,10 +292,8 @@ func TestSQLiteTypedSelectCountsRows(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	eventActive, err := events.Column("active")
-	require.NoError(t, err)
-	eventID, err := events.Column("id")
-	require.NoError(t, err)
+	eventActive := events.Column("active")
+	eventID := events.Column("id")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, events))
 
 	for _, row := range []event{
@@ -379,8 +368,7 @@ func TestSQLiteGeneratedRowMethodsRoundTrip(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	eventID, err := events.Column("id")
-	require.NoError(t, err)
+	eventID := events.Column("id")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, events))
 
 	note := "first"
@@ -440,8 +428,7 @@ func TestSQLiteDecimalRoundTripsExactly(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	invoiceID, err := invoices.Column("id")
-	require.NoError(t, err)
+	invoiceID := invoices.Column("id")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, invoices))
 
 	expected := invoice{ID: 1, Amount: "1234.5678901234567890"}
@@ -494,12 +481,9 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, events))
 	queryEvents := events.Ref()
-	id, err := queryEvents.Column("id")
-	require.NoError(t, err)
-	userID, err := queryEvents.Column("user_id")
-	require.NoError(t, err)
-	action, err := queryEvents.Column("action")
-	require.NoError(t, err)
+	id := queryEvents.Column("id")
+	userID := queryEvents.Column("user_id")
+	action := queryEvents.Column("action")
 
 	// Multi-row INSERT into the qualified table.
 	insertRows, err := query.NewInsertRows(queryEvents, []query.ColumnRef{id, userID, action}, [][]query.Expression{
@@ -611,12 +595,9 @@ func TestSQLiteReturningRoundTrip(t *testing.T) {
 	users, err := rasql.TableOf[returningUser](table)
 	require.NoError(t, err)
 	queryUsers := users.Ref()
-	id, err := queryUsers.Column("id")
-	require.NoError(t, err)
-	email, err := queryUsers.Column("email")
-	require.NoError(t, err)
-	status, err := queryUsers.Column("status")
-	require.NoError(t, err)
+	id := queryUsers.Column("id")
+	email := queryUsers.Column("email")
+	status := queryUsers.Column("status")
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 
 	insert, err := query.NewInsert(queryUsers, []query.ColumnRef{email}, []query.Expression{query.Bind("ada@example.com")})

@@ -22,10 +22,8 @@ func TestSelectBuilderBuildsRenderedStatement(t *testing.T) {
 		Build()
 	require.NoError(t, err)
 
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewSelect(users, id, email)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.Equal(id, query.Bind(42)))
@@ -52,10 +50,8 @@ func TestSelectBuilderWhereInRendersOnePlaceholderPerValue(t *testing.T) {
 		Build()
 	require.NoError(t, err)
 
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	statement, err := query.NewSelect(users, id, email)
 	require.NoError(t, err)
 	statement, err = statement.WithWhere(query.In(id, query.Bind(1), query.Bind(2), query.Bind(3)))
@@ -115,10 +111,8 @@ func TestSelectBuilderBuildsCountStatement(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	id := users.Column("id")
+	orderUserID := orders.Column("user_id")
 
 	tests := map[string]struct {
 		dialect dialect.Dialect
@@ -194,8 +188,7 @@ func TestSelectBuilderRejectsCountWithDistinct(t *testing.T) {
 
 func TestSelectBuilderBuildsGroupedStatement(t *testing.T) {
 	users := fluentUsers(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
 	rendered, err := render.SelectFrom(dialect.PostgreSQL(), users).
 		Project(id, query.CountAll().As("total")).
@@ -233,10 +226,8 @@ func TestSelectBuilderGroupsByJoinedColumn(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	id := users.Column("id")
+	orderUserID := orders.Column("user_id")
 
 	rendered, err := render.SelectFrom(dialect.PostgreSQL(), users).
 		Project(orderUserID, query.CountAll().As("total")).
@@ -283,8 +274,7 @@ func TestSelectBuilderGroupsByJoinedColumn(t *testing.T) {
 
 func TestSelectBuilderGroupingIsImmutable(t *testing.T) {
 	users := fluentUsers(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
 	base := render.SelectFrom(dialect.PostgreSQL(), users).
 		Project(id, query.CountAll().As("total")).
@@ -361,10 +351,8 @@ func TestSelectBuilderReportsBuildErrors(t *testing.T) {
 
 func TestSelectBuilderCombinesPredicates(t *testing.T) {
 	users := fluentUsers(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 
 	t.Run("two Where calls combine with AND", func(t *testing.T) {
 		statement, err := render.SelectFrom(dialect.PostgreSQL(), users).
@@ -528,8 +516,7 @@ func TestSelectBuilderCombinesPredicates(t *testing.T) {
 
 func TestSelectBuilderPredicatesDoNotAlias(t *testing.T) {
 	users := fluentUsers(t)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 
 	// Three predicates leave the accumulated slice with spare backing-array
 	// capacity (Go grows a nil slice 0 -> 1 -> 2 -> 4), which is what exposes

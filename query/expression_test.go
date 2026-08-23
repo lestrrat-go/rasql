@@ -10,27 +10,40 @@ import (
 
 // TestColumnRefValidate pins ColumnRef.Validate for a valid column and for
 // the zero ColumnRef, whose nil source is reported rather than collapsed into
-// the missing-column message. The missing-column cases, including the
-// qualified and aliased table forms, live in expression_internal_test.go:
-// TableRef.Column still zeroes its result on a bad name until PR 3 lands, so
-// no exported constructor can build a ColumnRef pairing a valid source with a
-// name it does not hold.
+// the missing-column message.
 func TestColumnRefValidate(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 	require.NoError(t, id.Validate())
 
 	var zero query.ColumnRef
 	require.True(t, errors.Is(zero.Validate(), query.ErrNilTable))
 }
 
+// TestColumnRefValidateReportsMissingColumn covers ColumnRef.Validate for a
+// name its source table does not hold, on an unqualified, a qualified, and an
+// aliased table.
+func TestColumnRefValidateReportsMissingColumn(t *testing.T) {
+	definition := usersTable()
+
+	users, err := query.NewTableRef(definition)
+	require.NoError(t, err)
+	require.ErrorContains(t, users.Column("missing").Validate(), `table "users" has no column "missing"`)
+
+	definition.Schema = "tenant"
+	qualified := query.MustTableRef(definition)
+	require.ErrorContains(t, qualified.Column("missing").Validate(), `table "tenant.users" has no column "missing"`)
+
+	aliased, err := qualified.As("u")
+	require.NoError(t, err)
+	require.ErrorContains(t, aliased.Column("missing").Validate(), `table "u" has no column "missing"`)
+}
+
 func TestMembershipKeepsOperands(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
 	values := []query.Expression{query.Bind(1), query.Bind(2)}
 	in := query.In(id, values...)
@@ -56,8 +69,7 @@ func TestMembershipKeepsOperands(t *testing.T) {
 func TestSubqueryKeepsItsStatement(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 
@@ -76,8 +88,7 @@ func TestSubqueryKeepsItsStatement(t *testing.T) {
 func TestMembershipReportsItsSubqueryForm(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 

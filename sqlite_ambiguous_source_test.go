@@ -139,10 +139,8 @@ func ambiguousSourceAlias(t *testing.T, definition schema.TableDef, alias string
 // that a refused statement carries no SQL.
 func ambiguousSourceJoin(t *testing.T, from query.TableRef, joined query.TableRef) (stmt.Statement, error) {
 	t.Helper()
-	fromID, err := from.Column("id")
-	require.NoError(t, err)
-	joinedID, err := joined.Column("id")
-	require.NoError(t, err)
+	fromID := from.Column("id")
+	joinedID := joined.Column("id")
 
 	s, err := query.NewJoinedSelect(from,
 		[]query.Join{query.InnerJoin(joined, query.Equal(fromID, joinedID))},

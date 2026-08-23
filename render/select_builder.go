@@ -48,8 +48,8 @@ func (b SelectBuilder) Select(columns ...string) SelectBuilder {
 		return b
 	}
 	for _, name := range columns {
-		column, err := b.from.Column(name)
-		if err != nil {
+		column := b.from.Column(name)
+		if err := column.Validate(); err != nil {
 			return b.withError(err)
 		}
 		b.projections = append(b.projections, column)
@@ -99,8 +99,8 @@ func (b SelectBuilder) WhereEqual(columnName string, value any) SelectBuilder {
 	if b.err != nil {
 		return b
 	}
-	column, err := b.from.Column(columnName)
-	if err != nil {
+	column := b.from.Column(columnName)
+	if err := column.Validate(); err != nil {
 		return b.withError(err)
 	}
 	b.predicates = append(b.predicates, query.Equal(column, query.Bind(value)))
@@ -119,8 +119,8 @@ func (b SelectBuilder) WhereIn(columnName string, values ...any) SelectBuilder {
 	if len(values) == 0 {
 		return b.withError(fmt.Errorf("IN requires at least one value"))
 	}
-	column, err := b.from.Column(columnName)
-	if err != nil {
+	column := b.from.Column(columnName)
+	if err := column.Validate(); err != nil {
 		return b.withError(err)
 	}
 	binds := make([]query.Expression, len(values))
@@ -150,8 +150,8 @@ func (b SelectBuilder) GroupByColumns(names ...string) SelectBuilder {
 		return b
 	}
 	for _, name := range names {
-		column, err := b.from.Column(name)
-		if err != nil {
+		column := b.from.Column(name)
+		if err := column.Validate(); err != nil {
 			return b.withError(err)
 		}
 		b.groupBy = append(b.groupBy, column)
@@ -340,8 +340,8 @@ func (b SelectBuilder) orderColumn(name string, descending bool) SelectBuilder {
 	if b.err != nil {
 		return b
 	}
-	column, err := b.from.Column(name)
-	if err != nil {
+	column := b.from.Column(name)
+	if err := column.Validate(); err != nil {
 		return b.withError(err)
 	}
 	if descending {

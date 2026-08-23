@@ -813,12 +813,9 @@ func qualifiedWriteTable(t *testing.T) (query.TableRef, query.ColumnRef, query.C
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := events.Column("id")
-	require.NoError(t, err)
-	userID, err := events.Column("user_id")
-	require.NoError(t, err)
-	action, err := events.Column("action")
-	require.NoError(t, err)
+	id := events.Column("id")
+	userID := events.Column("user_id")
+	action := events.Column("action")
 	return events, id, userID, action
 }
 
@@ -833,9 +830,7 @@ func writeTable(t *testing.T) (query.TableRef, query.ColumnRef, query.ColumnRef)
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 	return users, id, email
 }

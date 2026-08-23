@@ -68,21 +68,9 @@ func Example_rasqlgen_computed_field() {
 
 	// DecodeFrom projects what the caller names, since the result shape is not
 	// the table's row type.
-	email, err := people.Column("email")
-	if err != nil {
-		fmt.Printf("failed to find people.email: %s\n", err)
-		return
-	}
-	first, err := people.Column("first_name")
-	if err != nil {
-		fmt.Printf("failed to find people.first_name: %s\n", err)
-		return
-	}
-	last, err := people.Column("last_name")
-	if err != nil {
-		fmt.Printf("failed to find people.last_name: %s\n", err)
-		return
-	}
+	email := people.Column("email")
+	first := people.Column("first_name")
+	last := people.Column("last_name")
 	report, err := rasql.DecodeFrom[userReport](people).
 		Project(email, first, last).
 		One(ctx, db)

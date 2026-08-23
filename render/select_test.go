@@ -100,16 +100,11 @@ func qualifiedJoinSelectStatement(t *testing.T) query.Select {
 	})
 	require.NoError(t, err)
 
-	eventsID, err := events.Column("id")
-	require.NoError(t, err)
-	eventsUserID, err := events.Column("user_id")
-	require.NoError(t, err)
-	eventsAction, err := events.Column("action")
-	require.NoError(t, err)
-	usersID, err := users.Column("id")
-	require.NoError(t, err)
-	usersEmail, err := users.Column("email")
-	require.NoError(t, err)
+	eventsID := events.Column("id")
+	eventsUserID := events.Column("user_id")
+	eventsAction := events.Column("action")
+	usersID := users.Column("id")
+	usersEmail := users.Column("email")
 
 	statement, err := query.NewJoinedSelect(events,
 		[]query.Join{query.InnerJoin(users, query.Equal(eventsUserID, usersID))},
@@ -137,8 +132,7 @@ func TestSelectRendersAliasWithoutSchema(t *testing.T) {
 	require.NoError(t, err)
 	aliased, err := events.As("e")
 	require.NoError(t, err)
-	id, err := aliased.Column("id")
-	require.NoError(t, err)
+	id := aliased.Column("id")
 
 	statement, err := query.NewSelect(aliased, id)
 	require.NoError(t, err)
@@ -163,8 +157,7 @@ func TestSelectRendersQualifiedTableInGroupedStatement(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := events.Column("user_id")
-	require.NoError(t, err)
+	userID := events.Column("user_id")
 
 	statement, err := query.NewGroupedSelect(events, []query.Expression{userID},
 		userID,
@@ -196,8 +189,7 @@ func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	eventsUserID, err := events.Column("user_id")
-	require.NoError(t, err)
+	eventsUserID := events.Column("user_id")
 	inner, err := query.NewSelect(events, eventsUserID)
 	require.NoError(t, err)
 
@@ -210,8 +202,7 @@ func TestSelectRendersQualifiedTableInSubquery(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	usersID, err := users.Column("id")
-	require.NoError(t, err)
+	usersID := users.Column("id")
 
 	outer, err := query.NewSelect(users, usersID)
 	require.NoError(t, err)
@@ -271,8 +262,7 @@ func aggregateSelectStatement(t *testing.T) query.Select {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	amount, err := orders.Column("amount")
-	require.NoError(t, err)
+	amount := orders.Column("amount")
 
 	statement, err := query.NewSelect(orders,
 		query.CountAll().As("total"),
@@ -345,12 +335,9 @@ func distinctSelectStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 	orders, err = orders.As("o")
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
-	amount, err := orders.Column("amount")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	orderUserID := orders.Column("user_id")
+	amount := orders.Column("amount")
 
 	statement, err := query.NewSelect(users, userID.As("user_id"))
 	require.NoError(t, err)
@@ -382,8 +369,7 @@ func TestSelectRendersDistinctFunctionArgument(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
 
 	statement, err := query.NewSelect(orders, query.Count(orderUserID).WithDistinct().As("distinct_users"))
 	require.NoError(t, err)
@@ -438,12 +424,9 @@ func TestSelectRendersDistinctSubquery(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	status, err := users.Column("status")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	status := users.Column("status")
+	orderUserID := orders.Column("user_id")
 
 	subquery, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
@@ -481,10 +464,8 @@ func TestSelectRendersScalarFunctions(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
-	score, err := users.Column("score")
-	require.NoError(t, err)
+	email := users.Column("email")
+	score := users.Column("score")
 
 	statement, err := query.NewSelect(users,
 		query.Lower(email).As("lower_email"),
@@ -538,8 +519,7 @@ func TestSelectRendersScalarFunctionEscapeHatch(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	doc, err := users.Column("doc")
-	require.NoError(t, err)
+	doc := users.Column("doc")
 
 	statement, err := query.NewSelect(users, query.Func("jsonb_path_query", doc, query.Bind("$.a")).As("matched"))
 	require.NoError(t, err)
@@ -565,8 +545,7 @@ func TestSelectRendersDistinctEscapeHatchArgument(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	tag, err := posts.Column("tag")
-	require.NoError(t, err)
+	tag := posts.Column("tag")
 
 	statement, err := query.NewSelect(posts, query.Func("group_concat", tag).WithDistinct().As("tags"))
 	require.NoError(t, err)
@@ -621,8 +600,7 @@ func groupedSelectStatement(t *testing.T) query.Select {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	status, err := tasks.Column("status")
-	require.NoError(t, err)
+	status := tasks.Column("status")
 
 	statement, err := query.NewGroupedSelect(tasks, []query.Expression{status},
 		status,
@@ -654,12 +632,10 @@ func TestSelectRendersSubqueryInGroupedClauses(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	priority, err := tasks.Column("priority")
-	require.NoError(t, err)
+	priority := tasks.Column("priority")
 	allTasks, err := tasks.As("all_tasks")
 	require.NoError(t, err)
-	allPriority, err := allTasks.Column("priority")
-	require.NoError(t, err)
+	allPriority := allTasks.Column("priority")
 
 	average, err := query.NewSelect(allTasks, query.Avg(allPriority))
 	require.NoError(t, err)
@@ -715,8 +691,7 @@ func TestSelectRendersExternalProjectionImplementation(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
 	statement, err := query.NewSelect(users, upperCaseAliasProjection{expression: id, alias: "user_id"})
 	require.NoError(t, err)
@@ -846,14 +821,10 @@ func TestSelectRendersSubqueryPlaceholdersInOrder(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	status, err := users.Column("status")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
-	amount, err := orders.Column("amount")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	status := users.Column("status")
+	orderUserID := orders.Column("user_id")
+	amount := orders.Column("amount")
 
 	subquery, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
@@ -900,10 +871,8 @@ func TestSelectRejectsLimitedSubqueryInMembership(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	orderUserID := orders.Column("user_id")
 
 	limited, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)
@@ -967,18 +936,12 @@ func subqueryStatement(t *testing.T) query.Select {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	taskID, err := tasks.Column("id")
-	require.NoError(t, err)
-	taskProjectID, err := tasks.Column("project_id")
-	require.NoError(t, err)
-	taskTitle, err := tasks.Column("title")
-	require.NoError(t, err)
-	taskPriority, err := tasks.Column("priority")
-	require.NoError(t, err)
-	projectID, err := projects.Column("id")
-	require.NoError(t, err)
-	projectOwnerID, err := projects.Column("owner_id")
-	require.NoError(t, err)
+	taskID := tasks.Column("id")
+	taskProjectID := tasks.Column("project_id")
+	taskTitle := tasks.Column("title")
+	taskPriority := tasks.Column("priority")
+	projectID := projects.Column("id")
+	projectOwnerID := projects.Column("owner_id")
 
 	owned, err := query.NewSelect(projects, projectID)
 	require.NoError(t, err)
@@ -987,8 +950,7 @@ func subqueryStatement(t *testing.T) query.Select {
 
 	allTasks, err := tasks.As("all_tasks")
 	require.NoError(t, err)
-	allTasksPriority, err := allTasks.Column("priority")
-	require.NoError(t, err)
+	allTasksPriority := allTasks.Column("priority")
 	average, err := query.NewSelect(allTasks, query.Avg(allTasksPriority))
 	require.NoError(t, err)
 
@@ -1023,12 +985,9 @@ func columnMembershipStatement(t *testing.T) query.Select {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	orderID, err := orders.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	orderID := orders.Column("id")
+	orderUserID := orders.Column("user_id")
 
 	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
@@ -1053,10 +1012,8 @@ func membershipStatement(t *testing.T) query.Select {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 
 	statement, err := query.NewSelect(users, id, email)
 	require.NoError(t, err)
@@ -1093,12 +1050,9 @@ func selectStatement(t *testing.T) query.Select {
 	require.NoError(t, err)
 	orders, err = orders.As("o")
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
-	amount, err := orders.Column("amount")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	orderUserID := orders.Column("user_id")
+	amount := orders.Column("amount")
 
 	statement, err := query.NewSelect(users, userID.As("user_id"))
 	require.NoError(t, err)

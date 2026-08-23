@@ -294,7 +294,7 @@ rows, err := rasql.SelectFrom(users).
 source: [examples/rasql_where_expressions_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_where_expressions_example_test.go)
 <!-- END INCLUDE -->
 
-A generated accessor cannot name a column the table does not have, because the method would not exist. A table built at run time has no such accessors, so `table.Column(name)` looks the column up in the descriptor and fails when the table has no such column. A typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument. The renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
+A generated accessor cannot name a column the table does not have, because the method would not exist. A table built at run time has no such accessors, so `table.Column(name)` builds the reference and the statement it is carried in checks it against the descriptor. A typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument. The renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
 
 ## Nest a predicate tree
 
@@ -468,16 +468,8 @@ func Example_rasql_subquery() {
 
 	// orders has no generated column accessors, so its columns are looked up by name.
 	// That lookup validates them against the descriptor as the query is assembled.
-	orderUserID, err := orders.Column("user_id")
-	if err != nil {
-		fmt.Printf("failed to find orders.user_id: %s\n", err)
-		return
-	}
-	amount, err := orders.Column("amount")
-	if err != nil {
-		fmt.Printf("failed to find orders.amount: %s\n", err)
-		return
-	}
+	orderUserID := orders.Column("user_id")
+	amount := orders.Column("amount")
 
 	for _, user := range []UserRow{
 		{ID: 1, Email: "ada@example.com"},
@@ -522,11 +514,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to alias orders: %s\n", err)
 		return
 	}
-	allOrdersAmount, err := allOrders.Column("amount")
-	if err != nil {
-		fmt.Printf("failed to find all_orders.amount: %s\n", err)
-		return
-	}
+	allOrdersAmount := allOrders.Column("amount")
 	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrdersAmount))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
@@ -722,11 +710,7 @@ func Example_rasql_group_by() {
 	// tasks has no generated column accessor for status, so it is looked up
 	// by name. That lookup validates it against the descriptor as the query is
 	// assembled.
-	status, err := tasks.Column("status")
-	if err != nil {
-		fmt.Printf("failed to find tasks.status: %s\n", err)
-		return
-	}
+	status := tasks.Column("status")
 
 	// GroupBy adds the GROUP BY clause the mixed projection below needs: a
 	// bare column beside COUNT(*) is refused without one. Having filters
@@ -835,11 +819,7 @@ func Example_rasql_distinct() {
 	// orders has no generated column accessor for user_id, so it is looked up
 	// by name. That lookup validates it against the descriptor as the query is
 	// assembled.
-	orderUserID, err := orders.Column("user_id")
-	if err != nil {
-		fmt.Printf("failed to find orders.user_id: %s\n", err)
-		return
-	}
+	orderUserID := orders.Column("user_id")
 
 	// Distinct is meaningful here because Project narrows the result to
 	// user_id alone; SelectFrom would already select the orders primary key,
@@ -983,16 +963,8 @@ func Example_rasql_dynamic_projection() {
 
 	// orders has no generated column accessors, so its columns are looked up by name.
 	// That lookup validates them against the descriptor as the query is assembled.
-	orderUserID, err := orders.Column("user_id")
-	if err != nil {
-		fmt.Printf("failed to find orders.user_id: %s\n", err)
-		return
-	}
-	total, err := orders.Column("total")
-	if err != nil {
-		fmt.Printf("failed to find orders.total: %s\n", err)
-		return
-	}
+	orderUserID := orders.Column("user_id")
+	total := orders.Column("total")
 	// Populate both tables through the typed rasql API.
 	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)

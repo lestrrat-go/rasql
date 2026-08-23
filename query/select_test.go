@@ -19,12 +19,9 @@ func TestSelectBuildsImmutableStatement(t *testing.T) {
 	orders, err = orders.As("o")
 	require.NoError(t, err)
 
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
-	amount, err := orders.Column("amount")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	orderUserID := orders.Column("user_id")
+	amount := orders.Column("amount")
 
 	statement, err := query.NewSelect(users, userID.As("user_id"))
 	require.NoError(t, err)
@@ -60,8 +57,7 @@ func TestSelectBuildsImmutableStatement(t *testing.T) {
 func TestSelectAcceptsDistinctStatements(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 
 	base, err := query.NewSelect(users, email)
 	require.NoError(t, err)
@@ -84,10 +80,8 @@ func TestSelectAcceptsDistinctStatements(t *testing.T) {
 func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	email := users.Column("email")
+	userID := users.Column("id")
 
 	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, email)
 	require.NoError(t, err)
@@ -143,8 +137,7 @@ func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
 func TestFunctionAcceptsDistinctArgument(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 
 	plain := query.Count(userID)
 	require.False(t, plain.Distinct())
@@ -173,10 +166,8 @@ func TestFunctionAcceptsDistinctArgument(t *testing.T) {
 func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 
 	// WithDistinct changes where a call may sit no more than it changes what
 	// the call is, so it leaves Aggregates alone on either side of the split.
@@ -217,10 +208,8 @@ func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
 func TestFunctionConstructorsCarryTheirCall(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 
 	tests := map[string]struct {
 		function   query.Function
@@ -263,8 +252,7 @@ func TestFunctionConstructorsCarryTheirCall(t *testing.T) {
 func TestSelectRejectsInvalidStatements(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 
 	_, err = query.NewSelect(users)
 	requireQueryValidationError(t, err)
@@ -280,8 +268,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 
 	other, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	otherID, err := other.Column("id")
-	require.NoError(t, err)
+	otherID := other.Column("id")
 	_, err = statement.WithWhere(query.Equal(otherID, query.Bind(1)))
 	requireQueryValidationError(t, err)
 
@@ -349,8 +336,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 func TestSelectAcceptsMembershipPredicate(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
 
@@ -371,16 +357,12 @@ func TestSelectAcceptsMembershipPredicate(t *testing.T) {
 func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	orderID, err := orders.Column("id")
-	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
-	amount, err := orders.Column("amount")
-	require.NoError(t, err)
+	orderID := orders.Column("id")
+	orderUserID := orders.Column("user_id")
+	amount := orders.Column("amount")
 
 	statement, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
@@ -428,12 +410,10 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
 
 	base, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
@@ -546,14 +526,11 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
 
 	// An aggregate-only projection set filters and joins by columns, because
 	// WHERE and JOIN ON run before aggregation on the source rows.
@@ -600,14 +577,11 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 func TestSelectAcceptsScalarFunctions(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
 
 	// A scalar call in a projection needs no GROUP BY, unlike an aggregate
 	// beside a bare column.
@@ -656,10 +630,8 @@ func TestSelectAcceptsScalarFunctions(t *testing.T) {
 func TestSelectRejectsInvalidScalarCalls(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 
 	tests := map[string]struct {
 		call    query.Expression
@@ -702,12 +674,10 @@ func TestSelectRejectsInvalidScalarCalls(t *testing.T) {
 func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
 
 	// COALESCE(SUM(x), 0) is accepted in a projection: the nested aggregate
 	// sees allowsAggregate true at depth 0.
@@ -743,8 +713,7 @@ func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
 	// LOWER(email) counts as a bare column read, exactly as email would on its
 	// own: it is refused beside CountAll() in an ungrouped projection set and
 	// accepted once the statement groups.
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 	_, err = query.NewSelect(users, query.CountAll(), query.Lower(email))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "reads a column outside an aggregate function")
@@ -762,10 +731,8 @@ func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
 func TestFuncValidatesEscapeHatchName(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 
 	statement, err := query.NewSelect(users, query.Func("jsonb_path_query", email, query.Bind("$.a")).As("path"))
 	require.NoError(t, err)
@@ -795,10 +762,8 @@ func TestFuncValidatesEscapeHatchName(t *testing.T) {
 func TestSelectGroupsAndFilters(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 
 	grouped, err := query.NewGroupedSelect(users, []query.Expression{email},
 		email,
@@ -835,12 +800,10 @@ func TestSelectGroupsAndFilters(t *testing.T) {
 func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
 	join := query.InnerJoin(orders, query.Equal(userID, orderUserID))
 
 	grouped, err := query.NewJoinedSelect(users, []query.Join{join}, []query.Expression{orderUserID},
@@ -880,12 +843,10 @@ func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
 func TestSelectRejectsInvalidGrouping(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
+	userID := users.Column("id")
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
 
 	_, err = query.NewGroupedSelect(users, []query.Expression{query.CountAll()}, userID)
 	requireQueryValidationError(t, err)
@@ -924,14 +885,11 @@ func TestSelectRejectsInvalidGrouping(t *testing.T) {
 func TestSelectRejectsInvalidHaving(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	orderUserID, err := orders.Column("user_id")
-	require.NoError(t, err)
+	orderUserID := orders.Column("user_id")
 
 	plain, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
@@ -966,8 +924,7 @@ func TestSelectRejectsInvalidHaving(t *testing.T) {
 func TestSelectAcceptsGroupedStatements(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 
 	// A grouped statement may mix a bare column with an aggregate.
 	statement, err := query.NewGroupedSelect(users, []query.Expression{email},
@@ -1014,14 +971,12 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 func TestSelectAcceptsSubqueriesInGroupedClauses(t *testing.T) {
 	orders, err := query.NewTableRef(ordersTable())
 	require.NoError(t, err)
-	amount, err := orders.Column("amount")
-	require.NoError(t, err)
+	amount := orders.Column("amount")
 	// A separate alias keeps the average its own scope rather than a
 	// correlation, which this package does not support.
 	allOrders, err := orders.As("all_orders")
 	require.NoError(t, err)
-	allAmount, err := allOrders.Column("amount")
-	require.NoError(t, err)
+	allAmount := allOrders.Column("amount")
 	averageAmount, err := query.NewSelect(allOrders, query.Avg(allAmount))
 	require.NoError(t, err)
 
@@ -1045,10 +1000,8 @@ func TestSelectAcceptsSubqueriesInGroupedClauses(t *testing.T) {
 func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
-	userID, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	userID := users.Column("id")
+	email := users.Column("email")
 
 	base, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
@@ -1144,7 +1097,7 @@ func TestTableRefRejectsUnknownColumn(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
 
-	_, err = users.Column("missing")
+	err = users.Column("missing").Validate()
 	require.Error(t, err)
 }
 
@@ -1156,16 +1109,10 @@ func TestTableRefCopiesDescriptor(t *testing.T) {
 	descriptor.Columns[0].Name = "changed"
 	descriptor.PrimaryKey[0] = "changed"
 
-	_, err = users.Column("id")
-	require.NoError(t, err)
 	require.Equal(t, []string{"id"}, users.Definition().PrimaryKey)
 }
 
 func TestMustTableRef(t *testing.T) {
-	users := query.MustTableRef(usersTable())
-	_, err := users.Column("id")
-	require.NoError(t, err)
-
 	require.Panics(t, func() {
 		query.MustTableRef(schema.TableDef{})
 	})
@@ -1212,10 +1159,8 @@ func TestSelectJoinsSameNameTablesFromDifferentSchemas(t *testing.T) {
 	tenantB, err := query.NewTableRef(tenantBDescriptor)
 	require.NoError(t, err)
 
-	tenantAID, err := tenantA.Column("id")
-	require.NoError(t, err)
-	tenantBID, err := tenantB.Column("id")
-	require.NoError(t, err)
+	tenantAID := tenantA.Column("id")
+	tenantBID := tenantB.Column("id")
 
 	join := query.InnerJoin(tenantB, query.Equal(tenantAID, tenantBID))
 	_, err = query.NewJoinedSelect(tenantA, []query.Join{join}, nil, tenantAID)
@@ -1233,10 +1178,8 @@ func TestSelectNamesQualifiedTableInDuplicateSourceError(t *testing.T) {
 	other, err := query.NewTableRef(descriptor)
 	require.NoError(t, err)
 
-	fromID, err := from.Column("id")
-	require.NoError(t, err)
-	otherID, err := other.Column("id")
-	require.NoError(t, err)
+	fromID := from.Column("id")
+	otherID := other.Column("id")
 
 	join := query.InnerJoin(other, query.Equal(fromID, otherID))
 	_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, fromID)
@@ -1262,19 +1205,19 @@ func TestTableRefReportsWhetherItIsQualified(t *testing.T) {
 }
 
 // TestTableRefNamesQualifiedTableInUnknownColumnError pins the fifth
-// table-naming message: TableRef.Column names the qualified table, and the alias
-// once the table is aliased, exactly as every other message does.
+// table-naming message: ColumnRef.Validate names the qualified table, and the
+// alias once the table is aliased, exactly as every other message does.
 func TestTableRefNamesQualifiedTableInUnknownColumnError(t *testing.T) {
 	descriptor := usersTable()
 	descriptor.Schema = "tenant"
 	qualified := query.MustTableRef(descriptor)
 
-	_, err := qualified.Column("missing")
+	err := qualified.Column("missing").Validate()
 	require.ErrorContains(t, err, `table "tenant.users" has no column "missing"`)
 
 	aliased, err := qualified.As("u")
 	require.NoError(t, err)
-	_, err = aliased.Column("missing")
+	err = aliased.Column("missing").Validate()
 	require.ErrorContains(t, err, `table "u" has no column "missing"`)
 }
 
@@ -1349,13 +1292,11 @@ func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
 			require.NotEqual(t, tableKey(from), tableKey(joined),
 				"the pair must hold distinct table keys, so the check cannot be riding on the key")
 
-			fromID, err := from.Column("id")
-			require.NoError(t, err)
-			joinedID, err := joined.Column("id")
-			require.NoError(t, err)
+			fromID := from.Column("id")
+			joinedID := joined.Column("id")
 
 			join := query.InnerJoin(joined, query.Equal(fromID, joinedID))
-			_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, fromID)
+			_, err := query.NewJoinedSelect(from, []query.Join{join}, nil, fromID)
 			requireQueryValidationError(t, err)
 			require.ErrorContains(t, err, testCase.message)
 		})
@@ -1389,13 +1330,11 @@ func TestSelectRejectsSourcesThatShareOneName(t *testing.T) {
 			from := testCase.from(t)
 			joined := testCase.joined(t)
 
-			fromID, err := from.Column("id")
-			require.NoError(t, err)
-			joinedID, err := joined.Column("id")
-			require.NoError(t, err)
+			fromID := from.Column("id")
+			joinedID := joined.Column("id")
 
 			join := query.InnerJoin(joined, query.Equal(fromID, joinedID))
-			_, err = query.NewJoinedSelect(from, []query.Join{join}, nil, fromID)
+			_, err := query.NewJoinedSelect(from, []query.Join{join}, nil, fromID)
 			require.NoError(t, err)
 		})
 	}
@@ -1409,10 +1348,8 @@ func TestSelectRejectsSharedNameAddedByWithJoin(t *testing.T) {
 	descriptor.Schema = "tenant_a"
 	tenantUsers := query.MustTableRef(descriptor)
 
-	usersID, err := users.Column("id")
-	require.NoError(t, err)
-	tenantID, err := tenantUsers.Column("id")
-	require.NoError(t, err)
+	usersID := users.Column("id")
+	tenantID := tenantUsers.Column("id")
 
 	statement, err := query.NewSelect(users, usersID)
 	require.NoError(t, err)
@@ -1433,10 +1370,8 @@ var (
 // column.As sets the result alias the same way Project(column).As did.
 func TestBareColumnRefIsAProjection(t *testing.T) {
 	users := query.MustTableRef(usersTable())
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 
 	bare, err := query.NewSelect(users, id, email.As("user_email"))
 	require.NoError(t, err)
@@ -1461,8 +1396,7 @@ func TestBareColumnRefIsAProjection(t *testing.T) {
 // unchanged and stays usable as an argument to another call.
 func TestBareFunctionIsAProjection(t *testing.T) {
 	users := query.MustTableRef(usersTable())
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	email := users.Column("email")
 
 	upper := query.Upper(email)
 	lower := query.Lower(email)

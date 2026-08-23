@@ -247,14 +247,17 @@ func (t TableRef) Definition() schema.TableDef {
 }
 
 // Column returns a reference to a named column in t.
-func (t TableRef) Column(name string) (ColumnRef, error) {
-	if t.descriptor == nil {
-		return ColumnRef{}, ErrNilTable
-	}
-	if _, ok := t.descriptor.column(name); !ok {
-		return ColumnRef{}, fmt.Errorf("query column: table %q has no column %q", t.QualifiedName(), name)
-	}
-	return ColumnRef{source: t, name: name}, nil
+//
+// It reports no error. Every statement validates the columns it carries against
+// the tables it selects from, so a name t does not hold is caught there, together
+// with the separate check that t is one of those tables. The returned ColumnRef
+// keeps t as its source and name as its name whether or not t holds the column,
+// so the statement's error names both.
+//
+// ColumnRef.Validate runs the same existence check on its own, for a caller
+// holding a name it only learns while the program runs.
+func (t TableRef) Column(name string) ColumnRef {
+	return ColumnRef{source: t, name: name}
 }
 
 // column looks a column up on t's descriptor. It exists so the package's other

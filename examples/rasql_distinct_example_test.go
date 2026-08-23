@@ -64,11 +64,7 @@ func Example_rasql_distinct() {
 	// orders has no generated column accessor for user_id, so it is looked up
 	// by name. That lookup validates it against the descriptor as the query is
 	// assembled.
-	orderUserID, err := orders.Column("user_id")
-	if err != nil {
-		fmt.Printf("failed to find orders.user_id: %s\n", err)
-		return
-	}
+	orderUserID := orders.Column("user_id")
 
 	// Distinct is meaningful here because Project narrows the result to
 	// user_id alone; SelectFrom would already select the orders primary key,

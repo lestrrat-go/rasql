@@ -397,11 +397,7 @@ func typedInsertMany[T any](table Table[T], values []T, defaultColumns map[strin
 		if definitionColumn.Identity == schema.IdentityAlways {
 			continue
 		}
-		column, err := reference.Column(definitionColumn.Name)
-		if err != nil {
-			return query.Insert{}, err
-		}
-		columns = append(columns, column)
+		columns = append(columns, reference.Column(definitionColumn.Name))
 	}
 	if len(columns) == 0 {
 		for i := 1; i < len(values); i++ {
@@ -547,10 +543,7 @@ func typedUpdateWithOptions[T any](table Table[T], value T, config updateConfig)
 
 	assignments := make([]query.Assignment, 0, len(selected))
 	for _, name := range selected {
-		column, err := reference.Column(name)
-		if err != nil {
-			return query.Update{}, err
-		}
+		column := reference.Column(name)
 		assignments = append(assignments, query.Set(column, query.Bind(fields[name])))
 	}
 	if len(assignments) == 0 {
@@ -570,10 +563,7 @@ func typedUpdateWithOptions[T any](table Table[T], value T, config updateConfig)
 
 	predicates := make([]query.Expression, 0, len(definition.PrimaryKey))
 	for _, name := range definition.PrimaryKey {
-		column, err := reference.Column(name)
-		if err != nil {
-			return query.Update{}, err
-		}
+		column := reference.Column(name)
 		predicates = append(predicates, query.Equal(column, query.Bind(fields[name])))
 	}
 	if len(predicates) == 1 {

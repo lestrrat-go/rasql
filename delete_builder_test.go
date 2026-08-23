@@ -66,8 +66,7 @@ func TestDeleteFrom(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
+		id := users.Column("id")
 		result, err := rasql.DeleteFrom(users).WhereEqual(id, 42).Exec(t.Context(), db)
 		require.NoError(t, err)
 		rows, err := result.RowsAffected()
@@ -91,8 +90,7 @@ func TestDeleteFrom(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(0, 2))
 
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
+		id := users.Column("id")
 		result, err := rasql.DeleteFrom(users).WhereIn(id, 1, 2).Exec(t.Context(), db)
 		require.NoError(t, err)
 		rows, err := result.RowsAffected()
@@ -102,9 +100,8 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("WhereIn with no values reports an error", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		_, err = rasql.DeleteFrom(users).WhereIn(id).Build(dbForBuild(t).Dialect())
+		id := users.Column("id")
+		_, err := rasql.DeleteFrom(users).WhereIn(id).Build(dbForBuild(t).Dialect())
 		require.EqualError(t, err, "rasql: IN requires at least one value")
 	})
 
@@ -115,8 +112,7 @@ func TestDeleteFrom(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		archivedID, err := other.Column("id")
-		require.NoError(t, err)
+		archivedID := other.Column("id")
 
 		_, err = rasql.DeleteFrom(deleteUsersTable(t)).WhereIn(archivedID, 1).Build(dbForBuild(t).Dialect())
 		require.ErrorContains(t, err, "archived_users")
@@ -124,8 +120,7 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("Where takes a query expression", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		email := users.Column("email")
 		statement, err := rasql.DeleteFrom(users).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
 			Build(dbForBuild(t).Dialect())
@@ -157,8 +152,7 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("WhereIn alone satisfies the predicate requirement", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
+		id := users.Column("id")
 
 		statement, err := rasql.DeleteFrom(users).WhereIn(id, 1, 2).Build(dbForBuild(t).Dialect())
 		require.NoError(t, err)
@@ -196,8 +190,7 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("AllowAll with a predicate is rejected", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
+		id := users.Column("id")
 
 		t.Run("AllowAll then WhereEqual", func(t *testing.T) {
 			_, err := rasql.DeleteFrom(users).AllowAll().WhereEqual(id, 42).Build(dbForBuild(t).Dialect())
@@ -222,8 +215,7 @@ func TestDeleteFrom(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		archivedID, err := other.Column("id")
-		require.NoError(t, err)
+		archivedID := other.Column("id")
 
 		_, err = rasql.DeleteFrom(deleteUsersTable(t)).WhereEqual(archivedID, 1).Build(dbForBuild(t).Dialect())
 		require.ErrorContains(t, err, "archived_users")
@@ -231,10 +223,8 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("repeated Where combines with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 		statement, err := rasql.DeleteFrom(users).
 			Where(query.Equal(id, query.Bind(42))).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
@@ -248,10 +238,8 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("WhereEqual after Where combines with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 		statement, err := rasql.DeleteFrom(users).
 			Where(query.Equal(email, query.Bind("ada@example.com"))).
 			WhereEqual(id, 42).
@@ -265,10 +253,8 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("WhereIn after WhereEqual combines with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 		statement, err := rasql.DeleteFrom(users).
 			WhereEqual(email, "ada@example.com").
 			WhereIn(id, 1, 2).
@@ -282,10 +268,8 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("derived builders do not share predicates", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 
 		// Three predicates leave the accumulated slice with spare backing-array
 		// capacity (Go grows a nil slice 0 -> 1 -> 2 -> 4), which is what exposes
@@ -313,16 +297,14 @@ func TestDeleteFrom(t *testing.T) {
 
 	t.Run("a column from another table still errors after a valid predicate", func(t *testing.T) {
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
+		id := users.Column("id")
 		other, err := rasql.TableOf[deleteUser](schema.TableDef{
 			Name:       "archived_users",
 			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		archivedID, err := other.Column("id")
-		require.NoError(t, err)
+		archivedID := other.Column("id")
 
 		_, err = rasql.DeleteFrom(users).
 			WhereEqual(id, 1).
@@ -334,10 +316,8 @@ func TestDeleteFrom(t *testing.T) {
 
 func TestDeleteReturningBuild(t *testing.T) {
 	users := deleteUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
-	email, err := users.Column("email")
-	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
 
 	statement, err := rasql.DeleteFrom(users).
 		WhereEqual(id, 42).
@@ -361,10 +341,8 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 		mock.ExpectQuery("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1) RETURNING \"id\", \"email\"").
 			WithArgs(42).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
@@ -390,10 +368,8 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		users := deleteUsersTable(t)
-		id, err := users.Column("id")
-		require.NoError(t, err)
-		email, err := users.Column("email")
-		require.NoError(t, err)
+		id := users.Column("id")
+		email := users.Column("email")
 		mock.ExpectQuery("DELETE FROM \"users\" WHERE (\"users\".\"id\" = $1) RETURNING \"id\", \"email\"").
 			WithArgs(42).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "email"}).AddRow(int64(42), "ada@example.com"))
@@ -410,10 +386,9 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 
 func TestDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
 	users := deleteUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
-	_, err = rasql.DeleteFrom(users).
+	_, err := rasql.DeleteFrom(users).
 		WhereEqual(id, 42).
 		Returning(id).
 		Build(dialect.MySQL())
@@ -422,10 +397,9 @@ func TestDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
 
 func TestDeleteReturningRequiresProjection(t *testing.T) {
 	users := deleteUsersTable(t)
-	id, err := users.Column("id")
-	require.NoError(t, err)
+	id := users.Column("id")
 
-	_, err = rasql.DeleteFrom(users).WhereEqual(id, 42).Returning().Build(dialect.PostgreSQL())
+	_, err := rasql.DeleteFrom(users).WhereEqual(id, 42).Returning().Build(dialect.PostgreSQL())
 	require.EqualError(t, err, "rasql: RETURNING requires at least one projection")
 }
 
