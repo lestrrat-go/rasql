@@ -21,6 +21,7 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -206,7 +207,7 @@ func TestPostgreSQLInspectorRoundTripsTextWidthWithoutSpuriousDiff(t *testing.T)
 	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(255)}, live.Columns[1].Type)
 
 	analyzer := postgresql.New()
-	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: createTable.SQL()}})
+	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(createTable.SQL())}})
 	require.NoError(t, err)
 	liveSources, err := analyzer.LiveSources(live)
 	require.NoError(t, err)
@@ -255,7 +256,7 @@ func TestPostgreSQLInspectorRoundTripsCharacterWidthWithoutSpuriousDiff(t *testi
 	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}, live.Columns[1].Type)
 
 	analyzer := postgresql.New()
-	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: createTable.SQL()}})
+	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(createTable.SQL())}})
 	require.NoError(t, err)
 	liveSources, err := analyzer.LiveSources(live)
 	require.NoError(t, err)
@@ -526,8 +527,8 @@ func TestPostgreSQLInspectorRecordsExpressionIndex(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
 	require.Equal(t, []schema.IndexDef{
-		{Name: "users_lower_email_idx", Expressions: []string{"lower(email)"}},
-		{Name: "users_id_lower_email_idx", Expressions: []string{"id", "lower(email)"}},
+		{Name: "users_lower_email_idx", Expressions: []sqltext.Text{"lower(email)"}},
+		{Name: "users_id_lower_email_idx", Expressions: []sqltext.Text{"id", "lower(email)"}},
 	}, table.Indexes)
 }
 
@@ -1537,7 +1538,7 @@ func TestMySQLInspectorRecordsExpressionIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []schema.IndexDef{
 		{Name: "users_email_uidx", Columns: []string{"email"}, Unique: true},
-		{Name: "users_lower_email_idx", Expressions: []string{"lower(`email`)"}},
+		{Name: "users_lower_email_idx", Expressions: []sqltext.Text{"lower(`email`)"}},
 	}, table.Indexes)
 }
 
@@ -2068,7 +2069,7 @@ func TestMySQLInspectorRoundTripsUUIDWithoutSpuriousDiff(t *testing.T) {
 	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(36), Fixed: true}, live.Columns[0].Type)
 
 	analyzer := mysqldiff.New()
-	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: createTable.SQL()}})
+	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(createTable.SQL())}})
 	require.NoError(t, err)
 	liveSources, err := analyzer.LiveSources(live)
 	require.NoError(t, err)
@@ -2123,7 +2124,7 @@ func TestMySQLInspectorRoundTripsFixedWidthTextWithoutSpuriousDiff(t *testing.T)
 	require.Equal(t, schema.TextType{Width: schema.NewTextWidth(10), Fixed: true}, live.Columns[1].Type)
 
 	analyzer := mysqldiff.New()
-	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: createTable.SQL()}})
+	baseline, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(createTable.SQL())}})
 	require.NoError(t, err)
 	liveSources, err := analyzer.LiveSources(live)
 	require.NoError(t, err)
@@ -2979,8 +2980,8 @@ func TestSQLiteInspectorRecordsExpressionIndex(t *testing.T) {
 	table, err := inspector.Table(t.Context(), "users")
 	require.NoError(t, err)
 	require.Equal(t, []schema.IndexDef{
-		{Name: "users_id_lower_email_idx", Expressions: []string{"id", "lower(email)"}},
-		{Name: "users_lower_email_idx", Expressions: []string{"lower(email)"}},
+		{Name: "users_id_lower_email_idx", Expressions: []sqltext.Text{"id", "lower(email)"}},
+		{Name: "users_lower_email_idx", Expressions: []sqltext.Text{"lower(email)"}},
 	}, table.Indexes)
 }
 

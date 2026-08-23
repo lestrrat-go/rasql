@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/migrate"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -158,7 +159,7 @@ func TestRunnerUsesPostgreSQLTransactionAndHistoryLock(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT "id", "checksum" FROM "rasql_schema_migrations" ORDER BY "id"`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum"}))
-	mock.ExpectExec(migration.Statements[0].SQL).
+	mock.ExpectExec(string(migration.Statements[0].SQL)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO "rasql_schema_migrations" ("id", "checksum") VALUES ($1, $2)`).
 		WithArgs("001_create_users", sqlmock.AnyArg()).
@@ -187,7 +188,7 @@ func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT `id`, `checksum` FROM `rasql_schema_migrations` ORDER BY `id`").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum"}))
-	mock.ExpectExec(migration.Statements[0].SQL).
+	mock.ExpectExec(string(migration.Statements[0].SQL)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO `rasql_schema_migrations` (`id`, `checksum`) VALUES (?, ?)").
 		WithArgs("001_create_users", sqlmock.AnyArg()).
@@ -216,7 +217,7 @@ func sqlMigration(id string, sqlSources ...string) migrate.Migration {
 	for index, source := range sqlSources {
 		statements[index] = migrate.Statement{
 			Source: fmt.Sprintf("%03d.sql", index+1),
-			SQL:    source,
+			SQL:    sqltext.Text(source),
 		}
 	}
 	return migrate.Migration{ID: id, Statements: statements}

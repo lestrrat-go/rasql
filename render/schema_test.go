@@ -7,6 +7,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -399,7 +400,7 @@ func TestCreateIndexesRejectsExpressionIndex(t *testing.T) {
 		PrimaryKey: []string{"id"},
 		Indexes: []schema.IndexDef{{
 			Name:        "documents_lower_title_idx",
-			Expressions: []string{"lower(title)"},
+			Expressions: []sqltext.Text{"lower(title)"},
 		}},
 	}
 

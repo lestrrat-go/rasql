@@ -13,6 +13,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 const (
@@ -29,7 +30,7 @@ func SourcesFromTable(d dialect.Dialect, table schema.TableDef) ([]Source, error
 	if err != nil {
 		return nil, fmt.Errorf("render inspected table %q: %w", table.QualifiedName(), err)
 	}
-	sources := []Source{{Path: "live/" + table.Name + ".sql", SQL: created.SQL() + ";\n"}}
+	sources := []Source{{Path: "live/" + table.Name + ".sql", SQL: sqltext.Text(created.SQL() + ";\n")}}
 	indexes, err := render.CreateIndexes(d, table)
 	if err != nil {
 		return nil, fmt.Errorf("render indexes for inspected table %q: %w", table.QualifiedName(), err)
@@ -37,7 +38,7 @@ func SourcesFromTable(d dialect.Dialect, table schema.TableDef) ([]Source, error
 	for index, statement := range indexes {
 		sources = append(sources, Source{
 			Path: fmt.Sprintf("live/index_%d.sql", index+1),
-			SQL:  statement.SQL() + ";\n",
+			SQL:  sqltext.Text(statement.SQL() + ";\n"),
 		})
 	}
 	return sources, nil
@@ -84,7 +85,7 @@ func LoadSources(directory string) ([]Source, error) {
 		if err != nil {
 			return fmt.Errorf("resolve schema source %q: %w", path, err)
 		}
-		sources = append(sources, Source{Path: filepath.ToSlash(relative), SQL: string(data)})
+		sources = append(sources, Source{Path: filepath.ToSlash(relative), SQL: sqltext.Text(data)})
 		totalBytes += int64(len(data))
 		return nil
 	})

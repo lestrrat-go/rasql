@@ -1,5 +1,7 @@
 package schema
 
+import "github.com/lestrrat-go/rasql/sqltext"
+
 // TableOption configures NewTableDef and MustTableDef. A column constructor
 // such as Integer or Text and a constraint constructor such as PrimaryKey,
 // Unique, Check, Index, or ForeignKey each return a TableOption, so every
@@ -175,14 +177,14 @@ type checkTableOption CheckDef
 
 // Check declares an unnamed check constraint that expression must satisfy
 // for every row.
-func Check(expression string) TableOption {
+func Check(expression sqltext.Text) TableOption {
 	return checkTableOption(CheckDef{Expression: expression})
 }
 
 // CheckNamed declares a check constraint named name that expression must
 // satisfy for every row. Naming the constraint gives something else a name
 // to reference it by.
-func CheckNamed(name, expression string) TableOption {
+func CheckNamed(name string, expression sqltext.Text) TableOption {
 	return checkTableOption(CheckDef{Name: name, Expression: expression})
 }
 

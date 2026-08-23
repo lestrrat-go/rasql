@@ -6,6 +6,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/migrate"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -16,8 +17,8 @@ import (
 func reversibleMigration(id string, up string, down string) migrate.Migration {
 	return migrate.Migration{
 		ID:         id,
-		Statements: []migrate.Statement{{Source: "001_x.up.sql", SQL: up}},
-		Down:       []migrate.Statement{{Source: "001_x.down.sql", SQL: down}},
+		Statements: []migrate.Statement{{Source: "001_x.up.sql", SQL: sqltext.Text(up)}},
+		Down:       []migrate.Statement{{Source: "001_x.down.sql", SQL: sqltext.Text(down)}},
 	}
 }
 
@@ -109,7 +110,7 @@ func TestRevertPlanReportsWithoutChangingAnything(t *testing.T) {
 	plan, err := runner.RevertPlan(t.Context(), migrate.Steps(2), migrations...)
 	require.NoError(t, err)
 	require.Equal(t, []string{"003_tasks", "002_projects"}, revertedIDs(plan))
-	require.Equal(t, `DROP TABLE "tasks"`, plan[0].Down[0].SQL)
+	require.Equal(t, sqltext.Text(`DROP TABLE "tasks"`), plan[0].Down[0].SQL)
 	require.Equal(t, []string{"001_users", "002_projects", "003_tasks"}, appliedIDs(t, database),
 		"a plan must not touch the history")
 	require.True(t, tableExists(t, database, "tasks"))

@@ -9,12 +9,13 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 // Source is one SQL file in a desired schema tree.
 type Source struct {
 	Path string
-	SQL  string
+	SQL  sqltext.Text
 }
 
 // Snapshot is a parsed desired schema owned by one Analyzer.

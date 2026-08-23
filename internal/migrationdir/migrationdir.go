@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/migrate"
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 // Load reads every migration directory directly inside directory, in name
@@ -142,7 +143,7 @@ func readStatements(directory string, id string, filenames []string) ([]migrate.
 		if err != nil {
 			return nil, fmt.Errorf("read migration %q SQL source %q: %w", id, filename, err)
 		}
-		statements[index] = migrate.Statement{Source: filename, SQL: string(data)}
+		statements[index] = migrate.Statement{Source: filename, SQL: sqltext.Text(data)}
 	}
 	return statements, nil
 }

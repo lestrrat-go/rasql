@@ -20,6 +20,7 @@ import (
 	"unicode"
 
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 // reservedFieldNames holds the identifiers a generated table type already uses.
@@ -215,6 +216,9 @@ func schemaSource(packageName string, tables, allTables []schema.TableDef, descr
 		// schema package, so leaving it out leaves the import out too.
 		if descriptors == withDescriptors {
 			source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
+			if containsIndexExpressions(tables) {
+				source.WriteString("\t\"github.com/lestrrat-go/rasql/sqltext\"\n")
+			}
 		}
 		source.WriteString(")\n\n")
 	}
@@ -279,6 +283,9 @@ func descriptorSource(packageName string, tables []schema.TableDef) ([]byte, err
 		source.WriteString("import (\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
+		if containsIndexExpressions(tables) {
+			source.WriteString("\t\"github.com/lestrrat-go/rasql/sqltext\"\n")
+		}
 		source.WriteString(")\n\n")
 	} else {
 		source.WriteString("import \"github.com/lestrrat-go/rasql/schema\"\n\n")
@@ -827,6 +834,23 @@ func containsTime(tables []schema.TableDef) bool {
 	for _, table := range tables {
 		for _, column := range table.Columns {
 			if column.Type.Kind() == schema.KindTime {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// containsIndexExpressions reports whether any table's descriptor names an
+// IndexDef.Expressions, the one place a descriptor literal writes out an
+// explicit []sqltext.Text{...} slice type rather than an untyped string
+// constant. That is the only case needing the sqltext import: every other
+// branded field is written as a bare quoted literal, which converts to
+// sqltext.Text implicitly with no type name in the generated source.
+func containsIndexExpressions(tables []schema.TableDef) bool {
+	for _, table := range tables {
+		for _, index := range table.Indexes {
+			if len(index.Expressions) > 0 {
 				return true
 			}
 		}
@@ -1541,7 +1565,7 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 			}
 			if len(index.Expressions) > 0 {
 				source.WriteString(", Expressions: ")
-				writeStringLiteralSlice(source, index.Expressions)
+				writeSQLTextLiteralSlice(source, index.Expressions)
 			}
 			if index.Predicate != "" {
 				source.WriteString(", Predicate: ")
@@ -1983,6 +2007,22 @@ func writeStringLiteralSlice(source *bytes.Buffer, values []string) {
 	source.WriteByte('}')
 }
 
+// writeSQLTextLiteralSlice writes values as a []sqltext.Text composite
+// literal. It exists separately from writeStringLiteralSlice, rather than as
+// a shared generic, because the emitted slice type name itself changes with
+// the element type and a struct field's value cannot elide it the way a
+// slice element can.
+func writeSQLTextLiteralSlice(source *bytes.Buffer, values []sqltext.Text) {
+	source.WriteString("[]sqltext.Text{")
+	for index, value := range values {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(quote(value))
+	}
+	source.WriteByte('}')
+}
+
 // writeStringMapLiteral writes values as a map[string]string composite
 // literal, with keys sorted so repeated generation of the same descriptor
 // produces byte-identical source.
@@ -2069,6 +2109,10 @@ func conflictResolutionConstant(conflict schema.ConflictResolution) string {
 	}
 }
 
-func quote(value string) string {
-	return strconv.Quote(value)
+// quote renders value as a double-quoted Go string literal. The ~string
+// constraint lets it take schema's branded sqltext.Text fields directly,
+// alongside plain string and every other named string type this file
+// quotes, without a conversion at each call site.
+func quote[T ~string](value T) string {
+	return strconv.Quote(string(value))
 }

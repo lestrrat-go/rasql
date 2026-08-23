@@ -200,7 +200,7 @@ func (r Runner) revertPrepared(ctx context.Context, queries queryer, executions 
 	}
 	for _, migration := range selected {
 		for _, statement := range migration.down {
-			if _, err := executions.ExecContext(ctx, statement.SQL); err != nil {
+			if _, err := executions.ExecContext(ctx, string(statement.SQL)); err != nil {
 				return nil, fmt.Errorf("migrate: execute migration %q reverse SQL source %q: %w", migration.id, statement.Source, err)
 			}
 		}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -188,7 +189,7 @@ func newTableDefFixture() schema.TableDef {
 			},
 			{
 				Name:        "idx_expr",
-				Expressions: []string{"lower(name)", "amount * 2"},
+				Expressions: []sqltext.Text{"lower(name)", "amount * 2"},
 			},
 			{
 				Name: "idx_keys",

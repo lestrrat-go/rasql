@@ -13,6 +13,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/schemagen"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1353,7 +1354,7 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 			{Name: "uidx_code", Columns: []string{"code"}, Unique: true},
 			{Name: "idx_bio_gin", Columns: []string{"bio"}, Method: "gin"},
 			{Name: "idx_price_active", Columns: []string{"price"}, Predicate: "price > 0"},
-			{Name: "idx_lower_bio", Expressions: []string{"lower(bio)"}},
+			{Name: "idx_lower_bio", Expressions: []sqltext.Text{"lower(bio)"}},
 			{Name: "idx_price_status", Columns: []string{"price"}, IncludeColumns: []string{"status"}, Invisible: true},
 			{Name: "idx_created_at_desc", Keys: []schema.IndexKeyDef{{Expression: "created_at", Descending: true, Collation: "C", OperatorClass: "text_pattern_ops", PrefixLength: 8}}},
 			{Name: "idx_status_invalid", Columns: []string{"status"}, NotValid: true, StorageParameters: map[string]string{"fillfactor": "70"}, Tablespace: "pg_custom"},
@@ -1432,7 +1433,7 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Name: "uidx_code", Columns: []string{"code"}, Unique: true}`)
 	require.Contains(t, text, `{Name: "idx_bio_gin", Columns: []string{"bio"}, Method: schema.IndexMethod("gin")}`)
 	require.Contains(t, text, `{Name: "idx_price_active", Columns: []string{"price"}, Predicate: "price > 0"}`)
-	require.Contains(t, text, `{Name: "idx_lower_bio", Expressions: []string{"lower(bio)"}}`)
+	require.Contains(t, text, `{Name: "idx_lower_bio", Expressions: []sqltext.Text{"lower(bio)"}}`)
 	require.Contains(t, text, `{Name: "idx_price_status", Columns: []string{"price"}, IncludeColumns: []string{"status"}, Invisible: true}`)
 	require.Contains(t, text, `{Name: "idx_created_at_desc", Keys: []schema.IndexKeyDef{`)
 	require.Contains(t, text, `{Expression: "created_at", Descending: true, Collation: "C", OperatorClass: "text_pattern_ops", PrefixLength: 8}`)

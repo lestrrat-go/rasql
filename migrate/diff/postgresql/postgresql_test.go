@@ -6,6 +6,7 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,7 +117,7 @@ func TestLiveSourcesRejectsExpressionIndex(t *testing.T) {
 		PrimaryKey: []string{"id"},
 		Indexes: []schema.IndexDef{{
 			Name:        "members_lower_name_idx",
-			Expressions: []string{"lower(name)"},
+			Expressions: []sqltext.Text{"lower(name)"},
 		}},
 	})
 	require.ErrorContains(t, err, `"members_lower_name_idx"`)
@@ -705,7 +706,7 @@ func TestDiffRejectsConcurrentIndex(t *testing.T) {
 
 func parseSnapshot(t *testing.T, analyzer postgresql.Analyzer, source string) diff.Snapshot {
 	t.Helper()
-	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
+	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(source)}})
 	require.NoError(t, err)
 	return snapshot
 }

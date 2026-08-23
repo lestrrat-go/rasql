@@ -86,7 +86,10 @@ rejected the same way either form is built.
 
 A column constructor such as `schema.Integer` or `schema.Text` takes zero or
 more `schema.ColumnOption` values: `schema.Nullable()` marks the column
-nullable, `schema.Default(expr)` states its default expression,
+nullable, `schema.Default(expr)` states its default expression as
+`sqltext.Text`, rasql's branded type for SQL text sent as written — a
+literal such as `"CURRENT_TIMESTAMP"` converts to it with no ceremony, and a
+`string` built at runtime needs an explicit `sqltext.Text(...)` conversion,
 `schema.Identity(generation)` marks the column an identity column (see
 [Identity columns](#identity-columns)), `schema.Unsigned()` marks an
 integer column unsigned, and `schema.Width(n)` states a text column's
@@ -99,7 +102,7 @@ precision and scale as ordinary arguments rather than options, since
 | --- | --- |
 | `schema.PrimaryKey` | The columns that uniquely identify each row. |
 | `schema.Unique` / `schema.UniqueNamed` | An unnamed, or named, uniqueness requirement over columns. |
-| `schema.Check` / `schema.CheckNamed` | An unnamed, or named, check constraint over an expression. |
+| `schema.Check` / `schema.CheckNamed` | An unnamed, or named, check constraint over an `sqltext.Text` expression. |
 | `schema.Index` / `schema.UniqueIndex` | A plain, or unique, secondary index over columns. |
 | `schema.ForeignKey` / `schema.ForeignKeyOn` | A foreign key over one column, or over several. |
 | `schema.InSchema` | The namespace qualifying the table. |

@@ -111,7 +111,7 @@ type sqliteSpan struct {
 }
 
 func parseSource(source diff.Source) (*sqlitequery.Query, map[int][]foreignKeyActions, error) {
-	withoutActions, actions := stripReferenceActions(source.SQL)
+	withoutActions, actions := stripReferenceActions(string(source.SQL))
 	parsed, err := sqlitequery.Parse(withoutActions)
 	if err != nil {
 		return nil, nil, err

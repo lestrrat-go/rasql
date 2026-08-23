@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,7 +63,7 @@ func TestPostgreSQLInspectorRecordsExpressionIndexAgainstLiveDatabase(t *testing
 	table, err := inspector.Table(ctx, "articles")
 	require.NoError(t, err)
 	require.Equal(t, []schema.IndexDef{
-		{Name: "articles_lower_title_idx", Expressions: []string{"lower(title)"}},
+		{Name: "articles_lower_title_idx", Expressions: []sqltext.Text{"lower(title)"}},
 	}, table.Indexes)
 }
 
@@ -113,7 +114,7 @@ func TestPostgreSQLInspectorNormalizesExpressionIndexKeyAgainstLiveDatabase(t *t
 	table, err := inspector.Table(ctx, "articles")
 	require.NoError(t, err)
 	require.Equal(t, []schema.IndexDef{
-		{Name: "articles_fahrenheit_idx", Expressions: []string{"(celsius * 9 / 5 + 32)"}},
+		{Name: "articles_fahrenheit_idx", Expressions: []sqltext.Text{"(celsius * 9 / 5 + 32)"}},
 	}, table.Indexes)
 }
 

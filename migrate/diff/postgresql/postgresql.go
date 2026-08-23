@@ -60,7 +60,7 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		indexes: make(map[string]indexDefinition),
 	}
 	for _, source := range sources {
-		parsed, err := pgquery.Parse(source.SQL)
+		parsed, err := pgquery.Parse(string(source.SQL))
 		if err != nil {
 			return nil, fmt.Errorf("postgresql schema source %q: %w", source.Path, err)
 		}
