@@ -110,25 +110,18 @@ func TestWalkthroughBundleMatchesSample(t *testing.T) {
 
 // withoutRegionMarkers drops the include-block markers the checked-in copy
 // carries, along with the blank line a marker leaves behind when it sits
-// between two declarations.
+// between two declarations. A top-level marker is always followed by a blank
+// line, which TestDocRegionMarkersStayOutOfDocComments enforces so Go never
+// reads the marker as the next declaration's doc comment, so dropping the
+// marker line always leaves a blank run for collapseBlankRuns to close up.
 func withoutRegionMarkers(contents string) string {
 	lines := strings.Split(contents, "\n")
 	kept := make([]string, 0, len(lines))
-	dropped := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "// BEGIN(") || strings.HasPrefix(trimmed, "// END(") {
-			dropped = true
 			continue
 		}
-		// A marker placed inside a doc comment is separated from the prose
-		// above it by an empty comment line, which belongs to the marker
-		// rather than to the declaration being documented.
-		if dropped && trimmed == "//" {
-			dropped = false
-			continue
-		}
-		dropped = false
 		kept = append(kept, line)
 	}
 	return collapseBlankRuns(strings.Join(kept, "\n"))

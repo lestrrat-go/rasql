@@ -16,7 +16,7 @@ import (
 )
 
 // BEGIN(template)
-//
+
 //go:embed page.html
 var pageSource string
 
@@ -46,6 +46,7 @@ type Handler struct {
 }
 
 // BEGIN(newhandler)
+
 // NewHandler creates a handler over a reader and a writer. store.Repository
 // satisfies both, so an application passes it twice; a test passes whatever
 // it needs to stand in for either half.
@@ -56,6 +57,7 @@ func NewHandler(reader Reader, writer Writer, logger *slog.Logger) Handler {
 // END(newhandler)
 
 // BEGIN(routes)
+
 // Routes returns the mux serving the application.
 func (h Handler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
@@ -147,6 +149,7 @@ func (h Handler) closeTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // BEGIN(fail)
+
 // fail logs the cause and returns a response that repeats none of it, so a
 // database error never reaches the browser.
 func (h Handler) fail(w http.ResponseWriter, r *http.Request, what string, err error) {

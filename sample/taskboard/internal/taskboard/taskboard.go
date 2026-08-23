@@ -9,6 +9,7 @@ import (
 )
 
 // BEGIN(task_text)
+
 // Task is one open task as the page prints it. Both Assignee and DueOn are
 // already the text the page shows, so the template never asks whether a
 // task has an owner or a due date; this package answers that once.
@@ -52,6 +53,7 @@ type Choice struct {
 }
 
 // BEGIN(page)
+
 // Page is everything one drawing of the page needs.
 type Page struct {
 	Groups   []Group

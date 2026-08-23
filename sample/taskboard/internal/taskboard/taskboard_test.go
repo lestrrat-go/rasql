@@ -37,6 +37,7 @@ func TestGroupByProject(t *testing.T) {
 }
 
 // BEGIN(repeated_projects)
+
 func TestGroupByProjectSeparatesRepeatedProjects(t *testing.T) {
 	// The fold trusts the query's ORDER BY. Rows that arrive out of project
 	// order produce one group per run, which is what this pins: the day

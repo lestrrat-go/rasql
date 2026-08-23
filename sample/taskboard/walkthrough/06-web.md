@@ -106,7 +106,6 @@ The add form posts the three values `AddTask` takes:
 
 <!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#template) -->
 ```go
-//
 //go:embed page.html
 var pageSource string
 

@@ -22,6 +22,8 @@ Every Go block in `README.md` and `docs/` is copied from a file the compiler and
 
 A target naming a file alone includes that whole file. A target ending in `#name` includes only the region an example marks with `// BEGIN(name)` and `// END(name)`, shifted to the left margin, which is how a short passage shows a few lines instead of a whole example. `TestDocRegionsAreIncluded` fails on a region no page includes, so the markers and the pages stay in step.
 
+Leave a blank line after a marker written at the left margin. Go reads a comment line sitting directly above a declaration as that declaration's doc comment, so a marker written there is printed by `go doc` and by pkg.go.dev as the first words of what the declaration means. The blank line detaches it and costs the region nothing, since the region body is trimmed of the blank lines at either end. `TestDocRegionMarkersStayOutOfDocComments` fails on a marker that still attaches. A marker indented inside a function body needs no blank line, because a comment there is never a doc comment.
+
 Write the example first, under `examples/`, as an `Example*` function with an `// Output:` block. Then add the markers and fill every block:
 
 ```sh

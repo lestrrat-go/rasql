@@ -275,6 +275,89 @@ func TestDocRegionsAreIncluded(t *testing.T) {
 	require.NotZero(t, declared, "no example declares a region")
 }
 
+// markerAttachmentProblem reports why a source writes a region marker where Go
+// reads it as documentation, or the empty string when it does not. A comment
+// line sitting directly above a declaration is that declaration's doc comment,
+// so a marker written there is printed by `go doc` and by pkg.go.dev as the
+// first words of what the declaration means. A blank line after the marker
+// detaches it and costs the region nothing, since regionSource trims the blank
+// lines at either end of a region body. Only a top-level marker can attach this
+// way: a comment indented inside a function body is never a doc comment.
+func markerAttachmentProblem(lines []string) string {
+	for number, line := range lines {
+		if !strings.HasPrefix(line, "//") || !regionMarker.MatchString(line) {
+			continue
+		}
+		if number+1 == len(lines) || strings.TrimSpace(lines[number+1]) == "" {
+			continue
+		}
+		return fmt.Sprintf("writes the region marker on line %d directly above %q, where Go reads the marker as that declaration's doc comment", number+1, strings.TrimSpace(lines[number+1]))
+	}
+	return ""
+}
+
+// markerAttachmentFixtures pin markerAttachmentProblem to concrete sources.
+// Every source here is invented for this table so the fixtures keep their
+// meaning when the examples they resemble are rewritten.
+var markerAttachmentFixtures = []struct {
+	name    string
+	source  string
+	problem string
+}{
+	{
+		name:   "an opening marker detached from the declaration it precedes",
+		source: "// BEGIN(row)\n\n// UserRow is one user.\ntype UserRow struct {\n\tID int64\n}\n\n// END(row)\n",
+	},
+	{
+		name:    "an opening marker sitting on a doc comment",
+		source:  "// BEGIN(row)\n// UserRow is one user.\ntype UserRow struct {\n\tID int64\n}\n\n// END(row)\n",
+		problem: "doc comment",
+	},
+	{
+		name:    "an opening marker sitting on an undocumented declaration",
+		source:  "// BEGIN(row)\ntype UserRow struct {\n\tID int64\n}\n\n// END(row)\n",
+		problem: "doc comment",
+	},
+	{
+		name:    "a closing marker sitting on the declaration that follows the region",
+		source:  "// BEGIN(row)\n\ntype UserRow struct {\n\tID int64\n}\n// END(row)\ntype Next struct{}\n",
+		problem: "doc comment",
+	},
+	{
+		name:   "a marker indented inside a function body",
+		source: "func Example() {\n\t// BEGIN(open)\n\tfirst := 1\n\t// END(open)\n}\n",
+	},
+}
+
+// TestDocRegionMarkersStayOutOfDocComments keeps a region marker out of the
+// documentation Go itself publishes. A region delimits source for the
+// documentation in this repository, and it has no business also describing the
+// declaration it happens to sit above.
+func TestDocRegionMarkersStayOutOfDocComments(t *testing.T) {
+	t.Run("fixtures", func(t *testing.T) {
+		for _, fixture := range markerAttachmentFixtures {
+			t.Run(fixture.name, func(t *testing.T) {
+				problem := markerAttachmentProblem(strings.Split(strings.TrimSuffix(fixture.source, "\n"), "\n"))
+				if fixture.problem != "" {
+					require.Contains(t, problem, fixture.problem)
+					return
+				}
+				require.Empty(t, problem)
+			})
+		}
+	})
+
+	t.Run("sources", func(t *testing.T) {
+		for _, source := range exampleSources(t) {
+			contents, err := os.ReadFile(filepath.Join(repositoryRoot, source))
+			require.NoError(t, err)
+
+			problem := markerAttachmentProblem(strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n"))
+			require.Empty(t, problem, "%s %s; leave a blank line after the marker", source, problem)
+		}
+	})
+}
+
 // regionFixtures pin what a region include extracts. Every source here is
 // invented for this table so the fixtures keep their meaning when the examples
 // they resemble are rewritten.
@@ -350,6 +433,12 @@ var regionFixtures = []struct {
 		source:  "// BEGIN(open)\n\n\n// END(open)\n",
 		region:  "open",
 		problem: "holds no source",
+	},
+	{
+		name:    "the blank line detaching an opening marker from a declaration is dropped",
+		source:  "// BEGIN(row)\n\ntype UserRow struct {\n\tID int64\n}\n\n// END(row)\n",
+		region:  "row",
+		extract: "type UserRow struct {\n\tID int64\n}",
 	},
 }
 
