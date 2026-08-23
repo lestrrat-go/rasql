@@ -60,8 +60,8 @@ func TestSQLiteRefusesMisplacedAggregates(t *testing.T) {
 			"where":                               base.Select("id").Where(query.GreaterThan(query.Count(id), query.Bind(1))),
 			"where membership":                    base.Select("id").Where(query.In(id, query.Count(id))),
 			"order by beside a column projection": base.Select("id").Order(query.Asc(query.Count(id))),
-			"nested aggregate":                    base.Project(query.Project(query.Sum(query.Sum(id)))),
-			"mixed projections":                   base.Select("id").Project(query.Project(query.CountAll())),
+			"nested aggregate":                    base.Project(query.Sum(query.Sum(id))),
+			"mixed projections":                   base.Select("id").Project(query.CountAll()),
 			// A scalar function carries ctx unchanged into its arguments, so an
 			// aggregate wrapped inside one is refused in WHERE exactly as a bare
 			// aggregate is: the scalar call is not an exemption from the
@@ -96,7 +96,7 @@ func TestSQLiteOrdersAnAggregateStatement(t *testing.T) {
 	require.NoError(t, err)
 	// Every builder below projects the same aggregate-only set, so only the
 	// ordering differs between the accepted and the refused shapes.
-	counted := render.SelectFrom(dialect.SQLite(), table).Project(query.Project(query.CountAll()).As("count"))
+	counted := render.SelectFrom(dialect.SQLite(), table).Project(query.CountAll().As("count"))
 
 	t.Run("sqlite runs an aggregate ordering", func(t *testing.T) {
 		tests := map[string]render.SelectBuilder{
@@ -164,7 +164,7 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 	t.Run("a grouped mixed projection returns one row per group", func(t *testing.T) {
 		statement, err := query.NewGroupedSelect(table, []query.Expression{email},
 			email,
-			query.Project(query.CountAll()).As("total"),
+			query.CountAll().As("total"),
 		)
 		require.NoError(t, err)
 		rendered, err := render.Select(dialect.SQLite(), statement)
@@ -190,7 +190,7 @@ func TestSQLiteRunsGroupedStatements(t *testing.T) {
 	t.Run("a grouped HAVING filters groups", func(t *testing.T) {
 		statement, err := query.NewGroupedSelect(table, []query.Expression{id},
 			id,
-			query.Project(query.CountAll()).As("total"),
+			query.CountAll().As("total"),
 		)
 		require.NoError(t, err)
 		statement, err = statement.WithHaving(query.GreaterThan(id, query.Bind(1)))
@@ -228,8 +228,8 @@ func TestSQLiteRunsScalarFunctionsBesideAggregates(t *testing.T) {
 	require.NoError(t, err)
 
 	statement, err := query.NewGroupedSelect(table, []query.Expression{query.Lower(email)},
-		query.Project(query.Lower(email)).As("email"),
-		query.Project(query.Coalesce(query.Sum(id), query.Bind(0))).As("total"),
+		query.Lower(email).As("email"),
+		query.Coalesce(query.Sum(id), query.Bind(0)).As("total"),
 	)
 	require.NoError(t, err)
 	rendered, err := render.Select(dialect.SQLite(), statement)

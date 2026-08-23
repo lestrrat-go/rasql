@@ -50,7 +50,7 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 
 | Method | Effect |
 | --- | --- |
-| `Project(projections…)` | Adds columns directly, and other expressions through `query.Project`. |
+| `Project(projections…)` | Adds columns and function calls directly, and other expressions through `query.Project`. |
 | `Distinct()` | De-duplicates result rows. |
 | `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. |
 | `Where(expression)` | Adds a predicate from a `query` expression. |
@@ -527,7 +527,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to find all_orders.amount: %s\n", err)
 		return
 	}
-	average, err := query.NewSelect(allOrders.Ref(), query.Project(query.Avg(allOrdersAmount)))
+	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrdersAmount))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
 		return
@@ -734,7 +734,7 @@ func Example_rasql_group_by() {
 	// could not.
 	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
-		Project(status, query.Project(query.CountAll()).As("total")).
+		Project(status, query.CountAll().As("total")).
 		GroupBy(status).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Order(query.Asc(status)).

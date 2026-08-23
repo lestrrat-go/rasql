@@ -67,7 +67,7 @@ func TestSQLiteRunsDistinctStatements(t *testing.T) {
 	})
 
 	t.Run("COUNT(DISTINCT column) counts distinct values", func(t *testing.T) {
-		statement, err := query.NewSelect(table, query.Project(query.Count(city).WithDistinct()).As("distinct_cities"))
+		statement, err := query.NewSelect(table, query.Count(city).WithDistinct().As("distinct_cities"))
 		require.NoError(t, err)
 		rendered, err := render.Select(dialect.SQLite(), statement)
 		require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 	})
 
 	t.Run("COUNT(DISTINCT column) drops NULL", func(t *testing.T) {
-		statement, err := query.NewSelect(table, query.Project(query.Count(city).WithDistinct()).As("distinct_cities"))
+		statement, err := query.NewSelect(table, query.Count(city).WithDistinct().As("distinct_cities"))
 		require.NoError(t, err)
 		rendered, err := render.Select(dialect.SQLite(), statement)
 		require.NoError(t, err)

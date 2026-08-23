@@ -123,7 +123,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to find all_orders.amount: %s\n", err)
 		return
 	}
-	average, err := query.NewSelect(allOrders.Ref(), query.Project(query.Avg(allOrdersAmount)))
+	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrdersAmount))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
 		return

@@ -301,7 +301,7 @@ func (b SelectBuilder) BuildCount() (stmt.Statement, error) {
 	if b.distinct {
 		return stmt.Statement{}, fmt.Errorf("cannot count a distinct statement")
 	}
-	s, err := b.buildFromJoinsWhere(query.Project(query.CountAll()).As("count"))
+	s, err := b.buildFromJoinsWhere(query.CountAll().As("count"))
 	if err != nil {
 		return stmt.Statement{}, err
 	}

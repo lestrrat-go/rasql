@@ -175,7 +175,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// widening, but this projection exists to exercise a bound fallback, so it
 	// states both exact strings instead.
 	viaCoalesce, err := rasql.DecodeFrom[amountRow](records).
-		Project(recordID, query.Project(query.Coalesce(scalarAmount, query.Bind("0.0000"))).As("amount")).
+		Project(recordID, query.Coalesce(scalarAmount, query.Bind("0.0000")).As("amount")).
 		OrderAsc(recordID).
 		All(t.Context(), db)
 	require.NoError(t, err)
@@ -202,7 +202,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// per-dialect pair of its own. Neither amount equals the bound "0.0000",
 	// so NULLIF returns the column value on every row.
 	viaNullIf, err := rasql.DecodeFrom[amountRow](records).
-		Project(recordID, query.Project(query.Func("NULLIF", scalarAmount, query.Bind("0.0000"))).As("amount")).
+		Project(recordID, query.Func("NULLIF", scalarAmount, query.Bind("0.0000")).As("amount")).
 		OrderAsc(recordID).
 		All(t.Context(), db)
 	require.NoError(t, err)

@@ -326,7 +326,7 @@ func TestTypedSelectGroupBy(t *testing.T) {
 
 	db := dbForBuild(t)
 	statement, err := rasql.DecodeFrom[emailCount](users).
-		Project(email, query.Project(query.CountAll()).As("total")).
+		Project(email, query.CountAll().As("total")).
 		GroupBy(email).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
 		Build(db.Dialect())
@@ -390,7 +390,7 @@ func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
 	}
 
 	statement, err := rasql.DecodeFrom[userOrderCount](users).
-		Project(orderUserID, query.Project(query.CountAll()).As("total")).
+		Project(orderUserID, query.CountAll().As("total")).
 		Join(query.InnerJoin(orders, query.Equal(id, orderUserID))).
 		GroupBy(orderUserID).
 		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).

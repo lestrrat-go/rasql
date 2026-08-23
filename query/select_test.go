@@ -155,11 +155,11 @@ func TestFunctionAcceptsDistinctArgument(t *testing.T) {
 	require.Equal(t, plain.Arguments(), distinct.Arguments())
 	require.False(t, plain.Distinct(), "WithDistinct must not mutate the receiver")
 
-	statement, err := query.NewSelect(users, query.Project(distinct).As("distinct_count"))
+	statement, err := query.NewSelect(users, distinct.As("distinct_count"))
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
 
-	_, err = query.NewSelect(users, query.Project(query.CountAll().WithDistinct()))
+	_, err = query.NewSelect(users, query.CountAll().WithDistinct())
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "COUNT(DISTINCT *) is not valid")
 }
@@ -193,7 +193,7 @@ func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
 	}
 	for name, function := range refused {
 		t.Run(name, func(t *testing.T) {
-			_, err := query.NewSelect(users, query.Project(function).As("value"))
+			_, err := query.NewSelect(users, function.As("value"))
 			requireQueryValidationError(t, err)
 			require.ErrorContains(t, err, "does not aggregate, so it does not support DISTINCT")
 		})
@@ -202,7 +202,7 @@ func TestFunctionDistinctFollowsTheFunctionClass(t *testing.T) {
 	// An uncurated aggregate is reachable only through Func, and DISTINCT is
 	// part of how it is called, so validation admits the pair and leaves the
 	// target database to judge the name.
-	statement, err := query.NewSelect(users, query.Project(query.Func("group_concat", email).WithDistinct()).As("tags"))
+	statement, err := query.NewSelect(users, query.Func("group_concat", email).WithDistinct().As("tags"))
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
 
@@ -295,7 +295,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	// LENGTH is deliberately excluded from the curated set: PostgreSQL, MySQL,
 	// and SQLite disagree on whether it counts characters or bytes, so
 	// Call refuses it rather than hiding that difference.
-	_, err = query.NewSelect(users, query.Project(query.Call("LENGTH", userID)))
+	_, err = query.NewSelect(users, query.Call("LENGTH", userID))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `unsupported function "LENGTH"`)
 
@@ -325,22 +325,22 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	require.ErrorContains(t, err, "references table")
 	require.ErrorContains(t, err, "outside the statement")
 
-	_, err = query.NewSelect(users, query.Project(query.Call(query.FunctionSum)))
+	_, err = query.NewSelect(users, query.Call(query.FunctionSum))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "takes exactly one argument, got 0")
 
-	_, err = query.NewSelect(users, query.Project(query.Call(query.FunctionCount, userID, userID)))
+	_, err = query.NewSelect(users, query.Call(query.FunctionCount, userID, userID))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "takes exactly one argument, got 2")
 
-	_, err = query.NewSelect(users, query.Project(query.Count(otherID)))
+	_, err = query.NewSelect(users, query.Count(otherID))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "references table")
 	require.ErrorContains(t, err, "outside the statement")
 
 	statement, err = query.NewSelect(users,
-		query.Project(query.CountAll()),
-		query.Project(query.Max(userID)),
+		query.CountAll(),
+		query.Max(userID),
 	)
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
@@ -391,7 +391,7 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
 
-	averageAmount, err := query.NewSelect(orders, query.Project(query.Avg(amount)))
+	averageAmount, err := query.NewSelect(orders, query.Avg(amount))
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
 	statement, err = statement.WithWhere(query.GreaterThanOrEqual(userID, query.Scalar(averageAmount)))
@@ -465,7 +465,7 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 		},
 		"column ordering an aggregate projection set": {
 			build: func() error {
-				aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
+				aggregated, err := query.NewSelect(users, query.CountAll())
 				if err != nil {
 					return err
 				}
@@ -476,7 +476,7 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 		},
 		"column beside an aggregate in one ordering expression": {
 			build: func() error {
-				aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
+				aggregated, err := query.NewSelect(users, query.CountAll())
 				if err != nil {
 					return err
 				}
@@ -487,7 +487,7 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 		},
 		"nested aggregate in an ordering expression": {
 			build: func() error {
-				aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
+				aggregated, err := query.NewSelect(users, query.CountAll())
 				if err != nil {
 					return err
 				}
@@ -498,21 +498,21 @@ func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 		},
 		"nested aggregate": {
 			build: func() error {
-				_, err := query.NewSelect(users, query.Project(query.Sum(query.Sum(userID))))
+				_, err := query.NewSelect(users, query.Sum(query.Sum(userID)))
 				return err
 			},
 			message: `calls aggregate function "SUM" inside another aggregate function`,
 		},
 		"aggregate nested below an operator": {
 			build: func() error {
-				_, err := query.NewSelect(users, query.Project(query.Max(query.GreaterThan(query.Count(userID), query.Bind(1)))))
+				_, err := query.NewSelect(users, query.Max(query.GreaterThan(query.Count(userID), query.Bind(1))))
 				return err
 			},
 			message: `calls aggregate function "COUNT" inside another aggregate function`,
 		},
 		"column projected beside an aggregate": {
 			build: func() error {
-				_, err := query.NewSelect(users, userID, query.Project(query.CountAll()))
+				_, err := query.NewSelect(users, userID, query.CountAll())
 				return err
 			},
 			message: "reads a column outside an aggregate function while projections[1] aggregates",
@@ -558,8 +558,8 @@ func TestSelectAcceptsWellPlacedAggregates(t *testing.T) {
 	// An aggregate-only projection set filters and joins by columns, because
 	// WHERE and JOIN ON run before aggregation on the source rows.
 	statement, err := query.NewSelect(users,
-		query.Project(query.CountAll()).As("total"),
-		query.Project(query.Max(userID)).As("top"),
+		query.CountAll().As("total"),
+		query.Max(userID).As("top"),
 	)
 	require.NoError(t, err)
 	statement, err = statement.WithJoin(query.InnerJoin(orders, query.Equal(userID, orderUserID)))
@@ -611,7 +611,7 @@ func TestSelectAcceptsScalarFunctions(t *testing.T) {
 
 	// A scalar call in a projection needs no GROUP BY, unlike an aggregate
 	// beside a bare column.
-	projected, err := query.NewSelect(users, query.Project(query.Lower(email)).As("lower_email"))
+	projected, err := query.NewSelect(users, query.Lower(email).As("lower_email"))
 	require.NoError(t, err)
 	require.NoError(t, projected.Validate())
 
@@ -630,7 +630,7 @@ func TestSelectAcceptsScalarFunctions(t *testing.T) {
 	require.NoError(t, joined.Validate())
 
 	// A scalar call in a GROUP BY clause.
-	grouped, err := query.NewGroupedSelect(users, []query.Expression{query.Lower(email)}, query.Project(query.Lower(email)))
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{query.Lower(email)}, query.Lower(email))
 	require.NoError(t, err)
 	require.NoError(t, grouped.Validate())
 
@@ -711,7 +711,7 @@ func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
 
 	// COALESCE(SUM(x), 0) is accepted in a projection: the nested aggregate
 	// sees allowsAggregate true at depth 0.
-	projected, err := query.NewSelect(users, query.Project(query.Coalesce(query.Sum(userID), query.Bind(0))).As("total"))
+	projected, err := query.NewSelect(users, query.Coalesce(query.Sum(userID), query.Bind(0)).As("total"))
 	require.NoError(t, err)
 	require.NoError(t, projected.Validate())
 
@@ -730,13 +730,13 @@ func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
 
 	// SUM(COALESCE(x, 0)) is accepted: the aggregate walks its arguments one
 	// level deeper into aggregate nesting, and a scalar call there is fine.
-	sumOfCoalesce, err := query.NewSelect(users, query.Project(query.Sum(query.Coalesce(userID, query.Bind(0)))).As("total"))
+	sumOfCoalesce, err := query.NewSelect(users, query.Sum(query.Coalesce(userID, query.Bind(0))).As("total"))
 	require.NoError(t, err)
 	require.NoError(t, sumOfCoalesce.Validate())
 
 	// SUM(COALESCE(SUM(x), 0)) is refused: the inner SUM sees aggregateDepth
 	// 1 through the scalar call that carries it unchanged.
-	_, err = query.NewSelect(users, query.Project(query.Sum(query.Coalesce(query.Sum(userID), query.Bind(0)))))
+	_, err = query.NewSelect(users, query.Sum(query.Coalesce(query.Sum(userID), query.Bind(0))))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `calls aggregate function "SUM" inside another aggregate function`)
 
@@ -745,11 +745,11 @@ func TestSelectPlacesAggregatesInsideScalarFunctions(t *testing.T) {
 	// accepted once the statement groups.
 	email, err := users.Column("email")
 	require.NoError(t, err)
-	_, err = query.NewSelect(users, query.Project(query.CountAll()), query.Project(query.Lower(email)))
+	_, err = query.NewSelect(users, query.CountAll(), query.Lower(email))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "reads a column outside an aggregate function")
 
-	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, query.Project(query.CountAll()), query.Project(query.Lower(email)))
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, query.CountAll(), query.Lower(email))
 	require.NoError(t, err)
 	require.NoError(t, grouped.Validate())
 }
@@ -767,7 +767,7 @@ func TestFuncValidatesEscapeHatchName(t *testing.T) {
 	email, err := users.Column("email")
 	require.NoError(t, err)
 
-	statement, err := query.NewSelect(users, query.Project(query.Func("jsonb_path_query", email, query.Bind("$.a"))).As("path"))
+	statement, err := query.NewSelect(users, query.Func("jsonb_path_query", email, query.Bind("$.a")).As("path"))
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
 
@@ -779,11 +779,11 @@ func TestFuncValidatesEscapeHatchName(t *testing.T) {
 	// Aggregates has to agree with the placement rule validation just applied.
 	require.False(t, query.Func("SUM", userID).Aggregates())
 
-	_, err = query.NewSelect(users, query.Project(query.Func("bad-name", userID)))
+	_, err = query.NewSelect(users, query.Func("bad-name", userID))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `invalid function name "bad-name"`)
 
-	_, err = query.NewSelect(users, query.Project(query.Func("", userID)))
+	_, err = query.NewSelect(users, query.Func("", userID))
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `invalid function name ""`)
 }
@@ -802,7 +802,7 @@ func TestSelectGroupsAndFilters(t *testing.T) {
 
 	grouped, err := query.NewGroupedSelect(users, []query.Expression{email},
 		email,
-		query.Project(query.CountAll()).As("total"),
+		query.CountAll().As("total"),
 	)
 	require.NoError(t, err)
 	require.Nil(t, grouped.Having())
@@ -812,7 +812,7 @@ func TestSelectGroupsAndFilters(t *testing.T) {
 	keys[0] = nil
 	require.Equal(t, []query.Expression{email}, grouped.GroupBy(), "mutating the returned slice must not change the statement")
 
-	aggregateOnly, err := query.NewSelect(users, query.Project(query.CountAll()))
+	aggregateOnly, err := query.NewSelect(users, query.CountAll())
 	require.NoError(t, err)
 	refined, err := aggregateOnly.WithGroupBy(userID)
 	require.NoError(t, err)
@@ -845,7 +845,7 @@ func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
 
 	grouped, err := query.NewJoinedSelect(users, []query.Join{join}, []query.Expression{orderUserID},
 		orderUserID,
-		query.Project(query.CountAll()).As("total"),
+		query.CountAll().As("total"),
 	)
 	require.NoError(t, err)
 	require.Equal(t, []query.Expression{orderUserID}, grouped.GroupBy())
@@ -870,7 +870,7 @@ func TestJoinedSelectGroupsByJoinedColumn(t *testing.T) {
 
 	// Without the join the same grouping is refused, which is what attaching
 	// the joins afterwards amounted to.
-	_, err = query.NewJoinedSelect(users, nil, []query.Expression{orderUserID}, query.Project(query.CountAll()))
+	_, err = query.NewJoinedSelect(users, nil, []query.Expression{orderUserID}, query.CountAll())
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `references table "orders" outside the statement`)
 }
@@ -910,9 +910,9 @@ func TestSelectRejectsInvalidGrouping(t *testing.T) {
 	// leaves the statement ungrouped, so a mixed projection set is refused with
 	// the identical message NewSelect gives, rather than being silently
 	// accepted because the call went through the grouped constructor.
-	_, errFromNewSelect := query.NewSelect(users, userID, query.Project(query.CountAll()))
+	_, errFromNewSelect := query.NewSelect(users, userID, query.CountAll())
 	requireQueryValidationError(t, errFromNewSelect)
-	_, errFromEmptyGroup := query.NewGroupedSelect(users, nil, userID, query.Project(query.CountAll()))
+	_, errFromEmptyGroup := query.NewGroupedSelect(users, nil, userID, query.CountAll())
 	requireQueryValidationError(t, errFromEmptyGroup)
 	require.Equal(t, errFromNewSelect.Error(), errFromEmptyGroup.Error())
 }
@@ -939,7 +939,7 @@ func TestSelectRejectsInvalidHaving(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "requires a GROUP BY clause or a projection set that aggregates")
 
-	aggregateOnly, err := query.NewSelect(users, query.Project(query.CountAll()))
+	aggregateOnly, err := query.NewSelect(users, query.CountAll())
 	require.NoError(t, err)
 	_, err = aggregateOnly.WithHaving(userID)
 	requireQueryValidationError(t, err)
@@ -954,7 +954,7 @@ func TestSelectRejectsInvalidHaving(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, `calls aggregate function "MAX" inside another aggregate function`)
 
-	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, email, query.Project(query.CountAll()))
+	grouped, err := query.NewGroupedSelect(users, []query.Expression{email}, email, query.CountAll())
 	require.NoError(t, err)
 	withHaving, err := grouped.WithHaving(query.NotEqual(email, query.Bind("done")))
 	require.NoError(t, err)
@@ -972,7 +972,7 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 	// A grouped statement may mix a bare column with an aggregate.
 	statement, err := query.NewGroupedSelect(users, []query.Expression{email},
 		email,
-		query.Project(query.CountAll()).As("total"),
+		query.CountAll().As("total"),
 	)
 	require.NoError(t, err)
 	require.NoError(t, statement.Validate())
@@ -990,7 +990,7 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 	// HAVING over an aggregate needs no GROUP BY when the projection set
 	// aggregates and reads no column outside an aggregate, because that set is
 	// already one group.
-	aggregateOnly, err := query.NewSelect(users, query.Project(query.CountAll()))
+	aggregateOnly, err := query.NewSelect(users, query.CountAll())
 	require.NoError(t, err)
 	aggregateHaving, err := aggregateOnly.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
 	require.NoError(t, err)
@@ -999,7 +999,7 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 	// Not every projection in that set has to aggregate. A projection that
 	// reads no column, a bound value here, sits beside the aggregate and the
 	// set still counts as one group, so the HAVING stays legal.
-	besideBoundValue, err := query.NewSelect(users, query.Project(query.CountAll()), query.Project(query.Bind(7)))
+	besideBoundValue, err := query.NewSelect(users, query.CountAll(), query.Project(query.Bind(7)))
 	require.NoError(t, err)
 	boundValueHaving, err := besideBoundValue.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
 	require.NoError(t, err)
@@ -1022,12 +1022,12 @@ func TestSelectAcceptsSubqueriesInGroupedClauses(t *testing.T) {
 	require.NoError(t, err)
 	allAmount, err := allOrders.Column("amount")
 	require.NoError(t, err)
-	averageAmount, err := query.NewSelect(allOrders, query.Project(query.Avg(allAmount)))
+	averageAmount, err := query.NewSelect(allOrders, query.Avg(allAmount))
 	require.NoError(t, err)
 
 	// GROUP BY groups on whether each amount beats the average.
 	aboveAverage := query.GreaterThan(amount, query.Scalar(averageAmount))
-	grouped, err := query.NewGroupedSelect(orders, []query.Expression{aboveAverage}, query.Project(query.CountAll()))
+	grouped, err := query.NewGroupedSelect(orders, []query.Expression{aboveAverage}, query.CountAll())
 	require.NoError(t, err)
 	require.NoError(t, grouped.Validate())
 
@@ -1052,7 +1052,7 @@ func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
 
 	base, err := query.NewSelect(users, userID)
 	require.NoError(t, err)
-	aggregated, err := query.NewSelect(users, query.Project(query.CountAll()))
+	aggregated, err := query.NewSelect(users, query.CountAll())
 	require.NoError(t, err)
 
 	rejected := map[string]struct {
@@ -1075,7 +1075,7 @@ func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
 		},
 		"aggregate in a value list inside another aggregate": {
 			build: func() error {
-				_, err := query.NewSelect(users, query.Project(query.Max(query.In(userID, query.Count(email)))))
+				_, err := query.NewSelect(users, query.Max(query.In(userID, query.Count(email))))
 				return err
 			},
 			message: `calls aggregate function "COUNT" inside another aggregate function`,
@@ -1084,7 +1084,7 @@ func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
 			build: func() error {
 				_, err := query.NewSelect(users,
 					query.Project(query.In(email, query.Bind("ada@example.com"))),
-					query.Project(query.CountAll()),
+					query.CountAll(),
 				)
 				return err
 			},
@@ -1123,7 +1123,7 @@ func TestSelectJudgesAggregatesInsideMembership(t *testing.T) {
 		// A column read inside an aggregate is aggregated, including one the
 		// aggregate reaches through a membership test.
 		"membership inside an aggregate projection": func() error {
-			_, err := query.NewSelect(users, query.Project(query.Count(query.In(userID, query.Bind(1), query.Bind(2)))))
+			_, err := query.NewSelect(users, query.Count(query.In(userID, query.Bind(1), query.Bind(2))))
 			return err
 		},
 		// ORDER BY of an aggregate-only statement may call an aggregate, so a
@@ -1423,6 +1423,7 @@ func TestSelectRejectsSharedNameAddedByWithJoin(t *testing.T) {
 
 var (
 	_ query.Projection = query.ColumnRef{}
+	_ query.Projection = query.Function{}
 	_ query.Projection = query.ExpressionProjection{}
 )
 
@@ -1451,6 +1452,38 @@ func TestBareColumnRefIsAProjection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, wrapped.Projections()[0].ProjectedExpression(), bare.Projections()[0].ProjectedExpression())
 	require.Equal(t, wrapped.Projections()[1].ResultAlias(), bare.Projections()[1].ResultAlias())
+}
+
+// TestBareFunctionIsAProjection pins the same for a function call, which is
+// what a SELECT list holds besides columns. An unaliased call reports an empty
+// result alias, and As names it without the call growing an alias of its own:
+// the alias lives in the ExpressionProjection As returns, so the receiver is
+// unchanged and stays usable as an argument to another call.
+func TestBareFunctionIsAProjection(t *testing.T) {
+	users := query.MustTableRef(usersTable())
+	email, err := users.Column("email")
+	require.NoError(t, err)
+
+	upper := query.Upper(email)
+	lower := query.Lower(email)
+
+	statement, err := query.NewSelect(users, upper, lower.As("lower_email"))
+	require.NoError(t, err)
+	require.NoError(t, statement.Validate())
+
+	projections := statement.Projections()
+	require.Len(t, projections, 2)
+	require.Equal(t, "", projections[0].ResultAlias())
+	require.Equal(t, query.Expression(upper), projections[0].ProjectedExpression())
+	require.Equal(t, "lower_email", projections[1].ResultAlias())
+	require.Equal(t, query.Expression(lower), projections[1].ProjectedExpression())
+
+	require.Equal(t, "", lower.ResultAlias(), "As must not give the receiver an alias")
+
+	wrapped, err := query.NewSelect(users, query.Project(upper), query.Project(lower).As("lower_email"))
+	require.NoError(t, err)
+	require.Equal(t, wrapped.Projections()[0].ProjectedExpression(), projections[0].ProjectedExpression())
+	require.Equal(t, wrapped.Projections()[1].ResultAlias(), projections[1].ResultAlias())
 }
 
 // TestSelectRejectsNilProjection pins that a nil Projection element reports a
