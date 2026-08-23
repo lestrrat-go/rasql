@@ -83,6 +83,7 @@ func TestShowPage(t *testing.T) {
 }
 
 // BEGIN(add_no_owner)
+
 func TestAddTaskWithNoOwner(t *testing.T) {
 	repository := &fakeRepository{}
 	form := url.Values{"project_id": {"1"}, "assignee_id": {""}, "title": {"Find an owner"}}

@@ -10,6 +10,7 @@ import (
 )
 
 // BEGIN(render_select)
+
 func Example_query_render_select() {
 	// The query and render packages need no database handle and no Go row
 	// type. A table description is the only input.

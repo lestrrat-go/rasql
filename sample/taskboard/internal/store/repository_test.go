@@ -15,6 +15,7 @@ import (
 )
 
 // BEGIN(open_tx)
+
 // openTx returns a repository over a transaction that is rolled back when
 // the test ends, and the rasql.DB it was built on for the tests that write a
 // row the repository has no method for. rasql.Handle is satisfied by *sql.Tx
@@ -66,6 +67,7 @@ func seed(ctx context.Context, t *testing.T, repository store.Repository) (proje
 }
 
 // BEGIN(add_task_due_on)
+
 // addTaskDueOn files one open task with a due date. AddTask leaves due_on
 // alone, so a test that needs one writes the row itself, through the same
 // generated table the repository uses and over the same rolled-back
@@ -189,6 +191,7 @@ func TestCountOverdue(t *testing.T) {
 }
 
 // BEGIN(overdue_boundary)
+
 // TestCountOverdueCountsATaskOnlyAfterItsDueDate pins the boundary that
 // CountOverdue's cast draws. due_on is a date and on is an instant, so the two
 // meet only once one of them is narrowed, and narrowing on is what keeps a

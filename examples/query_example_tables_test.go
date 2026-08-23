@@ -9,6 +9,7 @@ import (
 // UserRow is the Go type of one row. Each tag names the column that field
 // holds. A generated row type has the same shape.
 // BEGIN(row_type)
+
 type UserRow struct {
 	ID    int64  `rasql:"id"`
 	Email string `rasql:"email"`
@@ -20,6 +21,7 @@ type UserRow struct {
 // column, so a mistyped column name fails to compile instead of failing at
 // run time.
 // BEGIN(table_type)
+
 type UsersTable struct {
 	rasql.Table[UserRow]
 }
@@ -32,6 +34,7 @@ func (t UsersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "em
 // users keeps the row type and its table description together. The other
 // examples use it as if it came from generated source.
 // BEGIN(table_value)
+
 var users = UsersTable{rasql.MustTableOf[UserRow](schema.MustTableDef("users",
 	schema.Integer("id"),
 	schema.Text("email"),

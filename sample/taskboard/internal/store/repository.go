@@ -1,6 +1,7 @@
 package store
 
 // BEGIN(generate)
+
 // The generated files beside this one are rebuilt from the checked-in
 // migrations by scripts/generate.sh. The directive lives here because every
 // other file in this package is generated, and a regenerating run would
@@ -19,6 +20,7 @@ import (
 )
 
 // BEGIN(repository)
+
 // Repository reads and writes Taskboard's tables through rasql.
 type Repository struct {
 	db rasql.DB
@@ -32,6 +34,7 @@ func New(db rasql.DB) Repository {
 // END(repository)
 
 // BEGIN(opentask)
+
 // OpenTask is one line of the page's list: an open task, the project it
 // sits under, and the member who owns it. AssigneeName is nil when nobody
 // owns the task, and DueOn is nil when it has no due date.
@@ -90,6 +93,7 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 }
 
 // BEGIN(closetask)
+
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
@@ -106,6 +110,7 @@ func (repository Repository) CloseTask(ctx context.Context, taskID int64) error 
 // END(closetask)
 
 // BEGIN(allprojects)
+
 // AllProjects returns every project in id order, for the form's project list.
 func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, error) {
 	projects := Projects()
@@ -129,6 +134,7 @@ func (repository Repository) AllMembers(ctx context.Context) ([]MembersRow, erro
 }
 
 // BEGIN(countoverdue)
+
 // overdueRow decodes the single column OverdueCount selects.
 type overdueRow struct {
 	Overdue int64

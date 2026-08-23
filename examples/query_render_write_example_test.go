@@ -10,6 +10,7 @@ import (
 )
 
 // BEGIN(render_write)
+
 func Example_query_render_write() {
 	// A table description carries everything the DDL and the write
 	// statements need. No row type and no database handle appear here.
