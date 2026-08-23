@@ -1026,6 +1026,59 @@ func membershipStatement(t *testing.T) query.Select {
 	return statement
 }
 
+// TestRenderPlainValueMatchesBind pins that a query constructor binding a
+// plain Go value renders identically to the same call written with an
+// explicit Bind: same SQL text, same argument slice. The expression tree the
+// two forms build is identical, so this is the proof that the change is
+// render-neutral.
+func TestRenderPlainValueMatchesBind(t *testing.T) {
+	users, err := query.NewTableRef(schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+
+	plainStatement, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+	plainStatement, err = plainStatement.WithWhere(query.Equal(email, "ada@example.com"))
+	require.NoError(t, err)
+
+	boundStatement, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+	boundStatement, err = boundStatement.WithWhere(query.Equal(email, query.Bind("ada@example.com")))
+	require.NoError(t, err)
+
+	plainRendered, err := render.Select(dialect.PostgreSQL(), plainStatement)
+	require.NoError(t, err)
+	boundRendered, err := render.Select(dialect.PostgreSQL(), boundStatement)
+	require.NoError(t, err)
+	require.Equal(t, boundRendered.SQL(), plainRendered.SQL())
+	require.Equal(t, boundRendered.Args(), plainRendered.Args())
+
+	plainIn, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+	plainIn, err = plainIn.WithWhere(query.In(id, 1, 2, 3))
+	require.NoError(t, err)
+
+	boundIn, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+	boundIn, err = boundIn.WithWhere(query.In(id, query.Bind(1), query.Bind(2), query.Bind(3)))
+	require.NoError(t, err)
+
+	plainInRendered, err := render.Select(dialect.PostgreSQL(), plainIn)
+	require.NoError(t, err)
+	boundInRendered, err := render.Select(dialect.PostgreSQL(), boundIn)
+	require.NoError(t, err)
+	require.Equal(t, boundInRendered.SQL(), plainInRendered.SQL())
+	require.Equal(t, boundInRendered.Args(), plainInRendered.Args())
+}
+
 func selectStatement(t *testing.T) query.Select {
 	t.Helper()
 	users, err := query.NewTableRef(schema.TableDef{

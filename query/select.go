@@ -40,7 +40,9 @@ type ExpressionProjection struct {
 
 // Project selects expression. Use it for what is not a plain column: an
 // aggregate, a function call, a bound value, or a scalar subquery. A ColumnRef
-// is already a Projection and is passed on its own.
+// is already a Projection and is passed on its own. Project takes an
+// Expression, unlike a comparison or a membership test, so a plain Go value
+// projected on its own has to be wrapped with Bind here.
 func Project(expression Expression) ExpressionProjection {
 	return ExpressionProjection{expression: expression}
 }

@@ -85,7 +85,12 @@ type Value struct {
 
 func (Value) expression() {}
 
-// Bind creates a bound SQL argument expression.
+// Bind creates a bound SQL argument expression. A comparison, a membership
+// test, Call, Func, and Coalesce bind a plain Go value automatically, so most
+// callers never write Bind directly; reach for it explicitly for a slot that
+// still takes an Expression — Project, an And/Or operand, an Asc/Desc
+// ordering key, or a GROUP BY key — and to say "treat this as data" about a
+// value that happens to satisfy Expression itself. Bind(nil) is a bound NULL.
 func Bind(value any) Value {
 	return Value{value: value}
 }
@@ -93,6 +98,29 @@ func Bind(value any) Value {
 // Argument returns the value supplied to Bind.
 func (v Value) Argument() any {
 	return v.value
+}
+
+// operand returns value as an expression. An Expression built by this package
+// is used as it stands; anything else is bound as a parameter, so a caller
+// writes Equal(column, "ada@example.com") instead of
+// Equal(column, Bind("ada@example.com")). A value that is already an
+// Expression is never wrapped a second time.
+func operand(value any) Expression {
+	if expression, ok := value.(Expression); ok {
+		return expression
+	}
+	return Bind(value)
+}
+
+// operands is operand over a variadic or slice argument. It always returns a
+// new slice, so a caller's later write to values cannot reach inside a built
+// expression.
+func operands(values []any) []Expression {
+	converted := make([]Expression, len(values))
+	for i, value := range values {
+		converted[i] = operand(value)
+	}
+	return converted
 }
 
 // BinaryOperator is an operator with a left and right expression.
@@ -117,43 +145,60 @@ type Binary struct {
 
 func (Binary) expression() {}
 
-// Compare combines left and right with operator.
-func Compare(left Expression, operator BinaryOperator, right Expression) Binary {
-	return Binary{left: left, operator: operator, right: right}
+// Compare combines left and right with operator. Either operand may be a
+// plain Go value, which is bound the way Bind would bind it; an operand that
+// is already an Expression is used as it stands. nil binds as NULL, so
+// Compare(left, OperatorEqual, nil) never matches a row — use IsNull to test
+// for NULL.
+func Compare(left any, operator BinaryOperator, right any) Binary {
+	return Binary{left: operand(left), operator: operator, right: operand(right)}
 }
 
-// Equal compares left and right for equality.
-func Equal(left Expression, right Expression) Binary {
+// Equal compares left and right for equality. Either operand may be a plain
+// Go value, which is bound; nil binds as NULL, so IsNull is what tests for
+// NULL.
+func Equal(left any, right any) Binary {
 	return Compare(left, OperatorEqual, right)
 }
 
-// NotEqual compares left and right for inequality.
-func NotEqual(left Expression, right Expression) Binary {
+// NotEqual compares left and right for inequality. Either operand may be a
+// plain Go value, which is bound; nil binds as NULL, so IsNull is what tests
+// for NULL.
+func NotEqual(left any, right any) Binary {
 	return Compare(left, OperatorNotEqual, right)
 }
 
-// GreaterThan compares left and right.
-func GreaterThan(left Expression, right Expression) Binary {
+// GreaterThan compares left and right. Either operand may be a plain Go
+// value, which is bound; nil binds as NULL, so IsNull is what tests for
+// NULL.
+func GreaterThan(left any, right any) Binary {
 	return Compare(left, OperatorGreaterThan, right)
 }
 
-// GreaterThanOrEqual compares left and right.
-func GreaterThanOrEqual(left Expression, right Expression) Binary {
+// GreaterThanOrEqual compares left and right. Either operand may be a plain
+// Go value, which is bound; nil binds as NULL, so IsNull is what tests for
+// NULL.
+func GreaterThanOrEqual(left any, right any) Binary {
 	return Compare(left, OperatorGreaterThanOrEqual, right)
 }
 
-// LessThan compares left and right.
-func LessThan(left Expression, right Expression) Binary {
+// LessThan compares left and right. Either operand may be a plain Go value,
+// which is bound; nil binds as NULL, so IsNull is what tests for NULL.
+func LessThan(left any, right any) Binary {
 	return Compare(left, OperatorLessThan, right)
 }
 
-// LessThanOrEqual compares left and right.
-func LessThanOrEqual(left Expression, right Expression) Binary {
+// LessThanOrEqual compares left and right. Either operand may be a plain Go
+// value, which is bound; nil binds as NULL, so IsNull is what tests for
+// NULL.
+func LessThanOrEqual(left any, right any) Binary {
 	return Compare(left, OperatorLessThanOrEqual, right)
 }
 
-// Like compares left and right with SQL LIKE.
-func Like(left Expression, right Expression) Binary {
+// Like compares left and right with SQL LIKE. Either operand may be a plain
+// Go value, which is bound; nil binds as NULL, so IsNull is what tests for
+// NULL.
+func Like(left any, right any) Binary {
 	return Compare(left, OperatorLike, right)
 }
 
@@ -265,27 +310,30 @@ type Membership struct {
 func (Membership) expression() {}
 
 // In tests whether expression equals one of values.
-// It renders as expression IN (…). The value list takes expressions, so a column
-// or a computed operand is accepted as deliberately as a bound value. Each Bind
-// value renders as its own placeholder and costs one argument, while a column
-// renders as a quoted identifier and costs none. Statement validation rejects an
-// empty value list, because IN () is not valid SQL in any supported dialect, and
-// rejects a Subquery placed among the values; use InSelect for
-// expression IN (SELECT …).
-func In(expression Expression, values ...Expression) Membership {
-	return Membership{expr: expression, values: append([]Expression(nil), values...)}
+// It renders as expression IN (…). Each argument that is not itself an
+// Expression is bound and costs one parameter, the same as passing it to
+// Bind; a column argument renders as a quoted identifier and costs none. A
+// slice argument is bound whole as a single parameter and is never expanded
+// — convert a []T to individual arguments element by element when each
+// element should be its own placeholder. Statement validation rejects an
+// empty value list, because IN () is not valid SQL in any supported dialect,
+// and rejects a Subquery placed among the values; use InSelect for
+// expression IN (SELECT …), which also fits a large set within the dialect's
+// parameter limit.
+func In(expression any, values ...any) Membership {
+	return Membership{expr: operand(expression), values: operands(values)}
 }
 
 // NotIn tests whether expression differs from every one of values.
-// It renders as expression NOT IN (…) and follows the same rules as In,
-// including the rejection of an empty value list and of a Subquery among the
-// values by statement validation; use NotInSelect for
+// It renders as expression NOT IN (…) and follows the same argument-binding
+// rules as In, including the rejection of an empty value list and of a
+// Subquery among the values by statement validation; use NotInSelect for
 // expression NOT IN (SELECT …). A NULL among values never makes the test true:
 // it is false when a non-NULL value equals expression, and unknown otherwise. A
 // WHERE clause keeps neither, so a NOT IN over a list that may contain NULL
 // matches no rows at all.
-func NotIn(expression Expression, values ...Expression) Membership {
-	return Membership{expr: expression, values: append([]Expression(nil), values...), not: true}
+func NotIn(expression any, values ...any) Membership {
+	return Membership{expr: operand(expression), values: operands(values), not: true}
 }
 
 // InSelect tests whether expression equals a value the statement returns.
@@ -293,16 +341,16 @@ func NotIn(expression Expression, values ...Expression) Membership {
 // expression, which statement validation checks. Unlike In, it costs no argument
 // per candidate value, so a set of any size fits within the dialect's parameter
 // limit.
-func InSelect(expression Expression, statement Select) Membership {
-	return Membership{expr: expression, subquery: Scalar(statement), hasSubquery: true}
+func InSelect(expression any, statement Select) Membership {
+	return Membership{expr: operand(expression), subquery: Scalar(statement), hasSubquery: true}
 }
 
 // NotInSelect tests whether expression differs from every value the statement
 // returns. It renders as expression NOT IN (SELECT …) and follows the same rules
 // as InSelect. A NULL among the statement's results never makes the test true,
 // so a NOT IN over a statement that may return NULL matches no rows at all.
-func NotInSelect(expression Expression, statement Select) Membership {
-	return Membership{expr: expression, subquery: Scalar(statement), hasSubquery: true, not: true}
+func NotInSelect(expression any, statement Select) Membership {
+	return Membership{expr: operand(expression), subquery: Scalar(statement), hasSubquery: true, not: true}
 }
 
 // Expression returns the expression being tested.
@@ -399,10 +447,12 @@ type Function struct {
 
 func (Function) expression() {}
 
-// Call applies name to arguments. Validation rejects a name that is not one of
-// the FunctionName constants, so a function name never reaches SQL unchecked.
-func Call(name FunctionName, arguments ...Expression) Function {
-	return Function{name: name, arguments: append([]Expression(nil), arguments...)}
+// Call applies name to arguments. An argument that is not itself an
+// Expression is bound the way Bind would bind it. Validation rejects a name
+// that is not one of the FunctionName constants, so a function name never
+// reaches SQL unchecked.
+func Call(name FunctionName, arguments ...any) Function {
+	return Function{name: name, arguments: operands(arguments)}
 }
 
 // Func calls the SQL function named name on arguments. It is the escape hatch
@@ -418,17 +468,17 @@ func Call(name FunctionName, arguments ...Expression) Function {
 // PostgreSQL, MySQL, and SQLite. Portability is entirely the caller's
 // responsibility; prefer Call with a FunctionName constant, or one of
 // Coalesce, Lower, Upper, and Abs, whenever the function is one of them.
-// Every argument still goes through the ordinary expression nodes, so a value
-// passed with Bind still travels as a placeholder rather than as SQL text —
-// only the function's own name reaches SQL unescaped, and only after
-// validation has confirmed it is a legal identifier. A call built with Func
-// is always treated as scalar: it is legal wherever any expression is, and it
-// is never subject to the aggregate placement rules, even when name happens
-// to match an aggregate this package curates, such as "SUM". WithDistinct is
-// the one thing it does not share with a curated scalar call, and WithDistinct
+// Every argument still goes through the ordinary expression nodes, so a
+// bound value still travels as a placeholder rather than as SQL text — only
+// the function's own name reaches SQL unescaped, and only after validation
+// has confirmed it is a legal identifier. A call built with Func is always
+// treated as scalar: it is legal wherever any expression is, and it is never
+// subject to the aggregate placement rules, even when name happens to match
+// an aggregate this package curates, such as "SUM". WithDistinct is the one
+// thing it does not share with a curated scalar call, and WithDistinct
 // states what it does there.
-func Func(name string, arguments ...Expression) Function {
-	return Function{name: FunctionName(name), arguments: append([]Expression(nil), arguments...), unchecked: true}
+func Func(name string, arguments ...any) Function {
+	return Function{name: FunctionName(name), arguments: operands(arguments), unchecked: true}
 }
 
 // Count counts the non-NULL values of expression. Use CountAll to count rows.
@@ -461,12 +511,13 @@ func Avg(expression Expression) Function {
 	return Call(FunctionAvg, expression)
 }
 
-// Coalesce returns the first of expressions that is not NULL. It takes at
-// least two expressions, because a one-argument COALESCE is not accepted by
-// every supported dialect.
+// Coalesce returns the first of expressions that is not NULL. An expression
+// that is not itself an Expression is bound the way Bind would bind it. It
+// takes at least two expressions, because a one-argument COALESCE is not
+// accepted by every supported dialect.
 //
-// On MySQL, coalescing a decimal column against a value bound with Bind
-// changes the scale the result decodes at. MySQL fixes the result type while
+// On MySQL, coalescing a decimal column against a bound value changes the
+// scale the result decodes at. MySQL fixes the result type while
 // it prepares the statement, and a placeholder carries no scale of its own at
 // that point, so the whole call becomes the widest decimal the server has,
 // DECIMAL(65,30), instead of the column's declared type: a DECIMAL(19,4)
@@ -487,7 +538,7 @@ func Avg(expression Expression) Function {
 // widens. The rule is about which argument the result takes its type from, not
 // about the function name. A function that returns a string or an integer,
 // such as CONCAT, has no decimal result scale to widen and is unaffected.
-func Coalesce(expressions ...Expression) Function {
+func Coalesce(expressions ...any) Function {
 	return Call(FunctionCoalesce, expressions...)
 }
 

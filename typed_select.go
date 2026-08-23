@@ -122,7 +122,7 @@ func (b TypedSelectBuilder[T]) Where(expression query.Expression) TypedSelectBui
 // Repeated calls combine with AND in the order they were made, including calls to Where.
 // Build and Query reject a column whose table is not part of the statement.
 func (b TypedSelectBuilder[T]) WhereEqual(column query.ColumnRef, value any) TypedSelectBuilder[T] {
-	b.builder = b.builder.Where(query.Equal(column, query.Bind(value)))
+	b.builder = b.builder.Where(query.Equal(column, value))
 	return b
 }
 
@@ -134,11 +134,7 @@ func (b TypedSelectBuilder[T]) WhereIn(column query.ColumnRef, values ...any) Ty
 	if len(values) == 0 {
 		return b.withError(fmt.Errorf("rasql: IN requires at least one value"))
 	}
-	binds := make([]query.Expression, len(values))
-	for i, value := range values {
-		binds[i] = query.Bind(value)
-	}
-	b.builder = b.builder.Where(query.In(column, binds...))
+	b.builder = b.builder.Where(query.In(column, values...))
 	return b
 }
 

@@ -98,7 +98,7 @@ type Join = query.Join
 
 // Equal compares left and right for equality. It is query.Equal under a name
 // generated code can reach without importing query.
-func Equal(left query.Expression, right query.Expression) query.Binary {
+func Equal(left any, right any) query.Binary {
 	return query.Equal(left, right)
 }
 

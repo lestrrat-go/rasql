@@ -103,7 +103,7 @@ func (b SelectBuilder) WhereEqual(columnName string, value any) SelectBuilder {
 	if err := column.Validate(); err != nil {
 		return b.withError(err)
 	}
-	b.predicates = append(b.predicates, query.Equal(column, query.Bind(value)))
+	b.predicates = append(b.predicates, query.Equal(column, value))
 	return b
 }
 
@@ -123,11 +123,7 @@ func (b SelectBuilder) WhereIn(columnName string, values ...any) SelectBuilder {
 	if err := column.Validate(); err != nil {
 		return b.withError(err)
 	}
-	binds := make([]query.Expression, len(values))
-	for i, value := range values {
-		binds[i] = query.Bind(value)
-	}
-	b.predicates = append(b.predicates, query.In(column, binds...))
+	b.predicates = append(b.predicates, query.In(column, values...))
 	return b
 }
 

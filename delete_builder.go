@@ -65,7 +65,7 @@ func (b DeleteBuilder) WhereEqual(column query.ColumnRef, value any) DeleteBuild
 	if b.err != nil {
 		return b
 	}
-	return b.Where(query.Equal(column, query.Bind(value)))
+	return b.Where(query.Equal(column, value))
 }
 
 // WhereIn adds an IN predicate for column and binds each value.
@@ -80,11 +80,7 @@ func (b DeleteBuilder) WhereIn(column query.ColumnRef, values ...any) DeleteBuil
 	if len(values) == 0 {
 		return b.withError(fmt.Errorf("rasql: IN requires at least one value"))
 	}
-	binds := make([]query.Expression, len(values))
-	for i, value := range values {
-		binds[i] = query.Bind(value)
-	}
-	return b.Where(query.In(column, binds...))
+	return b.Where(query.In(column, values...))
 }
 
 // AllowAll states that the statement is meant to delete every row of the target table,
