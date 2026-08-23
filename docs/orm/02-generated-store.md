@@ -230,10 +230,10 @@ The generated function returns a parameterized statement:
 
 package store
 
-import rasqlstmt "github.com/lestrrat-go/rasql/stmt"
+import "github.com/lestrrat-go/rasql/stmt"
 
-func UserByEmail(email any) rasqlstmt.Statement {
-	return rasqlstmt.New("SELECT id, email FROM users WHERE email = $1\n", email)
+func UserByEmail(email any) stmt.Statement {
+	return stmt.New("SELECT id, email FROM users WHERE email = $1\n", email)
 }
 ```
 source: [examples/store/user_by_email_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/user_by_email_gen.go)
@@ -258,10 +258,10 @@ source: [examples/store/user_by_id.sql](https://github.com/lestrrat-go/rasql/blo
 
 package store
 
-import rasqlstmt "github.com/lestrrat-go/rasql/stmt"
+import "github.com/lestrrat-go/rasql/stmt"
 
-func UserByID(id int64) rasqlstmt.Statement {
-	return rasqlstmt.New("SELECT id, email FROM users WHERE id = $1\n", id)
+func UserByID(id int64) stmt.Statement {
+	return stmt.New("SELECT id, email FROM users WHERE id = $1\n", id)
 }
 ```
 source: [examples/store/user_by_id_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/user_by_id_gen.go)
