@@ -10,6 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -537,7 +538,7 @@ func TestParseMatchesIndexOwnerAccordingToLowerCaseTableNames(t *testing.T) {
 	source := "CREATE TABLE `Members` (id bigint PRIMARY KEY);\nCREATE INDEX member_idx ON members (id);"
 
 	caseSensitive := mysql.New()
-	_, err := caseSensitive.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
+	_, err := caseSensitive.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(source)}})
 	require.ErrorContains(t, err, "missing table members")
 
 	for _, tableNames := range []mysql.LowerCaseTableNames{
@@ -546,7 +547,7 @@ func TestParseMatchesIndexOwnerAccordingToLowerCaseTableNames(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("lower_case_table_names=%d", tableNames), func(t *testing.T) {
 			analyzer := mysql.NewWithLowerCaseTableNames(tableNames)
-			_, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
+			_, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(source)}})
 			require.NoError(t, err)
 		})
 	}
@@ -554,7 +555,7 @@ func TestParseMatchesIndexOwnerAccordingToLowerCaseTableNames(t *testing.T) {
 
 func parseSnapshot(t *testing.T, analyzer mysql.Analyzer, source string) diff.Snapshot {
 	t.Helper()
-	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
+	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(source)}})
 	require.NoError(t, err)
 	return snapshot
 }

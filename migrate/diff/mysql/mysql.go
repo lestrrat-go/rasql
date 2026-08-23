@@ -86,7 +86,7 @@ func (a Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		lowerCaseTableNames: a.lowerCaseTableNames,
 	}
 	for _, source := range sources {
-		parsed, err := mysqlquery.Parse(source.SQL)
+		parsed, err := mysqlquery.Parse(string(source.SQL))
 		if err != nil {
 			return nil, fmt.Errorf("mysql schema source %q: %w", source.Path, err)
 		}

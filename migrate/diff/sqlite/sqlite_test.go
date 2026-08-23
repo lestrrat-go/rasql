@@ -7,6 +7,7 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -440,7 +441,7 @@ func TestParseAcceptsQualifiedIndexOwner(t *testing.T) {
 
 func parseSnapshot(t *testing.T, analyzer sqlite.Analyzer, source string) diff.Snapshot {
 	t.Helper()
-	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: source}})
+	snapshot, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text(source)}})
 	require.NoError(t, err)
 	return snapshot
 }

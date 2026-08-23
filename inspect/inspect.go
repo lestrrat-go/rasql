@@ -24,6 +24,7 @@ import (
 	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 // ErrTableNotFound is the sentinel wrapped by every [TableNotFoundError], so
@@ -1838,7 +1839,7 @@ func sqliteUniqueConstraints(statement *sqlitequery.CreateTableStatement, tableN
 			}
 			name := expression.Name[0].Name
 			columns[index] = name
-			key := schema.IndexKeyDef{Expression: name, Descending: column.Direction == sqlitequery.SortDescending}
+			key := schema.IndexKeyDef{Expression: sqltext.Text(name), Descending: column.Direction == sqlitequery.SortDescending}
 			if collation := sqliteIdentifierName(column.Collation); !strings.EqualFold(collation, "BINARY") {
 				key.Collation = collation
 			}
@@ -1901,7 +1902,7 @@ const (
 // "AS (expr)" with neither VIRTUAL nor STORED defaults to VIRTUAL, and
 // sqlitequery's parser leaves that default unspelled rather than filling it
 // in.
-func sqliteGeneratedExpression(statement *sqlitequery.CreateTableStatement, columnName string) (string, error) {
+func sqliteGeneratedExpression(statement *sqlitequery.CreateTableStatement, columnName string) (sqltext.Text, error) {
 	if statement == nil {
 		return "", nil
 	}
@@ -1949,7 +1950,11 @@ func sqliteChecks(statement *sqlitequery.CreateTableStatement, tableName string)
 	return checks, nil
 }
 
-func sqliteExpressionSQL(expression sqlitequery.Expression) (string, error) {
+// sqliteExpressionSQL returns the SQL text of expression, branded as
+// sqltext.Text: it reads out of a parsed SQLite AST, one of the two
+// boundaries where a runtime string vouches for itself as SQL text (the
+// other is the file loaders).
+func sqliteExpressionSQL(expression sqlitequery.Expression) (sqltext.Text, error) {
 	statement := &sqlitequery.CreateTableStatement{
 		Name:        sqlitequery.QualifiedName{{Name: "rasql_check"}},
 		Columns:     []sqlitequery.ColumnDefinition{{Name: sqlitequery.Identifier{Name: "value"}}},
@@ -1964,7 +1969,7 @@ func sqliteExpressionSQL(expression sqlitequery.Expression) (string, error) {
 	if !strings.HasPrefix(serialized, prefix) || !strings.HasSuffix(serialized, suffix) {
 		return "", fmt.Errorf("unexpected serialized CHECK shape %q", serialized)
 	}
-	return strings.TrimSuffix(strings.TrimPrefix(serialized, prefix), suffix), nil
+	return sqltext.Text(strings.TrimSuffix(strings.TrimPrefix(serialized, prefix), suffix)), nil
 }
 
 func sqliteIdentifierName(identifier *sqlitequery.Identifier) string {
@@ -2190,7 +2195,7 @@ type sqliteIndexKey struct {
 // already fetched it (a partial index does), or nil to fetch it lazily only
 // if an expression key is actually encountered, so a plain index never pays
 // for a second query.
-func (i Inspector) sqliteIndexKeys(ctx context.Context, databaseName, indexName string, definition *sqlitequery.CreateIndexStatement) ([]string, []string, []schema.IndexKeyDef, error) {
+func (i Inspector) sqliteIndexKeys(ctx context.Context, databaseName, indexName string, definition *sqlitequery.CreateIndexStatement) ([]string, []sqltext.Text, []schema.IndexKeyDef, error) {
 	query := sqliteQualifiedPragma(databaseName, "index_xinfo", indexName)
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
@@ -2237,7 +2242,7 @@ func (i Inspector) sqliteIndexKeys(ctx context.Context, databaseName, indexName 
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("inspect: SQLite index %q cannot be represented: serialize expression key: %w", indexName, err)
 		}
-		key.text = expression
+		key.text = string(expression)
 		key.isExpression = true
 		keys = append(keys, key)
 		keyPosition++
@@ -2251,7 +2256,7 @@ func (i Inspector) sqliteIndexKeys(ctx context.Context, databaseName, indexName 
 	if needsKeyDetail {
 		keyDefs := make([]schema.IndexKeyDef, len(keys))
 		for index, key := range keys {
-			keyDefs[index] = schema.IndexKeyDef{Expression: key.text, Descending: key.descending, Collation: key.collation}
+			keyDefs[index] = schema.IndexKeyDef{Expression: sqltext.Text(key.text), Descending: key.descending, Collation: key.collation}
 		}
 		return nil, nil, keyDefs, nil
 	}
@@ -2264,7 +2269,11 @@ func (i Inspector) sqliteIndexKeys(ctx context.Context, databaseName, indexName 
 		}
 	}
 	if hasExpression {
-		return nil, texts, nil, nil
+		expressions := make([]sqltext.Text, len(texts))
+		for index, value := range texts {
+			expressions[index] = sqltext.Text(value)
+		}
+		return nil, expressions, nil, nil
 	}
 	return texts, nil, nil, nil
 }
@@ -2403,7 +2412,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 				if !generationExpression.Valid || generationExpression.String == "" {
 					return nil, fmt.Errorf("inspect: column %q: generated column has no generation_expression to record", name)
 				}
-				column.GeneratedExpression = generationExpression.String
+				column.GeneratedExpression = sqltext.Text(generationExpression.String)
 				column.GeneratedStorage = storage
 			}
 			if postgreSQLIsIdentity == "YES" {
@@ -2418,7 +2427,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 				if !generationExpression.Valid || generationExpression.String == "" {
 					return nil, fmt.Errorf("inspect: column %q: generated column has no generation_expression to record", name)
 				}
-				column.GeneratedExpression = generationExpression.String
+				column.GeneratedExpression = sqltext.Text(generationExpression.String)
 				column.GeneratedStorage = storage
 			}
 			if mysqlAutoIncrement(mysqlExtra) {
@@ -2622,7 +2631,7 @@ func (i Inspector) readChecks(ctx context.Context, query string, argument any) (
 		}
 		checks = append(checks, schema.CheckDef{
 			Name:        name,
-			Expression:  expression,
+			Expression:  sqltext.Text(expression),
 			NoInherit:   noInherit,
 			NotValid:    !validated,
 			NotEnforced: !enforced,
@@ -2666,12 +2675,12 @@ func (i Inspector) readExclusionConstraints(ctx context.Context, query string, a
 			exclusions = append(exclusions, schema.ExclusionDef{
 				Name:       name,
 				Method:     exclusionMethod,
-				Predicate:  predicate.String,
+				Predicate:  sqltext.Text(predicate.String),
 				Deferrable: postgreSQLDeferrability(deferrable, initiallyDeferred),
 			})
 		}
 		last := &exclusions[len(exclusions)-1]
-		last.Elements = append(last.Elements, schema.ExclusionElementDef{Expression: expression, Operator: operator})
+		last.Elements = append(last.Elements, schema.ExclusionElementDef{Expression: sqltext.Text(expression), Operator: operator})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate exclusion constraints: %w", err)
@@ -2820,7 +2829,7 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 				Name:              name,
 				Unique:            unique,
 				Method:            method,
-				Predicate:         predicate,
+				Predicate:         sqltext.Text(predicate),
 				IncludeColumns:    includeColumns,
 				Invisible:         invisible,
 				NotValid:          notValid,
@@ -2857,7 +2866,7 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 			keys := make([]schema.IndexKeyDef, len(building.keys))
 			for keyIndex, key := range building.keys {
 				keys[keyIndex] = schema.IndexKeyDef{
-					Expression:    key.text,
+					Expression:    sqltext.Text(key.text),
 					Descending:    key.descending,
 					Collation:     key.collation,
 					OperatorClass: key.operatorClass,
@@ -2867,9 +2876,9 @@ func (i Inspector) readIndexes(ctx context.Context, query string, argument any, 
 			}
 			def.Keys = keys
 		case hasExpression:
-			texts := make([]string, len(building.keys))
+			texts := make([]sqltext.Text, len(building.keys))
 			for keyIndex, key := range building.keys {
-				texts[keyIndex] = key.text
+				texts[keyIndex] = sqltext.Text(key.text)
 			}
 			def.Expressions = texts
 		default:
@@ -3499,16 +3508,19 @@ func validDigitRun(value string) bool {
 	return true
 }
 
-func text(value any) string {
+// text reads value out of a live catalog row and brands it sqltext.Text: its
+// only two callers both feed a column's DEFAULT expression, read straight
+// out of information_schema or a SQLite PRAGMA.
+func text(value any) sqltext.Text {
 	switch value := value.(type) {
 	case nil:
 		return ""
 	case string:
-		return value
+		return sqltext.Text(value)
 	case []byte:
-		return string(value)
+		return sqltext.Text(value)
 	default:
-		return fmt.Sprint(value)
+		return sqltext.Text(fmt.Sprint(value))
 	}
 }
 

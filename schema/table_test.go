@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,7 +44,7 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	require.Equal(t, "id", table.PrimaryKey[0])
 	require.Equal(t, "customer_id", table.Indexes[0].Columns[0])
 	require.Equal(t, "id", table.ForeignKeys[0].ReferencedColumns[0])
-	require.Equal(t, "customer_id", table.ExclusionConstraints[0].Elements[0].Expression)
+	require.Equal(t, sqltext.Text("customer_id"), table.ExclusionConstraints[0].Elements[0].Expression)
 	require.Equal(t, "customer_id", table.Relationships[0].Columns[0])
 
 	amount, ok := table.Column("amount")
@@ -164,7 +165,7 @@ func TestTableCloneEmptyContainersStayNonNil(t *testing.T) {
 			Indexes: []schema.IndexDef{{
 				Name:              "orders_id_idx",
 				Columns:           []string{},
-				Expressions:       []string{},
+				Expressions:       []sqltext.Text{},
 				IncludeColumns:    []string{},
 				Keys:              []schema.IndexKeyDef{},
 				StorageParameters: map[string]string{},
@@ -392,7 +393,7 @@ func containerTableDef() schema.TableDef {
 		Indexes: []schema.IndexDef{{
 			Name:              "orders_customer_id_idx",
 			Columns:           []string{"customer_id"},
-			Expressions:       []string{"lower(email)"},
+			Expressions:       []sqltext.Text{"lower(email)"},
 			IncludeColumns:    []string{"id"},
 			Keys:              []schema.IndexKeyDef{{Expression: "customer_id"}},
 			StorageParameters: map[string]string{"fillfactor": "70"},
@@ -924,7 +925,7 @@ func TestTableValidateAcceptsExpressionIndex(t *testing.T) {
 		PrimaryKey: []string{"id"},
 		Indexes: []schema.IndexDef{{
 			Name:        "documents_lower_title_idx",
-			Expressions: []string{"lower(title)", "created_at"},
+			Expressions: []sqltext.Text{"lower(title)", "created_at"},
 		}},
 	}
 
@@ -946,7 +947,7 @@ func TestTableValidateRejectsIndexWithBothColumnsAndExpressions(t *testing.T) {
 		Indexes: []schema.IndexDef{{
 			Name:        "documents_bad_idx",
 			Columns:     []string{"title"},
-			Expressions: []string{"lower(title)"},
+			Expressions: []sqltext.Text{"lower(title)"},
 		}},
 	}
 
@@ -1037,7 +1038,7 @@ func TestTableValidateRejectsIndexWithExpressionsAndKeys(t *testing.T) {
 		PrimaryKey: []string{"id"},
 		Indexes: []schema.IndexDef{{
 			Name:        "documents_bad_idx",
-			Expressions: []string{"lower(title)"},
+			Expressions: []sqltext.Text{"lower(title)"},
 			Keys:        []schema.IndexKeyDef{{Expression: "lower(title)"}},
 		}},
 	}
@@ -1570,6 +1571,62 @@ func TestColumnIdentityJSON(t *testing.T) {
 	var noIdentity schema.TableDef
 	require.NoError(t, json.Unmarshal([]byte(`{"Name":"events","Columns":[{"Name":"id","Type":{"Kind":"integer"}}],"PrimaryKey":["id"]}`), &noIdentity))
 	require.Equal(t, schema.IdentityGeneration(""), noIdentity.Columns[0].Identity)
+}
+
+// TestBrandedSQLTextFieldsJSONRoundTrip pins the wire form of every
+// sqltext.Text field that carries a SQL expression rather than a plain
+// name: CheckDef.Expression, IndexDef.Predicate, IndexKeyDef.Expression,
+// ExclusionDef.Predicate, and ExclusionElementDef.Expression. A defined
+// string type marshals through encoding/json exactly like string, but this
+// is the only test that actually proves it for these five fields rather
+// than assuming it from ColumnDef.Default's marshaller alone.
+func TestBrandedSQLTextFieldsJSONRoundTrip(t *testing.T) {
+	table := schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "customer_id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Checks: []schema.CheckDef{
+			{Name: "chk_amount", Expression: "amount is not null"},
+		},
+		Indexes: []schema.IndexDef{{
+			Name:      "idx_active_customer",
+			Predicate: "amount is not null",
+			Keys:      []schema.IndexKeyDef{{Expression: "lower(customer_id)"}},
+		}},
+		ExclusionConstraints: []schema.ExclusionDef{{
+			Name:      "excl_customer_overlap",
+			Elements:  []schema.ExclusionElementDef{{Expression: "customer_id", Operator: "="}},
+			Predicate: "amount is not null",
+		}},
+	}
+	require.NoError(t, table.Validate())
+
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"CheckDef.Expression", `"Expression":"amount is not null"`},
+		{"IndexDef.Predicate", `"Predicate":"amount is not null"`},
+		{"IndexKeyDef.Expression", `"Expression":"lower(customer_id)"`},
+		{"ExclusionDef.Predicate", `"Predicate":"amount is not null"`},
+		{"ExclusionElementDef.Expression", `"Expression":"customer_id"`},
+	}
+
+	encoded, err := json.Marshal(table)
+	require.NoError(t, err)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			require.Contains(t, string(encoded), testCase.want)
+		})
+	}
+
+	var decoded schema.TableDef
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.Equal(t, table, decoded)
 }
 
 // TestRowNameJSON pins the snapshot form rasqlgen's -input reads: a

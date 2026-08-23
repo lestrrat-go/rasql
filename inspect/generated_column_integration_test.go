@@ -13,6 +13,7 @@ import (
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,8 +27,8 @@ import (
 // right assertion here -- these two constants are precisely the fact that
 // note exists to document.
 const (
-	postgreSQLNormalizedFahrenheitExpression = "(((celsius * 9) / 5) + 32)"
-	mysqlNormalizedFahrenheitExpression      = "(((`celsius` * 9) / 5) + 32)"
+	postgreSQLNormalizedFahrenheitExpression sqltext.Text = "(((celsius * 9) / 5) + 32)"
+	mysqlNormalizedFahrenheitExpression      sqltext.Text = "(((`celsius` * 9) / 5) + 32)"
 )
 
 // requireMentionsCelsius is the engine-neutral property both normalized
@@ -36,10 +37,10 @@ const (
 // around it. It supplements, rather than replaces, the exact per-engine
 // assertions: a property check alone would not catch a server silently
 // starting to report a different expression.
-func requireMentionsCelsius(t *testing.T, expression string) {
+func requireMentionsCelsius(t *testing.T, expression sqltext.Text) {
 	t.Helper()
 	require.NotEmpty(t, expression, "a generated column's expression must not be recorded as empty")
-	require.True(t, strings.Contains(expression, "celsius"), "expression %q must mention the celsius column it derives from", expression)
+	require.True(t, strings.Contains(string(expression), "celsius"), "expression %q must mention the celsius column it derives from", expression)
 }
 
 // postgreSQLLiveServerVersion reads the live server's server_version_num,

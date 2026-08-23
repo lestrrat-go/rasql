@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 // Migration is one ordered database change and the sources that undo it.
@@ -36,7 +38,7 @@ type Migration struct {
 // checksum. SQL must contain one database statement.
 type Statement struct {
 	Source string
-	SQL    string
+	SQL    sqltext.Text
 }
 
 // Validate reports whether m has a usable ID and SQL sources.
@@ -72,7 +74,7 @@ func (m Migration) validateStatements(statements []Statement) error {
 		if _, exists := sources[statement.Source]; exists {
 			return fmt.Errorf("migrate: migration %q contains duplicate SQL source %q", m.ID, statement.Source)
 		}
-		if strings.TrimSpace(statement.SQL) == "" {
+		if strings.TrimSpace(string(statement.SQL)) == "" {
 			return fmt.Errorf("migrate: migration %q SQL source %q is empty", m.ID, statement.Source)
 		}
 		sources[statement.Source] = struct{}{}

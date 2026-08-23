@@ -8,6 +8,8 @@ import (
 	"slices"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 // DecimalScale is the number of digits a DecimalType column keeps to the right
@@ -160,7 +162,7 @@ type ColumnDef struct {
 	Name     string
 	Type     ColumnType
 	Nullable bool
-	Default  string
+	Default  sqltext.Text
 
 	// GeneratedExpression is the expression a generated column computes,
 	// exactly as the server reports it, or empty for an ordinary column.
@@ -172,7 +174,7 @@ type ColumnDef struct {
 	// GeneratedStorage; Table.Validate rejects one stated without the
 	// other. See GeneratedStorage's own doc for what recording this fact
 	// currently means for rendering.
-	GeneratedExpression string `json:",omitempty"`
+	GeneratedExpression sqltext.Text `json:",omitempty"`
 
 	// GeneratedStorage names whether GeneratedExpression is stored or
 	// computed on read. See GeneratedStorage's own doc.
@@ -235,8 +237,8 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Name:                c.Name,
 		Type:                typeData,
 		Nullable:            c.Nullable,
-		Default:             c.Default,
-		GeneratedExpression: c.GeneratedExpression,
+		Default:             string(c.Default),
+		GeneratedExpression: string(c.GeneratedExpression),
 		GeneratedStorage:    c.GeneratedStorage,
 		Identity:            c.Identity,
 		Hidden:              c.Hidden,
@@ -267,8 +269,8 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Name:                wire.Name,
 		Type:                columnType,
 		Nullable:            wire.Nullable,
-		Default:             wire.Default,
-		GeneratedExpression: wire.GeneratedExpression,
+		Default:             sqltext.Text(wire.Default),
+		GeneratedExpression: sqltext.Text(wire.GeneratedExpression),
 		GeneratedStorage:    wire.GeneratedStorage,
 		Identity:            wire.Identity,
 		Hidden:              wire.Hidden,
@@ -441,7 +443,7 @@ func (u UniqueDef) Clone() UniqueDef {
 // Expression is a schema-level SQL expression and is rendered only by a DDL-capable dialect.
 type CheckDef struct {
 	Name       string
-	Expression string
+	Expression sqltext.Text
 
 	// NoInherit records a PostgreSQL check constraint declared NO
 	// INHERIT: a child table in an inheritance hierarchy neither
@@ -537,7 +539,7 @@ type IndexDef struct {
 	// TableDef.Validate accepts it, but render.CreateIndexes and the
 	// migrate diff-live path refuse to build DDL for one, because rasql
 	// does not yet know how to construct an expression key.
-	Expressions []string `json:",omitempty"`
+	Expressions []sqltext.Text `json:",omitempty"`
 
 	// Predicate is the WHERE-clause expression text of a partial index,
 	// exactly as the server reports it, or empty for a non-partial index.
@@ -553,7 +555,7 @@ type IndexDef struct {
 	// engine reported it, so rasql cannot rewrite the expression text for
 	// a different dialect: rendering a predicate read from one engine for
 	// another engine is the caller's own responsibility.
-	Predicate string `json:",omitempty"`
+	Predicate sqltext.Text `json:",omitempty"`
 
 	// IncludeColumns lists a PostgreSQL index's INCLUDE columns: columns
 	// carried by the index for covering reads without taking part in its
@@ -714,7 +716,7 @@ type IndexKeyDef struct {
 	// plain-column key, or expression text for an expression key. This is
 	// the same convention IndexDef.Expressions's elements use: a plain
 	// column is itself a valid SQL expression.
-	Expression string
+	Expression sqltext.Text
 
 	// Descending marks a key ordered DESC rather than the engine default,
 	// ASC. Its zero value, false, means ASC.
@@ -755,7 +757,7 @@ type ExclusionElementDef struct {
 	// it: a bare column name for a plain column element, or the element's
 	// expression text otherwise. This is the same convention
 	// IndexDef.Expressions uses for a mixed or expression index's keys.
-	Expression string
+	Expression sqltext.Text
 
 	// Operator is the name of the operator this element is checked with,
 	// exactly as the server reports it, such as "=" or "&&".
@@ -793,7 +795,7 @@ type ExclusionDef struct {
 	// exclusion constraint, exactly as the server reports it, or empty
 	// for a non-partial one. See IndexDef.Predicate for the same
 	// convention on a partial index.
-	Predicate string `json:",omitempty"`
+	Predicate sqltext.Text `json:",omitempty"`
 
 	// Deferrable names when the constraint is checked. See Deferrability's
 	// own doc for what its zero value means and what currently accepts it.

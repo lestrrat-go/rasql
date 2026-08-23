@@ -441,7 +441,7 @@ func writeRevertPlan(output io.Writer, plan []migrate.Migration) {
 			first = false
 			_, _ = fmt.Fprintf(output, "-- %s/%s\n", migration.ID, statement.Source)
 			_, _ = fmt.Fprint(output, statement.SQL)
-			if !strings.HasSuffix(statement.SQL, "\n") {
+			if !strings.HasSuffix(string(statement.SQL), "\n") {
 				_, _ = fmt.Fprintln(output)
 			}
 		}
@@ -631,7 +631,7 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 			first = false
 			_, _ = fmt.Fprintf(output, "-- %s/%s\n", migration.ID, statement.Source)
 			_, _ = fmt.Fprint(output, statement.SQL)
-			if !strings.HasSuffix(statement.SQL, "\n") {
+			if !strings.HasSuffix(string(statement.SQL), "\n") {
 				_, _ = fmt.Fprintln(output)
 			}
 		}

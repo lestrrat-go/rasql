@@ -1290,7 +1290,7 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		if check.NotEnforced {
 			return &UnsupportedCheckNotEnforcedError{Check: check.Name}
 		}
-		definition := "CHECK (" + check.Expression + ")"
+		definition := "CHECK (" + string(check.Expression) + ")"
 		if check.Name != "" {
 			name, err := r.quoteIdentifier(check.Name)
 			if err != nil {
@@ -1366,10 +1366,14 @@ func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef
 		return &UnsupportedIndexMethodError{Index: index.Name, Method: index.Method}
 	}
 	if index.Predicate != "" && !r.dialect.Supports(dialect.CapabilityPartialIndex) {
-		return &UnsupportedPartialIndexError{Index: index.Name, Predicate: index.Predicate, Dialect: r.dialect.Name()}
+		return &UnsupportedPartialIndexError{Index: index.Name, Predicate: string(index.Predicate), Dialect: r.dialect.Name()}
 	}
 	if len(index.Expressions) > 0 {
-		return &UnsupportedExpressionIndexError{Index: index.Name, Expressions: index.Expressions}
+		expressions := make([]string, len(index.Expressions))
+		for i, expression := range index.Expressions {
+			expressions[i] = string(expression)
+		}
+		return &UnsupportedExpressionIndexError{Index: index.Name, Expressions: expressions}
 	}
 	if len(index.IncludeColumns) > 0 {
 		return &UnsupportedIndexIncludeColumnsError{Index: index.Name, IncludeColumns: index.IncludeColumns}
@@ -1419,7 +1423,7 @@ func (r *renderer) writeCreateIndex(table schema.TableDef, index schema.IndexDef
 	r.builder.WriteByte(')')
 	if index.Predicate != "" {
 		r.builder.WriteString(" WHERE ")
-		r.builder.WriteString(index.Predicate)
+		r.builder.WriteString(string(index.Predicate))
 	}
 	return nil
 }
@@ -1509,7 +1513,7 @@ func (r *renderer) rejectUnboundedMySQLText(table schema.TableDef, names []strin
 
 func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
 	if column.GeneratedExpression != "" {
-		return "", &UnsupportedGeneratedColumnError{Column: column.Name, Expression: column.GeneratedExpression, Storage: column.GeneratedStorage}
+		return "", &UnsupportedGeneratedColumnError{Column: column.Name, Expression: string(column.GeneratedExpression), Storage: column.GeneratedStorage}
 	}
 	if integer, ok := column.Type.(schema.IntegerType); ok {
 		if width, stated := integer.DisplayWidth.Value(); stated {
@@ -1543,7 +1547,7 @@ func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
 		definition += " NOT NULL"
 	}
 	if column.Default != "" {
-		definition += " DEFAULT " + column.Default
+		definition += " DEFAULT " + string(column.Default)
 	}
 	if column.Identity != "" {
 		clause, err := r.identityClause(column)

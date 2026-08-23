@@ -187,7 +187,7 @@ func (r Runner) applyPrepared(ctx context.Context, queries queryer, executions e
 	}
 	for _, migration := range selected {
 		for _, statement := range migration.statements {
-			if _, err := executions.ExecContext(ctx, statement.SQL); err != nil {
+			if _, err := executions.ExecContext(ctx, string(statement.SQL)); err != nil {
 				return nil, fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
 			}
 		}

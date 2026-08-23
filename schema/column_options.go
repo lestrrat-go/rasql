@@ -1,5 +1,7 @@
 package schema
 
+import "github.com/lestrrat-go/rasql/sqltext"
+
 // ColumnOption configures a column constructor such as Integer or Text.
 type ColumnOption interface {
 	applyColumn(*ColumnDef) error
@@ -103,16 +105,16 @@ func (nullableColumnOption) applyColumn(c *ColumnDef) error {
 }
 
 // defaultColumnOption states a column's default expression.
-type defaultColumnOption string
+type defaultColumnOption sqltext.Text
 
 // Default states expr as the column's default expression, rendered by a
 // dialect exactly as given.
-func Default(expr string) ColumnOption {
+func Default(expr sqltext.Text) ColumnOption {
 	return defaultColumnOption(expr)
 }
 
 func (o defaultColumnOption) applyColumn(c *ColumnDef) error {
-	c.Default = string(o)
+	c.Default = sqltext.Text(o)
 	return nil
 }
 

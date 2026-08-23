@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -296,7 +297,7 @@ func TestNullableAndDefaultColumnOptions(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, table.Columns[1].Nullable)
-	require.Equal(t, "CURRENT_TIMESTAMP", table.Columns[2].Default)
+	require.Equal(t, sqltext.Text("CURRENT_TIMESTAMP"), table.Columns[2].Default)
 }
 
 func TestIdentityColumnOption(t *testing.T) {

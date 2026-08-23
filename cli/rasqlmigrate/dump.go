@@ -600,7 +600,7 @@ func checkMySQLColumnDefaults(table schema.TableDef) error {
 		if column.Default == "" {
 			continue
 		}
-		if isAcceptableMySQLDefault(column.Default) {
+		if isAcceptableMySQLDefault(string(column.Default)) {
 			continue
 		}
 		return fmt.Errorf("dump: table %q column %q has default %q, which MySQL reports without quotes and rasql cannot re-emit as SQL", table.Name, column.Name, column.Default)
@@ -758,7 +758,7 @@ func renderPostgreSQLCreateTable(d dialect.Dialect, table schema.TableDef) (stri
 	var serialColumns []string
 	clone := table.Clone()
 	for i, column := range clone.Columns {
-		if pgSequenceDefaultPattern.MatchString(column.Default) {
+		if pgSequenceDefaultPattern.MatchString(string(column.Default)) {
 			clone.Columns[i].Default = ""
 			serialColumns = append(serialColumns, column.Name)
 		}
