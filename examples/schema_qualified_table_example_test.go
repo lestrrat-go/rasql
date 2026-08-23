@@ -66,9 +66,8 @@ func Example_schema_qualified_table() {
 		return
 	}
 
-	eventID := events.Column("id")
 	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
-	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(ctx, db)
+	event, err := rasql.SelectFrom(events).WhereEqual(events.Column("id"), int64(1)).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)
 		return

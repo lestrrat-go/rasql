@@ -514,8 +514,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to alias orders: %s\n", err)
 		return
 	}
-	allOrdersAmount := allOrders.Column("amount")
-	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrdersAmount))
+	average, err := query.NewSelect(allOrders.Ref(), query.Avg(allOrders.Column("amount")))
 	if err != nil {
 		fmt.Printf("failed to build average subquery: %s\n", err)
 		return

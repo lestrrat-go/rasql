@@ -64,9 +64,8 @@ func Example_schema_decimal_column() {
 		return
 	}
 
-	invoiceID := invoices.Column("id")
 	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
-	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoiceID, int64(1)).One(ctx, db)
+	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoices.Column("id"), int64(1)).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)
 		return
