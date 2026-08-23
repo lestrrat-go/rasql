@@ -63,12 +63,12 @@ func (repository Repository) OpenTasks(ctx context.Context) ([]OpenTask, error) 
 		).
 		// END(leftjoin)
 		Project(
-			query.Project(tasks.ProjectID()).As("project_id"),
-			query.Project(projects.Name()).As("project_name"),
-			query.Project(tasks.ID()).As("task_id"),
-			query.Project(tasks.Title()).As("title"),
-			query.Project(members.Name()).As("assignee_name"),
-			query.Project(tasks.DueOn()).As("due_on"),
+			tasks.ProjectID().As("project_id"),
+			projects.Name().As("project_name"),
+			tasks.ID().As("task_id"),
+			tasks.Title().As("title"),
+			members.Name().As("assignee_name"),
+			tasks.DueOn().As("due_on"),
 		).
 		Where(tasks.Open()).
 		Order(query.Asc(tasks.ProjectID()), query.Asc(tasks.ID())).
