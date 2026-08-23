@@ -41,13 +41,14 @@ func Example_rasql_where_expressions() {
 		}
 	}
 
-	// Every value still travels as a bound argument: query.Bind marks it, and
-	// the renderer turns it into the dialect's placeholder.
+	// Every plain value still travels as a bound argument: the constructor
+	// binds it automatically, and the renderer turns it into the dialect's
+	// placeholder.
 	// SQL: SELECT users.id, users.email FROM users WHERE (users.id > ? AND users.id IS NOT NULL) ORDER BY users.id DESC (argument: 10)
 	// BEGIN(where_expressions)
 	rows, err := rasql.SelectFrom(users).
 		Where(query.And(
-			query.GreaterThan(users.ID(), query.Bind(10)),
+			query.GreaterThan(users.ID(), 10),
 			query.IsNotNull(users.ID()),
 		)).
 		Order(query.Desc(users.ID())).

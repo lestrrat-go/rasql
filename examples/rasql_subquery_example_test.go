@@ -96,7 +96,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
 	}
-	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email(), query.Bind("%@example.com")))
+	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email(), "%@example.com"))
 	if err != nil {
 		fmt.Printf("failed to filter domain-users subquery: %s\n", err)
 		return

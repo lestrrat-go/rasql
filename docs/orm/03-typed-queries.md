@@ -285,7 +285,7 @@ For anything richer, `Where` and `Order` accept expressions from the `query` pac
 ```go
 rows, err := rasql.SelectFrom(users).
 	Where(query.And(
-		query.GreaterThan(users.ID(), query.Bind(10)),
+		query.GreaterThan(users.ID(), 10),
 		query.IsNotNull(users.ID()),
 	)).
 	Order(query.Desc(users.ID())).
@@ -294,7 +294,7 @@ rows, err := rasql.SelectFrom(users).
 source: [examples/rasql_where_expressions_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_where_expressions_example_test.go)
 <!-- END INCLUDE -->
 
-A generated accessor cannot name a column the table does not have, because the method would not exist. A table built at run time has no such accessors, so `table.Column(name)` builds the reference and the statement it is carried in checks it against the descriptor. A typo surfaces while the query is being assembled rather than as a database error later. `query.Bind` marks a value as an argument. The renderer turns it into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
+A generated accessor cannot name a column the table does not have, because the method would not exist. A table built at run time has no such accessors, so `table.Column(name)` builds the reference and the statement it is carried in checks it against the descriptor. A typo surfaces while the query is being assembled rather than as a database error later. A plain Go value passed where an operand is expected, such as `10` above, is bound automatically and marked as an argument; `query.Bind` is the explicit spelling, still needed for a slot that requires a `query.Expression`. The renderer turns a bound value into the dialect's placeholder and appends it to the argument list. No public API puts a value into SQL text.
 
 ## Nest a predicate tree
 
@@ -355,11 +355,11 @@ func Example_rasql_nested_predicates() {
 	// call, and the whole tree is one predicate. The builder is immutable, so
 	// the same value below renders the statement and then runs it.
 	selected := rasql.SelectFrom(users).
-		Where(query.Like(users.Email(), query.Bind("%@example.com"))).
+		Where(query.Like(users.Email(), "%@example.com")).
 		Where(query.Or(
-			query.LessThan(users.ID(), query.Bind(10)),
+			query.LessThan(users.ID(), 10),
 			query.And(
-				query.GreaterThan(users.ID(), query.Bind(20)),
+				query.GreaterThan(users.ID(), 20),
 				query.IsNotNull(users.Email()),
 			),
 		)).
@@ -500,7 +500,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
 	}
-	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email(), query.Bind("%@example.com")))
+	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email(), "%@example.com"))
 	if err != nil {
 		fmt.Printf("failed to filter domain-users subquery: %s\n", err)
 		return
@@ -719,7 +719,7 @@ func Example_rasql_group_by() {
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
 		Project(status, query.CountAll().As("total")).
 		GroupBy(status).
-		Having(query.GreaterThan(query.CountAll(), query.Bind(1))).
+		Having(query.GreaterThan(query.CountAll(), 1)).
 		Order(query.Asc(status)).
 		Query(ctx, db)
 	if err != nil {
@@ -984,7 +984,7 @@ func Example_rasql_dynamic_projection() {
 	rows, err := rasql.DecodeFrom[orderSummary](users).
 		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orderUserID))).
 		Project(users.ID().As("user_id"), users.Email()).
-		Where(query.GreaterThan(total, query.Bind(20))).
+		Where(query.GreaterThan(total, 20)).
 		Order(query.Desc(total)).
 		Query(ctx, db)
 	if err != nil {
