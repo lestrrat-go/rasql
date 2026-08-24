@@ -16,7 +16,14 @@ type renderedRank struct {
 	Rank  int64  `rasql:"rank"`
 }
 
-func TestQueryRenderedDecodesCTEAndWindowResult(t *testing.T) {
+func TestQueryRendered(t *testing.T) {
+	t.Run("decodes CTE and window result", testQueryRenderedDecodesCTEAndWindowResult)
+	t.Run("All and One use typed decoding", testQueryRenderedAllAndOneUseTypedDecoding)
+	t.Run("validates before returning a sequence", testQueryRenderedValidatesBeforeReturningSequence)
+	t.Run("rejects whitespace-only SQL", testQueryRenderedRejectsWhitespaceOnlySQL)
+}
+
+func testQueryRenderedDecodesCTEAndWindowResult(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -46,7 +53,7 @@ SELECT id, email, rank FROM ranked_users WHERE id >= $1`, 2)
 	require.Equal(t, []renderedRank{{ID: 2, Email: "bob@example.com", Rank: 2}}, found)
 }
 
-func TestQueryRenderedAllAndOneUseTypedDecoding(t *testing.T) {
+func testQueryRenderedAllAndOneUseTypedDecoding(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -80,7 +87,7 @@ func TestQueryRenderedAllAndOneUseTypedDecoding(t *testing.T) {
 	require.Equal(t, renderedRank{ID: 1, Email: "ada@example.com", Rank: 1}, one)
 }
 
-func TestQueryRenderedValidatesBeforeReturningSequence(t *testing.T) {
+func testQueryRenderedValidatesBeforeReturningSequence(t *testing.T) {
 	var db rasql.DB
 	s := stmt.New("SELECT 1")
 
@@ -107,7 +114,7 @@ func TestQueryRenderedValidatesBeforeReturningSequence(t *testing.T) {
 // blank check lives in exec.DB.ValidateStatement rather than in a constructor
 // that used to trim before storing. This is where render.Precompiled's own
 // blank-SQL subtests landed after Precompiled was deleted.
-func TestQueryRenderedRejectsWhitespaceOnlySQL(t *testing.T) {
+func testQueryRenderedRejectsWhitespaceOnlySQL(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() {

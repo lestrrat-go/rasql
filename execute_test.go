@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
+func testTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -79,7 +79,7 @@ func TestTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	require.Equal(t, []user{{ID: 1, Email: "ada@example.com"}, {ID: 2, Email: "bob@example.com"}}, decoded)
 }
 
-func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
+func testTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -119,7 +119,7 @@ func TestTypedSelectFromDecodesGeneratedRowType(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDecodeFromRefDecodesProjectedRows(t *testing.T) {
+func testDecodeFromRefDecodesProjectedRows(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -165,7 +165,7 @@ func TestDecodeFromRefDecodesProjectedRows(t *testing.T) {
 // typed caller: GroupBy and Having on TypedSelectBuilder render into the
 // statement DecodeFrom builds, and the two result columns decode into a
 // two-field result struct.
-func TestDecodeFromDecodesGroupedRows(t *testing.T) {
+func testDecodeFromDecodesGroupedRows(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -219,7 +219,7 @@ func TestDecodeFromDecodesGroupedRows(t *testing.T) {
 // TestDecodeFromDecodesDistinctRows proves Distinct on TypedSelectBuilder
 // renders into the statement DecodeFrom builds and reaches a typed caller,
 // the distinct counterpart to TestDecodeFromDecodesGroupedRows.
-func TestDecodeFromDecodesDistinctRows(t *testing.T) {
+func testDecodeFromDecodesDistinctRows(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -267,7 +267,7 @@ func TestDecodeFromDecodesDistinctRows(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
+func testTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -310,7 +310,7 @@ func TestTypedSelectBuilderCountReturnsRowCount(t *testing.T) {
 // (convertAssign) rather than through the reflective dynamic.Get[int64] the
 // untyped builder still uses, and that conversion accepts a string or a
 // []byte for an integer destination where the reflective path does not.
-func TestTypedSelectBuilderCountReadsANonIntegerCount(t *testing.T) {
+func testTypedSelectBuilderCountReadsANonIntegerCount(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string
 		value any
@@ -355,7 +355,7 @@ func TestTypedSelectBuilderCountReadsANonIntegerCount(t *testing.T) {
 // TestTypedSelectBuilderRejectsEmptyIn pins the new err field TypedSelectBuilder
 // carries directly since the rebuild onto render.SelectBuilder: WhereIn's empty
 // value list no longer travels through the untyped builder's own error state.
-func TestTypedSelectBuilderRejectsEmptyIn(t *testing.T) {
+func testTypedSelectBuilderRejectsEmptyIn(t *testing.T) {
 	type user struct {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
@@ -378,7 +378,18 @@ func TestTypedSelectBuilderRejectsEmptyIn(t *testing.T) {
 	require.EqualError(t, err, "rasql: render SELECT: rasql: IN requires at least one value")
 }
 
-func TestDBExecExecutesParameterizedInsert(t *testing.T) {
+func TestExecution(t *testing.T) {
+	t.Run("executes a parameterized insert", testDBExecExecutesParameterizedInsert)
+	t.Run("queries a rendered statement", testDBQueryRenderedExecutesStaticStatement)
+	t.Run("creates a table and indexes", testCreateExecutesTableAndIndexes)
+	t.Run("rejects a zero DB at every entry point", testEveryEntryPointRejectsAZeroDB)
+	t.Run("rejects a RETURNING statement through Exec", testDBExecRejectsReturningStatement)
+	t.Run("accepts a statement without RETURNING", testDBExecStillAcceptsStatementWithoutReturning)
+	t.Run("rejects unconditional mutations", testExecRejectsUnconditionalMutations)
+	t.Run("runs targeted and explicitly allowed mutations", testExecRunsTargetedAndExplicitlyAllowedMutations)
+}
+
+func testDBExecExecutesParameterizedInsert(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -414,7 +425,7 @@ func TestDBExecExecutesParameterizedInsert(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDBQueryRenderedExecutesStaticStatement(t *testing.T) {
+func testDBQueryRenderedExecutesStaticStatement(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -434,7 +445,7 @@ func TestDBQueryRenderedExecutesStaticStatement(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestCreateExecutesTableAndIndexes(t *testing.T) {
+func testCreateExecutesTableAndIndexes(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -475,7 +486,7 @@ func TestCreateExecutesTableAndIndexes(t *testing.T) {
 // the functions that take one, before they render or execute anything.
 // dynamic.Query and dynamic.QueryWrite have the equivalent check in
 // dynamic/execute_test.go, since neither lives in this package anymore.
-func TestEveryEntryPointRejectsAZeroDB(t *testing.T) {
+func testEveryEntryPointRejectsAZeroDB(t *testing.T) {
 	var zero rasql.DB
 	users := deleteUsersTable(t)
 
@@ -488,7 +499,7 @@ func TestEveryEntryPointRejectsAZeroDB(t *testing.T) {
 	require.ErrorContains(t, rasql.CreateTable(t.Context(), zero, users), "rasql: invalid DB")
 }
 
-func TestDBExecRejectsReturningStatement(t *testing.T) {
+func testDBExecRejectsReturningStatement(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -505,7 +516,7 @@ func TestDBExecRejectsReturningStatement(t *testing.T) {
 	require.ErrorContains(t, err, "rasql: write statement has a RETURNING clause: use QueryWrite to read its rows")
 }
 
-func TestDBExecStillAcceptsStatementWithoutReturning(t *testing.T) {
+func testDBExecStillAcceptsStatementWithoutReturning(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -526,7 +537,7 @@ func TestDBExecStillAcceptsStatementWithoutReturning(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestExecRejectsUnconditionalMutations(t *testing.T) {
+func testExecRejectsUnconditionalMutations(t *testing.T) {
 	users := usersWriteTable(t)
 	email := users.Column("email")
 
@@ -572,7 +583,7 @@ func TestExecRejectsUnconditionalMutations(t *testing.T) {
 	}
 }
 
-func TestExecRunsTargetedAndExplicitlyAllowedMutations(t *testing.T) {
+func testExecRunsTargetedAndExplicitlyAllowedMutations(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -726,7 +737,7 @@ func requireLazyRowSequence[T any](t *testing.T, mock sqlmock.Sqlmock, expect fu
 // laziness rule directly to TypedSelectBuilder.Query: since the rebuild onto
 // render.SelectBuilder, the typed builder owns this rule itself rather than
 // inheriting it by delegating to the untyped builder's Query.
-func TestTypedSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
+func testTypedSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged(t *testing.T) {
 	db, mock := leakTestDB(t)
 	users := deleteUsersTable(t)
 

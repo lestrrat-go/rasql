@@ -11,27 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type deleteUser struct {
-	ID    int64  `rasql:"id"`
-	Email string `rasql:"email"`
+func TestDelete(t *testing.T) {
+	t.Run("rejects a nil predicate", testDeleteRejectsNilPredicate)
+	t.Run("deletes from a table", testDeleteFrom)
 }
 
-func deleteUsersTable(t *testing.T) rasql.Table[deleteUser] {
-	t.Helper()
-
-	users, err := rasql.TableOf[deleteUser](schema.TableDef{
-		Name: "users",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "email", Type: schema.TextType{}},
-		},
-		PrimaryKey: []string{"id"},
-	})
-	require.NoError(t, err)
-	return users
-}
-
-func TestDeleteRejectsNilPredicate(t *testing.T) {
+func testDeleteRejectsNilPredicate(t *testing.T) {
 	users := deleteUsersTable(t)
 	d := dbForBuild(t).Dialect()
 	var typedNil *query.Binary
@@ -49,7 +34,7 @@ func TestDeleteRejectsNilPredicate(t *testing.T) {
 	}
 }
 
-func TestDeleteFrom(t *testing.T) {
+func testDeleteFrom(t *testing.T) {
 	t.Run("WhereEqual deletes matching rows", func(t *testing.T) {
 		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 		require.NoError(t, err)
@@ -314,7 +299,14 @@ func TestDeleteFrom(t *testing.T) {
 	})
 }
 
-func TestDeleteReturningBuild(t *testing.T) {
+func TestDeleteReturning(t *testing.T) {
+	t.Run("builds RETURNING", testDeleteReturningBuild)
+	t.Run("uses typed helpers", testDeleteReturningTypedHelpers)
+	t.Run("rejects unsupported dialect", testDeleteReturningRejectsUnsupportedDialect)
+	t.Run("requires a projection", testDeleteReturningRequiresProjection)
+}
+
+func testDeleteReturningBuild(t *testing.T) {
 	users := deleteUsersTable(t)
 	id := users.Column("id")
 	email := users.Column("email")
@@ -328,7 +320,7 @@ func TestDeleteReturningBuild(t *testing.T) {
 	require.Equal(t, []any{42}, statement.Args())
 }
 
-func TestDeleteReturningTypedHelpers(t *testing.T) {
+func testDeleteReturningTypedHelpers(t *testing.T) {
 	t.Run("all", func(t *testing.T) {
 		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 		require.NoError(t, err)
@@ -384,7 +376,7 @@ func TestDeleteReturningTypedHelpers(t *testing.T) {
 	})
 }
 
-func TestDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
+func testDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
 	users := deleteUsersTable(t)
 	id := users.Column("id")
 
@@ -395,25 +387,10 @@ func TestDeleteReturningRejectsUnsupportedDialect(t *testing.T) {
 	require.ErrorContains(t, err, "RETURNING is not supported")
 }
 
-func TestDeleteReturningRequiresProjection(t *testing.T) {
+func testDeleteReturningRequiresProjection(t *testing.T) {
 	users := deleteUsersTable(t)
 	id := users.Column("id")
 
 	_, err := rasql.DeleteFrom(users).WhereEqual(id, 42).Returning().Build(dialect.PostgreSQL())
 	require.EqualError(t, err, "rasql: RETURNING requires at least one projection")
-}
-
-// dbForBuild returns a DB that renders statements without executing them.
-func dbForBuild(t *testing.T) rasql.DB {
-	t.Helper()
-
-	database, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		mock.ExpectClose()
-		require.NoError(t, database.Close())
-	})
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	return db
 }
