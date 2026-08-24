@@ -33,7 +33,9 @@ func Example_rasql_group_by() {
 	}
 	tasks := store.Tasks()
 
-	// A local result type holds one row per group.
+	// A local result type holds one row per group. The projection pairs a
+	// column with COUNT(*) AS total, and no table has a total column, so
+	// store.TasksRow could not receive this result at all.
 	type statusCount struct {
 		Status string
 		Total  int64

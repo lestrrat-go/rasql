@@ -33,7 +33,10 @@ func Example_rasql_distinct() {
 	}
 	orders := store.Orders()
 
-	// A local result type holds one row per distinct user id.
+	// A local result type holds one row per distinct user id. store.OrdersRow
+	// would decode this projection too, but it maps the whole table, so id and
+	// total would come back as zeroes no caller could tell from stored zeroes.
+	// A type with only the projected field cannot misreport what was selected.
 	type orderingUser struct {
 		UserID int64 `rasql:"user_id"`
 	}

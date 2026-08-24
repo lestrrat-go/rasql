@@ -35,6 +35,10 @@ func Example_rasql_subquery() {
 	orders := store.Orders()
 	// A local result type projects only orders columns, so no join is needed:
 	// both subqueries below run as their own SELECT, never as part of this one.
+	// store.OrdersRow would decode these two columns as well, but it maps the
+	// whole table, so its id field would read 0 whether or not the database
+	// sent one. A type holding just the projected columns says what was asked
+	// for.
 	type orderSummary struct {
 		UserID int64
 		Total  int64
