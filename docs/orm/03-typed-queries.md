@@ -2,6 +2,17 @@
 
 This page covers the ORM, the builder that knows the Go type of a row. [The SQL builder](../core/02-sql-builder.md) covers the raw path, which renders SQL text and stops there.
 
+`rasql` and `rasql/dynamic` are parallel facades over the same `query`, `render`, and `exec` layers. Neither package is built on the other. Use `rasql` when the result shape can be represented by a Go type, and use [`rasql/dynamic`](../core/05-dynamic.md) when table or column names arrive at run time.
+
+| | Typed `rasql` | `rasql/dynamic` |
+| --- | --- | --- |
+| Table input | `rasql.Table[T]`, usually generated | `query.TableRef` |
+| Column names | Generated accessors such as `users.ID()` | Strings such as `"id"`, or `query` projections |
+| Result rows | `T`, decoded by the typed builder | `dynamic.Row`, read with `dynamic.Get` or `dynamic.Decode` |
+| Database handle | `rasql.DB` | The same `rasql.DB` |
+
+Both facades build the same dialect-neutral statements and execute them through the same runtime. The difference is whether Go's type system supplies the row shape or the caller reads it at run time.
+
 `rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
 
 Columns come from the generated table value, so `users.ID()` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](02-generated-store.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
