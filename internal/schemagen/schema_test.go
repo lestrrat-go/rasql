@@ -1843,6 +1843,27 @@ func TestSchemaRenamesRowType(t *testing.T) {
 	require.NoErrorf(t, err, "go test output:\n%s", output)
 }
 
+// TestSchemaDocumentsRowType pins the doc comment the row type carries. Every
+// other exported declaration the generator emits already states what it is, so
+// a row type without one is the single name pkg.go.dev shows bare.
+func TestSchemaDocumentsRowType(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	renamed := users
+	renamed.Name = "orders"
+	renamed.RowName = "Order"
+
+	source, err := schemagen.PackageSource("generated", users, renamed)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "// UsersRow is one row of the \"users\" table.\ntype UsersRow struct {")
+	// A stated RowName names the type the comment opens with, and the comment
+	// still names the table it reads.
+	require.Contains(t, string(source), "// Order is one row of the \"orders\" table.\ntype Order struct {")
+}
+
 // TestSchemaRowNamedRejections covers every way a stated RowName can be
 // rejected: syntactically invalid, an unexported name, a name reserved
 // for a generated method, a name colliding with this table's own generated

@@ -8,6 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 )
 
+// UsersRow is one row of the "users" table.
 type UsersRow struct {
 	ID        int64
 	Email     string

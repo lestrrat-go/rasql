@@ -929,9 +929,17 @@ func writeTableAs(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("{Table: aliased}, nil\n}\n")
 }
 
+// writeRowType writes the exported row type: one field per column, in the
+// order the table declares them.
 func writeRowType(source *bytes.Buffer, table schema.TableDef) {
+	typeName := rowTypeName(table)
+	source.WriteString("// ")
+	source.WriteString(typeName)
+	source.WriteString(" is one row of the ")
+	source.WriteString(quote(table.Name))
+	source.WriteString(" table.\n")
 	source.WriteString("type ")
-	source.WriteString(rowTypeName(table))
+	source.WriteString(typeName)
 	source.WriteString(" struct {\n")
 	for _, column := range table.Columns {
 		source.WriteString("\t")
