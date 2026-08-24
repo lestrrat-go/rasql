@@ -7,38 +7,9 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
-
-// PersonRow writes a people row. Its rasql tags name the column each field
-// holds, which is the mapping a generated row type states as Go code instead.
-type PersonRow struct {
-	ID        int64  `rasql:"id"`
-	Email     string `rasql:"email"`
-	FirstName string `rasql:"first_name"`
-	LastName  string `rasql:"last_name"`
-}
-
-// PeopleTable has the shape rasqlgen emits: the typed table plus one accessor
-// method per column.
-type PeopleTable struct {
-	rasql.Table[PersonRow]
-}
-
-func (t PeopleTable) ID() query.ColumnRef        { return rasql.ColumnOf(t.Table, "id") }
-func (t PeopleTable) Email() query.ColumnRef     { return rasql.ColumnOf(t.Table, "email") }
-func (t PeopleTable) FirstName() query.ColumnRef { return rasql.ColumnOf(t.Table, "first_name") }
-func (t PeopleTable) LastName() query.ColumnRef  { return rasql.ColumnOf(t.Table, "last_name") }
-
-var people = PeopleTable{rasql.MustTableOf[PersonRow](schema.MustTableDef("people",
-	schema.Integer("id"),
-	schema.Text("email"),
-	schema.Text("first_name"),
-	schema.Text("last_name"),
-	schema.PrimaryKey("id"),
-))}
 
 type userReport struct {
 	Email     string
@@ -69,11 +40,12 @@ func Example_rasqlgen_computed_field() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	people := store.People()
 	if err := rasql.CreateTable(ctx, db, people); err != nil {
 		fmt.Printf("failed to create people table: %s\n", err)
 		return
 	}
-	if _, err := rasql.Insert(ctx, db, people, PersonRow{ID: 1, Email: "ada@example.com", FirstName: "Ada", LastName: "Lovelace"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, people, store.PeopleRow{ID: 1, Email: "ada@example.com", FirstName: "Ada", LastName: "Lovelace"}); err != nil {
 		fmt.Printf("failed to insert person: %s\n", err)
 		return
 	}

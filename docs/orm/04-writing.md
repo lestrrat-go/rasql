@@ -39,14 +39,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_insert() {
 	// This example inserts one generated row without constructing query.Insert.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -63,15 +61,17 @@ func Example_rasql_insert() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the table described by the generated users descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
-	// Insert uses the tagged fields in UserRow as values for the users table.
+	// Insert reads store.UsersRow's fields through the mapping method the
+	// generator wrote, and binds them as values for the users table.
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 42, "ada@example.com")
-	result, err := rasql.Insert(ctx, db, users, UserRow{ID: 42, Email: "ada@example.com"})
+	result, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 42, Email: "ada@example.com"})
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -111,47 +111,13 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// defaultUserRow and defaultUsersTable have the shape rasqlgen emits for a
-// table with a generated ID and a defaulted status: no tags, a ColumnValue
-// for writes, and read columns derived from the field names.
-type defaultUserRow struct {
-	ID     int64
-	Email  string
-	Status string
-}
-
-func (r defaultUserRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "email":
-		return r.Email, true
-	case "status":
-		return r.Status, true
-	}
-	return nil, false
-}
-
-type defaultUsersTable struct {
-	rasql.Table[defaultUserRow]
-}
-
-func (t defaultUsersTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t defaultUsersTable) Email() query.ColumnRef  { return rasql.ColumnOf(t.Table, "email") }
-func (t defaultUsersTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
-
-var defaultUsers = defaultUsersTable{rasql.MustTableOf[defaultUserRow](schema.MustTableDef("default_users",
-	schema.Integer("id"),
-	schema.Text("email"),
-	schema.Text("status", schema.Default("'pending'")),
-	schema.PrimaryKey("id"),
-))}
-
+// Example_rasql_insert_defaults writes a row whose id the database assigns and
+// whose status comes from the column's default. default_users is generated into
+// examples/store from a descriptor that declares that default.
 func Example_rasql_insert_defaults() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -168,6 +134,7 @@ func Example_rasql_insert_defaults() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	defaultUsers := store.DefaultUsers()
 	if err := rasql.CreateTable(ctx, db, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
@@ -175,7 +142,7 @@ func Example_rasql_insert_defaults() {
 
 	// Name each database-assigned column. Email remains an explicit empty string.
 	// SQL: INSERT INTO default_users (email) VALUES (?) (argument: "")
-	if _, err := rasql.InsertWithOptions(ctx, db, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
+	if _, err := rasql.InsertWithOptions(ctx, db, defaultUsers, store.DefaultUsersRow{}, rasql.DefaultColumns("id", "status")); err != nil {
 		fmt.Printf("failed to insert default user: %s\n", err)
 		return
 	}
@@ -210,14 +177,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_update() {
 	// This example changes a generated row by using its primary-key field.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -234,20 +199,21 @@ func Example_rasql_update() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the table described by the generated users descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Insert one row so the update has a persistent target.
-	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 	// Update matches the row's primary key and writes its non-key fields.
 	// SQL: UPDATE users SET email = ? WHERE id = ? (arguments: "grace@example.com", 42)
-	if _, err := rasql.Update(ctx, db, users, UserRow{ID: 42, Email: "grace@example.com"}); err != nil {
+	if _, err := rasql.Update(ctx, db, users, store.UsersRow{ID: 42, Email: "grace@example.com"}); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}
@@ -290,15 +256,13 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_delete() {
 	// This example deletes rows by a generated column and by a query expression.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -315,13 +279,14 @@ func Example_rasql_delete() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the table described by the generated users descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	for id, email := range map[int64]string{1: "ada@example.com", 2: "grace@example.com", 3: "edsger@example.com"} {
-		if _, err := rasql.Insert(ctx, db, users, UserRow{ID: id, Email: email}); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: id, Email: email}); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}

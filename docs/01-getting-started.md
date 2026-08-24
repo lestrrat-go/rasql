@@ -18,52 +18,22 @@ go get modernc.org/sqlite
 
 ## The table used throughout the documentation
 
-Almost every example on these pages queries the same `users` table. Three declarations make it up, and this section takes them one at a time.
+Almost every example on these pages queries the same `users` table. `rasql codegen generate` reads that table out of a live database and writes its Go declarations into `examples/store`, the package the examples import, which is how an application gets its own tables too. [`rasql codegen`](orm/01-codegen.md) covers running the generator, and [The generated store](orm/02-generated-store.md) shows the file it writes in full.
 
-A row type is an ordinary Go struct. Each field carries a `rasql` tag naming the column it holds.
+The generator leaves three declarations behind, and every query uses all three. `store.UsersRow` is the Go type of one row, holding one field per column. `store.UsersTable` adds one accessor method per column, so `users.ID()` is the column reference the query builders take, and it carries the `As` method [Alias a table for a self-join](orm/03-typed-queries.md#alias-a-table-for-a-self-join) uses. `store.Users()` returns the table value tying the row type to the table's description, so the compiler knows what a query against `users` returns.
 
-<!-- INCLUDE(examples/query_example_tables_test.go#row_type) -->
+An example binds that value once and reads its columns off it:
+
+<!-- INCLUDE(examples/rasql_sqlite_query_example_test.go#bind_table) -->
 ```go
-type UserRow struct {
-	ID    int64  `rasql:"id"`
-	Email string `rasql:"email"`
-}
+users := store.Users()
 ```
-source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
+source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_sqlite_query_example_test.go)
 <!-- END INCLUDE -->
 
-A table type embeds `rasql.Table[UserRow]` and adds one method per column. Those methods are the column accessors the query builders take.
+Those accessors are the reason a filter never spells a column as a string. `WhereEqual(users.ID(), 42)` builds, while `WhereEqual(users.Emial(), 42)` stops at the compiler with `users.Emial undefined (type store.UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column accessors catch](orm/02-generated-store.md#what-the-column-accessors-catch) shows what that covers and the three cases it does not.
 
-<!-- INCLUDE(examples/query_example_tables_test.go#table_type) -->
-```go
-type UsersTable struct {
-	rasql.Table[UserRow]
-}
-
-func (t UsersTable) ID() query.ColumnRef    { return rasql.ColumnOf(t.Table, "id") }
-func (t UsersTable) Email() query.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
-```
-source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
-<!-- END INCLUDE -->
-
-The table value ties the two together. `schema.MustTableDef` describes the table itself, and `rasql.MustTableOf` binds the row type to that description, so the compiler knows what a query against `users` returns.
-
-<!-- INCLUDE(examples/query_example_tables_test.go#table_value) -->
-```go
-var users = UsersTable{rasql.MustTableOf[UserRow](schema.MustTableDef("users",
-	schema.Integer("id"),
-	schema.Text("email"),
-	schema.PrimaryKey("id"),
-))}
-```
-source: [examples/query_example_tables_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_example_tables_test.go)
-<!-- END INCLUDE -->
-
-`rasql codegen generate` writes all three from a live database, which [`rasql codegen`](orm/01-codegen.md) covers. These pages declare them by hand so that every example runs without a generator step. The same source file gives `UsersTable` an `As` method, which [Alias a table for a self-join](orm/03-typed-queries.md#alias-a-table-for-a-self-join) uses.
-
-Those accessors are the reason a filter never spells a column as a string. `WhereEqual(users.ID(), 42)` builds, while `WhereEqual(users.Emial(), 42)` stops at the compiler with `users.Emial undefined (type UsersTable has no field or method Emial)`, and `WhereEqual("id", 42)` stops there too, because the parameter is a `query.ColumnRef` and not a name. [What the column accessors catch](orm/02-generated-store.md#what-the-column-accessors-catch) shows what that covers and the three cases it does not.
-
-[Schemas](core/01-schema.md) covers how to write these tables by hand, and [`rasql codegen`](orm/01-codegen.md) covers how to generate them.
+A table written by hand has the same three parts, which [Schemas](core/01-schema.md) covers. The pages reach for one only where the description itself is the subject, such as a decimal column's precision or a schema-qualified name.
 
 ## Create a DB
 
@@ -99,14 +69,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_sqlite_query() {
 	// This example creates, inserts, and reads one generated row with SQLite.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -123,18 +91,25 @@ func Example_rasql_sqlite_query() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+
+	// store.Users() returns the generated table value, which carries the row
+	// type and one accessor method per column.
+	users := store.Users()
+
 	// Create the schema described by the generated table descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	// Insert encodes UserRow's tagged fields as bound values.
-	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	// Insert encodes the row's fields as bound values, through the mapping
+	// method the generated row type carries.
+	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 42, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
-	// users is a typed table descriptor with the shape emitted by rasqlgen.
+	// SelectFrom knows the row type from the generated table, so One returns a
+	// decoded store.UsersRow.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
 	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).One(ctx, db)
 	if err != nil {
@@ -154,9 +129,9 @@ source: [examples/rasql_sqlite_query_example_test.go](https://github.com/lestrra
 The program moves through four steps.
 
 1. `rasql.CreateTable` renders the table description as DDL and executes it, followed by any indexes. A real application usually creates tables through migrations instead, so this step is mostly a convenience for tests and examples.
-2. `rasql.Insert` reads the tagged fields of `UserRow` and writes them as bound values. See [Writing rows](orm/04-writing.md).
+2. `rasql.Insert` reads the fields of `store.UsersRow` through the mapping method the generator wrote for it, and writes them as bound values. See [Writing rows](orm/04-writing.md).
 3. `rasql.SelectFrom(users)` starts a builder that already knows the result type. `WhereEqual` binds `42` as an argument rather than putting it into the SQL text.
-4. `One` executes the statement and returns a single decoded `UserRow`, reporting `rasql.ErrNoRows` when the result holds no row and `rasql.ErrMultipleRows` when it holds more than one.
+4. `One` executes the statement and returns a single decoded `store.UsersRow`, reporting `rasql.ErrNoRows` when the result holds no row and `rasql.ErrMultipleRows` when it holds more than one.
 
 The `database.SetMaxOpenConns(1)` call is a SQLite detail rather than a `rasql` requirement. An in-memory SQLite database belongs to a single connection, so a pooled second connection would not see the created table.
 

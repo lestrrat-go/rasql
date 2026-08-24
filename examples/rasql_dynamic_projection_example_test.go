@@ -7,16 +7,13 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_dynamic_projection() {
 	// This example joins users and orders, then reads an ad hoc result shape.
-	// Both tables and their row types are declared in
-	// query_example_tables_test.go with the shape rasqlgen emits; an
-	// application that generated into package store would write store.Users()
-	// and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -33,6 +30,8 @@ func Example_rasql_dynamic_projection() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
+	orders := store.Orders()
 	// A local result type makes the custom projection as easy to read as a table row.
 	type orderSummary struct {
 		UserID int64
@@ -49,11 +48,11 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// Populate both tables through the typed rasql API.
-	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	for _, order := range []OrderRow{
+	for _, order := range []store.OrdersRow{
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {

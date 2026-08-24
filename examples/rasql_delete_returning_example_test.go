@@ -8,6 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/dynamic"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -30,12 +31,13 @@ func Example_rasql_delete_returning() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	for id, email := range map[int64]string{42: "ada@example.com", 43: "grace@example.com"} {
-		if _, err := rasql.Insert(ctx, db, users, UserRow{ID: id, Email: email}); err != nil {
+		if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: id, Email: email}); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -72,7 +74,7 @@ func Example_rasql_delete_returning() {
 		WhereEqual(users.ID(), 43).
 		Returning(users.ID(), users.Email())
 
-	deleted, err := rasql.QueryDeleteOne[UserRow](ctx, db, typed)
+	deleted, err := rasql.QueryDeleteOne[store.UsersRow](ctx, db, typed)
 	// END(delete_returning_typed)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)

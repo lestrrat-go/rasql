@@ -7,45 +7,10 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
-
-// EmployeeRow is one row of the employees table, which points at itself through
-// manager_id. A top-level employee has no manager, so the column is nullable and
-// the field is a pointer.
-type EmployeeRow struct {
-	ID        int64  `rasql:"id"`
-	Name      string `rasql:"name"`
-	ManagerID *int64 `rasql:"manager_id"`
-}
-
-// EmployeesTable has the shape rasqlgen emits: the typed table plus one
-// accessor method per column.
-type EmployeesTable struct {
-	rasql.Table[EmployeeRow]
-}
-
-func (t EmployeesTable) ID() query.ColumnRef        { return rasql.ColumnOf(t.Table, "id") }
-func (t EmployeesTable) Name() query.ColumnRef      { return rasql.ColumnOf(t.Table, "name") }
-func (t EmployeesTable) ManagerID() query.ColumnRef { return rasql.ColumnOf(t.Table, "manager_id") }
-
-var employees = EmployeesTable{rasql.MustTableOf[EmployeeRow](schema.MustTableDef("employees",
-	schema.Integer("id"),
-	schema.Text("name"),
-	schema.Integer("manager_id", schema.Nullable()),
-	schema.PrimaryKey("id"),
-))}
-
-// As returns the table under alias.
-func (t EmployeesTable) As(alias string) (EmployeesTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
-	if err != nil {
-		return EmployeesTable{}, err
-	}
-	return EmployeesTable{Table: aliased}, nil
-}
 
 // Example_rasql_self_join joins a table to itself. The alias is what keeps the
 // two sides apart, and the column accessors read whichever table value they
@@ -67,12 +32,15 @@ func Example_rasql_self_join() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	employees := store.Employees()
 	if err := rasql.CreateTable(ctx, db, employees); err != nil {
 		fmt.Printf("failed to create employees table: %s\n", err)
 		return
 	}
+	// A top-level employee has no manager, so manager_id is nullable and the
+	// generated field is a pointer.
 	ada := int64(1)
-	for _, employee := range []EmployeeRow{
+	for _, employee := range []store.EmployeesRow{
 		{ID: 1, Name: "ada"},
 		{ID: 2, Name: "grace", ManagerID: &ada},
 		{ID: 3, Name: "edsger", ManagerID: &ada},

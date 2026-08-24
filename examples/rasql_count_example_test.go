@@ -7,14 +7,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_count() {
 	// This example counts rows matched by a builder without paging through them.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -31,13 +29,14 @@ func Example_rasql_count() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the table described by the generated users descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Use rasql.Insert for each fixture row so setup follows the public API.
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
@@ -49,7 +48,7 @@ func Example_rasql_count() {
 	}
 
 	// Count runs COUNT(*) over the builder's WHERE and joins, without decoding
-	// any row into a UserRow. It rejects a builder with Limit or Offset set,
+	// any row into a store.UsersRow. It rejects a builder with Limit or Offset set,
 	// since a count of a paged statement is not the count the caller asked for.
 	// SQL: SELECT COUNT(*) FROM users
 	total, err := rasql.SelectFrom(users).Count(ctx, db)

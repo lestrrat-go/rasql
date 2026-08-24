@@ -109,14 +109,13 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_typed_query() {
-	// This example pages through several users and decodes them as UserRow values.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
+	// This example pages through several users and decodes them as
+	// store.UsersRow values.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -133,13 +132,14 @@ func Example_rasql_typed_query() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the table described by the generated users descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Use rasql.Insert for each fixture row so setup follows the public API.
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
@@ -211,14 +211,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_where_in() {
 	// This example selects rows whose id is one of a fixed set of values.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -235,12 +233,13 @@ func Example_rasql_where_in() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the table described by the generated users descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
@@ -311,6 +310,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -335,11 +335,12 @@ func Example_rasql_nested_predicates() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 5, Email: "ada@example.com"},
 		{ID: 7, Email: "linus@other.org"},
 		{ID: 15, Email: "grace@example.com"},
@@ -411,6 +412,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
@@ -418,10 +420,6 @@ import (
 func Example_rasql_subquery() {
 	// This example selects orders placed by a user reachable by email domain,
 	// then narrows to orders at or above the average total across every order.
-	// Both tables and their row types are declared in
-	// query_example_tables_test.go with the shape rasqlgen emits; an
-	// application that generated into package store would write store.Users()
-	// and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -438,6 +436,8 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
+	orders := store.Orders()
 	// A local result type projects only orders columns, so no join is needed:
 	// both subqueries below run as their own SELECT, never as part of this one.
 	type orderSummary struct {
@@ -454,7 +454,7 @@ func Example_rasql_subquery() {
 		return
 	}
 
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@other.example"},
@@ -464,7 +464,7 @@ func Example_rasql_subquery() {
 			return
 		}
 	}
-	for _, order := range []OrderRow{
+	for _, order := range []store.OrdersRow{
 		{ID: 1, UserID: 1, Total: 80},
 		{ID: 2, UserID: 2, Total: 20},
 		{ID: 3, UserID: 3, Total: 100},
@@ -547,14 +547,12 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_count() {
 	// This example counts rows matched by a builder without paging through them.
-	// users and UserRow are declared in query_example_tables_test.go with the
-	// shape rasqlgen emits; an application that generated into package store
-	// would write store.Users() and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -571,13 +569,14 @@ func Example_rasql_count() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 	// Create the table described by the generated users descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 	// Use rasql.Insert for each fixture row so setup follows the public API.
-	for _, user := range []UserRow{
+	for _, user := range []store.UsersRow{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
@@ -589,7 +588,7 @@ func Example_rasql_count() {
 	}
 
 	// Count runs COUNT(*) over the builder's WHERE and joins, without decoding
-	// any row into a UserRow. It rejects a builder with Limit or Offset set,
+	// any row into a store.UsersRow. It rejects a builder with Limit or Offset set,
 	// since a count of a paged statement is not the count the caller asked for.
 	// SQL: SELECT COUNT(*) FROM users
 	total, err := rasql.SelectFrom(users).Count(ctx, db)
@@ -632,31 +631,10 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
-
-// TaskRow is one row of the tasks table.
-type TaskRow struct {
-	ID     int64  `rasql:"id"`
-	Status string `rasql:"status"`
-}
-
-// TasksTable has the shape rasqlgen emits: the typed table plus one accessor
-// method per column.
-type TasksTable struct {
-	rasql.Table[TaskRow]
-}
-
-func (t TasksTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t TasksTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
-
-var tasks = TasksTable{rasql.MustTableOf[TaskRow](schema.MustTableDef("tasks",
-	schema.Integer("id"),
-	schema.Text("status"),
-	schema.PrimaryKey("id"),
-))}
 
 func Example_rasql_group_by() {
 	// This example counts tasks per status and keeps only the statuses with
@@ -677,6 +655,7 @@ func Example_rasql_group_by() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	tasks := store.Tasks()
 
 	// A local result type holds one row per group.
 	type statusCount struct {
@@ -687,7 +666,7 @@ func Example_rasql_group_by() {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
-	for _, task := range []TaskRow{
+	for _, task := range []store.TasksRow{
 		{ID: 1, Status: "open"},
 		{ID: 2, Status: "open"},
 		{ID: 3, Status: "done"},
@@ -750,16 +729,14 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_distinct() {
 	// This example lists the users who have placed at least one order,
-	// without repeating a user who placed more than one. orders and OrderRow
-	// are declared in query_example_tables_test.go with the shape rasqlgen
-	// emits; an application that generated into package store would write
-	// store.Orders() and store.OrdersRow instead.
+	// without repeating a user who placed more than one.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -776,6 +753,7 @@ func Example_rasql_distinct() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	orders := store.Orders()
 
 	// A local result type holds one row per distinct user id.
 	type orderingUser struct {
@@ -785,7 +763,7 @@ func Example_rasql_distinct() {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
-	for _, order := range []OrderRow{
+	for _, order := range []store.OrdersRow{
 		{ID: 1, UserID: 1},
 		{ID: 2, UserID: 2},
 		{ID: 3, UserID: 1},
@@ -883,16 +861,13 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
 func Example_rasql_dynamic_projection() {
 	// This example joins users and orders, then reads an ad hoc result shape.
-	// Both tables and their row types are declared in
-	// query_example_tables_test.go with the shape rasqlgen emits; an
-	// application that generated into package store would write store.Users()
-	// and store.UsersRow instead.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -909,6 +884,8 @@ func Example_rasql_dynamic_projection() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
+	orders := store.Orders()
 	// A local result type makes the custom projection as easy to read as a table row.
 	type orderSummary struct {
 		UserID int64
@@ -925,11 +902,11 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// Populate both tables through the typed rasql API.
-	if _, err := rasql.Insert(ctx, db, users, UserRow{ID: 1, Email: "ada@example.com"}); err != nil {
+	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 1, Email: "ada@example.com"}); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	for _, order := range []OrderRow{
+	for _, order := range []store.OrdersRow{
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {
@@ -983,6 +960,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 )
 
 // statementPrinter is a debug-only rasql.Handle. It follows the same
@@ -1010,9 +988,8 @@ func Example_rasql_debug_query() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	users := store.Users()
 
-	// users is declared in query_example_tables_test.go with the shape rasqlgen
-	// emits; an application would write store.Users() instead.
 	count := 0
 	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).Query(context.Background(), db)
 	if err != nil {

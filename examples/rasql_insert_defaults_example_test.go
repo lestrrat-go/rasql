@@ -7,47 +7,13 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/examples/store"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// defaultUserRow and defaultUsersTable have the shape rasqlgen emits for a
-// table with a generated ID and a defaulted status: no tags, a ColumnValue
-// for writes, and read columns derived from the field names.
-type defaultUserRow struct {
-	ID     int64
-	Email  string
-	Status string
-}
-
-func (r defaultUserRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "email":
-		return r.Email, true
-	case "status":
-		return r.Status, true
-	}
-	return nil, false
-}
-
-type defaultUsersTable struct {
-	rasql.Table[defaultUserRow]
-}
-
-func (t defaultUsersTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t defaultUsersTable) Email() query.ColumnRef  { return rasql.ColumnOf(t.Table, "email") }
-func (t defaultUsersTable) Status() query.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
-
-var defaultUsers = defaultUsersTable{rasql.MustTableOf[defaultUserRow](schema.MustTableDef("default_users",
-	schema.Integer("id"),
-	schema.Text("email"),
-	schema.Text("status", schema.Default("'pending'")),
-	schema.PrimaryKey("id"),
-))}
-
+// Example_rasql_insert_defaults writes a row whose id the database assigns and
+// whose status comes from the column's default. default_users is generated into
+// examples/store from a descriptor that declares that default.
 func Example_rasql_insert_defaults() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -64,6 +30,7 @@ func Example_rasql_insert_defaults() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	defaultUsers := store.DefaultUsers()
 	if err := rasql.CreateTable(ctx, db, defaultUsers); err != nil {
 		fmt.Printf("failed to create default_users table: %s\n", err)
 		return
@@ -71,7 +38,7 @@ func Example_rasql_insert_defaults() {
 
 	// Name each database-assigned column. Email remains an explicit empty string.
 	// SQL: INSERT INTO default_users (email) VALUES (?) (argument: "")
-	if _, err := rasql.InsertWithOptions(ctx, db, defaultUsers, defaultUserRow{}, rasql.DefaultColumns("id", "status")); err != nil {
+	if _, err := rasql.InsertWithOptions(ctx, db, defaultUsers, store.DefaultUsersRow{}, rasql.DefaultColumns("id", "status")); err != nil {
 		fmt.Printf("failed to insert default user: %s\n", err)
 		return
 	}
