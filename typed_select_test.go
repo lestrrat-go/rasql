@@ -73,7 +73,42 @@ func (u *directScanUser) ScanDestinations(columns []string) ([]any, error) {
 	return destinations, nil
 }
 
-func TestTypedSelectScansKnownProjectionDirectly(t *testing.T) {
+func TestTypedSelect(t *testing.T) {
+	t.Run("scans known projection directly", testTypedSelectScansKnownProjectionDirectly)
+	t.Run("maps partial generated scan columns", testTypedSelectMapsPartialGeneratedScanColumns)
+	t.Run("projects with runtime column mapping", testTypedSelectProjectUsesRuntimeColumnMapping)
+	t.Run("builds generated scan destinations once", testTypedSelectBuildsGeneratedScanDestinationsOnce)
+	t.Run("One stops after a second row", testTypedSelectOneStopsAfterSecondRow)
+	t.Run("One reports no rows", testTypedSelectOneNoRows)
+	t.Run("One reports query failure", testTypedSelectOneQueryFailureIsNotNoRows)
+	t.Run("groups rows", testTypedSelectGroupBy)
+	t.Run("selects distinct rows", testTypedSelectDistinct)
+	t.Run("groups by a joined column", testTypedSelectGroupByJoinedColumn)
+	t.Run("combines predicates", testTypedSelectCombinesPredicates)
+	t.Run("handles IN predicates", testTypedSelectWhereIn)
+}
+
+func TestSelectAll(t *testing.T) {
+	t.Run("sizes result from limit", testSelectAllSizesResultFromLimit)
+	t.Run("caps absurd limit reservation", testSelectAllCapsTheReservationForAnAbsurdLimit)
+	t.Run("reserves nothing without a limit", testSelectAllWithoutLimitReservesNothing)
+	t.Run("returns a non-nil empty result", testSelectAllReturnsEmptyNotNilForNoRows)
+	t.Run("offset does not change reservation", testSelectAllOffsetDoesNotChangeTheReservation)
+}
+
+func TestTypedSelectExecution(t *testing.T) {
+	t.Run("subquery predicate", testTypedSelectBuilderRunsSubqueryPredicate)
+	t.Run("decodes generated row type", testTypedSelectFromDecodesGeneratedRowType)
+	t.Run("decodes projected rows from a table reference", testDecodeFromRefDecodesProjectedRows)
+	t.Run("decodes grouped rows", testDecodeFromDecodesGroupedRows)
+	t.Run("decodes distinct rows", testDecodeFromDecodesDistinctRows)
+	t.Run("counts rows", testTypedSelectBuilderCountReturnsRowCount)
+	t.Run("converts non-integer counts", testTypedSelectBuilderCountReadsANonIntegerCount)
+	t.Run("rejects empty IN", testTypedSelectBuilderRejectsEmptyIn)
+	t.Run("is lazy", testTypedSelectBuilderQueryRunsNothingUntilTheSequenceIsRanged)
+}
+
+func testTypedSelectScansKnownProjectionDirectly(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -102,7 +137,7 @@ func TestTypedSelectScansKnownProjectionDirectly(t *testing.T) {
 	require.Equal(t, staticScanUser{ID: 7, Email: "ada@example.com"}, result)
 }
 
-func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
+func testTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -134,7 +169,7 @@ func TestTypedSelectMapsPartialGeneratedScanColumns(t *testing.T) {
 	require.Equal(t, directScanUser{Email: "ada@example.com"}, result)
 }
 
-func TestTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
+func testTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -166,7 +201,7 @@ func TestTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
 	require.Equal(t, directScanUser{ID: 7, Email: "ada@example.com"}, result)
 }
 
-func TestTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
+func testTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -197,7 +232,7 @@ func TestTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
 	require.Equal(t, 1, plannedScanCalls)
 }
 
-func TestTypedSelectOneStopsAfterSecondRow(t *testing.T) {
+func testTypedSelectOneStopsAfterSecondRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -237,7 +272,7 @@ func TestTypedSelectOneStopsAfterSecondRow(t *testing.T) {
 	require.NotErrorIs(t, err, thirdRowError)
 }
 
-func TestTypedSelectOneNoRows(t *testing.T) {
+func testTypedSelectOneNoRows(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -271,7 +306,7 @@ func TestTypedSelectOneNoRows(t *testing.T) {
 	require.NotErrorIs(t, err, rasql.ErrMultipleRows)
 }
 
-func TestTypedSelectOneQueryFailureIsNotNoRows(t *testing.T) {
+func testTypedSelectOneQueryFailureIsNotNoRows(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -312,7 +347,7 @@ func TestOneSentinelsAreDistinct(t *testing.T) {
 // TestTypedSelectGroupBy proves TypedSelectBuilder.GroupBy and .Having reach
 // Build, and that TypedSelectBuilder.Count reports the grouping error rather
 // than running a query, since dbForBuild sets no mock expectation for one.
-func TestTypedSelectGroupBy(t *testing.T) {
+func testTypedSelectGroupBy(t *testing.T) {
 	users := deleteUsersTable(t)
 	email := users.Column("email")
 
@@ -344,7 +379,7 @@ func TestTypedSelectGroupBy(t *testing.T) {
 // and that Count refuses a distinct builder rather than rendering
 // SELECT DISTINCT COUNT(*), which always answers 1 instead of the number of
 // distinct rows.
-func TestTypedSelectDistinct(t *testing.T) {
+func testTypedSelectDistinct(t *testing.T) {
 	users := deleteUsersTable(t)
 	email := users.Column("email")
 
@@ -372,7 +407,7 @@ func TestTypedSelectDistinct(t *testing.T) {
 // assembly order: the grouping is validated together with the joins, so a joined
 // table's column may be grouped by. Attaching the joins after the first
 // validation refused it.
-func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
+func testTypedSelectGroupByJoinedColumn(t *testing.T) {
 	users := deleteUsersTable(t)
 	orders := selectOrdersTable(t)
 	id := users.Ref().Column("id")
@@ -396,7 +431,7 @@ func TestTypedSelectGroupByJoinedColumn(t *testing.T) {
 	require.Equal(t, []any{1}, statement.Args())
 }
 
-func TestTypedSelectCombinesPredicates(t *testing.T) {
+func testTypedSelectCombinesPredicates(t *testing.T) {
 	t.Run("WhereEqual then Where combine with AND", func(t *testing.T) {
 		users := deleteUsersTable(t)
 		id := users.Column("id")
@@ -498,7 +533,7 @@ func TestTypedSelectCombinesPredicates(t *testing.T) {
 	})
 }
 
-func TestTypedSelectWhereIn(t *testing.T) {
+func testTypedSelectWhereIn(t *testing.T) {
 	t.Run("builds an IN predicate", func(t *testing.T) {
 		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 		require.NoError(t, err)
@@ -568,7 +603,7 @@ func TestTypedSelectWhereIn(t *testing.T) {
 // TestSelectAllSizesResultFromLimit is the assertion that proves the change:
 // a LIMIT pre-sizes the collected slice to the limit, not just to the number
 // of rows actually returned.
-func TestSelectAllSizesResultFromLimit(t *testing.T) {
+func testSelectAllSizesResultFromLimit(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -597,7 +632,7 @@ func TestSelectAllSizesResultFromLimit(t *testing.T) {
 // TestSelectAllCapsTheReservationForAnAbsurdLimit proves the byte-budget
 // clamp holds: a LIMIT far beyond any real result must not translate into an
 // allocation anywhere near that size.
-func TestSelectAllCapsTheReservationForAnAbsurdLimit(t *testing.T) {
+func testSelectAllCapsTheReservationForAnAbsurdLimit(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -628,7 +663,7 @@ func TestSelectAllCapsTheReservationForAnAbsurdLimit(t *testing.T) {
 // Limit reproduces today's unhinted collectAll behavior: no exact capacity is
 // pinned here, since the growth pattern belongs to Go's append, not to this
 // package.
-func TestSelectAllWithoutLimitReservesNothing(t *testing.T) {
+func testSelectAllWithoutLimitReservesNothing(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -658,7 +693,7 @@ func TestSelectAllWithoutLimitReservesNothing(t *testing.T) {
 // TestSelectAllReturnsEmptyNotNilForNoRows pins a publicly observable, and
 // previously untested, behavior: an empty result decodes to a non-nil empty
 // slice, not nil, across every path that reaches collectAll.
-func TestSelectAllReturnsEmptyNotNilForNoRows(t *testing.T) {
+func testSelectAllReturnsEmptyNotNilForNoRows(t *testing.T) {
 	t.Run("All with no limit", func(t *testing.T) {
 		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 		require.NoError(t, err)
@@ -729,7 +764,7 @@ func TestSelectAllReturnsEmptyNotNilForNoRows(t *testing.T) {
 // TestSelectAllOffsetDoesNotChangeTheReservation pins the decision that an
 // OFFSET is ignored for sizing: it shifts the result window rather than
 // widening it, so it must not enter the hint alongside the LIMIT.
-func TestSelectAllOffsetDoesNotChangeTheReservation(t *testing.T) {
+func testSelectAllOffsetDoesNotChangeTheReservation(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {

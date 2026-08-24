@@ -18,7 +18,7 @@ import (
 // statement unless a caller remembered to exclude it by hand -- exactly the
 // gap a rasqlgen-generated store for a table with a generated column would
 // hit on its very first insert.
-func TestInsertOmitsGeneratedColumn(t *testing.T) {
+func testInsertOmitsGeneratedColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -66,7 +66,7 @@ func TestInsertOmitsGeneratedColumn(t *testing.T) {
 // assignment list from every non-primary-key descriptor column, so a
 // generated column reached a plain rasql.Update the same way it reached a
 // plain rasql.Insert.
-func TestUpdateOmitsGeneratedColumn(t *testing.T) {
+func testUpdateOmitsGeneratedColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -110,7 +110,7 @@ func TestUpdateOmitsGeneratedColumn(t *testing.T) {
 // names a generated column via rasql.UpdateColumns is refused up front, the
 // same way naming a primary key is, rather than left to fail against the
 // database once the statement reaches it.
-func TestUpdateColumnsRejectsGeneratedColumn(t *testing.T) {
+func testUpdateColumnsRejectsGeneratedColumn(t *testing.T) {
 	type measurement struct {
 		ID         int64 `rasql:"id"`
 		Celsius    int64 `rasql:"celsius"`
@@ -170,7 +170,7 @@ func identityMembersTable(t *testing.T) rasql.Table[identityMember] {
 // A BY DEFAULT identity column, legacy_id, stays in the list: it accepts
 // an explicit value, so its absence from the expectation below would be
 // the wrong assertion to make.
-func TestInsertOmitsAlwaysIdentityColumn(t *testing.T) {
+func testInsertOmitsAlwaysIdentityColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -200,7 +200,7 @@ func TestInsertOmitsAlwaysIdentityColumn(t *testing.T) {
 // rejects an UPDATE naming one ("column can only be updated to DEFAULT").
 // legacy_id, the BY DEFAULT identity column, is left in the assignment
 // list, since it is updatable like any other column.
-func TestUpdateOmitsAlwaysIdentityColumn(t *testing.T) {
+func testUpdateOmitsAlwaysIdentityColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -224,7 +224,7 @@ func TestUpdateOmitsAlwaysIdentityColumn(t *testing.T) {
 // TestUpdateColumnsRejectsAlwaysIdentityColumn proves that a caller who
 // explicitly names an ALWAYS identity column via rasql.UpdateColumns is
 // refused up front, the same way naming a generated column is.
-func TestUpdateColumnsRejectsAlwaysIdentityColumn(t *testing.T) {
+func testUpdateColumnsRejectsAlwaysIdentityColumn(t *testing.T) {
 	members := identityMembersTable(t)
 
 	_, err := rasql.UpdateWithOptions(t.Context(), buildOnlyDB(t), members, identityMember{}, rasql.UpdateColumns("external_ref"))
@@ -234,7 +234,7 @@ func TestUpdateColumnsRejectsAlwaysIdentityColumn(t *testing.T) {
 // TestUpdateColumnsAcceptsByDefaultIdentityColumn proves that a BY DEFAULT
 // identity column named through rasql.UpdateColumns is accepted and
 // updated like any other column, unlike its ALWAYS counterpart.
-func TestUpdateColumnsAcceptsByDefaultIdentityColumn(t *testing.T) {
+func testUpdateColumnsAcceptsByDefaultIdentityColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {

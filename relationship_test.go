@@ -28,7 +28,14 @@ type unsignedRelationshipOrder struct {
 	UserID uint64
 }
 
-func TestLoadHasManyGroupsRowsByParentKey(t *testing.T) {
+func TestLoadRelationships(t *testing.T) {
+	t.Run("has many groups rows by parent key", testLoadHasManyGroupsRowsByParentKey)
+	t.Run("belongs to groups rows by foreign key", testLoadBelongsToGroupsRowsByForeignKey)
+	t.Run("supports MySQL unsigned keys", testLoadRelationshipsSupportsMySQLUnsignedKeys)
+	t.Run("skips empty input", testLoadRelationshipsSkipsEmptyInput)
+}
+
+func testLoadHasManyGroupsRowsByParentKey(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -69,7 +76,7 @@ func TestLoadHasManyGroupsRowsByParentKey(t *testing.T) {
 	}, loaded)
 }
 
-func TestLoadBelongsToGroupsRowsByForeignKey(t *testing.T) {
+func testLoadBelongsToGroupsRowsByForeignKey(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -101,7 +108,7 @@ func TestLoadBelongsToGroupsRowsByForeignKey(t *testing.T) {
 	require.Equal(t, map[int64]relationshipUser{1: {ID: 1}, 2: {ID: 2}}, loaded)
 }
 
-func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
+func testLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -159,7 +166,7 @@ func TestLoadRelationshipsSupportsMySQLUnsignedKeys(t *testing.T) {
 	require.Empty(t, belongsTo)
 }
 
-func TestLoadRelationshipsSkipsEmptyInput(t *testing.T) {
+func testLoadRelationshipsSkipsEmptyInput(t *testing.T) {
 	users, err := rasql.TableOf[relationshipUser](schema.TableDef{
 		Name:       "users",
 		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
