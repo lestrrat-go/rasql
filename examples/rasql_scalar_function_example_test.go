@@ -34,7 +34,9 @@ func Example_rasql_scalar_function() {
 		return
 	}
 	users := store.Users()
-	// A local result type holds the decoded id and display name.
+	// A local result type holds the decoded id and display name. The name
+	// column is COALESCE(nickname, email) under an alias rather than a stored
+	// column, so store.UsersRow has no field it could land in.
 	type userName struct {
 		ID   int64
 		Name string

@@ -177,6 +177,9 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// rankedUser is a local result type rather than store.UsersRow, because the
+// template's window function returns a rank column the users table does not
+// have, and a generated row type has a field only for a real column.
 type rankedUser struct {
 	ID    int64  `rasql:"id"`
 	Email string `rasql:"email"`

@@ -11,6 +11,9 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// userReport is a local result type rather than store.UsersRow, because a
+// generated row type holds one field per column and has nowhere to put a
+// value derived from two of them. FullName below is that value.
 type userReport struct {
 	Email     string
 	FirstName string `rasql:"first_name"`

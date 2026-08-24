@@ -440,6 +440,10 @@ func Example_rasql_subquery() {
 	orders := store.Orders()
 	// A local result type projects only orders columns, so no join is needed:
 	// both subqueries below run as their own SELECT, never as part of this one.
+	// store.OrdersRow would decode these two columns as well, but it maps the
+	// whole table, so its id field would read 0 whether or not the database
+	// sent one. A type holding just the projected columns says what was asked
+	// for.
 	type orderSummary struct {
 		UserID int64
 		Total  int64
@@ -657,7 +661,9 @@ func Example_rasql_group_by() {
 	}
 	tasks := store.Tasks()
 
-	// A local result type holds one row per group.
+	// A local result type holds one row per group. The projection pairs a
+	// column with COUNT(*) AS total, and no table has a total column, so
+	// store.TasksRow could not receive this result at all.
 	type statusCount struct {
 		Status string
 		Total  int64
@@ -755,7 +761,10 @@ func Example_rasql_distinct() {
 	}
 	orders := store.Orders()
 
-	// A local result type holds one row per distinct user id.
+	// A local result type holds one row per distinct user id. store.OrdersRow
+	// would decode this projection too, but it maps the whole table, so id and
+	// total would come back as zeroes no caller could tell from stored zeroes.
+	// A type with only the projected field cannot misreport what was selected.
 	type orderingUser struct {
 		UserID int64 `rasql:"user_id"`
 	}
@@ -886,7 +895,10 @@ func Example_rasql_dynamic_projection() {
 	}
 	users := store.Users()
 	orders := store.Orders()
-	// A local result type makes the custom projection as easy to read as a table row.
+	// The projection reads one column from each side of the join, so no
+	// generated row type fits it: store.UsersRow has no user_id field and
+	// store.OrdersRow has no email. A local type names exactly the two
+	// columns the query selects.
 	type orderSummary struct {
 		UserID int64
 		Email  string

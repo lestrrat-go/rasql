@@ -32,7 +32,10 @@ func Example_rasql_dynamic_projection() {
 	}
 	users := store.Users()
 	orders := store.Orders()
-	// A local result type makes the custom projection as easy to read as a table row.
+	// The projection reads one column from each side of the join, so no
+	// generated row type fits it: store.UsersRow has no user_id field and
+	// store.OrdersRow has no email. A local type names exactly the two
+	// columns the query selects.
 	type orderSummary struct {
 		UserID int64
 		Email  string

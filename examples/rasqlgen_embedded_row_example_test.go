@@ -11,6 +11,9 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// userWithRole embeds the generated row type rather than replacing it,
+// which is the case this example exists to show: the embedded row keeps
+// its scan methods and Role rides along beside them.
 type userWithRole struct {
 	store.UsersRow // promotes ScanRow and ScanDestinations
 	Role           string
