@@ -12,8 +12,8 @@ import (
 )
 
 // Example_rasql_insert_defaults writes a row whose id the database assigns and
-// whose status comes from the column's default. default_users is generated into
-// examples/store from a descriptor that declares that default.
+// whose status comes from the column's default. The users table generated into
+// examples/store declares status with that default.
 func Example_rasql_insert_defaults() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -30,23 +30,24 @@ func Example_rasql_insert_defaults() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	defaultUsers := store.DefaultUsers()
-	if err := rasql.CreateTable(ctx, db, defaultUsers); err != nil {
-		fmt.Printf("failed to create default_users table: %s\n", err)
+	users := store.Users()
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
-	// Name each database-assigned column. Email remains an explicit empty string.
-	// SQL: INSERT INTO default_users (email) VALUES (?) (argument: "")
-	if _, err := rasql.InsertWithOptions(ctx, db, defaultUsers, store.DefaultUsersRow{}, rasql.DefaultColumns("id", "status")); err != nil {
-		fmt.Printf("failed to insert default user: %s\n", err)
+	// Name each column the database is to fill in. Every other column is
+	// written from the row, so the empty strings below are inserted as given.
+	// SQL: INSERT INTO users (email, nickname, first_name, last_name) VALUES (?, ?, ?, ?) (arguments: "", NULL, "", "")
+	if _, err := rasql.InsertWithOptions(ctx, db, users, store.UsersRow{}, rasql.DefaultColumns("id", "status")); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
-	// SQL: SELECT default_users.id, default_users.email, default_users.status FROM default_users WHERE default_users.id = ? (argument: 1)
-	user, err := rasql.SelectFrom(defaultUsers).WhereEqual(defaultUsers.ID(), 1).One(ctx, db)
+	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id = ? (argument: 1)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 1).One(ctx, db)
 	if err != nil {
-		fmt.Printf("failed to query default user: %s\n", err)
+		fmt.Printf("failed to query user: %s\n", err)
 		return
 	}
 	fmt.Printf("%d %q %q\n", user.ID, user.Email, user.Status)

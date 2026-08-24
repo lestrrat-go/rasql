@@ -68,11 +68,17 @@ func Example_rasql_delete_returning() {
 		fmt.Println("dynamic:", email)
 	}
 
-	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email (argument: 43)
+	// The typed terminal names every column, where the dynamic one above named
+	// two. store.UsersRow maps the whole users table, and QueryDeleteOne
+	// refuses a RETURNING clause that omits one of its columns, because the
+	// omitted field would decode as a zero value with nothing to say the
+	// database never sent it.
+	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email, nickname, status, first_name, last_name (argument: 43)
 	// BEGIN(delete_returning_typed)
 	typed := rasql.DeleteFrom(users).
 		WhereEqual(users.ID(), 43).
-		Returning(users.ID(), users.Email())
+		Returning(users.ID(), users.Email(), users.Nickname(),
+			users.Status(), users.FirstName(), users.LastName())
 
 	deleted, err := rasql.QueryDeleteOne[store.UsersRow](ctx, db, typed)
 	// END(delete_returning_typed)

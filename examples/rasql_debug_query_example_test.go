@@ -54,7 +54,7 @@ func Example_rasql_debug_query() {
 	fmt.Printf("%d result rows\n", count)
 
 	// Output:
-	// SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)
+	// SELECT "users"."id", "users"."email", "users"."nickname", "users"."status", "users"."first_name", "users"."last_name" FROM "users" WHERE ("users"."id" = $1)
 	// [42]
 	// 0 result rows
 }

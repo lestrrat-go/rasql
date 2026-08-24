@@ -20,6 +20,8 @@ go get modernc.org/sqlite
 
 Almost every example on these pages queries the same `users` table. `rasql codegen generate` reads that table out of a live database and writes its Go declarations into `examples/store`, the package the examples import, which is how an application gets its own tables too. [`rasql codegen`](orm/01-codegen.md) covers running the generator, and [The generated store](orm/02-generated-store.md) shows the file it writes in full.
 
+That one table carries every column the documentation needs, rather than a narrow table per topic. Most pages read `id` and `email` and nothing else. `nickname` is nullable, so [Scalar functions](core/02-sql-builder.md#scalar-functions) has a real NULL for `COALESCE` to fall back from. `status` declares a default, so [Use database defaults](orm/04-writing.md#use-database-defaults) can omit it from an `INSERT` and read back what the database filled in. `first_name` and `last_name` give [Decode a custom shape](orm/03-typed-queries.md#decode-a-custom-shape) two columns to combine into one computed value. A query that does not need a column simply never names it.
+
 The generator leaves three declarations behind, and every query uses all three. `store.UsersRow` is the Go type of one row, holding one field per column. `store.UsersTable` adds one accessor method per column, so `users.ID()` is the column reference the query builders take, and it carries the `As` method [Alias a table for a self-join](orm/03-typed-queries.md#alias-a-table-for-a-self-join) uses. `store.Users()` returns the table value tying the row type to the table's description, so the compiler knows what a query against `users` returns.
 
 An example binds that value once and reads its columns off it:

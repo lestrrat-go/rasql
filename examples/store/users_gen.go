@@ -9,13 +9,17 @@ import (
 )
 
 type UsersRow struct {
-	ID    int64
-	Email string
+	ID        int64
+	Email     string
+	Nickname  *string
+	Status    string
+	FirstName string
+	LastName  string
 }
 
 // ScanRow scans each result column directly into its field.
 func (r *UsersRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.Email)
+	return src.Scan(&r.ID, &r.Email, &r.Nickname, &r.Status, &r.FirstName, &r.LastName)
 }
 
 // ScanDestinations maps result-column names to fields on r.
@@ -23,9 +27,13 @@ func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {
 	const (
 		scanIndexID = iota
 		scanIndexEmail
+		scanIndexNickname
+		scanIndexStatus
+		scanIndexFirstName
+		scanIndexLastName
 	)
 	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(2)
+	scanned := rasql.NewScanMask(6)
 	var discard any
 	for index, column := range columns {
 		switch column {
@@ -39,6 +47,26 @@ func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
 			destinations[index] = &r.Email
+		case "nickname":
+			if !scanned.Mark(scanIndexNickname) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &r.Nickname
+		case "status":
+			if !scanned.Mark(scanIndexStatus) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &r.Status
+		case "first_name":
+			if !scanned.Mark(scanIndexFirstName) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &r.FirstName
+		case "last_name":
+			if !scanned.Mark(scanIndexLastName) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &r.LastName
 		default:
 			destinations[index] = &discard
 		}
@@ -53,6 +81,14 @@ func (r UsersRow) ColumnValue(name string) (any, bool) {
 		return r.ID, true
 	case "email":
 		return r.Email, true
+	case "nickname":
+		return r.Nickname, true
+	case "status":
+		return r.Status, true
+	case "first_name":
+		return r.FirstName, true
+	case "last_name":
+		return r.LastName, true
 	}
 	return nil, false
 }
@@ -67,6 +103,18 @@ func (t UsersTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") 
 
 // Email returns a reference to the "email" column.
 func (t UsersTable) Email() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
+
+// Nickname returns a reference to the "nickname" column.
+func (t UsersTable) Nickname() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "nickname") }
+
+// Status returns a reference to the "status" column.
+func (t UsersTable) Status() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+
+// FirstName returns a reference to the "first_name" column.
+func (t UsersTable) FirstName() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "first_name") }
+
+// LastName returns a reference to the "last_name" column.
+func (t UsersTable) LastName() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "last_name") }
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {

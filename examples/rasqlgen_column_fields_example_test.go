@@ -86,6 +86,6 @@ func Example_rasqlgen_column_fields() {
 	// Output:
 	// SELECT "users"."id" FROM "users" WHERE ("users"."id" = $1)
 	// query column: table "users" has no column "emial"
-	// SELECT "users"."id", "users"."email" FROM "users" WHERE ("users"."id" = $1)
+	// SELECT "users"."id", "users"."email", "users"."nickname", "users"."status", "users"."first_name", "users"."last_name" FROM "users" WHERE ("users"."id" = $1)
 	// emial query column: table "users" has no column "emial"
 }
