@@ -9,7 +9,7 @@ import (
 )
 
 func TestRasqlgenGeneratedDefinitionsAreValid(t *testing.T) {
-	for _, definition := range []schema.TableDef{defaultUsersDef, employeesDef, membersDef, ordersDef, peopleDef, tasksDef, usersDef} {
+	for _, definition := range []schema.TableDef{employeesDef, ordersDef, tasksDef, usersDef} {
 		if err := definition.Validate(); err != nil {
 			t.Errorf("%s: %s", definition.Name, err)
 		}

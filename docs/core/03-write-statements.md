@@ -156,27 +156,38 @@ func Example_rasql_returning() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	defaultUsers := store.DefaultUsers()
-	if err := rasql.CreateTable(ctx, db, defaultUsers); err != nil {
-		fmt.Printf("failed to create default_users table: %s\n", err)
+	users := store.Users()
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
-	// id is assigned by the database and status by its column default, so both
-	// are named in the RETURNING clause alongside the column that was set.
-	statement, err := query.NewInsert(defaultUsers.Ref(), query.Set(defaultUsers.Email(), "ada@example.com"))
+	// The insert names every column it has a value for. id is left to the
+	// database and status to its column default, which is what this example
+	// reads back.
+	statement, err := query.NewInsert(users.Ref(),
+		query.Set(users.Email(), "ada@example.com"),
+		query.Set(users.FirstName(), "Ada"),
+		query.Set(users.LastName(), "Lovelace"))
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	statement, err = statement.WithReturning(defaultUsers.ID(), defaultUsers.Email(), defaultUsers.Status())
+
+	// The RETURNING clause names all six columns rather than only the two the
+	// database filled in. QueryWriteOne decodes into store.UsersRow, which maps
+	// the whole users table, and it refuses a clause that omits a column of
+	// that table: an omitted column would decode as a zero value with nothing
+	// to say the database never sent it.
+	statement, err = statement.WithReturning(users.ID(), users.Email(), users.Nickname(),
+		users.Status(), users.FirstName(), users.LastName())
 	if err != nil {
 		fmt.Printf("failed to add RETURNING clause: %s\n", err)
 		return
 	}
 
-	// SQL: INSERT INTO default_users (email) VALUES (?) RETURNING id, email, status (argument: "ada@example.com")
-	user, err := rasql.QueryWriteOne[store.DefaultUsersRow](ctx, db, statement)
+	// SQL: INSERT INTO users (email, first_name, last_name) VALUES (?, ?, ?) RETURNING id, email, nickname, status, first_name, last_name (arguments: "ada@example.com", "Ada", "Lovelace")
+	user, err := rasql.QueryWriteOne[store.UsersRow](ctx, db, statement)
 	if err != nil {
 		fmt.Printf("failed to query inserted user: %s\n", err)
 		return
@@ -216,7 +227,8 @@ and `QueryWriteOne[T]`. Use one terminal per builder:
 ```go
 typed := rasql.DeleteFrom(users).
 	WhereEqual(users.ID(), 43).
-	Returning(users.ID(), users.Email())
+	Returning(users.ID(), users.Email(), users.Nickname(),
+		users.Status(), users.FirstName(), users.LastName())
 
 deleted, err := rasql.QueryDeleteOne[store.UsersRow](ctx, db, typed)
 ```

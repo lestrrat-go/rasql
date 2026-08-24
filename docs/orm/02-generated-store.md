@@ -27,13 +27,17 @@ import (
 )
 
 type UsersRow struct {
-	ID    int64
-	Email string
+	ID        int64
+	Email     string
+	Nickname  *string
+	Status    string
+	FirstName string
+	LastName  string
 }
 
 // ScanRow scans each result column directly into its field.
 func (r *UsersRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.Email)
+	return src.Scan(&r.ID, &r.Email, &r.Nickname, &r.Status, &r.FirstName, &r.LastName)
 }
 
 // ScanDestinations maps result-column names to fields on r.
@@ -41,9 +45,13 @@ func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {
 	const (
 		scanIndexID = iota
 		scanIndexEmail
+		scanIndexNickname
+		scanIndexStatus
+		scanIndexFirstName
+		scanIndexLastName
 	)
 	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(2)
+	scanned := rasql.NewScanMask(6)
 	var discard any
 	for index, column := range columns {
 		switch column {
@@ -57,6 +65,26 @@ func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {
 				return nil, fmt.Errorf("duplicate result column %q", column)
 			}
 			destinations[index] = &r.Email
+		case "nickname":
+			if !scanned.Mark(scanIndexNickname) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &r.Nickname
+		case "status":
+			if !scanned.Mark(scanIndexStatus) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &r.Status
+		case "first_name":
+			if !scanned.Mark(scanIndexFirstName) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &r.FirstName
+		case "last_name":
+			if !scanned.Mark(scanIndexLastName) {
+				return nil, fmt.Errorf("duplicate result column %q", column)
+			}
+			destinations[index] = &r.LastName
 		default:
 			destinations[index] = &discard
 		}
@@ -71,6 +99,14 @@ func (r UsersRow) ColumnValue(name string) (any, bool) {
 		return r.ID, true
 	case "email":
 		return r.Email, true
+	case "nickname":
+		return r.Nickname, true
+	case "status":
+		return r.Status, true
+	case "first_name":
+		return r.FirstName, true
+	case "last_name":
+		return r.LastName, true
 	}
 	return nil, false
 }
@@ -85,6 +121,18 @@ func (t UsersTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") 
 
 // Email returns a reference to the "email" column.
 func (t UsersTable) Email() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
+
+// Nickname returns a reference to the "nickname" column.
+func (t UsersTable) Nickname() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "nickname") }
+
+// Status returns a reference to the "status" column.
+func (t UsersTable) Status() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+
+// FirstName returns a reference to the "first_name" column.
+func (t UsersTable) FirstName() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "first_name") }
+
+// LastName returns a reference to the "last_name" column.
+func (t UsersTable) LastName() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "last_name") }
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {
@@ -116,21 +164,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-var defaultUsersDef = schema.TableDef{
-	Name: "default_users",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-		{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
-	},
-	PrimaryKey: []string{"id"},
-}
-
-var defaultUsersTable = DefaultUsersTable{rasql.TableFrom[DefaultUsersRow](defaultUsersDef)}
-
-// DefaultUsersDef returns a copy of the descriptor for the "default_users" table.
-func DefaultUsersDef() schema.TableDef { return defaultUsersDef.Clone() }
-
 var employeesDef = schema.TableDef{
 	Name: "employees",
 	Columns: []schema.ColumnDef{
@@ -146,21 +179,6 @@ var employeesTable = EmployeesTable{rasql.TableFrom[EmployeesRow](employeesDef)}
 // EmployeesDef returns a copy of the descriptor for the "employees" table.
 func EmployeesDef() schema.TableDef { return employeesDef.Clone() }
 
-var membersDef = schema.TableDef{
-	Name: "members",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
-	},
-	PrimaryKey: []string{"id"},
-}
-
-var membersTable = MembersTable{rasql.TableFrom[MembersRow](membersDef)}
-
-// MembersDef returns a copy of the descriptor for the "members" table.
-func MembersDef() schema.TableDef { return membersDef.Clone() }
-
 var ordersDef = schema.TableDef{
 	Name: "orders",
 	Columns: []schema.ColumnDef{
@@ -175,22 +193,6 @@ var ordersTable = OrdersTable{rasql.TableFrom[OrdersRow](ordersDef)}
 
 // OrdersDef returns a copy of the descriptor for the "orders" table.
 func OrdersDef() schema.TableDef { return ordersDef.Clone() }
-
-var peopleDef = schema.TableDef{
-	Name: "people",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-		{Name: "first_name", Type: schema.TextType{}},
-		{Name: "last_name", Type: schema.TextType{}},
-	},
-	PrimaryKey: []string{"id"},
-}
-
-var peopleTable = PeopleTable{rasql.TableFrom[PeopleRow](peopleDef)}
-
-// PeopleDef returns a copy of the descriptor for the "people" table.
-func PeopleDef() schema.TableDef { return peopleDef.Clone() }
 
 var tasksDef = schema.TableDef{
 	Name: "tasks",
@@ -211,6 +213,10 @@ var usersDef = schema.TableDef{
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "email", Type: schema.TextType{}},
+		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+		{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
+		{Name: "first_name", Type: schema.TextType{}},
+		{Name: "last_name", Type: schema.TextType{}},
 	},
 	PrimaryKey: []string{"id"},
 }
@@ -224,11 +230,8 @@ func UsersDef() schema.TableDef { return usersDef.Clone() }
 // file declares them.
 func Tables() []schema.TableDef {
 	return []schema.TableDef{
-		defaultUsersDef.Clone(),
 		employeesDef.Clone(),
-		membersDef.Clone(),
 		ordersDef.Clone(),
-		peopleDef.Clone(),
 		tasksDef.Clone(),
 		usersDef.Clone(),
 	}

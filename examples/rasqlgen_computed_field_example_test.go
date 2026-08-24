@@ -40,23 +40,23 @@ func Example_rasqlgen_computed_field() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	people := store.People()
-	if err := rasql.CreateTable(ctx, db, people); err != nil {
-		fmt.Printf("failed to create people table: %s\n", err)
+	users := store.Users()
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := rasql.Insert(ctx, db, people, store.PeopleRow{ID: 1, Email: "ada@example.com", FirstName: "Ada", LastName: "Lovelace"}); err != nil {
-		fmt.Printf("failed to insert person: %s\n", err)
+	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 1, Email: "ada@example.com", FirstName: "Ada", LastName: "Lovelace"}); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 	// DecodeFrom projects what the caller names, since the result shape is not
 	// the table's row type.
-	report, err := rasql.DecodeFrom[userReport](people).
-		Project(people.Email(), people.FirstName(), people.LastName()).
+	report, err := rasql.DecodeFrom[userReport](users).
+		Project(users.Email(), users.FirstName(), users.LastName()).
 		One(ctx, db)
 	if err != nil {
-		fmt.Printf("failed to query people: %s\n", err)
+		fmt.Printf("failed to query users: %s\n", err)
 		return
 	}
 	fmt.Println(report.Email, report.FullName())

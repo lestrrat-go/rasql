@@ -50,9 +50,17 @@ func TestGeneratedStoreIsCurrent(t *testing.T) {
 func exampleStore(t *testing.T) generate.Store {
 	t.Helper()
 
+	// users carries every column the examples read, rather than one narrow
+	// table per lesson. nickname is nullable so a COALESCE example has a real
+	// NULL to fall back from, status has a default so an insert may omit it,
+	// and the two name columns give a computed field something to combine.
 	users, err := schema.NewTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
+		schema.Text("nickname", schema.Nullable()),
+		schema.Text("status", schema.Default("'pending'")),
+		schema.Text("first_name"),
+		schema.Text("last_name"),
 		schema.PrimaryKey("id"),
 	)
 	require.NoError(t, err)
@@ -72,14 +80,6 @@ func exampleStore(t *testing.T) generate.Store {
 	)
 	require.NoError(t, err)
 
-	members, err := schema.NewTableDef("members",
-		schema.Integer("id"),
-		schema.Text("email"),
-		schema.Text("nickname", schema.Nullable()),
-		schema.PrimaryKey("id"),
-	)
-	require.NoError(t, err)
-
 	employees, err := schema.NewTableDef("employees",
 		schema.Integer("id"),
 		schema.Text("name"),
@@ -88,28 +88,11 @@ func exampleStore(t *testing.T) generate.Store {
 	)
 	require.NoError(t, err)
 
-	defaultUsers, err := schema.NewTableDef("default_users",
-		schema.Integer("id"),
-		schema.Text("email"),
-		schema.Text("status", schema.Default("'pending'")),
-		schema.PrimaryKey("id"),
-	)
-	require.NoError(t, err)
-
-	people, err := schema.NewTableDef("people",
-		schema.Integer("id"),
-		schema.Text("email"),
-		schema.Text("first_name"),
-		schema.Text("last_name"),
-		schema.PrimaryKey("id"),
-	)
-	require.NoError(t, err)
-
 	return generate.Store{
 		Package: queryPackage,
 		Root:    repositoryRootAbs(t),
 		Dir:     filepath.Join("examples", "store"),
-		Tables:  []schema.TableDef{users, orders, tasks, members, employees, defaultUsers, people},
+		Tables:  []schema.TableDef{users, orders, tasks, employees},
 		Queries: []generate.Query{
 			{
 				Input:    filepath.Join("examples", "store", queryTemplate),

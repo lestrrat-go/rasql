@@ -82,7 +82,7 @@ func Example_rasql_nested_predicates() {
 	}
 
 	// Output:
-	// SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."email" LIKE ?) AND (("users"."id" < ?) OR (("users"."id" > ?) AND ("users"."email" IS NOT NULL)))) ORDER BY "users"."id"
+	// SELECT "users"."id", "users"."email", "users"."nickname", "users"."status", "users"."first_name", "users"."last_name" FROM "users" WHERE (("users"."email" LIKE ?) AND (("users"."id" < ?) OR (("users"."id" > ?) AND ("users"."email" IS NOT NULL)))) ORDER BY "users"."id"
 	// 5 ada@example.com
 	// 25 alan@example.com
 }

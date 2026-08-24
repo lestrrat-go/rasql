@@ -7,21 +7,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-var defaultUsersDef = schema.TableDef{
-	Name: "default_users",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-		{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
-	},
-	PrimaryKey: []string{"id"},
-}
-
-var defaultUsersTable = DefaultUsersTable{rasql.TableFrom[DefaultUsersRow](defaultUsersDef)}
-
-// DefaultUsersDef returns a copy of the descriptor for the "default_users" table.
-func DefaultUsersDef() schema.TableDef { return defaultUsersDef.Clone() }
-
 var employeesDef = schema.TableDef{
 	Name: "employees",
 	Columns: []schema.ColumnDef{
@@ -37,21 +22,6 @@ var employeesTable = EmployeesTable{rasql.TableFrom[EmployeesRow](employeesDef)}
 // EmployeesDef returns a copy of the descriptor for the "employees" table.
 func EmployeesDef() schema.TableDef { return employeesDef.Clone() }
 
-var membersDef = schema.TableDef{
-	Name: "members",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
-	},
-	PrimaryKey: []string{"id"},
-}
-
-var membersTable = MembersTable{rasql.TableFrom[MembersRow](membersDef)}
-
-// MembersDef returns a copy of the descriptor for the "members" table.
-func MembersDef() schema.TableDef { return membersDef.Clone() }
-
 var ordersDef = schema.TableDef{
 	Name: "orders",
 	Columns: []schema.ColumnDef{
@@ -66,22 +36,6 @@ var ordersTable = OrdersTable{rasql.TableFrom[OrdersRow](ordersDef)}
 
 // OrdersDef returns a copy of the descriptor for the "orders" table.
 func OrdersDef() schema.TableDef { return ordersDef.Clone() }
-
-var peopleDef = schema.TableDef{
-	Name: "people",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-		{Name: "first_name", Type: schema.TextType{}},
-		{Name: "last_name", Type: schema.TextType{}},
-	},
-	PrimaryKey: []string{"id"},
-}
-
-var peopleTable = PeopleTable{rasql.TableFrom[PeopleRow](peopleDef)}
-
-// PeopleDef returns a copy of the descriptor for the "people" table.
-func PeopleDef() schema.TableDef { return peopleDef.Clone() }
 
 var tasksDef = schema.TableDef{
 	Name: "tasks",
@@ -102,6 +56,10 @@ var usersDef = schema.TableDef{
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "email", Type: schema.TextType{}},
+		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+		{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
+		{Name: "first_name", Type: schema.TextType{}},
+		{Name: "last_name", Type: schema.TextType{}},
 	},
 	PrimaryKey: []string{"id"},
 }
@@ -115,11 +73,8 @@ func UsersDef() schema.TableDef { return usersDef.Clone() }
 // file declares them.
 func Tables() []schema.TableDef {
 	return []schema.TableDef{
-		defaultUsersDef.Clone(),
 		employeesDef.Clone(),
-		membersDef.Clone(),
 		ordersDef.Clone(),
-		peopleDef.Clone(),
 		tasksDef.Clone(),
 		usersDef.Clone(),
 	}
