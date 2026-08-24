@@ -21,7 +21,60 @@ type insertCompatibilityUser struct{}
 
 var _ func(context.Context, rasql.DB, rasql.Table[insertCompatibilityUser], insertCompatibilityUser) (sql.Result, error) = rasql.Insert[insertCompatibilityUser]
 
-func TestInsertExecutesTypedRow(t *testing.T) {
+func TestInsert(t *testing.T) {
+	t.Run("executes a typed row", testInsertExecutesTypedRow)
+	t.Run("inserts many rows in one parameterized statement", testInsertManyExecutesOneParameterizedStatement)
+	t.Run("uses defaults for every row", testInsertManyWithOptionsUsesDefaultsForEveryRow)
+	t.Run("uses defaults for every column across dialects", testInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects)
+	t.Run("validates all default rows", testInsertManyWithOptionsValidatesAllDefaultRows)
+	t.Run("rejects empty rows", testInsertManyRejectsEmptyRows)
+	t.Run("uses selected database defaults", testInsertUsesDatabaseDefaultsForSelectedColumns)
+	t.Run("rejects unknown default columns", testInsertRejectsUnknownDefaultColumn)
+	t.Run("rejects an invalid TableFrom descriptor", testInsertRejectsTableFromWithInvalidDescriptor)
+	t.Run("uses defaults for every column", testInsertWithOptionsUsesDefaultsForEveryColumn)
+	t.Run("omits generated columns", testInsertOmitsGeneratedColumn)
+	t.Run("omits ALWAYS identity columns", testInsertOmitsAlwaysIdentityColumn)
+	t.Run("rejects missing tagged columns", testInsertRejectsMissingTaggedColumn)
+}
+
+func TestQueryWrite(t *testing.T) {
+	t.Run("decodes all returned rows", testQueryWriteAllDecodesReturnedRows)
+	t.Run("decodes one returned row", testQueryWriteOneDecodesReturnedRow)
+	t.Run("rejects zero or multiple rows", testQueryWriteOneRejectsZeroOrMultipleRows)
+	t.Run("reports decode errors", testQueryWriteOneReportsDecodeError)
+	t.Run("scans generated rows directly", testQueryWriteOneScansGeneratedRowDirectly)
+	t.Run("honors complete generated RETURNING", testQueryWriteAllHonorsCompleteGeneratedReturning)
+	t.Run("rejects incomplete generated RETURNING", testQueryWriteRejectsIncompleteGeneratedReturning)
+	t.Run("allows incomplete custom RETURNING", testQueryWriteAllowsIncompleteCustomReturning)
+}
+
+func TestUpdate(t *testing.T) {
+	t.Run("executes a typed row", testUpdateExecutesTypedRow)
+	t.Run("updates selected fields by primary key", testUpdateWithOptionsUpdatesSelectedFieldsByPrimaryKey)
+	t.Run("bulk updates partial rows by predicate", testUpdateManyBulkUpdatesPartialRowByPredicate)
+	t.Run("rejects invalid configuration", testUpdateWithOptionsRejectsInvalidConfiguration)
+	t.Run("rejects tables without a primary key", testUpdateRejectsTableWithoutPrimaryKey)
+	t.Run("names qualified tables in errors", testTypedWriteNamesQualifiedTableInErrors)
+	t.Run("matches composite primary keys", testUpdateMatchesCompositePrimaryKey)
+	t.Run("omits generated columns", testUpdateOmitsGeneratedColumn)
+	t.Run("rejects generated columns", testUpdateColumnsRejectsGeneratedColumn)
+	t.Run("omits ALWAYS identity columns", testUpdateOmitsAlwaysIdentityColumn)
+	t.Run("rejects ALWAYS identity columns", testUpdateColumnsRejectsAlwaysIdentityColumn)
+	t.Run("accepts BY DEFAULT identity columns", testUpdateColumnsAcceptsByDefaultIdentityColumn)
+}
+
+func TestColumnValuer(t *testing.T) {
+	t.Run("uses declared values", testWritesUseColumnValuer)
+	t.Run("ignores promoted values", testWritesIgnorePromotedColumnValuer)
+	t.Run("follows declared values", testWritesFollowDeclaredColumnValuer)
+	t.Run("routes every embedding shape", testWritesRouteEveryEmbeddingShape)
+}
+
+func TestGeneratedMethods(t *testing.T) {
+	t.Run("report the generated file", testGeneratedMethodsReportGeneratedFile)
+}
+
+func testInsertExecutesTypedRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -57,7 +110,7 @@ func TestInsertExecutesTypedRow(t *testing.T) {
 	require.EqualValues(t, 1, rows)
 }
 
-func TestInsertManyExecutesOneParameterizedStatement(t *testing.T) {
+func testInsertManyExecutesOneParameterizedStatement(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -95,7 +148,7 @@ func TestInsertManyExecutesOneParameterizedStatement(t *testing.T) {
 	require.EqualValues(t, 2, rows)
 }
 
-func TestInsertManyWithOptionsUsesDefaultsForEveryRow(t *testing.T) {
+func testInsertManyWithOptionsUsesDefaultsForEveryRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -135,7 +188,7 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryRow(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testing.T) {
+func testInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testing.T) {
 	type user struct {
 		ID     int64  `rasql:"id"`
 		Status string `rasql:"status"`
@@ -197,7 +250,7 @@ func TestInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testin
 	}
 }
 
-func TestInsertManyWithOptionsValidatesAllDefaultRows(t *testing.T) {
+func testInsertManyWithOptionsValidatesAllDefaultRows(t *testing.T) {
 	type user struct {
 		ID     int64  `rasql:"id"`
 		Status string `rasql:"status"`
@@ -222,7 +275,7 @@ func TestInsertManyWithOptionsValidatesAllDefaultRows(t *testing.T) {
 	require.ErrorContains(t, err, `row 1: row value must not be nil`)
 }
 
-func TestInsertManyRejectsEmptyRows(t *testing.T) {
+func testInsertManyRejectsEmptyRows(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
@@ -257,7 +310,7 @@ func (u generatedDefaultUser) ColumnValue(name string) (any, bool) {
 	return nil, false
 }
 
-func TestInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
+func testInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -295,7 +348,7 @@ func TestInsertUsesDatabaseDefaultsForSelectedColumns(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestInsertRejectsUnknownDefaultColumn(t *testing.T) {
+func testInsertRejectsUnknownDefaultColumn(t *testing.T) {
 	table := schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
@@ -320,7 +373,7 @@ func TestInsertRejectsUnknownDefaultColumn(t *testing.T) {
 // nothing: typedTableReference calls definition.Validate() on every write, so
 // an invalid descriptor is rejected here even though it would render on the
 // read path (query.TableRefFrom's contract).
-func TestInsertRejectsTableFromWithInvalidDescriptor(t *testing.T) {
+func testInsertRejectsTableFromWithInvalidDescriptor(t *testing.T) {
 	bad := schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
@@ -339,7 +392,7 @@ func TestInsertRejectsTableFromWithInvalidDescriptor(t *testing.T) {
 	require.ErrorContains(t, err, "table reference")
 }
 
-func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
+func testInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -370,7 +423,7 @@ func TestInsertWithOptionsUsesDefaultsForEveryColumn(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
+func testQueryWriteAllDecodesReturnedRows(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -409,7 +462,7 @@ func TestQueryWriteAllDecodesReturnedRows(t *testing.T) {
 	require.Equal(t, []user{{ID: 1}, {ID: 2}}, rows)
 }
 
-func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
+func testQueryWriteOneDecodesReturnedRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -448,7 +501,7 @@ func TestQueryWriteOneDecodesReturnedRow(t *testing.T) {
 	require.Equal(t, user{ID: 1, Email: "ada@example.com"}, result)
 }
 
-func TestQueryWriteOneRejectsZeroOrMultipleRows(t *testing.T) {
+func testQueryWriteOneRejectsZeroOrMultipleRows(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
@@ -500,7 +553,7 @@ func TestQueryWriteOneRejectsZeroOrMultipleRows(t *testing.T) {
 	})
 }
 
-func TestQueryWriteOneReportsDecodeError(t *testing.T) {
+func testQueryWriteOneReportsDecodeError(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -560,7 +613,7 @@ func (u *generatedReturningUser) ScanDestinations(columns []string) ([]any, erro
 	return destinations, nil
 }
 
-func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
+func testQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -595,7 +648,7 @@ func TestQueryWriteOneScansGeneratedRowDirectly(t *testing.T) {
 	require.Equal(t, generatedReturningUser{ID: 1, Email: "ada@example.com"}, result)
 }
 
-func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
+func testQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -635,7 +688,7 @@ func TestQueryWriteAllHonorsCompleteGeneratedReturning(t *testing.T) {
 	}, rows)
 }
 
-func TestQueryWriteRejectsIncompleteGeneratedReturning(t *testing.T) {
+func testQueryWriteRejectsIncompleteGeneratedReturning(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -673,7 +726,7 @@ func (u *partialReturningUser) ScanDestinations(columns []string) ([]any, error)
 	return destinations, nil
 }
 
-func TestQueryWriteAllowsIncompleteCustomReturning(t *testing.T) {
+func testQueryWriteAllowsIncompleteCustomReturning(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -716,7 +769,7 @@ func deleteReturningStatement(t *testing.T) query.Delete {
 	return statement
 }
 
-func TestUpdateExecutesTypedRow(t *testing.T) {
+func testUpdateExecutesTypedRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -752,7 +805,7 @@ func TestUpdateExecutesTypedRow(t *testing.T) {
 	require.EqualValues(t, 1, rows)
 }
 
-func TestUpdateWithOptionsUpdatesSelectedFieldsByPrimaryKey(t *testing.T) {
+func testUpdateWithOptionsUpdatesSelectedFieldsByPrimaryKey(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -791,7 +844,7 @@ func TestUpdateWithOptionsUpdatesSelectedFieldsByPrimaryKey(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestUpdateManyBulkUpdatesPartialRowByPredicate(t *testing.T) {
+func testUpdateManyBulkUpdatesPartialRowByPredicate(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -831,7 +884,7 @@ func TestUpdateManyBulkUpdatesPartialRowByPredicate(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestUpdateWithOptionsRejectsInvalidConfiguration(t *testing.T) {
+func testUpdateWithOptionsRejectsInvalidConfiguration(t *testing.T) {
 	type patch struct {
 		Email string `rasql:"email"`
 	}
@@ -855,7 +908,7 @@ func TestUpdateWithOptionsRejectsInvalidConfiguration(t *testing.T) {
 	require.ErrorContains(t, err, "bulk update requires an explicit UpdateWhere predicate")
 }
 
-func TestUpdateRejectsTableWithoutPrimaryKey(t *testing.T) {
+func testUpdateRejectsTableWithoutPrimaryKey(t *testing.T) {
 	type user struct {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
@@ -878,7 +931,7 @@ func TestUpdateRejectsTableWithoutPrimaryKey(t *testing.T) {
 // messages that name a table. Each one used to print the bare name, so a
 // qualified table reported "users" and told the caller nothing about which
 // schema the table it complained about sits in.
-func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
+func testTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 	type user struct {
 		ID    int64  `rasql:"id"`
 		Email string `rasql:"email"`
@@ -921,7 +974,7 @@ func TestTypedWriteNamesQualifiedTableInErrors(t *testing.T) {
 	require.ErrorContains(t, err, `table "tenant.users" has no non-primary-key columns`)
 }
 
-func TestUpdateMatchesCompositePrimaryKey(t *testing.T) {
+func testUpdateMatchesCompositePrimaryKey(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1136,7 +1189,7 @@ func (u partiallyMappedUser) ColumnValue(name string) (any, bool) {
 	return nil, false
 }
 
-func TestWritesUseColumnValuer(t *testing.T) {
+func testWritesUseColumnValuer(t *testing.T) {
 	table := schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
@@ -1221,7 +1274,7 @@ func TestWritesUseColumnValuer(t *testing.T) {
 	})
 }
 
-func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
+func testWritesIgnorePromotedColumnValuer(t *testing.T) {
 	table := schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
@@ -1281,7 +1334,7 @@ func TestWritesIgnorePromotedColumnValuer(t *testing.T) {
 	})
 }
 
-func TestWritesFollowDeclaredColumnValuer(t *testing.T) {
+func testWritesFollowDeclaredColumnValuer(t *testing.T) {
 	table := schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
@@ -1465,7 +1518,7 @@ func requireUpdateBinds[T any](t *testing.T, value T, id int64, email string) {
 // pointer receiver. Each shape is written three ways -- without tags, with tags,
 // and with tags plus a declared ColumnValue -- because the write side routes the
 // three differently.
-func TestWritesRouteEveryEmbeddingShape(t *testing.T) {
+func testWritesRouteEveryEmbeddingShape(t *testing.T) {
 	t.Run("pointer receiver without embedding", func(t *testing.T) {
 		// The row type declares its mapping, so the method binds these values
 		// even though no field of it is tagged.
@@ -1568,7 +1621,7 @@ const (
 // side rests on, for every shape it routes by. It fails on a Go release that
 // reports a promoted method as declared, or a declared one as generated, rather
 // than leaving that release to mis-bind a write.
-func TestGeneratedMethodsReportGeneratedFile(t *testing.T) {
+func testGeneratedMethodsReportGeneratedFile(t *testing.T) {
 	// Every fixture named here is declared in this file, so a declared
 	// ColumnValue must be reported as coming from it.
 	const declaringFile = "typed_write_test.go"
@@ -1701,7 +1754,7 @@ func requireMethodOrigin(t *testing.T, methodType reflect.Type, want string, dec
 	require.Truef(t, strings.HasSuffix(file, declaringFile), "%s.ColumnValue is declared in %s, and this Go build reports its file as %q. %s", methodType, declaringFile, file, originPremise)
 }
 
-func TestInsertRejectsMissingTaggedColumn(t *testing.T) {
+func testInsertRejectsMissingTaggedColumn(t *testing.T) {
 	type user struct {
 		ID int64 `rasql:"id"`
 	}
