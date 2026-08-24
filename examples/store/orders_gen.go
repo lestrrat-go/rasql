@@ -8,6 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 )
 
+// OrdersRow is one row of the "orders" table.
 type OrdersRow struct {
 	ID     int64
 	UserID int64

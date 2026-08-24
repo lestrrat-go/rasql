@@ -10,6 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 )
 
+// TasksRow is one row of the "tasks" table.
 type TasksRow struct {
 	ID         int64
 	ProjectID  int64

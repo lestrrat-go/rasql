@@ -8,6 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 )
 
+// EmployeesRow is one row of the "employees" table.
 type EmployeesRow struct {
 	ID        int64
 	Name      string

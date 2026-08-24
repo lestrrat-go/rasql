@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 )
 
+// ProjectsRow is one row of the "projects" table.
 type ProjectsRow struct {
 	ID   int64
 	Name string
