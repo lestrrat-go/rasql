@@ -129,7 +129,18 @@ func (r *renderer) writeSelect(s query.Select) error {
 			if i > 0 {
 				r.builder.WriteString(", ")
 			}
-			if err := r.writeExpression(order.Expression()); err != nil {
+			if projection, ok := order.ResultProjection(); ok {
+				// Validate ran ahead of write (renderStatement calls it
+				// before this method), so this projection's name is already
+				// confirmed present and unambiguous among s.Projections();
+				// ResultName resolves it the same way that check did.
+				name, _ := query.ResultName(projection)
+				quoted, err := r.quoteIdentifier(name)
+				if err != nil {
+					return err
+				}
+				r.builder.WriteString(quoted)
+			} else if err := r.writeExpression(order.Expression()); err != nil {
 				return err
 			}
 			if order.Descending() {

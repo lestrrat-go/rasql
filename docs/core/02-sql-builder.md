@@ -163,6 +163,8 @@ An `ORDER BY` clause follows the projections, in three cases.
 - When the statement is one implicit group, ordering may call an aggregate, such as `query.Asc(query.CountAll())`, and every column it reads has to sit inside one. `query.Asc(users.ID())` beside an aggregate projection is refused for the same `GROUP BY` reason the projection rule gives.
 - When no projection aggregates, ordering reads columns freely and may not call an aggregate.
 
+An `ORDER BY` term that names a projection's result, built with `query.AscResult`/`query.DescResult`, follows none of the three cases above: the projection it names has already been judged by the projection rules, so a result name reads nothing of its own for these rules to apply to. [Order by a projection's result name](#order-by-a-projections-result-name) covers it.
+
 A `HAVING` clause needs a statement that groups, so a statement that groups neither way refuses one. `Having` over a projection set that reads plain columns needs a `GroupBy` beside it. Over an explicit `GROUP BY`, the clause reads the grouping keys freely. Over one implicit group, it follows the same rule `ORDER BY` does, so every column it reads has to sit inside an aggregate. `query.GreaterThan(query.CountAll(), 1)` is accepted, and `query.GreaterThan(users.ID(), 1)` is refused.
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
@@ -333,7 +335,108 @@ A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `G
 | `rasql.LeftJoin(table, on)` | A left outer join on a typed table with its condition. |
 | `query.InnerJoin(queryTable, on)`, `query.LeftJoin(queryTable, on)` | The same joins on a `query.TableRef`, for dynamic code. |
 | `query.Asc(expression)`, `query.Desc(expression)` | Ordering for `Order`. |
+| `query.AscResult(projection)`, `query.DescResult(projection)` | Ordering for `Order` by a projection's already-computed result instead of its expression. |
 
+#### Order by a projection's result name
+
+`query.AscResult(projection)` and `query.DescResult(projection)` order by `projection`'s result name — the name `As` gave it, or, for a column selected without a wrapper, the column's own name — rather than by the expression behind it. `projection` is the same value passed to `Project` (or the same `query.ColumnRef` projected on its own), so the name is written once: this is what `SELECT … AS alias … ORDER BY alias` means, and the ordering reads the projection's already-computed result instead of recomputing the expression, so a long function call or a scalar subquery is written once instead of twice, and renaming its alias with `As` cannot drift the two apart the way repeating the name as a second string could.
+
+`projection` is not a `query.Expression`, which is deliberate. A result name resolves against the statement's own projections rather than against its tables, and SQL admits it in exactly one position: alone, as a whole `ORDER BY` term. PostgreSQL refuses `ORDER BY alias || 'x'` with "column does not exist" while MySQL and SQLite run it, so an expression node carrying a result name would build statements that work on two dialects and fail on the third. Keeping it a kind of `Order` instead means `WithWhere`, `WithGroupBy`, `WithHaving`, and a join condition all refuse it at compile time, since each of those takes an `Expression`.
+
+Validation resolves `projection` to the result name it reports and refuses one that reports no name at all: an unaliased function call or `query.Project` reports whatever name the database picks for it, which is not portable, so give such a projection an alias with `As` before ordering by it, or call `query.Asc` on the expression instead. It also refuses a name no projection of the statement reports, so the ordering cannot name a result the statement never produces, and a name more than one projection reports: PostgreSQL answers that shape with "ORDER BY is ambiguous" and MySQL with error 1052, while SQLite silently sorts by whichever projection was aliased, so refusing it here is what keeps one statement meaning one thing on all three. Membership and ambiguity are both judged by that resolved name, not by comparing `projection` against the statement's projections directly, since a projection built by `query.Project` can hold an expression that is not safe to compare that way — a caller whose alias happens to collide with an unaliased call's own database-chosen name, such as `SELECT count(*), max(id) AS count … ORDER BY count`, is refused by PostgreSQL and accepted by MySQL, and rasql leaves that residual case to the database rather than modeling a name it cannot know.
+
+There is no ordinal form, `ORDER BY 2`. It works on every supported engine, but an ordinal is a position into the select list: insert a projection ahead of it and the statement keeps compiling, keeps validating, keeps running, and silently sorts by a different column. Give the projection an alias with `As` and order by that name instead.
+
+<!-- INCLUDE(examples/rasql_order_by_alias_example_test.go#order_by_alias) -->
+```go
+// Example_rasql_order_by_alias binds a projection to a variable once and
+// passes that same variable to both Project and Order, so the ORDER BY reads
+// the projection's already-computed result instead of repeating its
+// expression, and renaming its alias can never drift the two apart the way
+// writing the alias out as a second string could. displayName falls back
+// from nickname to email with COALESCE.
+func Example_rasql_order_by_alias() {
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer func() { _ = database.Close() }()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	db, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create rasql db: %s\n", err)
+		return
+	}
+	users := store.Users()
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
+		return
+	}
+
+	nick := "Ada"
+	for _, user := range []store.UsersRow{
+		{ID: 1, Email: "ada@example.com", Nickname: &nick},
+		{ID: 2, Email: "bob@example.com", Nickname: nil},
+	} {
+		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
+			fmt.Printf("failed to insert user: %s\n", err)
+			return
+		}
+	}
+
+	// A local result type holds the decoded id and the aliased display name.
+	// DisplayName has no rasql tag, so it maps to the alias by snake-casing
+	// the field name to display_name.
+	type userDisplayName struct {
+		ID          int64
+		DisplayName string
+	}
+
+	// displayName is written once and used in both Project and Order below.
+	// SQL: SELECT users.id, COALESCE(users.nickname, users.email) AS display_name FROM users ORDER BY display_name DESC
+	displayName := query.Coalesce(users.Nickname(), users.Email()).As("display_name")
+	rows, err := rasql.DecodeFrom[userDisplayName](users).
+		Project(users.ID(), displayName).
+		Order(query.DescResult(displayName)).
+		Query(ctx, db)
+	if err != nil {
+		fmt.Printf("failed to query users: %s\n", err)
+		return
+	}
+	for user, err := range rows {
+		if err != nil {
+			fmt.Printf("failed to read user: %s\n", err)
+			return
+		}
+		fmt.Println(user.ID, user.DisplayName)
+	}
+
+	// A second builder orders by a projection whose result name two
+	// projections report: id is projected without a wrapper, and nickname is
+	// separately aliased id. rasql refuses this in Go rather than letting it
+	// reach a server, since PostgreSQL and MySQL both call it ambiguous and
+	// SQLite would otherwise resolve it silently.
+	nicknameAsID := users.Nickname().As("id")
+	_, err = rasql.DecodeFrom[userDisplayName](users).
+		Project(users.ID(), nicknameAsID).
+		Order(query.AscResult(nicknameAsID)).
+		Build(dialect.SQLite())
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	// Output:
+	// 2 bob@example.com
+	// 1 Ada
+	// query: order_by[0]: orders by the result name "id", which 2 projections report, so the ordering is ambiguous; give one of them a distinct alias
+}
+```
+source: [examples/rasql_order_by_alias_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_order_by_alias_example_test.go)
+<!-- END INCLUDE -->
 
 ## Next
 
