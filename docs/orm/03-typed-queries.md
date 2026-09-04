@@ -69,7 +69,7 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 | `WhereIn(column, values…)` | Adds `column IN (values…)` for a `query.ColumnRef`, one placeholder per value. |
 | `GroupBy(expressions…)` | Adds grouping built with the basic query API. |
 | `Having(expression)` | Adds a grouped predicate from a `query` expression; combines with `AND` like `Where`. |
-| `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. |
+| `Order(orders…)` | Adds ordering built with `query.Asc`/`query.Desc`, or with `query.AscResult`/`query.DescResult` to order by a projection's result name instead. |
 | `OrderAsc(column)`, `OrderDesc(column)` | Adds ordering for a `query.ColumnRef`. |
 | `Limit(n)`, `Offset(n)` | Pages the result. |
 | `Build(d)` | Renders `stmt.Statement` for a `dialect.Dialect` without executing. |
@@ -207,7 +207,7 @@ source: [examples/rasql_no_rows_example_test.go](https://github.com/lestrrat-go/
 
 ## Filter, order, and page
 
-`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.ColumnRef` and cover the common cases without importing the `query` package. Generated tables expose one accessor method per column, so `users.ID()` is the whole reference. `Limit` and `Offset` page the result. A caller who wants the raw row and full manual control drops to [`dynamic.SelectFrom(table.Ref()).Query(ctx, db)`](../core/05-dynamic.md) instead.
+`WhereEqual`, `OrderAsc`, and `OrderDesc` take a `query.ColumnRef` and cover the common cases without importing the `query` package. Generated tables expose one accessor method per column, so `users.ID()` is the whole reference. `Limit` and `Offset` page the result. A caller who wants the raw row and full manual control drops to [`dynamic.SelectFrom(table.Ref()).Query(ctx, db)`](../core/05-dynamic.md) instead. To order by a projection's already-computed result instead of a column, `Order(query.AscResult(projection))` and `Order(query.DescResult(projection))` cover that: [Order by a projection's result name](../core/02-sql-builder.md#order-by-a-projections-result-name).
 
 `WhereIn` covers a membership test the same way. It needs at least one value: an empty list makes `Build`, `Query`, `All`, and `One` return an error rather than render `IN ()`, which is not valid SQL in any supported dialect. A non-empty list binds each value as its own placeholder:
 

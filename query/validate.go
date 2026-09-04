@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -29,6 +30,36 @@ func validateAlias(alias string) error {
 		return fmt.Errorf("invalid alias: %w", err)
 	}
 	return nil
+}
+
+// validateOrderResultAlias refuses an ORDER BY term built by AscResult or
+// DescResult that PostgreSQL and MySQL would themselves refuse. projection
+// must report a result name at all, that name must be a legal identifier, it
+// must be reported by at least one projection of the statement, and it must
+// not be reported by more than one. results is Select.resultNames, counting
+// how many projections report each name; membership and ambiguity are judged
+// by that resolved name rather than by comparing projection against the
+// statement's projections with ==, since a projection built by Project can
+// hold an expression whose dynamic type is not comparable.
+func validateOrderResultAlias(projection Projection, results map[string]int, path string) error {
+	if nilcheck.Is(projection) {
+		return validationError(path, "must not be nil")
+	}
+	name, ok := ResultName(projection)
+	if !ok {
+		return validationError(path, "orders by a projection with no result name; give it one with As, or use Asc on the expression instead")
+	}
+	if err := validateAlias(name); err != nil {
+		return validationError(path, "%s", err)
+	}
+	switch count := results[name]; count {
+	case 0:
+		return validationError(path, "orders by the result name %q, which no projection of this statement reports; add the projection to Project before ordering by it", name)
+	case 1:
+		return nil
+	default:
+		return validationError(path, "orders by the result name %q, which %d projections report, so the ordering is ambiguous; give one of them a distinct alias", name, count)
+	}
 }
 
 // validateSourceReference refuses a source a server could not tell apart from

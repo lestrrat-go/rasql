@@ -32,7 +32,7 @@ Predicates, aggregates, and statement constructors are the same ones [the SQL bu
 | `GroupBy(expressions…)` | Adds grouping built with the basic query API. |
 | `GroupByColumns(names…)` | Adds primary-table columns to the grouping by name. |
 | `Having(expression)` | Adds a grouped predicate from a `query` expression; combines with `AND` like `Where`. |
-| `Order(orders…)` | Adds ordering built with `query.Asc` or `query.Desc`. |
+| `Order(orders…)` | Adds ordering built with `query.Asc`/`query.Desc`, or with `query.AscResult`/`query.DescResult` to order by a projection's result name instead. |
 | `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. |
 | `Limit(n)`, `Offset(n)` | Pages the result. |
 | `Build(d)` | Renders `stmt.Statement` for a `dialect.Dialect` without executing. |

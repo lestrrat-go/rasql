@@ -103,10 +103,16 @@ func (j Join) On() Expression {
 	return j.on
 }
 
-// Order specifies ordering for a result expression.
+// Order specifies ordering for a result expression, or for the result a
+// projection of the same statement already computed.
+//
+// A term is one or the other and never both. Asc and Desc build the expression
+// form, and AscResult and DescResult build the projection form; Expression and
+// ResultProjection report which one a value carries.
 type Order struct {
-	expression Expression
-	descending bool
+	expression       Expression
+	resultProjection Projection
+	descending       bool
 }
 
 // Asc orders expression in ascending order.
@@ -119,9 +125,68 @@ func Desc(expression Expression) Order {
 	return Order{expression: expression, descending: true}
 }
 
-// Expression returns the ordered expression.
+// AscResult orders by projection's already-computed result, in ascending
+// order, instead of recomputing the expression behind it. It is what
+// SELECT … AS alias … ORDER BY alias means, written so the alias is given
+// once: projection is the same value passed to Project (or the same ColumnRef
+// projected on its own), so a long function call or a scalar subquery is
+// written once instead of twice, and renaming its alias with As cannot drift
+// the two apart the way repeating the name as a second string could.
+//
+// projection is not an Expression, which is deliberate. A result name
+// resolves against the statement's projections rather than against its
+// tables, and SQL admits it in exactly one position: alone, as a whole
+// ORDER BY term. PostgreSQL refuses ORDER BY alias || 'x' with "column does
+// not exist" while MySQL and SQLite run it, so an expression node carrying a
+// result name would build statements that work on two dialects and fail on
+// the third. Keeping it a kind of Order instead means WithWhere, WithGroupBy,
+// WithHaving, and a join condition all refuse it at compile time, since each
+// of those takes an Expression.
+//
+// Statement validation resolves projection to the result name it reports —
+// the name As gave it, or, for a column selected without a wrapper, the
+// column's own name — and refuses a projection with neither, since an
+// unaliased function call or Project has no name any dialect agrees on; give
+// it one with As, or call Asc on the expression instead. Validation also
+// refuses a name no projection of the statement reports, so the ordering
+// cannot name a result the statement never produces, and a name more than one
+// projection reports: PostgreSQL answers that shape with "ORDER BY is
+// ambiguous" and MySQL with error 1052, while SQLite silently sorts by
+// whichever projection was aliased, so refusing it here is what keeps one
+// statement meaning one thing on all three. Membership and ambiguity are both
+// judged by that resolved name, not by comparing projection against the
+// statement's projections with ==, since a projection built by Project can
+// hold an expression whose dynamic type is not comparable.
+func AscResult(projection Projection) Order {
+	return Order{resultProjection: projection}
+}
+
+// DescResult orders by projection's result in descending order. It is
+// AscResult reversed, and carries every rule AscResult states.
+func DescResult(projection Projection) Order {
+	return Order{resultProjection: projection, descending: true}
+}
+
+// Expression returns the ordered expression, or nil when the order names a
+// projection's result instead. ResultProjection reports which of the two an
+// Order carries.
 func (o Order) Expression() Expression {
 	return o.expression
+}
+
+// ResultProjection returns the projection the order sorts by, and reports
+// whether the order names one at all. It reports nil and false for an order
+// built by Asc or Desc, whose ordering key is the Expression instead.
+//
+// It returns the projection itself rather than the name resolved from it, so
+// that name is computed in one place, ResultName, instead of Order keeping a
+// second copy that repeating alias could drift from — the exact drift
+// AscResult and DescResult exist to rule out.
+func (o Order) ResultProjection() (Projection, bool) {
+	if nilcheck.Is(o.resultProjection) {
+		return nil, false
+	}
+	return o.resultProjection, true
 }
 
 // Descending reports whether the order is descending.
@@ -401,8 +466,15 @@ func (s Select) Validate() error {
 			return validationError("having", "reads a column outside an aggregate function while the projections aggregate, which requires a GROUP BY clause")
 		}
 	}
+	var results map[string]int
+	for _, order := range s.orderBy {
+		if _, ok := order.ResultProjection(); ok {
+			results = s.resultNames()
+			break
+		}
+	}
 	for i, order := range s.orderBy {
-		if err := validateOrder(order, sources, projections, grouped, fmt.Sprintf("order_by[%d]", i)); err != nil {
+		if err := validateOrder(order, sources, projections, grouped, results, fmt.Sprintf("order_by[%d]", i)); err != nil {
 			return err
 		}
 	}
@@ -415,19 +487,27 @@ func (s Select) Validate() error {
 	return nil
 }
 
-// validateOrder validates one ORDER BY expression against what the statement
-// groups and what the projection set does, which projections reports. ORDER BY
-// runs after aggregation. A statement that groups explicitly may read its
-// grouping keys freely and may call an aggregate, so no bareColumn check
-// applies. An ungrouped statement follows the projection set instead, which has
-// exactly two cases because validateProjectionSet already refused the mixed
-// set: projections that never aggregate leave one result row per source row, so
+// validateOrder validates one ORDER BY term. A term naming a projection's
+// result, built by AscResult or DescResult, is resolved against results and
+// never reaches the aggregate reasoning below: it names a projection
+// validateProjectionSet has already judged under those rules, and a result
+// name reads nothing of its own for them to apply to. Otherwise the term is an
+// expression, validated against what the statement groups and what the
+// projection set does, which projections reports. ORDER BY runs after
+// aggregation. A statement that groups explicitly may read its grouping keys
+// freely and may call an aggregate, so no bareColumn check applies. An
+// ungrouped statement follows the projection set instead, which has exactly
+// two cases because validateProjectionSet already refused the mixed set:
+// projections that never aggregate leave one result row per source row, so
 // ORDER BY reads columns freely and must not aggregate; projections that all
 // aggregate leave a single implicit group, so ORDER BY may call an aggregate,
 // while a column it reads outside every aggregate belongs to no row of that
 // group and needs an explicit GROUP BY, exactly as in the projection set
 // itself.
-func validateOrder(order Order, sources map[string]struct{}, projections expressionUsage, grouped bool, path string) error {
+func validateOrder(order Order, sources map[string]struct{}, projections expressionUsage, grouped bool, results map[string]int, path string) error {
+	if projection, ok := order.ResultProjection(); ok {
+		return validateOrderResultAlias(projection, results, path)
+	}
 	if grouped {
 		_, err := validateExpression(order.expression, aggregateClauseContext(sources, "an ORDER BY clause"), path)
 		return err
@@ -488,6 +568,38 @@ func (s Select) validateProjectionSet(sources map[string]struct{}, grouped bool)
 		return expressionUsage{}, validationError(columnPath+".expression", "reads a column outside an aggregate function while %s aggregates, which requires a GROUP BY clause", aggregatePath)
 	}
 	return total, nil
+}
+
+// ResultName returns the name p is reported under in a SELECT list: the alias
+// As gave it, or, for a ColumnRef selected without a wrapper, the column's own
+// name. It reports false for a projection with neither, which is every other
+// unaliased projection: PostgreSQL, MySQL, and SQLite each pick a different
+// name for an unaliased function call, so this package cannot say what such a
+// projection is reported under and does not guess. AscResult, DescResult, and
+// this statement's own rendering both resolve a projection's name through
+// this one function, so the two can never compute it differently.
+func ResultName(p Projection) (string, bool) {
+	if alias := p.ResultAlias(); alias != "" {
+		return alias, true
+	}
+	if column, ok := p.(ColumnRef); ok {
+		return column.Name(), true
+	}
+	return "", false
+}
+
+// resultNames counts the result names this statement's projections report, so an
+// ORDER BY term naming one can be resolved against them. The count rather than a
+// presence flag is what lets validation tell an unknown name from an ambiguous
+// one.
+func (s Select) resultNames() map[string]int {
+	names := make(map[string]int, len(s.projections))
+	for _, projection := range s.projections {
+		if name, ok := ResultName(projection); ok {
+			names[name]++
+		}
+	}
+	return names
 }
 
 func (s Select) clone() Select {
