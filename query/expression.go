@@ -78,6 +78,26 @@ func (c ExcludedColumn) Column() ColumnRef {
 	return c.column
 }
 
+// TableIdentifier is an expression that renders a TableRef as a bare quoted
+// identifier: no schema qualifier, no column, and no text beyond what
+// Dialect.QuoteIdentifier returns for a table this statement already
+// carries. It exists for the one kind of SQL that treats a table's own name
+// as if it were a column: SQLite's FTS5 module reads the table name this way
+// as the left operand of MATCH and as the first argument to bm25 and its
+// other auxiliary functions. TableRef.Identifier builds it; nothing in this
+// package builds one from a plain string, so it cannot become a way to place
+// arbitrary text in a rendered statement.
+type TableIdentifier struct {
+	table TableRef
+}
+
+func (TableIdentifier) expression() {}
+
+// Table returns the table whose bare name is rendered.
+func (t TableIdentifier) Table() TableRef {
+	return t.table
+}
+
 // Value is a bound SQL argument. Its value is never interpolated into SQL text.
 type Value struct {
 	value any
@@ -134,6 +154,15 @@ const (
 	OperatorLessThan           BinaryOperator = "<"
 	OperatorLessThanOrEqual    BinaryOperator = "<="
 	OperatorLike               BinaryOperator = "LIKE"
+	// OperatorMatch is SQLite's full-text search operator, answered by a
+	// virtual table's own module — FTS5 among them — rather than by SQL
+	// itself. PostgreSQL and MySQL have no such operator, so render.Select
+	// and render.Update refuse it unless the target dialect grants
+	// dialect.CapabilityMatchOperator, which only dialect.SQLite does. Match
+	// builds the common shape directly; Compare accepts this constant too,
+	// for the less common shape that tests one column rather than the whole
+	// table.
+	OperatorMatch BinaryOperator = "MATCH"
 )
 
 // Binary combines two expressions with an operator.
@@ -200,6 +229,22 @@ func LessThanOrEqual(left any, right any) Binary {
 // NULL.
 func Like(left any, right any) Binary {
 	return Compare(left, OperatorLike, right)
+}
+
+// Match tests table against a full-text query, rendering table's own bare
+// identifier — never one of its columns — as the left operand of MATCH. This
+// is the common SQLite FTS5 shape: the table name stands for every indexed
+// column of the row at once, which is what lets one MATCH filter a whole
+// row rather than a single column. expr may be a plain Go value, bound the
+// way Compare binds it, or an Expression such as a bound query string built
+// some other way.
+//
+// A caller who wants MATCH against one column instead, which FTS5 also
+// supports, writes Compare(table.Column(name), OperatorMatch, expr)
+// directly; Match only builds the whole-table shape, since that is the one
+// bm25 and the target query in the rasql documentation both need.
+func Match(table TableRef, expr any) Binary {
+	return Binary{left: TableIdentifier{table: table}, operator: OperatorMatch, right: operand(expr)}
 }
 
 // Left returns the left expression.
@@ -418,6 +463,19 @@ const (
 	FunctionLower    FunctionName = "LOWER"
 	FunctionUpper    FunctionName = "UPPER"
 	FunctionAbs      FunctionName = "ABS"
+
+	// FunctionBM25 is SQLite FTS5's ranking function. Its first argument
+	// must be a TableIdentifier naming the FTS5 table itself, never a
+	// column and never a plain string, which validateBM25Function checks;
+	// BM25 builds a call in the right shape directly. Every other argument
+	// is an optional per-column weight. Like MATCH, it means nothing outside
+	// SQLite, but validation does not gate it by dialect the way it gates
+	// OperatorMatch: nothing about the call's shape is dialect-specific the
+	// way MATCH's syntax is, and a curated name checked at build time is
+	// still better than the Func escape hatch for a call this common.
+	// Rendering it against PostgreSQL or MySQL fails only when the database
+	// runs the statement, exactly as any other name given to Func would.
+	FunctionBM25 FunctionName = "BM25"
 )
 
 // Function calls a SQL function on its arguments. COUNT, SUM, MIN, MAX, and
@@ -509,6 +567,22 @@ func Max(expression Expression) Function {
 // Avg averages the values of expression.
 func Avg(expression Expression) Function {
 	return Call(FunctionAvg, expression)
+}
+
+// BM25 scores how well table's row matches the query an enclosing MATCH
+// tests, lower meaning a better match. weights states a relevance weight per
+// column of table, in the column order table declares them, and may be
+// omitted entirely; SQLite then weighs every column 1.0. table's own bare
+// identifier is always the call's first argument, built the same way Match
+// builds its left operand, so the table name never travels as SQL text
+// typed by hand.
+func BM25(table TableRef, weights ...float64) Function {
+	arguments := make([]any, 0, len(weights)+1)
+	arguments = append(arguments, TableIdentifier{table: table})
+	for _, weight := range weights {
+		arguments = append(arguments, weight)
+	}
+	return Call(FunctionBM25, arguments...)
 }
 
 // Coalesce returns the first of expressions that is not NULL. An expression

@@ -226,6 +226,14 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 			return expressionUsage{}, validationError(path, "references unknown column %q", expression.column.name)
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
+	case TableIdentifier:
+		if err := expression.table.validate(); err != nil {
+			return expressionUsage{}, validationError(path, "%s", err)
+		}
+		if _, inSources := ctx.sources[expression.table.key()]; !inSources {
+			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.table.QualifiedName())
+		}
+		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
 	case Value:
 		return expressionUsage{}, nil
 	case Binary:
@@ -352,6 +360,9 @@ func validateFunction(function Function, ctx expressionContext, path string) (ex
 	if function.unchecked {
 		return validateCustomFunction(function, ctx, path)
 	}
+	if function.name == FunctionBM25 {
+		return validateBM25Function(function, ctx, path)
+	}
 	spec, ok := functionSpecs[function.name]
 	if !ok {
 		return expressionUsage{}, validationError(path+".function", "unsupported function %q", function.name)
@@ -430,6 +441,39 @@ func validateScalarFunction(function Function, spec functionSpec, ctx expression
 	return usage, nil
 }
 
+// validateBM25Function validates a call to FunctionBM25. It is scalar, like
+// validateScalarFunction, and follows the same placement rule with no
+// DISTINCT and no *; it departs from validateScalarFunction only in its
+// arity, which is variable, and in checking the shape of its first argument,
+// which every other curated function leaves to whatever expression node the
+// caller passed. bm25's first argument must be a TableIdentifier: a
+// ColumnRef or a bound value there is not a mistake SQL itself would catch,
+// since either still reaches the database as a plausible-looking argument,
+// so this is exactly the shape the SQL text cannot check for us.
+func validateBM25Function(function Function, ctx expressionContext, path string) (expressionUsage, error) {
+	if function.star {
+		return expressionUsage{}, validationError(path, "function %q does not support *", function.name)
+	}
+	if function.distinct {
+		return expressionUsage{}, validationError(path, "function %q does not aggregate, so it does not support DISTINCT", function.name)
+	}
+	if len(function.arguments) == 0 {
+		return expressionUsage{}, validationError(path, "function %q takes the table's own identifier as its first argument, followed by zero or more column weights", function.name)
+	}
+	if _, ok := function.arguments[0].(TableIdentifier); !ok {
+		return expressionUsage{}, validationError(fmt.Sprintf("%s.arguments[0]", path), "function %q takes a TableIdentifier as its first argument, got %T; build one with TableRef.Identifier", function.name, function.arguments[0])
+	}
+	var usage expressionUsage
+	for i, argument := range function.arguments {
+		argumentUsage, err := validateExpression(argument, ctx, fmt.Sprintf("%s.arguments[%d]", path, i))
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		usage = usage.merge(argumentUsage)
+	}
+	return usage, nil
+}
+
 // validateCustomFunction validates a call built with Func: the escape hatch
 // that accepts any function name. Validation checks only that name is a
 // legal SQL identifier, reusing schema.ValidateIdentifier rather than
@@ -481,7 +525,7 @@ func validateFunctionArity(name FunctionName, count int, spec functionSpec, path
 
 func validBinaryOperator(operator BinaryOperator) bool {
 	switch operator {
-	case OperatorEqual, OperatorNotEqual, OperatorGreaterThan, OperatorGreaterThanOrEqual, OperatorLessThan, OperatorLessThanOrEqual, OperatorLike:
+	case OperatorEqual, OperatorNotEqual, OperatorGreaterThan, OperatorGreaterThanOrEqual, OperatorLessThan, OperatorLessThanOrEqual, OperatorLike, OperatorMatch:
 		return true
 	default:
 		return false

@@ -34,6 +34,13 @@ const (
 	// PostgreSQL and SQLite both have this; MySQL rejects a WHERE clause
 	// on CREATE INDEX with a syntax error.
 	CapabilityPartialIndex
+	// CapabilityMatchOperator reports that a statement may compare an
+	// expression against a query with query.OperatorMatch. Only SQLite has
+	// this: MATCH is answered by a virtual table's own module, FTS5 among
+	// them, and MySQL's own full-text search is a different syntax entirely
+	// — MATCH (cols) AGAINST (expr), not a binary operator — while
+	// PostgreSQL has neither.
+	CapabilityMatchOperator
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -135,7 +142,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityQualifiedIndexName | CapabilityPartialIndex,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator,
 		decimalName:  "TEXT",
 		// varcharText is left false: SQLite already drops schema.DecimalType's
 		// Precision and Scale for the same reason (see decimalTypeName below),
