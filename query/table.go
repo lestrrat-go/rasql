@@ -263,6 +263,15 @@ func (t TableRef) Column(name string) ColumnRef {
 	return ColumnRef{source: t, name: name}
 }
 
+// Identifier returns an expression for t's own name, rendered as a bare
+// quoted identifier with no schema and no column. It is meaningless in
+// ordinary SQL; build one only for a construct that specifically reads a
+// table's own name in expression position, such as query.Match or
+// query.BM25 for SQLite's FTS5 module.
+func (t TableRef) Identifier() TableIdentifier {
+	return TableIdentifier{table: t}
+}
+
 // column looks a column up on t's descriptor. It exists so the package's other
 // files can read the descriptor without dereferencing a possibly-nil pointer.
 func (t TableRef) column(name string) (schema.ColumnDef, bool) {

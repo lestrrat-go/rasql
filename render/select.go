@@ -2,6 +2,7 @@
 package render
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -27,6 +28,35 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error {
 	return e.Err
+}
+
+// ErrUnsupportedMatchOperator is the sentinel wrapped by every
+// [UnsupportedMatchOperatorError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrUnsupportedMatchOperator = errors.New("render: unsupported MATCH operator")
+
+// UnsupportedMatchOperatorError reports that a statement compares an
+// expression with [query.OperatorMatch] against a dialect that has not been
+// granted [dialect.CapabilityMatchOperator]. query.Validate accepts MATCH
+// like any other query.BinaryOperator, because the operator's shape is the
+// same on every dialect; only SQLite can actually run it, since MATCH is
+// answered by a virtual table's own module rather than by SQL itself, so
+// this package refuses to render it for any other dialect instead of
+// sending SQL the target database does not understand.
+type UnsupportedMatchOperatorError struct {
+	// Dialect is the name of the dialect that cannot express MATCH.
+	Dialect string
+}
+
+func (e *UnsupportedMatchOperatorError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express MATCH: it has no full-text search operator", e.Dialect)
+}
+
+// Unwrap exposes ErrUnsupportedMatchOperator so
+// errors.Is(err, ErrUnsupportedMatchOperator) works alongside errors.As
+// against *UnsupportedMatchOperatorError.
+func (e *UnsupportedMatchOperatorError) Unwrap() error {
+	return ErrUnsupportedMatchOperator
 }
 
 // Select renders s for d.
@@ -201,6 +231,13 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		r.builder.WriteByte('.')
 		r.builder.WriteString(name)
 		return nil
+	case query.TableIdentifier:
+		name, err := r.quoteIdentifier(expression.Table().Qualifier())
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(name)
+		return nil
 	case query.Value:
 		return r.writeArgument(expression.Argument())
 	case query.Function:
@@ -224,6 +261,9 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		r.builder.WriteByte(')')
 		return nil
 	case query.Binary:
+		if expression.Operator() == query.OperatorMatch && !r.dialect.Supports(dialect.CapabilityMatchOperator) {
+			return &UnsupportedMatchOperatorError{Dialect: r.dialect.Name()}
+		}
 		r.builder.WriteByte('(')
 		if err := r.writeExpression(expression.Left()); err != nil {
 			return err

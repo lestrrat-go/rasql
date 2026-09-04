@@ -319,6 +319,87 @@ A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `G
 
 `query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit. The arguments a subquery binds join the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an `OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject. PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`.
 
+### Full-text search (SQLite FTS5)
+
+SQLite's FTS5 module treats a virtual table's own name as an implicit column: it is the left operand of `MATCH` and the first argument to `bm25` and FTS5's other auxiliary functions. `query.TableIdentifier` is the expression node that renders a `query.TableRef` this way, as a bare quoted identifier with no schema and no column; `table.Identifier()` builds one directly, and `query.Match` and `query.BM25` below build one internally so a caller reaching for the common shapes never has to.
+
+| Constructor | Renders |
+| --- | --- |
+| `query.Match(table, expr)` | `"table" MATCH expr`, filtering every indexed column of table's row at once. |
+| `query.Compare(table.Column(name), query.OperatorMatch, expr)` | `"table"."column" MATCH expr`, filtering one column instead of the whole row — FTS5 supports this shape too. |
+| `query.BM25(table, weights…)` | `BM25("table", weights…)`, FTS5's ranking function; a query with no weights at all leaves every column weighed 1.0. |
+| `table.Identifier()` | The bare `query.TableIdentifier` `Match` and `BM25` build internally, for a call this package does not curate. |
+
+`query.OperatorMatch` is only valid on a dialect that grants `dialect.CapabilityMatchOperator`, which today is SQLite alone: MATCH is answered by a virtual table's own module rather than by SQL itself, MySQL's own full-text search is a different syntax entirely — `MATCH (cols) AGAINST (expr)`, not a binary operator — and PostgreSQL has neither. `render.Select` and `render.Update` refuse a statement built with `query.Match` or `query.Compare(…, query.OperatorMatch, …)` for any other dialect, returning a `*render.UnsupportedMatchOperatorError` rather than sending SQL the server would reject.
+
+`FunctionBM25` is curated, unlike most FTS5 auxiliary functions, because its first argument has a shape validation can check that SQL itself cannot: a `query.ColumnRef` or a bound value in that position still looks like a plausible argument once rendered, so `query.Call(query.FunctionBM25, …)` and `query.BM25` both refuse anything there but a `query.TableIdentifier`. FTS5's `rank` needs no such curation: it is an ordinary hidden column SQLite adds to every FTS5 table, read the same way any other column is, through `table.Column("rank")`.
+
+[SQLite virtual tables](08-inspection-facts.md#sqlite-virtual-tables) covers `TableDef.VirtualTableModule` and the hidden columns FTS5 and other modules declare; `render.CreateTable` does not build `CREATE VIRTUAL TABLE` DDL, so a caller creates the FTS5 table itself before building statements against it here.
+
+<!-- INCLUDE(examples/query_render_select_match_example_test.go#render_select_match) -->
+```go
+func Example_query_render_select_match() {
+	// query.TableRef carries no Go row type here, exactly as in
+	// query_render_select_example_test.go, so every column is still named
+	// by string rather than through a generated accessor.
+	notesFTS := query.MustTableRef(schema.TableDef{
+		Name: "notes_fts",
+		Columns: []schema.ColumnDef{
+			{Name: "title", Type: schema.TextType{}},
+			{Name: "body", Type: schema.TextType{}},
+		},
+	})
+
+	// query.BM25 takes the table's own identifier as its first argument,
+	// never a plain string, so "notes_fts" reaches SQL through
+	// Dialect.QuoteIdentifier rather than as a bound parameter. The two
+	// weights that follow favor a match in title over one in body.
+	score := query.BM25(notesFTS, 2.0, 1.0)
+	statement, err := query.NewSelect(notesFTS, notesFTS.Column("title"), score.As("score"))
+	if err != nil {
+		fmt.Printf("failed to build the select: %s\n", err)
+		return
+	}
+
+	// query.Match builds the same shape for MATCH: the table's own
+	// identifier on the left, so it filters every indexed column at once.
+	statement, err = statement.WithWhere(query.Match(notesFTS, "dinosaur"))
+	if err != nil {
+		fmt.Printf("failed to add the predicate: %s\n", err)
+		return
+	}
+	// rasql orders by an expression, not by a projection's result name, so
+	// the ordering repeats the same BM25 call rather than naming "score".
+	statement, err = statement.WithOrder(query.Asc(score))
+	if err != nil {
+		fmt.Printf("failed to add the ordering: %s\n", err)
+		return
+	}
+
+	// MATCH is SQLite-only: render.Select refuses it for a dialect that
+	// lacks dialect.CapabilityMatchOperator rather than send SQL neither
+	// PostgreSQL nor MySQL understands.
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Printf("failed to render the select: %s\n", err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+
+	if _, err := render.Select(dialect.PostgreSQL(), statement); err != nil {
+		fmt.Println(err)
+	}
+
+	// Output:
+	// SELECT "notes_fts"."title", BM25("notes_fts", ?, ?) AS "score" FROM "notes_fts" WHERE ("notes_fts" MATCH ?) ORDER BY BM25("notes_fts", ?, ?)
+	// 2 1 dinosaur 2 1
+	// render postgresql: the postgresql dialect cannot express MATCH: it has no full-text search operator
+}
+```
+source: [examples/query_render_select_match_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_render_select_match_example_test.go)
+<!-- END INCLUDE -->
+
 ### Projections, joins, and ordering
 
 | Constructor | Produces |

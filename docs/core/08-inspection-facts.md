@@ -71,6 +71,8 @@ PostgreSQL and MySQL have no virtual-table concept, so neither field ever comes 
 
 Some virtual table modules, `fts5` among them, quote a shadow table's name with single quotes in that `CREATE TABLE` text. rasql's SQLite parser accepts that form in table-name position, the one place SQLite itself reads a string literal as an identifier, so an `fts5` table's shadow tables describe the same as any other shadow table.
 
+Inspecting an `fts5` table's hidden columns is one half of the picture; the SQL builder's [Full-text search](02-sql-builder.md#full-text-search-sqlite-fts5) section covers the other half, building a `MATCH` predicate and a `bm25` ranking score against a table described this way.
+
 ## Index methods
 
 `IndexDef.Method` names a non-default index access method — what PostgreSQL calls an access method and MySQL calls an index type — such as PostgreSQL's `"gin"` or MySQL's `"FULLTEXT"`. Its zero value, the empty string, means the engine's own default, a plain B-tree.
