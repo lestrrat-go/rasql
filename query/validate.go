@@ -133,9 +133,21 @@ func aggregateClauseContext(sources map[string]struct{}, clause string) expressi
 	return expressionContext{sources: sources, clause: clause, allowsAggregate: true, allowsSubquery: true}
 }
 
-// selectClauseContext returns a context for a clause of a SELECT statement that
-// must not call an aggregate but may run a subquery.
-func selectClauseContext(sources map[string]struct{}, clause string) expressionContext {
+// subqueryClauseContext returns a context for a clause that must not call an
+// aggregate but may run a subquery. It serves every SELECT clause that is not
+// itself an aggregate clause — a JOIN ON condition, WHERE, GROUP BY, and ORDER
+// BY — and the WHERE clause of a DELETE statement, which is the one write
+// clause a subquery reaches.
+//
+// Extending that list to another write clause is this constructor plus the
+// clause's own call: swap its validateClauseExpression call for
+// validateSubqueryClauseExpression and name the clause in the refusal message
+// validateExpression's Subquery arm builds. Update's WHERE clause and its SET
+// assignments are the obvious next candidates, and stay on
+// validateClauseExpression until someone confirms against a live server what
+// each engine does with a subquery there, the way this repository confirmed
+// DELETE's.
+func subqueryClauseContext(sources map[string]struct{}, clause string) expressionContext {
 	return expressionContext{sources: sources, clause: clause, allowsSubquery: true}
 }
 
@@ -177,11 +189,11 @@ func validateClauseExpression(expression Expression, sources map[string]struct{}
 	return err
 }
 
-// validateSelectClauseExpression validates an expression that belongs to clause
-// of a SELECT statement, which must not call an aggregate function but may run a
-// subquery.
-func validateSelectClauseExpression(expression Expression, sources map[string]struct{}, clause string, path string) error {
-	_, err := validateExpression(expression, selectClauseContext(sources, clause), path)
+// validateSubqueryClauseExpression validates an expression that belongs to a
+// clause which must not call an aggregate function but may run a subquery. See
+// subqueryClauseContext for which clauses those are.
+func validateSubqueryClauseExpression(expression Expression, sources map[string]struct{}, clause string, path string) error {
+	_, err := validateExpression(expression, subqueryClauseContext(sources, clause), path)
 	return err
 }
 
@@ -310,7 +322,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		return validateFunction(expression, ctx, path)
 	case Subquery:
 		if !ctx.allowsSubquery {
-			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement", ctx.clause)
+			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement, and in the WHERE clause of a DELETE statement", ctx.clause)
 		}
 		if err := expression.statement.Validate(); err != nil {
 			return expressionUsage{}, validationError(path+".statement", "%s", err)

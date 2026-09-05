@@ -10,6 +10,41 @@ import (
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
+// ErrSubqueryReadsDeleteTarget is the sentinel wrapped by every
+// [SubqueryReadsDeleteTargetError], so a caller that only needs a presence
+// check can use errors.Is instead of errors.As.
+var ErrSubqueryReadsDeleteTarget = errors.New("render: a DELETE subquery reads the target table")
+
+// SubqueryReadsDeleteTargetError reports that a subquery in a DELETE's WHERE
+// clause reads the table the statement deletes from, on a dialect that has not
+// been granted [dialect.CapabilityDeleteSubqueryTarget].
+//
+// query.Delete.Validate accepts the statement, because the shape is ordinary
+// SQL: PostgreSQL 17 and SQLite both run DELETE FROM t WHERE id IN (SELECT id
+// FROM t …). MySQL 8.4 answers error 1093, "You can't specify target table 't'
+// for update in FROM clause", so this package refuses to render the statement
+// for MySQL instead of sending SQL the server would reject. See
+// dialect.CapabilityDeleteSubqueryTarget for the shapes MySQL was measured
+// against.
+type SubqueryReadsDeleteTargetError struct {
+	// Dialect is the name of the dialect that cannot run the statement.
+	Dialect string
+	// Table names the DELETE's target table, as query.TableRef.QualifiedName
+	// spells it for an error message.
+	Table string
+}
+
+func (e *SubqueryReadsDeleteTargetError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot run a DELETE whose WHERE subquery reads the target table %q: MySQL answers error 1093, \"You can't specify target table for update in FROM clause\". Run the SELECT as a statement of its own and pass the rows it returns to query.In, or point the subquery at a table other than the target", e.Dialect, e.Table)
+}
+
+// Unwrap exposes ErrSubqueryReadsDeleteTarget so
+// errors.Is(err, ErrSubqueryReadsDeleteTarget) works alongside errors.As
+// against *SubqueryReadsDeleteTargetError.
+func (e *SubqueryReadsDeleteTargetError) Unwrap() error {
+	return ErrSubqueryReadsDeleteTarget
+}
+
 // Insert renders s for d.
 func Insert(d dialect.Dialect, s query.Insert) (stmt.Statement, error) {
 	return renderStatement(d, "INSERT", s.Validate, func(renderer *renderer) error {
@@ -260,6 +295,9 @@ func (r *renderer) writeDelete(s query.Delete) error {
 	if s.Where() == nil && !s.AllowsAll() {
 		return fmt.Errorf("DELETE requires a WHERE predicate or an explicit AllowAll")
 	}
+	if where := s.Where(); where != nil && !r.dialect.Supports(dialect.CapabilityDeleteSubqueryTarget) && expressionReadsDeleteTarget(where, s.From()) {
+		return &SubqueryReadsDeleteTargetError{Dialect: r.dialect.Name(), Table: s.From().QualifiedName()}
+	}
 	table, err := r.quoteQualified(s.From().Schema(), s.From().Name())
 	if err != nil {
 		return err
@@ -273,6 +311,111 @@ func (r *renderer) writeDelete(s query.Delete) error {
 		}
 	}
 	return r.writeReturning(s.Returning())
+}
+
+// expressionReadsDeleteTarget reports whether any subquery reachable from
+// expression reads target in its own FROM or one of its joins. writeDelete
+// calls it for a dialect without dialect.CapabilityDeleteSubqueryTarget, which
+// today is MySQL alone.
+//
+// The walk descends the whole predicate rather than checking only a top-level
+// query.Membership, because MySQL's error 1093 does not care where the
+// subquery sits: it answered 1093 to an IN, a NOT IN, a scalar comparison
+// against (SELECT MAX(id) FROM t), a subquery reading the target through a
+// join, and a subquery nested one level inside another subquery. Every node
+// that can carry a child expression is therefore listed here; the leaves —
+// query.ColumnRef, query.Value, query.TableIdentifier, query.ExcludedColumn —
+// carry none and fall through to false.
+func expressionReadsDeleteTarget(expression query.Expression, target query.TableRef) bool {
+	switch expression := expression.(type) {
+	case query.Subquery:
+		return selectReadsDeleteTarget(expression.Statement(), target)
+	case query.Binary:
+		return expressionReadsDeleteTarget(expression.Left(), target) || expressionReadsDeleteTarget(expression.Right(), target)
+	case query.Logical:
+		for _, child := range expression.Expressions() {
+			if expressionReadsDeleteTarget(child, target) {
+				return true
+			}
+		}
+		return false
+	case query.Not:
+		return expressionReadsDeleteTarget(expression.Expression(), target)
+	case query.NullTest:
+		return expressionReadsDeleteTarget(expression.Expression(), target)
+	case query.Membership:
+		if subquery, ok := expression.Subquery(); ok && selectReadsDeleteTarget(subquery.Statement(), target) {
+			return true
+		}
+		if expressionReadsDeleteTarget(expression.Expression(), target) {
+			return true
+		}
+		for _, value := range expression.Values() {
+			if expressionReadsDeleteTarget(value, target) {
+				return true
+			}
+		}
+		return false
+	case query.Function:
+		for _, argument := range expression.Arguments() {
+			if expressionReadsDeleteTarget(argument, target) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// selectReadsDeleteTarget reports whether statement reads target, either as one
+// of its own sources or through a subquery of its own at any depth.
+//
+// A source matches on schema and name alone, ignoring the alias: MySQL answered
+// 1093 to DELETE FROM t WHERE id IN (SELECT id FROM t AS ta …) exactly as it did
+// to the unaliased form, so an alias hides nothing from the server and must
+// hide nothing from this check either.
+func selectReadsDeleteTarget(statement query.Select, target query.TableRef) bool {
+	if sameBaseTable(statement.From(), target) {
+		return true
+	}
+	for _, join := range statement.Joins() {
+		if sameBaseTable(join.Source(), target) || expressionReadsDeleteTarget(join.On(), target) {
+			return true
+		}
+	}
+	for _, projection := range statement.Projections() {
+		if expressionReadsDeleteTarget(projection.ProjectedExpression(), target) {
+			return true
+		}
+	}
+	if where := statement.Where(); where != nil && expressionReadsDeleteTarget(where, target) {
+		return true
+	}
+	for _, key := range statement.GroupBy() {
+		if expressionReadsDeleteTarget(key, target) {
+			return true
+		}
+	}
+	if having := statement.Having(); having != nil && expressionReadsDeleteTarget(having, target) {
+		return true
+	}
+	for _, order := range statement.OrderBy() {
+		// An order built by AscResult or DescResult carries a nil Expression
+		// and names a projection instead, and that projection is one of the
+		// statement's own, already walked above.
+		if expression := order.Expression(); expression != nil && expressionReadsDeleteTarget(expression, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameBaseTable reports whether source and target name the same underlying
+// table. It compares the schema and the name and never the alias, for the
+// reason selectReadsDeleteTarget states.
+func sameBaseTable(source query.TableRef, target query.TableRef) bool {
+	return source.Schema() == target.Schema() && source.Name() == target.Name()
 }
 
 func (r *renderer) writeReturning(projections []query.Projection) error {

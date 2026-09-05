@@ -107,7 +107,7 @@ Every constructor below takes and returns `query.Expression`, so conditions nest
 | `query.Or(expressions…)` | `(a OR b …)` |
 | `query.Negate(expression)` | `NOT (expression)` |
 
-The value list of `query.In` and `query.NotIn` takes any mix of plain Go values and expressions. Each argument that is not already an expression is bound automatically and costs its own placeholder, so a list of `N` such values costs `N` arguments against the dialect's parameter limit. An expression argument is accepted deliberately and costs no argument: a column such as `orders.UserID()` renders as a quoted identifier, which is how a column-to-column test like `query.In(users.ID(), orders.UserID())` is written. A slice argument is bound whole rather than expanded: `query.In(col, ids)` with `ids` a `[]int` binds one `[]int` value, and the driver rejects it; convert the slice to individual arguments element by element instead. `query.InSelect` and `query.NotInSelect` take a `SELECT` statement in place of a value list, cost no argument per candidate, and are the better choice for a large set; [Subqueries](#subqueries) covers the placement rules and the one MySQL restriction that governs them. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect. A membership test is an ordinary predicate, so the placement rules in [Aggregates](#aggregates) reach its operands as they reach the operands of a comparison.
+The value list of `query.In` and `query.NotIn` takes any mix of plain Go values and expressions. Each argument that is not already an expression is bound automatically and costs its own placeholder, so a list of `N` such values costs `N` arguments against the dialect's parameter limit. An expression argument is accepted deliberately and costs no argument: a column such as `orders.UserID()` renders as a quoted identifier, which is how a column-to-column test like `query.In(users.ID(), orders.UserID())` is written. A slice argument is bound whole rather than expanded: `query.In(col, ids)` with `ids` a `[]int` binds one `[]int` value, and the driver rejects it; convert the slice to individual arguments element by element instead. `query.InSelect` and `query.NotInSelect` take a `SELECT` statement in place of a value list, cost no argument per candidate, and are the better choice for a large set; [Subqueries](#subqueries) covers the placement rules and the two MySQL restrictions that govern them. An empty value list is a validation error rather than `IN ()`, which is not valid SQL in any supported dialect. A membership test is an ordinary predicate, so the placement rules in [Aggregates](#aggregates) reach its operands as they reach the operands of a comparison.
 
 ### Operands
 
@@ -317,11 +317,23 @@ source: [examples/rasql_scalar_function_example_test.go](https://github.com/lest
 
 `query.Subquery` is a `SELECT` statement used as an expression: `query.Scalar(statement)` uses it as a single value, and `query.InSelect`/`query.NotInSelect` use it as the right-hand side of a membership test. In every form, `statement` must project exactly one expression — validation reports the count when it does not — because `x > (SELECT a, b …)` is as invalid as `x IN (SELECT a, b …)`.
 
-A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `GROUP BY` clause, `HAVING` clause, and `ORDER BY` clause of a `SELECT` statement, and nowhere else: every clause of an `INSERT`, `UPDATE`, `DELETE`, or upsert — including `RETURNING` — refuses one, the same way those clauses refuse an aggregate. A subquery reads no table of the statement that encloses it: every column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a correlation. A subquery may nest inside another subquery to any depth.
+A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `GROUP BY` clause, `HAVING` clause, and `ORDER BY` clause of a
+`SELECT` statement, and in the `WHERE` clause of a `DELETE` statement. Every other clause of a write statement refuses one, the same way
+those clauses refuse an aggregate: an `UPDATE`'s `SET` assignments and its `WHERE` clause, an `INSERT`'s `VALUES` rows, an upsert's
+conflict-update assignments, and the `RETURNING` clause of any of them. A subquery reads no table of the statement that encloses it: every
+column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a
+correlation. A subquery may nest inside another subquery to any depth.
 
 [Filter with a subquery](../orm/03-typed-queries.md#filter-with-a-subquery) below builds both forms against a database, with one subquery reading its own table and another reading an alias of the enclosing statement's table.
 
 `query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit. The arguments a subquery binds join the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an `OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject. PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`.
+
+MySQL also refuses a `DELETE` whose `WHERE` subquery reads the table the statement deletes from, answering error 1093, `You can't specify
+target table 't' for update in FROM clause`. It answers that however the subquery reaches the table: named in the subquery's own `FROM`,
+named there under an alias, joined to, or read by a subquery nested inside it. PostgreSQL and SQLite run every one of those shapes and hold
+`dialect.CapabilityDeleteSubqueryTarget`, which MySQL does not, so `render.Delete` returns a `*render.SubqueryReadsDeleteTargetError` for
+MySQL instead of sending SQL the server would reject. Run the `SELECT` as a statement of its own and pass the rows it returns to `query.In`,
+or point the subquery at a table other than the target.
 
 ### Full-text search (SQLite FTS5)
 

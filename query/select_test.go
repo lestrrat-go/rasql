@@ -974,7 +974,7 @@ func TestSelectAcceptsGroupedStatements(t *testing.T) {
 
 // TestSelectAcceptsSubqueriesInGroupedClauses pins that GROUP BY and HAVING are
 // SELECT clauses like the others, so a subquery is legal in both. GROUP BY is
-// validated through validateSelectClauseExpression and HAVING through
+// validated through validateSubqueryClauseExpression and HAVING through
 // aggregateClauseContext, and both of those permit a subquery, which keeps the
 // clause list in the misplaced-subquery message honest.
 func TestSelectAcceptsSubqueriesInGroupedClauses(t *testing.T) {
