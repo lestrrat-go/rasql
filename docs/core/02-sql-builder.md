@@ -345,19 +345,26 @@ it returns, and a statement under construction has no enclosing statement to ask
 about. That is the same ordering `query.NewJoinedSelect` documents for a join a projection reads. A statement between the reader and the table declares it too, since
 validating that middle statement on its own has nothing else saying a third statement is coming.
 
-A subquery correlates with a `SELECT` statement alone. A `DELETE` and an `UPDATE` take a subquery in the clauses [Subqueries](#subqueries) lists, and neither produces a
-result row for a subquery to be evaluated against, so a statement that declared a correlation is refused in one of those clauses rather than rendered. Keeping the write
-target out of the subquery's scope is also what keeps the shape those clauses were opened for: a subquery selecting from the write target itself, which `render` refuses
-for MySQL alone because of its error 1093.
+The enclosing statement may be a `SELECT`, a `DELETE`, or an `UPDATE`. Each one has the row a correlated subquery reads: a result row for a `SELECT`, and the row being
+written for the other two. `DELETE FROM users WHERE EXISTS (SELECT orders.id FROM orders WHERE orders.user_id = users.id)` is the shape that enables, and PostgreSQL 17,
+MySQL 8.4 and SQLite all run it, in a `DELETE`'s `WHERE` clause, an `UPDATE`'s `WHERE` clause, and an `UPDATE`'s `SET` assignment value alike.
 
-The declaration is checked at both ends. A table named in it that no enclosing statement carries is refused when the subquery is nested, and `render.Select` refuses a
-statement that declares a correlation and is rendered on its own, since `Exists`, `NotExists`, `Scalar`, `InSelect` and `NotInSelect` are the only places the enclosing
-row exists at all. `query.Validate` accepts that statement, because it is a consistent model of a subquery; this is the same division the `MATCH` operator already
-follows, where validation accepts the shape and rendering refuses the dialects that cannot run it.
+Correlation needs no dialect capability of its own. MySQL's error 1093 is about the subquery's own `FROM` naming the write target, not about a column reference reaching
+out to it, so `dialect.CapabilityWriteSubqueryTarget` still draws the line in the same place: a correlated subquery reading another table renders for MySQL, and one
+selecting from the write target is refused for MySQL and rendered for PostgreSQL and SQLite, exactly as an uncorrelated one is.
 
-A column reference a server could resolve to both a table of the subquery and a table of an enclosing statement is refused rather than resolved. SQL itself answers such a
-reference from the innermost statement that has a match, and answers it silently: adding a join to a subquery would then change which table an already-written reference
-reads, with nothing in the Go code saying so. rasql refuses the pair and names the alias that separates the two scopes, which is what it already does for two tables of
+The declaration is checked at both ends. A table named in it that the enclosing statement does not carry is refused when the subquery is nested, and `render.Select`
+refuses a statement that declares a correlation and is rendered on its own, since a subquery position is the only place the enclosing row exists at all. `query.Validate`
+accepts that statement, because it is a consistent model of a subquery; this is the same division the `MATCH` operator already follows, where validation accepts the shape
+and rendering refuses the dialects that cannot run it.
+
+The tables named in the declaration are exactly what the subquery gets, and the enclosing statement's other tables stay out of its scope. That is what keeps a subquery
+selecting from a table the enclosing statement also selects from legal, which is the shape a `DELETE`'s `IN (SELECT … FROM the target …)` takes: nothing in that subquery
+can reach the enclosing copy, so no column reference in it is ambiguous, and a server resolves each one to the subquery's own table exactly as rasql validated it.
+
+Declaring a correlation with a table the subquery also selects from is what makes both copies reachable at once, and that pair is refused rather than resolved. SQL itself
+answers such a reference from the innermost statement that has a match, and answers it silently: the enclosing row the declaration asked for is then unreadable, with
+nothing in the Go code saying so. rasql refuses the pair and names the alias that separates the two scopes, which is what it already does for two tables of
 one statement a server could not tell apart. Alias one of the two tables with `TableRef.As` and the statement says which table each reference meant.
 
 An aggregate inside a subquery belongs to that subquery's own clause and its own grouping, never to the enclosing statement's, so a subquery that aggregates may sit

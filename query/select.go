@@ -266,12 +266,25 @@ func NewJoinedSelect(from TableRef, joins []Join, groupBy []Expression, projecti
 // reads, and for the same reason.
 //
 // The declaration is checked at both ends rather than trusted. A table named
-// here that no enclosing statement carries is refused when the subquery is
-// nested, so a subquery attached to the wrong statement is reported instead of
-// rendering SQL naming a table that is not there. render.Select refuses a
-// statement that declares a correlation and is rendered on its own, since
-// EXISTS, Scalar, InSelect and NotInSelect are the only places the enclosing
-// row it reads exists at all.
+// here that the enclosing statement does not carry is refused when the subquery
+// is nested, so a subquery attached to the wrong statement is reported instead
+// of rendering SQL naming a table that is not there. render.Select refuses a
+// statement that declares a correlation and is rendered on its own, since a
+// subquery position is the only place the enclosing row it reads exists at all.
+//
+// The enclosing statement may be a SELECT, a DELETE, or an UPDATE. Each one has
+// the row a correlated subquery reads: a result row for a SELECT, and the row
+// being written for the other two. DELETE FROM users WHERE EXISTS (SELECT
+// orders.id FROM orders WHERE orders.user_id = users.id) is the shape this
+// enables, and PostgreSQL 17, MySQL 8.4 and SQLite all run it.
+//
+// tables is what this statement itself reads, and it is exactly what this
+// statement gets: the enclosing statement's other tables stay out of scope. That
+// is what keeps a subquery selecting from a table the enclosing statement also
+// selects from legal, which is the shape render refuses for MySQL alone because
+// of its error 1093 and the other two dialects run. Declaring a correlation with
+// that same table is what makes both copies reachable, and validation then
+// refuses the pair and names the alias that separates them.
 //
 // A statement between the reader and the table declares it too. Correlation
 // reaching two levels out means the middle statement carries a subquery naming
@@ -448,23 +461,14 @@ func (s Select) Offset() (int, bool) {
 	return s.offset, s.hasOffset
 }
 
-// Validate reports whether s is internally consistent. A statement that
-// declares a correlation with WithCorrelation is judged against the tables it
-// declared, since the statement enclosing it does not exist yet; nesting it
-// checks that declaration against the statement that really encloses it, and
-// render.Select refuses one rendered on its own.
+// Validate reports whether s is internally consistent.
+//
+// A statement that declared a correlation with WithCorrelation is judged with
+// those tables in scope, which is what lets a correlated subquery be built and
+// validated before any statement encloses it. Nesting it checks the same
+// declaration against the statement that really encloses it, and render.Select
+// refuses one rendered on its own.
 func (s Select) Validate() error {
-	return s.validate(sourceScope{})
-}
-
-// validate is Validate against the tables of the statements enclosing s, which
-// a correlated subquery may read alongside its own. Validate passes the zero
-// scope, because a statement under construction is enclosed by nothing yet;
-// validateSubqueryStatement passes the enclosing SELECT's own scope, so a
-// subquery reads every table above it however deeply it nests and its declared
-// correlations are checked against them. sourceScope.correlates is what tells
-// the two apart, since only a scope built by this method ever sets it.
-func (s Select) validate(outer sourceScope) error {
 	if err := s.from.validate(); err != nil {
 		return validationError("from", "%s", err)
 	}
@@ -472,33 +476,23 @@ func (s Select) validate(outer sourceScope) error {
 		return validationError("projections", "must not be empty")
 	}
 
-	sources := outer.nested()
-	sources.correlates = true
+	sources := sourceScope{keys: make(map[string]struct{}, len(s.correlations)+len(s.joins)+1)}
+	// A declared correlation goes into the scope before this statement's own
+	// tables, so a table this statement selects from that it also declared is
+	// refused: both would then be reachable, and a server would answer every
+	// column reference from this statement's copy without the SQL saying which
+	// was meant. The repair is the same alias validateSourceReference names for
+	// two tables of one statement.
 	for i, correlated := range s.correlations {
 		path := fmt.Sprintf("correlations[%d]", i)
 		if err := correlated.validate(); err != nil {
 			return validationError(path, "%s", err)
-		}
-		// Enclosed, the enclosing scope is already in sources and is the truth
-		// about what this statement can read, so the declaration is checked
-		// against it rather than added to it. A declared table no enclosing
-		// statement carries would otherwise render a column reference naming a
-		// table the SQL never selects from.
-		if outer.correlates {
-			if _, enclosing := outer.keys[correlated.key()]; !enclosing {
-				return validationError(path, "declares a correlation with table %q, which no enclosing statement carries", correlated.QualifiedName())
-			}
-			continue
 		}
 		if err := validateSourceReference(sources.references, correlated, path); err != nil {
 			return err
 		}
 		sources.add(correlated)
 	}
-	// A subquery's own FROM is checked against the enclosing tables the way a
-	// join is checked against the tables beside it: a server that could resolve
-	// one column reference to both scopes would answer it from the inner one
-	// silently, and refusing names the alias that says which was meant.
 	if err := validateSourceReference(sources.references, s.from, "from"); err != nil {
 		return err
 	}
@@ -512,13 +506,11 @@ func (s Select) validate(outer sourceScope) error {
 			return validationError(path+".source", "%s", err)
 		}
 		// The duplicate message is about one statement listing the same table
-		// twice, so it covers only the tables this statement added. A join
-		// naming a table an enclosing statement already carries falls through
-		// to validateSourceReference below, whose message names the alias that
-		// separates the two scopes instead.
-		_, inScope := sources.keys[join.source.key()]
-		_, enclosing := outer.keys[join.source.key()]
-		if inScope && !enclosing {
+		// twice, so it covers only the tables this statement selects from. A
+		// join naming a table this statement declared a correlation with falls
+		// through to validateSourceReference below, whose message names the
+		// alias that separates the two scopes instead.
+		if _, inScope := sources.keys[join.source.key()]; inScope && !isCorrelatedSource(s.correlations, join.source) {
 			return validationError(path+".source", "duplicates table reference %q", join.source.QualifiedName())
 		}
 		if err := validateSourceReference(sources.references, join.source, path+".source"); err != nil {
@@ -581,6 +573,19 @@ func (s Select) validate(outer sourceScope) error {
 		return validationError("offset", "must not be negative")
 	}
 	return nil
+}
+
+// isCorrelatedSource reports whether source is one of the enclosing tables
+// correlations declares. It exists so a join can tell a table this statement
+// already selects from, which is a plain duplicate, from one it declared a
+// correlation with, which is the ambiguity an alias repairs.
+func isCorrelatedSource(correlations []TableRef, source TableRef) bool {
+	for _, correlated := range correlations {
+		if correlated.key() == source.key() {
+			return true
+		}
+	}
+	return false
 }
 
 // validateOrder validates one ORDER BY term. A term naming a projection's

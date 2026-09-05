@@ -583,13 +583,15 @@ func TestDeleteWhereAcceptsSubquery(t *testing.T) {
 	}
 }
 
-// TestDeleteWhereSubqueryStillRefusesCorrelation pins what admitting a
-// subquery into a DELETE's WHERE clause did not also admit: a correlation.
-// A subquery reads only its own FROM and joins, so a subquery predicate naming
-// the DELETE's target table is refused where it is written — while the
-// subquery's own SELECT is being built — and never becomes a statement a
-// DELETE could carry. Nothing models an outer scope, so there is no second
-// place this could pass.
+// TestDeleteWhereSubqueryStillRefusesCorrelation pins that a correlation with a
+// DELETE's target table is refused unless the subquery declared it. A subquery
+// reads its own FROM and joins plus the tables it named with
+// Select.WithCorrelation, so a subquery predicate naming the DELETE's target
+// without that declaration is refused where it is written — while the
+// subquery's own SELECT is being built — and never becomes a statement a DELETE
+// could carry. TestWriteStatementsAcceptACorrelatedSubquery in
+// correlated_subquery_test.go covers the declared form, which does reach a
+// DELETE.
 func TestDeleteWhereSubqueryStillRefusesCorrelation(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
@@ -666,10 +668,11 @@ func TestUpdateAcceptsSubquery(t *testing.T) {
 }
 
 // TestUpdateSubqueryStillRefusesCorrelation is
-// TestDeleteWhereSubqueryStillRefusesCorrelation for an UPDATE: admitting a
-// subquery into either clause admitted no correlation with it. The subquery
-// reads only its own FROM and joins, so naming the UPDATE's target table
-// inside one fails while that subquery is being built.
+// TestDeleteWhereSubqueryStillRefusesCorrelation for an UPDATE: a correlation
+// with the target has to be declared. The subquery reads its own FROM and joins
+// plus the tables Select.WithCorrelation named, so naming the UPDATE's target
+// table inside one that declared nothing fails while that subquery is being
+// built.
 func TestUpdateSubqueryStillRefusesCorrelation(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)

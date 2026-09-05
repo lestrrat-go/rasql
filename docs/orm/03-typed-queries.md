@@ -562,6 +562,11 @@ before it reads one. The database then evaluates the subquery once per enclosing
 `orders` table has any row at all. [Correlated subqueries](../core/02-sql-builder.md#correlated-subqueries) covers the scope rules, including what happens when a column
 could resolve to both scopes.
 
+The enclosing statement need not be a `SELECT`. A `DELETE` and an `UPDATE` carry the row being written, which is the row a correlated subquery reads, so the same
+`hasOrder` below reaches a `DELETE`'s `WHERE` clause, an `UPDATE`'s `WHERE` clause, and an `UPDATE`'s `SET` assignment value:
+`query.NewDelete(users.Ref())` refined with `WithWhere(query.Exists(hasOrder))` deletes every user who has an order, and a correlated
+`query.Scalar` in a `SET` value writes each user's own order count into a column of that user's row.
+
 <!-- INCLUDE(examples/rasql_exists_example_test.go) -->
 ```go
 package examples_test

@@ -23,6 +23,9 @@ import (
 type correlatedUser struct {
 	ID    int64  `rasql:"id"`
 	Email string `rasql:"email"`
+	// OrderCount is written by the UPDATE whose SET value is a correlated
+	// scalar subquery, and is zero everywhere else.
+	OrderCount int64 `rasql:"order_count"`
 }
 
 type correlatedOrder struct {
@@ -262,6 +265,7 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(191)}},
+			{Name: "order_count", Type: schema.IntegerType{}},
 		},
 		PrimaryKey: []string{"id"},
 	})
@@ -312,4 +316,114 @@ func openCorrelatedSQLite(t *testing.T) *sql.DB {
 	})
 	database.SetMaxOpenConns(1)
 	return database
+}
+
+// TestCorrelatedWriteAgainstLiveDatabases runs a correlated subquery in each of
+// the three write clauses that admit one -- a DELETE's WHERE, an UPDATE's WHERE,
+// and an UPDATE's SET assignment value -- against every engine rasql supports,
+// and requires each to change exactly the rows the correlation names. The row a
+// correlated subquery reads in a write statement is the row being written, so a
+// subquery evaluated once for the whole statement would touch every row or none
+// and fail each of these.
+//
+// The subqueries here read a table other than the write target. A correlated
+// subquery whose own FROM is the target is the shape MySQL answers 1093 to, and
+// TestCorrelatedWriteSubqueryFollowsTheSameCapability in the render package
+// covers that boundary.
+//
+// PostgreSQL and MySQL skip when their DSN is unset; SQLite always runs, in
+// memory.
+func TestCorrelatedWriteAgainstLiveDatabases(t *testing.T) {
+	for _, engine := range []correlatedEngine{
+		{name: "postgresql", open: dbtest.PostgreSQLDB, dialect: dialect.PostgreSQL()},
+		{name: "mysql", open: dbtest.MySQLDB, dialect: dialect.MySQL()},
+		{name: "sqlite", open: openCorrelatedSQLite, dialect: dialect.SQLite()},
+	} {
+		t.Run(engine.name, func(t *testing.T) {
+			testCorrelatedWrite(t, engine)
+		})
+	}
+}
+
+func testCorrelatedWrite(t *testing.T, engine correlatedEngine) {
+	t.Helper()
+
+	database := engine.open(t)
+	db, err := rasql.New(database, engine.dialect)
+	require.NoError(t, err)
+
+	// Each clause gets its own pair of tables, since each one writes. The names
+	// come from dbtest.UniqueName, so the three pairs never collide even on the
+	// one SQLite connection they share.
+	t.Run("a DELETE's WHERE clause", func(t *testing.T) {
+		users, orders := createCorrelatedFixture(t, db)
+		statement, err := query.NewDelete(users.Ref())
+		require.NoError(t, err)
+		statement, err = statement.WithWhere(query.Exists(correlatedOrdersOfUser(t, users, orders, orders.Ref().Column("id"))))
+		require.NoError(t, err)
+
+		_, err = rasql.Exec(t.Context(), db, statement)
+		require.NoError(t, err)
+
+		remaining, err := rasql.SelectFrom(users).OrderAsc(users.Ref().Column("id")).All(t.Context(), db)
+		require.NoError(t, err)
+		require.Equal(t, []correlatedUser{{ID: 2, Email: "bob@example.com"}}, remaining,
+			"only the user with no order may survive, so the subquery read each user's own row")
+	})
+
+	t.Run("an UPDATE's WHERE clause", func(t *testing.T) {
+		users, orders := createCorrelatedFixture(t, db)
+		usersRef := users.Ref()
+		statement, err := query.NewUpdate(usersRef, query.Set(usersRef.Column("email"), "buyer@example.com"))
+		require.NoError(t, err)
+		statement, err = statement.WithWhere(query.Exists(correlatedOrdersOfUser(t, users, orders, orders.Ref().Column("id"))))
+		require.NoError(t, err)
+
+		_, err = rasql.Exec(t.Context(), db, statement)
+		require.NoError(t, err)
+
+		updated, err := rasql.SelectFrom(users).OrderAsc(usersRef.Column("id")).All(t.Context(), db)
+		require.NoError(t, err)
+		require.Equal(t, []correlatedUser{
+			{ID: 1, Email: "buyer@example.com"},
+			{ID: 2, Email: "bob@example.com"},
+			{ID: 3, Email: "buyer@example.com"},
+		}, updated, "the user with no order must keep the address it had")
+	})
+
+	t.Run("an UPDATE's SET assignment value", func(t *testing.T) {
+		users, orders := createCorrelatedFixture(t, db)
+		usersRef := users.Ref()
+		counted := correlatedOrdersOfUser(t, users, orders, query.Project(query.CountAll()))
+		statement, err := query.NewUpdate(usersRef, query.Set(usersRef.Column("order_count"), query.Scalar(counted)))
+		require.NoError(t, err)
+		statement, err = statement.AllowAll()
+		require.NoError(t, err)
+
+		_, err = rasql.Exec(t.Context(), db, statement)
+		require.NoError(t, err)
+
+		counts, err := rasql.SelectFrom(users).OrderAsc(usersRef.Column("id")).All(t.Context(), db)
+		require.NoError(t, err)
+		require.Equal(t, []correlatedUser{
+			{ID: 1, Email: "ada@example.com", OrderCount: 2},
+			{ID: 2, Email: "bob@example.com", OrderCount: 0},
+			{ID: 3, Email: "cyd@example.com", OrderCount: 1},
+		}, counts, "each row must carry the count of its own orders, not one count shared by all three")
+	})
+}
+
+// correlatedOrdersOfUser builds SELECT projection FROM orders WHERE
+// orders.user_id = users.id, correlated with users, which is the subquery every
+// correlated write test above runs.
+func correlatedOrdersOfUser(t *testing.T, users rasql.Table[correlatedUser], orders rasql.Table[correlatedOrder], projection query.Projection) query.Select {
+	t.Helper()
+
+	statement, err := query.NewSelect(orders.Ref(), projection)
+	require.NoError(t, err)
+	statement, err = statement.WithCorrelation(users.Ref())
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.Equal(orders.Ref().Column("user_id"), users.Ref().Column("id")))
+	require.NoError(t, err)
+	return statement
 }

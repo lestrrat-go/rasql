@@ -281,3 +281,119 @@ func deleteWherePersonHasAnOrder(t *testing.T, people query.TableRef, orders que
 	require.NoError(t, err)
 	return statement
 }
+
+// TestCorrelatedWriteSubqueryFollowsTheSameCapability confirms that a
+// correlated subquery needs no dialect capability of its own. MySQL's error
+// 1093 is about the subquery's FROM naming the write target, not about a
+// column reference reaching out to it, so correlation moves the boundary
+// nowhere: expressionReadsWriteTarget already walks for exactly that FROM, and
+// dialect.CapabilityWriteSubqueryTarget already gates it.
+//
+// The two halves are the two sides of that boundary. A correlated subquery
+// selecting from another table renders for MySQL and MySQL runs it. A
+// correlated subquery selecting from the write target under an alias -- the
+// shape MySQL answers 1093 to -- is still refused by render for MySQL with the
+// same typed error, and PostgreSQL, which holds the capability, still renders
+// and runs it.
+func TestCorrelatedWriteSubqueryFollowsTheSameCapability(t *testing.T) {
+	people, orders := deleteSubqueryTables(t)
+	id := people.Column("id")
+
+	// DELETE FROM people WHERE EXISTS (SELECT orders.id FROM orders WHERE
+	// orders.person_id = people.id): the subquery reads another table and
+	// reaches the target only through a column reference.
+	hasOrder, err := query.NewSelect(orders, orders.Column("id"))
+	require.NoError(t, err)
+	hasOrder, err = hasOrder.WithCorrelation(people)
+	require.NoError(t, err)
+	hasOrder, err = hasOrder.WithWhere(query.Equal(orders.Column("person_id"), id))
+	require.NoError(t, err)
+	byOtherTable, err := query.NewDelete(people)
+	require.NoError(t, err)
+	byOtherTable, err = byOtherTable.WithWhere(query.Exists(hasOrder))
+	require.NoError(t, err)
+
+	// DELETE FROM people WHERE EXISTS (SELECT x.id FROM people AS x WHERE
+	// x.id = people.id): the subquery's own FROM is the write target, under an
+	// alias so the two copies stay tellable apart in the Go code as well.
+	aliased, err := people.As("x")
+	require.NoError(t, err)
+	selfReferencing, err := query.NewSelect(aliased, aliased.Column("id"))
+	require.NoError(t, err)
+	selfReferencing, err = selfReferencing.WithCorrelation(people)
+	require.NoError(t, err)
+	selfReferencing, err = selfReferencing.WithWhere(query.Equal(aliased.Column("id"), id))
+	require.NoError(t, err)
+	byTarget, err := query.NewDelete(people)
+	require.NoError(t, err)
+	byTarget, err = byTarget.WithWhere(query.Exists(selfReferencing))
+	require.NoError(t, err, "query validation accepts the shape; only rendering for MySQL refuses it")
+
+	t.Run("mysql", func(t *testing.T) {
+		ctx := t.Context()
+		database := dbtest.MySQLDB(t)
+		_, err := database.ExecContext(ctx, "CREATE TABLE live_delete_people (id BIGINT PRIMARY KEY, email VARCHAR(255) NOT NULL) ENGINE=InnoDB")
+		require.NoError(t, err, "create live target table")
+		_, err = database.ExecContext(ctx, "CREATE TABLE live_delete_orders (id BIGINT PRIMARY KEY, person_id BIGINT NOT NULL) ENGINE=InnoDB")
+		require.NoError(t, err, "create live subquery table")
+		_, err = database.ExecContext(ctx, "INSERT INTO live_delete_people (id, email) VALUES (1, 'ada@example.com'), (2, 'grace@example.com')")
+		require.NoError(t, err, "seed live target table")
+		_, err = database.ExecContext(ctx, "INSERT INTO live_delete_orders (id, person_id) VALUES (10, 1)")
+		require.NoError(t, err, "seed live subquery table")
+
+		// MySQL itself refuses the self-referencing correlated form, which is
+		// what says the existing capability is still the right gate rather
+		// than one correlation should have widened.
+		_, err = database.ExecContext(ctx,
+			"DELETE FROM live_delete_people WHERE EXISTS (SELECT x.id FROM live_delete_people AS x WHERE x.id = live_delete_people.id)")
+		require.Error(t, err, "MySQL must refuse a correlated DELETE subquery whose own FROM is the target table")
+		var mysqlErr *gomysql.MySQLError
+		require.ErrorAs(t, err, &mysqlErr, "the refusal must come from MySQL itself, not from a connection or driver failure")
+		require.EqualValues(t, 1093, mysqlErr.Number, "MySQL's own error number, unchanged by the correlation")
+
+		_, err = render.Delete(dialect.MySQL(), byTarget)
+		var refusal *render.SubqueryReadsWriteTargetError
+		require.ErrorAs(t, err, &refusal, "rendering for MySQL must refuse it through the capability that already exists")
+		require.Equal(t, "DELETE", refusal.Operation)
+		require.Equal(t, "live_delete_people", refusal.Table)
+
+		rendered, err := render.Delete(dialect.MySQL(), byOtherTable)
+		require.NoError(t, err, "a correlated subquery over another table adds no refusal")
+		_, err = database.ExecContext(ctx, rendered.SQL(), rendered.Args()...)
+		require.NoError(t, err, "MySQL must run render.Delete's own correlated output")
+
+		var surviving int
+		require.NoError(t, database.QueryRowContext(ctx, "SELECT COUNT(*) FROM live_delete_people").Scan(&surviving))
+		require.Equal(t, 1, surviving, "only the person with an order may be gone")
+	})
+
+	t.Run("postgresql", func(t *testing.T) {
+		ctx := t.Context()
+		database := dbtest.PostgreSQLDB(t)
+		_, err := database.ExecContext(ctx, "CREATE TABLE live_delete_people (id BIGINT PRIMARY KEY, email TEXT NOT NULL)")
+		require.NoError(t, err, "create live target table")
+		_, err = database.ExecContext(ctx, "CREATE TABLE live_delete_orders (id BIGINT PRIMARY KEY, person_id BIGINT NOT NULL)")
+		require.NoError(t, err, "create live subquery table")
+		_, err = database.ExecContext(ctx, "INSERT INTO live_delete_people (id, email) VALUES (1, 'ada@example.com'), (2, 'grace@example.com')")
+		require.NoError(t, err, "seed live target table")
+		_, err = database.ExecContext(ctx, "INSERT INTO live_delete_orders (id, person_id) VALUES (10, 1)")
+		require.NoError(t, err, "seed live subquery table")
+
+		rendered, err := render.Delete(dialect.PostgreSQL(), byOtherTable)
+		require.NoError(t, err)
+		_, err = database.ExecContext(ctx, rendered.SQL(), rendered.Args()...)
+		require.NoError(t, err, "PostgreSQL must run a correlated DELETE subquery over another table")
+
+		var surviving int
+		require.NoError(t, database.QueryRowContext(ctx, "SELECT COUNT(*) FROM live_delete_people").Scan(&surviving))
+		require.Equal(t, 1, surviving, "only the person with an order may be gone")
+
+		rendered, err = render.Delete(dialect.PostgreSQL(), byTarget)
+		require.NoError(t, err, "PostgreSQL holds dialect.CapabilityWriteSubqueryTarget, so rendering must not refuse this")
+		_, err = database.ExecContext(ctx, rendered.SQL(), rendered.Args()...)
+		require.NoError(t, err, "PostgreSQL must run the very correlated statement MySQL answers 1093 to")
+
+		require.NoError(t, database.QueryRowContext(ctx, "SELECT COUNT(*) FROM live_delete_people").Scan(&surviving))
+		require.Equal(t, 0, surviving, "every remaining row matches itself, so all of them go")
+	})
+}

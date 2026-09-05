@@ -86,51 +86,36 @@ func validateSourceReference(references []sourceReference, source TableRef, path
 }
 
 // sourceScope is every table a statement's expressions may name: the tables the
-// statement itself selects from, and, for a subquery, the tables of every
-// statement enclosing it, so a correlated subquery can read the enclosing row.
+// statement selects from, plus the tables of an enclosing statement it declared
+// a correlation with through Select.WithCorrelation.
+//
+// A subquery inherits exactly what it declared and nothing else. The enclosing
+// statement's remaining tables stay invisible to it, which is what keeps a
+// subquery selecting from a table the enclosing statement also selects from
+// legal: nothing in that subquery can reach the enclosing copy, so no column
+// reference in it is ambiguous, and a server resolves each one to the subquery's
+// own table exactly as rasql validated it. Declaring a correlation with that
+// same table is what makes the two reachable at once, and validateSourceReference
+// is then what refuses the pair.
 //
 // It carries two views of those tables, because neither can be derived from the
 // other. keys states which descriptor a column belongs to, so a ColumnRef
 // resolves in one map lookup. references states how a server would resolve a
 // column reference written against a table, which is what tells apart two
 // sources that hold different keys and still render under the same leading
-// identifier; sourceReference.conflicts owns that comparison. Keeping the two
-// in one value is what stops a caller from threading the lookup set into a
-// subquery while leaving the ambiguity check behind.
+// identifier; sourceReference.conflicts owns that comparison.
 type sourceScope struct {
 	keys       map[string]struct{}
 	references []sourceReference
-	// correlates reports whether a subquery validated inside this scope
-	// inherits it and may therefore read a column of it. A SELECT statement's
-	// scope does: the subquery runs once per row the SELECT is on, and that row
-	// is what the correlated column reads. A write statement's scope does not:
-	// its target table is rows being written rather than rows being read, and a
-	// DELETE or an UPDATE has no result row for a subquery to be evaluated
-	// against. It is also what tells a top-level statement from a nested one,
-	// since Select.Validate starts from the zero scope.
-	correlates bool
 }
 
-// newSourceScope returns a scope holding table alone, and correlating with
-// nothing. It is what a write statement validates against: the target table so
-// its own clauses resolve a column, and no correlation, so a subquery in one of
-// those clauses is still validated on its own.
+// newSourceScope returns a scope holding table alone. It is what a write
+// statement validates its own clauses against, since a write statement names
+// one table and joins none.
 func newSourceScope(table TableRef) sourceScope {
 	scope := sourceScope{keys: make(map[string]struct{}, 1)}
 	scope.add(table)
 	return scope
-}
-
-// nested returns a scope for a statement enclosed by the one s describes. It
-// copies both views, so the tables the inner statement goes on to add never
-// reach back into the enclosing statement's own scope.
-func (s sourceScope) nested() sourceScope {
-	nested := sourceScope{keys: make(map[string]struct{}, len(s.keys)+1)}
-	for key := range s.keys {
-		nested.keys[key] = struct{}{}
-	}
-	nested.references = append(nested.references, s.references...)
-	return nested
 }
 
 // add records table as a source in scope. Call it only after
@@ -399,42 +384,34 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 	}
 }
 
-// validateSubqueryStatement validates the SELECT a subquery runs, in the scope
-// of the statement that encloses it. Both subquery forms go through it, so the
-// clause rule and the scope rule are stated once; each caller adds only what its
-// own form demands of the projections.
+// validateSubqueryStatement validates the SELECT a subquery runs. Both subquery
+// forms go through it, so the clause rule and the correlation rule are stated
+// once; each caller adds only what its own form demands of the projections.
 //
-// The statement is validated through Select.validate rather than the exported
-// Select.Validate, because a statement validated on its own knows nothing of the
-// tables enclosing it and would refuse every correlated column reference as
-// naming a table outside the statement. ctx.sources is the enclosing statement's
-// own scope, already the union of its tables and those of anything enclosing
-// it, so passing it here accumulates correlation to any nesting depth.
+// The statement is validated exactly as it was while it was being built, through
+// the same Select.Validate a caller reaches. Nothing about the enclosing
+// statement is folded into it, because a subquery reads an enclosing table only
+// where it declared that table with Select.WithCorrelation, and its own
+// validation has already judged those declarations against everything else it
+// names.
 //
-// A write statement's scope does not correlate, so a subquery in a DELETE's or
-// an UPDATE's clause is validated on its own, exactly as it was before
-// correlation existed. That keeps the shape those clauses were opened for:
-// DELETE FROM users WHERE users.id IN (SELECT users.id FROM users …) reads the
-// target table in the subquery's own FROM, which render refuses for MySQL alone
-// because of its error 1093, and which merging the target into the subquery's
-// scope would instead refuse for every dialect as an ambiguous source. A
-// statement that declared a correlation is refused there rather than rendered,
-// since nothing has checked what the three engines do with a correlated
-// subquery in a write clause.
+// What is added here is the other end of that declaration: every table the
+// subquery declared must be one the enclosing statement carries. Without this
+// check a subquery attached to the wrong statement would render a column
+// reference naming a table the SQL never selects from. The enclosing statement
+// may be a SELECT, a DELETE, or an UPDATE — each carries the row a correlated
+// subquery reads, which is a result row for a SELECT and the row being written
+// for the other two.
 func validateSubqueryStatement(statement Select, ctx expressionContext, path string) error {
 	if !ctx.allowsSubquery {
 		return validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement, in the WHERE clause of a DELETE statement, and in the WHERE clause and SET assignments of an UPDATE statement", ctx.clause)
 	}
-	outer := ctx.sources
-	if !outer.correlates {
-		if len(statement.correlations) > 0 {
-			return validationError(path, "runs a correlated subquery in %s, but a subquery correlates only with a SELECT statement, which has a result row for it to read", ctx.clause)
+	for i, correlated := range statement.correlations {
+		if _, enclosing := ctx.sources.keys[correlated.key()]; !enclosing {
+			return validationError(fmt.Sprintf("%s.statement.correlations[%d]", path, i), "declares a correlation with table %q, which the enclosing statement does not carry", correlated.QualifiedName())
 		}
-		// The write target stays out of the subquery's scope entirely, so the
-		// subquery is judged exactly as it was while it was being built.
-		outer = sourceScope{}
 	}
-	if err := statement.validate(outer); err != nil {
+	if err := statement.Validate(); err != nil {
 		return validationError(path+".statement", "%s", err)
 	}
 	return nil

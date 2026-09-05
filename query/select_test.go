@@ -299,10 +299,7 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "from")
 
-	// The subquery reads another table, so the projection count is what it is
-	// refused for. A second unaliased users in the subquery would be refused
-	// first, as a source the enclosing statement already answers for.
-	twoProjections, err := query.NewSelect(other, otherID, query.Project(query.Bind(1)))
+	twoProjections, err := query.NewSelect(users, userID, query.Project(query.Bind(1)))
 	require.NoError(t, err)
 	_, err = statement.WithWhere(query.GreaterThan(userID, query.Scalar(twoProjections)))
 	requireQueryValidationError(t, err)
@@ -399,15 +396,10 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 	require.NoError(t, notInStatement.Validate())
 
 	// A subquery two levels deep: the outer statement's InSelect reads a
-	// statement whose own WHERE runs another InSelect. The innermost statement
-	// aliases orders, which the statement enclosing it already reads: two
-	// unaliased orders in nested scopes render column references a server would
-	// answer from the inner one alone, which validation refuses.
-	innerOrders, err := orders.As("inner_orders")
+	// statement whose own WHERE runs another InSelect.
+	innermost, err := query.NewSelect(orders, orderID)
 	require.NoError(t, err)
-	innermost, err := query.NewSelect(innerOrders, innerOrders.Column("id"))
-	require.NoError(t, err)
-	innermost, err = innermost.WithWhere(query.GreaterThan(innerOrders.Column("amount"), query.Bind(10)))
+	innermost, err = innermost.WithWhere(query.GreaterThan(amount, query.Bind(10)))
 	require.NoError(t, err)
 	nested, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)

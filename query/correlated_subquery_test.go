@@ -169,42 +169,50 @@ func TestCorrelationMustNameAnEnclosingTable(t *testing.T) {
 	require.NoError(t, err)
 	_, err = statement.WithWhere(query.Exists(subquery))
 	requireQueryValidationError(t, err)
-	require.ErrorContains(t, err, `declares a correlation with table "users", which no enclosing statement carries`)
+	require.ErrorContains(t, err, `declares a correlation with table "users", which the enclosing statement does not carry`)
 }
 
-// TestCorrelatedSubqueryRefusesAnAmbiguousSource pins the resolution rule. SQL
-// answers a column reference from the innermost statement that has a match, and
-// answers it silently: two unaliased copies of one table in nested scopes make
-// every reference to it read the inner one, with nothing in the Go code saying
-// so. rasql refuses the pair and names the alias that separates them, which is
-// what it already does for two tables of one statement a server cannot tell
-// apart.
+// TestCorrelatedSubqueryRefusesAnAmbiguousSource pins the resolution rule. A
+// subquery that declared a correlation with a table it also selects from can
+// reach both copies, and SQL answers every reference to them from the subquery's
+// own, silently: the enclosing row the declaration asked for is then unreadable
+// with nothing in the Go code saying so. rasql refuses the pair and names the
+// alias that separates them, which is what it already does for two tables of one
+// statement a server cannot tell apart.
+//
+// A subquery that declared nothing reaches only its own tables, so selecting
+// from a table the enclosing statement also selects from is not ambiguous and
+// stays legal. That is the shape a DELETE's IN (SELECT … FROM the target …)
+// takes, which render refuses for MySQL alone.
 func TestCorrelatedSubqueryRefusesAnAmbiguousSource(t *testing.T) {
 	f := newCorrelatedFixture(t)
 
-	t.Run("subquery selects from the enclosing table", func(t *testing.T) {
+	t.Run("subquery selects from a table it correlates with", func(t *testing.T) {
 		subquery, err := query.NewSelect(f.users, query.Project(query.Bind(1)))
 		require.NoError(t, err)
-		statement, err := query.NewSelect(f.users, f.usersID)
-		require.NoError(t, err)
-		_, err = statement.WithWhere(query.Exists(subquery))
+		_, err = subquery.WithCorrelation(f.users)
 		requireQueryValidationError(t, err)
 		require.ErrorContains(t, err, "give one of them a distinct alias")
 	})
 
-	t.Run("subquery joins the enclosing table", func(t *testing.T) {
-		subquery, err := query.NewJoinedSelect(
-			f.orders,
-			[]query.Join{query.InnerJoin(f.users, query.Equal(f.ordersUser, f.usersID))},
-			nil,
-			query.Project(query.Bind(1)),
-		)
+	t.Run("subquery joins a table it correlates with", func(t *testing.T) {
+		subquery, err := query.NewSelect(f.orders, query.Project(query.Bind(1)))
+		require.NoError(t, err)
+		subquery, err = subquery.WithCorrelation(f.users)
+		require.NoError(t, err)
+		_, err = subquery.WithJoin(query.InnerJoin(f.users, query.Equal(f.ordersUser, f.usersID)))
+		requireQueryValidationError(t, err)
+		require.ErrorContains(t, err, "give one of them a distinct alias")
+	})
+
+	t.Run("selecting from the enclosing table without declaring it stays legal", func(t *testing.T) {
+		subquery, err := query.NewSelect(f.users, f.usersID)
 		require.NoError(t, err)
 		statement, err := query.NewSelect(f.users, f.usersID)
 		require.NoError(t, err)
-		_, err = statement.WithWhere(query.Exists(subquery))
-		requireQueryValidationError(t, err)
-		require.ErrorContains(t, err, "give one of them a distinct alias")
+		statement, err = statement.WithWhere(query.InSelect(f.usersID, subquery))
+		require.NoError(t, err)
+		require.NoError(t, statement.Validate())
 	})
 
 	t.Run("an alias repairs it", func(t *testing.T) {
@@ -288,36 +296,71 @@ func TestExistsFollowsTheSubqueryClauseRule(t *testing.T) {
 	require.ErrorContains(t, err, "runs a subquery in a RETURNING projection")
 }
 
-// TestWriteStatementsRefuseACorrelatedSubquery pins where correlation stops. A
-// DELETE and an UPDATE take a subquery in the clauses their own work opened, but
-// neither has a result row for a subquery to be evaluated against, so a
-// statement that declared a correlation is refused there rather than rendered.
-// Keeping the enclosing target out of the subquery's scope is also what keeps
-// the shape those clauses were opened for: a subquery selecting from the write
-// target itself, which render refuses for MySQL alone.
-func TestWriteStatementsRefuseACorrelatedSubquery(t *testing.T) {
+// TestWriteStatementsAcceptACorrelatedSubquery covers the three write clauses a
+// subquery reaches: a DELETE's WHERE, an UPDATE's WHERE, and an UPDATE's SET
+// assignment value. The row a correlated subquery reads is the row being
+// written, so each of the three carries the write target as the table a
+// correlation may name.
+// TestCorrelatedWriteAgainstLiveDatabases in the root package runs all three
+// against PostgreSQL, MySQL, and SQLite.
+func TestWriteStatementsAcceptACorrelatedSubquery(t *testing.T) {
 	f := newCorrelatedFixture(t)
 
-	correlated := f.ordersOfUser(t, query.Project(query.Bind(1)))
+	exists := query.Exists(f.ordersOfUser(t, f.ordersID))
+	counted := query.Scalar(f.ordersOfUser(t, query.Project(query.CountAll())))
 
 	deleteStatement, err := query.NewDelete(f.users)
 	require.NoError(t, err)
-	_, err = deleteStatement.WithWhere(query.Exists(correlated))
-	requireQueryValidationError(t, err)
-	require.ErrorContains(t, err, "runs a correlated subquery in a WHERE clause")
+	deleteWhere, err := deleteStatement.WithWhere(exists)
+	require.NoError(t, err)
+	require.NoError(t, deleteWhere.Validate())
 
 	updateStatement, err := query.NewUpdate(f.users, query.Set(f.users.Column("email"), "ada@example.com"))
 	require.NoError(t, err)
-	_, err = updateStatement.WithWhere(query.Exists(correlated))
-	requireQueryValidationError(t, err)
-	require.ErrorContains(t, err, "runs a correlated subquery in a WHERE clause")
+	updateWhere, err := updateStatement.WithWhere(exists)
+	require.NoError(t, err)
+	require.NoError(t, updateWhere.Validate())
 
-	// A subquery reading the write target in its own FROM is still accepted,
-	// which merging the target into the subquery's scope would have refused as
-	// an ambiguous source on every dialect.
+	updateSet, err := query.NewUpdate(f.users, query.Set(f.users.Column("id"), counted))
+	require.NoError(t, err)
+	require.NoError(t, updateSet.Validate())
+}
+
+// TestWriteSubqueryStillNamesTheWriteTargetAsItsOwnSource pins what admitting a
+// correlation into a write statement did not change. A subquery selecting from
+// the write target declares no correlation, so it reads only its own copy of
+// that table and stays legal here, exactly as it was before correlation existed;
+// render is what refuses it for MySQL, whose error 1093 rejects the shape.
+// Declaring a correlation with that same target is the ambiguous pair instead,
+// and validation refuses it.
+func TestWriteSubqueryStillNamesTheWriteTargetAsItsOwnSource(t *testing.T) {
+	f := newCorrelatedFixture(t)
+
+	deleteStatement, err := query.NewDelete(f.users)
+	require.NoError(t, err)
+
 	overTarget, err := query.NewSelect(f.users, f.usersID)
 	require.NoError(t, err)
 	sameTable, err := deleteStatement.WithWhere(query.InSelect(f.usersID, overTarget))
 	require.NoError(t, err)
 	require.NoError(t, sameTable.Validate())
+
+	_, err = overTarget.WithCorrelation(f.users)
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, "give one of them a distinct alias")
+}
+
+// TestWriteCorrelationMustNameTheWriteTarget pins the declaration check at the
+// write end. A subquery correlating with a table the write statement does not
+// target has nothing to resolve against, so it is refused rather than rendered
+// against a table the statement never names.
+func TestWriteCorrelationMustNameTheWriteTarget(t *testing.T) {
+	f := newCorrelatedFixture(t)
+
+	subquery := f.ordersOfUser(t, f.ordersID)
+	deleteStatement, err := query.NewDelete(f.orders)
+	require.NoError(t, err)
+	_, err = deleteStatement.WithWhere(query.Exists(subquery))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `declares a correlation with table "users", which the enclosing statement does not carry`)
 }
