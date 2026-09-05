@@ -334,6 +334,313 @@ func TestDeleteRendersNotInForBuiltInDialects(t *testing.T) {
 	}
 }
 
+// TestDeleteRendersSubqueryForBuiltInDialects covers the shape every supported
+// engine runs: the subquery reads a table other than the one the DELETE
+// targets, so no dialect capability is in question and all three render it.
+func TestDeleteRendersSubqueryForBuiltInDialects(t *testing.T) {
+	users, id, _ := writeTable(t)
+	orders, userID, amount := deleteSubqueryTable(t)
+
+	candidates, err := query.NewSelect(orders, userID)
+	require.NoError(t, err)
+	candidates, err = candidates.WithWhere(query.GreaterThan(amount, 100.0))
+	require.NoError(t, err)
+
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	deleteStatement, err = deleteStatement.WithWhere(query.InSelect(id, candidates))
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		dialect dialect.Dialect
+		sql     string
+	}{
+		"postgresql": {
+			dialect: dialect.PostgreSQL(),
+			sql:     "DELETE FROM \"users\" WHERE (\"users\".\"id\" IN (SELECT \"orders\".\"user_id\" FROM \"orders\" WHERE (\"orders\".\"amount\" > $1)))",
+		},
+		"mysql": {
+			dialect: dialect.MySQL(),
+			sql:     "DELETE FROM `users` WHERE (`users`.`id` IN (SELECT `orders`.`user_id` FROM `orders` WHERE (`orders`.`amount` > ?)))",
+		},
+		"sqlite": {
+			dialect: dialect.SQLite(),
+			sql:     "DELETE FROM \"users\" WHERE (\"users\".\"id\" IN (SELECT \"orders\".\"user_id\" FROM \"orders\" WHERE (\"orders\".\"amount\" > ?)))",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := render.Delete(test.dialect, deleteStatement)
+			require.NoError(t, err)
+			require.Equal(t, test.sql, rendered.SQL())
+			require.Equal(t, []any{100.0}, rendered.Args())
+		})
+	}
+}
+
+// TestDeleteSubqueryReadingTargetIsRefusedForMySQL covers the one shape the
+// three engines disagree about: a subquery that reads the very table the
+// DELETE removes rows from. PostgreSQL and SQLite run it and hold
+// dialect.CapabilityWriteSubqueryTarget; MySQL answers error 1093 and does
+// not, so rendering for MySQL fails here instead of at the server.
+//
+// Each case names the target through a different route, because MySQL refuses
+// all of them alike: directly in the subquery's FROM, under an alias there, in
+// a join of the subquery, inside a scalar comparison, and one subquery deep
+// inside another. The live counterpart that pins MySQL's own 1093 for these
+// same shapes is TestDeleteSubqueryReadingTargetIsRefusedByLiveMySQL in
+// write_subquery_integration_test.go; this test asserts only what rasql does
+// with them.
+func TestDeleteSubqueryReadingTargetIsRefusedForMySQL(t *testing.T) {
+	users, id, email := writeTable(t)
+	orders, userID, _ := deleteSubqueryTable(t)
+
+	aliased, err := users.As("u")
+	require.NoError(t, err)
+
+	fromTarget, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+	fromAliasedTarget, err := query.NewSelect(aliased, aliased.Column("id"))
+	require.NoError(t, err)
+	joinedTarget, err := query.NewJoinedSelect(orders, []query.Join{
+		query.InnerJoin(users, query.Equal(userID, id)),
+	}, nil, userID)
+	require.NoError(t, err)
+	fromOther, err := query.NewSelect(orders, userID)
+	require.NoError(t, err)
+	nestedTarget, err := fromOther.WithWhere(query.InSelect(userID, fromTarget))
+	require.NoError(t, err)
+
+	tests := map[string]query.Expression{
+		"IN over the target":            query.InSelect(id, fromTarget),
+		"NOT IN over the target":        query.NotInSelect(id, fromTarget),
+		"IN over an alias of it":        query.InSelect(id, fromAliasedTarget),
+		"IN over a join onto it":        query.InSelect(id, joinedTarget),
+		"scalar comparison against it":  query.Equal(id, query.Scalar(fromTarget)),
+		"target one subquery deeper":    query.InSelect(id, nestedTarget),
+		"subquery nested under an AND":  query.And(query.InSelect(id, fromTarget), query.Equal(email, "ada@example.com")),
+		"subquery nested under a NOT":   query.Negate(query.InSelect(id, fromTarget)),
+		"subquery inside a COALESCE":    query.Equal(id, query.Coalesce(query.Scalar(fromTarget), query.Bind(0))),
+		"subquery in the ORDER BY of a": query.InSelect(id, orderedByTargetSubquery(t, orders, userID, fromTarget)),
+	}
+	for name, predicate := range tests {
+		t.Run(name, func(t *testing.T) {
+			statement, err := query.NewDelete(users)
+			require.NoError(t, err)
+			statement, err = statement.WithWhere(predicate)
+			require.NoError(t, err, "query validation accepts every one of these; only rendering for MySQL refuses")
+
+			_, err = render.Delete(dialect.MySQL(), statement)
+			require.Error(t, err)
+			var refusal *render.SubqueryReadsWriteTargetError
+			require.ErrorAs(t, err, &refusal)
+			require.Equal(t, "mysql", refusal.Dialect)
+			require.Equal(t, "users", refusal.Table)
+			require.ErrorIs(t, err, render.ErrSubqueryReadsWriteTarget)
+
+			for _, permissive := range []dialect.Dialect{dialect.PostgreSQL(), dialect.SQLite()} {
+				_, err := render.Delete(permissive, statement)
+				require.NoError(t, err, "%s runs this shape, so rendering must not refuse it", permissive.Name())
+			}
+		})
+	}
+}
+
+// orderedByTargetSubquery builds a SELECT over source that orders by a scalar
+// subquery, so the walk that looks for the DELETE's target has to reach a
+// clause other than FROM, WHERE, and the projections to find it.
+func orderedByTargetSubquery(t *testing.T, source query.TableRef, key query.ColumnRef, target query.Select) query.Select {
+	t.Helper()
+	statement, err := query.NewSelect(source, key)
+	require.NoError(t, err)
+	statement, err = statement.WithOrder(query.Asc(query.Scalar(target)))
+	require.NoError(t, err)
+	return statement
+}
+
+// TestUpdateSubqueryReadingTargetIsRefusedForMySQL is
+// TestDeleteSubqueryReadingTargetIsRefusedForMySQL for an UPDATE, which reaches
+// a subquery through two clauses rather than one. MySQL answered 1093 to a
+// subquery reading the target from the WHERE clause and to one reading it from
+// a SET assignment's value, so both are checked, and a subquery over another
+// table is checked in each clause too, since a rule that refused those would
+// refuse most of what the feature is for.
+func TestUpdateSubqueryReadingTargetIsRefusedForMySQL(t *testing.T) {
+	users, id, email := writeTable(t)
+	orders, userID, amount := deleteSubqueryTable(t)
+
+	fromTarget, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+	highestAmount, err := query.NewSelect(orders, query.Max(amount))
+	require.NoError(t, err)
+	fromOther, err := query.NewSelect(orders, userID)
+	require.NoError(t, err)
+
+	refused := map[string]func() (query.Update, error){
+		"WHERE reads the target": func() (query.Update, error) {
+			statement, err := query.NewUpdate(users, query.Set(email, "ada@example.com"))
+			if err != nil {
+				return query.Update{}, err
+			}
+			return statement.WithWhere(query.InSelect(id, fromTarget))
+		},
+		"SET value reads the target": func() (query.Update, error) {
+			statement, err := query.NewUpdate(users, query.Set(email, query.Scalar(fromTarget)))
+			if err != nil {
+				return query.Update{}, err
+			}
+			return statement.WithWhere(query.Equal(id, 1))
+		},
+	}
+	for name, build := range refused {
+		t.Run(name, func(t *testing.T) {
+			statement, err := build()
+			require.NoError(t, err, "query validation accepts both; only rendering for MySQL refuses")
+
+			_, err = render.Update(dialect.MySQL(), statement)
+			require.Error(t, err)
+			var refusal *render.SubqueryReadsWriteTargetError
+			require.ErrorAs(t, err, &refusal)
+			require.Equal(t, "mysql", refusal.Dialect)
+			require.Equal(t, "UPDATE", refusal.Operation)
+			require.Equal(t, "users", refusal.Table)
+			require.ErrorIs(t, err, render.ErrSubqueryReadsWriteTarget)
+
+			for _, permissive := range []dialect.Dialect{dialect.PostgreSQL(), dialect.SQLite()} {
+				_, err := render.Update(permissive, statement)
+				require.NoError(t, err, "%s runs this shape, so rendering must not refuse it", permissive.Name())
+			}
+		})
+	}
+
+	accepted := map[string]func() (query.Update, error){
+		"WHERE reads another table": func() (query.Update, error) {
+			statement, err := query.NewUpdate(users, query.Set(email, "ada@example.com"))
+			if err != nil {
+				return query.Update{}, err
+			}
+			return statement.WithWhere(query.InSelect(id, fromOther))
+		},
+		"SET value reads another table": func() (query.Update, error) {
+			statement, err := query.NewUpdate(users, query.Set(email, query.Scalar(highestAmount)))
+			if err != nil {
+				return query.Update{}, err
+			}
+			return statement.WithWhere(query.Equal(id, 1))
+		},
+	}
+	for name, build := range accepted {
+		t.Run(name, func(t *testing.T) {
+			statement, err := build()
+			require.NoError(t, err)
+			for _, d := range []dialect.Dialect{dialect.MySQL(), dialect.PostgreSQL(), dialect.SQLite()} {
+				_, err := render.Update(d, statement)
+				require.NoError(t, err, "%s runs a subquery over a table other than the target", d.Name())
+			}
+		})
+	}
+}
+
+// TestWriteSubqueryTargetMatchesAcrossSchemaQualification pins what happens
+// when the target and the subquery's source name one table but spell it
+// differently: one bare, one schema-qualified. MySQL answered 1093 to that
+// spelling too, so the two must match here, and comparing the schema strings
+// outright would have missed it and sent MySQL the statement.
+//
+// The pair that genuinely differs is checked alongside it: two schemas both
+// stated and different is the one case where the qualifier settles the
+// question, and it must not be swept into the match.
+func TestWriteSubqueryTargetMatchesAcrossSchemaQualification(t *testing.T) {
+	bare, err := query.NewTableRef(schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	qualified, err := query.NewTableRef(schema.TableDef{
+		Schema:     "app",
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	otherSchema, err := query.NewTableRef(schema.TableDef{
+		Schema:     "archive",
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+
+	tests := map[string]struct {
+		target  query.TableRef
+		source  query.TableRef
+		refused bool
+	}{
+		"bare target, qualified subquery":   {target: bare, source: qualified, refused: true},
+		"qualified target, bare subquery":   {target: qualified, source: bare, refused: true},
+		"both bare":                         {target: bare, source: bare, refused: true},
+		"both qualified alike":              {target: qualified, source: qualified, refused: true},
+		"two schemas stated and different":  {target: qualified, source: otherSchema, refused: false},
+		"the same pair the other way round": {target: otherSchema, source: qualified, refused: false},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			inner, err := query.NewSelect(test.source, test.source.Column("id"))
+			require.NoError(t, err)
+			statement, err := query.NewDelete(test.target)
+			require.NoError(t, err)
+			statement, err = statement.WithWhere(query.InSelect(test.target.Column("id"), inner))
+			require.NoError(t, err)
+
+			_, err = render.Delete(dialect.MySQL(), statement)
+			if !test.refused {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, render.ErrSubqueryReadsWriteTarget)
+		})
+	}
+}
+
+// TestSQLiteDeleteSubqueryReadingTargetExecutes proves SQLite really does run
+// the shape MySQL refuses, rather than rasql merely granting SQLite the
+// capability and never checking. It executes rasql's own rendered SQL against
+// an in-memory SQLite database and reads the surviving rows back.
+func TestSQLiteDeleteSubqueryReadingTargetExecutes(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	users, id, email := writeTable(t)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY, \"email\" TEXT NOT NULL)")
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "INSERT INTO \"users\" (\"id\", \"email\") VALUES (1, 'ada@example.com'), (2, 'grace@example.com')")
+	require.NoError(t, err)
+
+	doomed, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+	doomed, err = doomed.WithWhere(query.Equal(email, "ada@example.com"))
+	require.NoError(t, err)
+
+	statement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.InSelect(id, doomed))
+	require.NoError(t, err)
+
+	rendered, err := render.Delete(dialect.SQLite(), statement)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), rendered.SQL(), rendered.Args()...)
+	require.NoError(t, err, "SQLite must run a DELETE whose subquery reads the target table")
+
+	var surviving int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM \"users\"").Scan(&surviving))
+	require.Equal(t, 1, surviving)
+}
+
 func TestReturningRequiresDialectCapability(t *testing.T) {
 	users, id, email := writeTable(t)
 	statement, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
@@ -856,4 +1163,23 @@ func writeTable(t *testing.T) (query.TableRef, query.ColumnRef, query.ColumnRef)
 	id := users.Column("id")
 	email := users.Column("email")
 	return users, id, email
+}
+
+// deleteSubqueryTable is the second table the DELETE subquery tests need: one
+// a subquery can read that is not the table the DELETE targets, so a shape
+// every engine accepts can be told apart from the self-referencing shape MySQL
+// refuses.
+func deleteSubqueryTable(t *testing.T) (query.TableRef, query.ColumnRef, query.ColumnRef) {
+	t.Helper()
+	orders, err := query.NewTableRef(schema.TableDef{
+		Name: "orders",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+			{Name: "amount", Type: schema.FloatType{}},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	return orders, orders.Column("user_id"), orders.Column("amount")
 }

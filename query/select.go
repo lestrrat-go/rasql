@@ -429,7 +429,7 @@ func (s Select) Validate() error {
 		}
 		sources[join.source.key()] = struct{}{}
 		references = append(references, join.source.reference())
-		if err := validateSelectClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {
+		if err := validateSubqueryClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {
 			return err
 		}
 	}
@@ -437,7 +437,7 @@ func (s Select) Validate() error {
 	grouped := len(s.groupBy) > 0
 	for i, expression := range s.groupBy {
 		path := fmt.Sprintf("group_by[%d]", i)
-		if err := validateSelectClauseExpression(expression, sources, "a GROUP BY clause", path); err != nil {
+		if err := validateSubqueryClauseExpression(expression, sources, "a GROUP BY clause", path); err != nil {
 			return err
 		}
 		if _, ok := expression.(Value); ok {
@@ -450,7 +450,7 @@ func (s Select) Validate() error {
 		return err
 	}
 	if s.where != nil {
-		if err := validateSelectClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
+		if err := validateSubqueryClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
 	}
@@ -513,7 +513,7 @@ func validateOrder(order Order, sources map[string]struct{}, projections express
 		return err
 	}
 	if !projections.aggregate {
-		return validateSelectClauseExpression(order.expression, sources, "an ORDER BY clause", path)
+		return validateSubqueryClauseExpression(order.expression, sources, "an ORDER BY clause", path)
 	}
 	usage, err := validateExpression(order.expression, aggregateClauseContext(sources, "an ORDER BY clause"), path)
 	if err != nil {

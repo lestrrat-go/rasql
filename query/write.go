@@ -471,6 +471,22 @@ func (s Update) Returning() []Projection {
 }
 
 // Validate reports whether s is internally consistent.
+//
+// A SET assignment's value and the WHERE clause both admit a subquery, and are
+// validated through validateSubqueryClauseExpression for that reason, while
+// every RETURNING projection stays on validateClauseExpression. UPDATE users
+// SET plan = (SELECT …) and UPDATE users SET … WHERE id IN (SELECT …) are both
+// ordinary SQL on every supported engine, and the renderer already emits them,
+// so refusing them here was the only thing standing in the way of building one.
+//
+// A subquery still reads none of this statement's own tables: it is validated
+// by Select.Validate against its own FROM and joins, so a column of the
+// UPDATE's target table named inside one is refused rather than treated as a
+// correlation. Whether the subquery may name the target table in its own FROM
+// is a separate question, and an engine-specific one: MySQL refuses that with
+// error 1093 from either clause, where PostgreSQL and SQLite run both, so
+// render decides it from dialect.CapabilityWriteSubqueryTarget rather than this
+// package refusing a statement two of the three engines execute.
 func (s Update) Validate() error {
 	sources, err := validateWriteTarget(s.table, "table")
 	if err != nil {
@@ -489,12 +505,12 @@ func (s Update) Validate() error {
 			return validationError(path+".column", "duplicates column %q", assignment.column.Name())
 		}
 		seen[assignment.column.Name()] = struct{}{}
-		if err := validateClauseExpression(assignment.value, sources, "a SET assignment", path+".value"); err != nil {
+		if err := validateSubqueryClauseExpression(assignment.value, sources, "a SET assignment", path+".value"); err != nil {
 			return err
 		}
 	}
 	if s.where != nil {
-		if err := validateClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
+		if err := validateSubqueryClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
 	}
@@ -590,13 +606,28 @@ func (s Delete) Returning() []Projection {
 }
 
 // Validate reports whether s is internally consistent.
+//
+// The WHERE clause admits a subquery, so it is validated through
+// validateSubqueryClauseExpression while every RETURNING projection stays on
+// validateClauseExpression. DELETE FROM users WHERE id IN (SELECT …) is
+// ordinary SQL on every supported engine, and the renderer already emits it, so
+// refusing it here was the only thing standing in the way of building one.
+//
+// A subquery still reads none of this statement's own tables: it is validated
+// by Select.Validate against its own FROM and joins, so a column of the DELETE's
+// target table named inside one is refused rather than treated as a
+// correlation. Whether the subquery may name the target table in its own FROM
+// is a separate question, and an engine-specific one: MySQL refuses that with
+// error 1093 where PostgreSQL and SQLite run it, so render decides it from
+// dialect.CapabilityWriteSubqueryTarget rather than this package refusing a
+// statement two of the three engines execute.
 func (s Delete) Validate() error {
 	sources, err := validateWriteTarget(s.from, "from")
 	if err != nil {
 		return err
 	}
 	if s.where != nil {
-		if err := validateClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
+		if err := validateSubqueryClauseExpression(s.where, sources, "a WHERE clause", "where"); err != nil {
 			return err
 		}
 	}

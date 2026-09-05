@@ -464,9 +464,13 @@ func TestUpsertAcceptsNestedExcludedColumn(t *testing.T) {
 }
 
 // TestWriteStatementsRejectSubqueries covers the placement rule that keeps a
-// subquery out of every write clause: only a SELECT statement's own clauses set
-// allowsSubquery, so a write clause refuses one with the same message a write
-// clause uses for a misplaced aggregate.
+// subquery out of the write clauses that still refuse one. A DELETE's WHERE
+// clause admits one, and so do an UPDATE's WHERE clause and its SET
+// assignments (see TestDeleteWhereAcceptsSubquery and
+// TestUpdateAcceptsSubquery). Everything left — an INSERT's assignments and
+// VALUES rows, an upsert's conflict-update assignments, and every RETURNING
+// projection — refuses one with the same message a write clause uses for a
+// misplaced aggregate.
 func TestWriteStatementsRejectSubqueries(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)
@@ -497,21 +501,23 @@ func TestWriteStatementsRejectSubqueries(t *testing.T) {
 				return err
 			},
 		},
-		"update assignment": {
+		"update returning": {
 			build: func() error {
-				_, err := query.NewUpdate(users, query.Set(id, query.Scalar(ids)))
+				predicate, err := update.WithWhere(query.Equal(id, 1))
+				if err != nil {
+					return err
+				}
+				_, err = predicate.WithReturning(query.Project(query.Scalar(ids)))
 				return err
 			},
 		},
-		"update where": {
+		"delete returning": {
 			build: func() error {
-				_, err := update.WithWhere(query.InSelect(id, ids))
-				return err
-			},
-		},
-		"delete where": {
-			build: func() error {
-				_, err := deleteStatement.WithWhere(query.InSelect(id, ids))
+				predicate, err := deleteStatement.WithWhere(query.Equal(id, 1))
+				if err != nil {
+					return err
+				}
+				_, err = predicate.WithReturning(query.Project(query.Scalar(ids)))
 				return err
 			},
 		},
@@ -529,6 +535,153 @@ func TestWriteStatementsRejectSubqueries(t *testing.T) {
 			require.ErrorContains(t, err, "only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement")
 		})
 	}
+}
+
+// TestDeleteWhereAcceptsSubquery pins the DELETE clause that admits a
+// subquery. Every shape here is ordinary SQL, and the renderer already emitted
+// it before validation allowed one to be built, so validation is the only thing
+// that had to change. Whether MySQL will run the self-referencing shapes is a
+// separate, engine-specific question render answers from
+// dialect.CapabilityWriteSubqueryTarget; see
+// TestDeleteSubqueryReadingTargetIsRefusedForMySQL in the render package.
+func TestDeleteWhereAcceptsSubquery(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	orders, err := query.NewTableRef(ordersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	userID := orders.Column("user_id")
+
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+
+	otherTable, err := query.NewSelect(orders, userID)
+	require.NoError(t, err)
+	sameTable, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+	aliased, err := users.As("u")
+	require.NoError(t, err)
+	aliasedTarget, err := query.NewSelect(aliased, aliased.Column("id"))
+	require.NoError(t, err)
+
+	tests := map[string]query.Expression{
+		"IN over another table":      query.InSelect(id, otherTable),
+		"NOT IN over another table":  query.NotInSelect(id, otherTable),
+		"IN over the target table":   query.InSelect(id, sameTable),
+		"scalar over another table":  query.Equal(id, query.Scalar(otherTable)),
+		"subquery under a Logical":   query.And(query.InSelect(id, otherTable), query.Equal(users.Column("email"), "ada@example.com")),
+		"subquery under a Not":       query.Negate(query.InSelect(id, otherTable)),
+		"subquery under a Coalesce":  query.Equal(id, query.Coalesce(query.Scalar(otherTable), query.Bind(0))),
+		"subquery over target alias": query.InSelect(id, aliasedTarget),
+	}
+	for name, predicate := range tests {
+		t.Run(name, func(t *testing.T) {
+			statement, err := deleteStatement.WithWhere(predicate)
+			require.NoError(t, err)
+			require.NoError(t, statement.Validate())
+		})
+	}
+}
+
+// TestDeleteWhereSubqueryStillRefusesCorrelation pins what admitting a
+// subquery into a DELETE's WHERE clause did not also admit: a correlation.
+// A subquery reads only its own FROM and joins, so a subquery predicate naming
+// the DELETE's target table is refused where it is written — while the
+// subquery's own SELECT is being built — and never becomes a statement a
+// DELETE could carry. Nothing models an outer scope, so there is no second
+// place this could pass.
+func TestDeleteWhereSubqueryStillRefusesCorrelation(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	orders, err := query.NewTableRef(ordersTable())
+	require.NoError(t, err)
+
+	subquery, err := query.NewSelect(orders, orders.Column("user_id"))
+	require.NoError(t, err)
+
+	_, err = subquery.WithWhere(query.Equal(orders.Column("user_id"), users.Column("id")))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `references table "users" outside the statement`)
+}
+
+// TestUpdateAcceptsSubquery pins the two UPDATE clauses that admit one: the
+// WHERE predicate and a SET assignment's value. A RETURNING projection is
+// checked here too, and still refuses a subquery, so the change is confined to
+// the clauses it was meant for.
+func TestUpdateAcceptsSubquery(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	orders, err := query.NewTableRef(ordersTable())
+	require.NoError(t, err)
+	id := users.Column("id")
+	email := users.Column("email")
+	userID := orders.Column("user_id")
+
+	otherTable, err := query.NewSelect(orders, userID)
+	require.NoError(t, err)
+	sameTable, err := query.NewSelect(users, id)
+	require.NoError(t, err)
+
+	predicates := map[string]query.Expression{
+		"IN over another table":     query.InSelect(id, otherTable),
+		"NOT IN over another table": query.NotInSelect(id, otherTable),
+		"IN over the target table":  query.InSelect(id, sameTable),
+		"scalar over another table": query.Equal(id, query.Scalar(otherTable)),
+		"subquery under a Logical":  query.And(query.InSelect(id, otherTable), query.Equal(email, "ada@example.com")),
+	}
+	for name, predicate := range predicates {
+		t.Run("WHERE: "+name, func(t *testing.T) {
+			statement, err := query.NewUpdate(users, query.Set(email, "ada@example.com"))
+			require.NoError(t, err)
+			statement, err = statement.WithWhere(predicate)
+			require.NoError(t, err)
+			require.NoError(t, statement.Validate())
+		})
+	}
+
+	values := map[string]query.Expression{
+		"scalar over another table":  query.Scalar(otherTable),
+		"scalar over the target":     query.Scalar(sameTable),
+		"subquery inside a Coalesce": query.Coalesce(query.Scalar(otherTable), query.Bind(0)),
+	}
+	for name, value := range values {
+		t.Run("SET: "+name, func(t *testing.T) {
+			statement, err := query.NewUpdate(users, query.Set(email, value))
+			require.NoError(t, err)
+			statement, err = statement.WithWhere(query.Equal(id, 1))
+			require.NoError(t, err)
+			require.NoError(t, statement.Validate())
+		})
+	}
+
+	t.Run("RETURNING still refuses one", func(t *testing.T) {
+		statement, err := query.NewUpdate(users, query.Set(email, "ada@example.com"))
+		require.NoError(t, err)
+		statement, err = statement.WithWhere(query.Equal(id, 1))
+		require.NoError(t, err)
+		_, err = statement.WithReturning(query.Project(query.Scalar(otherTable)).As("recent"))
+		requireQueryValidationError(t, err)
+		require.ErrorContains(t, err, "runs a subquery in a RETURNING projection")
+	})
+}
+
+// TestUpdateSubqueryStillRefusesCorrelation is
+// TestDeleteWhereSubqueryStillRefusesCorrelation for an UPDATE: admitting a
+// subquery into either clause admitted no correlation with it. The subquery
+// reads only its own FROM and joins, so naming the UPDATE's target table
+// inside one fails while that subquery is being built.
+func TestUpdateSubqueryStillRefusesCorrelation(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	orders, err := query.NewTableRef(ordersTable())
+	require.NoError(t, err)
+
+	subquery, err := query.NewSelect(orders, orders.Column("user_id"))
+	require.NoError(t, err)
+
+	_, err = subquery.WithWhere(query.Equal(orders.Column("user_id"), users.Column("id")))
+	requireQueryValidationError(t, err)
+	require.ErrorContains(t, err, `references table "users" outside the statement`)
 }
 
 func TestUpsertValidatesConflictAssignments(t *testing.T) {
