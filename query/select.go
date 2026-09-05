@@ -198,16 +198,20 @@ func (o Order) Descending() bool {
 type Select struct {
 	projections []Projection
 	from        TableRef
-	joins       []Join
-	where       Expression
-	groupBy     []Expression
-	having      Expression
-	orderBy     []Order
-	limit       int
-	hasLimit    bool
-	offset      int
-	hasOffset   bool
-	distinct    bool
+	// correlations names the tables of an enclosing statement this one reads,
+	// which WithCorrelation declares and Correlations reports. It is empty for
+	// every statement that stands on its own.
+	correlations []TableRef
+	joins        []Join
+	where        Expression
+	groupBy      []Expression
+	having       Expression
+	orderBy      []Order
+	limit        int
+	hasLimit     bool
+	offset       int
+	hasOffset    bool
+	distinct     bool
 }
 
 // NewSelect creates a validated SELECT statement.
@@ -247,6 +251,61 @@ func NewJoinedSelect(from TableRef, joins []Join, groupBy []Expression, projecti
 		return Select{}, err
 	}
 	return statement, nil
+}
+
+// WithCorrelation returns a copy of s that may read the columns of tables, the
+// tables of the statement s will be nested inside. It is what makes a
+// correlated subquery buildable: Subquery states what correlation means, and
+// this is where the statement says which enclosing tables it correlates with.
+//
+// Declare the correlation before the clause that reads the enclosing table.
+// Every builder method validates the copy it returns, and a statement under
+// construction has no enclosing statement to ask, so WithWhere refuses a
+// predicate reading a table this statement has not been told about. That is the
+// same ordering NewJoinedSelect already documents for a join a projection
+// reads, and for the same reason.
+//
+// The declaration is checked at both ends rather than trusted. A table named
+// here that the enclosing statement does not carry is refused when the subquery
+// is nested, so a subquery attached to the wrong statement is reported instead
+// of rendering SQL naming a table that is not there. render.Select refuses a
+// statement that declares a correlation and is rendered on its own, since a
+// subquery position is the only place the enclosing row it reads exists at all.
+//
+// The enclosing statement may be a SELECT, a DELETE, or an UPDATE. Each one has
+// the row a correlated subquery reads: a result row for a SELECT, and the row
+// being written for the other two. DELETE FROM users WHERE EXISTS (SELECT
+// orders.id FROM orders WHERE orders.user_id = users.id) is the shape this
+// enables, and PostgreSQL 17, MySQL 8.4 and SQLite all run it.
+//
+// tables is what this statement itself reads, and it is exactly what this
+// statement gets: the enclosing statement's other tables stay out of scope. That
+// is what keeps a subquery selecting from a table the enclosing statement also
+// selects from legal, which is the shape render refuses for MySQL alone because
+// of its error 1093 and the other two dialects run. Declaring a correlation with
+// that same table is what makes both copies reachable, and validation then
+// refuses the pair and names the alias that separates them.
+//
+// A statement between the reader and the table declares it too. Correlation
+// reaching two levels out means the middle statement carries a subquery naming
+// a table the middle statement has not been told about, and validating that
+// middle statement on its own would refuse it, since nothing then says a third
+// statement is coming. Repeating the declaration is what tells it, and it also
+// leaves every level saying which enclosing tables the statements inside it
+// read.
+func (s Select) WithCorrelation(tables ...TableRef) (Select, error) {
+	copy := s.clone()
+	copy.correlations = append(copy.correlations, tables...)
+	if err := copy.Validate(); err != nil {
+		return Select{}, err
+	}
+	return copy, nil
+}
+
+// Correlations returns a copy of the enclosing tables s declared with
+// WithCorrelation. It is empty for a statement that stands on its own.
+func (s Select) Correlations() []TableRef {
+	return append([]TableRef(nil), s.correlations...)
 }
 
 // WithJoin returns a copy of s with join appended.
@@ -403,6 +462,12 @@ func (s Select) Offset() (int, bool) {
 }
 
 // Validate reports whether s is internally consistent.
+//
+// A statement that declared a correlation with WithCorrelation is judged with
+// those tables in scope, which is what lets a correlated subquery be built and
+// validated before any statement encloses it. Nesting it checks the same
+// declaration against the statement that really encloses it, and render.Select
+// refuses one rendered on its own.
 func (s Select) Validate() error {
 	if err := s.from.validate(); err != nil {
 		return validationError("from", "%s", err)
@@ -411,8 +476,27 @@ func (s Select) Validate() error {
 		return validationError("projections", "must not be empty")
 	}
 
-	sources := map[string]struct{}{s.from.key(): {}}
-	references := []sourceReference{s.from.reference()}
+	sources := sourceScope{keys: make(map[string]struct{}, len(s.correlations)+len(s.joins)+1)}
+	// A declared correlation goes into the scope before this statement's own
+	// tables, so a table this statement selects from that it also declared is
+	// refused: both would then be reachable, and a server would answer every
+	// column reference from this statement's copy without the SQL saying which
+	// was meant. The repair is the same alias validateSourceReference names for
+	// two tables of one statement.
+	for i, correlated := range s.correlations {
+		path := fmt.Sprintf("correlations[%d]", i)
+		if err := correlated.validate(); err != nil {
+			return validationError(path, "%s", err)
+		}
+		if err := validateSourceReference(sources.references, correlated, path); err != nil {
+			return err
+		}
+		sources.add(correlated)
+	}
+	if err := validateSourceReference(sources.references, s.from, "from"); err != nil {
+		return err
+	}
+	sources.add(s.from)
 	for i, join := range s.joins {
 		path := fmt.Sprintf("joins[%d]", i)
 		if join.kind != JoinInner && join.kind != JoinLeft {
@@ -421,14 +505,18 @@ func (s Select) Validate() error {
 		if err := join.source.validate(); err != nil {
 			return validationError(path+".source", "%s", err)
 		}
-		if _, exists := sources[join.source.key()]; exists {
+		// The duplicate message is about one statement listing the same table
+		// twice, so it covers only the tables this statement selects from. A
+		// join naming a table this statement declared a correlation with falls
+		// through to validateSourceReference below, whose message names the
+		// alias that separates the two scopes instead.
+		if _, inScope := sources.keys[join.source.key()]; inScope && !isCorrelatedSource(s.correlations, join.source) {
 			return validationError(path+".source", "duplicates table reference %q", join.source.QualifiedName())
 		}
-		if err := validateSourceReference(references, join.source, path+".source"); err != nil {
+		if err := validateSourceReference(sources.references, join.source, path+".source"); err != nil {
 			return err
 		}
-		sources[join.source.key()] = struct{}{}
-		references = append(references, join.source.reference())
+		sources.add(join.source)
 		if err := validateSubqueryClauseExpression(join.on, sources, "a JOIN ON condition", path+".on"); err != nil {
 			return err
 		}
@@ -487,6 +575,19 @@ func (s Select) Validate() error {
 	return nil
 }
 
+// isCorrelatedSource reports whether source is one of the enclosing tables
+// correlations declares. It exists so a join can tell a table this statement
+// already selects from, which is a plain duplicate, from one it declared a
+// correlation with, which is the ambiguity an alias repairs.
+func isCorrelatedSource(correlations []TableRef, source TableRef) bool {
+	for _, correlated := range correlations {
+		if correlated.key() == source.key() {
+			return true
+		}
+	}
+	return false
+}
+
 // validateOrder validates one ORDER BY term. A term naming a projection's
 // result, built by AscResult or DescResult, is resolved against results and
 // never reaches the aggregate reasoning below: it names a projection
@@ -504,7 +605,7 @@ func (s Select) Validate() error {
 // while a column it reads outside every aggregate belongs to no row of that
 // group and needs an explicit GROUP BY, exactly as in the projection set
 // itself.
-func validateOrder(order Order, sources map[string]struct{}, projections expressionUsage, grouped bool, results map[string]int, path string) error {
+func validateOrder(order Order, sources sourceScope, projections expressionUsage, grouped bool, results map[string]int, path string) error {
 	if projection, ok := order.ResultProjection(); ok {
 		return validateOrderResultAlias(projection, results, path)
 	}
@@ -536,7 +637,7 @@ func validateOrder(order Order, sources map[string]struct{}, projections express
 // aggregate appears among the grouping keys, and leaves that to the database,
 // because a precise version of that check needs primary-key and outer-join
 // reasoning this package does not have.
-func (s Select) validateProjectionSet(sources map[string]struct{}, grouped bool) (expressionUsage, error) {
+func (s Select) validateProjectionSet(sources sourceScope, grouped bool) (expressionUsage, error) {
 	var (
 		total         expressionUsage
 		aggregatePath string
@@ -604,6 +705,7 @@ func (s Select) resultNames() map[string]int {
 
 func (s Select) clone() Select {
 	copy := s
+	copy.correlations = append([]TableRef(nil), s.correlations...)
 	copy.projections = append([]Projection(nil), s.projections...)
 	copy.joins = append([]Join(nil), s.joins...)
 	copy.groupBy = append([]Expression(nil), s.groupBy...)

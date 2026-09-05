@@ -309,11 +309,11 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "use InSelect or NotInSelect")
 
-	// A subquery cannot correlate: its WHERE reads no table outside its own FROM
-	// and joins, so a caller who tries to reference the enclosing table hits the
-	// same "outside the statement" error the table-scope check already reports
-	// for any expression, before the subquery is even nested inside another
-	// statement.
+	// A subquery correlates only when it says so. WithCorrelation names the
+	// enclosing table, and a statement that has not named one reads no table
+	// outside its own FROM and joins, so this hits the same "outside the
+	// statement" error the table-scope check reports for any expression, while
+	// the statement is still being built and long before it is nested.
 	correlated, err := query.NewSelect(other, otherID)
 	require.NoError(t, err)
 	_, err = correlated.WithWhere(query.Equal(userID, query.Bind(1)))

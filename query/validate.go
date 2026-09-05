@@ -85,13 +85,54 @@ func validateSourceReference(references []sourceReference, source TableRef, path
 	return nil
 }
 
+// sourceScope is every table a statement's expressions may name: the tables the
+// statement selects from, plus the tables of an enclosing statement it declared
+// a correlation with through Select.WithCorrelation.
+//
+// A subquery inherits exactly what it declared and nothing else. The enclosing
+// statement's remaining tables stay invisible to it, which is what keeps a
+// subquery selecting from a table the enclosing statement also selects from
+// legal: nothing in that subquery can reach the enclosing copy, so no column
+// reference in it is ambiguous, and a server resolves each one to the subquery's
+// own table exactly as rasql validated it. Declaring a correlation with that
+// same table is what makes the two reachable at once, and validateSourceReference
+// is then what refuses the pair.
+//
+// It carries two views of those tables, because neither can be derived from the
+// other. keys states which descriptor a column belongs to, so a ColumnRef
+// resolves in one map lookup. references states how a server would resolve a
+// column reference written against a table, which is what tells apart two
+// sources that hold different keys and still render under the same leading
+// identifier; sourceReference.conflicts owns that comparison.
+type sourceScope struct {
+	keys       map[string]struct{}
+	references []sourceReference
+}
+
+// newSourceScope returns a scope holding table alone. It is what a write
+// statement validates its own clauses against, since a write statement names
+// one table and joins none.
+func newSourceScope(table TableRef) sourceScope {
+	scope := sourceScope{keys: make(map[string]struct{}, 1)}
+	scope.add(table)
+	return scope
+}
+
+// add records table as a source in scope. Call it only after
+// validateSourceReference has cleared table against the sources already there,
+// since the check reads exactly the references this appends to.
+func (s *sourceScope) add(table TableRef) {
+	s.keys[table.key()] = struct{}{}
+	s.references = append(s.references, table.reference())
+}
+
 // expressionContext tells the expression walk where in a statement the
 // expression sits. An aggregate function is only legal in a SELECT projection,
 // in a HAVING clause, and in the ORDER BY of a statement that groups, and never
 // inside another aggregate, so a walk that carries no clause and no nesting
 // state cannot tell a legal call from one every dialect rejects.
 type expressionContext struct {
-	sources map[string]struct{}
+	sources sourceScope
 	// clause names the SQL clause the expression belongs to, for error messages.
 	clause string
 	// allowsAggregate reports whether the clause may call an aggregate at all.
@@ -112,7 +153,7 @@ type expressionContext struct {
 }
 
 // clauseContext returns a context for a clause that must not call an aggregate.
-func clauseContext(sources map[string]struct{}, clause string) expressionContext {
+func clauseContext(sources sourceScope, clause string) expressionContext {
 	return expressionContext{sources: sources, clause: clause}
 }
 
@@ -120,7 +161,7 @@ func clauseContext(sources map[string]struct{}, clause string) expressionContext
 // sources still carries the target table so a reference to another table
 // keeps reporting the "outside the statement" error, but a reference to the
 // target table itself is refused with rowValue's dedicated message instead.
-func rowValueContext(sources map[string]struct{}, clause string) expressionContext {
+func rowValueContext(sources sourceScope, clause string) expressionContext {
 	return expressionContext{sources: sources, clause: clause, rowValue: true}
 }
 
@@ -129,7 +170,7 @@ func rowValueContext(sources map[string]struct{}, clause string) expressionConte
 // column read outside every aggregate reads bareColumn from the returned usage.
 // It also allows a subquery, since every clause this context serves belongs to a
 // SELECT statement.
-func aggregateClauseContext(sources map[string]struct{}, clause string) expressionContext {
+func aggregateClauseContext(sources sourceScope, clause string) expressionContext {
 	return expressionContext{sources: sources, clause: clause, allowsAggregate: true, allowsSubquery: true}
 }
 
@@ -147,12 +188,12 @@ func aggregateClauseContext(sources map[string]struct{}, clause string) expressi
 // clause's own call swapped for validateSubqueryClauseExpression, and the
 // clause named in the refusal message validateExpression's Subquery arm
 // builds.
-func subqueryClauseContext(sources map[string]struct{}, clause string) expressionContext {
+func subqueryClauseContext(sources sourceScope, clause string) expressionContext {
 	return expressionContext{sources: sources, clause: clause, allowsSubquery: true}
 }
 
 // projectionContext returns a context for a SELECT projection.
-func projectionContext(sources map[string]struct{}) expressionContext {
+func projectionContext(sources sourceScope) expressionContext {
 	return aggregateClauseContext(sources, "a SELECT projection")
 }
 
@@ -184,7 +225,7 @@ func (u expressionUsage) merge(other expressionUsage) expressionUsage {
 
 // validateClauseExpression validates an expression that belongs to clause, which
 // must not call an aggregate function.
-func validateClauseExpression(expression Expression, sources map[string]struct{}, clause string, path string) error {
+func validateClauseExpression(expression Expression, sources sourceScope, clause string, path string) error {
 	_, err := validateExpression(expression, clauseContext(sources, clause), path)
 	return err
 }
@@ -192,7 +233,7 @@ func validateClauseExpression(expression Expression, sources map[string]struct{}
 // validateSubqueryClauseExpression validates an expression that belongs to a
 // clause which must not call an aggregate function but may run a subquery. See
 // subqueryClauseContext for which clauses those are.
-func validateSubqueryClauseExpression(expression Expression, sources map[string]struct{}, clause string, path string) error {
+func validateSubqueryClauseExpression(expression Expression, sources sourceScope, clause string, path string) error {
 	_, err := validateExpression(expression, subqueryClauseContext(sources, clause), path)
 	return err
 }
@@ -201,7 +242,7 @@ func validateSubqueryClauseExpression(expression Expression, sources map[string]
 // row of an INSERT statement: it must not call an aggregate, must not run a
 // subquery, and must not read a column of the row's own target table, because
 // no row exists yet for such a read to resolve against.
-func validateRowValueExpression(expression Expression, sources map[string]struct{}, clause string, path string) error {
+func validateRowValueExpression(expression Expression, sources sourceScope, clause string, path string) error {
 	_, err := validateExpression(expression, rowValueContext(sources, clause), path)
 	return err
 }
@@ -216,7 +257,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if err := expression.source.validate(); err != nil {
 			return expressionUsage{}, validationError(path, "%s", err)
 		}
-		_, inSources := ctx.sources[expression.source.key()]
+		_, inSources := ctx.sources.keys[expression.source.key()]
 		if ctx.rowValue && inSources {
 			return expressionUsage{}, validationError(path, "references column %q of the target table, but an INSERT VALUES row cannot read the target table's columns", expression.name)
 		}
@@ -231,7 +272,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if err := expression.column.source.validate(); err != nil {
 			return expressionUsage{}, validationError(path, "%s", err)
 		}
-		if _, exists := ctx.sources[expression.column.source.key()]; !exists {
+		if _, exists := ctx.sources.keys[expression.column.source.key()]; !exists {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.column.source.QualifiedName())
 		}
 		if _, exists := expression.column.source.column(expression.column.name); !exists {
@@ -242,7 +283,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if err := expression.table.validate(); err != nil {
 			return expressionUsage{}, validationError(path, "%s", err)
 		}
-		if _, inSources := ctx.sources[expression.table.key()]; !inSources {
+		if _, inSources := ctx.sources.keys[expression.table.key()]; !inSources {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.table.QualifiedName())
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
@@ -321,19 +362,87 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 	case Function:
 		return validateFunction(expression, ctx, path)
 	case Subquery:
-		if !ctx.allowsSubquery {
-			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement, in the WHERE clause of a DELETE statement, and in the WHERE clause and SET assignments of an UPDATE statement", ctx.clause)
-		}
-		if err := expression.statement.Validate(); err != nil {
-			return expressionUsage{}, validationError(path+".statement", "%s", err)
+		if err := validateSubqueryStatement(expression.statement, ctx, path); err != nil {
+			return expressionUsage{}, err
 		}
 		if n := len(expression.statement.projections); n != 1 {
 			return expressionUsage{}, validationError(path, "a subquery used as an expression must select exactly one expression, got %d", n)
 		}
-		return expressionUsage{}, nil
+		return subqueryUsage(), nil
+	case Existence:
+		// EXISTS reads whether a row arrived and never reads a value, so the
+		// projection count Scalar, InSelect and NotInSelect require does not
+		// apply here, and the statement may project anything at all. Existence
+		// states why that difference makes it a node of its own, and Exists
+		// states which body is portable.
+		if err := validateSubqueryStatement(expression.subquery.statement, ctx, path+".subquery"); err != nil {
+			return expressionUsage{}, err
+		}
+		return subqueryUsage(), nil
 	default:
 		return expressionUsage{}, validationError(path, "uses unsupported expression %T", expression)
 	}
+}
+
+// validateSubqueryStatement validates the SELECT a subquery runs. Both subquery
+// forms go through it, so the clause rule and the correlation rule are stated
+// once; each caller adds only what its own form demands of the projections.
+//
+// The statement is validated exactly as it was while it was being built, through
+// the same Select.Validate a caller reaches. Nothing about the enclosing
+// statement is folded into it, because a subquery reads an enclosing table only
+// where it declared that table with Select.WithCorrelation, and its own
+// validation has already judged those declarations against everything else it
+// names.
+//
+// What is added here is the other end of that declaration: every table the
+// subquery declared must be one the enclosing statement carries. Without this
+// check a subquery attached to the wrong statement would render a column
+// reference naming a table the SQL never selects from. The enclosing statement
+// may be a SELECT, a DELETE, or an UPDATE — each carries the row a correlated
+// subquery reads, which is a result row for a SELECT and the row being written
+// for the other two.
+func validateSubqueryStatement(statement Select, ctx expressionContext, path string) error {
+	if !ctx.allowsSubquery {
+		return validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement, in the WHERE clause of a DELETE statement, and in the WHERE clause and SET assignments of an UPDATE statement", ctx.clause)
+	}
+	for i, correlated := range statement.correlations {
+		if _, enclosing := ctx.sources.keys[correlated.key()]; !enclosing {
+			return validationError(fmt.Sprintf("%s.statement.correlations[%d]", path, i), "declares a correlation with table %q, which the enclosing statement does not carry", correlated.QualifiedName())
+		}
+	}
+	if err := statement.Validate(); err != nil {
+		return validationError(path+".statement", "%s", err)
+	}
+	return nil
+}
+
+// subqueryUsage is what both subquery forms report back to the statement that
+// encloses them: nothing at all.
+//
+// aggregate stays false because an aggregate call inside a subquery belongs to
+// that subquery's own clause and its own grouping. SELECT users.id, (SELECT
+// AVG(orders.total) FROM orders) FROM users aggregates nothing at the outer
+// level, and reporting the inner AVG outward would make the outer projection
+// set look like it mixes an aggregate with a bare column and refuse a statement
+// every dialect runs. The subquery's own validation has already judged that call
+// against its own clause, in a context built inside Select.validate that starts
+// again at aggregate depth zero -- which is also why an aggregate is legal
+// inside a subquery that sits inside an aggregate's argument, since the subquery
+// breaks the nesting SQL forbids.
+//
+// bareColumn stays false for the same reason. The columns a subquery reads
+// belong to the subquery's rows, not to the enclosing statement's, so reporting
+// them outward would make an ungrouped enclosing statement look like it reads a
+// bare column beside an aggregate and refuse it. A correlated reference to an
+// enclosing table is the one read that does belong to the enclosing row, and
+// this leaves it to the database rather than checking it here, exactly as
+// Select.validateProjectionSet already leaves "a column projected outside an
+// aggregate is not among the grouping keys" to the database: naming the shapes a
+// server refuses there needs primary-key and outer-join reasoning this package
+// does not have.
+func subqueryUsage() expressionUsage {
+	return expressionUsage{}
 }
 
 // functionSpec states how many arguments a supported function takes and

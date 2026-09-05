@@ -348,6 +348,12 @@ func expressionReadsWriteTarget(expression query.Expression, target query.TableR
 	switch expression := expression.(type) {
 	case query.Subquery:
 		return selectReadsWriteTarget(expression.Statement(), target)
+	case query.Existence:
+		// EXISTS carries its subquery in a node of its own rather than as a
+		// query.Subquery operand, so it needs its own arm: without one the walk
+		// would fall through to false and rasql would send MySQL a DELETE FROM
+		// t WHERE EXISTS (SELECT … FROM t …) to answer 1093 to.
+		return selectReadsWriteTarget(expression.Subquery().Statement(), target)
 	case query.Binary:
 		return expressionReadsWriteTarget(expression.Left(), target) || expressionReadsWriteTarget(expression.Right(), target)
 	case query.Logical:

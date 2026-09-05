@@ -428,9 +428,25 @@ func (m Membership) Subquery() (Subquery, bool) {
 // placeholder numbering stays correct in every dialect.
 //
 // The statement is validated as part of the statement that encloses it, and it
-// reads no table of that statement: every column it names must belong to its own
-// FROM or joins. A subquery that reads an enclosing table is refused, because the
-// scope rule that makes such a correlation safe is not modelled yet.
+// may name a column of any table that statement carries as well as a column of
+// its own FROM and joins. Naming one correlates the subquery: the database
+// evaluates it once per enclosing row rather than once for the whole statement,
+// and the row it reads is the enclosing row being tested. Correlation reaches
+// through any depth of nesting, so a subquery three levels down may read a
+// table of the statement at the top, and it applies to every form: a scalar
+// subquery in a projection that counts one user's orders is correlated the same
+// way an Exists is.
+//
+// A column reference a server could resolve to both a table of the subquery and
+// a table of an enclosing statement is refused rather than resolved. SQL itself
+// answers such a reference from the innermost statement that has a match, and
+// answers it silently: adding a join to a subquery would then change which
+// table an already-written reference reads, with nothing in the Go code saying
+// so. rasql refuses the pair instead and names the alias that separates the two
+// scopes, which is what it already does for two tables of one statement a
+// server could not tell apart. Alias one of the two tables with TableRef.As and
+// the ambiguity is gone, and the statement says which table each reference
+// meant.
 type Subquery struct {
 	statement Select
 }
@@ -447,6 +463,70 @@ func Scalar(statement Select) Subquery {
 // Statement returns a copy of the SELECT the subquery runs.
 func (s Subquery) Statement() Select {
 	return s.statement
+}
+
+// Existence tests whether a subquery returns any row at all, rendering as
+// EXISTS (SELECT …) or NOT EXISTS (SELECT …). Exists and NotExists build it.
+//
+// It is a node of its own rather than a flag on Subquery, because the two ask
+// different things of the statement they run. Scalar, InSelect and NotInSelect
+// each put the subquery where SQL expects a value, so the statement must
+// project exactly one expression: x > (SELECT a, b …) is as invalid as
+// x IN (SELECT a, b …). EXISTS reads no value at all, only whether a row
+// arrived, so it ignores what the statement projects entirely. A flag on
+// Subquery would carry that difference inside the very value Membership already
+// holds, and nothing would then stop InSelect from being handed a subquery
+// built for EXISTS.
+type Existence struct {
+	subquery Subquery
+	not      bool
+}
+
+func (Existence) expression() {}
+
+// Exists tests whether statement returns at least one row. It renders as
+// EXISTS (SELECT …).
+//
+// statement may project any number of expressions, unlike the statement given
+// to Scalar, InSelect or NotInSelect: EXISTS reads none of them. Project a
+// column of statement's own table, such as the primary key. SELECT 1 is the
+// conventional body in hand-written SQL and is written here as
+// Project(Bind(1)), since Project takes an Expression and a plain Go value has
+// to be bound to become one, but a bound value is a placeholder rather than the
+// literal 1: PostgreSQL has nothing to infer that placeholder's type from in a
+// projection standing on its own, types it as text, and the pgx driver then
+// refuses to encode a Go int as text. MySQL and SQLite run the same statement,
+// so a bound integer here builds a query that works on two engines and fails on
+// the third. Project(Bind("1")) runs on all three; a column costs no parameter
+// at all.
+//
+// Write statement so that it reads a column of the enclosing statement, which
+// Subquery describes. An EXISTS whose statement reads only its own tables asks
+// nothing about the row being tested and merely reports whether a table is
+// non-empty, which is the same answer for every row.
+func Exists(statement Select) Existence {
+	return Existence{subquery: Subquery{statement: statement}}
+}
+
+// NotExists tests whether statement returns no row at all. It renders as
+// NOT EXISTS (SELECT …) and carries every rule Exists states.
+//
+// A NULL among the statement's results changes nothing here, unlike in NotIn
+// and NotInSelect: EXISTS reports whether a row arrived and never reads a
+// value, so NOT EXISTS over a statement that returns a NULL-valued row is
+// false, not unknown.
+func NotExists(statement Select) Existence {
+	return Existence{subquery: Subquery{statement: statement}, not: true}
+}
+
+// Subquery returns the subquery whose rows the test counts.
+func (e Existence) Subquery() Subquery {
+	return e.subquery
+}
+
+// Not reports whether the test is NOT EXISTS.
+func (e Existence) Not() bool {
+	return e.not
 }
 
 // FunctionName identifies a SQL function a statement may call.
