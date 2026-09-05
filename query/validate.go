@@ -136,17 +136,17 @@ func aggregateClauseContext(sources map[string]struct{}, clause string) expressi
 // subqueryClauseContext returns a context for a clause that must not call an
 // aggregate but may run a subquery. It serves every SELECT clause that is not
 // itself an aggregate clause — a JOIN ON condition, WHERE, GROUP BY, and ORDER
-// BY — and the WHERE clause of a DELETE statement, which is the one write
-// clause a subquery reaches.
+// BY — the WHERE clause of a DELETE, and the WHERE clause and SET assignment
+// values of an UPDATE.
 //
-// Extending that list to another write clause is this constructor plus the
-// clause's own call: swap its validateClauseExpression call for
-// validateSubqueryClauseExpression and name the clause in the refusal message
-// validateExpression's Subquery arm builds. Update's WHERE clause and its SET
-// assignments are the obvious next candidates, and stay on
+// The write clauses left out are INSERT's VALUES rows, an upsert's
+// conflict-update assignments, and every RETURNING projection. Each stays on
 // validateClauseExpression until someone confirms against a live server what
-// each engine does with a subquery there, the way this repository confirmed
-// DELETE's.
+// the three engines do with a subquery there, the way this repository
+// confirmed DELETE's and UPDATE's. Extending the list is this comment, the
+// clause's own call swapped for validateSubqueryClauseExpression, and the
+// clause named in the refusal message validateExpression's Subquery arm
+// builds.
 func subqueryClauseContext(sources map[string]struct{}, clause string) expressionContext {
 	return expressionContext{sources: sources, clause: clause, allowsSubquery: true}
 }
@@ -322,7 +322,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		return validateFunction(expression, ctx, path)
 	case Subquery:
 		if !ctx.allowsSubquery {
-			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement, and in the WHERE clause of a DELETE statement", ctx.clause)
+			return expressionUsage{}, validationError(path, "runs a subquery in %s, but a subquery is only valid in the projections, JOIN ON conditions, WHERE clause, GROUP BY clause, HAVING clause, and ORDER BY clause of a SELECT statement, in the WHERE clause of a DELETE statement, and in the WHERE clause and SET assignments of an UPDATE statement", ctx.clause)
 		}
 		if err := expression.statement.Validate(); err != nil {
 			return expressionUsage{}, validationError(path+".statement", "%s", err)

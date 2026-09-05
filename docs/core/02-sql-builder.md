@@ -318,8 +318,8 @@ source: [examples/rasql_scalar_function_example_test.go](https://github.com/lest
 `query.Subquery` is a `SELECT` statement used as an expression: `query.Scalar(statement)` uses it as a single value, and `query.InSelect`/`query.NotInSelect` use it as the right-hand side of a membership test. In every form, `statement` must project exactly one expression — validation reports the count when it does not — because `x > (SELECT a, b …)` is as invalid as `x IN (SELECT a, b …)`.
 
 A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `GROUP BY` clause, `HAVING` clause, and `ORDER BY` clause of a
-`SELECT` statement, and in the `WHERE` clause of a `DELETE` statement. Every other clause of a write statement refuses one, the same way
-those clauses refuse an aggregate: an `UPDATE`'s `SET` assignments and its `WHERE` clause, an `INSERT`'s `VALUES` rows, an upsert's
+`SELECT` statement, in the `WHERE` clause of a `DELETE` statement, and in the `WHERE` clause and `SET` assignments of an `UPDATE` statement.
+Every other clause of a write statement refuses one, the same way those clauses refuse an aggregate: an `INSERT`'s `VALUES` rows, an upsert's
 conflict-update assignments, and the `RETURNING` clause of any of them. A subquery reads no table of the statement that encloses it: every
 column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a
 correlation. A subquery may nest inside another subquery to any depth.
@@ -328,12 +328,17 @@ correlation. A subquery may nest inside another subquery to any depth.
 
 `query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit. The arguments a subquery binds join the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an `OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject. PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`.
 
-MySQL also refuses a `DELETE` whose `WHERE` subquery reads the table the statement deletes from, answering error 1093, `You can't specify
-target table 't' for update in FROM clause`. It answers that however the subquery reaches the table: named in the subquery's own `FROM`,
-named there under an alias, joined to, or read by a subquery nested inside it. PostgreSQL and SQLite run every one of those shapes and hold
-`dialect.CapabilityDeleteSubqueryTarget`, which MySQL does not, so `render.Delete` returns a `*render.SubqueryReadsDeleteTargetError` for
-MySQL instead of sending SQL the server would reject. Run the `SELECT` as a statement of its own and pass the rows it returns to `query.In`,
-or point the subquery at a table other than the target.
+MySQL also refuses a `DELETE` or an `UPDATE` whose subquery reads the table the statement writes to, answering error 1093, `You can't
+specify target table 't' for update in FROM clause`. It answers that however the subquery reaches the table: named in the subquery's own
+`FROM`, named there under an alias, joined to, or read by a subquery nested inside it. An `UPDATE` earns 1093 from either of its clauses,
+so a subquery reading the target from the `WHERE` clause and one reading it from a `SET` assignment's value are both refused. PostgreSQL
+and SQLite run every one of those shapes and hold `dialect.CapabilityWriteSubqueryTarget`, which MySQL does not, so `render.Delete` and
+`render.Update` return a `*render.SubqueryReadsWriteTargetError` for MySQL instead of sending SQL the server would reject. Run the `SELECT`
+as a statement of its own and pass the rows it returns to `query.In`, or point the subquery at a table other than the target.
+
+Two spellings of one table count as the same table here, so a bare `users` and a schema-qualified `app.users` are refused together. An
+unqualified name resolves against whatever schema the connection is currently using, which rasql does not know, and MySQL answered 1093 to
+that mixed spelling too. Only a pair that states two different schemas is treated as two tables.
 
 ### Full-text search (SQLite FTS5)
 

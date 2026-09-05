@@ -10,39 +10,43 @@ import (
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
-// ErrSubqueryReadsDeleteTarget is the sentinel wrapped by every
-// [SubqueryReadsDeleteTargetError], so a caller that only needs a presence
+// ErrSubqueryReadsWriteTarget is the sentinel wrapped by every
+// [SubqueryReadsWriteTargetError], so a caller that only needs a presence
 // check can use errors.Is instead of errors.As.
-var ErrSubqueryReadsDeleteTarget = errors.New("render: a DELETE subquery reads the target table")
+var ErrSubqueryReadsWriteTarget = errors.New("render: a write statement's subquery reads the target table")
 
-// SubqueryReadsDeleteTargetError reports that a subquery in a DELETE's WHERE
-// clause reads the table the statement deletes from, on a dialect that has not
-// been granted [dialect.CapabilityDeleteSubqueryTarget].
+// SubqueryReadsWriteTargetError reports that a subquery in a DELETE or an
+// UPDATE reads the table the statement writes to, on a dialect that has not
+// been granted [dialect.CapabilityWriteSubqueryTarget].
 //
-// query.Delete.Validate accepts the statement, because the shape is ordinary
-// SQL: PostgreSQL 17 and SQLite both run DELETE FROM t WHERE id IN (SELECT id
-// FROM t …). MySQL 8.4 answers error 1093, "You can't specify target table 't'
+// query.Delete.Validate and query.Update.Validate both accept the statement,
+// because the shape is ordinary SQL: PostgreSQL 17 and SQLite both run DELETE
+// FROM t WHERE id IN (SELECT id FROM t …) and UPDATE t SET n = (SELECT MAX(n)
+// FROM t). MySQL 8.4 answers error 1093, "You can't specify target table 't'
 // for update in FROM clause", so this package refuses to render the statement
 // for MySQL instead of sending SQL the server would reject. See
-// dialect.CapabilityDeleteSubqueryTarget for the shapes MySQL was measured
+// dialect.CapabilityWriteSubqueryTarget for the shapes MySQL was measured
 // against.
-type SubqueryReadsDeleteTargetError struct {
+type SubqueryReadsWriteTargetError struct {
 	// Dialect is the name of the dialect that cannot run the statement.
 	Dialect string
-	// Table names the DELETE's target table, as query.TableRef.QualifiedName
+	// Operation is the SQL keyword naming the statement, "DELETE" or
+	// "UPDATE", so the message says which one the caller wrote.
+	Operation string
+	// Table names the statement's target table, as query.TableRef.QualifiedName
 	// spells it for an error message.
 	Table string
 }
 
-func (e *SubqueryReadsDeleteTargetError) Error() string {
-	return fmt.Sprintf("the %s dialect cannot run a DELETE whose WHERE subquery reads the target table %q: MySQL answers error 1093, \"You can't specify target table for update in FROM clause\". Run the SELECT as a statement of its own and pass the rows it returns to query.In, or point the subquery at a table other than the target", e.Dialect, e.Table)
+func (e *SubqueryReadsWriteTargetError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot run a %s whose subquery reads the target table %q: MySQL answers error 1093, \"You can't specify target table for update in FROM clause\". Run the SELECT as a statement of its own and pass the rows it returns to query.In, or point the subquery at a table other than the target", e.Dialect, e.Operation, e.Table)
 }
 
-// Unwrap exposes ErrSubqueryReadsDeleteTarget so
-// errors.Is(err, ErrSubqueryReadsDeleteTarget) works alongside errors.As
-// against *SubqueryReadsDeleteTargetError.
-func (e *SubqueryReadsDeleteTargetError) Unwrap() error {
-	return ErrSubqueryReadsDeleteTarget
+// Unwrap exposes ErrSubqueryReadsWriteTarget so
+// errors.Is(err, ErrSubqueryReadsWriteTarget) works alongside errors.As
+// against *SubqueryReadsWriteTargetError.
+func (e *SubqueryReadsWriteTargetError) Unwrap() error {
+	return ErrSubqueryReadsWriteTarget
 }
 
 // Insert renders s for d.
@@ -261,6 +265,19 @@ func (r *renderer) writeUpdate(s query.Update) error {
 	if s.Where() == nil && !s.AllowsAll() {
 		return fmt.Errorf("UPDATE requires a WHERE predicate or an explicit AllowAll")
 	}
+	// Both clauses are checked, because MySQL answers 1093 to either: a
+	// subquery reading the target from the WHERE clause and one reading it
+	// from a SET assignment's value are refused alike.
+	if !r.dialect.Supports(dialect.CapabilityWriteSubqueryTarget) {
+		if where := s.Where(); where != nil && expressionReadsWriteTarget(where, s.Table()) {
+			return &SubqueryReadsWriteTargetError{Dialect: r.dialect.Name(), Operation: "UPDATE", Table: s.Table().QualifiedName()}
+		}
+		for _, assignment := range s.Assignments() {
+			if expressionReadsWriteTarget(assignment.Value(), s.Table()) {
+				return &SubqueryReadsWriteTargetError{Dialect: r.dialect.Name(), Operation: "UPDATE", Table: s.Table().QualifiedName()}
+			}
+		}
+	}
 	table, err := r.quoteQualified(s.Table().Schema(), s.Table().Name())
 	if err != nil {
 		return err
@@ -295,8 +312,8 @@ func (r *renderer) writeDelete(s query.Delete) error {
 	if s.Where() == nil && !s.AllowsAll() {
 		return fmt.Errorf("DELETE requires a WHERE predicate or an explicit AllowAll")
 	}
-	if where := s.Where(); where != nil && !r.dialect.Supports(dialect.CapabilityDeleteSubqueryTarget) && expressionReadsDeleteTarget(where, s.From()) {
-		return &SubqueryReadsDeleteTargetError{Dialect: r.dialect.Name(), Table: s.From().QualifiedName()}
+	if where := s.Where(); where != nil && !r.dialect.Supports(dialect.CapabilityWriteSubqueryTarget) && expressionReadsWriteTarget(where, s.From()) {
+		return &SubqueryReadsWriteTargetError{Dialect: r.dialect.Name(), Operation: "DELETE", Table: s.From().QualifiedName()}
 	}
 	table, err := r.quoteQualified(s.From().Schema(), s.From().Name())
 	if err != nil {
@@ -313,12 +330,13 @@ func (r *renderer) writeDelete(s query.Delete) error {
 	return r.writeReturning(s.Returning())
 }
 
-// expressionReadsDeleteTarget reports whether any subquery reachable from
+// expressionReadsWriteTarget reports whether any subquery reachable from
 // expression reads target in its own FROM or one of its joins. writeDelete
-// calls it for a dialect without dialect.CapabilityDeleteSubqueryTarget, which
-// today is MySQL alone.
+// calls it on the DELETE's predicate, and writeUpdate on the UPDATE's
+// predicate and on each SET assignment's value, for a dialect without
+// dialect.CapabilityWriteSubqueryTarget, which today is MySQL alone.
 //
-// The walk descends the whole predicate rather than checking only a top-level
+// The walk descends the whole expression rather than checking only a top-level
 // query.Membership, because MySQL's error 1093 does not care where the
 // subquery sits: it answered 1093 to an IN, a NOT IN, a scalar comparison
 // against (SELECT MAX(id) FROM t), a subquery reading the target through a
@@ -326,39 +344,39 @@ func (r *renderer) writeDelete(s query.Delete) error {
 // that can carry a child expression is therefore listed here; the leaves —
 // query.ColumnRef, query.Value, query.TableIdentifier, query.ExcludedColumn —
 // carry none and fall through to false.
-func expressionReadsDeleteTarget(expression query.Expression, target query.TableRef) bool {
+func expressionReadsWriteTarget(expression query.Expression, target query.TableRef) bool {
 	switch expression := expression.(type) {
 	case query.Subquery:
-		return selectReadsDeleteTarget(expression.Statement(), target)
+		return selectReadsWriteTarget(expression.Statement(), target)
 	case query.Binary:
-		return expressionReadsDeleteTarget(expression.Left(), target) || expressionReadsDeleteTarget(expression.Right(), target)
+		return expressionReadsWriteTarget(expression.Left(), target) || expressionReadsWriteTarget(expression.Right(), target)
 	case query.Logical:
 		for _, child := range expression.Expressions() {
-			if expressionReadsDeleteTarget(child, target) {
+			if expressionReadsWriteTarget(child, target) {
 				return true
 			}
 		}
 		return false
 	case query.Not:
-		return expressionReadsDeleteTarget(expression.Expression(), target)
+		return expressionReadsWriteTarget(expression.Expression(), target)
 	case query.NullTest:
-		return expressionReadsDeleteTarget(expression.Expression(), target)
+		return expressionReadsWriteTarget(expression.Expression(), target)
 	case query.Membership:
-		if subquery, ok := expression.Subquery(); ok && selectReadsDeleteTarget(subquery.Statement(), target) {
+		if subquery, ok := expression.Subquery(); ok && selectReadsWriteTarget(subquery.Statement(), target) {
 			return true
 		}
-		if expressionReadsDeleteTarget(expression.Expression(), target) {
+		if expressionReadsWriteTarget(expression.Expression(), target) {
 			return true
 		}
 		for _, value := range expression.Values() {
-			if expressionReadsDeleteTarget(value, target) {
+			if expressionReadsWriteTarget(value, target) {
 				return true
 			}
 		}
 		return false
 	case query.Function:
 		for _, argument := range expression.Arguments() {
-			if expressionReadsDeleteTarget(argument, target) {
+			if expressionReadsWriteTarget(argument, target) {
 				return true
 			}
 		}
@@ -368,43 +386,43 @@ func expressionReadsDeleteTarget(expression query.Expression, target query.Table
 	}
 }
 
-// selectReadsDeleteTarget reports whether statement reads target, either as one
+// selectReadsWriteTarget reports whether statement reads target, either as one
 // of its own sources or through a subquery of its own at any depth.
 //
 // A source matches on schema and name alone, ignoring the alias: MySQL answered
 // 1093 to DELETE FROM t WHERE id IN (SELECT id FROM t AS ta …) exactly as it did
 // to the unaliased form, so an alias hides nothing from the server and must
 // hide nothing from this check either.
-func selectReadsDeleteTarget(statement query.Select, target query.TableRef) bool {
+func selectReadsWriteTarget(statement query.Select, target query.TableRef) bool {
 	if sameBaseTable(statement.From(), target) {
 		return true
 	}
 	for _, join := range statement.Joins() {
-		if sameBaseTable(join.Source(), target) || expressionReadsDeleteTarget(join.On(), target) {
+		if sameBaseTable(join.Source(), target) || expressionReadsWriteTarget(join.On(), target) {
 			return true
 		}
 	}
 	for _, projection := range statement.Projections() {
-		if expressionReadsDeleteTarget(projection.ProjectedExpression(), target) {
+		if expressionReadsWriteTarget(projection.ProjectedExpression(), target) {
 			return true
 		}
 	}
-	if where := statement.Where(); where != nil && expressionReadsDeleteTarget(where, target) {
+	if where := statement.Where(); where != nil && expressionReadsWriteTarget(where, target) {
 		return true
 	}
 	for _, key := range statement.GroupBy() {
-		if expressionReadsDeleteTarget(key, target) {
+		if expressionReadsWriteTarget(key, target) {
 			return true
 		}
 	}
-	if having := statement.Having(); having != nil && expressionReadsDeleteTarget(having, target) {
+	if having := statement.Having(); having != nil && expressionReadsWriteTarget(having, target) {
 		return true
 	}
 	for _, order := range statement.OrderBy() {
 		// An order built by AscResult or DescResult carries a nil Expression
 		// and names a projection instead, and that projection is one of the
 		// statement's own, already walked above.
-		if expression := order.Expression(); expression != nil && expressionReadsDeleteTarget(expression, target) {
+		if expression := order.Expression(); expression != nil && expressionReadsWriteTarget(expression, target) {
 			return true
 		}
 	}
@@ -412,10 +430,28 @@ func selectReadsDeleteTarget(statement query.Select, target query.TableRef) bool
 }
 
 // sameBaseTable reports whether source and target name the same underlying
-// table. It compares the schema and the name and never the alias, for the
-// reason selectReadsDeleteTarget states.
+// table. It never compares the alias, for the reason selectReadsWriteTarget
+// states.
+//
+// The schema is compared only when both sides state one. An unqualified name
+// resolves against whatever schema the connection is currently using, which
+// this package does not know, so a bare users and a qualified app.users may
+// well be one table: MySQL answered 1093 to a DELETE from an unqualified
+// target whose subquery named the same table schema-qualified, and it is that
+// answer this has to predict. Treating the pair as the same table refuses a
+// statement MySQL might have run, when the two really do live in different
+// schemas; sending it and collecting 1093 from the server would be the other
+// error, and this one at least names the repair. query.sourceReference.conflicts
+// resolves the same question the same way, for the same reason, when it decides
+// whether two sources of one statement are distinguishable.
 func sameBaseTable(source query.TableRef, target query.TableRef) bool {
-	return source.Schema() == target.Schema() && source.Name() == target.Name()
+	if source.Name() != target.Name() {
+		return false
+	}
+	if source.Schema() != "" && target.Schema() != "" {
+		return source.Schema() == target.Schema()
+	}
+	return true
 }
 
 func (r *renderer) writeReturning(projections []query.Projection) error {

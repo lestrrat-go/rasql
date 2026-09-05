@@ -20,23 +20,31 @@ const (
 	// CapabilitySubqueryLimit reports whether a subquery on the right-hand side
 	// of IN may set a LIMIT or an OFFSET. MySQL rejects that combination.
 	CapabilitySubqueryLimit
-	// CapabilityDeleteSubqueryTarget reports whether a subquery in a DELETE's
-	// WHERE clause may read the table the statement deletes from. MySQL 8.4
-	// refuses that with its own error 1093, "You can't specify target table
-	// 't' for update in FROM clause", and refuses it for every shape a rasql
-	// statement can take: the subquery may name the target in its own FROM or
-	// in one of its joins, may name it under an alias, and may sit at any
-	// depth inside the predicate — an IN, a NOT IN, a scalar comparison, or a
-	// subquery nested inside another subquery — and MySQL answers 1093 to all
-	// of them. PostgreSQL 17 and SQLite run every one of those shapes, so both
-	// hold this capability and MySQL does not.
+	// CapabilityWriteSubqueryTarget reports whether a subquery in a DELETE or
+	// an UPDATE may read the table the statement writes to. MySQL 8.4 refuses
+	// that with its own error 1093, "You can't specify target table 't' for
+	// update in FROM clause", and refuses it for every shape a rasql statement
+	// can take: the subquery may name the target in its own FROM or in one of
+	// its joins, may name it under an alias, and may sit at any depth inside
+	// the predicate — an IN, a NOT IN, a scalar comparison, or a subquery
+	// nested inside another subquery — and MySQL answers 1093 to all of them.
+	// An UPDATE is governed by the same rule in both of its clauses: MySQL
+	// answers 1093 to a subquery reading the target from the WHERE clause and
+	// to one reading it from a SET assignment's value. PostgreSQL 17 and
+	// SQLite run every one of those shapes, so both hold this capability and
+	// MySQL does not.
+	//
+	// The schema qualifier does not change the answer. MySQL answered 1093 to
+	// a DELETE from an unqualified target whose subquery named the same table
+	// schema-qualified, so a spelling that differs only in the qualifier still
+	// names one table to the server.
 	//
 	// MySQL does accept the read once it is wrapped in a derived table, as in
 	// DELETE FROM t WHERE id IN (SELECT x.id FROM (SELECT id FROM t) AS x),
 	// but that shape is not reachable from here: query.Select takes a
 	// query.TableRef as its FROM and never a nested SELECT, so nothing this
 	// package renders can express the workaround.
-	CapabilityDeleteSubqueryTarget
+	CapabilityWriteSubqueryTarget
 	// CapabilityQualifiedReference reports that a REFERENCES clause accepts a
 	// schema-qualified table name.
 	CapabilityQualifiedReference
@@ -95,7 +103,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityDeleteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex,
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
@@ -159,7 +167,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityDeleteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator,
 		decimalName:  "TEXT",
 		// varcharText is left false: SQLite already drops schema.DecimalType's
 		// Precision and Scale for the same reason (see decimalTypeName below),

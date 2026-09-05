@@ -307,7 +307,7 @@ func TestBuiltinCapabilities(t *testing.T) {
 	require.False(t, dialect.PostgreSQL().Supports(dialect.CapabilityMatchOperator))
 	require.False(t, dialect.MySQL().Supports(dialect.CapabilityMatchOperator))
 
-	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityDeleteSubqueryTarget))
-	require.True(t, dialect.SQLite().Supports(dialect.CapabilityDeleteSubqueryTarget))
-	require.False(t, dialect.MySQL().Supports(dialect.CapabilityDeleteSubqueryTarget))
+	require.True(t, dialect.PostgreSQL().Supports(dialect.CapabilityWriteSubqueryTarget))
+	require.True(t, dialect.SQLite().Supports(dialect.CapabilityWriteSubqueryTarget))
+	require.False(t, dialect.MySQL().Supports(dialect.CapabilityWriteSubqueryTarget))
 }
