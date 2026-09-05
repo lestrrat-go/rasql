@@ -103,6 +103,8 @@ Every constructor below takes and returns `query.Expression`, so conditions nest
 | `query.InSelect(expression, statement)` | `expression IN (SELECT …)` |
 | `query.NotInSelect(expression, statement)` | `expression NOT IN (SELECT …)` |
 | `query.Scalar(statement)` | `(SELECT …)`, used as a single value |
+| `query.Exists(statement)` | `EXISTS (SELECT …)` |
+| `query.NotExists(statement)` | `NOT EXISTS (SELECT …)` |
 | `query.And(expressions…)` | `(a AND b …)` |
 | `query.Or(expressions…)` | `(a OR b …)` |
 | `query.Negate(expression)` | `NOT (expression)` |
@@ -315,18 +317,61 @@ source: [examples/rasql_scalar_function_example_test.go](https://github.com/lest
 
 ### Subqueries
 
-`query.Subquery` is a `SELECT` statement used as an expression: `query.Scalar(statement)` uses it as a single value, and `query.InSelect`/`query.NotInSelect` use it as the right-hand side of a membership test. In every form, `statement` must project exactly one expression — validation reports the count when it does not — because `x > (SELECT a, b …)` is as invalid as `x IN (SELECT a, b …)`.
+`query.Subquery` is a `SELECT` statement used as an expression: `query.Scalar(statement)` uses it as a single value, and `query.InSelect`/`query.NotInSelect` use it as the
+right-hand side of a membership test. In those three forms, `statement` must project exactly one expression — validation reports the count when it does not — because
+`x > (SELECT a, b …)` is as invalid as `x IN (SELECT a, b …)`.
+
+`query.Exists(statement)` and `query.NotExists(statement)` test whether the statement returns any row at all. They read no value from it, only whether a row arrived, so
+`statement` may project any number of expressions and the projection is arbitrary. Project a column of the subquery's own table, such as its primary key. `SELECT 1` is
+the conventional body in hand-written SQL and `query.Project(query.Bind(1))` is how it is written here, but a bound value is a placeholder rather than the literal `1`:
+PostgreSQL has nothing to infer that placeholder's type from in a projection standing on its own, types it as `text`, and the pgx driver then refuses to encode a Go `int`
+as text. MySQL and SQLite both run the same statement, so a bound integer there builds a query that works on two engines and fails on the third.
+`query.Project(query.Bind("1"))` runs on all three; a column costs no parameter at all.
 
 A subquery is legal in the projections, `JOIN ON` conditions, `WHERE` clause, `GROUP BY` clause, `HAVING` clause, and `ORDER BY` clause of a
 `SELECT` statement, in the `WHERE` clause of a `DELETE` statement, and in the `WHERE` clause and `SET` assignments of an `UPDATE` statement.
 Every other clause of a write statement refuses one, the same way those clauses refuse an aggregate: an `INSERT`'s `VALUES` rows, an upsert's
-conflict-update assignments, and the `RETURNING` clause of any of them. A subquery reads no table of the statement that encloses it: every
-column it names must belong to its own `FROM` or joins, so a subquery that reads an enclosing table is refused rather than treated as a
-correlation. A subquery may nest inside another subquery to any depth.
+conflict-update assignments, and the `RETURNING` clause of any of them. A subquery may nest inside another subquery to any depth.
 
-[Filter with a subquery](../orm/03-typed-queries.md#filter-with-a-subquery) below builds both forms against a database, with one subquery reading its own table and another reading an alias of the enclosing statement's table.
+#### Correlated subqueries
 
-`query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit. The arguments a subquery binds join the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an `OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject. PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`.
+A subquery may read a column of the statement enclosing it, alongside the columns of its own `FROM` and joins. Reading one correlates the subquery: the database evaluates
+it once per enclosing row rather than once for the whole statement, and the row it reads is the enclosing row being tested. Correlation is what `EXISTS` is for — an
+`EXISTS` reading only its own tables asks nothing about the row being tested and merely reports whether a table is non-empty — and it reaches every other form too, so a
+scalar subquery counting one user's orders beside that user is the same mechanism.
+
+Call `query.Select.WithCorrelation(tables…)` to name the enclosing tables the statement reads, before the clause that reads them. Every builder method validates the copy
+it returns, and a statement under construction has no enclosing statement to ask, so `WithWhere` refuses a predicate naming a table this statement has not been told
+about. That is the same ordering `query.NewJoinedSelect` documents for a join a projection reads. A statement between the reader and the table declares it too, since
+validating that middle statement on its own has nothing else saying a third statement is coming.
+
+A subquery correlates with a `SELECT` statement alone. A `DELETE` and an `UPDATE` take a subquery in the clauses [Subqueries](#subqueries) lists, and neither produces a
+result row for a subquery to be evaluated against, so a statement that declared a correlation is refused in one of those clauses rather than rendered. Keeping the write
+target out of the subquery's scope is also what keeps the shape those clauses were opened for: a subquery selecting from the write target itself, which `render` refuses
+for MySQL alone because of its error 1093.
+
+The declaration is checked at both ends. A table named in it that no enclosing statement carries is refused when the subquery is nested, and `render.Select` refuses a
+statement that declares a correlation and is rendered on its own, since `Exists`, `NotExists`, `Scalar`, `InSelect` and `NotInSelect` are the only places the enclosing
+row exists at all. `query.Validate` accepts that statement, because it is a consistent model of a subquery; this is the same division the `MATCH` operator already
+follows, where validation accepts the shape and rendering refuses the dialects that cannot run it.
+
+A column reference a server could resolve to both a table of the subquery and a table of an enclosing statement is refused rather than resolved. SQL itself answers such a
+reference from the innermost statement that has a match, and answers it silently: adding a join to a subquery would then change which table an already-written reference
+reads, with nothing in the Go code saying so. rasql refuses the pair and names the alias that separates the two scopes, which is what it already does for two tables of
+one statement a server could not tell apart. Alias one of the two tables with `TableRef.As` and the statement says which table each reference meant.
+
+An aggregate inside a subquery belongs to that subquery's own clause and its own grouping, never to the enclosing statement's, so a subquery that aggregates may sit
+beside a bare column in an ungrouped statement, and a column the subquery reads never makes the enclosing statement look like it reads one. A correlated column read
+alongside an aggregate is left to the database, exactly as a column projected outside an aggregate that is not among the grouping keys already is.
+
+[Filter with a subquery](../orm/03-typed-queries.md#filter-with-a-subquery) builds an uncorrelated `InSelect` and a `Scalar` over an alias of the enclosing statement's
+table, and [Filter with EXISTS](../orm/03-typed-queries.md#filter-with-exists) builds the correlated `EXISTS` and `NOT EXISTS` pair against a database.
+
+`query.InSelect` costs no argument per candidate, unlike `query.In`, so a set of any size fits within the dialect's parameter limit. The arguments a subquery binds join
+the enclosing statement's argument list at the position the subquery occupies, so placeholder numbering stays correct in every dialect. MySQL refuses a `LIMIT` or an
+`OFFSET` on the statement given to `InSelect` or `NotInSelect` — error 1235 — so rendering for MySQL reports an error instead of sending SQL the server would reject.
+PostgreSQL and SQLite accept it. That restriction does not apply to `Scalar`, which MySQL accepts with a `LIMIT`, nor to `Exists` and `NotExists`: error 1235 names a
+`LIMIT` in an `IN`/`ALL`/`ANY`/`SOME` subquery, and MySQL runs `EXISTS (SELECT … LIMIT 1)`.
 
 MySQL also refuses a `DELETE` or an `UPDATE` whose subquery reads the table the statement writes to, answering error 1093, `You can't
 specify target table 't' for update in FROM clause`. It answers that however the subquery reaches the table: named in the subquery's own

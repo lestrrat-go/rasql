@@ -60,8 +60,20 @@ func (e *UnsupportedMatchOperatorError) Unwrap() error {
 }
 
 // Select renders s for d.
+//
+// It refuses a statement that declared a correlation with
+// query.Select.WithCorrelation. Such a statement reads a column of the row an
+// enclosing statement is on, which exists only while the statement runs inside
+// another one, so rendering it here would emit SQL naming a table the FROM
+// clause never lists. query.Validate accepts it, because the statement is a
+// consistent model of a subquery; this is the same division the MATCH operator
+// already follows, where validation accepts the shape and rendering refuses the
+// dialects that cannot run it.
 func Select(d dialect.Dialect, s query.Select) (stmt.Statement, error) {
 	return renderStatement(d, "SELECT", s.Validate, func(renderer *renderer) error {
+		if correlations := s.Correlations(); len(correlations) > 0 {
+			return fmt.Errorf("the statement declares a correlation with table %q and is rendered on its own; a correlated SELECT is only valid inside the statement it correlates with, as the statement given to query.Exists, query.NotExists, query.Scalar, query.InSelect or query.NotInSelect", correlations[0].QualifiedName())
+		}
 		return renderer.writeSelect(s)
 	})
 }
@@ -367,6 +379,24 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 	case query.Subquery:
 		r.builder.WriteByte('(')
 		if err := r.writeSelect(expression.Statement()); err != nil {
+			return err
+		}
+		r.builder.WriteByte(')')
+		return nil
+	case query.Existence:
+		// The outer parentheses match query.Not's, which wraps a prefix
+		// operator the same way; the inner ones come from the query.Subquery
+		// arm above, so EXISTS never has to parenthesize the SELECT itself.
+		// No dialect capability gates a LIMIT here, unlike the query.Membership
+		// arm: MySQL's error 1235 names LIMIT in an IN/ALL/ANY/SOME subquery,
+		// and MySQL 8.4 runs EXISTS (SELECT … LIMIT 1) as PostgreSQL and SQLite
+		// do.
+		if expression.Not() {
+			r.builder.WriteString("(NOT EXISTS ")
+		} else {
+			r.builder.WriteString("(EXISTS ")
+		}
+		if err := r.writeExpression(expression.Subquery()); err != nil {
 			return err
 		}
 		r.builder.WriteByte(')')

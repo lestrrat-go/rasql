@@ -129,9 +129,17 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// from the server, so it carries the padded amount for the same reason the
 	// two expectations above do -- expect firstStored, never first.
 	recordActive := records.Column("active")
-	activeIDs, err := query.NewSelect(records.Ref(), recordID)
+	// The subquery reads an alias of the same table, so each scope answers to
+	// a leading identifier of its own: two unaliased copies of one table in
+	// nested scopes render column references a server resolves to the inner
+	// one alone, which validation refuses rather than let the inner scope win
+	// silently.
+	activeRecords, err := records.Ref().As("active_records")
 	require.NoError(t, err)
-	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActive, query.Bind(true)))
+	activeID := activeRecords.Column("id")
+	activeIDs, err := query.NewSelect(activeRecords, activeID)
+	require.NoError(t, err)
+	activeIDs, err = activeIDs.WithWhere(query.Equal(activeRecords.Column("active"), query.Bind(true)))
 	require.NoError(t, err)
 	viaSubquery, err := rasql.SelectFrom(records).
 		Where(query.InSelect(recordID, activeIDs)).

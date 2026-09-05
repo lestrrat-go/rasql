@@ -637,14 +637,14 @@ func (s Delete) Validate() error {
 	return validateProjections(s.returning, sources, "returning")
 }
 
-func validateWriteTarget(table TableRef, path string) (map[string]struct{}, error) {
+func validateWriteTarget(table TableRef, path string) (sourceScope, error) {
 	if err := table.validate(); err != nil {
-		return nil, validationError(path, "%s", err)
+		return sourceScope{}, validationError(path, "%s", err)
 	}
 	if table.Alias() != "" {
-		return nil, validationError(path+".alias", "write targets must not use an alias")
+		return sourceScope{}, validationError(path+".alias", "write targets must not use an alias")
 	}
-	return map[string]struct{}{table.key(): {}}, nil
+	return newSourceScope(table), nil
 }
 
 func validateTargetColumn(column ColumnRef, table TableRef, path string) error {
@@ -662,7 +662,7 @@ func validateTargetColumn(column ColumnRef, table TableRef, path string) error {
 
 // validateProjections validates the RETURNING projections of a write statement.
 // RETURNING reports the rows the statement changed, so it may not aggregate.
-func validateProjections(projections []Projection, sources map[string]struct{}, path string) error {
+func validateProjections(projections []Projection, sources sourceScope, path string) error {
 	for i, projection := range projections {
 		itemPath := fmt.Sprintf("%s[%d]", path, i)
 		if nilcheck.Is(projection) {

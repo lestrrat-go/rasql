@@ -299,7 +299,10 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "from")
 
-	twoProjections, err := query.NewSelect(users, userID, query.Project(query.Bind(1)))
+	// The subquery reads another table, so the projection count is what it is
+	// refused for. A second unaliased users in the subquery would be refused
+	// first, as a source the enclosing statement already answers for.
+	twoProjections, err := query.NewSelect(other, otherID, query.Project(query.Bind(1)))
 	require.NoError(t, err)
 	_, err = statement.WithWhere(query.GreaterThan(userID, query.Scalar(twoProjections)))
 	requireQueryValidationError(t, err)
@@ -309,11 +312,11 @@ func TestSelectRejectsInvalidStatements(t *testing.T) {
 	requireQueryValidationError(t, err)
 	require.ErrorContains(t, err, "use InSelect or NotInSelect")
 
-	// A subquery cannot correlate: its WHERE reads no table outside its own FROM
-	// and joins, so a caller who tries to reference the enclosing table hits the
-	// same "outside the statement" error the table-scope check already reports
-	// for any expression, before the subquery is even nested inside another
-	// statement.
+	// A subquery correlates only when it says so. WithCorrelation names the
+	// enclosing table, and a statement that has not named one reads no table
+	// outside its own FROM and joins, so this hits the same "outside the
+	// statement" error the table-scope check reports for any expression, while
+	// the statement is still being built and long before it is nested.
 	correlated, err := query.NewSelect(other, otherID)
 	require.NoError(t, err)
 	_, err = correlated.WithWhere(query.Equal(userID, query.Bind(1)))
@@ -396,10 +399,15 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 	require.NoError(t, notInStatement.Validate())
 
 	// A subquery two levels deep: the outer statement's InSelect reads a
-	// statement whose own WHERE runs another InSelect.
-	innermost, err := query.NewSelect(orders, orderID)
+	// statement whose own WHERE runs another InSelect. The innermost statement
+	// aliases orders, which the statement enclosing it already reads: two
+	// unaliased orders in nested scopes render column references a server would
+	// answer from the inner one alone, which validation refuses.
+	innerOrders, err := orders.As("inner_orders")
 	require.NoError(t, err)
-	innermost, err = innermost.WithWhere(query.GreaterThan(amount, query.Bind(10)))
+	innermost, err := query.NewSelect(innerOrders, innerOrders.Column("id"))
+	require.NoError(t, err)
+	innermost, err = innermost.WithWhere(query.GreaterThan(innerOrders.Column("amount"), query.Bind(10)))
 	require.NoError(t, err)
 	nested, err := query.NewSelect(orders, orderUserID)
 	require.NoError(t, err)

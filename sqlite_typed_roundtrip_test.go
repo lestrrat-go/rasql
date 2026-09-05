@@ -181,7 +181,13 @@ func TestSQLiteTypedSelectSubqueryFiltersRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []user{insertedUsers[0], insertedUsers[2]}, viaInSelect)
 
-	average, err := query.NewSelect(orders.Ref(), query.Avg(amount))
+	// The enclosing statement below joins orders, so the average has to read
+	// an alias of it: an unaliased orders in both scopes renders column
+	// references a server would answer from the subquery alone, and validation
+	// refuses that pair rather than let the inner scope win silently.
+	allOrders, err := orders.Ref().As("all_orders")
+	require.NoError(t, err)
+	average, err := query.NewSelect(allOrders, query.Avg(allOrders.Column("amount")))
 	require.NoError(t, err)
 
 	viaScalar, err := rasql.DecodeFrom[user](users).
@@ -523,10 +529,15 @@ func TestSQLiteQualifiedTableRoundTrip(t *testing.T) {
 	}, grouped)
 
 	// A subquery naming the qualified table, both as the outer and inner
-	// statement.
-	prolific, err := query.NewSelect(queryEvents, userID)
+	// statement. The inner one is aliased: an unaliased audit.events in both
+	// scopes renders every column reference under the same leading identifier,
+	// which validation refuses rather than resolve to the inner scope silently.
+	prolificEvents, err := queryEvents.As("prolific_events")
 	require.NoError(t, err)
-	prolific, err = prolific.WithGroupBy(userID)
+	prolificUserID := prolificEvents.Column("user_id")
+	prolific, err := query.NewSelect(prolificEvents, prolificUserID)
+	require.NoError(t, err)
+	prolific, err = prolific.WithGroupBy(prolificUserID)
 	require.NoError(t, err)
 	prolific, err = prolific.WithHaving(query.GreaterThan(query.CountAll(), query.Bind(1)))
 	require.NoError(t, err)
