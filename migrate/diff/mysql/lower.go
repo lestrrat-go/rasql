@@ -69,11 +69,7 @@ func compareMySQL(baseline, target *schemaSnapshot) (loweringModel, error) {
 	}
 	addedOrder, err := orderAddedTables(added, target.lowerCaseTableNames)
 	if err != nil {
-		addedOrder = make([]string, 0, len(added))
-		for _, entry := range added {
-			addedOrder = append(addedOrder, entry.Key)
-		}
-		sort.Strings(addedOrder)
+		return loweringModel{}, fmt.Errorf("mysql schema diff requires manual migration: %w", err)
 	}
 	for _, key := range addedOrder {
 		targetTable := target.tables[key]

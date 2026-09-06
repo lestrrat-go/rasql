@@ -1043,6 +1043,54 @@ func TestDiffDoesNotNormalizeAwaySQLitePrimaryKeyMetadata(t *testing.T) {
 	}
 }
 
+func TestSQLitePrimaryKeyNullabilityMatchesLiveSQLite(t *testing.T) {
+	tests := []struct {
+		name         string
+		baseline     string
+		target       string
+		insert       string
+		rejectsNull  bool
+		targetReject bool
+		expectsEqual bool
+	}{
+		{"ordinary inline text key", "CREATE TABLE members (id TEXT PRIMARY KEY);", "CREATE TABLE members (id TEXT PRIMARY KEY NOT NULL);", "INSERT INTO members (id) VALUES (NULL);", false, true, false},
+		{"ordinary table text key", "CREATE TABLE members (id TEXT, PRIMARY KEY (id));", "CREATE TABLE members (id TEXT NOT NULL, PRIMARY KEY (id));", "INSERT INTO members (id) VALUES (NULL);", false, true, false},
+		{"ordinary composite key", "CREATE TABLE members (a TEXT, b TEXT, PRIMARY KEY (a, b));", "CREATE TABLE members (a TEXT NOT NULL, b TEXT NOT NULL, PRIMARY KEY (a, b));", "INSERT INTO members (a, b) VALUES (NULL, 'b');", false, true, false},
+		{"integer rowid alias", "CREATE TABLE members (id INTEGER PRIMARY KEY);", "CREATE TABLE members (id INTEGER, PRIMARY KEY (id));", "INSERT INTO members (id) VALUES (NULL);", false, false, true},
+		{"inline integer descending key", "CREATE TABLE members (id INTEGER PRIMARY KEY DESC);", "CREATE TABLE members (id INTEGER PRIMARY KEY);", "INSERT INTO members (id) VALUES (NULL);", false, false, false},
+		{"strict text key", "CREATE TABLE members (id TEXT PRIMARY KEY) STRICT;", "CREATE TABLE members (id TEXT PRIMARY KEY NOT NULL) STRICT;", "INSERT INTO members (id) VALUES (NULL);", true, false, true},
+		{"without rowid composite key", "CREATE TABLE members (a TEXT, b TEXT, PRIMARY KEY (a, b)) WITHOUT ROWID;", "CREATE TABLE members (a TEXT NOT NULL, b TEXT NOT NULL, PRIMARY KEY (a, b)) WITHOUT ROWID;", "INSERT INTO members (a, b) VALUES (NULL, 'b');", true, false, true},
+		{"non-key not null", "CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT NOT NULL);", "CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT NOT NULL);", "INSERT INTO members (id, name) VALUES ('id', 'name');", false, false, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			analyzer := sqlite.New()
+			baseline := parseSnapshot(t, analyzer, test.baseline)
+			target := parseSnapshot(t, analyzer, test.target)
+			_, err := analyzer.Diff(baseline, target)
+			if test.expectsEqual {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "column members.")
+			}
+			for index, source := range []string{test.baseline, test.target} {
+				database, err := sql.Open("sqlite", ":memory:")
+				require.NoError(t, err)
+				_, err = database.ExecContext(t.Context(), source)
+				require.NoError(t, err)
+				_, err = database.ExecContext(t.Context(), test.insert)
+				rejectsNull := test.rejectsNull || index == 1 && test.targetReject
+				if rejectsNull {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+				require.NoError(t, database.Close())
+			}
+		})
+	}
+}
+
 func TestParseRejectsCreateTableAsSelect(t *testing.T) {
 	analyzer := sqlite.New()
 	_, err := analyzer.Parse([]diff.Source{{Path: "member_copy.sql", SQL: "CREATE TABLE member_copy AS SELECT id FROM members;"}})

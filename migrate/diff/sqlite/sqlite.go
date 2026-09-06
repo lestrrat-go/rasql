@@ -352,6 +352,11 @@ func sqliteTokenWordPart(value byte) bool {
 // into the same representation regardless of whether the source used inline
 // or table-level syntax. SQLite inspection renders this normalized form.
 func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
+	originalColumns := make([]sqlitequery.ColumnDefinition, len(statement.Columns))
+	for index, column := range statement.Columns {
+		originalColumns[index] = column
+		originalColumns[index].Constraints = append([]sqlitequery.ColumnConstraint(nil), column.Constraints...)
+	}
 	var primaryKey sqlitequery.TableConstraint
 	var hasPrimaryKey bool
 	var inlineAutoincrement bool
@@ -437,7 +442,7 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 		primaryKey.Name = nil
 		for index := range statement.Columns {
 			column := &statement.Columns[index]
-			if !primaryKeyContainsColumn(primaryKey, column.Name.Name) || hasColumnConstraint(*column, sqlitequery.ConstraintNotNull) {
+			if !primaryKeyColumnImplicitlyNotNull(statement, primaryKey, originalColumns[index]) || hasColumnConstraint(*column, sqlitequery.ConstraintNotNull) {
 				continue
 			}
 			column.Constraints = append(column.Constraints, sqlitequery.ColumnConstraint{Kind: sqlitequery.ConstraintNotNull})
@@ -447,6 +452,35 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 		}
 	}
 	statement.Constraints = constraints
+}
+
+// primaryKeyColumnImplicitlyNotNull reports whether SQLite makes column
+// non-null solely because it is a member of this table's primary key.
+func primaryKeyColumnImplicitlyNotNull(table *sqlitequery.CreateTableStatement, primaryKey sqlitequery.TableConstraint, column sqlitequery.ColumnDefinition) bool {
+	if table == nil || primaryKey.Kind != sqlitequery.ConstraintPrimaryKey || !primaryKeyContainsColumn(primaryKey, column.Name.Name) {
+		return false
+	}
+	if table.Options.Strict || table.Options.WithoutRowID {
+		return true
+	}
+	if len(primaryKey.Columns) != 1 {
+		return false
+	}
+	indexed := primaryKey.Columns[0]
+	expression, ok := indexed.Expression.(*sqlitequery.IdentifierExpression)
+	if !ok || len(expression.Name) != 1 || indexed.Collation != nil ||
+		sqliteIdentifierKey(expression.Name[0].Name) != sqliteIdentifierKey(column.Name.Name) {
+		return false
+	}
+	if len(column.Type.Words) != 1 || !strings.EqualFold(column.Type.Words[0], "INTEGER") || len(column.Type.Modifiers) != 0 {
+		return false
+	}
+	for _, constraint := range column.Constraints {
+		if constraint.Kind == sqlitequery.ConstraintPrimaryKey && constraint.Direction == sqlitequery.SortDescending {
+			return false
+		}
+	}
+	return true
 }
 
 func primaryKeyContainsColumn(constraint sqlitequery.TableConstraint, name string) bool {
@@ -505,6 +539,12 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		}
 		decisions = append(decisions, tableDecisions...)
 		if len(tableDiagnostics) > 0 || len(tableDecisions) > 0 {
+			if len(tableDecisions) == 0 && primaryKeyNullabilityOnly(pair.Baseline, pair.Target) {
+				return diff.Plan{}, manualMigrationError(tableDiagnostics)
+			}
+			if len(tableDecisions) == 0 && hasDescendingPrimaryKey(pair.Baseline.statement) {
+				return diff.Plan{}, manualMigrationError(tableDiagnostics)
+			}
 			carrier, rebuildErr := buildRebuildCarrier(pair.Baseline, pair.Target, indexesForTable(baseline.indexes, pair.Target.statement.Name), indexesForTable(target.indexes, pair.Target.statement.Name), tableDecisions, baseline.liveFacts, baseline.liveFactsKnown)
 			if rebuildErr != nil {
 				return diff.Plan{}, rebuildErr
@@ -593,6 +633,52 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		return plan, nil
 	}
 	return diff.NewPlan("sqlite", operations, decisions, lowerer)
+}
+
+func primaryKeyNullabilityOnly(baseline, target tableDefinition) bool {
+	if len(baseline.normalized.Columns) != len(target.normalized.Columns) {
+		return false
+	}
+	for index := range baseline.normalized.Columns {
+		left, right := baseline.normalized.Columns[index], target.normalized.Columns[index]
+		left.Constraints = withoutNotNull(left.Constraints)
+		right.Constraints = withoutNotNull(right.Constraints)
+		if !ast.Equal(left, right) {
+			return false
+		}
+	}
+	return ast.Equal(baseline.normalized.Constraints, target.normalized.Constraints)
+}
+
+func withoutNotNull(constraints []sqlitequery.ColumnConstraint) []sqlitequery.ColumnConstraint {
+	result := make([]sqlitequery.ColumnConstraint, 0, len(constraints))
+	for _, constraint := range constraints {
+		if constraint.Kind != sqlitequery.ConstraintNotNull {
+			result = append(result, constraint)
+		}
+	}
+	return result
+}
+
+func hasDescendingPrimaryKey(table *sqlitequery.CreateTableStatement) bool {
+	if table == nil {
+		return false
+	}
+	for _, column := range table.Columns {
+		for _, constraint := range column.Constraints {
+			if constraint.Kind == sqlitequery.ConstraintPrimaryKey && constraint.Direction == sqlitequery.SortDescending {
+				return true
+			}
+		}
+	}
+	for _, constraint := range table.Constraints {
+		for _, column := range constraint.Columns {
+			if constraint.Kind == sqlitequery.ConstraintPrimaryKey && column.Direction == sqlitequery.SortDescending {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasRebuildCarrier(carriers []rebuildCarrier, table sqlitequery.QualifiedName) bool {
