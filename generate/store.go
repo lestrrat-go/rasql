@@ -526,11 +526,12 @@ func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables 
 		return File{}, err
 	}
 	if q.Describer != nil {
-		description, err := q.Describer.Describe(ctx, querydescribe.Request{Name: q.Function, SQL: definition.SQL, Parameters: definition.Parameters, Tables: tables, Expected: q.Expected, Cardinality: q.Cardinality})
+		request := snapshotDescriptionRequest(querydescribe.Request{Name: q.Function, SQL: definition.SQL, Parameters: definition.Parameters, Tables: tables, Expected: q.Expected, Cardinality: q.Cardinality})
+		description, err := q.Describer.Describe(ctx, request)
 		if err != nil {
 			return File{}, err
 		}
-		definition.Result = &description
+		definition.Result = snapshotDescription(&description)
 		definition.ResultType = q.ResultType
 	} else if q.Expected != nil || q.ResultType != "" || q.Cardinality != querydescribe.Many {
 		return File{}, fmt.Errorf("query %q: typed result options require a describer", q.Function)

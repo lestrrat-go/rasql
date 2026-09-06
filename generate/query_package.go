@@ -751,11 +751,12 @@ func (p QueryPackage) planQuery(ctx context.Context, root, dir string, query Que
 		return File{}, fmt.Errorf("generate: bind query %q: %w", query.Function, err)
 	}
 	if query.Describer != nil {
-		description, err := query.Describer.Describe(ctx, querydescribe.Request{Name: query.Function, SQL: definition.SQL, Parameters: definition.Parameters, Tables: tables, Expected: query.Expected, Cardinality: query.Cardinality})
+		request := snapshotDescriptionRequest(querydescribe.Request{Name: query.Function, SQL: definition.SQL, Parameters: definition.Parameters, Tables: tables, Expected: query.Expected, Cardinality: query.Cardinality})
+		description, err := query.Describer.Describe(ctx, request)
 		if err != nil {
 			return File{}, err
 		}
-		definition.Result = &description
+		definition.Result = snapshotDescription(&description)
 		definition.ResultType = query.ResultType
 	} else if query.Expected != nil || query.ResultType != "" || query.Cardinality != querydescribe.Many {
 		return File{}, fmt.Errorf("generate: query %q typed result options require a describer", query.Function)
