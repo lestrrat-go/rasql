@@ -213,7 +213,7 @@ func TestGenerateRejectsBadFlags(t *testing.T) {
 		{
 			name:     "leftover arguments",
 			args:     []string{"generate", "-dsn", "app.db", "-dialect", "sqlite", "-package", "store", "-output", "internal/store", "extra"},
-			expected: `unexpected arguments: ["extra"]`,
+			expected: "unexpected positional argument; generate accepts flags only",
 		},
 	}
 	for _, testCase := range testCases {
@@ -229,6 +229,42 @@ func TestGenerateRejectsBadFlags(t *testing.T) {
 			entries, readErr := os.ReadDir(dir)
 			require.NoError(t, readErr)
 			require.Empty(t, entries, "a refused run must write nothing")
+		})
+	}
+}
+
+func TestGenerateRejectsPositionalArgumentsWithoutEchoingValues(t *testing.T) {
+	const secret = "auditSyntheticPassword572"
+	const dsn = "postgres://tester:" + secret + "@localhost/test"
+	testCases := []struct {
+		name          string
+		args          []string
+		expectedError string
+	}{
+		{
+			name:          "stray argument stops parsing",
+			args:          []string{"generate", "stray", "-dsn", dsn},
+			expectedError: "unexpected 3 positional arguments; generate accepts flags only",
+		},
+		{
+			name:          "double dash stops parsing",
+			args:          []string{"generate", "--", dsn},
+			expectedError: "unexpected positional argument; generate accepts flags only",
+		},
+		{
+			name:          "help stops parsing",
+			args:          []string{"generate", "-h", dsn},
+			expectedError: "unexpected positional argument; generate accepts flags only",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var output, diagnostics bytes.Buffer
+			err := rasqlgen.Run(testCase.args, &output, &diagnostics)
+			require.EqualError(t, err, testCase.expectedError)
+			combined := output.String() + diagnostics.String() + err.Error()
+			require.NotContains(t, combined, secret)
+			require.NotContains(t, combined, dsn)
 		})
 	}
 }
