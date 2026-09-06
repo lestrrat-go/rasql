@@ -12,6 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestObjectNameJSONRoundTrip(t *testing.T) {
+	table := validTable()
+	table.Schema = "audit"
+	table.Name = "customer-id"
+	want := table.ObjectName()
+	encoded, err := json.Marshal(want)
+	require.NoError(t, err)
+	var got schema.ObjectName
+	require.NoError(t, json.Unmarshal(encoded, &got))
+	require.Equal(t, want, got)
+}
+
 func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor := validTable()
 	descriptor.Schema = "audit"
@@ -1796,12 +1808,12 @@ func TestTableRejectsRelationshipWithoutMatchingForeignKey(t *testing.T) {
 
 func TestValidateIdentifier(t *testing.T) {
 	require.NoError(t, schema.ValidateIdentifier("customer_42"))
-	require.Error(t, schema.ValidateIdentifier("42_customer"))
-	require.Error(t, schema.ValidateIdentifier("customer-id"))
-	// A dotted name must stay rejected: schema qualification carries the
-	// namespace in a separate field rather than a dotted string, and this
-	// pins that a future change cannot weaken the rule to allow one.
-	require.ErrorContains(t, schema.ValidateIdentifier("audit.events"), "invalid character")
+	require.NoError(t, schema.ValidateIdentifier("42_customer"))
+	require.NoError(t, schema.ValidateIdentifier("customer-id"))
+	require.NoError(t, schema.ValidateIdentifier("audit.events"))
+	require.Error(t, schema.ValidateIdentifier(""))
+	require.Error(t, schema.ValidateIdentifier("bad\x00name"))
+	require.Error(t, schema.ValidateIdentifier(string([]byte{0xff})))
 }
 
 // TestTableValidatesSchemaQualifier pins the validation rule added for the
@@ -1817,16 +1829,8 @@ func TestTableValidatesSchemaQualifier(t *testing.T) {
 	require.NoError(t, base("").Validate())
 	require.NoError(t, base("audit").Validate())
 
-	err := base("audit.events").Validate()
-	require.Error(t, err)
-	var validationErr *schema.ValidationError
-	require.True(t, errors.As(err, &validationErr))
-	require.ErrorContains(t, err, "table.schema")
-
-	err = base("1bad").Validate()
-	require.Error(t, err)
-	require.True(t, errors.As(err, &validationErr))
-	require.ErrorContains(t, err, "table.schema")
+	require.NoError(t, base("audit.events").Validate())
+	require.NoError(t, base("1bad").Validate())
 }
 
 // TestTableValidatesForeignKeyReferencedSchema covers ForeignKey.ReferencedSchema:
@@ -1842,16 +1846,8 @@ func TestTableValidatesForeignKeyReferencedSchema(t *testing.T) {
 	require.NoError(t, base("").Validate())
 	require.NoError(t, base("tenant").Validate())
 
-	err := base("tenant.customers").Validate()
-	require.Error(t, err)
-	var validationErr *schema.ValidationError
-	require.True(t, errors.As(err, &validationErr))
-	require.ErrorContains(t, err, "foreign_keys[0].referenced_schema")
-
-	err = base("1bad").Validate()
-	require.Error(t, err)
-	require.True(t, errors.As(err, &validationErr))
-	require.ErrorContains(t, err, "foreign_keys[0].referenced_schema")
+	require.NoError(t, base("tenant.customers").Validate())
+	require.NoError(t, base("1bad").Validate())
 }
 
 // TestTableValidateAcceptsForeignKeyMatchAndDeferrability proves that a

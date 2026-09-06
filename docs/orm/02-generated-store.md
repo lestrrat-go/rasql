@@ -12,6 +12,11 @@ The generated package contains one `<table>_gen.go` file per table,
 scan and mapping methods, the table type, column accessors, and the package
 accessor. The descriptor file contains the runtime `schema.TableDef` values.
 
+When a physical table or column name contains spaces, punctuation, or a
+keyword, configure `generate.Store.Names` with its exact `schema.ObjectName`.
+The generated Go names remain stable while descriptors, scan switches, and SQL
+column references keep the original physical names.
+
 This is the generated surface for a `users` table:
 
 <!-- INCLUDE(examples/store/users_gen.go) -->

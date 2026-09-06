@@ -3,6 +3,7 @@ package dialect
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -220,7 +221,8 @@ func (d builtin) QuoteIdentifier(name string) (string, error) {
 	if err := schema.ValidateIdentifier(name); err != nil {
 		return "", fmt.Errorf("dialect %s: invalid identifier: %w", d.name, err)
 	}
-	return string(d.quote) + name + string(d.quote), nil
+	quoted := strings.ReplaceAll(name, string(d.quote), string(d.quote)+string(d.quote))
+	return string(d.quote) + quoted + string(d.quote), nil
 }
 
 func (d builtin) Placeholder(position int) (string, error) {

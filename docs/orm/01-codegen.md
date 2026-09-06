@@ -68,6 +68,13 @@ type: the generator derives `UsersRow` from a `users` table on its own, and
 reads badly, and when it collides with another table's generated names, which
 refuses the run.
 
+Programmatic generators can set `generate.Store.Names` when physical names do
+not make good Go identifiers or normalize to the same symbol. Keys are exact
+`schema.ObjectName` values, so an empty schema targets only the unqualified
+table. `ObjectNames` can set table accessors, table and row types, output file
+bases, and per-column fields and accessors. These names affect Go output only;
+SQL descriptors retain the exact physical names.
+
 `queries` compiles static SQL templates into generated functions beside the
 table code. Each entry names the `function` to generate and states its
 template in exactly one of two places. Naming an `input` file, resolved

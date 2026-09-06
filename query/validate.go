@@ -26,7 +26,7 @@ func validationError(path string, format string, args ...any) error {
 }
 
 func validateAlias(alias string) error {
-	if err := schema.ValidateIdentifier(alias); err != nil {
+	if err := schema.ValidateSimpleIdentifier(alias); err != nil {
 		return fmt.Errorf("invalid alias: %w", err)
 	}
 	return nil
@@ -611,7 +611,7 @@ func validateCustomFunction(function Function, ctx expressionContext, path strin
 	if function.star {
 		return expressionUsage{}, validationError(path, "function %q does not support *", function.name)
 	}
-	if err := schema.ValidateIdentifier(string(function.name)); err != nil {
+	if err := schema.ValidateSimpleIdentifier(string(function.name)); err != nil {
 		return expressionUsage{}, validationError(path+".function", "invalid function name %q: %s", function.name, err)
 	}
 	var usage expressionUsage
