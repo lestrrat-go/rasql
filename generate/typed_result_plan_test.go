@@ -1,15 +1,26 @@
 package generate_test
 
 import (
+	"context"
 	"database/sql"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/querydescribe"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+type fixedDescriber struct{ description querydescribe.Description }
+
+func (d fixedDescriber) Describe(context.Context, querydescribe.Request) (querydescribe.Description, error) {
+	return d.description, nil
+}
 
 func TestQueryPackagePlanContextRejectsRemovedResultColumn(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
@@ -21,4 +32,56 @@ func TestQueryPackagePlanContextRejectsRemovedResultColumn(t *testing.T) {
 	_, err = packagePlan.PlanContext(t.Context())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "deleted_column")
+}
+
+func TestQueryPackageRegeneratedTypeCompilesAndRejectsStaleCaller(t *testing.T) {
+	root, err := filepath.Abs("..")
+	require.NoError(t, err)
+	dir := t.TempDir()
+	makeDescription := func(typ string) querydescribe.Description {
+		return querydescribe.Description{Columns: []querydescribe.Column{{Name: "id", Binding: schema.GoBinding{Type: typ}}}}
+	}
+	build := func(typ string) []byte {
+		plan, planErr := (generate.QueryPackage{Package: "queries", Root: root, Dir: dir, Dialect: dialect.SQLite(), Queries: []generate.Query{{Function: "Report", Output: "report_gen.go", SQL: "SELECT 1", Describer: fixedDescriber{description: makeDescription(typ)}}}}).PlanContext(t.Context())
+		require.NoError(t, planErr)
+		require.Len(t, plan.Files(), 1)
+		return plan.Files()[0].Source
+	}
+	first := build("int64")
+	second := build("string")
+	require.NotEqual(t, first, second)
+	module := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.com/consumer\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => "+root+"\n"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(module, "queries"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(module, "queries", "report_gen.go"), second, 0o644))
+	caller := []byte("package queries\n\nvar _ int64 = ReportRow{}.ID\n")
+	require.NoError(t, os.WriteFile(filepath.Join(module, "queries", "caller_test.go"), caller, 0o644))
+	cmd := exec.Command("go", "test", "-mod=mod", "./...")
+	cmd.Dir = module
+	cmd.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, ".tmp", "gocache"))
+	output, err := cmd.CombinedOutput()
+	require.Error(t, err, string(output))
+	require.NoError(t, os.WriteFile(filepath.Join(module, "queries", "caller_test.go"), []byte("package queries\n\nvar _ string = ReportRow{}.ID\n"), 0o644))
+	cmd = exec.Command("go", "test", "-mod=mod", "./...")
+	cmd.Dir = module
+	cmd.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, ".tmp", "gocache"))
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	_ = first
+}
+
+func TestQueryPackagePlanClonesDescriptionAndChecksInputFreshness(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/plan\n\ngo 1.26\n"), 0o644))
+	input := filepath.Join(root, "report.sql")
+	require.NoError(t, os.WriteFile(input, []byte("SELECT 1"), 0o644))
+	description := querydescribe.Description{Columns: []querydescribe.Column{{Name: "id", Binding: schema.GoBinding{Type: "int64"}}}}
+	query := generate.Query{Function: "Report", Output: "report_gen.go", Input: input, Describer: fixedDescriber{description: description}}
+	plan, err := (generate.QueryPackage{Package: "plan", Root: root, Dir: filepath.Join(root, "queries"), Dialect: dialect.SQLite(), Queries: []generate.Query{query}}).PlanContext(t.Context())
+	require.NoError(t, err)
+	description.Columns[0].Binding.Imports = append(description.Columns[0].Binding.Imports, schema.GoImport{Path: "mutated"})
+	files := plan.Files()
+	require.NotContains(t, string(files[0].Source), "mutated")
+	require.NoError(t, os.WriteFile(input, []byte("SELECT 2"), 0o644))
+	require.Error(t, plan.Commit())
 }
