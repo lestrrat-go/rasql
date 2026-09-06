@@ -174,10 +174,6 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 			diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(baseline.indexes[key].statement.Name)))
 		}
 	}
-	if len(diagnostics) > 0 {
-		return diff.Plan{}, manualMigrationError(diagnostics)
-	}
-
 	plan := diff.Plan{Dialect: "mysql", Statements: make([]diff.PlannedStatement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
@@ -191,6 +187,22 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 		for index := range plan.Statements {
 			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
 		}
+	}
+	var decisions []diff.RequiredDecision
+	remaining := make([]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		if decision, ok := diff.BackfillDecision("mysql", diagnostic); ok {
+			decisions = append(decisions, decision)
+			continue
+		}
+		remaining = append(remaining, diagnostic)
+	}
+	if len(remaining) > 0 {
+		return diff.Plan{}, manualMigrationError(remaining)
+	}
+	plan.Decisions = decisions
+	if len(plan.Decisions) > 0 {
+		plan.Operations = diff.OperationsFromStatements("mysql", plan.Statements)
 	}
 	return plan, nil
 }

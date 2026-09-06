@@ -60,7 +60,11 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		indexes: make(map[string]indexDefinition),
 	}
 	for _, source := range sources {
-		parsed, err := pgquery.Parse(string(source.SQL))
+		normalizedSource, err := stripIdentityClauses(string(source.SQL))
+		if err != nil {
+			return nil, fmt.Errorf("postgresql schema source %q: %w", source.Path, err)
+		}
+		parsed, err := pgquery.Parse(normalizedSource)
 		if err != nil {
 			return nil, fmt.Errorf("postgresql schema source %q: %w", source.Path, err)
 		}
@@ -148,10 +152,6 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	for _, entry := range comparison.Indexes.Removed {
 		diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(*entry.Value.statement.Name)))
 	}
-	if len(diagnostics) > 0 {
-		return diff.Plan{}, manualMigrationError(diagnostics)
-	}
-
 	plan := diff.Plan{Dialect: "postgresql", Statements: make([]diff.PlannedStatement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
@@ -165,6 +165,22 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		for index := range plan.Statements {
 			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
 		}
+	}
+	var decisions []diff.RequiredDecision
+	remaining := make([]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		if decision, ok := diff.BackfillDecision("postgresql", diagnostic); ok {
+			decisions = append(decisions, decision)
+			continue
+		}
+		remaining = append(remaining, diagnostic)
+	}
+	if len(remaining) > 0 {
+		return diff.Plan{}, manualMigrationError(remaining)
+	}
+	plan.Decisions = decisions
+	if len(plan.Decisions) > 0 {
+		plan.Operations = diff.OperationsFromStatements("postgresql", plan.Statements)
 	}
 	return plan, nil
 }

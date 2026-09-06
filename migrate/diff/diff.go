@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -125,8 +126,196 @@ func compareSchemaObjects[T any](baseline, target map[string]T, equal func(T, T)
 // Plan is a reviewed set of SQL sources generated for one migration.
 type Plan struct {
 	Dialect            string
+	Operations         []ProposedOperation
+	Decisions          []RequiredDecision
 	Statements         []PlannedStatement
 	IrreversibleReason string
+}
+
+// OperationKind identifies the kind of schema change proposed by an analyzer.
+type OperationKind string
+
+const (
+	OperationCreateTable       OperationKind = "create_table"
+	OperationAddColumn         OperationKind = "add_column"
+	OperationAlterNullability  OperationKind = "alter_nullability"
+	OperationReplaceConstraint OperationKind = "replace_constraint"
+	OperationRebuildTable      OperationKind = "rebuild_table"
+)
+
+// ProposedOperation is a reviewable schema change. Forward and Reverse are
+// populated only when the operation can be lowered without a decision.
+type ProposedOperation struct {
+	ID, Table, Column, Constraint, Summary string
+	Kind                                   OperationKind
+	Forward, Reverse                       []PlannedStatement
+}
+
+// DecisionKind identifies caller-owned information needed before execution.
+type DecisionKind string
+
+const (
+	DecisionBackfill DecisionKind = "backfill"
+	DecisionRename   DecisionKind = "rename"
+)
+
+// RequiredDecision records information which cannot safely be inferred.
+type RequiredDecision struct {
+	ID, Table, Column, Baseline, Target, Reason string
+	Kind                                        DecisionKind
+}
+
+// Resolution supplies one caller-owned answer to a RequiredDecision.
+type Resolution struct {
+	DecisionID  string
+	BackfillSQL string
+	RenameFrom  string
+}
+
+// OperationID returns the stable identifier format used by analyzers.
+func OperationID(kind OperationKind, dialect, table, column, constraint string) string {
+	parts := []string{string(kind), strings.ToLower(dialect), strings.ToLower(table)}
+	if column != "" {
+		parts = append(parts, strings.ToLower(column))
+	}
+	if constraint != "" {
+		parts = append(parts, strings.ToLower(constraint))
+	}
+	return strings.Join(parts, "_")
+}
+
+// DecisionID returns the stable identifier format used by analyzers.
+func DecisionID(kind DecisionKind, dialect, table, column string) string {
+	return strings.Join([]string{string(kind), strings.ToLower(dialect), strings.ToLower(table), strings.ToLower(column)}, "_")
+}
+
+var backfillDiagnostic = regexp.MustCompile(`^new required column ([^.]+)\.([^ ]+) needs an application-specific backfill$`)
+
+// BackfillDecision converts the stable diagnostic emitted by an analyzer into
+// a caller-owned decision while keeping dialect-specific parsing private.
+func BackfillDecision(dialect, diagnostic string) (RequiredDecision, bool) {
+	match := backfillDiagnostic.FindStringSubmatch(diagnostic)
+	if match == nil {
+		return RequiredDecision{}, false
+	}
+	return RequiredDecision{
+		ID: DecisionID(DecisionBackfill, dialect, match[1], match[2]), Kind: DecisionBackfill,
+		Table: match[1], Column: match[2], Target: match[2], Reason: diagnostic,
+	}, true
+}
+
+// OperationsFromStatements preserves the existing lowered artifact while
+// exposing each generated source as a reviewable operation.
+func OperationsFromStatements(dialect string, statements []PlannedStatement) []ProposedOperation {
+	operations := make([]ProposedOperation, 0, len(statements))
+	for _, statement := range statements {
+		name := strings.TrimSuffix(statement.Source, filepath.Ext(statement.Source))
+		kind := OperationAddColumn
+		table, column := operationNames(statement.Summary)
+		switch {
+		case strings.HasPrefix(name, "create_table_"):
+			kind = OperationCreateTable
+		case strings.HasPrefix(name, "create_index_"):
+			kind = OperationReplaceConstraint
+		}
+		operations = append(operations, ProposedOperation{
+			ID: OperationID(kind, dialect, table, column, ""), Table: table, Column: column,
+			Kind: kind, Summary: statement.Summary, Forward: []PlannedStatement{statement},
+			Reverse: []PlannedStatement{{Source: statement.Source, SQL: statement.ReverseSQL, ReverseSQL: statement.SQL, Summary: statement.Summary}},
+		})
+	}
+	return operations
+}
+
+func operationNames(summary string) (string, string) {
+	parts := strings.Fields(summary)
+	if len(parts) < 3 {
+		return summary, ""
+	}
+	name := strings.TrimSuffix(parts[len(parts)-1], ";")
+	for index := range name {
+		if name[index] == '.' {
+			return name[:index], name[index+1:]
+		}
+	}
+	return name, ""
+}
+
+// Executable reports whether all required decisions have been supplied.
+func (p Plan) Executable() bool { return len(p.Decisions) == 0 && len(p.Statements) > 0 }
+
+// Resolve returns an independent executable copy after applying every answer.
+func (p Plan) Resolve(resolutions ...Resolution) (Plan, error) {
+	if len(resolutions) != len(p.Decisions) {
+		return Plan{}, fmt.Errorf("migrate diff: expected one resolution for each decision, got %d for %d", len(resolutions), len(p.Decisions))
+	}
+	byID := make(map[string]RequiredDecision, len(p.Decisions))
+	for _, decision := range p.Decisions {
+		if decision.ID == "" || decision.Kind == "" {
+			return Plan{}, fmt.Errorf("migrate diff: invalid decision metadata")
+		}
+		byID[decision.ID] = decision
+	}
+	copyPlan := p.clone()
+	copyPlan.Decisions = nil
+	copyPlan.Statements = nil
+	seen := make(map[string]struct{}, len(resolutions))
+	for _, resolution := range resolutions {
+		decision, ok := byID[resolution.DecisionID]
+		if !ok {
+			return Plan{}, fmt.Errorf("migrate diff: unknown decision %q", resolution.DecisionID)
+		}
+		if _, ok := seen[resolution.DecisionID]; ok {
+			return Plan{}, fmt.Errorf("migrate diff: duplicate resolution for %q", resolution.DecisionID)
+		}
+		seen[resolution.DecisionID] = struct{}{}
+		switch decision.Kind {
+		case DecisionBackfill:
+			if strings.TrimSpace(resolution.BackfillSQL) == "" {
+				return Plan{}, fmt.Errorf("migrate diff: backfill resolution %q is empty", decision.ID)
+			}
+		case DecisionRename:
+			if strings.TrimSpace(resolution.RenameFrom) == "" {
+				return Plan{}, fmt.Errorf("migrate diff: rename resolution %q is empty", decision.ID)
+			}
+		default:
+			return Plan{}, fmt.Errorf("migrate diff: unsupported decision kind %q", decision.Kind)
+		}
+		seen[resolution.DecisionID] = struct{}{}
+	}
+	if len(seen) != len(byID) {
+		return Plan{}, fmt.Errorf("migrate diff: unresolved decision IDs remain")
+	}
+	for index := range copyPlan.Operations {
+		copyPlan.Operations[index].Forward = cloneStatements(copyPlan.Operations[index].Forward)
+		copyPlan.Operations[index].Reverse = cloneStatements(copyPlan.Operations[index].Reverse)
+	}
+	for _, operation := range copyPlan.Operations {
+		copyPlan.Statements = append(copyPlan.Statements, cloneStatements(operation.Forward)...)
+	}
+	if len(copyPlan.Statements) == 0 {
+		copyPlan.Statements = cloneStatements(p.Statements)
+	}
+	return copyPlan, nil
+}
+
+func (p Plan) clone() Plan {
+	copyPlan := p
+	copyPlan.Operations = append([]ProposedOperation(nil), p.Operations...)
+	copyPlan.Decisions = append([]RequiredDecision(nil), p.Decisions...)
+	copyPlan.Statements = cloneStatements(p.Statements)
+	for index := range copyPlan.Operations {
+		copyPlan.Operations[index].Forward = cloneStatements(p.Operations[index].Forward)
+		copyPlan.Operations[index].Reverse = cloneStatements(p.Operations[index].Reverse)
+	}
+	return copyPlan
+}
+
+func cloneStatements(in []PlannedStatement) []PlannedStatement {
+	if in == nil {
+		return nil
+	}
+	return append([]PlannedStatement(nil), in...)
 }
 
 // PlannedStatement is one generated native SQL source file.
@@ -139,7 +328,7 @@ type PlannedStatement struct {
 
 // Empty reports whether a plan contains no generated SQL sources.
 func (p Plan) Empty() bool {
-	return len(p.Statements) == 0
+	return len(p.Statements) == 0 && len(p.Operations) == 0 && len(p.Decisions) == 0
 }
 
 // Validate reports whether p can be written as one migration directory.
@@ -148,7 +337,29 @@ func (p Plan) Validate() error {
 		return fmt.Errorf("migrate diff: plan dialect must not be empty")
 	}
 	if len(p.Statements) == 0 {
-		return fmt.Errorf("migrate diff: plan has no SQL sources")
+		if len(p.Operations) == 0 && len(p.Decisions) == 0 {
+			return fmt.Errorf("migrate diff: plan has no SQL sources")
+		}
+	}
+	decisionIDs := make(map[string]struct{}, len(p.Decisions))
+	for _, decision := range p.Decisions {
+		if decision.ID == "" || decision.Table == "" || decision.Column == "" || decision.Kind == "" {
+			return fmt.Errorf("migrate diff: decision metadata is incomplete")
+		}
+		if _, exists := decisionIDs[decision.ID]; exists {
+			return fmt.Errorf("migrate diff: duplicate decision ID %q", decision.ID)
+		}
+		decisionIDs[decision.ID] = struct{}{}
+	}
+	operationIDs := make(map[string]struct{}, len(p.Operations))
+	for _, operation := range p.Operations {
+		if operation.ID == "" || operation.Kind == "" || operation.Table == "" {
+			return fmt.Errorf("migrate diff: operation metadata is incomplete")
+		}
+		if _, exists := operationIDs[operation.ID]; exists {
+			return fmt.Errorf("migrate diff: duplicate operation ID %q", operation.ID)
+		}
+		operationIDs[operation.ID] = struct{}{}
 	}
 	sources := make(map[string]int, len(p.Statements))
 	for index, statement := range p.Statements {
@@ -187,6 +398,14 @@ func WriteMigration(directory string, p Plan) error {
 	}
 	if err := p.Validate(); err != nil {
 		return err
+	}
+	if len(p.Decisions) > 0 {
+		ids := make([]string, len(p.Decisions))
+		for index, decision := range p.Decisions {
+			ids[index] = decision.ID
+		}
+		sort.Strings(ids)
+		return fmt.Errorf("migrate diff: unresolved decisions: %s", strings.Join(ids, ", "))
 	}
 	parent := filepath.Dir(directory)
 	if err := os.MkdirAll(parent, 0o700); err != nil {

@@ -128,6 +128,9 @@ func runDiff(args []string) error {
 	fromDirectory := flags.String("from", "", "baseline desired-schema directory")
 	toDirectory := flags.String("to", "", "target desired-schema directory")
 	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
+	var backfills, renames repeatableFlag
+	flags.Var(&backfills, "backfill", "resolve a backfill decision as decision-id=sql-file")
+	flags.Var(&renames, "rename", "resolve a rename decision as decision-id=baseline-column")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -161,6 +164,31 @@ func runDiff(args []string) error {
 	if plan.Empty() {
 		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
 		return nil
+	}
+	if len(backfills.values)+len(renames.values) > 0 {
+		resolutions := make([]diff.Resolution, 0, len(backfills.values)+len(renames.values))
+		for _, value := range backfills.values {
+			parts := strings.SplitN(value, "=", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return errors.New("diff -backfill requires decision-id=sql-file")
+			}
+			source, readErr := os.ReadFile(parts[1])
+			if readErr != nil {
+				return fmt.Errorf("read backfill SQL: %w", readErr)
+			}
+			resolutions = append(resolutions, diff.Resolution{DecisionID: parts[0], BackfillSQL: string(source)})
+		}
+		for _, value := range renames.values {
+			parts := strings.SplitN(value, "=", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return errors.New("diff -rename requires decision-id=baseline-column")
+			}
+			resolutions = append(resolutions, diff.Resolution{DecisionID: parts[0], RenameFrom: parts[1]})
+		}
+		plan, err = plan.Resolve(resolutions...)
+		if err != nil {
+			return err
+		}
 	}
 	if *outputDirectory == "" {
 		writeDiffPlan(commandOutput, plan)
@@ -520,6 +548,11 @@ func newFlagSet(name string) *flag.FlagSet {
 	return flags
 }
 
+type repeatableFlag struct{ values []string }
+
+func (f *repeatableFlag) String() string         { return strings.Join(f.values, ",") }
+func (f *repeatableFlag) Set(value string) error { f.values = append(f.values, value); return nil }
+
 func openRunner(ctx context.Context, directory string, dialectName string, dsn string, historyTable string) (migrate.Runner, []migrate.Migration, func(), error) {
 	if directory == "" || dialectName == "" || dsn == "" {
 		return migrate.Runner{}, nil, func() {}, errors.New("database commands require -dir, -dialect, and -dsn")
@@ -639,6 +672,14 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 }
 
 func writeDiffPlan(output io.Writer, plan diff.Plan) {
+	if len(plan.Decisions) > 0 {
+		for _, operation := range plan.Operations {
+			_, _ = fmt.Fprintf(output, "-- operation %s (%s): %s\n", operation.ID, operation.Kind, operation.Summary)
+		}
+		for _, decision := range plan.Decisions {
+			_, _ = fmt.Fprintf(output, "-- decision %s (%s): %s\n", decision.ID, decision.Kind, decision.Reason)
+		}
+	}
 	for index, statement := range plan.Statements {
 		if index > 0 {
 			_, _ = fmt.Fprintln(output)
