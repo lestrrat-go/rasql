@@ -49,6 +49,7 @@ func TestCreateTableNativeRendererMatrix(t *testing.T) {
 		{"postgres timetz precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timetz", Kind: schema.NativeBuiltin, Arguments: []string{"0"}}, `CREATE TABLE "events" ("value" "pg_catalog"."timetz"(0) NOT NULL)`},
 		{"mysql escaping", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "mysql", Name: "choice", Kind: schema.NativeEnum, Arguments: []string{"a\\b", "quote's"}}, "CREATE TABLE `events` (`value` ENUM('a\\\\b', 'quote''s') NOT NULL)"},
 		{"sqlite declaration", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}, `CREATE TABLE "events" ("value" VARCHAR(12) NOT NULL)`},
+		{"sqlite quoted declaration", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: `A"B`, Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" "A""B" NOT NULL)`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

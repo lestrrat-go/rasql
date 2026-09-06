@@ -870,7 +870,7 @@ func sqliteDeclarationNeedsNative(declaration string) bool {
 	if value == "" || value == "BLOB" || value == "INTEGER" || value == "TEXT" || value == "REAL" {
 		return false
 	}
-	return strings.ContainsAny(value, "()") || strings.Contains(value, "UNSIGNED") || value == "INT" || value == "INT2" || value == "INT8" || value == "FLOAT" || value == "DOUBLE" || value == "DOUBLE PRECISION" || value == "CHAR" || value == "CLOB"
+	return strings.ContainsAny(value, "()") || strings.Contains(value, "UNSIGNED") || value == "INT" || value == "INT2" || value == "INT8" || value == "FLOAT" || value == "DOUBLE" || value == "DOUBLE PRECISION" || value == "CHAR" || value == "CLOB" || value == "BOOLEAN" || value == "JSON" || value == "DATE" || value == "TIME"
 }
 
 func sqliteNativeType(declaration string) (*schema.NativeTypeDef, error) {
@@ -922,12 +922,24 @@ func sqliteNativeType(declaration string) (*schema.NativeTypeDef, error) {
 		return nil, fmt.Errorf("declared type name %q is invalid", name)
 	}
 	for _, char := range name {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ' ' {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ' ' || char == '"' {
 			continue
 		}
 		return nil, fmt.Errorf("declared type name %q is invalid", name)
 	}
-	return &schema.NativeTypeDef{Dialect: "sqlite", Name: strings.ToUpper(name), Kind: schema.NativeOther, Arguments: arguments}, nil
+	if sqliteKnownNativeName(name) {
+		name = strings.ToUpper(name)
+	}
+	return &schema.NativeTypeDef{Dialect: "sqlite", Name: name, Kind: schema.NativeOther, Arguments: arguments}, nil
+}
+
+func sqliteKnownNativeName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "INT", "INT2", "INT8", "INTEGER", "VARCHAR", "CHAR", "CHARACTER", "FLOAT", "DOUBLE", "DOUBLE PRECISION", "BOOLEAN", "JSON", "DATE", "TIME", "BLOB", "TEXT", "REAL":
+		return true
+	default:
+		return false
+	}
 }
 
 type sqliteTableOptions struct {

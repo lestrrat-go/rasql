@@ -288,10 +288,14 @@ func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, erro
 			if !sqliteNativeDeclarationSupported(native.Name, native.Arguments) {
 				return "", false, nil
 			}
-			if len(native.Arguments) == 0 {
-				return native.Name, true, nil
+			name := native.Name
+			if !sqliteKnownNativeName(name) || strings.ContainsAny(name, " \"") {
+				name = `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 			}
-			return native.Name + "(" + strings.Join(native.Arguments, ", ") + ")", true, nil
+			if len(native.Arguments) == 0 {
+				return name, true, nil
+			}
+			return name + "(" + strings.Join(native.Arguments, ", ") + ")", true, nil
 		}
 		if d.name == "postgresql" && native.Kind == schema.NativeBuiltin && len(native.Arguments) > 0 {
 			if len(native.Arguments) != 1 || native.Arguments[0] == "" {
@@ -355,7 +359,7 @@ func sqliteNativeDeclarationSupported(value string, arguments []string) bool {
 		return false
 	}
 	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ' ' {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ' ' || char == '"' {
 			continue
 		}
 		return false
@@ -371,6 +375,15 @@ func sqliteNativeDeclarationSupported(value string, arguments []string) bool {
 		}
 	}
 	return true
+}
+
+func sqliteKnownNativeName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "INT", "INT2", "INT8", "INTEGER", "VARCHAR", "CHAR", "CHARACTER", "FLOAT", "DOUBLE", "DOUBLE PRECISION", "BOOLEAN", "JSON", "DATE", "TIME", "BLOB", "TEXT", "REAL":
+		return true
+	default:
+		return false
+	}
 }
 
 // unsignedTypeName renders the DDL type for a column that states no negative

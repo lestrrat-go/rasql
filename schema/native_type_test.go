@@ -51,3 +51,50 @@ func TestNativeTypeValidationRejectsInvalidShapes(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "depth"))
 }
+
+func TestNativeTypeValidationMatrix(t *testing.T) {
+	for _, kind := range []schema.NativeTypeKind{schema.NativeBuiltin, schema.NativeDomain, schema.NativeEnum, schema.NativeSet, schema.NativeArray, schema.NativeOther} {
+		dialect := "postgresql"
+		if kind == schema.NativeSet {
+			dialect = "mysql"
+		}
+		native := &schema.NativeTypeDef{Dialect: dialect, Name: "value", Kind: kind}
+		if kind == schema.NativeArray {
+			native.Element = &schema.NativeTypeDef{Dialect: dialect, Name: "value", Kind: schema.NativeOther}
+		}
+		require.NoError(t, (schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: native}}}).Validate(), string(kind))
+	}
+	for _, native := range []*schema.NativeTypeDef{
+		{Dialect: "postgresql", Name: "value", Kind: schema.NativeEnum, Element: &schema.NativeTypeDef{Dialect: "postgresql", Name: "other", Kind: schema.NativeOther}},
+		{Dialect: "postgresql", Name: "bad.name", Kind: schema.NativeOther},
+		{Dialect: "postgresql", Name: "value", Kind: schema.NativeTypeKind("unknown")},
+	} {
+		require.Error(t, (schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: native}}}).Validate())
+	}
+	for _, native := range []*schema.NativeTypeDef{
+		{Kind: schema.NativeOther, Name: "value"},
+		{Dialect: "postgresql", Kind: schema.NativeOther},
+		{Dialect: "postgresql", Name: "value"},
+	} {
+		require.Error(t, (schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: native}}}).Validate())
+	}
+	validDepth := &schema.NativeTypeDef{Dialect: "postgresql", Name: "value", Kind: schema.NativeArray}
+	current := validDepth
+	for index := 1; index < 31; index++ {
+		current.Element = &schema.NativeTypeDef{Dialect: "postgresql", Name: "value", Kind: schema.NativeArray}
+		current = current.Element
+	}
+	current.Element = &schema.NativeTypeDef{Dialect: "postgresql", Name: "leaf", Kind: schema.NativeOther}
+	descriptor := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: validDepth}}}
+	require.NoError(t, descriptor.Validate())
+	clone := descriptor.Clone()
+	clone.Columns[0].NativeType.Element.Name = "changed"
+	require.Equal(t, "value", descriptor.Columns[0].NativeType.Element.Name)
+	empty := schema.NativeTypeDef{Dialect: "postgresql", Name: "value", Kind: schema.NativeEnum, Arguments: []string{}}
+	nilArguments := schema.NativeTypeDef{Dialect: "postgresql", Name: "value", Kind: schema.NativeEnum}
+	emptyJSON, err := json.Marshal(empty)
+	require.NoError(t, err)
+	nilJSON, err := json.Marshal(nilArguments)
+	require.NoError(t, err)
+	require.NotEqual(t, string(emptyJSON), string(nilJSON))
+}
