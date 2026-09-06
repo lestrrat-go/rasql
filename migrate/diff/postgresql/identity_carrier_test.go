@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	pgquery "github.com/lestrrat-go/rasql-pg/query"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
@@ -15,9 +16,33 @@ func TestTaskboardIdentityAndForeignKeyFacts(t *testing.T) {
 	snapshot, err := New().Parse([]diff.Source{{Path: "tasks.sql", SQL: sqltext.Text(data)}})
 	require.NoError(t, err)
 	table := snapshot.(*schemaSnapshot).tables["5:tasks"]
-	require.Equal(t, identityAlways, table.identities[identifierKey(`"id"`)])
-	require.Equal(t, referenceNoAction, table.foreignKeys[foreignKeyKey{table: "5:tasks", constraint: identifierKey(`"tasks_assignee_id_fkey"`)}].onDelete)
-	require.Equal(t, referenceCascade, table.foreignKeys[foreignKeyKey{table: "5:tasks", constraint: identifierKey(`"tasks_project_id_fkey"`)}].onDelete)
+	require.Len(t, table.identities, 1)
+	require.Len(t, table.foreignKeys, 2)
+	require.Equal(t, identityAlways, table.identities[identifierKey(pgquery.Identifier{Name: "id"})])
+	assignee := table.foreignKeys[foreignKeyKey{table: "5:tasks", constraint: identifierKey(pgquery.Identifier{Name: "tasks_assignee_id_fkey"}), inline: false}]
+	project := table.foreignKeys[foreignKeyKey{table: "5:tasks", constraint: identifierKey(pgquery.Identifier{Name: "tasks_project_id_fkey"}), inline: false}]
+	require.Equal(t, referenceNoAction, assignee.onDelete)
+	require.Equal(t, referenceNoAction, assignee.onUpdate)
+	require.Equal(t, referenceCascade, project.onDelete)
+	require.Equal(t, referenceNoAction, project.onUpdate)
+	assigneeFound, projectFound := false, false
+	for _, constraint := range table.statement.Constraints {
+		if constraint.Name == nil || constraint.References == nil {
+			continue
+		}
+		switch constraint.Name.Name {
+		case "tasks_assignee_id_fkey":
+			assigneeFound = true
+			require.Equal(t, "members", constraint.References.Table.String())
+			require.Equal(t, []pgquery.Identifier{{Name: "id", Quoted: true}}, constraint.References.Columns)
+		case "tasks_project_id_fkey":
+			projectFound = true
+			require.Equal(t, "projects", constraint.References.Table.String())
+			require.Equal(t, []pgquery.Identifier{{Name: "id", Quoted: true}}, constraint.References.Columns)
+		}
+	}
+	require.True(t, assigneeFound)
+	require.True(t, projectFound)
 }
 
 func TestCreateTableRestoresIdentityFact(t *testing.T) {

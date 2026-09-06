@@ -68,14 +68,21 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		if err != nil {
 			return nil, fmt.Errorf("postgresql schema source %q: %w", source.Path, err)
 		}
+		consumed := make(map[string]struct{})
 		for index, statement := range parsed.Statements {
 			switch statement := statement.(type) {
 			case *pgquery.CreateTableStatement:
-				identities := make(map[string]identityMode)
-				for key, mode := range facts.identities {
-					identities[key.column] = mode
+				tableKey := qualifiedNameKey(statement.Name)
+				tableFacts, ok := facts.tables[tableKey]
+				if !ok {
+					return nil, fmt.Errorf("postgresql schema source %q table %s has no scanned facts", source.Path, displayName(statement.Name))
 				}
-				if err := snapshot.addTable(source.Path, statement, identities, facts.foreignKeys); err != nil {
+				identities, foreignKeys, err := attachFacts(source.Path, statement, tableKey, tableFacts)
+				if err != nil {
+					return nil, err
+				}
+				consumed[tableKey] = struct{}{}
+				if err := snapshot.addTable(source.Path, statement, identities, foreignKeys); err != nil {
 					return nil, err
 				}
 			case *pgquery.CreateIndexStatement:
@@ -85,6 +92,9 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 			default:
 				return nil, fmt.Errorf("postgresql schema source %q statement %d must be CREATE TABLE or named CREATE INDEX, got %T", source.Path, index+1, statement)
 			}
+		}
+		if err := rejectUnconsumedTables(source.Path, facts, consumed); err != nil {
+			return nil, err
 		}
 	}
 	for _, key := range sortedIndexKeys(snapshot.indexes) {
@@ -97,6 +107,15 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		return nil, fmt.Errorf("postgresql schema has no CREATE TABLE statements")
 	}
 	return snapshot, nil
+}
+
+func rejectUnconsumedTables(source string, facts scannedPostgreSQLFacts, consumed map[string]struct{}) error {
+	for key := range facts.tables {
+		if _, ok := consumed[key]; !ok {
+			return fmt.Errorf("postgresql schema source %q scanned table %s was not parsed", source, key)
+		}
+	}
+	return nil
 }
 
 // Diff returns safe, additive changes from from to to.
@@ -172,10 +191,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
 		}
 	}
-	remaining := make([]string, 0, len(diagnostics))
-	for _, diagnostic := range diagnostics {
-		remaining = append(remaining, diagnostic)
-	}
+	remaining := append([]string(nil), diagnostics...)
 	if len(remaining) > 0 {
 		return diff.Plan{}, manualMigrationError(remaining)
 	}
@@ -221,6 +237,50 @@ func operationsFromGenerated(dialect string, generated []generatedStatement) []d
 type schemaSnapshot struct {
 	tables  map[string]tableDefinition
 	indexes map[string]indexDefinition
+}
+
+func attachFacts(source string, statement *pgquery.CreateTableStatement, tableKey string, scanned tableFacts) (map[string]identityMode, map[foreignKeyKey]foreignKeyActions, error) {
+	identities := make(map[string]identityMode, len(scanned.identities))
+	columns := make(map[string]int, len(statement.Columns))
+	for _, column := range statement.Columns {
+		columns[identifierKey(column.Name)]++
+	}
+	for column, mode := range scanned.identities {
+		if columns[column] != 1 {
+			return nil, nil, fmt.Errorf("postgresql schema source %q table %s identity column %s does not attach exactly once", source, tableKey, column)
+		}
+		identities[column] = mode
+	}
+	foreignKeys := make(map[foreignKeyKey]foreignKeyActions, len(scanned.foreignKeys))
+	parsed := make(map[foreignKeyKey]int)
+	for _, constraint := range statement.Constraints {
+		if constraint.Kind == pgquery.ConstraintForeignKey && constraint.References != nil && constraint.Name != nil {
+			parsed[foreignKeyKey{tableKey, identifierKey(*constraint.Name), false}]++
+		}
+	}
+	for _, column := range statement.Columns {
+		for _, constraint := range column.Constraints {
+			if constraint.Kind == pgquery.ConstraintReferences && constraint.References != nil {
+				parsed[foreignKeyKey{tableKey, identifierKey(column.Name), true}]++
+			}
+		}
+	}
+	for key, actions := range scanned.foreignKeys {
+		kind := "table"
+		if key.inline {
+			kind = "inline"
+		}
+		if parsed[key] != 1 {
+			return nil, nil, fmt.Errorf("postgresql schema source %q table %s %s foreign key %s does not attach exactly once", source, tableKey, kind, key.constraint)
+		}
+		foreignKeys[key] = actions
+	}
+	for key := range parsed {
+		if _, ok := scanned.foreignKeys[key]; !ok {
+			return nil, nil, fmt.Errorf("postgresql schema source %q table %s foreign key %s has no scanned action facts", source, tableKey, key.constraint)
+		}
+	}
+	return identities, foreignKeys, nil
 }
 
 // Dialect identifies PostgreSQL snapshots.
@@ -679,14 +739,6 @@ func manualMigrationError(diagnostics []string) error {
 		lines[index] = "- " + diagnostic
 	}
 	return fmt.Errorf("postgresql schema diff requires manual migration:\n%s", strings.Join(lines, "\n"))
-}
-
-func qualifiedNameKey(name pgquery.QualifiedName) string {
-	var key strings.Builder
-	for _, part := range name {
-		fmt.Fprintf(&key, "%d:%s", len(part.Name), part.Name)
-	}
-	return key.String()
 }
 
 func displayName(name pgquery.QualifiedName) string {

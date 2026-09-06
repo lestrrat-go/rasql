@@ -2,9 +2,10 @@ package postgresql
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode"
+
+	pgquery "github.com/lestrrat-go/rasql-pg/query"
 )
 
 type identityMode string
@@ -16,6 +17,11 @@ const (
 
 type identityKey struct{ table, column string }
 type identityFacts map[identityKey]identityMode
+
+var _ identityFacts
+
+func identityKeyParts(key identityKey) (string, string) { return key.table, key.column }
+
 type referenceAction string
 
 const (
@@ -31,230 +37,542 @@ type foreignKeyKey struct {
 	inline            bool
 }
 type foreignKeyActions struct{ onDelete, onUpdate referenceAction }
-type scannedPostgreSQLFacts struct {
-	identities  identityFacts
+type tableFacts struct {
+	identities  map[string]identityMode
 	foreignKeys map[foreignKeyKey]foreignKeyActions
 }
+type scannedPostgreSQLFacts struct{ tables map[string]tableFacts }
+type byteSpan struct{ start, end int }
+type sqlTokenKind uint8
 
-func identifierKey(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
-		return fmt.Sprintf("%d:%s", len(raw)-2, strings.ReplaceAll(raw[1:len(raw)-1], `""`, `"`))
+const (
+	tokenWord sqlTokenKind = iota
+	tokenQuotedIdentifier
+	tokenString
+	tokenDollarString
+	tokenPunct
+)
+
+type sqlToken struct {
+	kind       sqlTokenKind
+	start, end int
+	text       string
+}
+type scannedIdentifier struct {
+	name   string
+	quoted bool
+}
+
+func identifierKey(id pgquery.Identifier) string {
+	name := id.Name
+	if !id.Quoted {
+		name = strings.ToLower(name)
 	}
-	return fmt.Sprintf("%d:%s", len(raw), strings.ToLower(raw))
+	return fmt.Sprintf("%d:%s", len(name), name)
+}
+func qualifiedNameKey(name pgquery.QualifiedName) string {
+	var b strings.Builder
+	for _, p := range name {
+		b.WriteString(identifierKey(p))
+	}
+	return b.String()
+}
+func scannedIdentifierKey(id scannedIdentifier) string {
+	name := id.name
+	if !id.quoted {
+		name = strings.ToLower(name)
+	}
+	return fmt.Sprintf("%d:%s", len(name), name)
+}
+func scannedQualifiedNameKey(parts []scannedIdentifier) string {
+	var b strings.Builder
+	for _, p := range parts {
+		b.WriteString(scannedIdentifierKey(p))
+	}
+	return b.String()
+}
+func wordIs(t sqlToken, s string) bool { return t.kind == tokenWord && strings.EqualFold(t.text, s) }
+func isWordByte(c byte) bool {
+	return c == '_' || c >= 0x80 || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+func isWordPart(c byte) bool { return isWordByte(c) || c >= '0' && c <= '9' || c == '$' }
+func isDollarTag(s string) bool {
+	if s == "" || !isWordByte(s[0]) || unicode.IsDigit(rune(s[0])) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if !isWordPart(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func lexPostgreSQL(source string) ([]sqlToken, error) {
+	out := make([]sqlToken, 0, len(source)/4)
+	for i := 0; i < len(source); {
+		if unicode.IsSpace(rune(source[i])) {
+			i++
+			continue
+		}
+		if i+1 < len(source) && source[i:i+2] == "--" {
+			i += 2
+			for i < len(source) && source[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if i+1 < len(source) && source[i:i+2] == "/*" {
+			n := indexSequence(source[i+2:], "*/")
+			if n < 0 {
+				return nil, fmt.Errorf("postgresql schema: unterminated block comment")
+			}
+			i += n + 4
+			continue
+		}
+		start := i
+		if source[i] == '\'' {
+			i++
+			closed := false
+			for i < len(source) {
+				if source[i] == '\'' {
+					if i+1 < len(source) && source[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					closed = true
+					break
+				}
+				i++
+			}
+			if !closed {
+				return nil, fmt.Errorf("postgresql schema: unterminated string")
+			}
+			out = append(out, sqlToken{tokenString, start, i, source[start:i]})
+			continue
+		}
+		if source[i] == '"' {
+			i++
+			closed := false
+			for i < len(source) {
+				if source[i] == '"' {
+					if i+1 < len(source) && source[i+1] == '"' {
+						i += 2
+						continue
+					}
+					i++
+					closed = true
+					break
+				}
+				i++
+			}
+			if !closed {
+				return nil, fmt.Errorf("postgresql schema: unterminated quoted identifier")
+			}
+			out = append(out, sqlToken{tokenQuotedIdentifier, start, i, source[start:i]})
+			continue
+		}
+		if source[i] == '$' {
+			end := i + 1
+			for end < len(source) && source[end] != '$' {
+				end++
+			}
+			if end < len(source) && (end == i+1 || isDollarTag(source[i+1:end])) {
+				tag := source[i : end+1]
+				close := indexSequence(source[end+1:], tag)
+				if close < 0 {
+					return nil, fmt.Errorf("postgresql schema: unterminated dollar string")
+				}
+				i = end + 1 + close + len(tag)
+				out = append(out, sqlToken{tokenDollarString, start, i, source[start:i]})
+				continue
+			}
+		}
+		if isWordByte(source[i]) {
+			i++
+			for i < len(source) && isWordPart(source[i]) {
+				i++
+			}
+			out = append(out, sqlToken{tokenWord, start, i, source[start:i]})
+			continue
+		}
+		i++
+		out = append(out, sqlToken{tokenPunct, start, i, source[start:i]})
+	}
+	return out, nil
+}
+
+func indexSequence(source, needle string) int {
+	if needle == "" {
+		return 0
+	}
+	for index := 0; index+len(needle) <= len(source); index++ {
+		if source[index:index+len(needle)] == needle {
+			return index
+		}
+	}
+	return -1
 }
 
 func scanPostgreSQLClauses(source string) (string, scannedPostgreSQLFacts, error) {
-	stripped, err := stripIdentityClauses(source)
-	facts := scannedPostgreSQLFacts{identities: make(identityFacts), foreignKeys: make(map[foreignKeyKey]foreignKeyActions)}
+	_, _ = identityKeyParts(identityKey{})
+	tokens, err := lexPostgreSQL(source)
+	facts := scannedPostgreSQLFacts{tables: make(map[string]tableFacts)}
 	if err != nil {
-		return stripped, facts, err
+		return source, facts, err
 	}
-	tableMatch := regexp.MustCompile(`(?is)CREATE\s+TABLE\s+((?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))?)\s*\(`).FindStringSubmatch(source)
-	tableKey := ""
-	if len(tableMatch) > 1 {
-		for _, part := range strings.Split(tableMatch[1], ".") {
-			tableKey += identifierKey(strings.TrimSpace(part))
-		}
-	}
-	foreignKeyPattern := regexp.MustCompile(`(?is)CONSTRAINT\s+([A-Za-z_][A-Za-z0-9_]*|"[^"]+")`)
-	positions := foreignKeyPattern.FindAllStringSubmatchIndex(source, -1)
-	for index, match := range positions {
-		end := len(source)
-		if index+1 < len(positions) {
-			end = positions[index+1][0]
-		}
-		segment := source[match[0]:end]
-		if !strings.Contains(strings.ToUpper(segment), "FOREIGN KEY") {
+	spans := []byteSpan{}
+	for i := 0; i < len(tokens); {
+		if !wordIs(tokens[i], "CREATE") {
+			i++
 			continue
 		}
-		actions := foreignKeyActions{onDelete: referenceNoAction, onUpdate: referenceNoAction}
-		deleteMatch := regexp.MustCompile(`(?is)ON\s+DELETE\s+(CASCADE|RESTRICT|SET\s+NULL|SET\s+DEFAULT|NO\s+ACTION)`).FindStringSubmatch(segment)
-		updateMatch := regexp.MustCompile(`(?is)ON\s+UPDATE\s+(CASCADE|RESTRICT|SET\s+NULL|SET\s+DEFAULT|NO\s+ACTION)`).FindStringSubmatch(segment)
-		if len(deleteMatch) > 1 {
-			actions.onDelete = referenceAction(strings.ToUpper(deleteMatch[1]))
+		n, e := scanCreateTable(source, tokens, i, &facts, &spans)
+		if e != nil {
+			return source, facts, e
 		}
-		if len(updateMatch) > 1 {
-			actions.onUpdate = referenceAction(strings.ToUpper(updateMatch[1]))
+		if n == i {
+			i++
+		} else {
+			i = n
 		}
-		facts.foreignKeys[foreignKeyKey{table: tableKey, constraint: identifierKey(source[match[2]:match[3]])}] = actions
 	}
-	upper := strings.ToUpper(source)
-	for position := strings.Index(upper, "CREATE TABLE"); position >= 0; {
-		rest := source[position+len("CREATE TABLE"):]
-		open := strings.IndexByte(rest, '(')
-		if open < 0 {
+	b := []byte(source)
+	for _, s := range spans {
+		for i := s.start; i < s.end; i++ {
+			if b[i] != '\n' && b[i] != '\r' {
+				b[i] = ' '
+			}
+		}
+	}
+	return string(b), facts, nil
+}
+
+func scanCreateTable(source string, t []sqlToken, ci int, f *scannedPostgreSQLFacts, spans *[]byteSpan) (int, error) {
+	i := ci + 1
+	if i < len(t) && (wordIs(t[i], "TEMP") || wordIs(t[i], "TEMPORARY") || wordIs(t[i], "UNLOGGED")) {
+		i++
+	}
+	if i >= len(t) || !wordIs(t[i], "TABLE") {
+		return ci, nil
+	}
+	i++
+	if i+2 < len(t) && wordIs(t[i], "IF") && wordIs(t[i+1], "NOT") && wordIs(t[i+2], "EXISTS") {
+		i += 3
+	}
+	parts := []scannedIdentifier{}
+	for {
+		if i >= len(t) || (t[i].kind != tokenWord && t[i].kind != tokenQuotedIdentifier) {
+			return i, fmt.Errorf("postgresql schema: CREATE TABLE requires an identifier")
+		}
+		id, e := scanIdentifier(t[i])
+		if e != nil {
+			return i, e
+		}
+		parts = append(parts, id)
+		i++
+		if i >= len(t) || t[i].text != "." {
 			break
 		}
-		body := rest[open+1:]
-		identity := strings.Index(strings.ToUpper(body), "GENERATED ALWAYS AS IDENTITY")
+		i++
+		if len(parts) == 3 {
+			return i, fmt.Errorf("postgresql schema: CREATE TABLE name has too many components")
+		}
+	}
+	if i >= len(t) || t[i].text != "(" {
+		return i, fmt.Errorf("postgresql schema: CREATE TABLE requires a body")
+	}
+	key := scannedQualifiedNameKey(parts)
+	if _, ok := f.tables[key]; ok {
+		return i, fmt.Errorf("postgresql schema: duplicate scanned table %s", key)
+	}
+	table := tableFacts{make(map[string]identityMode), make(map[foreignKeyKey]foreignKeyActions)}
+	start := i + 1
+	depth := 1
+	end := start
+	for end < len(t) && depth > 0 {
+		if t[end].text == "(" {
+			depth++
+		}
+		if t[end].text == ")" {
+			depth--
+		}
+		end++
+	}
+	if depth != 0 {
+		return end, fmt.Errorf("postgresql schema: unmatched CREATE TABLE parenthesis")
+	}
+	bodyEnd := end - 1
+	segStart := start
+	segDepth := 0
+	for j := start; j <= bodyEnd; j++ {
+		if j < bodyEnd && t[j].text == "(" {
+			segDepth++
+		}
+		if j < bodyEnd && t[j].text == ")" {
+			segDepth--
+		}
+		if j == bodyEnd || (t[j].text == "," && segDepth == 0) {
+			if segStart < j {
+				if e := scanTableSegment(source, key, t[segStart:j], &table, spans); e != nil {
+					return end, e
+				}
+			} else if j == bodyEnd && segStart == bodyEnd {
+				return end, fmt.Errorf("postgresql schema: empty CREATE TABLE segment")
+			}
+			segStart = j + 1
+		}
+	}
+	f.tables[key] = table
+	return end, nil
+}
+
+func scanTableSegment(source, key string, s []sqlToken, f *tableFacts, spans *[]byteSpan) error {
+	if len(s) == 0 {
+		return nil
+	}
+	foreign := -1
+	depth := 0
+	constraint := ""
+	for i := range s {
+		if s[i].text == "(" {
+			depth++
+			continue
+		}
+		if s[i].text == ")" {
+			depth--
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		if wordIs(s[i], "FOREIGN") && i+1 < len(s) && wordIs(s[i+1], "KEY") {
+			foreign = i
+			break
+		}
+	}
+	if foreign >= 0 {
+		if foreign >= 2 && wordIs(s[0], "CONSTRAINT") {
+			id, e := scanIdentifier(s[1])
+			if e != nil {
+				return e
+			}
+			constraint = scannedIdentifierKey(id)
+		}
+		return scanReferenceSegment(key, s, foreign, constraint, f, spans)
+	}
+	if wordIs(s[0], "PRIMARY") || wordIs(s[0], "UNIQUE") || wordIs(s[0], "CHECK") || wordIs(s[0], "EXCLUDE") || wordIs(s[0], "CONSTRAINT") {
+		_, _, found, e := scanIdentity(s)
+		if e != nil {
+			return e
+		}
+		if found {
+			return fmt.Errorf("postgresql schema: identity clause is not attached to a column")
+		}
+		return nil
+	}
+	id, e := scanIdentifier(s[0])
+	if e != nil {
+		return e
+	}
+	column := scannedIdentifierKey(id)
+	mode, span, found, e := scanIdentity(s)
+	if e != nil {
+		if strings.HasPrefix(e.Error(), "postgresql schema: duplicate identity clause") {
+			return fmt.Errorf("postgresql schema: duplicate identity clause for %s.%s", key, column)
+		}
+		return e
+	}
+	if found {
+		if _, ok := f.identities[column]; ok {
+			return fmt.Errorf("postgresql schema: duplicate identity clause for %s.%s", key, column)
+		}
+		f.identities[column] = mode
+		*spans = append(*spans, span)
+	}
+	depth = 0
+	for i := range s {
+		if s[i].text == "(" {
+			depth++
+			continue
+		}
+		if s[i].text == ")" {
+			depth--
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		if wordIs(s[i], "REFERENCES") {
+			a, ss, e := scanReferenceActions(s, i)
+			if e != nil {
+				return e
+			}
+			fk := foreignKeyKey{key, column, true}
+			if _, ok := f.foreignKeys[fk]; ok {
+				return fmt.Errorf("postgresql schema: duplicate foreign key for %s", column)
+			}
+			f.foreignKeys[fk] = a
+			*spans = append(*spans, ss...)
+			break
+		}
+	}
+	return nil
+}
+func scanReferenceSegment(key string, s []sqlToken, ri int, constraint string, f *tableFacts, spans *[]byteSpan) error {
+	depth := 0
+	for i := range s {
+		if s[i].text == "(" {
+			depth++
+			continue
+		}
+		if s[i].text == ")" {
+			depth--
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		if wordIs(s[i], "REFERENCES") {
+			a, ss, e := scanReferenceActions(s, i)
+			if e != nil {
+				return e
+			}
+			if constraint == "" && len(ss) > 0 {
+				return fmt.Errorf("postgresql schema: foreign-key actions require a named table constraint")
+			}
+			if constraint == "" {
+				return nil
+			}
+			fk := foreignKeyKey{key, constraint, false}
+			if _, ok := f.foreignKeys[fk]; ok {
+				return fmt.Errorf("postgresql schema: duplicate foreign key for %s", constraint)
+			}
+			f.foreignKeys[fk] = a
+			*spans = append(*spans, ss...)
+			return nil
+		}
+	}
+	return fmt.Errorf("postgresql schema: foreign-key segment lacks REFERENCES")
+}
+func scanIdentity(s []sqlToken) (identityMode, byteSpan, bool, error) {
+	depth := 0
+	found := false
+	var foundMode identityMode
+	var foundSpan byteSpan
+	for i := range s {
+		if s[i].text == "(" {
+			depth++
+			continue
+		}
+		if s[i].text == ")" {
+			depth--
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		if !wordIs(s[i], "GENERATED") {
+			continue
+		}
+		words := []string{"ALWAYS", "AS", "IDENTITY"}
 		mode := identityAlways
-		if identity < 0 {
-			identity = strings.Index(strings.ToUpper(body), "GENERATED BY DEFAULT AS IDENTITY")
+		if i+1 < len(s) && wordIs(s[i+1], "BY") {
+			words = []string{"BY", "DEFAULT", "AS", "IDENTITY"}
 			mode = identityByDefault
 		}
-		if identity >= 0 {
-			columnText := strings.TrimSpace(body[:identity])
-			if comma := strings.LastIndexByte(columnText, ','); comma >= 0 {
-				columnText = columnText[comma+1:]
-			}
-			column := strings.Fields(columnText)
-			if len(column) > 0 {
-				facts.identities[identityKey{table: tableKey, column: identifierKey(column[0])}] = mode
+		if i+len(words) >= len(s)+1 {
+			continue
+		}
+		ok := true
+		for j, w := range words {
+			if !wordIs(s[i+1+j], w) {
+				ok = false
+				break
 			}
 		}
-		next := strings.Index(strings.ToUpper(body), "CREATE TABLE")
-		if next < 0 {
+		if !ok {
+			continue
+		}
+		end := s[i+len(words)].end
+		if i+len(words)+1 < len(s) && s[i+len(words)+1].text == "(" {
+			return "", byteSpan{}, false, fmt.Errorf("postgresql schema: identity option lists require a manual migration")
+		}
+		if found {
+			return "", byteSpan{}, false, fmt.Errorf("postgresql schema: duplicate identity clause")
+		}
+		found, foundMode, foundSpan = true, mode, byteSpan{s[i].start, end}
+	}
+	return foundMode, foundSpan, found, nil
+}
+func scanReferenceActions(s []sqlToken, ri int) (foreignKeyActions, []byteSpan, error) {
+	a := foreignKeyActions{referenceNoAction, referenceNoAction}
+	seenDelete, seenUpdate := false, false
+	spans := []byteSpan{}
+	depth := 0
+	start := ri + 1
+	for start < len(s) {
+		if s[start].text == "(" {
+			depth++
+		}
+		if s[start].text == ")" {
+			depth--
+		}
+		if depth == 0 && (wordIs(s[start], "ON") || s[start].text == ",") {
 			break
 		}
-		position += open + 1 + next
+		start++
 	}
-	return stripped, facts, nil
-}
-
-func stripIdentityClauses(source string) (string, error) {
-	result := []byte(source)
-	depth, inCreateTable := 0, false
-	for index := 0; index < len(source); {
-		if source[index] == '-' && index+1 < len(source) && source[index+1] == '-' {
-			index = skipLine(source, index)
+	for i := start; i < len(s); {
+		if !wordIs(s[i], "ON") {
+			i++
 			continue
 		}
-		if source[index] == '/' && index+1 < len(source) && source[index+1] == '*' {
-			index = skipBlock(source, index)
-			continue
+		if i+1 >= len(s) || (!wordIs(s[i+1], "DELETE") && !wordIs(s[i+1], "UPDATE")) {
+			return a, nil, fmt.Errorf("postgresql schema: unknown foreign-key action")
 		}
-		if strings.ContainsRune("'\"`", rune(source[index])) {
-			index = skipQuote(source, index, source[index])
-			continue
+		j := i + 2
+		if j >= len(s) {
+			return a, nil, fmt.Errorf("postgresql schema: incomplete foreign-key action")
 		}
-		if source[index] == '$' {
-			if end := skipDollar(source, index); end > index {
-				index = end
-				continue
+		value := ""
+		end := j
+		if wordIs(s[j], "NO") && j+1 < len(s) && wordIs(s[j+1], "ACTION") {
+			value = "NO ACTION"
+			end = j + 1
+		} else if wordIs(s[j], "SET") && j+1 < len(s) && (wordIs(s[j+1], "NULL") || wordIs(s[j+1], "DEFAULT")) {
+			value = "SET " + strings.ToUpper(s[j+1].text)
+			end = j + 1
+		} else if wordIs(s[j], "CASCADE") || wordIs(s[j], "RESTRICT") {
+			value = strings.ToUpper(s[j].text)
+		} else {
+			return a, nil, fmt.Errorf("postgresql schema: unknown foreign-key action")
+		}
+		if wordIs(s[i+1], "DELETE") {
+			if seenDelete {
+				return a, nil, fmt.Errorf("postgresql schema: duplicate ON DELETE action")
 			}
-		}
-		if source[index] == '(' {
-			depth++
-			index++
-			continue
-		}
-		if source[index] == ')' {
-			if depth > 0 {
-				depth--
+			seenDelete = true
+			a.onDelete = referenceAction(value)
+		} else {
+			if seenUpdate {
+				return a, nil, fmt.Errorf("postgresql schema: duplicate ON UPDATE action")
 			}
-			index++
-			continue
+			seenUpdate = true
+			a.onUpdate = referenceAction(value)
 		}
-		if !wordStart(source[index]) {
-			index++
-			continue
-		}
-		start, end := word(source, index)
-		if strings.EqualFold(source[start:end], "CREATE") {
-			inCreateTable = strings.EqualFold(nextWord(source, end), "TABLE")
-		}
-		if inCreateTable && depth > 0 && strings.EqualFold(source[start:end], "GENERATED") {
-			clauseEnd, ok := identityEnd(source, end)
-			if ok {
-				if next := spaces(source, clauseEnd); next < len(source) && source[next] == '(' {
-					return "", fmt.Errorf("postgresql schema: identity option lists require a manual migration")
-				}
-				for offset := start; offset < clauseEnd; offset++ {
-					if result[offset] != '\n' && result[offset] != '\r' {
-						result[offset] = ' '
-					}
-				}
-				index = clauseEnd
-				continue
-			}
-		}
-		index = end
+		spans = append(spans, byteSpan{s[i].start, s[end].end})
+		i = end + 1
 	}
-	actionPattern := regexp.MustCompile(`(?is)\bON\s+(?:DELETE|UPDATE)\s+(?:NO\s+ACTION|CASCADE|RESTRICT|SET\s+(?:NULL|DEFAULT))`)
-	for _, match := range actionPattern.FindAllStringIndex(source, -1) {
-		for offset := match[0]; offset < match[1]; offset++ {
-			if result[offset] != '\n' && result[offset] != '\r' {
-				result[offset] = ' '
-			}
-		}
-	}
-	return string(result), nil
+	return a, spans, nil
 }
-
-func identityEnd(source string, index int) (int, bool) {
-	words := []string{"ALWAYS", "AS", "IDENTITY"}
-	if strings.EqualFold(nextWord(source, index), "BY") {
-		words = []string{"BY", "DEFAULT", "AS", "IDENTITY"}
+func scanIdentifier(t sqlToken) (scannedIdentifier, error) {
+	if t.kind == tokenWord {
+		return scannedIdentifier{t.text, false}, nil
 	}
-	for _, expected := range words {
-		index = spaces(source, index)
-		start, end := word(source, index)
-		if !strings.EqualFold(source[start:end], expected) {
-			return index, false
-		}
-		index = end
+	if t.kind != tokenQuotedIdentifier {
+		return scannedIdentifier{}, fmt.Errorf("postgresql schema: expected identifier")
 	}
-	return index, true
-}
-func nextWord(source string, index int) string {
-	index = spaces(source, index)
-	start, end := word(source, index)
-	return source[start:end]
-}
-func word(source string, index int) (int, int) {
-	start := index
-	for index < len(source) && (unicode.IsLetter(rune(source[index])) || unicode.IsDigit(rune(source[index])) || source[index] == '_') {
-		index++
-	}
-	return start, index
-}
-func wordStart(value byte) bool { return unicode.IsLetter(rune(value)) || value == '_' }
-func spaces(source string, index int) int {
-	for index < len(source) && unicode.IsSpace(rune(source[index])) {
-		index++
-	}
-	return index
-}
-func skipLine(source string, index int) int {
-	for index < len(source) && source[index] != '\n' {
-		index++
-	}
-	return index
-}
-func skipBlock(source string, index int) int {
-	index += 2
-	for index+1 < len(source) && source[index:index+2] != "*/" {
-		index++
-	}
-	if index+1 < len(source) {
-		index += 2
-	}
-	return index
-}
-func skipQuote(source string, index int, quote byte) int {
-	index++
-	for index < len(source) {
-		if source[index] == quote {
-			if index+1 < len(source) && source[index+1] == quote {
-				index += 2
-				continue
-			}
-			return index + 1
-		}
-		index++
-	}
-	return index
-}
-func skipDollar(source string, index int) int {
-	end := strings.IndexByte(source[index+1:], '$')
-	if end < 0 {
-		return 0
-	}
-	tag := source[index : index+end+2]
-	close := strings.Index(source[index+end+2:], tag)
-	if close < 0 {
-		return 0
-	}
-	return index + end + 2 + close + len(tag)
+	return scannedIdentifier{strings.ReplaceAll(t.text[1:len(t.text)-1], `""`, `"`), true}, nil
 }
