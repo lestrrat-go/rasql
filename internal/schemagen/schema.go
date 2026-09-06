@@ -637,7 +637,7 @@ func validateVariableNames(tables []schema.TableDef) error {
 		// cross-table. Falsify this by finding an accepted table name whose
 		// timeScannerTypeName begins with an uppercase rune.
 
-		methods := make(map[string]struct{}, len(table.Columns))
+		methods := make(map[string]string, len(table.Columns)*2)
 		for _, column := range table.Columns {
 			method := goName(column.Name)
 			if method == "" || !token.IsIdentifier(method) {
@@ -646,10 +646,15 @@ func validateVariableNames(tables []schema.TableDef) error {
 			if _, exists := reservedFieldNames[method]; exists {
 				return fmt.Errorf("generate: column %q on table %q uses reserved generated method %q", column.Name, table.Name, method)
 			}
-			if _, exists := methods[method]; exists {
-				return fmt.Errorf("generate: column %q on table %q duplicates generated method %q", column.Name, table.Name, method)
+			for _, generated := range []string{method, method + "Ref"} {
+				if _, exists := reservedFieldNames[generated]; exists {
+					return fmt.Errorf("generate: column %q on table %q uses reserved generated method %q", column.Name, table.Name, generated)
+				}
+				if owner, exists := methods[generated]; exists {
+					return fmt.Errorf("generate: columns %q and %q on table %q both generate method %q", owner, column.Name, table.Name, generated)
+				}
+				methods[generated] = column.Name
 			}
-			methods[method] = struct{}{}
 		}
 		relationshipMethods := make(map[string]struct {
 			index int
@@ -680,6 +685,9 @@ func validateVariableNames(tables []schema.TableDef) error {
 			}
 			method := goName(relationship.Name)
 			if _, exists := methods[method]; exists {
+				if column, ok := methods[method]; ok && method == goName(column)+"Ref" {
+					continue
+				}
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated method %q", relationship.Name, table.Name, method)
 			}
 		}
@@ -1097,6 +1105,11 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, bindi
 	}
 	result := make([]relationshipSpec, 0)
 	usedMethods := make(map[string]struct{})
+	for _, column := range table.Columns {
+		method := goName(column.Name)
+		usedMethods[method] = struct{}{}
+		usedMethods[method+"Ref"] = struct{}{}
+	}
 	for _, relationship := range table.Relationships {
 		parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
 		if !ok {
@@ -1111,7 +1124,14 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, bindi
 			continue
 		}
 		if _, exists := usedMethods[method]; exists {
-			continue
+			base := method
+			for suffix := 2; ; suffix++ {
+				candidate := base + strconv.Itoa(suffix)
+				if _, occupied := usedMethods[candidate]; !occupied && !reservedRelationshipMethod(candidate) {
+					method = candidate
+					break
+				}
+			}
 		}
 		usedMethods[method] = struct{}{}
 		result = append(result, relationshipSpec{

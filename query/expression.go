@@ -138,7 +138,6 @@ func operand(value any) Expression {
 	return Bind(value)
 }
 
-
 // operands is operand over a variadic or slice argument. It always returns a
 // new slice, so a caller's later write to values cannot reach inside a built
 // expression.
@@ -332,17 +331,11 @@ func (NullTest) expression() {}
 
 // IsNull tests whether expression is NULL.
 func IsNull(expression Expression) NullTest {
-	if ref, ok := expression.(interface{ Ref() ColumnRef }); ok {
-		expression = ref.Ref()
-	}
 	return NullTest{expr: expression}
 }
 
 // IsNotNull tests whether expression is not NULL.
 func IsNotNull(expression Expression) NullTest {
-	if ref, ok := expression.(interface{ Ref() ColumnRef }); ok {
-		expression = ref.Ref()
-	}
 	return NullTest{expr: expression, not: true}
 }
 

@@ -20,7 +20,6 @@ func (c TypedColumn[Row, Value]) Name() string                       { return c.
 func (c NullableColumn[Row, Value]) Name() string                    { return c.ref.Name() }
 func (c TypedColumn[Row, Value]) Source() RelationRef                { return c.ref.Source() }
 func (c NullableColumn[Row, Value]) Source() RelationRef             { return c.ref.Source() }
-func (NullableColumn[Row, Value]) expression()                       {}
 func (c TypedColumn[Row, Value]) ProjectedExpression() Expression    { return c.ref }
 func (c TypedColumn[Row, Value]) ResultAlias() string                { return "" }
 func (c TypedColumn[Row, Value]) As(alias string) Projection         { return c.ref.As(alias) }
@@ -28,11 +27,12 @@ func (c NullableColumn[Row, Value]) ProjectedExpression() Expression { return c.
 func (c NullableColumn[Row, Value]) ResultAlias() string             { return "" }
 func (c NullableColumn[Row, Value]) As(alias string) Projection      { return c.ref.As(alias) }
 
-// Predicate is the existing NULL-test expression shape, shared with the
-// dynamic expression API so the typed facade adds no second AST.
-type Predicate = NullTest
+// Predicate is an opaque typed boolean expression accepted by SafeSelectBuilder.
+type Predicate struct{ expression Expression }
 
-func typedPredicate(expression Expression) Predicate { return Predicate{expr: expression} }
+func (p Predicate) Expression() Expression { return p.expression }
+
+func typedPredicate(expression Expression) Predicate { return Predicate{expression: expression} }
 
 func EqualValue[R, V any](column TypedColumn[R, V], value V) Predicate {
 	return typedPredicate(Equal(column.ref, value))
@@ -87,7 +87,15 @@ func OrPredicates(predicates ...Predicate) Predicate {
 }
 
 func NotPredicate(predicate Predicate) Predicate {
-	return typedPredicate(Negate(predicate.Expression()))
+	return typedPredicate(Negate(predicate.expression))
+}
+
+func TypedIsNull[R, V any](column NullableColumn[R, V]) Predicate {
+	return typedPredicate(IsNull(column.ref))
+}
+
+func TypedIsNotNull[R, V any](column NullableColumn[R, V]) Predicate {
+	return typedPredicate(IsNotNull(column.ref))
 }
 
 func AssignValue[R, V any](column TypedColumn[R, V], value V) Assignment {

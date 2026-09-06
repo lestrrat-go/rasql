@@ -21,12 +21,12 @@ func typedTestColumns(t *testing.T) (TypedColumn[typedTestRow, int64], NullableC
 
 func TestTypedPredicatesNormalizeToExistingAST(t *testing.T) {
 	id, email := typedTestColumns(t)
-	predicate := AndPredicates(EqualValue(id, int64(7)), IsNotNull(email), InValues(id, int64(7), int64(8)))
+	predicate := AndPredicates(EqualValue(id, int64(7)), TypedIsNotNull(email), InValues(id, int64(7), int64(8)))
 	logical, ok := predicate.Expression().(Logical)
 	require.True(t, ok)
 	require.Len(t, logical.Expressions(), 3)
 	require.Equal(t, id.Ref(), id.Ref())
-	require.Equal(t, "email", IsNull(email).Expression().(ColumnRef).Name())
+	require.Equal(t, "email", TypedIsNull(email).Expression().(NullTest).Expression().(ColumnRef).Name())
 	require.Equal(t, "id", AssignValue(id, int64(9)).Column().Name())
 }
 

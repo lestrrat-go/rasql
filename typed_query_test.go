@@ -23,3 +23,16 @@ func TestSafeSelectBuilderUsesTypedPredicates(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, statement.SQL(), "WHERE")
 }
+
+func TestTypedFacadeZeroValuesReturnErrors(t *testing.T) {
+	var zeroTable Table[safeQueryRow]
+	_, err := TypedSelectFrom(zeroTable).Select()
+	require.Error(t, err)
+	var zeroColumn query.TypedColumn[safeQueryRow, int64]
+	_, err = TypedSelectFrom(TableFrom[safeQueryRow](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})).
+		Where(query.EqualValue(zeroColumn, int64(1))).Select()
+	require.Error(t, err)
+	_, err = TypedSelectFrom(TableFrom[safeQueryRow](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})).
+		Where(query.Predicate{}).Select()
+	require.Error(t, err)
+}
