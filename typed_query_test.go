@@ -65,6 +65,8 @@ func TestSafeSelectBuilderSQLiteTerminalsAndImmutability(t *testing.T) {
 	id := query.TypedColumnOf[safeQueryRow, int64](table.Column("id"))
 	nick := query.NullableColumnOf[safeQueryRow, *string](table.Column("nickname"))
 	base := TypedSelectFrom(table)
+	_, err = base.Select()
+	require.NoError(t, err)
 	derived := base.Where(query.EqualValue(id, int64(1))).Order(query.Asc(id.Ref())).Limit(1).Offset(0).Distinct()
 	aliased, err := As(table, "other")
 	require.NoError(t, err)
@@ -113,4 +115,132 @@ func TestSafeSelectBuilderSQLiteTerminalsAndImmutability(t *testing.T) {
 	require.Equal(t, 1, seen)
 	_, err = base.Result()
 	require.NoError(t, err)
+}
+
+func TestTypedPredicatesMatchDynamicSQLAndArgs(t *testing.T) {
+	table, err := TableOf[safeQueryRow](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+	}})
+	require.NoError(t, err)
+	id := query.TypedColumnOf[safeQueryRow, int64](table.Column("id"))
+	nickname := query.NullableColumnOf[safeQueryRow, *string](table.Column("nickname"))
+	ada := "Ada"
+	cases := []struct {
+		name    string
+		typed   query.Predicate
+		dynamic query.Expression
+	}{
+		{"equal", query.EqualValue(id, int64(3)), query.Equal(id.Ref(), int64(3))},
+		{"nullable equal", query.EqualNullableValue(nickname, &ada), query.Equal(nickname.Ref(), &ada)},
+		{"less", query.LessValue(id, int64(3)), query.LessThan(id.Ref(), int64(3))},
+		{"less or equal", query.LessOrEqualValue(id, int64(3)), query.LessThanOrEqual(id.Ref(), int64(3))},
+		{"greater", query.GreaterValue(id, int64(3)), query.GreaterThan(id.Ref(), int64(3))},
+		{"greater or equal", query.GreaterOrEqualValue(id, int64(3)), query.GreaterThanOrEqual(id.Ref(), int64(3))},
+		{"in", query.InValues(id, int64(1), int64(3)), query.In(id.Ref(), int64(1), int64(3))},
+		{"is null", query.TypedIsNull(nickname), query.IsNull(nickname.Ref())},
+		{"is not null", query.TypedIsNotNull(nickname), query.IsNotNull(nickname.Ref())},
+		{"logical", query.AndPredicates(query.EqualValue(id, int64(3)), query.TypedIsNotNull(nickname)), query.And(query.Equal(id.Ref(), int64(3)), query.IsNotNull(nickname.Ref()))},
+		{"not", query.NotPredicate(query.EqualValue(id, int64(3))), query.Negate(query.Equal(id.Ref(), int64(3)))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			typed, err := TypedSelectFrom(table).Where(tc.typed).Build(dialect.SQLite())
+			require.NoError(t, err)
+			dynamic, err := SelectFrom(table).Where(tc.dynamic).Build(dialect.SQLite())
+			require.NoError(t, err)
+			require.Equal(t, dynamic.SQL(), typed.SQL())
+			require.Equal(t, dynamic.Args(), typed.Args())
+		})
+	}
+
+	aliased, err := As(table, "other")
+	require.NoError(t, err)
+	otherID := query.TypedColumnOf[safeQueryRow, int64](aliased.Column("id"))
+	typedJoin := TypedSelectFrom(table).Join(query.TypedLeftJoin(aliased.Ref(), query.EqualColumns(id, otherID)))
+	dynamicJoin := SelectFrom(table).Join(query.LeftJoin(aliased.Ref(), query.Equal(id.Ref(), otherID.Ref())))
+	typedStatement, err := typedJoin.Build(dialect.SQLite())
+	require.NoError(t, err)
+	dynamicStatement, err := dynamicJoin.Build(dialect.SQLite())
+	require.NoError(t, err)
+	require.Equal(t, dynamicStatement.SQL(), typedStatement.SQL())
+	require.Equal(t, dynamicStatement.Args(), typedStatement.Args())
+}
+
+func TestSafeSelectBuilderForwardsErrorsAndZeroValues(t *testing.T) {
+	table, err := TableOf[safeQueryRow](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "nickname", Type: schema.TextType{}, Nullable: true}}})
+	require.NoError(t, err)
+	id := query.TypedColumnOf[safeQueryRow, int64](table.Column("id"))
+	var zeroNullable query.NullableColumn[safeQueryRow, *string]
+	_, err = TypedSelectFrom(table).Where(query.TypedIsNull(zeroNullable)).Build(dialect.SQLite())
+	require.Error(t, err)
+	var zeroJoin query.TypedJoin
+	_, err = TypedSelectFrom(table).Join(zeroJoin).Build(dialect.SQLite())
+	require.Error(t, err)
+	var zeroBuilder SafeSelectBuilder[safeQueryRow]
+	_, err = zeroBuilder.Select()
+	require.Error(t, err)
+
+	invalid := TypedSelectFrom(table).Where(query.Predicate{})
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	db, err := New(sqlDB, dialect.SQLite())
+	require.NoError(t, err)
+	terminals := []struct {
+		name string
+		call func() error
+	}{
+		{"select", func() error { _, err := invalid.Select(); return err }},
+		{"result", func() error { _, err := invalid.Result(); return err }},
+		{"build", func() error { _, err := invalid.Build(dialect.SQLite()); return err }},
+		{"query", func() error { _, err := invalid.Query(context.Background(), db); return err }},
+		{"all", func() error { _, err := invalid.All(context.Background(), db); return err }},
+		{"one", func() error { _, err := invalid.One(context.Background(), db); return err }},
+		{"count", func() error { _, err := invalid.Count(context.Background(), db); return err }},
+		{"count page", func() error { _, err := invalid.CountPage(context.Background(), db); return err }},
+	}
+	for _, terminal := range terminals {
+		t.Run(terminal.name, func(t *testing.T) { require.Error(t, terminal.call()) })
+	}
+
+	forwarders := []struct {
+		name string
+		call func(SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow]
+	}{
+		{"project", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] { return b.Project(id.Ref()) }},
+		{"join", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] {
+			aliased, err := As(table, "other")
+			require.NoError(t, err)
+			otherID := query.TypedColumnOf[safeQueryRow, int64](aliased.Column("id"))
+			return b.Join(query.TypedInnerJoin(aliased.Ref(), query.EqualColumns(id, otherID)))
+		}},
+		{"where", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] {
+			return b.Where(query.EqualValue(id, int64(1)))
+		}},
+		{"group by", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] { return b.GroupBy(id.Ref()) }},
+		{"having", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] {
+			return b.Project(query.CountAll()).GroupBy(id.Ref()).Having(query.EqualValue(id, int64(1)))
+		}},
+		{"order", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] {
+			return b.Order(query.Asc(id.Ref()))
+		}},
+		{"distinct", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] { return b.Distinct() }},
+		{"limit", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] { return b.Limit(1) }},
+		{"offset", func(b SafeSelectBuilder[safeQueryRow]) SafeSelectBuilder[safeQueryRow] { return b.Offset(1) }},
+	}
+	base := TypedSelectFrom(table)
+	baseStatement, err := base.Build(dialect.SQLite())
+	require.NoError(t, err)
+	for _, forwarder := range forwarders {
+		t.Run(forwarder.name, func(t *testing.T) {
+			branch := forwarder.call(base)
+			statement, err := branch.Build(dialect.SQLite())
+			require.NoError(t, err)
+			require.NotEqual(t, baseStatement.SQL(), statement.SQL())
+			unchanged, err := base.Build(dialect.SQLite())
+			require.NoError(t, err)
+			require.Equal(t, baseStatement.SQL(), unchanged.SQL())
+		})
+	}
 }
