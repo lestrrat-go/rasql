@@ -141,7 +141,9 @@ func dumpFilesFromDatabase(ctx context.Context, d dialect.Dialect, database *sql
 		historyTable = "rasql_schema_migrations"
 	}
 	excludeTables := append([]string(nil), opts.Exclude...)
-	excludeTables = append(excludeTables, historyTable+"_progress")
+	if len(opts.Include) == 0 {
+		excludeTables = append(excludeTables, historyTable+"_progress")
+	}
 	transaction, err := runWithHardDeadline(ctx, func() (*sql.Tx, error) {
 		return database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
 	})
