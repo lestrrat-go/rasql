@@ -34,6 +34,10 @@ type bulkFailHandle struct {
 	err    error
 }
 
+type zeroLimitDialect struct{ dialect.Dialect }
+
+func (zeroLimitDialect) Name() string { return "custom" }
+
 func (h *bulkRecordingHandle) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
 	return nil, fmt.Errorf("unexpected query call")
 }
@@ -100,12 +104,126 @@ func TestBulkPlanBatchesByConsecutiveMaskRowsAndActualBinds(t *testing.T) {
 	require.Equal(t, []rasql.InputRange{{First: 0, Last: 3}}, outcome.Completed)
 	require.True(t, outcome.Durable)
 	require.Len(t, handle.calls, 3)
-	require.Len(t, handle.calls[0].args, 2)
-	require.Len(t, handle.calls[1].args, 2)
-	require.Len(t, handle.calls[2].args, 1)
-	for _, call := range handle.calls {
-		require.LessOrEqual(t, len(call.args), 3)
+	require.Equal(t, []any{"first", "second"}, handle.calls[0].args)
+	require.Equal(t, []any{int64(3), pointer("third")}, handle.calls[1].args)
+	require.Equal(t, []any{"fourth"}, handle.calls[2].args)
+}
+
+func TestBulkPlanDefaultLimitsAndInvalidLimitsMakeNoCalls(t *testing.T) {
+	table, a, _, _ := bulkTestTable()
+	plan, err := rasql.NewCreatePlan(table, rasql.SetField(a, "value"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(plan)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		dialect dialect.Dialect
+		binds   int
+	}{
+		{dialect.PostgreSQL(), 65535},
+		{dialect.MySQL(), 65535},
+		{dialect.SQLite(), 32766},
+	} {
+		handle := &bulkRecordingHandle{}
+		db, dbErr := rasql.New(handle, test.dialect)
+		require.NoError(t, dbErr)
+		outcome, execErr := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{})
+		require.NoError(t, execErr)
+		require.Equal(t, []rasql.InputRange{{First: 0, Last: 0}}, outcome.Completed)
+		require.Len(t, handle.calls, 1)
+		rowPlans := make([]rasql.CreatePlan[bulkTestRow], 1001)
+		for i := range rowPlans {
+			rowPlans[i], err = rasql.NewCreatePlan(table, rasql.SetField(a, fmt.Sprintf("row-%d", i)))
+			require.NoError(t, err)
+		}
+		rowBulk, err := rasql.NewBulkPlan(rowPlans...)
+		require.NoError(t, err)
+		handle.calls = nil
+		_, err = rasql.ExecBulkCreate(t.Context(), db, rowBulk, rasql.BulkOptions{MaxBindParameters: test.binds})
+		require.NoError(t, err)
+		require.Len(t, handle.calls, 2)
+		bindPlans := make([]rasql.CreatePlan[bulkTestRow], test.binds+1)
+		for i := range bindPlans {
+			bindPlans[i], err = rasql.NewCreatePlan(table, rasql.SetField(a, fmt.Sprintf("bind-%d", i)))
+			require.NoError(t, err)
+		}
+		bindBulk, err := rasql.NewBulkPlan(bindPlans...)
+		require.NoError(t, err)
+		handle.calls = nil
+		_, err = rasql.ExecBulkCreate(t.Context(), db, bindBulk, rasql.BulkOptions{MaxRows: test.binds + 1})
+		require.NoError(t, err)
+		require.Len(t, handle.calls, 2)
 	}
+	for _, options := range []rasql.BulkOptions{{MaxRows: -1}, {MaxBindParameters: -1}} {
+		handle := &bulkRecordingHandle{}
+		db, dbErr := rasql.New(handle, dialect.SQLite())
+		require.NoError(t, dbErr)
+		_, execErr := rasql.ExecBulkCreate(t.Context(), db, bulk, options)
+		require.Error(t, execErr)
+		require.Empty(t, handle.calls)
+	}
+	defaults, err := rasql.NewCreatePlan(table, rasql.DefaultField(a))
+	require.NoError(t, err)
+	defaultBulk, err := rasql.NewBulkPlan(defaults)
+	require.NoError(t, err)
+	handle := &bulkRecordingHandle{}
+	db, err := rasql.New(handle, zeroLimitDialect{Dialect: dialect.SQLite()})
+	require.NoError(t, err)
+	_, err = rasql.ExecBulkCreate(t.Context(), db, defaultBulk, rasql.BulkOptions{})
+	require.Error(t, err)
+	require.Empty(t, handle.calls)
+}
+
+func TestBulkPlanSplitsAtRowAndActualBindBoundaries(t *testing.T) {
+	table, a, _, c := bulkTestTable()
+	plans := make([]rasql.CreatePlan[bulkTestRow], 0, 4)
+	for _, value := range []string{"one", "two", "three", "four"} {
+		plan, err := rasql.NewCreatePlan(table, rasql.SetField(a, value), rasql.ClearField(c))
+		require.NoError(t, err)
+		plans = append(plans, plan)
+	}
+	bulk, err := rasql.NewBulkPlan(plans...)
+	require.NoError(t, err)
+	handle := &bulkRecordingHandle{}
+	db, err := rasql.New(handle, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{MaxRows: 2, MaxBindParameters: 10})
+	require.NoError(t, err)
+	require.Len(t, handle.calls, 2)
+	require.Equal(t, []any{"one", nil, "two", nil}, handle.calls[0].args)
+	require.Equal(t, []any{"three", nil, "four", nil}, handle.calls[1].args)
+	handle.calls = nil
+	_, err = rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{MaxRows: 100, MaxBindParameters: 3})
+	require.NoError(t, err)
+	require.Len(t, handle.calls, 4)
+	for i, value := range []string{"one", "two", "three", "four"} {
+		require.Equal(t, []any{value, nil}, handle.calls[i].args)
+	}
+}
+
+func TestBulkPlanPreservesDuplicateFailureIndexesAndInputIsolation(t *testing.T) {
+	table, a, _, _ := bulkTestTable()
+	fields := []rasql.MutationField[bulkTestRow]{rasql.SetField(a, "original")}
+	plan, err := rasql.NewCreatePlan(table, fields...)
+	require.NoError(t, err)
+	fields[0] = rasql.SetField(a, "mutated")
+	plans := []rasql.CreatePlan[bulkTestRow]{plan, plan}
+	bulk, err := rasql.NewBulkPlan(plans...)
+	require.NoError(t, err)
+	plans[0] = rasql.CreatePlan[bulkTestRow]{}
+	handle := &bulkFailHandle{failAt: 1, err: fmt.Errorf("rejected")}
+	db, err := rasql.New(handle, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{
+		Classifier: fixedBulkClassifier{certainty: rasql.OutcomeRejected},
+	})
+	require.Error(t, err)
+	require.Equal(t, []int{0, 1}, outcome.Failed.Indexes)
+	require.Equal(t, []any{"original", "original"}, handle.calls[0].args)
+}
+
+func TestBulkPlanRejectsEmptyInput(t *testing.T) {
+	_, err := rasql.NewBulkPlan[bulkTestRow]()
+	require.Error(t, err)
 }
 
 func TestBulkPlanDefaultOnlyRowsRemainIndividualAndLimitsValidateBeforeExecution(t *testing.T) {
