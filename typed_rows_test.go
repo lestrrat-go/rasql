@@ -24,10 +24,11 @@ func TestTypedRows(t *testing.T) {
 }
 
 func testScanTypedRowsKeepsDynamicScannerStateIndependent(t *testing.T) {
+	var closes int
 	rows := openCloseCountingRows(t, "rasql-typed-rows-dynamic-ownership", &closeCountingDriver{
 		columns: []string{"payload"},
 		rows:    [][]driver.Value{{"abc"}, {"def"}},
-		closes:  new(int),
+		closes:  &closes,
 	})
 
 	collected := make([]dynamicScannerRow, 0, 2)
@@ -44,10 +45,11 @@ func testScanTypedRowsKeepsDynamicScannerStateIndependent(t *testing.T) {
 }
 
 func testScanTypedRowsKeepsStaticScannerStateIndependent(t *testing.T) {
+	var closes int
 	rows := openCloseCountingRows(t, "rasql-typed-rows-static-ownership", &closeCountingDriver{
 		columns: []string{"payload"},
 		rows:    [][]driver.Value{{"abc"}, {"def"}},
-		closes:  new(int),
+		closes:  &closes,
 	})
 
 	collected := make([]staticScannerRow, 0, 2)
