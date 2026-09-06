@@ -43,6 +43,6 @@ func TestNativeTypePostgreSQL(t *testing.T) {
 	require.Equal(t, "jsonb", byName["payload_binary"].NativeType.Name)
 	require.Equal(t, schema.TimeType{}, byName["happened"].Type)
 	require.Equal(t, "timestamptz", byName["happened"].NativeType.Name)
-	require.Equal(t, "timetz", byName["local_time"].NativeType.Name)
+	require.Equal(t, "time", byName["local_time"].NativeType.Name)
 	require.Equal(t, "date", byName["day"].NativeType.Name)
 }

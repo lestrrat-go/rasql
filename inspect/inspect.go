@@ -2427,7 +2427,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			}
 			column.Type = columnType
 			column.NativeType = native
-			if column.NativeType == nil && pgUDTName.Valid && pgUDTName.String != "" {
+			if _, opaque := column.Type.(schema.OpaqueType); opaque && column.NativeType == nil && pgUDTName.Valid && pgUDTName.String != "" {
 				column.NativeType = &schema.NativeTypeDef{Dialect: "postgresql", Schema: pgUDTSchema.String, Name: pgUDTName.String, Kind: schema.NativeOther}
 			}
 			if strings.EqualFold(databaseType, "ARRAY") && column.NativeType != nil && column.NativeType.Kind != schema.NativeArray {
