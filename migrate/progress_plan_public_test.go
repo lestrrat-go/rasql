@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
@@ -25,10 +26,9 @@ func planProgressMigration() Migration {
 	}
 }
 
-func openPlanProgressRunner(t *testing.T, state *recoveryState) (*sql.DB, Runner) {
+func openPlanProgressRunner(t *testing.T, fixture *dbtest.Recovery) (*sql.DB, Runner) {
 	t.Helper()
-	recoveryCurrent.Store(state)
-	database, err := sql.Open(recoveryDriverName, "")
+	database, err := fixture.Open()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 	runner, err := New(database, dialect.MySQL())
@@ -38,11 +38,9 @@ func openPlanProgressRunner(t *testing.T, state *recoveryState) (*sql.DB, Runner
 
 func TestApplyPlanReturnsProgressSourceSuffix(t *testing.T) {
 	migration := planProgressMigration()
-	state := &recoveryState{
-		history: map[string]string{}, effects: map[string]bool{}, executions: map[string]int{},
-		progress: &recoveryProgress{id: migration.ID, checksum: checksum(migration.Statements), direction: string(DirectionUp), source: migration.Statements[0].Source, sourceIndex: 0, nextIndex: 1},
-	}
-	_, runner := openPlanProgressRunner(t, state)
+	fixture := dbtest.NewRecovery()
+	fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(DirectionUp), Source: migration.Statements[0].Source, SourceIndex: 0, NextIndex: 1})
+	_, runner := openPlanProgressRunner(t, fixture)
 	planned, err := runner.ApplyPlan(t.Context(), AllPending(), migration)
 	require.NoError(t, err)
 	require.Len(t, planned, 1)
@@ -52,11 +50,10 @@ func TestApplyPlanReturnsProgressSourceSuffix(t *testing.T) {
 
 func TestRevertPlanReturnsProgressSourceSuffix(t *testing.T) {
 	migration := planProgressMigration()
-	state := &recoveryState{
-		history: map[string]string{migration.ID: checksum(migration.Statements)}, effects: map[string]bool{}, executions: map[string]int{},
-		progress: &recoveryProgress{id: migration.ID, checksum: checksum(migration.Statements), direction: string(DirectionDown), source: migration.Down[0].Source, sourceIndex: 0, nextIndex: 1},
-	}
-	_, runner := openPlanProgressRunner(t, state)
+	fixture := dbtest.NewRecovery()
+	fixture.SetHistory(migration.ID, checksum(migration.Statements))
+	fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(DirectionDown), Source: migration.Down[0].Source, SourceIndex: 0, NextIndex: 1})
+	_, runner := openPlanProgressRunner(t, fixture)
 	planned, err := runner.RevertPlan(t.Context(), Steps(1), migration)
 	require.NoError(t, err)
 	require.Len(t, planned, 1)
@@ -68,19 +65,16 @@ func TestProgressPlansRefuseUncertainRows(t *testing.T) {
 	for _, direction := range []Direction{DirectionUp, DirectionDown} {
 		t.Run(string(direction), func(t *testing.T) {
 			migration := planProgressMigration()
-			history := map[string]string{}
+			fixture := dbtest.NewRecovery()
 			if direction == DirectionDown {
-				history[migration.ID] = checksum(migration.Statements)
+				fixture.SetHistory(migration.ID, checksum(migration.Statements))
 			}
 			source := migration.Statements[0].Source
 			if direction == DirectionDown {
 				source = migration.Down[0].Source
 			}
-			state := &recoveryState{
-				history: history, effects: map[string]bool{}, executions: map[string]int{},
-				progress: &recoveryProgress{id: migration.ID, checksum: checksum(migration.Statements), direction: string(direction), source: source, sourceIndex: 0, nextIndex: 0},
-			}
-			_, runner := openPlanProgressRunner(t, state)
+			fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(direction), Source: source, SourceIndex: 0, NextIndex: 0})
+			_, runner := openPlanProgressRunner(t, fixture)
 			var err error
 			if direction == DirectionUp {
 				_, err = runner.ApplyPlan(t.Context(), AllPending(), migration)
@@ -96,38 +90,30 @@ func TestProgressPlansRefuseUncertainRows(t *testing.T) {
 
 func TestApplyPlanFinalizesTerminalProgress(t *testing.T) {
 	migration := planProgressMigration()
-	state := &recoveryState{
-		history: map[string]string{}, effects: map[string]bool{}, executions: map[string]int{},
-		progress: &recoveryProgress{id: migration.ID, checksum: checksum(migration.Statements), direction: string(DirectionUp), source: migration.Statements[2].Source, sourceIndex: 2, nextIndex: 3},
-	}
-	_, runner := openPlanProgressRunner(t, state)
+	fixture := dbtest.NewRecovery()
+	fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(DirectionUp), Source: migration.Statements[2].Source, SourceIndex: 2, NextIndex: 3})
+	_, runner := openPlanProgressRunner(t, fixture)
 	planned, err := runner.ApplyPlan(t.Context(), AllPending(), migration)
 	require.NoError(t, err)
 	require.Empty(t, planned)
 	status, err := runner.Status(t.Context(), migration)
 	require.NoError(t, err)
 	require.Equal(t, StatusApplied, status[0].State)
-	state.mu.Lock()
-	require.Nil(t, state.progress)
-	state.mu.Unlock()
+	require.Nil(t, fixture.Snapshot().Progress)
 }
 
 func TestRevertPlanFinalizesTerminalProgressAfterHistoryMutation(t *testing.T) {
 	migration := planProgressMigration()
-	state := &recoveryState{
-		history: map[string]string{}, effects: map[string]bool{}, executions: map[string]int{},
-		progress: &recoveryProgress{id: migration.ID, checksum: checksum(migration.Statements), direction: string(DirectionDown), source: migration.Down[2].Source, sourceIndex: 2, nextIndex: 3},
-	}
-	_, runner := openPlanProgressRunner(t, state)
+	fixture := dbtest.NewRecovery()
+	fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(DirectionDown), Source: migration.Down[2].Source, SourceIndex: 2, NextIndex: 3})
+	_, runner := openPlanProgressRunner(t, fixture)
 	planned, err := runner.RevertPlan(t.Context(), Steps(1), migration)
 	require.NoError(t, err)
 	require.Empty(t, planned)
 	status, err := runner.Status(t.Context(), migration)
 	require.NoError(t, err)
 	require.Equal(t, StatusPending, status[0].State)
-	state.mu.Lock()
-	require.Nil(t, state.progress)
-	state.mu.Unlock()
+	require.Nil(t, fixture.Snapshot().Progress)
 }
 
 func statementSources(statements []Statement) []string {
