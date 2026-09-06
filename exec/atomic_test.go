@@ -79,6 +79,163 @@ func TestAtomicNestedNamesAreQuotedAndDistinct(t *testing.T) {
 	require.Equal(t, statements[0][len("SAVEPOINT "):], statements[3][len("RELEASE SAVEPOINT "):])
 }
 
+func TestAtomicSavepointChildRejectsOuterFinalization(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	mock.ExpectBegin()
+	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	err = db.Atomic(t.Context(), nil, func(ctx context.Context, tx exec.DB) error {
+		return tx.Atomic(ctx, nil, func(_ context.Context, scoped exec.DB) error {
+			require.ErrorContains(t, scoped.Commit(), "cannot commit")
+			require.ErrorContains(t, scoped.Rollback(), "cannot roll back")
+			return nil
+		})
+	})
+	require.NoError(t, err)
+}
+
+func TestAtomicCleanupUsesDetachedContextAfterCancellation(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	mock.ExpectBegin()
+	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ROLLBACK TO SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	tx, err := db.Begin(t.Context(), nil)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	callbackErr := errors.New("cancelled callback")
+	err = tx.Atomic(ctx, nil, func(context.Context, exec.DB) error {
+		cancel()
+		return callbackErr
+	})
+	require.ErrorIs(t, err, callbackErr)
+	require.NoError(t, tx.Rollback())
+	mock.ExpectBegin()
+	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`ROLLBACK TO SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+	tx, err = db.Begin(t.Context(), nil)
+	require.NoError(t, err)
+	panicValue := errors.New("cancelled panic")
+	ctx2, cancel2 := context.WithCancel(t.Context())
+	func() {
+		defer func() { require.Equal(t, panicValue, recover()) }()
+		err = tx.Atomic(ctx2, nil, func(context.Context, exec.DB) error {
+			cancel2()
+			panic(panicValue)
+		})
+	}()
+	require.NoError(t, tx.Rollback())
+}
+
+func TestAtomicSavepointLifecycleObserversAreInherited(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	mock.ExpectBegin()
+	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	var statements []string
+	db, err = db.WithInvocationObservers(exec.ExtensionErrorHandlerFunc(func(context.Context, exec.ExtensionError) {}), exec.InvocationObserverFunc(func(ctx context.Context, _ exec.Operation) (context.Context, exec.CompletionObserver) {
+		return ctx, exec.CompletionObserverFunc(func(_ context.Context, completion exec.Completion) error {
+			if completion.Phase == exec.ExecutionPhase && completion.Operation.Kind() == exec.ExecOperation {
+				statements = append(statements, completion.Operation.SQL())
+			}
+			return nil
+		})
+	}))
+	require.NoError(t, err)
+	require.NoError(t, db.Atomic(t.Context(), nil, func(ctx context.Context, tx exec.DB) error {
+		return tx.Atomic(ctx, nil, func(context.Context, exec.DB) error { return nil })
+	}))
+	require.Len(t, statements, 2)
+	require.Contains(t, statements[0], "SAVEPOINT")
+	require.Contains(t, statements[1], "RELEASE SAVEPOINT")
+}
+
+func TestAtomicReleaseAndOuterRollbackErrorsRemainReachable(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectBegin()
+	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	releaseErr := errors.New("release failed")
+	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnError(releaseErr)
+	mock.ExpectRollback()
+	tx, err := db.Begin(t.Context(), nil)
+	require.NoError(t, err)
+	err = tx.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { return nil })
+	require.ErrorIs(t, err, releaseErr)
+	require.NoError(t, tx.Rollback())
+
+	mock.ExpectBegin()
+	callbackErr := errors.New("outer callback failed")
+	rollbackErr := errors.New("outer rollback failed")
+	mock.ExpectRollback().WillReturnError(rollbackErr)
+	err = db.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { return callbackErr })
+	require.ErrorIs(t, err, callbackErr)
+	require.ErrorIs(t, err, rollbackErr)
+}
+
+func TestAtomicOuterPanicCleanupWrapsRollbackFailure(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	mock.ExpectBegin()
+	rollbackErr := errors.New("outer rollback failed")
+	mock.ExpectRollback().WillReturnError(rollbackErr)
+	panicValue := errors.New("outer panic")
+	func() {
+		defer func() {
+			panicErr, ok := recover().(error)
+			require.True(t, ok)
+			var atomicPanic exec.AtomicPanic
+			require.ErrorAs(t, panicErr, &atomicPanic)
+			require.Equal(t, panicValue, atomicPanic.Value)
+			require.ErrorIs(t, atomicPanic, rollbackErr)
+		}()
+		require.NoError(t, db.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { panic(panicValue) }))
+	}()
+}
+
 func TestAtomicRejectsNestedOptionsAndUnsupportedDialectBeforeCallback(t *testing.T) {
 	database, mock, err := sqlmock.New()
 	require.NoError(t, err)

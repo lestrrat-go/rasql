@@ -53,6 +53,7 @@ type DB struct {
 	observers             []Observer
 	extensionErrorHandler ExtensionErrorHandler
 	invocationObservers   []InvocationObserver
+	savepointScoped       bool
 	// tx is the transaction this DB runs in, and is nil when it runs directly
 	// on handle. When it is set it is the same value as handle.
 	tx *sql.Tx
@@ -220,6 +221,9 @@ func (db DB) Begin(ctx context.Context, opts *sql.TxOptions, hooks ...Hook) (DB,
 // transaction is finished. Every later Commit or Rollback finds it finished: a
 // later Commit reports that, and a later Rollback reports nothing.
 func (db DB) Commit() error {
+	if db.savepointScoped {
+		return fmt.Errorf("rasql: atomic savepoint DB cannot commit its outer transaction")
+	}
 	if db.tx == nil {
 		return fmt.Errorf("rasql: this DB is not a transaction: Commit needs one from Begin")
 	}
@@ -243,6 +247,9 @@ func (db DB) Commit() error {
 // It reports an error when db is not a transaction, which is every DB except
 // one from Begin and one built by New from a *sql.Tx.
 func (db DB) Rollback() error {
+	if db.savepointScoped {
+		return fmt.Errorf("rasql: atomic savepoint DB cannot roll back its outer transaction")
+	}
 	if db.tx == nil {
 		return fmt.Errorf("rasql: this DB is not a transaction: Rollback needs one from Begin")
 	}

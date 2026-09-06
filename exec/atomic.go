@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync/atomic"
+	"time"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -83,18 +84,26 @@ func (db DB) atomicSavepoint(ctx context.Context, opts *sql.TxOptions, fn Atomic
 	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("SAVEPOINT "+name))); err != nil {
 		return err
 	}
-	result := runAtomicCallback(ctx, db, fn)
+	scoped := db
+	scoped.savepointScoped = true
+	result := runAtomicCallback(ctx, scoped, fn)
+	cleanupCtx, cancel := atomicCleanupContext(ctx)
+	defer cancel()
 	if result.panicked {
-		cleanupErr := db.atomicRollbackSavepoint(ctx, name)
-		cleanupErr = errors.Join(cleanupErr, db.atomicReleaseSavepoint(ctx, name))
+		cleanupErr := db.atomicRollbackSavepoint(cleanupCtx, name)
+		cleanupErr = errors.Join(cleanupErr, db.atomicReleaseSavepoint(cleanupCtx, name))
 		panicAtomic(result.value, cleanupErr)
 	}
 	if result.err != nil {
-		cleanupErr := db.atomicRollbackSavepoint(ctx, name)
-		cleanupErr = errors.Join(cleanupErr, db.atomicReleaseSavepoint(ctx, name))
+		cleanupErr := db.atomicRollbackSavepoint(cleanupCtx, name)
+		cleanupErr = errors.Join(cleanupErr, db.atomicReleaseSavepoint(cleanupCtx, name))
 		return errors.Join(result.err, cleanupErr)
 	}
-	return db.atomicReleaseSavepoint(ctx, name)
+	return db.atomicReleaseSavepoint(cleanupCtx, name)
+}
+
+func atomicCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
 
 func runAtomicCallback(ctx context.Context, db DB, fn AtomicFunc) (result atomicCallbackResult) {
