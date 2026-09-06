@@ -74,6 +74,17 @@ func (b SelectBuilder) Project(projections ...query.Projection) SelectBuilder {
 	return b
 }
 
+// ReplaceProject replaces the projection list while preserving every other
+// immutable builder clause.
+func (b SelectBuilder) ReplaceProject(projections ...query.Projection) SelectBuilder {
+	b = b.clone()
+	if b.err != nil {
+		return b
+	}
+	b.projections = append([]query.Projection(nil), projections...)
+	return b
+}
+
 // Join adds joins created through the basic query API.
 func (b SelectBuilder) Join(joins ...query.Join) SelectBuilder {
 	b = b.clone()
@@ -231,44 +242,68 @@ func (b SelectBuilder) Offset(offset int) SelectBuilder {
 
 // Build validates b and returns its parameterized SQL statement.
 func (b SelectBuilder) Build() (stmt.Statement, error) {
+	s, err := b.Query()
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return Select(b.dialect, s)
+}
+
+// Query assembles and validates the dialect-free query AST.
+func (b SelectBuilder) Query() (query.Select, error) {
 	if b.err != nil {
-		return stmt.Statement{}, b.err
+		return query.Select{}, b.err
 	}
 	s, err := b.buildFromJoinsWhere(b.projections...)
 	if err != nil {
-		return stmt.Statement{}, err
+		return query.Select{}, err
 	}
 	if b.distinct {
 		s, err = s.WithDistinct()
 		if err != nil {
-			return stmt.Statement{}, err
+			return query.Select{}, err
 		}
 	}
 	if predicate, ok := combinePredicates(b.havingPredicates); ok {
 		s, err = s.WithHaving(predicate)
 		if err != nil {
-			return stmt.Statement{}, err
+			return query.Select{}, err
 		}
 	}
 	if len(b.orders) > 0 {
 		s, err = s.WithOrder(b.orders...)
 		if err != nil {
-			return stmt.Statement{}, err
+			return query.Select{}, err
 		}
 	}
 	if b.hasLimit {
 		s, err = s.WithLimit(b.limit)
 		if err != nil {
-			return stmt.Statement{}, err
+			return query.Select{}, err
 		}
 	}
 	if b.hasOffset {
 		s, err = s.WithOffset(b.offset)
 		if err != nil {
-			return stmt.Statement{}, err
+			return query.Select{}, err
 		}
 	}
-	return Select(b.dialect, s)
+	return s, nil
+}
+
+// QueryForCount assembles a query for an outer count. It preserves grouping,
+// HAVING, DISTINCT, joins, and predicates; when keepPaging is false it drops
+// ordering and pagination because they do not affect the complete count.
+func (b SelectBuilder) QueryForCount(keepPaging bool) (query.Select, error) {
+	copy := b.clone()
+	if !keepPaging || (!copy.hasLimit && !copy.hasOffset) {
+		copy.orders = nil
+	}
+	if !keepPaging {
+		copy.hasLimit = false
+		copy.hasOffset = false
+	}
+	return copy.Query()
 }
 
 // BuildCount validates b and returns a parameterized statement that counts the

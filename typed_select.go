@@ -8,6 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -27,8 +28,10 @@ func SelectFrom[T any](table ReadTable[T]) TypedSelectBuilder[T] {
 		columns[index] = column.Name
 	}
 	return TypedSelectBuilder[T]{
-		builder:    render.SelectFrom(nil, reference).Select(columns...),
-		staticScan: true,
+		builder:           render.SelectFrom(nil, reference).Select(columns...),
+		staticScan:        true,
+		resultColumns:     tableResultColumns(definition.Columns),
+		resultMetadataSet: true,
 	}
 }
 
@@ -78,13 +81,16 @@ func LeftJoin[T any](table ReadTable[T], on query.Expression) query.Join {
 // handle and no dialect, so one builder can be assembled once and run against a
 // DB and a transaction started from it alike.
 type TypedSelectBuilder[T any] struct {
-	builder render.SelectBuilder
+	builder           render.SelectBuilder
+	resultColumns     []query.ResultColumn
+	resultMetadataSet bool
 	// limit and hasLimit shadow the same state inside builder, which render
 	// keeps unexported with no getter. All reads them for a collection
 	// capacity. Limit is the only method that sets a limit; a second one would
 	// have to set these too.
-	limit    int
-	hasLimit bool
+	limit     int
+	hasLimit  bool
+	hasOffset bool
 	// err holds the first error this package rejects a builder with.
 	// render.SelectBuilder carries an error of its own but exposes no way to
 	// set one, so a nil table or an empty IN list is held here and checked by
@@ -97,15 +103,19 @@ type TypedSelectBuilder[T any] struct {
 
 // Project adds projections created through the basic query API.
 func (b TypedSelectBuilder[T]) Project(projections ...query.Projection) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Project(projections...)
 	if len(projections) > 0 {
 		b.staticScan = false
+		b.resultColumns = nil
+		b.resultMetadataSet = false
 	}
 	return b
 }
 
 // Join adds joins created through the basic query API.
 func (b TypedSelectBuilder[T]) Join(joins ...query.Join) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Join(joins...)
 	return b
 }
@@ -114,6 +124,7 @@ func (b TypedSelectBuilder[T]) Join(joins ...query.Join) TypedSelectBuilder[T] {
 // Repeated calls combine with AND in the order they were made. Use one call
 // with query.Or for a top-level OR.
 func (b TypedSelectBuilder[T]) Where(expression query.Expression) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Where(expression)
 	return b
 }
@@ -122,6 +133,7 @@ func (b TypedSelectBuilder[T]) Where(expression query.Expression) TypedSelectBui
 // Repeated calls combine with AND in the order they were made, including calls to Where.
 // Build and Query reject a column whose table is not part of the statement.
 func (b TypedSelectBuilder[T]) WhereEqual(column query.ColumnRef, value any) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Where(query.Equal(column, value))
 	return b
 }
@@ -131,6 +143,7 @@ func (b TypedSelectBuilder[T]) WhereEqual(column query.ColumnRef, value any) Typ
 // Where and WhereEqual. Build, Query, All, and One reject an empty value list,
 // and reject a column whose table is not part of the statement.
 func (b TypedSelectBuilder[T]) WhereIn(column query.ColumnRef, values ...any) TypedSelectBuilder[T] {
+	b = b.clone()
 	if len(values) == 0 {
 		return b.withError(fmt.Errorf("rasql: IN requires at least one value"))
 	}
@@ -141,6 +154,7 @@ func (b TypedSelectBuilder[T]) WhereIn(column query.ColumnRef, values ...any) Ty
 // GroupBy adds grouping expressions created through the basic query API.
 // Repeated calls append in the order they were made.
 func (b TypedSelectBuilder[T]) GroupBy(expressions ...query.Expression) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.GroupBy(expressions...)
 	return b
 }
@@ -149,24 +163,28 @@ func (b TypedSelectBuilder[T]) GroupBy(expressions ...query.Expression) TypedSel
 // Repeated calls combine with AND in the order they were made, exactly as Where
 // does. Use one call with query.Or for a top-level OR.
 func (b TypedSelectBuilder[T]) Having(expression query.Expression) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Having(expression)
 	return b
 }
 
 // Order adds ordering created through the basic query API.
 func (b TypedSelectBuilder[T]) Order(orders ...query.Order) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Order(orders...)
 	return b
 }
 
 // OrderAsc adds ascending ordering for column.
 func (b TypedSelectBuilder[T]) OrderAsc(column query.ColumnRef) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Order(query.Asc(column))
 	return b
 }
 
 // OrderDesc adds descending ordering for column.
 func (b TypedSelectBuilder[T]) OrderDesc(column query.ColumnRef) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Order(query.Desc(column))
 	return b
 }
@@ -176,12 +194,14 @@ func (b TypedSelectBuilder[T]) OrderDesc(column query.ColumnRef) TypedSelectBuil
 // so Distinct is meaningful mainly beside a narrowed projection: DecodeFrom
 // with Project, or dynamic.SelectBuilder's Select with specific column names.
 func (b TypedSelectBuilder[T]) Distinct() TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Distinct()
 	return b
 }
 
 // Limit sets the maximum number of result rows.
 func (b TypedSelectBuilder[T]) Limit(limit int) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Limit(limit)
 	b.limit = limit
 	b.hasLimit = true
@@ -190,7 +210,9 @@ func (b TypedSelectBuilder[T]) Limit(limit int) TypedSelectBuilder[T] {
 
 // Offset sets the number of result rows to skip.
 func (b TypedSelectBuilder[T]) Offset(offset int) TypedSelectBuilder[T] {
+	b = b.clone()
 	b.builder = b.builder.Offset(offset)
+	b.hasOffset = true
 	return b
 }
 
@@ -209,7 +231,43 @@ func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (stmt.Statement, error) 
 	if b.err != nil {
 		return stmt.Statement{}, b.err
 	}
-	return b.builder.WithDialect(d).Build()
+	statement, err := b.Select()
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	if b.resultMetadataSet {
+		if _, err := query.ResultOf(statement, b.resultColumns...); err != nil {
+			return stmt.Statement{}, err
+		}
+	}
+	return render.Select(d, statement)
+}
+
+func (b TypedSelectBuilder[T]) Select() (query.Select, error) {
+	if b.err != nil {
+		return query.Select{}, b.err
+	}
+	return b.builder.Query()
+}
+
+func (b TypedSelectBuilder[T]) Result(columns ...query.ResultColumn) (query.ResultQuery, error) {
+	statement, err := b.Select()
+	if err != nil {
+		return query.ResultQuery{}, err
+	}
+	if len(columns) == 0 && b.resultMetadataSet {
+		columns = b.resultColumns
+	}
+	return query.ResultOf(statement, columns...)
+}
+
+func RebindResult[R any, T any](b TypedSelectBuilder[T], columns []query.ResultColumn, projections ...query.Projection) TypedSelectBuilder[R] {
+	copy := b.clone()
+	copy.builder = copy.builder.ReplaceProject(projections...)
+	copy.resultColumns = cloneResultColumns(columns)
+	copy.resultMetadataSet = true
+	copy.staticScan = false
+	return TypedSelectBuilder[R]{builder: copy.builder, resultColumns: copy.resultColumns, resultMetadataSet: true, limit: copy.limit, hasLimit: copy.hasLimit, hasOffset: copy.hasOffset, err: copy.err, staticScan: false}
 }
 
 // Query returns a rangeable sequence that decodes each result row as T.
@@ -253,7 +311,7 @@ func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) 
 	if b.err != nil {
 		return 0, b.err
 	}
-	s, err := b.builder.WithDialect(db.Dialect()).BuildCount()
+	s, err := b.countStatement(db.Dialect(), false)
 	if err != nil {
 		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
@@ -268,6 +326,79 @@ func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) 
 		return 0, err
 	}
 	return counted.Count, nil
+}
+
+// CountPage counts rows retained by the current page.
+func (b TypedSelectBuilder[T]) CountPage(ctx context.Context, db DB) (int64, error) {
+	if err := db.Validate(); err != nil {
+		return 0, err
+	}
+	if b.err != nil {
+		return 0, b.err
+	}
+	s, err := b.countStatement(db.Dialect(), true)
+	if err != nil {
+		return 0, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	counted, err := exactlyOne(scanTypedRenderedStatic[countRow](ctx, db, s))
+	if err != nil {
+		return 0, err
+	}
+	return counted.Count, nil
+}
+
+func (b TypedSelectBuilder[T]) countStatement(d dialect.Dialect, keepPaging bool) (stmt.Statement, error) {
+	statement, err := b.builder.WithDialect(d).QueryForCount(keepPaging)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	metadata, err := resultMetadata(statement, b.resultColumns, b.resultMetadataSet)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	if _, err := query.ResultOf(statement, metadata...); err != nil {
+		return stmt.Statement{}, err
+	}
+	if !keepPaging && !b.hasLimit && !b.hasOffset && !statement.Distinct() && len(statement.GroupBy()) == 0 && statement.Having() == nil {
+		return b.builder.WithDialect(d).BuildCount()
+	}
+	result, err := query.ResultOf(statement, metadata...)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	relation, err := query.Derived(result, "count_source")
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	outer, err := query.NewSelect(relation, query.CountAll().As("count"))
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return render.Select(d, outer)
+}
+
+func resultMetadata(statement query.Select, supplied []query.ResultColumn, suppliedSet bool) ([]query.ResultColumn, error) {
+	if suppliedSet {
+		return cloneResultColumns(supplied), nil
+	}
+	projections := statement.Projections()
+	metadata := make([]query.ResultColumn, len(projections))
+	for i, projection := range projections {
+		column, ok := projection.(query.ColumnRef)
+		if !ok {
+			return nil, fmt.Errorf("count requires result metadata for projection %d; call Result or RebindResult", i)
+		}
+		for _, candidate := range column.Source().Columns() {
+			if candidate.Name == column.Name() {
+				metadata[i] = query.ResultColumn{Name: column.Name(), Type: candidate.Type, Nullable: candidate.Nullable}
+				break
+			}
+		}
+		if metadata[i].Type == nil {
+			return nil, fmt.Errorf("count cannot derive metadata for projection %q; call Result or RebindResult", column.Name())
+		}
+	}
+	return metadata, nil
 }
 
 // One returns exactly one row from Query.
@@ -297,6 +428,28 @@ func (b TypedSelectBuilder[T]) withError(err error) TypedSelectBuilder[T] {
 		b.err = err
 	}
 	return b
+}
+
+func (b TypedSelectBuilder[T]) clone() TypedSelectBuilder[T] {
+	b.resultColumns = cloneResultColumns(b.resultColumns)
+	return b
+}
+
+func cloneResultColumns(columns []query.ResultColumn) []query.ResultColumn {
+	result := make([]query.ResultColumn, len(columns))
+	for i, column := range columns {
+		result[i] = column
+		result[i].Type = schema.CloneColumnType(column.Type)
+	}
+	return result
+}
+
+func tableResultColumns(columns []schema.ColumnDef) []query.ResultColumn {
+	result := make([]query.ResultColumn, len(columns))
+	for i, column := range columns {
+		result[i] = query.ResultColumn{Name: column.Name, Type: schema.CloneColumnType(column.Type), Nullable: column.Nullable}
+	}
+	return result
 }
 
 // countRow reads the single value a COUNT(*) statement returns. BuildCount
