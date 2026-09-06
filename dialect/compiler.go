@@ -14,6 +14,7 @@ type Emitter interface {
 
 // Compiler extends the common renderer for a dialect. Returning handled=false
 // from CompileExpression delegates to rasql's built-in expression walker.
+// Emitter.Expression permits child callbacks up to 64 nested compiler calls.
 type Compiler interface {
 	CompilePagination(Emitter, Pagination) error
 	CompileExpression(Emitter, query.Expression) (handled bool, err error)
