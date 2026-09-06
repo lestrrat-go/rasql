@@ -787,7 +787,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 			Default:  text(column.defaultValue),
 			Hidden:   column.hidden == sqliteHiddenModule,
 		}
-		if _, opaque := column.columnType.(schema.OpaqueType); opaque {
+		if _, opaque := column.columnType.(schema.OpaqueType); opaque || sqliteDeclarationNeedsNative(column.databaseType) {
 			columnDef.NativeType = &schema.NativeTypeDef{Dialect: "sqlite", Name: strings.TrimSpace(column.databaseType), Kind: schema.NativeOther}
 		}
 		if column.hidden == sqliteHiddenGeneratedVirtual || column.hidden == sqliteHiddenGeneratedStored {
@@ -859,6 +859,14 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		return schema.TableDef{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
+}
+
+func sqliteDeclarationNeedsNative(declaration string) bool {
+	value := strings.ToUpper(strings.TrimSpace(declaration))
+	if value == "" || value == "BLOB" || value == "INTEGER" || value == "TEXT" || value == "REAL" || value == "BOOLEAN" || value == "JSON" || value == "DATE" || value == "TIME" {
+		return false
+	}
+	return strings.ContainsAny(value, "()") || strings.Contains(value, "UNSIGNED") || value == "INT" || value == "INT2" || value == "INT8" || value == "FLOAT" || value == "DOUBLE" || value == "DOUBLE PRECISION" || value == "CHAR" || value == "CLOB"
 }
 
 type sqliteTableOptions struct {
@@ -2407,7 +2415,9 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			Nullable: strings.EqualFold(nullable, "YES"),
 			Default:  text(defaultValue),
 		}
-		if native, ok := mysqlNativeType(databaseType); ok {
+		if native, ok, err := mysqlNativeType(databaseType); err != nil {
+			return nil, fmt.Errorf("inspect: column %q: %w", name, err)
+		} else if ok {
 			column.NativeType = native
 		}
 		if postgresqlNative {
@@ -2530,7 +2540,8 @@ func postgreSQLNativeColumn(portable schema.ColumnType, databaseType string, pre
 	if typeName.Valid && typeName.String == "numeric" && !precision.Valid {
 		portable = schema.OpaqueType{}
 	}
-	if kind == schema.NativeBuiltin && precision.Valid && !strings.EqualFold(databaseType, "json") && !strings.EqualFold(databaseType, "jsonb") && !strings.Contains(strings.ToLower(databaseType), "timestamp") && !strings.Contains(strings.ToLower(databaseType), "time") && !strings.EqualFold(databaseType, "date") {
+	keepBuiltin := strings.EqualFold(databaseType, "json") || strings.EqualFold(databaseType, "jsonb") || strings.Contains(strings.ToLower(databaseType), "timestamp") || strings.Contains(strings.ToLower(databaseType), "time") || strings.EqualFold(databaseType, "date") || (strings.EqualFold(databaseType, "numeric") && !precision.Valid)
+	if kind == schema.NativeBuiltin && !keepBuiltin {
 		return portable, nil, nil
 	}
 	return portable, native, nil
@@ -2559,7 +2570,7 @@ func postgreSQLBaseType(name string) schema.ColumnType {
 	}
 }
 
-func mysqlNativeType(declaration string) (*schema.NativeTypeDef, bool) {
+func mysqlNativeType(declaration string) (*schema.NativeTypeDef, bool, error) {
 	value := strings.TrimSpace(declaration)
 	upper := strings.ToUpper(value)
 	kind := schema.NativeTypeKind("")
@@ -2569,18 +2580,87 @@ func mysqlNativeType(declaration string) (*schema.NativeTypeDef, bool) {
 	case strings.HasPrefix(upper, "SET("):
 		kind = schema.NativeSet
 	default:
-		return nil, false
+		return nil, false, nil
 	}
 	start := strings.IndexByte(value, '(')
-	end := strings.LastIndexByte(value, ')')
-	if start < 0 || end <= start {
-		return nil, false
+	if start < 0 || !strings.HasSuffix(value, ")") {
+		return nil, false, fmt.Errorf("malformed MySQL native type %q", declaration)
 	}
-	arguments := strings.Split(value[start+1:end], ",")
-	for index := range arguments {
-		arguments[index] = strings.Trim(arguments[index], " `'\"")
+	arguments, err := parseMySQLTypeArguments(value[start+1 : len(value)-1])
+	if err != nil {
+		return nil, false, fmt.Errorf("malformed MySQL native type %q: %w", declaration, err)
 	}
-	return &schema.NativeTypeDef{Dialect: "mysql", Name: strings.ToLower(value[:start]), Kind: kind, Arguments: arguments}, true
+	return &schema.NativeTypeDef{Dialect: "mysql", Name: strings.ToLower(value[:start]), Kind: kind, Arguments: arguments}, true, nil
+}
+
+func parseMySQLTypeArguments(value string) ([]string, error) {
+	arguments := make([]string, 0, 1)
+	for index := 0; index < len(value); {
+		for index < len(value) && (value[index] == ' ' || value[index] == '\t' || value[index] == '\n' || value[index] == '\r') {
+			index++
+		}
+		if index >= len(value) || value[index] != '\'' {
+			return nil, fmt.Errorf("expected quoted label")
+		}
+		index++
+		var builder strings.Builder
+		closed := false
+		for index < len(value) {
+			char := value[index]
+			index++
+			switch char {
+			case '\\':
+				if index >= len(value) {
+					return nil, fmt.Errorf("trailing escape")
+				}
+				escaped := value[index]
+				index++
+				switch escaped {
+				case '0':
+					builder.WriteByte(0)
+				case 'b':
+					builder.WriteByte('\b')
+				case 'n':
+					builder.WriteByte('\n')
+				case 'r':
+					builder.WriteByte('\r')
+				case 't':
+					builder.WriteByte('\t')
+				case 'Z':
+					builder.WriteByte(26)
+				default:
+					builder.WriteByte(escaped)
+				}
+			case '\'':
+				if index < len(value) && value[index] == '\'' {
+					builder.WriteByte('\'')
+					index++
+					continue
+				}
+				closed = true
+			default:
+				builder.WriteByte(char)
+			}
+			if closed {
+				break
+			}
+		}
+		if !closed {
+			return nil, fmt.Errorf("unterminated label")
+		}
+		arguments = append(arguments, builder.String())
+		for index < len(value) && (value[index] == ' ' || value[index] == '\t' || value[index] == '\n' || value[index] == '\r') {
+			index++
+		}
+		if index == len(value) {
+			return arguments, nil
+		}
+		if value[index] != ',' {
+			return nil, fmt.Errorf("expected comma")
+		}
+		index++
+	}
+	return nil, fmt.Errorf("empty argument list")
 }
 
 // postgreSQLGeneratedStorage maps pg_catalog.pg_attribute.attgenerated,
@@ -3379,6 +3459,8 @@ func normalizeType(dialectName string, databaseType string, characterMaximumLeng
 			return schema.JSONType{}, nil
 		case "UUID":
 			return schema.UUIDType{}, nil
+		case "USER-DEFINED":
+			return schema.OpaqueType{}, nil
 		}
 	case "mysql":
 		return normalizeMySQLType(typeName, databaseType)

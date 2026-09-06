@@ -285,6 +285,9 @@ func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, erro
 	switch native.Kind {
 	case schema.NativeOther, schema.NativeBuiltin:
 		if d.name == "sqlite" {
+			if !sqliteNativeDeclarationSupported(native.Name) {
+				return "", false, nil
+			}
 			return native.Name, true, nil
 		}
 		name, err := qualified()
@@ -315,6 +318,7 @@ func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, erro
 		}
 		literals := make([]string, len(native.Arguments))
 		for i, value := range native.Arguments {
+			value = strings.ReplaceAll(value, "\\", "\\\\")
 			literals[i] = "'" + strings.ReplaceAll(value, "'", "''") + "'"
 		}
 		return name + "(" + strings.Join(literals, ", ") + ")", true, nil
@@ -322,6 +326,20 @@ func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, erro
 		name, err := qualified()
 		return name, err == nil, err
 	}
+}
+
+func sqliteNativeDeclarationSupported(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || strings.ContainsRune(" _(),\"'", char) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // unsignedTypeName renders the DDL type for a column that states no negative
