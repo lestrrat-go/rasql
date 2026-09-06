@@ -248,6 +248,23 @@ func TestRunDumpPreviewWritesNothingToDisk(t *testing.T) {
 	require.Contains(t, outputBuffer.String(), `CREATE TABLE "main"."members"`)
 }
 
+func TestRunDumpSchemaOutputWritesPlainSources(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	output := filepath.Join(t.TempDir(), "schema")
+	setCommandOutput(t)
+	require.NoError(t, run([]string{"dump", "-dialect", "sqlite", "-dsn", dsn, "-output", output}))
+	entries, err := os.ReadDir(output)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "main__members.sql", entries[0].Name())
+}
+
 func TestWriteDumpOutputDirectoryHandling(t *testing.T) {
 	files := []dumpFile{{Name: "teams.up.sql", SQL: "CREATE TABLE teams (id INTEGER);\n"}, {Name: "teams.down.sql", SQL: "DROP TABLE teams;\n"}}
 

@@ -7,12 +7,36 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDiffWriteMigrationLoadsExactArtifact(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id BIGINT PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id BIGINT PRIMARY KEY, email VARCHAR(255)); CREATE INDEX members_email_idx ON members (email);")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	root := t.TempDir()
+	require.NoError(t, diff.WriteMigration(filepath.Join(root, "001_add_email"), plan))
+	loaded, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Len(t, loaded[0].Statements, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		require.Equal(t, statement.Source[:len(statement.Source)-4]+".up.sql", loaded[0].Statements[index].Source)
+		require.Equal(t, statement.SQL, string(loaded[0].Statements[index].SQL))
+	}
+	require.Len(t, loaded[0].Down, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		require.Equal(t, statement.Source[:len(statement.Source)-4]+".down.sql", loaded[0].Down[len(plan.Statements)-index-1].Source)
+		require.Equal(t, statement.ReverseSQL, string(loaded[0].Down[len(plan.Statements)-index-1].SQL))
+	}
+}
 
 func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
 	analyzer := mysql.New()

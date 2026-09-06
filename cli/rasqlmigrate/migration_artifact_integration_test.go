@@ -25,7 +25,7 @@ func TestGeneratedMigrationArtifactRoundTripsLiveEngines(t *testing.T) {
 			baseline := filepath.Join(root, "baseline")
 			target := filepath.Join(root, "target")
 			migrationRoot := filepath.Join(root, "migrations")
-			table := "artifact_" + filenamePart(t.Name())
+			table := "artifact_users"
 			writeTestSchema(t, baseline, "tables/table.sql", fmt.Sprintf("CREATE TABLE %s (id INTEGER PRIMARY KEY);\n", table))
 			writeTestSchema(t, target, "tables/table.sql", fmt.Sprintf("CREATE TABLE %s (id INTEGER PRIMARY KEY, email TEXT);\n", table))
 			directory := filepath.Join(migrationRoot, "001_add_email")
