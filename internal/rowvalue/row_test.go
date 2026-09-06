@@ -190,7 +190,8 @@ func TestAssignDispatchesNULLToScanners(t *testing.T) {
 	})
 
 	t.Run("nil pointer keeps nil semantics", func(t *testing.T) {
-		destination := new(string)
+		value := "stale"
+		destination := &value
 		require.NoError(t, rowvalue.Assign(result, "value", &destination))
 		require.Nil(t, destination)
 	})
