@@ -21,6 +21,14 @@ func TestComposableExpressionsValidatePlacement(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, window.Validate())
 
+	_, err = query.NewSelect(users, query.Project(query.OverWindow(id, query.Window(nil, query.Asc(id)))))
+	require.ErrorContains(t, err, "window-capable")
+	_, err = query.NewSelect(users, query.Project(query.OverWindow(query.Add(id, 1), query.Window(nil, query.Asc(id)))))
+	require.ErrorContains(t, err, "window-capable")
+
+	_, err = query.NewSelect(users, query.Project(query.FilterWhere(query.Add(query.CountAll(), balance), query.GreaterThan(balance, 0))))
+	require.ErrorContains(t, err, "requires a GROUP BY clause")
+
 	_, err = query.NewSelect(users, query.Project(query.SearchedCase(query.When(query.Bind(true), 1))))
 	require.ErrorContains(t, err, "must be a predicate expression")
 
