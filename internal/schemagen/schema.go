@@ -1104,15 +1104,6 @@ type inverseRelationshipCandidate struct {
 	keyType      string
 }
 
-func containsRelationships(tables, allTables []schema.TableDef) bool {
-	for _, table := range tables {
-		if len(relationshipSpecs(table, allTables)) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 func containsRelationshipsWithNames(tables, allTables []schema.TableDef, names *ResolvedNames) bool {
 	for _, table := range tables {
 		if len(relationshipSpecs(table, allTables, names)) > 0 {
@@ -1542,10 +1533,6 @@ func isTimeColumn(column schema.ColumnDef) bool {
 
 func timeScannerTypeName(tableName string) string {
 	return strings.TrimSuffix(descriptorName(tableName), "Table") + "TimeScanner"
-}
-
-func writeTimeScannerLiteral(source *bytes.Buffer, tableName string, destination string) {
-	writeTimeScannerLiteralResolved(source, timeScannerTypeName(tableName), destination)
 }
 
 func writeTimeScannerLiteralResolved(source *bytes.Buffer, scanner string, destination string) {
