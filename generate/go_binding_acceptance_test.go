@@ -45,7 +45,8 @@ func (j NullableJSON) Value() (driver.Value,error) { if !j.Valid { return nil,ni
 
 const bindingConsumerTest = `package generated_test
 import (
- "context"
+	"bytes"
+	"context"
  "database/sql"
  "strings"
  "testing"
@@ -61,7 +62,7 @@ func TestBindingsRoundTrip(t *testing.T) {
  db,err:=rasql.New(dbsql,dialect.SQLite()); if err!=nil { t.Fatal(err) }; ctx:=context.Background()
  if err=rasql.CreateTable(ctx,db,generated.Users()); err!=nil { t.Fatal(err) }; if err=rasql.CreateTable(ctx,db,generated.Orders()); err!=nil { t.Fatal(err) }
  nickname:="Ada"; if _,err=rasql.Insert(ctx,db,generated.Users(),generated.UsersRow{ID:types.UserID("u1"),Nickname:&nickname}); err!=nil { t.Fatal(err) }; if _,err=rasql.Insert(ctx,db,generated.Users(),generated.UsersRow{ID:types.UserID("u2")}); err!=nil { t.Fatal(err) }
- want:=generated.OrdersRow{ID:1,UserID:types.UserID("u1"),OtherID:other.OtherID("o1"),Amount:types.NullableDecimal{Data:"12.50",Valid:true},Payload:types.NullableJSON{Data:` + "`" + `{"ok":true}` + "`" + `,Valid:true}}
+ want:=generated.OrdersRow{ID:1,UserID:types.UserID("u1"),OtherID:other.OtherID("o1"),Amount:types.NullableDecimal{Data:"12.50",Valid:true},Payload:types.NullableJSON{Data:` + "`" + `{"ok":true}` + "`" + `,Valid:true},RawBytes:[]byte{1,2,3}}
  if _,err=rasql.Insert(ctx,db,generated.Orders(),want); err!=nil { t.Fatal(err) }
  nulls:=generated.OrdersRow{ID:2,UserID:types.UserID("u1"),OtherID:other.OtherID("o2"),Amount:types.NullableDecimal{},Payload:types.NullableJSON{}}
  if _,err=rasql.Insert(ctx,db,generated.Orders(),nulls); err!=nil { t.Fatal(err) }
@@ -76,6 +77,8 @@ func TestBindingsRoundTrip(t *testing.T) {
  amountRows,err=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByAmount(types.NullableDecimal{})); if err!=nil { t.Fatal(err) }; if len(amountRows)!=1 || amountRows[0].Amount.Valid { t.Fatalf("NULL amount rows %#v",amountRows) }
  payloadRows,err:=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByPayload(want.Payload)); if err!=nil { t.Fatal(err) }; if len(payloadRows)!=1 || payloadRows[0].Payload!=want.Payload { t.Fatalf("payload rows %#v",payloadRows) }
  payloadRows,err=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByPayload(types.NullableJSON{})); if err!=nil { t.Fatal(err) }; if len(payloadRows)!=1 || payloadRows[0].Payload.Valid { t.Fatalf("NULL payload rows %#v",payloadRows) }
+ bytesRows,err:=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByBytes([]byte{1,2,3})); if err!=nil { t.Fatal(err) }; if len(bytesRows)!=1 || !bytes.Equal(bytesRows[0].RawBytes,want.RawBytes) { t.Fatalf("bytes rows %#v",bytesRows) }
+ bytesRows,err=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByBytes(nil)); if err!=nil { t.Fatal(err) }; if len(bytesRows)!=1 || bytesRows[0].RawBytes!=nil { t.Fatalf("NULL bytes rows %#v",bytesRows) }
  if err=rasql.CreateTable(ctx,db,generated.BadValues()); err!=nil { t.Fatal(err) }; if _,err=dbsql.ExecContext(ctx,"INSERT INTO bad_values (id,value) VALUES (?,?)",1,"bad"); err!=nil { t.Fatal(err) }; _,err=rasql.SelectFrom(generated.BadValues()).One(ctx,db); if err==nil || !strings.Contains(err.Error(), "NoScan") { t.Fatalf("want NoScan scan error, got %v",err) }
 }
 `
@@ -142,6 +145,13 @@ func TestGeneratedGoBindingsRunInSQLiteConsumer(t *testing.T) {
 	payloadSource, err := querygen.GoSourceInDir(dir, payloadCompiled.QueryDef(), "generated", "OrderByPayload", orders)
 	require.NoError(t, err)
 	require.Contains(t, string(payloadSource), "func OrderByPayload(payload types.NullableJSON)")
+	bytesQuery, err := namedsql.Parse("order_by_bytes", `SELECT id, user_id, other_id, amount, payload, raw_bytes FROM orders WHERE raw_bytes IS {{bind "rawBytes" orders.raw_bytes}}`)
+	require.NoError(t, err)
+	bytesCompiled, err := bytesQuery.Compile(dialect.SQLite())
+	require.NoError(t, err)
+	bytesSource, err := querygen.GoSourceInDir(dir, bytesCompiled.QueryDef(), "generated", "OrderByBytes", orders)
+	require.NoError(t, err)
+	require.Contains(t, string(bytesSource), "func OrderByBytes(rawBytes []byte)")
 	packageDir := filepath.Join(dir, "generated")
 	require.NoError(t, os.Mkdir(packageDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "store_gen.go"), storeSource, 0o600))
@@ -150,25 +160,31 @@ func TestGeneratedGoBindingsRunInSQLiteConsumer(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "limit_gen.go"), limitSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "amount_gen.go"), amountSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "payload_gen.go"), payloadSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "bytes_gen.go"), bytesSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "types.go"), []byte(bindingConsumerTypes), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "consumer_test.go"), []byte(bindingConsumerTest), 0o600))
-	invalidConsumer := `package generated_test
-import (
- "testing"
- "example.com/bindings/generated"
-)
-func TestInvalidGeneratedCalls(t *testing.T) {
- _ = generated.UserByNickname("wrong")
- _ = generated.LimitedUsers("wrong")
-}
-`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "invalid_consumer_test.go"), []byte(invalidConsumer), 0o600))
-	invalidCommand := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
-	invalidCommand.Dir = dir
-	invalidOutput, invalidErr := invalidCommand.CombinedOutput()
-	require.Error(t, invalidErr, "invalid consumer unexpectedly compiled:\n%s", invalidOutput)
-	require.Contains(t, string(invalidOutput), "cannot use")
-	require.NoError(t, os.Remove(filepath.Join(dir, "invalid_consumer_test.go")))
+	invalidCases := []struct {
+		name string
+		file string
+		call string
+		want []string
+	}{
+		{name: "nickname", file: "invalid_nickname_test.go", call: `_ = generated.UserByNickname("wrong")`, want: []string{"cannot use", "UserByNickname", "*string"}},
+		{name: "limit", file: "invalid_limit_test.go", call: `_ = generated.LimitedUsers("wrong")`, want: []string{"cannot use", "LimitedUsers", "int"}},
+	}
+	for _, tc := range invalidCases {
+		invalidConsumer := "package generated_test\nimport (\n \"testing\"\n \"example.com/bindings/generated\"\n)\nfunc TestInvalidGeneratedCalls(t *testing.T) {\n " + tc.call + "\n}\n"
+		invalidPath := filepath.Join(dir, tc.file)
+		require.NoError(t, os.WriteFile(invalidPath, []byte(invalidConsumer), 0o600))
+		invalidCommand := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
+		invalidCommand.Dir = dir
+		invalidOutput, invalidErr := invalidCommand.CombinedOutput()
+		require.Error(t, invalidErr, "%s unexpectedly compiled:\n%s", tc.name, invalidOutput)
+		for _, want := range tc.want {
+			require.Contains(t, string(invalidOutput), want, "%s diagnostic", tc.name)
+		}
+		require.NoError(t, os.Remove(invalidPath))
+	}
 	command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "./...")
 	command.Dir = dir
 	output, err := command.CombinedOutput()
@@ -178,7 +194,7 @@ func TestInvalidGeneratedCalls(t *testing.T) {
 func bindingTables() (schema.TableDef, schema.TableDef, schema.TableDef) {
 	userID := &schema.GoBinding{Type: "types.UserID", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "types"}}}
 	otherID := &schema.GoBinding{Type: "types.OtherID", Imports: []schema.GoImport{{Path: "example.com/other/v2", Name: "types"}}}
-	orders := schema.TableDef{Name: "orders", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.TextType{}, GoBinding: userID}, {Name: "other_id", Type: schema.TextType{}, GoBinding: otherID}, {Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}, Nullable: true, GoBinding: &schema.GoBinding{Type: "types.Decimal", NullableType: "types.NullableDecimal", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "types"}}}}, {Name: "payload", Type: schema.JSONType{}, Nullable: true, GoBinding: &schema.GoBinding{Type: "types.JSONValue", NullableType: "types.NullableJSON", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "types"}}}}}, ForeignKeys: []schema.ForeignKeyDef{{Name: "orders_user_fk", Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}, Relationships: []schema.RelationshipDef{{Name: "user", Kind: schema.RelationshipBelongsTo, Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}}
+	orders := schema.TableDef{Name: "orders", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.TextType{}, GoBinding: userID}, {Name: "other_id", Type: schema.TextType{}, GoBinding: otherID}, {Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}, Nullable: true, GoBinding: &schema.GoBinding{Type: "types.Decimal", NullableType: "types.NullableDecimal", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "types"}}}}, {Name: "payload", Type: schema.JSONType{}, Nullable: true, GoBinding: &schema.GoBinding{Type: "types.JSONValue", NullableType: "types.NullableJSON", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "types"}}}}, {Name: "raw_bytes", Type: schema.BytesType{}, Nullable: true}}, ForeignKeys: []schema.ForeignKeyDef{{Name: "orders_user_fk", Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}, Relationships: []schema.RelationshipDef{{Name: "user", Kind: schema.RelationshipBelongsTo, Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}}
 	users := schema.TableDef{Name: "users", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.TextType{}, GoBinding: userID}, {Name: "nickname", Type: schema.TextType{}, Nullable: true}}}
 	bad := schema.TableDef{Name: "bad_values", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.TextType{}, Nullable: true, GoBinding: &schema.GoBinding{Type: "NoScan", NullableType: "NoScan"}}}}
 	return users, orders, bad
