@@ -2545,6 +2545,14 @@ func postgreSQLNativeColumn(portable schema.ColumnType, databaseType string, pre
 		native = &schema.NativeTypeDef{Dialect: "postgresql", Schema: elementSchema.String, Name: elementName.String, Kind: schema.NativeArray, Element: element}
 		portable = schema.OpaqueType{}
 	}
+	if strings.EqualFold(databaseType, "ARRAY") && native.Kind != schema.NativeArray {
+		elementNameValue := strings.TrimPrefix(udtName.String, "_")
+		if elementNameValue == "" {
+			return nil, nil, fmt.Errorf("postgresql array element identity is incomplete")
+		}
+		native = &schema.NativeTypeDef{Dialect: "postgresql", Schema: udtSchema.String, Name: elementNameValue, Kind: schema.NativeArray, Element: makeNative(elementNameValue, udtSchema.String, schema.NativeOther)}
+		portable = schema.OpaqueType{}
+	}
 	if typeName.Valid && typeName.String == "numeric" && !precision.Valid {
 		portable = schema.OpaqueType{}
 	}
