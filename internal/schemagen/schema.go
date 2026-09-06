@@ -725,6 +725,8 @@ func validateVariableNames(tables []schema.TableDef) error {
 func validateMutationMethods(table schema.TableDef) error {
 	createMethods := map[string]string{"Plan": "Plan"}
 	patchMethods := map[string]string{"Where": "Where"}
+	createBuilder := mutationPrefix(table) + "Create"
+	patchBuilder := mutationPrefix(table) + "Patch"
 	primary := make(map[string]struct{}, len(table.PrimaryKey))
 	for _, name := range table.PrimaryKey {
 		primary[name] = struct{}{}
@@ -743,14 +745,14 @@ func validateMutationMethods(table schema.TableDef) error {
 		}
 		for _, name := range createNames {
 			if owner, exists := createMethods[name]; exists {
-				return fmt.Errorf("generate: column %q on table %q collides with create method %q from %q", column.Name, table.Name, name, owner)
+				return fmt.Errorf("generate: column %q on table %q collides with create method %q on builder %q from %q", column.Name, table.Name, name, createBuilder, owner)
 			}
 			createMethods[name] = column.Name
 		}
 		if column.Nullable {
 			name := "Clear" + method
 			if owner, exists := createMethods[name]; exists {
-				return fmt.Errorf("generate: column %q on table %q collides with create method %q from %q", column.Name, table.Name, name, owner)
+				return fmt.Errorf("generate: column %q on table %q collides with create method %q on builder %q from %q", column.Name, table.Name, name, createBuilder, owner)
 			}
 			createMethods[name] = column.Name
 		}
@@ -763,14 +765,14 @@ func validateMutationMethods(table schema.TableDef) error {
 		}
 		for _, name := range patchNames {
 			if owner, exists := patchMethods[name]; exists {
-				return fmt.Errorf("generate: column %q on table %q collides with patch method %q from %q", column.Name, table.Name, name, owner)
+				return fmt.Errorf("generate: column %q on table %q collides with patch method %q on builder %q from %q", column.Name, table.Name, name, patchBuilder, owner)
 			}
 			patchMethods[name] = column.Name
 		}
 		if column.Nullable {
 			name := "Clear" + method
 			if owner, exists := patchMethods[name]; exists {
-				return fmt.Errorf("generate: column %q on table %q collides with patch method %q from %q", column.Name, table.Name, name, owner)
+				return fmt.Errorf("generate: column %q on table %q collides with patch method %q on builder %q from %q", column.Name, table.Name, name, patchBuilder, owner)
 			}
 			patchMethods[name] = column.Name
 		}

@@ -1172,6 +1172,7 @@ func TestSchemaRejectsPatchOnlyMutationMethodCollision(t *testing.T) {
 	// predicate method. This fixture therefore reaches the patch validator.
 	err := schemagen.Validate("generated", table)
 	require.ErrorContains(t, err, `column "where" on table "items" collides with patch method "Where"`)
+	require.ErrorContains(t, err, `on builder "ItemsPatch"`)
 	require.ErrorContains(t, err, `from "Where"`)
 }
 
