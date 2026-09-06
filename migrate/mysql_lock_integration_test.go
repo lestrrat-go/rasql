@@ -4,6 +4,7 @@ package migrate_test
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -23,12 +24,27 @@ func TestMySQLLockReleasedAfterCancellation(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := runner.Apply(ctx, migrate.AllPending(), migrate.Migration{
-			ID: "001_cancellation_probe",
+			ID:         "001_cancellation_probe",
 			Statements: []migrate.Statement{{Source: "001.sql", SQL: sqltext.Text("SELECT SLEEP(10)")}},
 		})
 		done <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
+	pollCtx, stopPolling := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopPolling()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var owner sql.NullInt64
+		require.NoError(t, database.QueryRowContext(pollCtx, "SELECT IS_USED_LOCK(?)", "rasql_schema_migrations").Scan(&owner))
+		if owner.Valid {
+			break
+		}
+		select {
+		case <-pollCtx.Done():
+			require.FailNow(t, "timed out waiting for migration lock ownership")
+		case <-ticker.C:
+		}
+	}
 	cancel()
 	err = <-done
 	require.Error(t, err)
