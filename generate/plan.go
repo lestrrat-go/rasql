@@ -2,6 +2,7 @@ package generate
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"go/build"
@@ -98,6 +99,7 @@ func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 type Plan struct {
 	files   []File
 	orphans []string
+	inputs  []queryInputSnapshot
 	// dir is the store's resolved output directory: the directory every
 	// File.Path is a direct child of. It is empty only for the zero Plan,
 	// which is what Commit checks to tell the two apart.
@@ -280,6 +282,9 @@ func (p Plan) Commit() error {
 	if p.dir == "" {
 		return errors.New("generate: zero Plan cannot be committed; only Store.Plan builds a Plan that Commit can act on")
 	}
+	if err := validateStoreInputs(p.inputs, p.root); err != nil {
+		return err
+	}
 
 	// Step 1: resolve and authorize everything; write nothing.
 	dir, err := openPlannedDirectory(p.anchor, p.anchorInfo, p.dir, true)
@@ -456,6 +461,19 @@ func (p Plan) Commit() error {
 // else does.
 var ErrStale = errors.New("generate: generated package is stale")
 
+func validateStoreInputs(inputs []queryInputSnapshot, root string) error {
+	for _, input := range inputs {
+		data, err := readQueryInput(input.path)
+		if err != nil {
+			return fmt.Errorf("generate: query input %s changed after Store.Plan: %w; rerun Store.Plan", formatCheckPath(root, input.path), err)
+		}
+		if sha256.Sum256(data) != input.digest {
+			return fmt.Errorf("generate: query input %s changed after Store.Plan; rerun Store.Plan", formatCheckPath(root, input.path))
+		}
+	}
+	return nil
+}
+
 // Check compares the plan with what is on disk, without writing anything.
 //
 // It returns nil exactly when Commit would write no file and delete no
@@ -501,6 +519,9 @@ var ErrStale = errors.New("generate: generated package is stale")
 // read-only counterpart to make: it guards a deletion Check never performs,
 // and the marker it re-reads is the one Check already read here.
 func (p Plan) Check() error {
+	if err := validateStoreInputs(p.inputs, p.root); err != nil {
+		return err
+	}
 	if p.dir == "" {
 		return errors.New("generate: zero Plan cannot be checked; only Store.Plan builds a Plan that Check can act on")
 	}

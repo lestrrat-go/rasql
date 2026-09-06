@@ -2,6 +2,7 @@ package generate
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"go/token"
@@ -305,6 +306,7 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	}
 
 	files := make([]File, 0, len(sorted)+2+len(s.Queries))
+	inputs := make(map[string]queryInputData, len(s.Queries))
 	for _, table := range sorted {
 		source, err := schemagen.TableSurfaceSourceInDir(dir, s.Package, table, sorted...)
 		if err != nil {
@@ -326,7 +328,7 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorTestFilename), Source: descriptorTestSource})
 
 	for index, q := range s.Queries {
-		file, err := s.planQuery(ctx, root, dir, q, sorted, filenames, identifiers)
+		file, err := s.planQuery(ctx, root, dir, q, sorted, filenames, identifiers, inputs)
 		if err != nil {
 			return Plan{}, fmt.Errorf("generate: query[%d]: %w", index, err)
 		}
@@ -403,7 +405,12 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 		}
 	}
 
-	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
+	inputSnapshots := make([]queryInputSnapshot, 0, len(inputs))
+	for _, input := range inputs {
+		inputSnapshots = append(inputSnapshots, input.snapshot)
+	}
+	sort.Slice(inputSnapshots, func(i, j int) bool { return inputSnapshots[i].path < inputSnapshots[j].path })
+	return Plan{files: files, orphans: orphans, inputs: inputSnapshots, dir: dir, prune: s.Prune, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans the store and commits the plan: it is Plan followed by
@@ -438,7 +445,7 @@ func (s Store) Check() error {
 // both once they pass, so a later query is checked against them too. tables
 // is the hint-applied, validated, name-sorted set the generated package
 // declares; a bind that names a column resolves against it.
-func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string) (File, error) {
+func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string, inputs map[string]queryInputData) (File, error) {
 	if q.Input == "" && q.SQL == "" {
 		return File{}, errors.New("input or sql is required")
 	}
@@ -507,11 +514,16 @@ func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables 
 		if err != nil {
 			return File{}, fmt.Errorf("resolve Input: %w", err)
 		}
-		data, err := readQueryInput(inputPath)
-		if err != nil {
-			return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
+		input, exists := inputs[inputPath]
+		if !exists {
+			data, err := readQueryInput(inputPath)
+			if err != nil {
+				return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
+			}
+			input = queryInputData{snapshot: queryInputSnapshot{path: inputPath, digest: sha256.Sum256(data)}, data: data}
+			inputs[inputPath] = input
 		}
-		text = string(data)
+		text = string(input.data)
 	}
 	parsed, err := namedsql.Parse(q.Function, text)
 	if err != nil {

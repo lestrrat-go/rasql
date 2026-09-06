@@ -123,3 +123,20 @@ func TestResultDescriptionSnapshotsRequestAndReturnedSlices(t *testing.T) {
 	require.Equal(t, "int64", expected.Columns[0].Binding.Type)
 	require.NotContains(t, string(plan.Files()[0].Source), "mutated-result")
 }
+
+func TestStorePlanContextChecksQueryInputFreshnessBeforePublication(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/store\n\ngo 1.26\n"), 0o644))
+	input := filepath.Join(root, "report.sql")
+	require.NoError(t, os.WriteFile(input, []byte("SELECT 1"), 0o644))
+	store := generate.Store{Package: "store", Root: root, Dir: filepath.Join(root, "generated"), Dialect: dialect.SQLite(), Tables: []schema.TableDef{{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}}, Queries: []generate.Query{{Function: "Report", Output: "report_gen.go", Input: input}}}
+	plan, err := store.PlanContext(t.Context())
+	require.NoError(t, err)
+	before := plan.Files()
+	require.NotEmpty(t, before)
+	require.NoError(t, os.WriteFile(input, []byte("SELECT 2"), 0o644))
+	require.Error(t, plan.Check())
+	require.Error(t, plan.Commit())
+	_, err = os.Stat(filepath.Join(root, "generated"))
+	require.Error(t, err)
+}
