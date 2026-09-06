@@ -48,16 +48,19 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 	if err := r.ensureHistory(ctx, connection); err != nil {
 		return nil, err
 	}
-	if err := r.ensureProgress(ctx, connection); err != nil {
-		return nil, err
-	}
-	progress, err := r.progress(ctx, connection)
-	if err != nil {
-		return nil, err
-	}
-	if progress != nil {
-		if err := r.validateProgress(progress, prepared); err != nil {
+	var progress *progressEntry
+	if r.dialect.Name() == "mysql" {
+		if err := r.ensureProgress(ctx, connection); err != nil {
 			return nil, err
+		}
+		progress, err = r.progress(ctx, connection)
+		if err != nil {
+			return nil, err
+		}
+		if progress != nil {
+			if err := r.validateProgress(progress, prepared); err != nil {
+				return nil, err
+			}
 		}
 	}
 	applied, err := r.applied(ctx, connection)
