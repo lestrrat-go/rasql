@@ -141,6 +141,7 @@ func TestTypedPredicatesMatchDynamicSQLAndArgs(t *testing.T) {
 		{"is null", query.TypedIsNull(nickname), query.IsNull(nickname.Ref())},
 		{"is not null", query.TypedIsNotNull(nickname), query.IsNotNull(nickname.Ref())},
 		{"logical", query.AndPredicates(query.EqualValue(id, int64(3)), query.TypedIsNotNull(nickname)), query.And(query.Equal(id.Ref(), int64(3)), query.IsNotNull(nickname.Ref()))},
+		{"or", query.OrPredicates(query.EqualValue(id, int64(3)), query.TypedIsNull(nickname)), query.Or(query.Equal(id.Ref(), int64(3)), query.IsNull(nickname.Ref()))},
 		{"not", query.NotPredicate(query.EqualValue(id, int64(3))), query.Negate(query.Equal(id.Ref(), int64(3)))},
 	}
 	for _, tc := range cases {
@@ -165,6 +166,12 @@ func TestTypedPredicatesMatchDynamicSQLAndArgs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, dynamicStatement.SQL(), typedStatement.SQL())
 	require.Equal(t, dynamicStatement.Args(), typedStatement.Args())
+	typedInner, err := TypedSelectFrom(table).Join(query.TypedInnerJoin(aliased.Ref(), query.EqualColumns(id, otherID))).Build(dialect.SQLite())
+	require.NoError(t, err)
+	dynamicInner, err := SelectFrom(table).Join(query.InnerJoin(aliased.Ref(), query.Equal(id.Ref(), otherID.Ref()))).Build(dialect.SQLite())
+	require.NoError(t, err)
+	require.Equal(t, dynamicInner.SQL(), typedInner.SQL())
+	require.Equal(t, dynamicInner.Args(), typedInner.Args())
 }
 
 func TestSafeSelectBuilderForwardsErrorsAndZeroValues(t *testing.T) {
@@ -200,8 +207,17 @@ func TestSafeSelectBuilderForwardsErrorsAndZeroValues(t *testing.T) {
 		{"count", func() error { _, err := invalid.Count(context.Background(), db); return err }},
 		{"count page", func() error { _, err := invalid.CountPage(context.Background(), db); return err }},
 	}
+	var expected error
 	for _, terminal := range terminals {
-		t.Run(terminal.name, func(t *testing.T) { require.Error(t, terminal.call()) })
+		t.Run(terminal.name, func(t *testing.T) {
+			got := terminal.call()
+			require.Error(t, got)
+			if expected == nil {
+				expected = got
+				return
+			}
+			require.ErrorIs(t, got, expected)
+		})
 	}
 
 	forwarders := []struct {
