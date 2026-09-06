@@ -134,6 +134,9 @@ func (n *ResolvedNames) validateCollisions(tables []schema.TableDef) error {
 		owners[name] = owner
 		return nil
 	}
+	for _, fixed := range []string{"Tables", "TestRasqlgenGeneratedDefinitionsAreValid"} {
+		owners[fixed] = "fixed generated declaration " + fixed
+	}
 	for _, table := range tables {
 		object, _ := n.Object(table)
 		identity := physicalIdentity(object.Identity)
@@ -149,6 +152,7 @@ func (n *ResolvedNames) validateCollisions(tables []schema.TableDef) error {
 		}
 		methods := map[string]struct{}{"As": {}, "Column": {}, "ColumnValue": {}, "Ref": {}, "ScanDestinations": {}, "ScanRow": {}, "Table": {}, "tableRow": {}}
 		fields := make(map[string]string)
+		accessors := make(map[string]string)
 		for _, column := range table.Columns {
 			resolved, _ := n.Column(table, column.Name)
 			if _, reserved := methods[resolved.Accessor]; reserved {
@@ -158,6 +162,19 @@ func (n *ResolvedNames) validateCollisions(tables []schema.TableDef) error {
 				return fmt.Errorf("generate: final field %q on %s collides between columns %q and %q", resolved.Field, identity, previous, column.Name)
 			}
 			fields[resolved.Field] = column.Name
+			if previous, exists := accessors[resolved.Accessor]; exists {
+				return fmt.Errorf("generate: final accessor %q on %s collides between columns %q and %q", resolved.Accessor, identity, previous, column.Name)
+			}
+			accessors[resolved.Accessor] = column.Name
+		}
+		for _, relationship := range relationshipSpecs(table, tables, n) {
+			if err := claim(relationship.typeName, identity+" relationship "+relationship.method); err != nil {
+				return err
+			}
+			if previous, exists := accessors[relationship.method]; exists {
+				return fmt.Errorf("generate: final relationship method %q on %s collides with column %q", relationship.method, identity, previous)
+			}
+			accessors[relationship.method] = "relationship " + relationship.method
 		}
 	}
 	files := make(map[string]string)
@@ -195,6 +212,43 @@ func (n *ResolvedNames) Column(table schema.TableDef, physical string) (Resolved
 func (n *ResolvedNames) Filename(table schema.TableDef) string {
 	value, _ := n.Object(table)
 	return value.FileBase + "_gen.go"
+}
+
+func (n *ResolvedNames) validateCoverage(tables, allTables []schema.TableDef) error {
+	known := make(map[schema.ObjectName]schema.TableDef, len(allTables))
+	for _, table := range allTables {
+		known[table.ObjectName()] = table
+	}
+	for _, table := range tables {
+		if _, ok := n.Object(table); !ok {
+			return fmt.Errorf("generate: resolved names missing table %s", physicalIdentity(table.ObjectName()))
+		}
+		for _, column := range table.Columns {
+			if _, ok := n.Column(table, column.Name); !ok {
+				return fmt.Errorf("generate: resolved names missing column %s.%q", physicalIdentity(table.ObjectName()), column.Name)
+			}
+		}
+		for _, relationship := range table.Relationships {
+			target, ok := known[schema.ObjectName{Schema: relationship.ReferencedSchema, Name: relationship.ReferencedTable}]
+			if !ok {
+				continue
+			}
+			if _, ok := n.Object(target); !ok {
+				return fmt.Errorf("generate: resolved names missing relationship target %s", physicalIdentity(target.ObjectName()))
+			}
+			for _, column := range relationship.Columns {
+				if _, ok := n.Column(table, column); !ok {
+					return fmt.Errorf("generate: resolved names missing relationship column %s.%q", physicalIdentity(table.ObjectName()), column)
+				}
+			}
+			for _, column := range relationship.ReferencedColumns {
+				if _, ok := n.Column(target, column); !ok {
+					return fmt.Errorf("generate: resolved names missing relationship target column %s.%q", physicalIdentity(target.ObjectName()), column)
+				}
+			}
+		}
+	}
+	return nil
 }
 func (n *ResolvedNames) PackageLevelNames() []string { return append([]string(nil), n.packageNames...) }
 func (n *ResolvedNames) collectPackageNames() []string {
