@@ -64,9 +64,8 @@ type DB struct {
 // Handle. New opens no connection and starts no transaction.
 //
 // A DB built from a *sql.Tx is a transaction: its Commit and Rollback finish
-// that transaction, and its Begin reports an error rather than nesting. That
-// is how an application already holding a *sql.Tx hands it to this package
-// without a second type.
+// that transaction, and its Begin reports an error rather than nesting. Use
+// Atomic when work must compose inside an existing transaction.
 //
 // Optional hooks and observers observe every statement run through the returned
 // DB and, unless narrowed or extended by WithHooks, WithObservers, or by Begin's
@@ -159,7 +158,8 @@ func (db DB) Handle() Handle {
 //
 // The handle must be able to start a transaction. *sql.DB and *sql.Conn can;
 // *sql.Tx cannot, so Begin on a DB that is already a transaction reports an
-// error rather than quietly opening a savepoint.
+// error rather than quietly opening a savepoint. Atomic uses a savepoint for
+// that case.
 //
 // The returned DB inherits db's hooks, with hooks appended after them, the
 // same way WithHooks appends rather than replaces. A hook registered on db
