@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"reflect"
@@ -16,7 +17,67 @@ import (
 func TestTypedRows(t *testing.T) {
 	t.Run("reports a closed column read", testScanTypedRowsReportsAClosedColumnRead)
 	t.Run("closes rows on every path", testScanTypedRowsClosesRowsOnEveryPath)
+	t.Run("keeps dynamic scanner state independent", testScanTypedRowsKeepsDynamicScannerStateIndependent)
+	t.Run("keeps static scanner state independent", testScanTypedRowsKeepsStaticScannerStateIndependent)
+	t.Run("validates dynamic mapping for empty results", testScanTypedRowsValidatesEmptyResultMapping)
 	t.Run("preallocates within the byte budget", testPreallocCapacity)
+}
+
+func testScanTypedRowsKeepsDynamicScannerStateIndependent(t *testing.T) {
+	rows := openCloseCountingRows(t, "rasql-typed-rows-dynamic-ownership", &closeCountingDriver{
+		columns: []string{"payload"},
+		rows:    [][]driver.Value{{"abc"}, {"def"}},
+		closes:  new(int),
+	})
+
+	collected := make([]dynamicScannerRow, 0, 2)
+	for result, err := range scanTypedRows[dynamicScannerRow](rows) {
+		require.NoError(t, err)
+		collected = append(collected, result)
+	}
+	require.Len(t, collected, 2)
+	require.Equal(t, "abc", string(collected[0].Payload.bytes))
+	require.Equal(t, "def", string(collected[1].Payload.bytes))
+
+	collected[0].Payload.bytes[0] = 'x'
+	require.Equal(t, "def", string(collected[1].Payload.bytes))
+}
+
+func testScanTypedRowsKeepsStaticScannerStateIndependent(t *testing.T) {
+	rows := openCloseCountingRows(t, "rasql-typed-rows-static-ownership", &closeCountingDriver{
+		columns: []string{"payload"},
+		rows:    [][]driver.Value{{"abc"}, {"def"}},
+		closes:  new(int),
+	})
+
+	collected := make([]staticScannerRow, 0, 2)
+	for result, err := range scanTypedRowsStatic[staticScannerRow](rows) {
+		require.NoError(t, err)
+		collected = append(collected, result)
+	}
+	require.Len(t, collected, 2)
+	require.Equal(t, "abc", string(collected[0].Payload.bytes))
+	require.Equal(t, "def", string(collected[1].Payload.bytes))
+
+	collected[0].Payload.bytes[0] = 'x'
+	require.Equal(t, "def", string(collected[1].Payload.bytes))
+}
+
+func testScanTypedRowsValidatesEmptyResultMapping(t *testing.T) {
+	closes := 0
+	rows := openCloseCountingRows(t, "rasql-typed-rows-empty-mapping", &closeCountingDriver{
+		columns: []string{"payload"},
+		closes:  &closes,
+	})
+
+	yielded := 0
+	for _, err := range scanTypedRows[closeCountingErrRow](rows) {
+		yielded++
+		require.ErrorIs(t, err, errScanDestinations)
+		require.ErrorContains(t, err, "rasql: configure result scan")
+	}
+	require.Equal(t, 1, yielded)
+	require.Equal(t, 1, closes)
 }
 
 // testScanTypedRowsReportsAClosedColumnRead documents the branch that yields
@@ -173,6 +234,43 @@ type closeCountingErrRow struct{}
 
 func (*closeCountingErrRow) ScanDestinations([]string) ([]any, error) {
 	return nil, errScanDestinations
+}
+
+type reusableScanner struct {
+	bytes []byte
+}
+
+func (s *reusableScanner) Scan(value any) error {
+	switch value := value.(type) {
+	case nil:
+		s.bytes = s.bytes[:0]
+	case string:
+		s.bytes = append(s.bytes[:0], value...)
+	case []byte:
+		s.bytes = append(s.bytes[:0], value...)
+	default:
+		return fmt.Errorf("unsupported scanner value %T", value)
+	}
+	return nil
+}
+
+type dynamicScannerRow struct {
+	Payload reusableScanner
+}
+
+func (r *dynamicScannerRow) ScanDestinations(columns []string) ([]any, error) {
+	if len(columns) != 1 || columns[0] != "payload" {
+		return nil, fmt.Errorf("unexpected result columns %q", columns)
+	}
+	return []any{&r.Payload}, nil
+}
+
+type staticScannerRow struct {
+	Payload reusableScanner
+}
+
+func (r *staticScannerRow) ScanRow(source ScanSource) error {
+	return source.Scan(&r.Payload)
 }
 
 // closeCountingDriver is a test-only database/sql driver, distinct from
