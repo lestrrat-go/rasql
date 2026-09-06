@@ -228,6 +228,11 @@ func applyDumpGuards(ctx context.Context, transaction *sql.Tx, d dialect.Dialect
 				if fact.Identity && !fact.hasDefaultIdentitySequence() {
 					return nil, fmt.Errorf("dump: table %q column %q is an identity column with a non-default sequence (start %s, increment %s, minimum %s, maximum %s, cycle %s), which render would silently drop since it only emits a bare GENERATED ... AS IDENTITY clause; rewrite the sequence to bigint's own defaults, or dump the other tables with -table", table.Name, fact.Name, fact.IdentityStart.String, fact.IdentityIncrement.String, fact.IdentityMinimum.String, fact.IdentityMaximum.String, fact.IdentityCycle.String)
 				}
+				if fact.Sequence != nil && !fact.Identity {
+					if eligible, reason := eligibleForBigSerialRewrite(table, fact); !eligible {
+						return nil, fmt.Errorf("dump: table %q column %q sequence %q is not eligible for BIGSERIAL rewriting: %s", table.Name, fact.Name, fact.Sequence.Schema+"."+fact.Sequence.Name, reason)
+					}
+				}
 			}
 			if violation, bad := firstTypeViolation(table, facts, dumpPostgreSQLTypeAllowed); bad {
 				violations = append(violations, violation)
@@ -312,6 +317,18 @@ type dumpColumnFact struct {
 	IdentityMinimum   sql.NullString
 	IdentityMaximum   sql.NullString
 	IdentityCycle     sql.NullString
+	Sequence          *dumpSequenceFact
+}
+
+type dumpSequenceFact struct {
+	Schema, Name        string
+	OwnedByColumn       bool
+	SequenceReferences  int64
+	ReferencingDefaults int64
+	Start, Increment    int64
+	Minimum, Maximum    int64
+	Cache               int64
+	Cycle               bool
 }
 
 // hasDefaultIdentitySequence reports whether f's identity sequence facts
@@ -327,6 +344,42 @@ func (f dumpColumnFact) hasDefaultIdentitySequence() bool {
 		f.IdentityCycle.String == "NO"
 }
 
+func eligibleForBigSerialRewrite(table schema.TableDef, fact dumpColumnFact) (bool, string) {
+	if fact.Sequence == nil {
+		return false, "the default does not resolve to a sequence"
+	}
+	sequence := fact.Sequence
+	if !sequence.OwnedByColumn {
+		return false, "the sequence is not owned by this column"
+	}
+	if sequence.SequenceReferences != 1 {
+		return false, fmt.Sprintf("the default references %d sequences", sequence.SequenceReferences)
+	}
+	if sequence.ReferencingDefaults != 1 {
+		return false, fmt.Sprintf("the sequence has %d column defaults", sequence.ReferencingDefaults)
+	}
+	if sequence.Start != 1 || sequence.Increment != 1 || sequence.Minimum != 1 || sequence.Maximum != 9223372036854775807 || sequence.Cache != 1 || sequence.Cycle {
+		return false, "the sequence settings are not PostgreSQL's BIGINT serial defaults"
+	}
+	for _, column := range table.Columns {
+		if column.Name != fact.Name {
+			continue
+		}
+		expected := table.Name + "_" + column.Name + "_seq"
+		if len(expected) > 63 {
+			return false, "the generated sequence name would be truncated"
+		}
+		if sequence.Name != expected {
+			return false, fmt.Sprintf("the sequence name is %q, want %q", sequence.Name, expected)
+		}
+		if table.Schema != "" && sequence.Schema != table.Schema {
+			return false, fmt.Sprintf("the sequence is in schema %q, want %q", sequence.Schema, table.Schema)
+		}
+		return true, ""
+	}
+	return false, "the sequence column is not present in the table descriptor"
+}
+
 // fetchPostgreSQLColumnFacts reads tableName's columns' data_type, identity
 // status, and identity sequence facts in one round trip -- the same query
 // section 4.2 always needed, extended to also carry the declared type the
@@ -336,7 +389,30 @@ func (f dumpColumnFact) hasDefaultIdentitySequence() bool {
 func fetchPostgreSQLColumnFacts(ctx context.Context, transaction *sql.Tx, tableName string) ([]dumpColumnFact, error) {
 	rows, err := runWithHardDeadline(ctx, func() (*sql.Rows, error) {
 		return transaction.QueryContext(ctx,
-			`SELECT column_name, data_type, is_identity, identity_start, identity_increment, identity_minimum, identity_maximum, identity_cycle FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1`,
+			`SELECT c.column_name, c.data_type, c.is_identity, c.identity_start, c.identity_increment, c.identity_minimum, c.identity_maximum, c.identity_cycle,
+				ds.sequence_schema, ds.sequence_name, ds.owned_by_column, ds.sequence_references, ds.referencing_defaults,
+				ds.sequence_start, ds.sequence_increment, ds.sequence_minimum, ds.sequence_maximum, ds.sequence_cache, ds.sequence_cycle
+			 FROM information_schema.columns c
+			 JOIN pg_namespace n ON n.nspname = c.table_schema
+			 JOIN pg_class rel ON rel.relname = c.table_name AND rel.relnamespace = n.oid
+			 JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attname = c.column_name AND NOT a.attisdropped
+			 LEFT JOIN LATERAL (
+				SELECT seqns.nspname AS sequence_schema, seq.relname AS sequence_name, refs.sequence_references,
+					EXISTS (SELECT 1 FROM pg_depend own WHERE own.classid = 'pg_class'::regclass AND own.objid = seq.oid AND own.refclassid = 'pg_class'::regclass AND own.refobjid = rel.oid AND own.refobjsubid = a.attnum AND own.deptype = 'a') AS owned_by_column,
+					(SELECT count(DISTINCT ad2.oid) FROM pg_attrdef ad2 JOIN pg_depend dep2 ON dep2.classid = 'pg_attrdef'::regclass AND dep2.objid = ad2.oid AND dep2.refclassid = 'pg_class'::regclass AND dep2.deptype = 'n' WHERE dep2.refobjid = seq.oid) AS referencing_defaults,
+					ps.seqstart AS sequence_start, ps.seqincrement AS sequence_increment, ps.seqmin AS sequence_minimum, ps.seqmax AS sequence_maximum, ps.seqcache AS sequence_cache, ps.seqcycle AS sequence_cycle
+				FROM (
+					SELECT count(DISTINCT dep.refobjid) AS sequence_references, min(dep.refobjid) AS sequence_oid
+					FROM pg_attrdef ad
+					JOIN pg_depend dep ON dep.classid = 'pg_attrdef'::regclass AND dep.objid = ad.oid AND dep.refclassid = 'pg_class'::regclass AND dep.deptype = 'n'
+					JOIN pg_class referenced ON referenced.oid = dep.refobjid AND referenced.relkind = 'S'
+					WHERE ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+				) refs
+				JOIN pg_class seq ON seq.oid = refs.sequence_oid
+				JOIN pg_namespace seqns ON seqns.oid = seq.relnamespace
+				JOIN pg_sequence ps ON ps.seqrelid = seq.oid
+			) ds ON true
+			 WHERE c.table_schema = current_schema() AND c.table_name = $1`,
 			tableName)
 	})
 	if err != nil {
@@ -347,10 +423,13 @@ func fetchPostgreSQLColumnFacts(ctx context.Context, transaction *sql.Tx, tableN
 	for rows.Next() {
 		var name, declaredType, isIdentity string
 		var identityStart, identityIncrement, identityMinimum, identityMaximum, identityCycle sql.NullString
-		if err := rows.Scan(&name, &declaredType, &isIdentity, &identityStart, &identityIncrement, &identityMinimum, &identityMaximum, &identityCycle); err != nil {
+		var sequenceSchema, sequenceName sql.NullString
+		var ownedByColumn, sequenceCycle sql.NullBool
+		var sequenceReferences, referencingDefaults, sequenceStart, sequenceIncrement, sequenceMinimum, sequenceMaximum, sequenceCache sql.NullInt64
+		if err := rows.Scan(&name, &declaredType, &isIdentity, &identityStart, &identityIncrement, &identityMinimum, &identityMaximum, &identityCycle, &sequenceSchema, &sequenceName, &ownedByColumn, &sequenceReferences, &referencingDefaults, &sequenceStart, &sequenceIncrement, &sequenceMinimum, &sequenceMaximum, &sequenceCache, &sequenceCycle); err != nil {
 			return nil, fmt.Errorf("dump: read columns for table %q: %w", tableName, err)
 		}
-		facts = append(facts, dumpColumnFact{
+		fact := dumpColumnFact{
 			Name:              name,
 			DeclaredType:      declaredType,
 			Identity:          isIdentity == "YES",
@@ -359,7 +438,11 @@ func fetchPostgreSQLColumnFacts(ctx context.Context, transaction *sql.Tx, tableN
 			IdentityMinimum:   identityMinimum,
 			IdentityMaximum:   identityMaximum,
 			IdentityCycle:     identityCycle,
-		})
+		}
+		if sequenceName.Valid {
+			fact.Sequence = &dumpSequenceFact{Schema: sequenceSchema.String, Name: sequenceName.String, OwnedByColumn: ownedByColumn.Bool, SequenceReferences: sequenceReferences.Int64, ReferencingDefaults: referencingDefaults.Int64, Start: sequenceStart.Int64, Increment: sequenceIncrement.Int64, Minimum: sequenceMinimum.Int64, Maximum: sequenceMaximum.Int64, Cache: sequenceCache.Int64, Cycle: sequenceCycle.Bool}
+		}
+		facts = append(facts, fact)
 	}
 	return facts, rows.Err()
 }

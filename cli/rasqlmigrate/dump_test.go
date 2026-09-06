@@ -467,6 +467,29 @@ func TestDumpColumnFactHasDefaultIdentitySequence(t *testing.T) {
 	}
 }
 
+func TestEligibleForBigSerialRewrite(t *testing.T) {
+	table := schema.TableDef{Name: "teams", Schema: "public", Columns: []schema.ColumnDef{{Name: "id"}}}
+	canonical := dumpColumnFact{Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", OwnedByColumn: true, SequenceReferences: 1, ReferencingDefaults: 1, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}}
+	eligible, reason := eligibleForBigSerialRewrite(table, canonical)
+	require.True(t, eligible)
+	require.Empty(t, reason)
+
+	cases := map[string]dumpColumnFact{
+		"ambiguous": {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", OwnedByColumn: true, SequenceReferences: 2, ReferencingDefaults: 1, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+		"shared":    {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", OwnedByColumn: true, SequenceReferences: 1, ReferencingDefaults: 2, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+		"unowned":   {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", SequenceReferences: 1, ReferencingDefaults: 1, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+		"custom":    {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", OwnedByColumn: true, SequenceReferences: 1, ReferencingDefaults: 1, Start: 10, Increment: 5, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+		"renamed":   {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "renamed_sequence", OwnedByColumn: true, SequenceReferences: 1, ReferencingDefaults: 1, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+	}
+	for name, fact := range cases {
+		t.Run(name, func(t *testing.T) {
+			eligible, reason := eligibleForBigSerialRewrite(table, fact)
+			require.False(t, eligible)
+			require.NotEmpty(t, reason)
+		})
+	}
+}
+
 func TestFirstTypeViolationAndTypeGateError(t *testing.T) {
 	teams := schema.TableDef{
 		Name: "teams",
