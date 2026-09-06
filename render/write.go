@@ -82,18 +82,42 @@ func Write(d dialect.Dialect, s query.WriteStatement) (stmt.Statement, error) {
 	switch s := s.(type) {
 	case query.Insert:
 		return Insert(d, s)
+	case *query.Insert:
+		if s == nil {
+			return nilWriteStatementError()
+		}
+		return Insert(d, *s)
 	case query.Update:
 		return Update(d, s)
+	case *query.Update:
+		if s == nil {
+			return nilWriteStatementError()
+		}
+		return Update(d, *s)
 	case query.Delete:
 		return Delete(d, s)
+	case *query.Delete:
+		if s == nil {
+			return nilWriteStatementError()
+		}
+		return Delete(d, *s)
 	case query.Upsert:
 		return Upsert(d, s)
+	case *query.Upsert:
+		if s == nil {
+			return nilWriteStatementError()
+		}
+		return Upsert(d, *s)
 	default:
 		if s == nil {
-			return stmt.Statement{}, &Error{Err: fmt.Errorf("write statement must not be nil")}
+			return nilWriteStatementError()
 		}
 		return stmt.Statement{}, &Error{Err: fmt.Errorf("unsupported write statement %T", s)}
 	}
+}
+
+func nilWriteStatementError() (stmt.Statement, error) {
+	return stmt.Statement{}, &Error{Err: errors.New("write statement must not be nil")}
 }
 
 func (r *renderer) writeInsert(s query.Insert) error {
