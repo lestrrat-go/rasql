@@ -186,10 +186,6 @@ type expressionContext struct {
 	// allowsExcluded reports whether an upsert conflict-update expression may
 	// read the incoming row through EXCLUDED.
 	allowsExcluded bool
-	// rejectsExcluded reports the conflict-target predicate context, where
-	// EXCLUDED has no SQL meaning even though other write clauses defer that
-	// check to rendering.
-	rejectsExcluded bool
 }
 
 // clauseContext returns a context for a clause that must not call an aggregate.
@@ -316,7 +312,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
 	case ExcludedColumn:
-		if ctx.rejectsExcluded {
+		if !ctx.allowsExcluded {
 			return expressionUsage{}, validationError(path, "EXCLUDED is only valid in an upsert conflict-update expression")
 		}
 		if err := expression.column.source.validate(); err != nil {

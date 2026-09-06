@@ -68,3 +68,19 @@ func TestUpsertConditionalPredicatesValidate(t *testing.T) {
 	_, err = noAssignments.WithUpdateWhere(query.Equal(id, 1))
 	require.ErrorContains(t, err, "requires assignments")
 }
+
+func TestExcludedRejectedOutsideUpsertAction(t *testing.T) {
+	table, err := query.NewTableRef(schema.MustTableDef("items", schema.Integer("id"), schema.Integer("version")))
+	require.NoError(t, err)
+	id, version := table.Column("id"), table.Column("version")
+	selectStatement, err := query.NewSelect(table, id)
+	require.NoError(t, err)
+	_, err = selectStatement.WithWhere(query.Equal(id, query.Excluded(id)))
+	require.ErrorContains(t, err, "EXCLUDED")
+	update, err := query.NewUpdate(table, query.Set(version, 1))
+	require.NoError(t, err)
+	_, err = update.WithWhere(query.Equal(id, query.Excluded(id)))
+	require.ErrorContains(t, err, "EXCLUDED")
+	_, err = query.NewInsert(table, query.Set(id, query.Excluded(id)), query.Set(version, 1))
+	require.ErrorContains(t, err, "EXCLUDED")
+}

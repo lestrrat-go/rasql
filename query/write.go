@@ -160,7 +160,6 @@ func (s Upsert) Validate() error {
 	}
 	if s.conflictWhere != nil {
 		ctx := clauseContext(sources, "a conflict target predicate")
-		ctx.rejectsExcluded = true
 		if _, err := validateExpression(s.conflictWhere, ctx, "conflict_where"); err != nil {
 			return err
 		}

@@ -1058,21 +1058,14 @@ func TestSQLiteUpsertExecutesNestedExcludedColumn(t *testing.T) {
 	require.Equal(t, "grace@example.com", actual)
 }
 
-// TestUpdateRejectsExcludedColumnOutsideUpsertAssignment proves the scope of
-// the renderer fix above: validation admits ExcludedColumn wherever its
-// source table is in scope, which includes an UPDATE's own WHERE clause, but
-// EXCLUDED means nothing there. writeExcludedColumn refuses it with a named
-// error instead of falling through to the generic "unsupported expression"
-// message the same shape reported before this change added a case for it.
+// TestUpdateRejectsExcludedColumnOutsideUpsertAssignment proves that query
+// validation refuses EXCLUDED outside an upsert conflict-update action.
 func TestUpdateRejectsExcludedColumnOutsideUpsertAssignment(t *testing.T) {
 	users, id, email := writeTable(t)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
-	update, err = update.WithWhere(query.Equal(id, query.Excluded(id)))
-	require.NoError(t, err)
-
-	_, err = render.Update(dialect.SQLite(), update)
-	require.ErrorContains(t, err, `references the excluded column "id" outside an upsert conflict-update assignment`)
+	_, err = update.WithWhere(query.Equal(id, query.Excluded(id)))
+	require.ErrorContains(t, err, "EXCLUDED")
 }
 
 func TestSQLiteMultiRowInsertExecutes(t *testing.T) {
