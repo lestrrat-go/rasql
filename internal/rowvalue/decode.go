@@ -61,29 +61,12 @@ func Assign[T any](r Row, name string, destination *T) error {
 // such as a missing column, that a field reached earlier in declaration order
 // would have reported first under the old, per-row walk.
 func Decode[T any](r Row) (T, error) {
-	var result T
-	plan := planFor(reflect.TypeFor[T]())
-	if plan.err != nil {
-		return result, plan.err
+	decoder, err := NewDecoder[T]()
+	if err != nil {
+		var zero T
+		return zero, err
 	}
-	if !plan.isStruct {
-		return result, fmt.Errorf("row: decode destination %T must be a struct", result)
-	}
-	if len(plan.fields) == 0 {
-		return result, fmt.Errorf("row: decode destination %T has no exported fields", result)
-	}
-
-	destination := reflect.ValueOf(&result).Elem()
-	for _, field := range plan.fields {
-		value, ok := r.lookup(field.column)
-		if !ok {
-			return result, fmt.Errorf("row: column %q is not present", field.column)
-		}
-		if err := assign(destination.Field(field.index), value); err != nil {
-			return result, fmt.Errorf("row: decode column %q: %w", field.column, err)
-		}
-	}
-	return result, nil
+	return decoder.Decode(r)
 }
 
 // snakeCase derives the column name of an untagged field. It is lossy, so it
