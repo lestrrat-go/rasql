@@ -2,6 +2,7 @@ package generate
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"go/build"
@@ -85,7 +86,9 @@ func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 // the explicit prune choice when Store.Plan builds it. Check and Commit rescan
 // ownership and refuse generated outputs that appear afterwards; call
 // Store.Plan again to decide whether a newly found file should be kept or
-// pruned. The directory itself is the one exception: a plan
+// pruned. File-backed query inputs are applicability guards: changing their
+// bytes after planning makes held Check and Commit refuse, while inline SQL
+// remains a snapshot. The directory itself is the one exception: a plan
 // records the deepest directory on Dir's own path that already existed, and
 // Commit refuses to act when that path no longer names that same directory,
 // since every orphan it would delete was recorded relative to it and every
@@ -98,6 +101,7 @@ func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 type Plan struct {
 	files   []File
 	orphans []string
+	inputs  []queryInputSnapshot
 	// dir is the store's resolved output directory: the directory every
 	// File.Path is a direct child of. It is empty only for the zero Plan,
 	// which is what Commit checks to tell the two apart.
@@ -235,7 +239,8 @@ func (p Plan) Orphans() []string {
 //     directory has changed underneath it. A generated entry gained after
 //     Plan is refused rather than added to the old prune set. When Prune is
 //     false and there is at least one orphan, Commit refuses here, naming every
-//     one of them.
+//     one of them. Recorded query inputs are reread and must retain their
+//     captured bytes before publication begins.
 //  2. Write every per-table file and every query file, in path order.
 //  3. Delete this run's leftovers: every path Orphans reported, in path
 //     order, and only when Prune is set -- otherwise step 1 already
@@ -406,6 +411,9 @@ func (p Plan) Commit() error {
 	if !p.prune && len(p.orphans) > 0 {
 		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write, and Store.Prune is false: %s; set Prune to delete them, or remove them yourself", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
 	}
+	if err := p.validateQueryInputs(); err != nil {
+		return err
+	}
 
 	// The aggregator files are singled out here, once, so steps 2 and 4
 	// below can write in the order Commit's own doc comment promises:
@@ -486,7 +494,7 @@ var ErrStale = errors.New("generate: generated package is stale")
 // marker. It also rescans package ownership and generated entries through
 // that directory before any planned file is compared. Each planned file is
 // then compared through the very directory the matching write would go
-// through, so what Check compares is the file
+// through, and rereads recorded query inputs before comparing bytes, so what Check compares is the file
 // Commit would replace rather than whatever that path reaches on a second
 // resolution.
 //
@@ -625,6 +633,9 @@ func (p Plan) Check() error {
 	if !p.prune && len(p.orphans) > 0 {
 		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write, and Store.Prune is false: %s; set Prune to delete them, or remove them yourself", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
 	}
+	if err := p.validateQueryInputs(); err != nil {
+		return err
+	}
 
 	// Past the refusal checks, every remaining difference is staleness: a
 	// Write right now would change something, but nothing here stops it.
@@ -650,6 +661,19 @@ func (p Plan) Check() error {
 	}
 	sort.Strings(stale)
 	return fmt.Errorf("%w: %s", ErrStale, strings.Join(stale, "; "))
+}
+
+func (p Plan) validateQueryInputs() error {
+	for _, input := range p.inputs {
+		data, err := readQueryInput(input.path)
+		if err != nil {
+			return fmt.Errorf("generate: query input %s changed after Store.Plan: %w; rerun Store.Plan", formatCheckPath(p.root, input.path), err)
+		}
+		if sha256.Sum256(data) != input.digest {
+			return fmt.Errorf("generate: query input %s changed after Store.Plan; rerun Store.Plan", formatCheckPath(p.root, input.path))
+		}
+	}
+	return nil
 }
 
 // formatCheckPath reports path the way Check's error names it: relative to
