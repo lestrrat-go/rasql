@@ -53,3 +53,13 @@ func TestSQLiteDescriberChecksObservedExpectedType(t *testing.T) {
 	_, err = querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "typed", SQL: "SELECT id FROM typed_source", Expected: want})
 	require.ErrorIs(t, err, querydescribe.ErrExpected)
 }
+
+func TestSQLiteDescriberRejectsNormalizedFieldCollision(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), "CREATE TABLE collision(user_id INTEGER, userID INTEGER)")
+	require.NoError(t, err)
+	_, err = querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "collision", SQL: "SELECT user_id, userID FROM collision"})
+	require.ErrorIs(t, err, querydescribe.ErrIncomplete)
+}
