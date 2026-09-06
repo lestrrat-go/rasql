@@ -665,13 +665,31 @@ func (i Inspector) mySQLCheckColumnVisibility(ctx context.Context, tableName str
 		}
 		return false, nil
 	}
-	var returnedTable string
-	var definition string
-	if err := rows.Scan(&returnedTable, &definition); err != nil {
+	columns, err := rows.Columns()
+	if err != nil {
+		return true, &IncompleteMetadataError{Table: tableName, Visible: visible, Reason: fmt.Sprintf("SHOW CREATE TABLE returned unreadable metadata: %v", err)}
+	}
+	values := make([]any, len(columns))
+	destinations := make([]any, len(columns))
+	for index := range values {
+		destinations[index] = &values[index]
+	}
+	if err := rows.Scan(destinations...); err != nil {
 		return true, &IncompleteMetadataError{
 			Table:   tableName,
 			Visible: visible,
 			Reason:  fmt.Sprintf("SHOW CREATE TABLE returned unreadable metadata: %v", err),
+		}
+	}
+	var definition string
+	for index := len(values) - 1; index >= 0; index-- {
+		if value, ok := values[index].([]byte); ok {
+			definition = string(value)
+			break
+		}
+		if value, ok := values[index].(string); ok {
+			definition = value
+			break
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1037,6 +1055,7 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 	table := schema.TableDef{
 		Schema:                      options.database,
 		Name:                        tableName,
+		Kind:                        schema.ObjectTable,
 		Columns:                     columns,
 		PrimaryKey:                  primaryKey,
 		Strict:                      options.strict,

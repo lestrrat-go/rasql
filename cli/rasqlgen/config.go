@@ -68,6 +68,7 @@ type config struct {
 // configTables is the table selection and the Go-side names no database can
 // state.
 type configTables struct {
+	IncludeViews bool `json:"include_views"`
 	// Include names the only tables to generate. Empty sweeps every base
 	// table. It is not accepted together with Exclude.
 	Include []string `json:"include"`

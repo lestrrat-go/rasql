@@ -67,11 +67,23 @@ func MustReadTableOf[T any](definition schema.TableDef) ReadTable[T] {
 
 // TableOf creates a typed table from a validated schema definition.
 func TableOf[T any](definition schema.TableDef) (Table[T], error) {
+	if err := requireWritableDefinition(definition); err != nil {
+		return nil, err
+	}
 	source, err := query.NewTableRef(definition)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table definition: %w", err)
 	}
 	return typedTable[T]{source: source}, nil
+}
+
+func requireWritableDefinition(definition schema.TableDef) error {
+	for _, operation := range []schema.Operation{schema.OperationInsert, schema.OperationUpdate, schema.OperationDelete} {
+		if !definition.Supports(operation) {
+			return fmt.Errorf("rasql: object %q does not support operation %d", definition.QualifiedName(), operation)
+		}
+	}
+	return nil
 }
 
 // MustTableOf creates a typed table or panics when definition is invalid.

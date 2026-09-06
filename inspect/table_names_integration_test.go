@@ -60,7 +60,16 @@ func TestPostgreSQLInspectorReadsViewObjectsAgainstLiveDatabase(t *testing.T) {
 	view, err := inspector.Object(t.Context(), "view_read")
 	require.NoError(t, err)
 	require.Equal(t, schema.ObjectView, view.EffectiveKind())
+	require.Equal(t, schema.OperationRead, view.Operations)
 	require.Equal(t, []string{"id", "name"}, []string{view.Columns[0].Name, view.Columns[1].Name})
+	require.Equal(t, []schema.ColumnType{schema.IntegerType{}, schema.TextType{}}, []schema.ColumnType{view.Columns[0].Type, view.Columns[1].Type})
+	require.True(t, view.Columns[0].Nullable)
+	objects, err := inspector.ObjectNames(t.Context())
+	require.NoError(t, err)
+	require.Contains(t, objects, inspect.ObjectName{Name: "view_read", Kind: schema.ObjectView})
+	rows, err := database.QueryContext(t.Context(), "SELECT id, name FROM view_read")
+	require.NoError(t, err)
+	require.NoError(t, rows.Close())
 }
 
 func TestMySQLInspectorReadsViewObjectsAgainstLiveDatabase(t *testing.T) {
@@ -72,5 +81,15 @@ func TestMySQLInspectorReadsViewObjectsAgainstLiveDatabase(t *testing.T) {
 	view, err := inspector.Object(t.Context(), "view_read")
 	require.NoError(t, err)
 	require.Equal(t, schema.ObjectView, view.EffectiveKind())
+	require.Equal(t, schema.OperationRead, view.Operations)
 	require.Equal(t, []string{"id", "name"}, []string{view.Columns[0].Name, view.Columns[1].Name})
+	require.Equal(t, schema.IntegerType{}, view.Columns[0].Type)
+	require.Equal(t, schema.TextType{}, view.Columns[1].Type)
+	require.True(t, view.Columns[0].Nullable)
+	objects, err := inspector.ObjectNames(t.Context())
+	require.NoError(t, err)
+	require.Contains(t, objects, inspect.ObjectName{Name: "view_read", Kind: schema.ObjectView})
+	rows, err := database.QueryContext(t.Context(), "SELECT id, name FROM view_read")
+	require.NoError(t, err)
+	require.NoError(t, rows.Close())
 }
