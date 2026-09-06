@@ -1,6 +1,6 @@
 # Migrations
 
-`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so resolve any failed partial migration before retrying.
+`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so the runner records progress and blocks uncertain work until it is reconciled.
 
 Run the command outside the application, before it starts. The application then opens a database whose schema is already in place.
 
@@ -46,10 +46,10 @@ Create these directories yourself with `mkdir`. There is no command that scaffol
 - A migration directory holds sources and no subdirectories. Every source ends in `.up.sql` or `.down.sql`. Any other name fails the load, a plain `.sql` included, which is what turns a misspelled `001_add_nickname.dwon.sql` into an error rather than a silent extra forward source.
 - A migration's forward sources run in ascending filename order, with the same byte comparison and the same need for padding.
 - Its reverse sources run in **descending** filename order, so the migration is undone in the reverse of the order it was done.
-- Every migration needs at least one `.up.sql` and at least one `.down.sql`. A migration with no reverse source fails the load, so `apply` refuses it too and a reverse script cannot be missing on the day it is needed. A change that destroys data still writes the reverse that rebuilds the structure, such as re-adding a dropped column without its rows.
-- A migration may hold fewer reverse sources than forward ones. One `DROP TABLE` undoes a create-table plus a create-index without an empty file standing in for the second.
+- Every migration needs at least one `.up.sql` and either matching `.down.sql` sources or a `.rasql-irreversible` marker with a reason. A marked migration applies but cannot be reverted. A change that destroys data still writes the reverse that rebuilds the structure when one is proven safe, such as re-adding a dropped column without its rows.
+- A hand-written migration may hold fewer reverse sources than forward ones. One `DROP TABLE` can undo a create-table plus a create-index without an empty file standing in for the second.
 - Every `.down.sql` must share its stem with a `.up.sql` in the same migration. That is the typo check, and it is the only pairing rule.
-- An entry whose name starts with a dot is ignored, so an editor's swap file does not become a migration.
+- An entry whose name starts with a dot is ignored, except `.rasql-irreversible`, which marks a migration as intentionally irreversible. Other dot files remain ignored, so an editor's swap file does not become a migration.
 - A source file must hold something other than whitespace.
 
 The engine enforces the rest at apply time, against the history table rather than the disk. A migration whose recorded bytes no longer match its forward files fails with a checksum error. A new migration whose name sorts before one that is already applied fails as "recorded after a missing migration", rather than running out of order or being skipped. A recorded migration whose directory has since disappeared fails as "was not supplied".
@@ -105,7 +105,17 @@ rasql migrate verify \
 
 `apply` runs every pending migration, oldest first, and prints one `applied<TAB>ID` line per migration followed by a count. Pass `-to ID` to stop at a chosen migration, which applies `ID` and every pending migration before it and leaves the rest pending. Naming a migration that is already applied applies nothing. Pass `-dry-run` to print the forward SQL the run would execute without running it. That dry run reads the history table, so it prints only what is still pending, while [`plan`](#create-and-review-a-migration) prints every supplied source and never opens a database.
 
-`status` reports `applied`, `pending`, `changed`, `out_of_order`, and `unknown` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
+`status` reports `applied`, `pending`, `changed`, `out_of_order`, `unknown`, and `incomplete` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
+
+If MySQL stops during a migration, `status` shows the source and direction that need review. Use a read-only query returning one non-NULL boolean to reconcile it after checking the database:
+
+```sh
+rasql migrate reconcile \
+  -dir db/migrations -dialect mysql -dsn "$DATABASE_URL" \
+  -id 20240901_add_owner -check 'SELECT EXISTS (SELECT 1 FROM owners WHERE id = 1)'
+```
+
+`true` records the source as executed and `false` removes its pending intent so the source can run later. The command never executes migration SQL or accepts a force outcome.
 
 ## Revert a migration
 
@@ -131,7 +141,7 @@ A reverted migration becomes `pending` again, so `apply` runs it once more. That
 
 The whole run is refused, before any statement runs, when a selected migration's forward sources no longer match their recorded checksum, when `-to` names a migration that is not applied, when `-steps` exceeds the number applied, or when the history disagrees with the supplied migrations. A refused run changes nothing.
 
-PostgreSQL and SQLite revert a migration atomically, so a failed revert leaves the database as it was. MySQL commits DDL implicitly, so a revert that fails partway can leave a schema half undone with the migration still recorded. Resolve that state by hand before running `revert` again. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go`.
+PostgreSQL and SQLite revert a migration atomically, so a failed revert leaves the database as it was. MySQL commits DDL implicitly, so a revert that fails partway retains a progress row and blocks replay until reconciliation. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go`.
 
 ## Generate PostgreSQL, MySQL, and SQLite migrations
 
@@ -251,7 +261,7 @@ rasql migrate dump \
   -output db/migrations/postgresql/001_initial
 ```
 
-That leaves one `.up.sql`/`.down.sql` pair per `CREATE TABLE` statement and one `.up.sql` per `CREATE INDEX` statement, numbered in the same dependency order, with no `.down.sql` for an index step since dropping its table already drops it:
+That leaves one `.up.sql`/`.down.sql` pair per `CREATE TABLE` statement and one `.up.sql`/`.down.sql` pair per generated `CREATE INDEX` statement, numbered in the same dependency order:
 
 ```text
 db/migrations/postgresql/001_initial/
@@ -260,6 +270,7 @@ db/migrations/postgresql/001_initial/
   002_create_members.up.sql
   002_create_members.down.sql
   003_create_index_members_team_id_idx.up.sql
+  003_create_index_members_team_id_idx.down.sql
 ```
 
 `-dialect` and `-dsn` are required. `-table` names a comma-separated list of tables to dump instead of every base table; `-exclude` names tables to skip during a sweep, and is refused together with `-table`. `-history-table` names a migration history table a sweep skips (`rasql_schema_migrations` by default). `-format` is `schema` or `migration` (`schema` by default). `-timeout` bounds the whole run (`30s` by default). Omit `-output` to preview the files a run would write, headed by their own path, without writing anything to disk. The command reads the whole sweep inside one read-only transaction, rolls it back, and redacts the exact DSN from returned errors. `-output` must be missing or empty; a dump never overwrites checked-in DDL, and there is no `-force` flag.

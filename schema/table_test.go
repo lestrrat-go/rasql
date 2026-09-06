@@ -335,6 +335,21 @@ func fillContainerFields(value reflect.Value) {
 	}
 }
 
+func TestColumnCollationJSONAndValidation(t *testing.T) {
+	table := schema.TableDef{Name: "members", Columns: []schema.ColumnDef{{Name: "name", Type: schema.TextType{}, Collation: "NOCASE"}}}
+	encoded, err := json.Marshal(table)
+	require.NoError(t, err)
+	var decoded schema.TableDef
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.Equal(t, table, decoded)
+	hyphenated := table
+	hyphenated.Columns[0].Collation = "bad-name"
+	require.NoError(t, hyphenated.Validate())
+	invalid := table
+	invalid.Columns[0].Collation = "bad\x00name"
+	require.ErrorContains(t, invalid.Validate(), "columns[0].collation")
+}
+
 // requireContainerFieldsUnshared reports a failure for each slice, map or
 // pointer-backed interface field source and clone still share, naming the
 // field's own path through the descriptor. It descends into slice elements

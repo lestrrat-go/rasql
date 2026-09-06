@@ -15,7 +15,7 @@ import (
 func LoadHasMany[Parent, Child any, Key comparable](
 	ctx context.Context,
 	db DB,
-	childTable Table[Child],
+	childTable ReadTable[Child],
 	childKeyColumn query.ColumnRef,
 	parents []Parent,
 	parentKey func(Parent) Key,
@@ -56,7 +56,7 @@ func LoadHasMany[Parent, Child any, Key comparable](
 func LoadBelongsTo[Child, Parent any, Key comparable](
 	ctx context.Context,
 	db DB,
-	parentTable Table[Parent],
+	parentTable ReadTable[Parent],
 	parentKeyColumn query.ColumnRef,
 	children []Child,
 	childKey func(Child) Key,

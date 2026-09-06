@@ -37,3 +37,16 @@ func TestGoRunHelp(t *testing.T) {
 		})
 	}
 }
+
+func TestGoRunRejectsPositionalDSN(t *testing.T) {
+	secret := "auditSyntheticPassword572"
+	dsn := "postgres://tester:" + secret + "@localhost/test"
+	arguments := append([]string{"run", "./cmd/rasqlgen"}, "generate", "--", dsn)
+	command := exec.CommandContext(t.Context(), "go", arguments...)
+	command.Dir = filepath.Join("..", "..")
+	output, err := command.CombinedOutput()
+	require.Error(t, err)
+	require.Contains(t, string(output), "unexpected positional argument; generate accepts flags only")
+	require.NotContains(t, string(output), secret)
+	require.NotContains(t, string(output), dsn)
+}

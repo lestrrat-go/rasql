@@ -264,6 +264,7 @@ func requireSameDecimal(t *testing.T, expected, actual string) {
 func integrationTable(name string) schema.TableDef {
 	return schema.TableDef{
 		Name: name,
+		Kind: schema.ObjectTable,
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "active", Type: schema.BooleanType{}},

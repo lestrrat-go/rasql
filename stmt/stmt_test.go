@@ -1,11 +1,33 @@
 package stmt_test
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStatementArgsIsolatesByteArguments(t *testing.T) {
+	s := stmt.New("SELECT ?", []byte("abc"), sql.Named("payload", []byte("abc")))
+
+	first := s.Args()
+	first[0].([]byte)[0] = 'x'
+	named := first[1].(sql.NamedArg)
+	named.Value.([]byte)[0] = 'x'
+	require.Equal(t, "payload", named.Name)
+	require.Equal(t, []byte("abc"), s.BoundArgs()[0])
+	require.Equal(t, sql.Named("payload", []byte("abc")), s.BoundArgs()[1])
+
+	second := s.Args()
+	second[0].([]byte)[0] = 'y'
+	secondNamed := second[1].(sql.NamedArg)
+	secondNamed.Value.([]byte)[0] = 'y'
+	require.Equal(t, []byte("xbc"), first[0])
+	require.Equal(t, []byte("xbc"), first[1].(sql.NamedArg).Value)
+	require.Equal(t, []byte("abc"), s.BoundArgs()[0])
+	require.Equal(t, sql.Named("payload", []byte("abc")), s.BoundArgs()[1])
+}
 
 // TestStatementBoundArgsAliasesStorage pins the contract that separates
 // BoundArgs from Args: BoundArgs hands out the statement's own arg slice, so

@@ -245,7 +245,7 @@ func TestColumnOf(t *testing.T) {
 
 		column := rasql.ColumnOf(table, "missing")
 		require.Equal(t, "missing", column.Name())
-		require.Equal(t, table.Ref(), column.Source())
+		require.Equal(t, query.Relation(table.Ref()), column.Source())
 
 		_, err = query.NewSelect(table.Ref(), column)
 		require.ErrorContains(t, err, `references unknown column "missing"`)

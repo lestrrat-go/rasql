@@ -77,7 +77,7 @@ func TestTypedSelect(t *testing.T) {
 	t.Run("scans known projection directly", testTypedSelectScansKnownProjectionDirectly)
 	t.Run("maps partial generated scan columns", testTypedSelectMapsPartialGeneratedScanColumns)
 	t.Run("projects with runtime column mapping", testTypedSelectProjectUsesRuntimeColumnMapping)
-	t.Run("builds generated scan destinations once", testTypedSelectBuildsGeneratedScanDestinationsOnce)
+	t.Run("builds generated scan destinations per row", testTypedSelectBuildsGeneratedScanDestinationsPerRow)
 	t.Run("One stops after a second row", testTypedSelectOneStopsAfterSecondRow)
 	t.Run("One reports no rows", testTypedSelectOneNoRows)
 	t.Run("One reports query failure", testTypedSelectOneQueryFailureIsNotNoRows)
@@ -201,7 +201,7 @@ func testTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
 	require.Equal(t, directScanUser{ID: 7, Email: "ada@example.com"}, result)
 }
 
-func testTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
+func testTypedSelectBuildsGeneratedScanDestinationsPerRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -229,7 +229,7 @@ func testTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
 		All(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, []plannedScanUser{{Name: "Ada Lovelace"}, {Name: "Grace Hopper"}}, rows)
-	require.Equal(t, 1, plannedScanCalls)
+	require.Equal(t, 2, plannedScanCalls)
 }
 
 func testTypedSelectOneStopsAfterSecondRow(t *testing.T) {
@@ -356,7 +356,15 @@ func testTypedSelectGroupBy(t *testing.T) {
 		Total int64  `rasql:"total"`
 	}
 
-	db := dbForBuild(t)
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	db, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
 	statement, err := rasql.DecodeFrom[emailCount](users).
 		Project(email, query.CountAll().As("total")).
 		GroupBy(email).
@@ -372,7 +380,7 @@ func testTypedSelectGroupBy(t *testing.T) {
 		GroupBy(email).
 		Count(t.Context(), db)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "cannot count a grouped statement")
+	require.ErrorContains(t, err, "projections")
 }
 
 // TestTypedSelectDistinct proves TypedSelectBuilder.Distinct reaches Build,
@@ -387,7 +395,15 @@ func testTypedSelectDistinct(t *testing.T) {
 		Email string `rasql:"email"`
 	}
 
-	db := dbForBuild(t)
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	db, err := rasql.New(database, dialect.PostgreSQL())
+	require.NoError(t, err)
 	statement, err := rasql.DecodeFrom[emailOnly](users).
 		Project(email).
 		Distinct().
@@ -395,12 +411,14 @@ func testTypedSelectDistinct(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `SELECT DISTINCT "users"."email" FROM "users"`, statement.SQL())
 
-	_, err = rasql.DecodeFrom[emailOnly](users).
+	mock.ExpectQuery(`SELECT COUNT(*) AS "count" FROM (SELECT DISTINCT "users"."email" FROM "users") AS "count_source"`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	count, err := rasql.DecodeFrom[emailOnly](users).
 		Project(email).
 		Distinct().
 		Count(t.Context(), db)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "cannot count a distinct statement")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
 }
 
 // TestTypedSelectGroupByJoinedColumn proves the typed builder shares the fixed

@@ -16,13 +16,15 @@ const defaultHistoryTable = "rasql_schema_migrations"
 // completed migration.
 // Its configuration is immutable, so Apply is safe to invoke concurrently.
 type Runner struct {
-	database     *sql.DB
-	dialect      dialect.Dialect
-	historyTable string
-	historySQL   string
-	idSQL        string
-	checksumSQL  string
-	appliedAtSQL string
+	database      *sql.DB
+	dialect       dialect.Dialect
+	historyTable  string
+	historySQL    string
+	idSQL         string
+	checksumSQL   string
+	appliedAtSQL  string
+	progressTable string
+	progressSQL   string
 }
 
 // New creates a Runner with the default migration-history table.
@@ -46,6 +48,21 @@ func NewWithHistoryTable(database *sql.DB, d dialect.Dialect, historyTable strin
 	default:
 		return Runner{}, fmt.Errorf("migrate: dialect %q is not supported", d.Name())
 	}
+	progressTable := historyTable + "_progress"
+	maxIdentifierLength := 0
+	switch d.Name() {
+	case "postgresql":
+		maxIdentifierLength = 63
+	case "mysql":
+		maxIdentifierLength = 64
+	}
+	if maxIdentifierLength > 0 && len(progressTable) > maxIdentifierLength {
+		return Runner{}, fmt.Errorf("migrate: progress table %q exceeds %d-byte identifier limit", progressTable, maxIdentifierLength)
+	}
+	progressSQL, err := d.QuoteIdentifier(progressTable)
+	if err != nil {
+		return Runner{}, fmt.Errorf("migrate: quote migration progress table: %w", err)
+	}
 	historySQL, err := d.QuoteIdentifier(historyTable)
 	if err != nil {
 		return Runner{}, fmt.Errorf("migrate: quote history table: %w", err)
@@ -63,18 +80,20 @@ func NewWithHistoryTable(database *sql.DB, d dialect.Dialect, historyTable strin
 		return Runner{}, fmt.Errorf("migrate: quote migration applied-at column: %w", err)
 	}
 	return Runner{
-		database:     database,
-		dialect:      d,
-		historyTable: historyTable,
-		historySQL:   historySQL,
-		idSQL:        idSQL,
-		checksumSQL:  checksumSQL,
-		appliedAtSQL: appliedAtSQL,
+		database:      database,
+		dialect:       d,
+		historyTable:  historyTable,
+		historySQL:    historySQL,
+		idSQL:         idSQL,
+		checksumSQL:   checksumSQL,
+		appliedAtSQL:  appliedAtSQL,
+		progressTable: progressTable,
+		progressSQL:   progressSQL,
 	}, nil
 }
 
 func (r Runner) validate() error {
-	if r.database == nil || r.dialect == nil || r.historyTable == "" || r.historySQL == "" || r.idSQL == "" || r.checksumSQL == "" || r.appliedAtSQL == "" {
+	if r.database == nil || r.dialect == nil || r.historyTable == "" || r.historySQL == "" || r.idSQL == "" || r.checksumSQL == "" || r.appliedAtSQL == "" || r.progressSQL == "" {
 		return fmt.Errorf("migrate: invalid runner")
 	}
 	return nil
@@ -168,6 +187,9 @@ func (r Runner) applied(ctx context.Context, queries queryer) (map[string]string
 }
 
 func (r Runner) record(ctx context.Context, executions executor, migration preparedMigration) error {
+	if err := journalWriteHook("history"); err != nil {
+		return err
+	}
 	firstPlaceholder, err := r.dialect.Placeholder(1)
 	if err != nil {
 		return fmt.Errorf("migrate: render migration history insert: %w", err)

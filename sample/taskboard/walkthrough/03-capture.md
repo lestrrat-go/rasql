@@ -58,6 +58,9 @@ DROP TABLE "tasks";
 
 -- 004_create_index_tasks_open_by_project.up.sql
 CREATE INDEX "tasks_open_by_project" ON "tasks" ("project_id", "id") WHERE is_open;
+
+-- 004_create_index_tasks_open_by_project.down.sql
+DROP INDEX "tasks_open_by_project";
 ```
 
 Every decision chapter 2 argued for is in there. `GENERATED ALWAYS AS IDENTITY` survived, `BIGINT` and `TIMESTAMPTZ` are the types the database has, `ON DELETE CASCADE` and `ON DELETE NO ACTION` are each on the key that earned them, `DEFAULT true` and `DEFAULT now()` are intact, and the partial index kept its `WHERE is_open`.
@@ -90,9 +93,10 @@ db/migrations/
     003_create_tasks.up.sql
     003_create_tasks.down.sql
     004_create_index_tasks_open_by_project.up.sql
+    004_create_index_tasks_open_by_project.down.sql
 ```
 
-Seven files for four steps forward. The index has no reverse source of its own, because dropping `tasks` drops the index with it, and [Migrations](../../../docs/core/07-migrations.md#the-rules-a-migration-root-follows) allows a migration to hold fewer reverse sources than forward ones for exactly that reason.
+Eight files for four steps forward. Each generated step has a reverse source, so the migration can be reverted in descending order.
 
 Running the same command a second time changes nothing:
 

@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -123,15 +125,30 @@ func compareSchemaObjects[T any](baseline, target map[string]T, equal func(T, T)
 
 // Plan is a reviewed set of SQL sources generated for one migration.
 type Plan struct {
-	Dialect    string
-	Statements []PlannedStatement
+	Dialect            string
+	Statements         []PlannedStatement
+	IrreversibleReason string
 }
 
 // PlannedStatement is one generated native SQL source file.
 type PlannedStatement struct {
-	Source  string
-	SQL     string
-	Summary string
+	Source     string
+	SQL        string
+	ReverseSQL string
+	Summary    string
+}
+
+// NumberSources prefixes each unnumbered SQL source with its plan ordinal.
+// The shared width keeps lexical source order equal to numeric plan order,
+// including plans that cross the 999-source boundary.
+func NumberSources(statements []PlannedStatement) {
+	if len(statements) == 0 {
+		return
+	}
+	width := max(3, len(strconv.Itoa(len(statements))))
+	for index := range statements {
+		statements[index].Source = fmt.Sprintf("%0*d_%s", width, index+1, statements[index].Source)
+	}
 }
 
 // Empty reports whether a plan contains no generated SQL sources.
@@ -160,6 +177,20 @@ func (p Plan) Validate() error {
 		}
 		sources[statement.Source] = index
 	}
+	if strings.TrimSpace(p.IrreversibleReason) != "" {
+		if strings.TrimSpace(p.IrreversibleReason) != p.IrreversibleReason {
+			return fmt.Errorf("migrate diff: irreversible reason must be trimmed")
+		}
+	} else {
+		for _, statement := range p.Statements {
+			if strings.TrimSpace(statement.ReverseSQL) == "" {
+				return fmt.Errorf("migrate diff: generated SQL source %q has no reverse SQL", statement.Source)
+			}
+			if !utf8.ValidString(statement.ReverseSQL) {
+				return fmt.Errorf("migrate diff: generated SQL source %q has invalid reverse SQL", statement.Source)
+			}
+		}
+	}
 	return nil
 }
 
@@ -186,9 +217,21 @@ func WriteMigration(directory string, p Plan) error {
 		}
 	}()
 	for _, statement := range p.Statements {
-		path := filepath.Join(temporary, statement.Source)
+		path := filepath.Join(temporary, strings.TrimSuffix(statement.Source, ".sql")+".up.sql")
 		if err := os.WriteFile(path, []byte(statement.SQL), 0o600); err != nil {
 			return fmt.Errorf("migrate diff: write generated SQL source %q: %w", statement.Source, err)
+		}
+	}
+	if strings.TrimSpace(p.IrreversibleReason) != "" {
+		if err := os.WriteFile(filepath.Join(temporary, ".rasql-irreversible"), []byte(p.IrreversibleReason+"\n"), 0o600); err != nil {
+			return fmt.Errorf("migrate diff: write irreversibility marker: %w", err)
+		}
+	} else {
+		for _, statement := range p.Statements {
+			path := filepath.Join(temporary, strings.TrimSuffix(statement.Source, ".sql")+".down.sql")
+			if err := os.WriteFile(path, []byte(statement.ReverseSQL), 0o600); err != nil {
+				return fmt.Errorf("migrate diff: write reverse SQL source %q: %w", statement.Source, err)
+			}
 		}
 	}
 	if err := os.Rename(temporary, directory); err != nil {

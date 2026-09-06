@@ -83,7 +83,77 @@ Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is wh
 
 `NewInsert` pairs each column with its value through `query.Set`, the same call `NewUpdate` takes, so the two cannot fall out of step. The rendered column list follows the order the assignments were given in. Passing `query.Defaults()` on its own writes the database default for every column instead. `NewInsertRows` keeps a separate column list because an `INSERT` names its columns once and supplies every row against that one list.
 
+<!-- INCLUDE(examples/query_lock_upsert_example_test.go#conditional_upsert) -->
+```go
+func Example_query_conditionalUpsert() {
+	items := query.MustTableRef(schema.MustTableDef("items", schema.Integer("id"), schema.Integer("version"), schema.Text("payload")))
+	id, version, payload := items.Column("id"), items.Column("version"), items.Column("payload")
+	insert, err := query.NewInsert(items, query.Set(id, 1), query.Set(version, 3), query.Set(payload, "new"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
+		query.Set(version, query.Excluded(version)), query.Set(payload, query.Excluded(payload)),
+	})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithUpdateWhere(query.LessThan(version, query.Excluded(version)))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Upsert(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// INSERT INTO "items" ("id", "version", "payload") VALUES (?, ?, ?) ON CONFLICT ("id") DO UPDATE SET "version" = EXCLUDED."version", "payload" = EXCLUDED."payload" WHERE ("items"."version" < EXCLUDED."version")
+	// 1 3 new
+}
+```
+source: [examples/query_lock_upsert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_lock_upsert_example_test.go)
+<!-- END INCLUDE -->
+
+`Upsert.WithUpdateWhere` applies a version check after the conflict assignments, so an older incoming row leaves newer stored data unchanged.
+
+<!-- INCLUDE(examples/query_expression_example_test.go#trusted_fragments) -->
+```go
+func Example_query_trustedFragments() {
+	accounts := query.MustTableRef(schema.MustTableDef("accounts", schema.Integer("id"), schema.Integer("balance")))
+	fragment := query.TrustedSQL("{} + {}", query.IdentifierHole(query.Ident("balance")), query.Hole(2))
+	statement, err := query.NewSelect(accounts, query.Project(fragment).As("total"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT "balance" + ? AS "total" FROM "accounts"
+	// 2
+}
+```
+source: [examples/query_expression_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_expression_example_test.go)
+<!-- END INCLUDE -->
+
+`query.TrustedSQL` lets an application supply trusted SQL syntax while `query.Hole` still binds values and `query.IdentifierHole` quotes one validated identifier.
+
 `NewInsertRows` names its columns once, takes every row's values as one `[][]any`, binds each plain Go value the way `Set` does, and renders the rows as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
+
+`query.NewInsertSelect` uses a reusable `query.ResultQuery` instead of value rows. Its target columns must match the
+source projection count, and its source arguments render before any `RETURNING` arguments. A result query can also be
+wrapped with `query.Derived` or placed in a CTE before it is used by another statement.
 
 <!-- INCLUDE(examples/rasql_partial_update_example_test.go#partial_update) -->
 ```go
