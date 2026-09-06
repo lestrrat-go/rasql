@@ -62,6 +62,13 @@ type PatchPlan[T any] struct {
 	err    error
 }
 
+type normalizedCreate[T any] struct {
+	table       query.TableRef
+	columns     []query.ColumnRef
+	values      []any
+	defaultOnly bool
+}
+
 func NewCreatePlan[T any](table Table[T], fields ...MutationField[T]) (CreatePlan[T], error) {
 	plan := CreatePlan[T]{table: table, fields: append([]MutationField[T](nil), fields...)}
 	plan.err = validateMutationPlan(table, plan.fields, false, query.Predicate{})
@@ -110,15 +117,26 @@ func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patc
 }
 
 func (p CreatePlan[T]) lower() (query.Insert, error) {
+	lowered, err := p.lowerNormalized()
+	if err != nil {
+		return query.Insert{}, err
+	}
+	if lowered.defaultOnly {
+		return query.NewInsert(lowered.table, query.Defaults())
+	}
+	return query.NewInsertRows(lowered.table, lowered.columns, [][]any{lowered.values})
+}
+
+func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	if p.err != nil {
-		return query.Insert{}, p.err
+		return normalizedCreate[T]{}, p.err
 	}
 	columns := p.table.Ref().Definition().Columns
 	byName := make(map[string]MutationField[T], len(p.fields))
 	for _, field := range p.fields {
 		byName[field.column.Name()] = field
 	}
-	values := make([]query.InsertValues, 0, len(p.fields))
+	lowered := normalizedCreate[T]{table: p.table.Ref()}
 	for _, column := range columns {
 		field, ok := byName[column.Name]
 		if !ok || field.state == mutationDefault {
@@ -126,14 +144,13 @@ func (p CreatePlan[T]) lower() (query.Insert, error) {
 		}
 		value := field.value
 		if field.state == mutationClear {
-			value = query.Bind(nil)
+			value = nil
 		}
-		values = append(values, query.Set(p.table.Ref().Column(column.Name), value))
+		lowered.columns = append(lowered.columns, p.table.Ref().Column(column.Name))
+		lowered.values = append(lowered.values, value)
 	}
-	if len(values) == 0 {
-		values = append(values, query.Defaults())
-	}
-	return query.NewInsert(p.table.Ref(), values...)
+	lowered.defaultOnly = len(lowered.columns) == 0
+	return lowered, nil
 }
 
 func (p PatchPlan[T]) lower() (query.Update, error) {
