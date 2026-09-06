@@ -128,8 +128,8 @@ func ExecBulkCreate[T any](ctx context.Context, db DB, bulk BulkPlan[T], options
 					cleanupFailed := bulkHasCleanupError(callbackErr, callbackMarker)
 					if cleanupFailed {
 						outcome.Failed.Indexes = bulkAttemptedIndexes(outcome)
+						outcome.Failed.Certainty = OutcomeUnknown
 					}
-					outcome.Failed.Certainty = OutcomeUnknown
 					outcome.Failed.Err = callbackErr
 				}
 				outcome.Completed = nil

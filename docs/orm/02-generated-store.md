@@ -580,7 +580,11 @@ first := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastNa
 second := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
 bulk, _ := rasql.NewBulkPlan(first, second)
 outcome, err := rasql.ExecBulkCreate(context.Background(), db, bulk, rasql.BulkOptions{MaxRows: 100})
-fmt.Println(outcome.Completed, err)
+if err != nil {
+	fmt.Println(err)
+	return
+}
+fmt.Println(outcome.Completed)
 ```
 source: [examples/typed_bulk_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/typed_bulk_example_test.go)
 <!-- END INCLUDE -->

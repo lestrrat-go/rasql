@@ -292,7 +292,7 @@ func TestGeneratedCreateBuildersRunThroughBulkSQLite(t *testing.T) {
 	require.Equal(t, []rasql.InputRange{{First: 0, Last: 3}}, outcome.Completed)
 	rows, err := database.Query(`SELECT email, nickname, status FROM users ORDER BY id`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var got []struct {
 		email, status string
 		nickname      *string
@@ -441,6 +441,36 @@ func TestBulkCallerSavepointCleanupFailureMarksAttemptedIndexesUnknown(t *testin
 	require.Equal(t, []int{0}, outcome.Failed.Indexes)
 	require.Equal(t, rasql.OutcomeUnknown, outcome.Failed.Certainty)
 	require.False(t, outcome.Durable)
+	_ = tx.Rollback()
+}
+
+func TestBulkCallerSavepointSuccessPreservesRejectedClassification(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = database.Close() }()
+	mock.ExpectBegin()
+	tx, err := database.Begin()
+	require.NoError(t, err)
+	table, a, _, _ := bulkTestTable()
+	plan, err := rasql.NewCreatePlan(table, rasql.SetField(a, "one"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(plan)
+	require.NoError(t, err)
+	statementErr := fmt.Errorf("rejected statement")
+	mock.ExpectExec("SAVEPOINT").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO").WillReturnError(statementErr)
+	mock.ExpectExec("ROLLBACK TO SAVEPOINT").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("RELEASE SAVEPOINT").WillReturnResult(sqlmock.NewResult(0, 0))
+	db, err := rasql.New(tx, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{
+		Atomic: true, Classifier: fixedBulkClassifier{certainty: rasql.OutcomeRejected},
+	})
+	require.ErrorIs(t, err, statementErr)
+	require.Equal(t, []int{0}, outcome.Failed.Indexes)
+	require.Equal(t, rasql.OutcomeRejected, outcome.Failed.Certainty)
+	require.False(t, outcome.Durable)
+	require.NoError(t, mock.ExpectationsWereMet())
 	_ = tx.Rollback()
 }
 

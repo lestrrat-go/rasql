@@ -17,6 +17,7 @@ func Example_typedBulk() {
 		WithArgs("ada@example.com", "Ada", "Lovelace", "grace@example.com", "Grace", "Hopper").
 		WillReturnResult(sqlmock.NewResult(1, 2))
 	db, _ := rasql.New(database, dialect.SQLite())
+	// BEGIN(typedBulk)
 	first := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 	second := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
 	bulk, _ := rasql.NewBulkPlan(first, second)
@@ -26,5 +27,6 @@ func Example_typedBulk() {
 		return
 	}
 	fmt.Println(outcome.Completed)
+	// END(typedBulk)
 	// Output: [{0 1}]
 }
