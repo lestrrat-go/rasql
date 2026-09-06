@@ -398,7 +398,7 @@ func (r Runner) applyPreparedMySQL(ctx context.Context, connection *sql.Conn, ta
 		if err := r.finalizeProgress(ctx, connection, terminal, migration); err != nil {
 			return exportMigrationsForResult(completed), incompleteError(terminal, fmt.Errorf("finalize progress: %w", err))
 		}
-		completed = append(completed, Migration{ID: migration.id, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
+		completed = append(completed, Migration{ID: migration.id, Mode: migration.mode, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
 	}
 	return exportMigrationsForResult(completed), nil
 }
@@ -462,7 +462,7 @@ func (r Runner) revertPreparedMySQL(ctx context.Context, connection *sql.Conn, t
 		if err := r.finalizeProgress(ctx, connection, terminal, migration); err != nil {
 			return exportMigrationsForResult(completed), incompleteError(terminal, fmt.Errorf("finalize progress: %w", err))
 		}
-		completed = append(completed, Migration{ID: migration.id, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
+		completed = append(completed, Migration{ID: migration.id, Mode: migration.mode, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
 	}
 	return exportMigrationsForResult(completed), nil
 }

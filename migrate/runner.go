@@ -101,6 +101,7 @@ func (r Runner) validate() error {
 
 type preparedMigration struct {
 	id         string
+	mode       ExecutionMode
 	statements []Statement
 	down       []Statement
 	checksum   string
@@ -119,9 +120,10 @@ func prepareMigrations(migrations []Migration) ([]preparedMigration, error) {
 		ids[migration.ID] = struct{}{}
 		prepared[index] = preparedMigration{
 			id:         migration.ID,
+			mode:       migration.Mode,
 			statements: append([]Statement(nil), migration.Statements...),
 			down:       append([]Statement(nil), migration.Down...),
-			checksum:   checksum(migration.Statements),
+			checksum:   checksumMode(migration.Mode, migration.Statements),
 		}
 	}
 	sort.Slice(prepared, func(left, right int) bool {

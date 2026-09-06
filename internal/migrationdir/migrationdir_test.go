@@ -213,6 +213,29 @@ func TestLoadRejectsMalformedIrreversibleArtifacts(t *testing.T) {
 	})
 }
 
+func TestLoadRejectsMalformedExecutionModeArtifacts(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "invalid value", data: []byte("atomic\n"), want: "invalid execution mode"},
+		{name: "invalid utf8", data: []byte{0xff}, want: "invalid execution mode"},
+		{name: "oversized", data: make([]byte, 4097), want: "invalid execution mode"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			directory := filepath.Join(root, "001_mode")
+			require.NoError(t, os.MkdirAll(directory, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(directory, "001_change.up.sql"), []byte("SELECT 1;\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(directory, "001_change.down.sql"), []byte("SELECT 0;\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(directory, ".rasql-mode"), testCase.data, 0o600))
+			_, err := migrationdir.Load(root)
+			require.ErrorContains(t, err, testCase.want)
+		})
+	}
+}
+
 func TestLoadOrdersMigrationsByName(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"010_third", "002_second", "001_first"} {

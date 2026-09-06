@@ -81,8 +81,23 @@ func loadMigration(directory string, id string) (migrate.Migration, error) {
 	upFiles := make([]string, 0)
 	downFiles := make([]string, 0)
 	marker := false
+	mode := migrate.ExecutionModeAtomic
 	stems := make(map[string]struct{})
 	for _, entry := range entries {
+		if entry.Name() == ".rasql-mode" {
+			if entry.IsDir() {
+				return migrate.Migration{}, fmt.Errorf("migration %q execution mode is a directory", id)
+			}
+			data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+			if err != nil {
+				return migrate.Migration{}, fmt.Errorf("read migration %q execution mode: %w", id, err)
+			}
+			if len(data) > 4096 || !utf8.Valid(data) || strings.TrimSpace(string(data)) != "nontransactional" {
+				return migrate.Migration{}, fmt.Errorf("migration %q has an invalid execution mode", id)
+			}
+			mode = migrate.ExecutionModeNonTransactional
+			continue
+		}
 		if entry.Name() == ".rasql-irreversible" {
 			if entry.IsDir() {
 				return migrate.Migration{}, fmt.Errorf("migration %q irreversibility marker is a directory", id)
@@ -127,7 +142,7 @@ func loadMigration(directory string, id string) (migrate.Migration, error) {
 			if err != nil {
 				return migrate.Migration{}, err
 			}
-			migration := migrate.Migration{ID: id, Statements: statements}
+			migration := migrate.Migration{ID: id, Mode: mode, Statements: statements}
 			if err := migration.Validate(); err != nil {
 				return migrate.Migration{}, err
 			}
@@ -157,7 +172,7 @@ func loadMigration(directory string, id string) (migrate.Migration, error) {
 	if err != nil {
 		return migrate.Migration{}, err
 	}
-	migration := migrate.Migration{ID: id, Statements: statements, Down: down}
+	migration := migrate.Migration{ID: id, Mode: mode, Statements: statements, Down: down}
 	if err := migration.Validate(); err != nil {
 		return migrate.Migration{}, err
 	}

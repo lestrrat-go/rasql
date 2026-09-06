@@ -195,6 +195,7 @@ func exportMigrations(selected []preparedMigration) []Migration {
 	for index, migration := range selected {
 		exported[index] = Migration{
 			ID:         migration.id,
+			Mode:       migration.mode,
 			Statements: append([]Statement(nil), migration.statements...),
 			Down:       append([]Statement(nil), migration.down...),
 		}
