@@ -140,11 +140,6 @@ func scanTypedRenderedOwned[T any](ctx context.Context, db DB, s stmt.Statement,
 	}
 }
 
-func scanTypedRenderedWith[T any](ctx context.Context, db DB, s stmt.Statement, scan func(exec.RowSource) iter.Seq2[T, error]) iter.Seq2[T, error] {
-	rows, _ := scanTypedRenderedOwned(ctx, db, s, scan, true)
-	return rows
-}
-
 type rowAccounting interface {
 	RecordRow()
 	Finish(error, bool) error

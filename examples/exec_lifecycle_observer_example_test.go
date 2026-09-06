@@ -36,9 +36,10 @@ func Example_rasql_lifecycle_observer() {
 	events := make([]string, 0, 2)
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, operation rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, completion rasql.Completion) error {
-			if completion.Phase == rasql.ExecutionPhase {
+			switch completion.Phase {
+			case rasql.ExecutionPhase:
 				events = append(events, "execution")
-			} else if completion.Phase == rasql.ConsumptionPhase {
+			case rasql.ConsumptionPhase:
 				events = append(events, fmt.Sprintf("consumption rows=%d", completion.RowsRead))
 			}
 			return nil

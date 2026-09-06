@@ -38,7 +38,7 @@ func TestQueryOwnedCompletesExecutionAndConsumption(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM users").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2))
 	rows, err := db.QueryOwned(t.Context(), stmt.New("SELECT id FROM users"))
 	require.NoError(t, err)
-	defer rows.Finish(nil, true)
+	defer func() { _ = rows.Finish(nil, true) }()
 	var id int
 	require.True(t, rows.Next())
 	require.NoError(t, rows.Scan(&id))
