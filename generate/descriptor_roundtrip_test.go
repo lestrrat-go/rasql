@@ -491,7 +491,7 @@ type descriptorAccessor struct {
 // }". Capturing all three names from the generated source, rather than
 // recomputing rasqlgen's own name-derivation rules a second time here, is
 // what keeps this test honest about what rasqlgen actually named them.
-var descriptorAccessorPattern = regexp.MustCompile(`(?m)^// (\w+) returns a copy of the descriptor for the "([^"]*)" table\.\n^func (\w+)\(\) schema\.TableDef \{ return (\w+)\.Clone\(\) \}$`)
+var descriptorAccessorPattern = regexp.MustCompile(`(?m)^// (\w+) returns a copy of the descriptor for the "([^"]*)" table\.\n^func (\w+)\(\) schema\.TableDef \{\s*return (\w+)\.Clone\(\)\s*\}$`)
 
 // extractDescriptorAccessors returns, for each table schema_gen.go declares,
 // its descriptorAccessor, sorted by table name so the generated files this

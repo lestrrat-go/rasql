@@ -76,7 +76,7 @@ func TestNativeTypePostgreSQL(t *testing.T) {
 	require.Equal(t, "{sad,happy}", moods.Text)
 	require.Equal(t, "12.345", amount.Text)
 	require.Equal(t, `{"k":1}`, payload.Text)
-	require.Equal(t, `{"raw":true}`, payloadBinary.Text)
+	require.Equal(t, `{"raw": true}`, payloadBinary.Text)
 	var nullValues [12]nativeTextValue
 	require.NoError(t, database.QueryRowContext(ctx, "SELECT mood, moods, amount, arbitrary, payload, payload_binary, happened, happened_plain, zoned_time, local_time, day, pair FROM "+quoted(tableName)+" WHERE mood IS NULL").Scan(&nullValues[0], &nullValues[1], &nullValues[2], &nullValues[3], &nullValues[4], &nullValues[5], &nullValues[6], &nullValues[7], &nullValues[8], &nullValues[9], &nullValues[10], &nullValues[11]))
 	for _, value := range nullValues {
