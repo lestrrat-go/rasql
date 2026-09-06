@@ -186,7 +186,7 @@ func (r TasksTableProjectRelation) Join() rasql.Join {
 
 // LoadWith fetches related parents with filtering, ordering, and bind batching.
 func (r TasksTableProjectRelation) LoadWith(ctx context.Context, db rasql.DB, children []TasksRow, options rasql.RelationshipLoadOptions) (map[int64]ProjectsRow, error) {
-	return rasql.LoadBelongsToPlan(ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) int64 { return row.ProjectID }, func(row ProjectsRow) int64 { return row.ID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
+	return rasql.LoadBelongsToPlan[TasksRow, ProjectsRow, int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) int64 { return row.ProjectID }, func(row ProjectsRow) int64 { return row.ID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
 }
 
 // Load fetches all related parents for children in one query.
