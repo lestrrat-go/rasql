@@ -60,7 +60,8 @@ func TestRevertAgainstLiveDatabases(t *testing.T) {
 
 // TestFailedRevertAgainstLiveDatabases pins the asymmetry Revert documents
 // rather than trusting the doc comment: PostgreSQL rolls a failed revert
-// back whole, and MySQL does not, because its DDL commits implicitly. The
+// back whole, while explicitly nontransactional migrations retain durable
+// progress when their DDL commits implicitly. The
 // MySQL half is the reason the doc tells a user to resolve the state by
 // hand, so it is asserted here rather than described.
 func TestFailedRevertAgainstLiveDatabases(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 
 func recoveryMatrixMigration() Migration {
 	return Migration{
-		ID: "001_recovery",
+		ID: "001_recovery", Mode: ExecutionModeNonTransactional,
 		Statements: []Statement{
 			{Source: "001_create.up.sql", SQL: sqltext.Text("CREATE TABLE recovery_one")},
 			{Source: "002_index.up.sql", SQL: sqltext.Text("CREATE INDEX recovery_two")},
@@ -25,6 +25,10 @@ func recoveryMatrixMigration() Migration {
 			{Source: "003_seed.down.sql", SQL: sqltext.Text("DELETE FROM recovery_three")},
 		},
 	}
+}
+
+func recoveryMatrixChecksum(migration Migration) string {
+	return checksumMode(migration.Mode, migration.Statements)
 }
 
 func openRecoveryRunner(t *testing.T, fixture *dbtest.Recovery) (*sql.DB, Runner) {
@@ -62,7 +66,7 @@ func TestRecoveryPublicFiveWindows(t *testing.T) {
 				}
 				database, runner := openRecoveryRunner(t, fixture)
 				if direction == DirectionDown {
-					fixture.SetHistory(migration.ID, checksum(migration.Statements))
+					fixture.SetHistory(migration.ID, recoveryMatrixChecksum(migration))
 				}
 				var result ExecutionResult
 				var err error
@@ -85,7 +89,7 @@ func TestRecoveryPublicFiveWindows(t *testing.T) {
 				if test.wantProgress {
 					require.NotNil(t, snapshot.Progress)
 					require.Equal(t, migration.ID, snapshot.Progress.ID)
-					require.Equal(t, checksum(migration.Statements), snapshot.Progress.Checksum)
+					require.Equal(t, recoveryMatrixChecksum(migration), snapshot.Progress.Checksum)
 					require.Equal(t, string(direction), snapshot.Progress.Direction)
 					expectedSources := migration.Statements
 					if direction == DirectionDown {
@@ -159,14 +163,14 @@ func TestRecoveryPublicKnownCheckpointPlansAndRetry(t *testing.T) {
 		t.Run(string(direction), func(t *testing.T) {
 			fixture := dbtest.NewRecovery()
 			if direction == DirectionDown {
-				fixture.SetHistory(migration.ID, checksum(migration.Statements))
+				fixture.SetHistory(migration.ID, recoveryMatrixChecksum(migration))
 			}
 			statements := migration.Statements
 			source := statements[0].Source
 			if direction == DirectionDown {
 				source = migration.Down[0].Source
 			}
-			fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(direction), SourceIndex: 0, Source: source, NextIndex: 1})
+			fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: recoveryMatrixChecksum(migration), Direction: string(direction), SourceIndex: 0, Source: source, NextIndex: 1})
 			database, runner := openRecoveryRunner(t, fixture)
 			defer func() { _ = database.Close() }()
 			var planned []Migration
@@ -214,20 +218,20 @@ func TestRecoveryPublicReconcileAllSourcesAndDecisions(t *testing.T) {
 				t.Run(string(direction)+"/"+string(decision)+"/"+string(rune('0'+sourceIndex)), func(t *testing.T) {
 					fixture := dbtest.NewRecovery()
 					if direction == DirectionDown {
-						fixture.SetHistory(migration.ID, checksum(migration.Statements))
+						fixture.SetHistory(migration.ID, recoveryMatrixChecksum(migration))
 					}
 					statements := migration.Statements
 					if direction == DirectionDown {
 						statements = migration.Down
 					}
-					fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(direction), SourceIndex: sourceIndex, Source: statements[sourceIndex].Source, NextIndex: sourceIndex})
+					fixture.SetProgress(dbtest.Progress{ID: migration.ID, Checksum: recoveryMatrixChecksum(migration), Direction: string(direction), SourceIndex: sourceIndex, Source: statements[sourceIndex].Source, NextIndex: sourceIndex})
 					database, runner := openRecoveryRunner(t, fixture)
 					check := &matrixCheck{decision: decision}
 					require.NoError(t, runner.Reconcile(t.Context(), check, migration))
 					require.Equal(t, 1, check.calls)
 					require.Equal(t, int64(1), check.connectionID)
 					require.Equal(t, migration.ID, check.value.ID)
-					require.Equal(t, checksum(migration.Statements), check.value.Checksum)
+					require.Equal(t, recoveryMatrixChecksum(migration), check.value.Checksum)
 					require.Equal(t, statements[sourceIndex].Source, check.value.Source)
 					require.Equal(t, direction, check.value.Direction)
 					require.Equal(t, sourceIndex, check.value.SourceIndex)
@@ -258,10 +262,10 @@ func TestRecoveryPublicMismatchRefusalAndResultCopies(t *testing.T) {
 		progress dbtest.Progress
 	}{
 		{name: "checksum", progress: dbtest.Progress{ID: migration.ID, Checksum: "wrong", Direction: string(DirectionUp), SourceIndex: 0, Source: migration.Statements[0].Source, NextIndex: 0}},
-		{name: "source", progress: dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(DirectionUp), SourceIndex: 0, Source: "wrong.sql", NextIndex: 0}},
-		{name: "direction", progress: dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: "sideways", SourceIndex: 0, Source: migration.Statements[0].Source, NextIndex: 0}},
-		{name: "source index", progress: dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(DirectionUp), SourceIndex: 3, Source: migration.Statements[0].Source, NextIndex: 3}},
-		{name: "next index", progress: dbtest.Progress{ID: migration.ID, Checksum: checksum(migration.Statements), Direction: string(DirectionUp), SourceIndex: 0, Source: migration.Statements[0].Source, NextIndex: 2}},
+		{name: "source", progress: dbtest.Progress{ID: migration.ID, Checksum: recoveryMatrixChecksum(migration), Direction: string(DirectionUp), SourceIndex: 0, Source: "wrong.sql", NextIndex: 0}},
+		{name: "direction", progress: dbtest.Progress{ID: migration.ID, Checksum: recoveryMatrixChecksum(migration), Direction: "sideways", SourceIndex: 0, Source: migration.Statements[0].Source, NextIndex: 0}},
+		{name: "source index", progress: dbtest.Progress{ID: migration.ID, Checksum: recoveryMatrixChecksum(migration), Direction: string(DirectionUp), SourceIndex: 3, Source: migration.Statements[0].Source, NextIndex: 3}},
+		{name: "next index", progress: dbtest.Progress{ID: migration.ID, Checksum: recoveryMatrixChecksum(migration), Direction: string(DirectionUp), SourceIndex: 0, Source: migration.Statements[0].Source, NextIndex: 2}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := dbtest.NewRecovery()
@@ -316,7 +320,7 @@ func assertIncompleteResult(t *testing.T, result ExecutionResult, err error, mig
 	t.Helper()
 	require.NotNil(t, result.Incomplete)
 	require.Equal(t, migration.ID, result.Incomplete.ID)
-	require.Equal(t, checksum(migration.Statements), result.Incomplete.Checksum)
+	require.Equal(t, recoveryMatrixChecksum(migration), result.Incomplete.Checksum)
 	require.Equal(t, direction, result.Incomplete.Direction)
 	require.Equal(t, sourceIndex, result.Incomplete.SourceIndex)
 	sources := migration.Statements

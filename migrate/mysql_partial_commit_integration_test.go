@@ -38,12 +38,16 @@ func testMySQLApplyPureDML(t *testing.T) {
 	}}
 	_, firstErr := runner.Apply(ctx, migrate.AllPending(), migration)
 	requireMySQLNativeError(t, firstErr, 1146)
-	require.Equal(t, int64(1), mysqlCounter(t, ctx, database, "sec_t1_apply_dml_counter"))
+	require.Equal(t, int64(0), mysqlCounter(t, ctx, database, "sec_t1_apply_dml_counter"))
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_dml_history", migration.ID))
-	_, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
-	requireMySQLNativeError(t, retryErr, 1146)
+	retry := migration
+	retry.Statements = append([]migrate.Statement(nil), migration.Statements[:1]...)
+	retry.Statements = append(retry.Statements, migrate.Statement{Source: "002_fixed.up.sql", SQL: sqltext.Text("UPDATE sec_t1_apply_dml_counter SET value = value + 1")})
+	completed, retryErr := runner.Apply(ctx, migrate.AllPending(), retry)
+	require.NoError(t, retryErr)
+	require.Len(t, completed, 1)
 	require.Equal(t, int64(2), mysqlCounter(t, ctx, database, "sec_t1_apply_dml_counter"))
-	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_dml_history", migration.ID))
+	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_dml_history", migration.ID))
 }
 
 func testMySQLRevertPureDML(t *testing.T) {
@@ -67,12 +71,16 @@ func testMySQLRevertPureDML(t *testing.T) {
 	require.Equal(t, int64(2), mysqlCounter(t, ctx, database, "sec_t1_revert_dml_counter"))
 	_, firstErr := runner.Revert(ctx, migrate.Steps(1), migration)
 	requireMySQLNativeError(t, firstErr, 1146)
-	require.Equal(t, int64(1), mysqlCounter(t, ctx, database, "sec_t1_revert_dml_counter"))
+	require.Equal(t, int64(2), mysqlCounter(t, ctx, database, "sec_t1_revert_dml_counter"))
 	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_dml_history", migration.ID))
-	_, retryErr := runner.Revert(ctx, migrate.Steps(1), migration)
-	requireMySQLNativeError(t, retryErr, 1146)
+	retry := migration
+	retry.Down = append([]migrate.Statement(nil), migration.Down[:1]...)
+	retry.Down = append(retry.Down, migrate.Statement{Source: "002_fixed.down.sql", SQL: sqltext.Text("UPDATE sec_t1_revert_dml_counter SET value = value - 1")})
+	completed, retryErr := runner.Revert(ctx, migrate.Steps(1), retry)
+	require.NoError(t, retryErr)
+	require.Len(t, completed, 1)
 	require.Equal(t, int64(0), mysqlCounter(t, ctx, database, "sec_t1_revert_dml_counter"))
-	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_dml_history", migration.ID))
+	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_dml_history", migration.ID))
 }
 
 func testMySQLApplyImplicitCommitDDL(t *testing.T) {
@@ -81,7 +89,7 @@ func testMySQLApplyImplicitCommitDDL(t *testing.T) {
 	logMySQLDiagnostics(t, ctx, database)
 	runner, err := migrate.NewWithHistoryTable(database, dialect.MySQL(), "sec_t1_apply_ddl_history")
 	require.NoError(t, err)
-	migration := migrate.Migration{ID: "001_apply_ddl", Statements: []migrate.Statement{
+	migration := migrate.Migration{ID: "001_apply_ddl", Mode: migrate.ExecutionModeNonTransactional, Statements: []migrate.Statement{
 		{Source: "001_create.up.sql", SQL: sqltext.Text("CREATE TABLE sec_t1_apply_ddl_object (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")},
 		{Source: "002_fail.up.sql", SQL: sqltext.Text("INSERT INTO sec_t1_apply_ddl_missing VALUES (1)")},
 	}}
@@ -90,8 +98,14 @@ func testMySQLApplyImplicitCommitDDL(t *testing.T) {
 	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_apply_ddl_object"))
 	require.Equal(t, "InnoDB", mysqlTableEngine(t, ctx, database, "sec_t1_apply_ddl_object"))
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
-	_, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
-	requireMySQLNativeError(t, retryErr, 1050)
+	status, statusErr := runner.Status(ctx, migration)
+	require.NoError(t, statusErr)
+	require.Equal(t, migrate.StatusIncomplete, status[0].State)
+	require.NoError(t, runner.Reconcile(ctx, mysqlNotExecutedCheck{}, migration))
+	mysqlExec(t, ctx, database, "CREATE TABLE sec_t1_apply_ddl_missing (id BIGINT NOT NULL) ENGINE=InnoDB")
+	completed, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
+	require.NoError(t, retryErr)
+	require.Len(t, completed, 1)
 	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_apply_ddl_object"))
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
 }
@@ -104,6 +118,7 @@ func testMySQLRevertImplicitCommitDDL(t *testing.T) {
 	require.NoError(t, err)
 	migration := migrate.Migration{
 		ID:         "001_revert_ddl",
+		Mode:       migrate.ExecutionModeNonTransactional,
 		Statements: []migrate.Statement{{Source: "001_create.up.sql", SQL: sqltext.Text("CREATE TABLE sec_t1_revert_ddl_object (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")}},
 		Down: []migrate.Statement{
 			{Source: "001_drop.down.sql", SQL: sqltext.Text("DROP TABLE sec_t1_revert_ddl_object")},
@@ -117,10 +132,22 @@ func testMySQLRevertImplicitCommitDDL(t *testing.T) {
 	requireMySQLNativeError(t, firstErr, 1146)
 	require.False(t, mysqlTableExists(t, ctx, database, "sec_t1_revert_ddl_object"))
 	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_ddl_history", migration.ID))
-	_, retryErr := runner.Revert(ctx, migrate.Steps(1), migration)
-	requireMySQLNativeError(t, retryErr, 1051)
+	status, statusErr := runner.Status(ctx, migration)
+	require.NoError(t, statusErr)
+	require.Equal(t, migrate.StatusIncomplete, status[0].State)
+	require.NoError(t, runner.Reconcile(ctx, mysqlNotExecutedCheck{}, migration))
+	mysqlExec(t, ctx, database, "CREATE TABLE sec_t1_revert_ddl_missing (id BIGINT NOT NULL) ENGINE=InnoDB")
+	completed, retryErr := runner.Revert(ctx, migrate.Steps(1), migration)
+	require.NoError(t, retryErr)
+	require.Len(t, completed, 1)
 	require.False(t, mysqlTableExists(t, ctx, database, "sec_t1_revert_ddl_object"))
-	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_ddl_history", migration.ID))
+	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_ddl_history", migration.ID))
+}
+
+type mysqlNotExecutedCheck struct{}
+
+func (mysqlNotExecutedCheck) Check(context.Context, *sql.Conn, migrate.IncompleteMigration) (migrate.ReconcileDecision, error) {
+	return migrate.ReconcileNotExecuted, nil
 }
 
 func logMySQLDiagnostics(t *testing.T, ctx context.Context, database *sql.DB) {

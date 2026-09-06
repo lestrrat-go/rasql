@@ -1,6 +1,6 @@
 # Migrations
 
-`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so the runner records progress and blocks uncertain work until it is reconciled.
+`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. Atomic migrations use one transaction per migration on all three engines. Explicit `nontransactional` migrations use durable progress and reconciliation when their sources cannot run in a transaction, including MySQL DDL.
 
 Run the command outside the application, before it starts. The application then opens a database whose schema is already in place.
 
@@ -141,7 +141,7 @@ A reverted migration becomes `pending` again, so `apply` runs it once more. That
 
 The whole run is refused, before any statement runs, when a selected migration's forward sources no longer match their recorded checksum, when `-to` names a migration that is not applied, when `-steps` exceeds the number applied, or when the history disagrees with the supplied migrations. A refused run changes nothing.
 
-PostgreSQL and SQLite revert a migration atomically, so a failed revert leaves the database as it was. MySQL commits DDL implicitly, so a revert that fails partway retains a progress row and blocks replay until reconciliation. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go`.
+Atomic migrations revert atomically on PostgreSQL, MySQL, and SQLite, so a failed revert leaves the database and history unchanged. An explicit `nontransactional` migration retains a progress row when a source outcome is uncertain and blocks replay until reconciliation. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go` and the engine-specific recovery fixtures.
 
 ## Generate PostgreSQL, MySQL, and SQLite migrations
 
