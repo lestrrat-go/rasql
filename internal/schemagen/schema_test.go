@@ -581,6 +581,7 @@ func TestSchemaGeneratedRelationshipShapesExecuteSQLite(t *testing.T) {
 		UniqueConstraints: []schema.UniqueDef{{Columns: []string{"user_id"}}},
 		ForeignKeys:       []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}},
 	}
+	requiredOrders := schema.TableDef{Name: "required_orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}, ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}}
 	accounts := schema.TableDef{
 		Name: "accounts", Columns: []schema.ColumnDef{{Name: "tenant_id", Type: schema.IntegerType{}}, {Name: "id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"tenant_id", "id"},
@@ -601,7 +602,7 @@ func TestSchemaGeneratedRelationshipShapesExecuteSQLite(t *testing.T) {
 	compositeSources := schema.TableDef{Name: "composite_sources", Columns: []schema.ColumnDef{{Name: "left", Type: schema.TextType{}}, {Name: "right", Type: schema.TextType{}}}, PrimaryKey: []string{"left", "right"}, Relationships: []schema.RelationshipDef{{Name: "Targets", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"left", "right"}, ReferencedTable: "composite_targets", ReferencedColumns: []string{"left", "right"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "composite_links"}, SourceColumns: []string{"source_left", "source_right"}, TargetColumns: []string{"target_left", "target_right"}}}}}
 	compositeTargets := schema.TableDef{Name: "composite_targets", Columns: []schema.ColumnDef{{Name: "left", Type: schema.TextType{}}, {Name: "right", Type: schema.TextType{}}, {Name: "value", Type: schema.TextType{}}}, PrimaryKey: []string{"left", "right"}}
 	compositeLinks := schema.TableDef{Name: "composite_links", Columns: []schema.ColumnDef{{Name: "source_left", Type: schema.TextType{}}, {Name: "source_right", Type: schema.TextType{}}, {Name: "target_left", Type: schema.TextType{}}, {Name: "target_right", Type: schema.TextType{}}}, PrimaryKey: []string{"source_left", "source_right", "target_left", "target_right"}}
-	allTables := []schema.TableDef{users, orders, profiles, accounts, memberships, roles, userRoles, permissions, rolePermissions, logicalOrders, alternate, references, compositeSources, compositeTargets, compositeLinks}
+	allTables := []schema.TableDef{users, orders, requiredOrders, profiles, accounts, memberships, roles, userRoles, permissions, rolePermissions, logicalOrders, alternate, references, compositeSources, compositeTargets, compositeLinks}
 	descriptor, err := schemagen.DescriptorSource("generated", allTables...)
 	require.NoError(t, err)
 	files := make(map[string][]byte)
@@ -726,6 +727,7 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 	for _, statement := range []string{
 		"CREATE TABLE users (id INTEGER PRIMARY KEY, code TEXT NOT NULL)",
 		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER)",
+		"CREATE TABLE required_orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)",
 		"CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER)",
 		"CREATE TABLE accounts (tenant_id INTEGER NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (tenant_id, id))",
 		"CREATE TABLE memberships (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, account_id INTEGER NOT NULL)",
@@ -741,6 +743,7 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 		"CREATE TABLE composite_links (source_left TEXT NOT NULL, source_right TEXT NOT NULL, target_left TEXT NOT NULL, target_right TEXT NOT NULL)",
 		"INSERT INTO users VALUES (1, 'one'), (2, 'two')",
 		"INSERT INTO orders VALUES (10, NULL), (11, 1)",
+		"INSERT INTO required_orders VALUES (12, 1)",
 		"INSERT INTO profiles VALUES (30, 1), (31, 1)",
 		"INSERT INTO accounts VALUES (7, 1), (8, 1)",
 		"INSERT INTO memberships VALUES (40, 7, 1), (41, 8, 1)",
@@ -823,6 +826,26 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 4, queries)
+	called = false
+	_, err = generated.RequiredOrders().User().LoadThen(t.Context(), db, []generated.RequiredOrdersRow{{ID: 12, UserID: 1}, {ID: 12, UserID: 1}}, rasql.RelationshipLoadOptions{}, func(rows []generated.UsersRow) error {
+		called = true
+		require.Len(t, rows, 1)
+		require.Equal(t, int64(1), rows[0].ID)
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, called)
+	_, err = generated.RequiredOrders().User().LoadThen(t.Context(), db, []generated.RequiredOrdersRow{{ID: 12, UserID: 1}}, rasql.RelationshipLoadOptions{}, nil)
+	require.NoError(t, err)
+	called = false
+	_, err = generated.RequiredOrders().User().LoadThen(t.Context(), db, []generated.RequiredOrdersRow{{ID: 12, UserID: 1}}, rasql.RelationshipLoadOptions{}, func([]generated.UsersRow) error { called = true; return fmt.Errorf("scalar callback failure") })
+	require.EqualError(t, err, "scalar callback failure")
+	require.True(t, called)
+	queries = 0
+	empty, err := generated.Users().Roles().LoadWith(t.Context(), hooked, nil, rasql.RelationshipLoadOptions{})
+	require.NoError(t, err)
+	require.Empty(t, empty)
+	require.Equal(t, 0, queries)
 	compositeSources := []generated.CompositeSourcesRow{{Left: "source", Right: "key"}, {Left: "source", Right: "key"}}
 	called = false
 	_, err = generated.CompositeSources().Targets().LoadThen(t.Context(), db, compositeSources, rasql.RelationshipLoadOptions{}, func(rows []generated.CompositeTargetsRow) error {

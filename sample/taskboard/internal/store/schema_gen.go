@@ -55,8 +55,8 @@ var tasksDef = schema.TableDef{
 		{Name: "tasks_project_id_fkey", Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction},
 	},
 	Relationships: []schema.RelationshipDef{
-		{Name: "Assignee", Kind: schema.RelationshipBelongsTo, Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},
-		{Name: "Project", Kind: schema.RelationshipBelongsTo, Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}},
+		{Name: "Assignee", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("optional"), Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},
+		{Name: "Project", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("required"), Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}},
 	},
 }
 

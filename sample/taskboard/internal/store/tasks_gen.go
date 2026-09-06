@@ -191,9 +191,14 @@ func (r TasksTableAssigneeRelation) LoadThen(ctx context.Context, db rasql.DB, s
 		return loaded, err
 	}
 	rows := make([]MembersRow, 0)
+	seen := make(map[int64]struct{})
 	for _, source := range sources {
 		key := r.SourceKey(source)
 		if row, ok := loaded[key]; ok {
+			if _, ok := seen[row.ID]; ok {
+				continue
+			}
+			seen[row.ID] = struct{}{}
 			rows = append(rows, row)
 		}
 	}
@@ -253,9 +258,14 @@ func (r TasksTableProjectRelation) LoadThen(ctx context.Context, db rasql.DB, so
 		return loaded, err
 	}
 	rows := make([]ProjectsRow, 0)
+	seen := make(map[int64]struct{})
 	for _, source := range sources {
 		key := r.SourceKey(source)
 		if row, ok := loaded[key]; ok {
+			if _, ok := seen[row.ID]; ok {
+				continue
+			}
+			seen[row.ID] = struct{}{}
 			rows = append(rows, row)
 		}
 	}
