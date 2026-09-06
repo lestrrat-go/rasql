@@ -289,8 +289,28 @@ func visibleSourceFromTable(table query.RelationRef) visibleSource {
 }
 
 func (r *renderer) validateSelectSources(s query.Select) error {
+	ctes := s.CTEs()
+	for i, left := range ctes {
+		for j := 0; j < i; j++ {
+			if dialect.IdentifiersEqual(r.dialect, ctes[j].Name(), left.Name()) {
+				return fmt.Errorf("CTE names %q and %q collide in the %s dialect", ctes[j].Name(), left.Name(), r.dialect.Name())
+			}
+		}
+	}
 	sources := make([]visibleSource, 0, len(s.Correlations())+1+len(s.Joins()))
 	add := func(table query.RelationRef) error {
+		if cteName := table.CTEName(); cteName != "" {
+			found := false
+			for _, cte := range ctes {
+				if cte.Name() == cteName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("CTE %q is not defined by this SELECT", cteName)
+			}
+		}
 		candidate := visibleSourceFromTable(table)
 		for _, existing := range sources {
 			if !r.sourceIdentifiersConflict(existing, candidate) {

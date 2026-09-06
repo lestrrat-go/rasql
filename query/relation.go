@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -38,8 +39,8 @@ func ResultOf(body QueryBody, columns ...ResultColumn) (ResultQuery, error) {
 		if err := schema.ValidateIdentifier(column.Name); err != nil {
 			return ResultQuery{}, fmt.Errorf("result column %d: %w", i, err)
 		}
-		if column.Type == nil {
-			return ResultQuery{}, fmt.Errorf("result column %q has nil type", column.Name)
+		if err := schema.ValidateColumnType(column.Type); err != nil {
+			return ResultQuery{}, fmt.Errorf("result column %q: %w", column.Name, err)
 		}
 		for _, existing := range columns[:i] {
 			if existing.Name == column.Name {
@@ -71,13 +72,22 @@ func ResultOf(body QueryBody, columns ...ResultColumn) (ResultQuery, error) {
 			return ResultQuery{}, fmt.Errorf("result columns count %d does not match compound output count %d", len(columns), len(typed.left.columns))
 		}
 	}
-	return ResultQuery{body: body, columns: append([]ResultColumn(nil), columns...)}, nil
+	return ResultQuery{body: body, columns: cloneResultColumns(columns)}, nil
 }
 
 func (q ResultQuery) Body() QueryBody { return q.body }
 
 func (q ResultQuery) Columns() []ResultColumn {
-	return append([]ResultColumn(nil), q.columns...)
+	return cloneResultColumns(q.columns)
+}
+
+func cloneResultColumns(columns []ResultColumn) []ResultColumn {
+	copy := make([]ResultColumn, len(columns))
+	for i, column := range columns {
+		copy[i] = column
+		copy[i].Type = schema.CloneColumnType(column.Type)
+	}
+	return copy
 }
 
 type relationKind uint8
@@ -115,7 +125,7 @@ func Derived(result ResultQuery, alias string) (RelationRef, error) {
 		return RelationRef{}, fmt.Errorf("derived relation query must not be empty")
 	}
 	copy := result
-	copy.columns = append([]ResultColumn(nil), result.columns...)
+	copy.columns = cloneResultColumns(result.columns)
 	return RelationRef{kind: relationResult, result: &copy, alias: alias}, nil
 }
 
@@ -137,14 +147,14 @@ func (r RelationRef) Columns() []ResultColumn {
 		definition := r.table.Definition()
 		columns := make([]ResultColumn, len(definition.Columns))
 		for i, column := range definition.Columns {
-			columns[i] = ResultColumn{Name: column.Name, Type: column.Type}
+			columns[i] = ResultColumn{Name: column.Name, Type: schema.CloneColumnType(column.Type), Nullable: column.Nullable}
 		}
 		return columns
 	}
 	if r.result == nil {
 		return nil
 	}
-	return append([]ResultColumn(nil), r.result.columns...)
+	return cloneResultColumns(r.result.columns)
 }
 
 func (r RelationRef) Alias() string { return r.alias }
@@ -202,6 +212,13 @@ func (r RelationRef) CTEName() string {
 		return ""
 	}
 	return r.cte.name
+}
+
+func (r RelationRef) cteID() uint64 {
+	if r.cte == nil {
+		return 0
+	}
+	return r.cte.id
 }
 
 func (r RelationRef) QualifiedName() string {
@@ -293,12 +310,17 @@ type Compound struct {
 	operator    CompoundOperator
 }
 
-func (c Compound) Left() ResultQuery          { return c.left }
-func (c Compound) Right() ResultQuery         { return c.right }
+func (c Compound) Left() ResultQuery          { return cloneResultQuery(c.left) }
+func (c Compound) Right() ResultQuery         { return cloneResultQuery(c.right) }
 func (c Compound) Operator() CompoundOperator { return c.operator }
 
 func (c CTE) Name() string       { return c.name }
-func (c CTE) Query() ResultQuery { return c.query }
+func (c CTE) Query() ResultQuery { return cloneResultQuery(c.query) }
+
+func cloneResultQuery(result ResultQuery) ResultQuery {
+	result.columns = cloneResultColumns(result.columns)
+	return result
+}
 
 func CompoundQuery(left ResultQuery, operator CompoundOperator, right ResultQuery) (Compound, error) {
 	if left.body == nil || right.body == nil {
@@ -328,7 +350,10 @@ func (Compound) queryBody() {}
 type CTE struct {
 	name  string
 	query ResultQuery
+	id    uint64
 }
+
+var nextCTEID uint64
 
 func CommonTable(name string, result ResultQuery) (CTE, error) {
 	if err := schema.ValidateIdentifier(name); err != nil {
@@ -337,7 +362,7 @@ func CommonTable(name string, result ResultQuery) (CTE, error) {
 	if result.body == nil {
 		return CTE{}, fmt.Errorf("CTE query must not be empty")
 	}
-	return CTE{name: name, query: result}, nil
+	return CTE{name: name, query: result, id: atomic.AddUint64(&nextCTEID, 1)}, nil
 }
 
 func (c CTE) Ref(alias string) (RelationRef, error) {
@@ -349,7 +374,7 @@ func (c CTE) Ref(alias string) (RelationRef, error) {
 	}
 	copy := c
 	result := c.query
-	result.columns = append([]ResultColumn(nil), c.query.columns...)
+	result.columns = cloneResultColumns(c.query.columns)
 	return RelationRef{kind: relationCTE, cte: &copy, result: &result, alias: alias}, nil
 }
 

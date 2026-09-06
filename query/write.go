@@ -256,8 +256,7 @@ func NewInsertRows(into TableRef, columns []ColumnRef, rows [][]any) (Insert, er
 
 // NewInsertSelect creates an INSERT whose rows come from a reusable query.
 func NewInsertSelect(into TableRef, columns []ColumnRef, source ResultQuery) (Insert, error) {
-	copy := source
-	copy.columns = append([]ResultColumn(nil), source.columns...)
+	copy := cloneResultQuery(source)
 	return validatedInsert(Insert{into: into, columns: append([]ColumnRef(nil), columns...), selectSource: &copy})
 }
 
@@ -374,6 +373,16 @@ func (s Insert) Validate() error {
 		if len(s.columns) == 0 {
 			return validationError("columns", "must not be empty")
 		}
+		seen := make(map[string]struct{}, len(s.columns))
+		for i, column := range s.columns {
+			if err := validateTargetColumn(column, s.into, fmt.Sprintf("columns[%d]", i)); err != nil {
+				return err
+			}
+			if _, exists := seen[column.Name()]; exists {
+				return validationError(fmt.Sprintf("columns[%d]", i), "duplicates column %q", column.Name())
+			}
+			seen[column.Name()] = struct{}{}
+		}
 		if len(s.columns) != len(s.selectSource.columns) {
 			return validationError("columns", "has %d columns for %d source results", len(s.columns), len(s.selectSource.columns))
 		}
@@ -420,7 +429,7 @@ func (s Insert) clone() Insert {
 	copy.rows = cloneRows(s.rows)
 	if s.selectSource != nil {
 		result := *s.selectSource
-		result.columns = append([]ResultColumn(nil), result.columns...)
+		result.columns = cloneResultColumns(result.columns)
 		copy.selectSource = &result
 	}
 	copy.returning = append([]Projection(nil), s.returning...)

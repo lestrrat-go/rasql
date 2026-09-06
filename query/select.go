@@ -499,6 +499,9 @@ func (s Select) Offset() (int, bool) {
 // declaration against the statement that really encloses it, and render.Select
 // refuses one rendered on its own.
 func (s Select) Validate() error {
+	if err := validateVisibleCTE(s.from, s.ctes, "from"); err != nil {
+		return err
+	}
 	if err := s.from.validate(); err != nil {
 		return validationError("from", "%s", err)
 	}
@@ -526,6 +529,9 @@ func (s Select) Validate() error {
 	// alias validateSourceReference names for two tables of one statement.
 	for i, correlated := range s.correlations {
 		path := fmt.Sprintf("correlations[%d]", i)
+		if err := validateVisibleCTE(correlated, s.ctes, path); err != nil {
+			return err
+		}
 		if err := correlated.validate(); err != nil {
 			return validationError(path, "%s", err)
 		}
@@ -545,6 +551,9 @@ func (s Select) Validate() error {
 		}
 		if err := join.source.validate(); err != nil {
 			return validationError(path+".source", "%s", err)
+		}
+		if err := validateVisibleCTE(join.source, s.ctes, path+".source"); err != nil {
+			return err
 		}
 		// The duplicate message is about one statement listing the same table
 		// twice, so it covers only the tables this statement selects from. A
@@ -627,6 +636,21 @@ func isCorrelatedSource(correlations []RelationRef, source RelationRef) bool {
 		}
 	}
 	return false
+}
+
+func validateVisibleCTE(source RelationRef, ctes []CTE, path string) error {
+	if source.CTEName() == "" {
+		return nil
+	}
+	if len(ctes) == 0 {
+		return nil
+	}
+	for _, cte := range ctes {
+		if cte.id == source.cteID() {
+			return nil
+		}
+	}
+	return validationError(path, "references CTE %q outside its owning SELECT", source.CTEName())
 }
 
 // validateOrder validates one ORDER BY term. A term naming a projection's
