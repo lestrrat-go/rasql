@@ -89,3 +89,34 @@ func (t MembersTable) As(alias string) (MembersTable, error) {
 	}
 	return MembersTable{Table: aliased}, nil
 }
+
+type MembersCreate struct {
+	fields []rasql.MutationField[MembersRow]
+}
+
+func NewMembersCreate() MembersCreate { return MembersCreate{} }
+
+func (p MembersCreate) Name(value string) MembersCreate {
+	fields := append([]rasql.MutationField[MembersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[MembersRow](Members().Name(), value))
+	return MembersCreate{fields: fields}
+}
+func (p MembersCreate) Plan() rasql.CreatePlan[MembersRow] {
+	plan, _ := rasql.NewCreatePlan[MembersRow](Members(), p.fields...)
+	return plan
+}
+
+type MembersPatch struct {
+	fields []rasql.MutationField[MembersRow]
+}
+
+func NewMembersPatch() MembersPatch { return MembersPatch{} }
+
+func (p MembersPatch) Name(value string) MembersPatch {
+	fields := append([]rasql.MutationField[MembersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[MembersRow](Members().Name(), value))
+	return MembersPatch{fields: fields}
+}
+func (p MembersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[MembersRow], error) {
+	return rasql.NewPatchPlan[MembersRow](Members(), predicate, p.fields...)
+}

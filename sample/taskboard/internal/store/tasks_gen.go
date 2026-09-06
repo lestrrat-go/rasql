@@ -185,6 +185,127 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 	return TasksTable{Table: aliased}, nil
 }
 
+type TasksCreate struct {
+	fields []rasql.MutationField[TasksRow]
+}
+
+func NewTasksCreate() TasksCreate { return TasksCreate{} }
+
+func (p TasksCreate) ProjectID(value int64) TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().ProjectID(), value))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) AssigneeID(value *int64) TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().AssigneeID(), value))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) ClearAssigneeID() TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.ClearField[TasksRow](Tasks().AssigneeID()))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) Title(value string) TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().Title(), value))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) IsOpen(value bool) TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().IsOpen(), value))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) DefaultIsOpen() TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().IsOpen()))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) CreatedAt(value time.Time) TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().CreatedAt(), value))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) DefaultCreatedAt() TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().CreatedAt()))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) DueOn(value *time.Time) TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().DueOn(), value))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) ClearDueOn() TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.ClearField[TasksRow](Tasks().DueOn()))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) Plan() rasql.CreatePlan[TasksRow] {
+	plan, _ := rasql.NewCreatePlan[TasksRow](Tasks(), p.fields...)
+	return plan
+}
+
+type TasksPatch struct {
+	fields []rasql.MutationField[TasksRow]
+}
+
+func NewTasksPatch() TasksPatch { return TasksPatch{} }
+
+func (p TasksPatch) ProjectID(value int64) TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().ProjectID(), value))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) AssigneeID(value *int64) TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().AssigneeID(), value))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) ClearAssigneeID() TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.ClearField[TasksRow](Tasks().AssigneeID()))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) Title(value string) TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().Title(), value))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) IsOpen(value bool) TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().IsOpen(), value))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) DefaultIsOpen() TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().IsOpen()))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) CreatedAt(value time.Time) TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().CreatedAt(), value))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) DefaultCreatedAt() TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().CreatedAt()))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) DueOn(value *time.Time) TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().DueOn(), value))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) ClearDueOn() TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.ClearField[TasksRow](Tasks().DueOn()))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) Where(predicate query.Predicate) (rasql.PatchPlan[TasksRow], error) {
+	return rasql.NewPatchPlan[TasksRow](Tasks(), predicate, p.fields...)
+}
+
 // TasksTableProjectRelation describes the Project relationship from TasksTable.
 type TasksTableProjectRelation struct {
 	Parent    ProjectsTable

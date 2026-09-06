@@ -91,6 +91,37 @@ func (t ProjectsTable) As(alias string) (ProjectsTable, error) {
 	return ProjectsTable{Table: aliased}, nil
 }
 
+type ProjectsCreate struct {
+	fields []rasql.MutationField[ProjectsRow]
+}
+
+func NewProjectsCreate() ProjectsCreate { return ProjectsCreate{} }
+
+func (p ProjectsCreate) Name(value string) ProjectsCreate {
+	fields := append([]rasql.MutationField[ProjectsRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[ProjectsRow](Projects().Name(), value))
+	return ProjectsCreate{fields: fields}
+}
+func (p ProjectsCreate) Plan() rasql.CreatePlan[ProjectsRow] {
+	plan, _ := rasql.NewCreatePlan[ProjectsRow](Projects(), p.fields...)
+	return plan
+}
+
+type ProjectsPatch struct {
+	fields []rasql.MutationField[ProjectsRow]
+}
+
+func NewProjectsPatch() ProjectsPatch { return ProjectsPatch{} }
+
+func (p ProjectsPatch) Name(value string) ProjectsPatch {
+	fields := append([]rasql.MutationField[ProjectsRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[ProjectsRow](Projects().Name(), value))
+	return ProjectsPatch{fields: fields}
+}
+func (p ProjectsPatch) Where(predicate query.Predicate) (rasql.PatchPlan[ProjectsRow], error) {
+	return rasql.NewPatchPlan[ProjectsRow](Projects(), predicate, p.fields...)
+}
+
 // ProjectsTableTasksRelation describes the Tasks relationship from ProjectsTable.
 type ProjectsTableTasksRelation struct {
 	Parent    ProjectsTable

@@ -104,3 +104,59 @@ func (t EmployeesTable) As(alias string) (EmployeesTable, error) {
 	}
 	return EmployeesTable{Table: aliased}, nil
 }
+
+type EmployeesCreate struct {
+	fields []rasql.MutationField[EmployeesRow]
+}
+
+func NewEmployeesCreate() EmployeesCreate { return EmployeesCreate{} }
+
+func (p EmployeesCreate) ID(value int64) EmployeesCreate {
+	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[EmployeesRow](Employees().ID(), value))
+	return EmployeesCreate{fields: fields}
+}
+func (p EmployeesCreate) Name(value string) EmployeesCreate {
+	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[EmployeesRow](Employees().Name(), value))
+	return EmployeesCreate{fields: fields}
+}
+func (p EmployeesCreate) ManagerID(value *int64) EmployeesCreate {
+	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
+	fields = append(fields, rasql.SetNullableField[EmployeesRow](Employees().ManagerID(), value))
+	return EmployeesCreate{fields: fields}
+}
+func (p EmployeesCreate) ClearManagerID() EmployeesCreate {
+	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
+	fields = append(fields, rasql.ClearField[EmployeesRow](Employees().ManagerID()))
+	return EmployeesCreate{fields: fields}
+}
+func (p EmployeesCreate) Plan() rasql.CreatePlan[EmployeesRow] {
+	plan, _ := rasql.NewCreatePlan[EmployeesRow](Employees(), p.fields...)
+	return plan
+}
+
+type EmployeesPatch struct {
+	fields []rasql.MutationField[EmployeesRow]
+}
+
+func NewEmployeesPatch() EmployeesPatch { return EmployeesPatch{} }
+
+func (p EmployeesPatch) Name(value string) EmployeesPatch {
+	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[EmployeesRow](Employees().Name(), value))
+	return EmployeesPatch{fields: fields}
+}
+func (p EmployeesPatch) ManagerID(value *int64) EmployeesPatch {
+	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
+	fields = append(fields, rasql.SetNullableField[EmployeesRow](Employees().ManagerID(), value))
+	return EmployeesPatch{fields: fields}
+}
+func (p EmployeesPatch) ClearManagerID() EmployeesPatch {
+	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
+	fields = append(fields, rasql.ClearField[EmployeesRow](Employees().ManagerID()))
+	return EmployeesPatch{fields: fields}
+}
+func (p EmployeesPatch) Where(predicate query.Predicate) (rasql.PatchPlan[EmployeesRow], error) {
+	return rasql.NewPatchPlan[EmployeesRow](Employees(), predicate, p.fields...)
+}

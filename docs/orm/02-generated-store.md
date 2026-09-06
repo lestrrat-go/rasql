@@ -167,6 +167,102 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 	}
 	return UsersTable{Table: aliased}, nil
 }
+
+type UsersCreate struct {
+	fields []rasql.MutationField[UsersRow]
+}
+
+func NewUsersCreate() UsersCreate { return UsersCreate{} }
+
+func (p UsersCreate) ID(value int64) UsersCreate {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().ID(), value))
+	return UsersCreate{fields: fields}
+}
+func (p UsersCreate) Email(value string) UsersCreate {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().Email(), value))
+	return UsersCreate{fields: fields}
+}
+func (p UsersCreate) Nickname(value *string) UsersCreate {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetNullableField[UsersRow](Users().Nickname(), value))
+	return UsersCreate{fields: fields}
+}
+func (p UsersCreate) ClearNickname() UsersCreate {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.ClearField[UsersRow](Users().Nickname()))
+	return UsersCreate{fields: fields}
+}
+func (p UsersCreate) Status(value string) UsersCreate {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().Status(), value))
+	return UsersCreate{fields: fields}
+}
+func (p UsersCreate) DefaultStatus() UsersCreate {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.DefaultField[UsersRow](Users().Status()))
+	return UsersCreate{fields: fields}
+}
+func (p UsersCreate) FirstName(value string) UsersCreate {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().FirstName(), value))
+	return UsersCreate{fields: fields}
+}
+func (p UsersCreate) LastName(value string) UsersCreate {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().LastName(), value))
+	return UsersCreate{fields: fields}
+}
+func (p UsersCreate) Plan() rasql.CreatePlan[UsersRow] {
+	plan, _ := rasql.NewCreatePlan[UsersRow](Users(), p.fields...)
+	return plan
+}
+
+type UsersPatch struct {
+	fields []rasql.MutationField[UsersRow]
+}
+
+func NewUsersPatch() UsersPatch { return UsersPatch{} }
+
+func (p UsersPatch) Email(value string) UsersPatch {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().Email(), value))
+	return UsersPatch{fields: fields}
+}
+func (p UsersPatch) Nickname(value *string) UsersPatch {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetNullableField[UsersRow](Users().Nickname(), value))
+	return UsersPatch{fields: fields}
+}
+func (p UsersPatch) ClearNickname() UsersPatch {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.ClearField[UsersRow](Users().Nickname()))
+	return UsersPatch{fields: fields}
+}
+func (p UsersPatch) Status(value string) UsersPatch {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().Status(), value))
+	return UsersPatch{fields: fields}
+}
+func (p UsersPatch) DefaultStatus() UsersPatch {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.DefaultField[UsersRow](Users().Status()))
+	return UsersPatch{fields: fields}
+}
+func (p UsersPatch) FirstName(value string) UsersPatch {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().FirstName(), value))
+	return UsersPatch{fields: fields}
+}
+func (p UsersPatch) LastName(value string) UsersPatch {
+	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[UsersRow](Users().LastName(), value))
+	return UsersPatch{fields: fields}
+}
+func (p UsersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[UsersRow], error) {
+	return rasql.NewPatchPlan[UsersRow](Users(), predicate, p.fields...)
+}
 ```
 source: [examples/store/users_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/users_gen.go)
 <!-- END INCLUDE -->
@@ -464,6 +560,13 @@ generator should remove owned files for dropped tables or queries. Set it to
 The generated output is deterministic for deterministic catalog and query
 inputs. Run the check command in CI and fail the build when the checked-in
 source is stale.
+
+Generated tables also expose immutable typed create and patch builders. Create
+setters distinguish omitted defaulted columns, explicit zero values, and NULL
+through `Clear` methods on nullable columns. Patch builders require a typed
+predicate, omit primary-key setters, and can execute through `ExecPatch` or
+read saved rows with `QueryPatchOne` and `QueryPatchAll` when the dialect
+supports `RETURNING`.
 
 ## Next
 

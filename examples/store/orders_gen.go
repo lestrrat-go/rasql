@@ -104,3 +104,49 @@ func (t OrdersTable) As(alias string) (OrdersTable, error) {
 	}
 	return OrdersTable{Table: aliased}, nil
 }
+
+type OrdersCreate struct {
+	fields []rasql.MutationField[OrdersRow]
+}
+
+func NewOrdersCreate() OrdersCreate { return OrdersCreate{} }
+
+func (p OrdersCreate) ID(value int64) OrdersCreate {
+	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[OrdersRow](Orders().ID(), value))
+	return OrdersCreate{fields: fields}
+}
+func (p OrdersCreate) UserID(value int64) OrdersCreate {
+	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[OrdersRow](Orders().UserID(), value))
+	return OrdersCreate{fields: fields}
+}
+func (p OrdersCreate) Total(value int64) OrdersCreate {
+	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[OrdersRow](Orders().Total(), value))
+	return OrdersCreate{fields: fields}
+}
+func (p OrdersCreate) Plan() rasql.CreatePlan[OrdersRow] {
+	plan, _ := rasql.NewCreatePlan[OrdersRow](Orders(), p.fields...)
+	return plan
+}
+
+type OrdersPatch struct {
+	fields []rasql.MutationField[OrdersRow]
+}
+
+func NewOrdersPatch() OrdersPatch { return OrdersPatch{} }
+
+func (p OrdersPatch) UserID(value int64) OrdersPatch {
+	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[OrdersRow](Orders().UserID(), value))
+	return OrdersPatch{fields: fields}
+}
+func (p OrdersPatch) Total(value int64) OrdersPatch {
+	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[OrdersRow](Orders().Total(), value))
+	return OrdersPatch{fields: fields}
+}
+func (p OrdersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[OrdersRow], error) {
+	return rasql.NewPatchPlan[OrdersRow](Orders(), predicate, p.fields...)
+}
