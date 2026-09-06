@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/lestrrat-go/rasql/schema"
@@ -29,7 +30,7 @@ type ResultQuery struct {
 // ResultOf makes body reusable as a relation after validating its output
 // metadata against the body's projection count.
 func ResultOf(body QueryBody, columns ...ResultColumn) (ResultQuery, error) {
-	if body == nil {
+	if body == nil || (reflect.ValueOf(body).Kind() == reflect.Pointer && reflect.ValueOf(body).IsNil()) {
 		return ResultQuery{}, fmt.Errorf("result query body must not be nil")
 	}
 	if err := body.Validate(); err != nil {

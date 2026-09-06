@@ -51,10 +51,29 @@ func TestSQLiteReusableResultQueryConsumer(t *testing.T) {
 	var groups int
 	require.NoError(t, database.QueryRowContext(t.Context(), countStatement.SQL(), countStatement.Args()...).Scan(&groups))
 	require.Equal(t, 2, groups)
+	distinct, err := query.NewSelect(events, category)
+	require.NoError(t, err)
+	distinct, err = distinct.WithDistinct()
+	require.NoError(t, err)
+	distinct, err = distinct.WithOrder(query.Asc(category))
+	require.NoError(t, err)
+	distinctStatement, err := render.Select(dialect.SQLite(), distinct)
+	require.NoError(t, err)
+	distinctRows, err := database.QueryContext(t.Context(), distinctStatement.SQL(), distinctStatement.Args()...)
+	require.NoError(t, err)
+	var distinctValues []sql.NullString
+	for distinctRows.Next() {
+		var item sql.NullString
+		require.NoError(t, distinctRows.Scan(&item))
+		distinctValues = append(distinctValues, item)
+	}
+	require.NoError(t, distinctRows.Err())
+	require.NoError(t, distinctRows.Close())
+	require.Equal(t, []sql.NullString{{}, {Valid: true, String: "a"}, {Valid: true, String: "b"}}, distinctValues)
 
 	paged, err := query.NewSelect(derived, derived.Column("category"), derived.Column("count"))
 	require.NoError(t, err)
-	paged, err = paged.WithOrder(query.Asc(derived.Column("count")))
+	paged, err = paged.WithOrder(query.Asc(derived.Column("count")), query.Asc(derived.Column("category")))
 	require.NoError(t, err)
 	paged, err = paged.WithLimit(1)
 	require.NoError(t, err)
@@ -94,19 +113,32 @@ func TestSQLiteReusableResultQueryConsumer(t *testing.T) {
 	require.NoError(t, err)
 	unionRelation, err := query.Derived(compoundResult, "all_groups")
 	require.NoError(t, err)
-	unionStatement, err := render.Select(dialect.SQLite(), mustSelect(t, unionRelation, unionRelation.Column("category")))
+	unionSelect := mustSelect(t, unionRelation, unionRelation.Column("category"), unionRelation.Column("count"))
+	unionSelect, err = unionSelect.WithOrder(query.Asc(unionRelation.Column("category")), query.Asc(unionRelation.Column("count")))
+	require.NoError(t, err)
+	unionStatement, err := render.Select(dialect.SQLite(), unionSelect)
 	require.NoError(t, err)
 	rows, err = database.QueryContext(t.Context(), unionStatement.SQL(), unionStatement.Args()...)
 	require.NoError(t, err)
-	unionRows := 0
+	unionRows := make([]struct {
+		category sql.NullString
+		count    int
+	}, 0, 4)
 	for rows.Next() {
-		var ignored sql.NullString
-		require.NoError(t, rows.Scan(&ignored))
-		unionRows++
+		var item struct {
+			category sql.NullString
+			count    int
+		}
+		require.NoError(t, rows.Scan(&item.category, &item.count))
+		unionRows = append(unionRows, item)
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	require.Equal(t, 4, unionRows)
+	require.Equal(t, 4, len(unionRows))
+	require.Equal(t, []sql.NullString{{}, {}, {Valid: true, String: "a"}, {Valid: true, String: "a"}}, []sql.NullString{unionRows[0].category, unionRows[1].category, unionRows[2].category, unionRows[3].category})
+	for _, item := range unionRows {
+		require.Equal(t, 2, item.count)
+	}
 
 	cte, err := query.CommonTable("positive_groups", result)
 	require.NoError(t, err)
@@ -131,12 +163,47 @@ func TestSQLiteReusableResultQueryConsumer(t *testing.T) {
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), insertStatement.SQL(), insertStatement.Args()...)
 	require.NoError(t, err)
-	var archived int
-	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM archive`).Scan(&archived))
-	require.Equal(t, 2, archived)
-	var updated int
-	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM events WHERE value = 9`).Scan(&updated))
-	require.Equal(t, 2, updated)
+	archiveRows, err := database.QueryContext(t.Context(), `SELECT category, count FROM archive ORDER BY category`)
+	require.NoError(t, err)
+	type archiveRow struct {
+		category sql.NullString
+		count    int
+	}
+	var storedArchive []archiveRow
+	for archiveRows.Next() {
+		var item archiveRow
+		require.NoError(t, archiveRows.Scan(&item.category, &item.count))
+		storedArchive = append(storedArchive, item)
+	}
+	require.NoError(t, archiveRows.Err())
+	require.NoError(t, archiveRows.Close())
+	require.Len(t, storedArchive, 2)
+	require.False(t, storedArchive[0].category.Valid)
+	require.Equal(t, 2, storedArchive[0].count)
+	require.Equal(t, sql.NullString{Valid: true, String: "a"}, storedArchive[1].category)
+	require.Equal(t, 2, storedArchive[1].count)
+	eventRows, err := database.QueryContext(t.Context(), `SELECT id, category, value FROM events ORDER BY id`)
+	require.NoError(t, err)
+	type eventRow struct {
+		id       int
+		category sql.NullString
+		value    int
+	}
+	var storedEvents []eventRow
+	for eventRows.Next() {
+		var item eventRow
+		require.NoError(t, eventRows.Scan(&item.id, &item.category, &item.value))
+		storedEvents = append(storedEvents, item)
+	}
+	require.NoError(t, eventRows.Err())
+	require.NoError(t, eventRows.Close())
+	require.Equal(t, []eventRow{
+		{1, sql.NullString{Valid: true, String: "a"}, 9},
+		{2, sql.NullString{Valid: true, String: "a"}, 9},
+		{3, sql.NullString{}, 1},
+		{4, sql.NullString{}, 1},
+		{5, sql.NullString{Valid: true, String: "b"}, 0},
+	}, storedEvents)
 }
 
 func mustSelect(t *testing.T, source query.RelationRef, projections ...query.Projection) query.Select {

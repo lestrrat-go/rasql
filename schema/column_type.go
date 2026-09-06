@@ -187,10 +187,14 @@ func ValidateColumnType(columnType ColumnType) error {
 	if value.Kind() == reflect.Pointer && value.IsNil() {
 		return fmt.Errorf("column type must not be a typed nil")
 	}
-	if !validColumnType(columnType) {
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	base := value.Interface().(ColumnType)
+	if !validColumnType(base) {
 		return fmt.Errorf("unsupported column type %T", columnType)
 	}
-	switch typed := columnType.(type) {
+	switch typed := base.(type) {
 	case DecimalType:
 		if typed.Precision < 1 {
 			return fmt.Errorf("decimal precision must be at least 1")
