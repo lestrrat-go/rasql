@@ -42,6 +42,10 @@ type DB = exec.DB
 // Optional hooks observe every statement run through the returned DB and,
 // unless narrowed or extended by WithHooks or by Begin's own hooks parameter,
 // every transaction Begin starts from it.
-func New(handle Handle, d dialect.Dialect, hooks ...Hook) (DB, error) {
-	return exec.New(handle, d, hooks...)
+type Option = exec.Option
+
+func WithRelationshipBindLimit(limit int) Option { return exec.WithRelationshipBindLimit(limit) }
+
+func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
+	return exec.New(handle, d, options...)
 }

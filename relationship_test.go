@@ -1,14 +1,36 @@
 package rasql_test
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
+
+func TestLoadHasManyPlanBatchesAndCapsSQLite(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+	_, err = database.Exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, active INTEGER, created_at INTEGER); INSERT INTO orders VALUES (1,1,1,1),(2,1,1,2),(3,1,1,3),(4,1,1,4),(5,1,1,5),(6,1,1,6),(7,2,1,1)")
+	require.NoError(t, err)
+	db, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	orders, err := rasql.TableOf[planOrder](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}, {Name: "created_at", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	require.NoError(t, err)
+	loaded, err := rasql.LoadHasManyPlan(t.Context(), db, orders, []query.ColumnRef{orders.Column("user_id")}, []relationshipUser{{ID: 1}, {ID: 1}, {ID: 2}, {ID: 3}}, func(user relationshipUser) int64 { return user.ID }, func(order planOrder) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{Where: query.Equal(orders.Column("active"), 1), OrderBy: []query.Order{query.Desc(orders.Column("created_at"))}, PerParentLimit: 5, BindLimit: 2})
+	require.NoError(t, err)
+	require.Len(t, loaded[1], 5)
+	require.Equal(t, int64(6), loaded[1][0].ID)
+	require.Len(t, loaded[2], 1)
+	require.Empty(t, loaded[3])
+}
 
 type relationshipUser struct {
 	ID int64
@@ -18,6 +40,8 @@ type relationshipOrder struct {
 	ID     int64
 	UserID int64
 }
+
+type planOrder struct{ ID, UserID, Active, CreatedAt int64 }
 
 type unsignedRelationshipUser struct {
 	ID uint64

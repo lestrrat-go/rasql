@@ -376,6 +376,37 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		}
 		r.builder.WriteString("))")
 		return nil
+	case query.TupleMembership:
+		if len(expression.Columns) == 0 || len(expression.Values) == 0 {
+			return fmt.Errorf("tuple IN requires columns and values")
+		}
+		r.builder.WriteByte('(')
+		for i, column := range expression.Columns {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			if err := r.writeExpression(column); err != nil {
+				return err
+			}
+		}
+		r.builder.WriteString(") IN (")
+		for i, values := range expression.Values {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			r.builder.WriteByte('(')
+			for j, value := range values {
+				if j > 0 {
+					r.builder.WriteString(", ")
+				}
+				if err := r.writeExpression(query.Bind(value)); err != nil {
+					return err
+				}
+			}
+			r.builder.WriteByte(')')
+		}
+		r.builder.WriteString(")")
+		return nil
 	case query.Subquery:
 		r.builder.WriteByte('(')
 		if err := r.writeSelect(expression.Statement()); err != nil {

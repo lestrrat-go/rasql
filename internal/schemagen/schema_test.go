@@ -275,7 +275,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	// A nullable column is a pointer field, and the generated scan methods
 	// assign through it.
 	require.Contains(t, string(source), "\tEmail     *string\n")
-	require.NotContains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
 	require.NotContains(t, string(source), "github.com/lestrrat-go/rasql/row")
 	// PackageSource returns a whole package, descriptors included, so it
 	// names the schema package its descriptor literals are written in.
