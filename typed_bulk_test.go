@@ -430,6 +430,55 @@ func TestBulkCallerTransactionCommitRemainsNonDurable(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestBulkAtomicCallerTransactionPersistsAccordingToOuterDecision(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		finalize func(*sql.Tx) error
+		wantRows int
+	}{
+		{name: "rollback", finalize: (*sql.Tx).Rollback, wantRows: 0},
+		{name: "commit", finalize: (*sql.Tx).Commit, wantRows: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sqlDB, err := sql.Open("sqlite", ":memory:")
+			require.NoError(t, err)
+			defer func() { _ = sqlDB.Close() }()
+			sqlDB.SetMaxOpenConns(1)
+			_, err = sqlDB.Exec(`CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT NOT NULL)`)
+			require.NoError(t, err)
+			table := rasql.MustTableOf[bulkTestRow](schema.TableDef{
+				Name: "items", PrimaryKey: []string{"id"},
+				Columns: []schema.ColumnDef{
+					{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+					{Name: "a", Type: schema.TextType{}},
+				},
+			})
+			a := query.TypedColumnOf[bulkTestRow, string](table.Column("a"))
+			first, err := rasql.NewCreatePlan(table, rasql.SetField(a, "outer-one"))
+			require.NoError(t, err)
+			second, err := rasql.NewCreatePlan(table, rasql.SetField(a, "outer-two"))
+			require.NoError(t, err)
+			bulk, err := rasql.NewBulkPlan(first, second)
+			require.NoError(t, err)
+			tx, err := sqlDB.BeginTx(t.Context(), nil)
+			require.NoError(t, err)
+			db, err := rasql.New(tx, dialect.SQLite())
+			require.NoError(t, err)
+			outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{Atomic: true})
+			require.NoError(t, err)
+			require.Equal(t, []rasql.InputRange{{First: 0, Last: 1}}, outcome.Completed)
+			require.False(t, outcome.Durable)
+			returned := outcome
+			require.NoError(t, test.finalize(tx))
+			require.Equal(t, []rasql.InputRange{{First: 0, Last: 1}}, returned.Completed)
+			require.False(t, returned.Durable)
+			var count int
+			require.NoError(t, sqlDB.QueryRow(`SELECT count(*) FROM items`).Scan(&count))
+			require.Equal(t, test.wantRows, count)
+		})
+	}
+}
+
 func TestBulkCallerSavepointPreservesOuterSentinel(t *testing.T) {
 	sqlDB, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
