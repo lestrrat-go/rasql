@@ -62,6 +62,11 @@ func TestNativeRuntime(t *testing.T) {
  require.Equal(t, "amount", row.Amount)
  require.Equal(t, "one", row.Choice)
  require.Equal(t, "admin", row.Role)
+ value, ok := row.ColumnValue("mood"); require.True(t, ok); require.Equal(t, "happy", value)
+ value, ok = row.ColumnValue("moods"); require.True(t, ok); require.Equal(t, []string{"sad"}, value)
+ value, ok = row.ColumnValue("amount"); require.True(t, ok); require.Equal(t, "amount", value)
+ value, ok = row.ColumnValue("choice"); require.True(t, ok); require.Equal(t, "one", value)
+ value, ok = row.ColumnValue("role"); require.True(t, ok); require.Equal(t, "admin", value)
  for _, test := range []struct { column query.ColumnRef; value any }{
   {generated.Events().Mood(), "happy"}, {generated.Events().Moods(), []string{"sad"}}, {generated.Events().Amount(), "amount"}, {generated.Events().Choice(), "one"}, {generated.Events().Role(), "admin"},
  } {
