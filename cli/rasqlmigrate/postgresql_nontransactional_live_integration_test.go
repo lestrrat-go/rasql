@@ -10,6 +10,9 @@ import (
 
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/migrate/diff"
+	postgresqldiff "github.com/lestrrat-go/rasql/migrate/diff/postgresql"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,16 +23,19 @@ func TestPostgreSQLCLIConcurrentIndexRoundTrip(t *testing.T) {
 	t.Cleanup(func() { stdlib.UnregisterConnConfig(dsn) })
 	root := t.TempDir()
 	migrations := filepath.Join(root, "migrations")
-	write := func(id, name, source string) {
-		directory := filepath.Join(migrations, id)
-		require.NoError(t, os.MkdirAll(directory, 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(directory, name), []byte(source), 0o600))
-	}
-	write("001_create_users", "001_create_users.up.sql", "CREATE TABLE users (id BIGINT PRIMARY KEY);\n")
-	write("001_create_users", "001_create_users.down.sql", "DROP TABLE users;\n")
-	write("002_users_index", "001_users_index.up.sql", "CREATE INDEX CONCURRENTLY users_id_idx ON users (id);\n")
-	write("002_users_index", "001_users_index.down.sql", "DROP INDEX CONCURRENTLY users_id_idx;\n")
-	require.NoError(t, os.WriteFile(filepath.Join(migrations, "002_users_index", ".rasql-mode"), []byte("nontransactional\n"), 0o600))
+	analyzer := postgresqldiff.New()
+	baseline, err := analyzer.Parse([]diff.Source{{Path: "baseline.sql", SQL: sqltext.Text("CREATE TABLE users (id BIGINT PRIMARY KEY);")}})
+	require.NoError(t, err)
+	target, err := analyzer.Parse([]diff.Source{{Path: "target.sql", SQL: sqltext.Text("CREATE TABLE users (id BIGINT PRIMARY KEY); CREATE INDEX CONCURRENTLY users_id_idx ON users (id);")}})
+	require.NoError(t, err)
+	tableDirectory := filepath.Join(migrations, "001_create_users")
+	require.NoError(t, os.MkdirAll(tableDirectory, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(tableDirectory, "001_create_users.up.sql"), []byte("CREATE TABLE users (id BIGINT PRIMARY KEY);\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(tableDirectory, "001_create_users.down.sql"), []byte("DROP TABLE users;\n"), 0o600))
+	indexPlan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, "nontransactional", string(indexPlan.Mode))
+	require.NoError(t, diff.WriteMigration(filepath.Join(migrations, "002_users_index"), indexPlan))
 	var output bytes.Buffer
 	require.NoError(t, Run([]string{"apply", "-dir", migrations, "-dialect", "postgresql", "-dsn", dsn}, &output, &output))
 	var valid, ready bool

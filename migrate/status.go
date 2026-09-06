@@ -88,6 +88,10 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 		if err := r.withMySQLReadLock(ctx, connection, observe); err != nil {
 			return nil, err
 		}
+	} else if r.dialect.Name() == "postgresql" {
+		if err := r.withPostgreSQLReadLock(ctx, connection, observe); err != nil {
+			return nil, err
+		}
 	} else if err := observe(); err != nil {
 		return nil, err
 	}

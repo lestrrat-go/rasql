@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -70,6 +71,68 @@ func TestPostgreSQLNonTransactionalCheckpointRecovery(t *testing.T) {
 	var remaining int
 	require.NoError(t, restartedDatabase.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM pg_class WHERE relname = $1", index).Scan(&remaining))
 	require.Zero(t, remaining)
+}
+
+func TestPostgreSQLTwoRunnersAndStatusShareMigrationLock(t *testing.T) {
+	config := dbtest.PostgreSQLConfig(t)
+	database := dbtest.PostgreSQLDB(t)
+	secondDatabase := stdlib.OpenDB(*config)
+	t.Cleanup(func() { _ = secondDatabase.Close() })
+	history := dbtest.UniqueName(t, "p8_pg_serial_history")
+	table := dbtest.UniqueName(t, "p8_pg_serial_table")
+	migration := Migration{ID: "001_serial", Mode: ExecutionModeNonTransactional, Statements: []Statement{{
+		Source: "001_table.up.sql", SQL: sqltext.Text("CREATE TABLE " + table + " (id BIGINT PRIMARY KEY)"),
+	}}, Down: []Statement{{Source: "001_table.down.sql", SQL: sqltext.Text("DROP TABLE " + table)}}}
+	first, err := NewWithHistoryTable(database, dialect.PostgreSQL(), history)
+	require.NoError(t, err)
+	second, err := NewWithHistoryTable(secondDatabase, dialect.PostgreSQL(), history)
+	require.NoError(t, err)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	previousHook := journalWriteHook
+	var checkpoint bool
+	journalWriteHook = func(operation string) error {
+		if operation == "checkpoint" && !checkpoint {
+			checkpoint = true
+			close(entered)
+			select {
+			case <-release:
+			case <-time.After(10 * time.Second):
+				return errPostgreSQLLiveJournalFailure
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		journalWriteHook = previousHook
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	firstResult := make(chan error, 1)
+	go func() {
+		_, runErr := first.Apply(context.Background(), AllPending(), migration)
+		firstResult <- runErr
+	}()
+	<-entered
+	secondContext, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	_, secondErr := second.Apply(secondContext, AllPending(), migration)
+	cancel()
+	require.ErrorIs(t, secondErr, context.DeadlineExceeded)
+	statusContext, statusCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	_, statusErr := second.Status(statusContext, migration)
+	statusCancel()
+	require.ErrorIs(t, statusErr, context.DeadlineExceeded)
+	close(release)
+	require.NoError(t, <-firstResult)
+	status, err := second.Status(t.Context(), migration)
+	require.NoError(t, err)
+	require.Equal(t, StatusApplied, status[0].State)
+	var count int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM "+history).Scan(&count))
+	require.Equal(t, 1, count)
 }
 
 var errPostgreSQLLiveJournalFailure = errorString("postgresql live journal failure")
