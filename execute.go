@@ -43,6 +43,43 @@ func QueryRenderedOne[T any](ctx context.Context, db DB, s stmt.Statement) (T, e
 	return exactlyOne(rows)
 }
 
+// QueryRenderedOptional executes a precompiled SELECT and decodes at most one
+// result. It reports whether a row was found and rejects a second row.
+func QueryRenderedOptional[T any](ctx context.Context, db DB, s stmt.Statement) (T, bool, error) {
+	var zero T
+	rows, err := QueryRendered[T](ctx, db, s)
+	if err != nil {
+		return zero, false, err
+	}
+	return optionalOne(rows)
+}
+
+func optionalOne[T any](rows iter.Seq2[T, error]) (T, bool, error) {
+	var zero T
+	seen := false
+	var result T
+	var scanErr error
+	rows(func(row T, err error) bool {
+		if err != nil {
+			scanErr = err
+			return false
+		}
+		if seen {
+			scanErr = ErrMultipleRows
+			return false
+		}
+		result, seen = row, true
+		return true
+	})
+	if scanErr != nil {
+		return zero, false, scanErr
+	}
+	if !seen {
+		return zero, false, nil
+	}
+	return result, true, nil
+}
+
 // Exec renders and executes a write statement.
 // It rejects a statement carrying a RETURNING clause, because ExecContext
 // discards result rows; QueryWrite reads them instead.

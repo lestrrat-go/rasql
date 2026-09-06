@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/token"
@@ -18,6 +19,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/internal/schemagen"
 	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -118,6 +120,10 @@ func (hint TableHint) Apply(table schema.TableDef) schema.TableDef {
 // Query is one static SQL template compiled into a generated function
 // inside the store package.
 type Query struct {
+	Describer   querydescribe.Describer
+	Expected    *querydescribe.Description
+	ResultType  string
+	Cardinality querydescribe.Cardinality
 	// Bindings overrides generated Go parameter types by bind name.
 	Bindings map[string]namedsql.ParameterBinding
 
@@ -196,7 +202,10 @@ type Query struct {
 // asked, rather than the two strings compared, and two spellings that fold
 // together while neither of them exists yet -- which nothing on disk tells
 // apart -- are refused rather than planned as two files.
-func (s Store) Plan() (Plan, error) {
+func (s Store) Plan() (Plan, error) { return s.PlanContext(context.Background()) }
+
+// PlanContext plans the store and runs configured result describers.
+func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	// The blank identifier is checked separately because
 	// token.IsIdentifier accepts it: it is an identifier everywhere else
 	// in Go, but "package _" is not a package clause the compiler
@@ -317,7 +326,7 @@ func (s Store) Plan() (Plan, error) {
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorTestFilename), Source: descriptorTestSource})
 
 	for index, q := range s.Queries {
-		file, err := s.planQuery(root, dir, q, sorted, filenames, identifiers)
+		file, err := s.planQuery(ctx, root, dir, q, sorted, filenames, identifiers)
 		if err != nil {
 			return Plan{}, fmt.Errorf("generate: query[%d]: %w", index, err)
 		}
@@ -429,7 +438,7 @@ func (s Store) Check() error {
 // both once they pass, so a later query is checked against them too. tables
 // is the hint-applied, validated, name-sorted set the generated package
 // declares; a bind that names a column resolves against it.
-func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string) (File, error) {
+func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string) (File, error) {
 	if q.Input == "" && q.SQL == "" {
 		return File{}, errors.New("input or sql is required")
 	}
@@ -488,6 +497,16 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 	definition, err := compiled.QueryDef().WithBindings(q.Bindings)
 	if err != nil {
 		return File{}, err
+	}
+	if q.Describer != nil {
+		description, err := q.Describer.Describe(ctx, querydescribe.Request{Name: q.Function, SQL: definition.SQL, Parameters: definition.Parameters, Tables: tables, Expected: q.Expected, Cardinality: q.Cardinality})
+		if err != nil {
+			return File{}, err
+		}
+		definition.Result = &description
+		definition.ResultType = q.ResultType
+	} else if q.Expected != nil || q.ResultType != "" || q.Cardinality != querydescribe.Many {
+		return File{}, fmt.Errorf("query %q: typed result options require a describer", q.Function)
 	}
 	source, err := querygen.GoSourceInDir(dir, definition, s.Package, q.Function, tables...)
 	if err != nil {
