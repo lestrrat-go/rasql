@@ -33,7 +33,7 @@ func TestWithPostgreSQLLockJoinsCanceledOperationAndCleanup(t *testing.T) {
 	database := runner.database
 	connection, err := database.Conn(t.Context())
 	require.NoError(t, err)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	operationErr := context.Canceled
 	releaseErr := errors.New("unlock query failed")
 	mock.ExpectExec("SELECT pg_advisory_lock(hashtextextended($1, 0))").WithArgs(postgreSQLLockHistory).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -52,7 +52,7 @@ func TestReleasePostgreSQLLockRejectsFalseAndDisposesConnection(t *testing.T) {
 	defer closeTest()
 	connection, err := runner.database.Conn(t.Context())
 	require.NoError(t, err)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	mock.ExpectQuery("SELECT pg_advisory_unlock(hashtextextended($1, 0))").WithArgs(postgreSQLLockHistory).
 		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(false))
 	err = runner.releasePostgreSQLLock(connection)
@@ -66,7 +66,7 @@ func TestReleasePostgreSQLLockAcceptsTrue(t *testing.T) {
 	defer closeTest()
 	connection, err := runner.database.Conn(t.Context())
 	require.NoError(t, err)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	mock.ExpectQuery("SELECT pg_advisory_unlock(hashtextextended($1, 0))").WithArgs(postgreSQLLockHistory).
 		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(true))
 	require.NoError(t, runner.releasePostgreSQLLock(connection))
@@ -78,7 +78,7 @@ func TestReleasePostgreSQLLockBoundsCleanup(t *testing.T) {
 	defer closeTest()
 	connection, err := runner.database.Conn(t.Context())
 	require.NoError(t, err)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	mock.ExpectQuery("SELECT pg_advisory_unlock(hashtextextended($1, 0))").WithArgs(postgreSQLLockHistory).
 		WillDelayFor(postgreSQLLockReleaseTimeout + time.Second).WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(true))
 	started := time.Now()
