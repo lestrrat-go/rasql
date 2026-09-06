@@ -200,6 +200,8 @@ func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
 	mock.ExpectExec("UPDATE `rasql_schema_migrations_progress` SET `next_index`=?, `source`=? WHERE `id`=?").
 		WithArgs(1, "001.sql", "001_create_users").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT `id`, `checksum` FROM `rasql_schema_migrations` ORDER BY `id`").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum"}))
 	mock.ExpectExec("INSERT INTO `rasql_schema_migrations` (`id`, `checksum`) VALUES (?, ?)").
 		WithArgs("001_create_users", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))

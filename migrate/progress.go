@@ -66,6 +66,9 @@ func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations 
 	if err := r.validate(); err != nil {
 		return err
 	}
+	if r.dialect.Name() != "mysql" {
+		return fmt.Errorf("migrate: reconcile is supported only for MySQL")
+	}
 	prepared, err := prepareMigrations(migrations)
 	if err != nil {
 		return err
@@ -92,6 +95,9 @@ func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations 
 		if err := r.validateProgress(entry, prepared); err != nil {
 			return nil, err
 		}
+		if entry.nextIndex > entry.sourceIndex {
+			return nil, incompleteError(*entry, errors.New("migrate: progress source is already known complete; retry to finalize it"))
+		}
 		decision, err := check.Check(ctx, connection, IncompleteMigration{ID: entry.id, Checksum: entry.checksum, Source: entry.source, Direction: entry.direction, SourceIndex: entry.sourceIndex})
 		if err != nil {
 			return nil, err
@@ -99,32 +105,24 @@ func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations 
 		migration := findProgressMigration(prepared, entry.id)
 		switch decision {
 		case ReconcileNotExecuted:
-			return nil, r.deleteProgress(ctx, connection, entry.id)
+			return nil, r.restoreKnownCheckpoint(ctx, connection, migration, entry.direction, entry.nextIndex)
 		case ReconcileExecuted:
 			if err := r.checkpointProgress(ctx, connection, migration, entry.direction, entry.sourceIndex); err != nil {
 				return nil, err
 			}
-			if entry.direction == DirectionUp {
-				if entry.sourceIndex+1 == len(migration.statements) {
-					if err := r.record(ctx, connection, migration); err != nil {
-						return nil, err
-					}
-				}
-			} else if entry.sourceIndex+1 == len(migration.down) {
-				if err := r.forget(ctx, connection, migration.id); err != nil {
+			statements, _ := progressStatements(migration, entry.direction)
+			if entry.sourceIndex+1 == len(statements) {
+				entry.nextIndex = entry.sourceIndex + 1
+				if err := r.finalizeProgress(ctx, connection, *entry, migration); err != nil {
 					return nil, err
 				}
 			}
-			return nil, r.deleteProgress(ctx, connection, entry.id)
+			return nil, nil
 		default:
 			return nil, fmt.Errorf("migrate: invalid reconcile decision %q", decision)
 		}
 	}
-	if r.dialect.Name() == "mysql" {
-		_, err = r.withMySQLLock(ctx, connection, run)
-		return err
-	}
-	_, err = run()
+	_, err = r.withMySQLLock(ctx, connection, run)
 	return err
 }
 
@@ -179,6 +177,17 @@ func migrationSource(migration preparedMigration, direction Direction, index int
 	return migration.statements[index].Source
 }
 
+func progressStatements(migration preparedMigration, direction Direction) ([]Statement, error) {
+	switch direction {
+	case DirectionUp:
+		return migration.statements, nil
+	case DirectionDown:
+		return migration.down, nil
+	default:
+		return nil, fmt.Errorf("migrate: invalid progress direction %q", direction)
+	}
+}
+
 func (r Runner) checkpointProgress(ctx context.Context, connection executor, migration preparedMigration, direction Direction, index int) error {
 	entrySource := migrationSource(migration, direction, index)
 	first, err := r.dialect.Placeholder(1)
@@ -209,6 +218,56 @@ func (r Runner) deleteProgress(ctx context.Context, connection executor, id stri
 	return err
 }
 
+func (r Runner) restoreKnownCheckpoint(ctx context.Context, connection executor, migration preparedMigration, direction Direction, nextIndex int) error {
+	statements, err := progressStatements(migration, direction)
+	if err != nil {
+		return err
+	}
+	if nextIndex == 0 {
+		return r.deleteProgress(ctx, connection, migration.id)
+	}
+	if nextIndex > len(statements) {
+		return fmt.Errorf("migrate: progress checkpoint %d is outside source count %d", nextIndex, len(statements))
+	}
+	return r.upsertProgress(ctx, connection, migration, direction, nextIndex-1)
+}
+
+func (r Runner) finalizeProgress(ctx context.Context, connection interface {
+	executor
+	queryer
+}, entry progressEntry, migration preparedMigration) error {
+	statements, err := progressStatements(migration, entry.direction)
+	if err != nil {
+		return err
+	}
+	if entry.nextIndex != len(statements) || entry.sourceIndex != len(statements)-1 {
+		return fmt.Errorf("migrate: progress row is not terminal")
+	}
+	applied, err := r.applied(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if entry.direction == DirectionUp {
+		recorded, exists := applied[migration.id]
+		if exists && recorded != migration.checksum {
+			return fmt.Errorf("migrate: migration %q history checksum does not match progress", migration.id)
+		}
+		if !exists {
+			if err := r.record(ctx, connection, migration); err != nil {
+				return err
+			}
+		}
+	} else if recorded, exists := applied[migration.id]; exists {
+		if recorded != migration.checksum {
+			return fmt.Errorf("migrate: migration %q history checksum does not match progress", migration.id)
+		}
+		if err := r.forget(ctx, connection, migration.id); err != nil {
+			return err
+		}
+	}
+	return r.deleteProgress(ctx, connection, migration.id)
+}
+
 func incompleteError(entry progressEntry, cause error) error {
 	return &IncompleteMigrationError{Incomplete: IncompleteMigration{ID: entry.id, Checksum: entry.checksum, Source: entry.source, Direction: entry.direction, SourceIndex: entry.sourceIndex}, Cause: cause}
 }
@@ -224,15 +283,18 @@ func (r Runner) validateProgress(entry *progressEntry, migrations []preparedMigr
 		if entry.direction != DirectionUp && entry.direction != DirectionDown {
 			return fmt.Errorf("migrate: migration %q progress direction is invalid", entry.id)
 		}
-		statements := migration.statements
-		if entry.direction == DirectionDown {
-			statements = migration.down
+		statements, err := progressStatements(migration, entry.direction)
+		if err != nil {
+			return err
 		}
 		if entry.sourceIndex < 0 || entry.sourceIndex >= len(statements) || statements[entry.sourceIndex].Source != entry.source {
 			return fmt.Errorf("migrate: migration %q progress source does not match supplied migration", entry.id)
 		}
-		if entry.nextIndex < entry.sourceIndex || entry.nextIndex > len(statements) {
+		if entry.nextIndex < entry.sourceIndex || entry.nextIndex > entry.sourceIndex+1 || entry.nextIndex > len(statements) {
 			return fmt.Errorf("migrate: migration %q progress index is invalid", entry.id)
+		}
+		if entry.nextIndex == len(statements) && entry.sourceIndex != len(statements)-1 {
+			return fmt.Errorf("migrate: migration %q progress terminal index is invalid", entry.id)
 		}
 		return nil
 	}
@@ -243,12 +305,26 @@ func (r Runner) applyPreparedMySQL(ctx context.Context, connection *sql.Conn, ta
 	entry, err := r.progress(ctx, connection)
 	if err != nil {
 		return nil, err
-	} else if entry != nil {
+	}
+	completed := make([]Migration, 0)
+	if entry != nil {
 		if err := r.validateProgress(entry, migrations); err != nil {
 			return nil, err
 		}
+		if entry.direction != DirectionUp {
+			return nil, fmt.Errorf("migrate: apply cannot resume %s progress; reconcile or revert it first", entry.direction)
+		}
 		if entry.nextIndex <= entry.sourceIndex {
 			return nil, incompleteError(*entry, errors.New("source outcome is uncertain; reconcile it before retrying"))
+		}
+		migration := findProgressMigration(migrations, entry.id)
+		statements, _ := progressStatements(migration, entry.direction)
+		if entry.nextIndex == len(statements) {
+			if err := r.finalizeProgress(ctx, connection, *entry, migration); err != nil {
+				return nil, incompleteError(*entry, fmt.Errorf("finalize progress: %w", err))
+			}
+			completed = append(completed, exportMigrationsForResult([]Migration{{ID: migration.id, Statements: migration.statements, Down: migration.down}})...)
+			entry = nil
 		}
 	}
 	recorded, err := r.applied(ctx, connection)
@@ -259,21 +335,13 @@ func (r Runner) applyPreparedMySQL(ctx context.Context, connection *sql.Conn, ta
 	if err != nil {
 		return nil, err
 	}
-	completed := make([]Migration, 0, len(selected))
+	if entry != nil {
+		selected = []preparedMigration{findProgressMigration(migrations, entry.id)}
+	}
 	for _, migration := range selected {
 		start := 0
 		if entry != nil && entry.id == migration.id {
 			start = entry.nextIndex
-			if start >= len(migration.statements) {
-				if err := r.record(ctx, connection, migration); err != nil {
-					return exportMigrationsForResult(completed), incompleteError(*entry, fmt.Errorf("record history: %w", err))
-				}
-				if err := r.deleteProgress(ctx, connection, migration.id); err != nil {
-					return exportMigrationsForResult(completed), incompleteError(*entry, fmt.Errorf("delete progress: %w", err))
-				}
-				completed = append(completed, exportMigrationsForResult([]Migration{{ID: migration.id, Statements: migration.statements, Down: migration.down}})...)
-				continue
-			}
 		}
 		for index := start; index < len(migration.statements); index++ {
 			statement := migration.statements[index]
@@ -288,13 +356,9 @@ func (r Runner) applyPreparedMySQL(ctx context.Context, connection *sql.Conn, ta
 				return exportMigrationsForResult(completed), incompleteError(entry, fmt.Errorf("checkpoint source: %w", err))
 			}
 		}
-		if err := r.record(ctx, connection, migration); err != nil {
-			entry := progressEntry{id: migration.id, checksum: migration.checksum, direction: DirectionUp, sourceIndex: len(migration.statements) - 1, source: migration.statements[len(migration.statements)-1].Source, nextIndex: len(migration.statements)}
-			return exportMigrationsForResult(completed), incompleteError(entry, fmt.Errorf("record history: %w", err))
-		}
-		if err := r.deleteProgress(ctx, connection, migration.id); err != nil {
-			entry := progressEntry{id: migration.id, checksum: migration.checksum, direction: DirectionUp, sourceIndex: len(migration.statements) - 1, source: migration.statements[len(migration.statements)-1].Source, nextIndex: len(migration.statements)}
-			return exportMigrationsForResult(completed), incompleteError(entry, fmt.Errorf("delete progress: %w", err))
+		terminal := progressEntry{id: migration.id, checksum: migration.checksum, direction: DirectionUp, sourceIndex: len(migration.statements) - 1, source: migration.statements[len(migration.statements)-1].Source, nextIndex: len(migration.statements)}
+		if err := r.finalizeProgress(ctx, connection, terminal, migration); err != nil {
+			return exportMigrationsForResult(completed), incompleteError(terminal, fmt.Errorf("finalize progress: %w", err))
 		}
 		completed = append(completed, Migration{ID: migration.id, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
 	}
@@ -305,12 +369,26 @@ func (r Runner) revertPreparedMySQL(ctx context.Context, connection *sql.Conn, t
 	entry, err := r.progress(ctx, connection)
 	if err != nil {
 		return nil, err
-	} else if entry != nil {
+	}
+	completed := make([]Migration, 0)
+	if entry != nil {
 		if err := r.validateProgress(entry, migrations); err != nil {
 			return nil, err
 		}
+		if entry.direction != DirectionDown {
+			return nil, fmt.Errorf("migrate: revert cannot resume %s progress; reconcile or apply it first", entry.direction)
+		}
 		if entry.nextIndex <= entry.sourceIndex {
 			return nil, incompleteError(*entry, errors.New("source outcome is uncertain; reconcile it before retrying"))
+		}
+		migration := findProgressMigration(migrations, entry.id)
+		statements, _ := progressStatements(migration, entry.direction)
+		if entry.nextIndex == len(statements) {
+			if err := r.finalizeProgress(ctx, connection, *entry, migration); err != nil {
+				return nil, incompleteError(*entry, fmt.Errorf("finalize progress: %w", err))
+			}
+			completed = append(completed, exportMigrationsForResult([]Migration{{ID: migration.id, Statements: migration.statements, Down: migration.down}})...)
+			entry = nil
 		}
 	}
 	recorded, err := r.applied(ctx, connection)
@@ -321,21 +399,13 @@ func (r Runner) revertPreparedMySQL(ctx context.Context, connection *sql.Conn, t
 	if err != nil {
 		return nil, err
 	}
-	completed := make([]Migration, 0, len(selected))
+	if entry != nil {
+		selected = []preparedMigration{findProgressMigration(migrations, entry.id)}
+	}
 	for _, migration := range selected {
 		start := 0
 		if entry != nil && entry.id == migration.id {
 			start = entry.nextIndex
-			if start >= len(migration.down) {
-				if err := r.forget(ctx, connection, migration.id); err != nil {
-					return exportMigrationsForResult(completed), incompleteError(*entry, fmt.Errorf("delete history: %w", err))
-				}
-				if err := r.deleteProgress(ctx, connection, migration.id); err != nil {
-					return exportMigrationsForResult(completed), incompleteError(*entry, fmt.Errorf("delete progress: %w", err))
-				}
-				completed = append(completed, exportMigrationsForResult([]Migration{{ID: migration.id, Statements: migration.statements, Down: migration.down}})...)
-				continue
-			}
 		}
 		for index := start; index < len(migration.down); index++ {
 			statement := migration.down[index]
@@ -350,13 +420,9 @@ func (r Runner) revertPreparedMySQL(ctx context.Context, connection *sql.Conn, t
 				return exportMigrationsForResult(completed), incompleteError(entry, fmt.Errorf("checkpoint source: %w", err))
 			}
 		}
-		if err := r.forget(ctx, connection, migration.id); err != nil {
-			entry := progressEntry{id: migration.id, checksum: migration.checksum, direction: DirectionDown, sourceIndex: len(migration.down) - 1, source: migration.down[len(migration.down)-1].Source, nextIndex: len(migration.down)}
-			return exportMigrationsForResult(completed), incompleteError(entry, fmt.Errorf("delete history: %w", err))
-		}
-		if err := r.deleteProgress(ctx, connection, migration.id); err != nil {
-			entry := progressEntry{id: migration.id, checksum: migration.checksum, direction: DirectionDown, sourceIndex: len(migration.down) - 1, source: migration.down[len(migration.down)-1].Source, nextIndex: len(migration.down)}
-			return exportMigrationsForResult(completed), incompleteError(entry, fmt.Errorf("delete progress: %w", err))
+		terminal := progressEntry{id: migration.id, checksum: migration.checksum, direction: DirectionDown, sourceIndex: len(migration.down) - 1, source: migration.down[len(migration.down)-1].Source, nextIndex: len(migration.down)}
+		if err := r.finalizeProgress(ctx, connection, terminal, migration); err != nil {
+			return exportMigrationsForResult(completed), incompleteError(terminal, fmt.Errorf("finalize progress: %w", err))
 		}
 		completed = append(completed, Migration{ID: migration.id, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
 	}
