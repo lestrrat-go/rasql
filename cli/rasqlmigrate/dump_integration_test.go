@@ -63,6 +63,11 @@ func TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "sequence_cases")
 	require.Contains(t, err.Error(), "shared_sequence")
+	dumpMustExec(t, ctx, source, `ALTER TABLE sequence_cases ALTER COLUMN shared_first DROP DEFAULT, ALTER COLUMN shared_second DROP DEFAULT`)
+	_, err = dumpFilesFromDatabase(ctx, dialect.PostgreSQL(), source, dumpOptions{Format: "schema"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sequence_cases")
+	require.Contains(t, err.Error(), "custom_sequence")
 	_, statErr := os.Stat(outputDirectory)
 	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
