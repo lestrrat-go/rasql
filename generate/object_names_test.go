@@ -1,9 +1,11 @@
 package generate_test
 
 import (
+	"context"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -37,6 +39,7 @@ func TestStoreObjectNamesPreservePhysicalNames(t *testing.T) {
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	for _, file := range plan.Files() {
+		require.NoError(t, os.WriteFile(file.Path, file.Source, 0o644))
 		_, parseErr := parser.ParseFile(token.NewFileSet(), file.Path, file.Source, 0)
 		require.NoError(t, parseErr)
 		if filepath.Base(file.Path) == "customer_gen.go" {
@@ -76,8 +79,8 @@ func TestStoreObjectNamesPlanIsHeldSnapshot(t *testing.T) {
 	table.PrimaryKey = []string{"id"}
 	table.UniqueConstraints = []schema.UniqueDef{{Columns: []string{"name"}}}
 	table.Indexes = []schema.IndexDef{{Name: "customer_name_idx", Columns: []string{"name"}}}
-	table.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"id"}, ReferencedTable: "customer-id", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade}}
-	table.Relationships = []schema.RelationshipDef{{Name: "Self", Kind: schema.RelationshipBelongsTo, Columns: []string{"id"}, ReferencedTable: "customer-id", ReferencedColumns: []string{"id"}}}
+	table.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"id"}, ReferencedTable: "customer_id", ReferencedColumns: []string{"id"}, DeleteSetColumns: []string{"id"}, OnDelete: schema.SetNull}}
+	table.Relationships = []schema.RelationshipDef{{Name: "Self", Kind: schema.RelationshipBelongsTo, Columns: []string{"id"}, ReferencedTable: "customer_id", ReferencedColumns: []string{"id"}}}
 	table.Columns[1].GeneratedExpression = "CustomerName"
 	table.Columns[1].GeneratedStorage = schema.GeneratedStored
 	store := generate.Store{
@@ -103,8 +106,11 @@ func TestStoreObjectNamesPlanIsHeldSnapshot(t *testing.T) {
 	store.Tables[0].Indexes[0].Columns[0] = "changed-name"
 	store.Tables[0].ForeignKeys[0].ReferencedTable = "changed"
 	store.Tables[0].ForeignKeys[0].Columns[0] = "changed-id"
+	store.Tables[0].ForeignKeys[0].ReferencedColumns[0] = "changed-id"
+	store.Tables[0].ForeignKeys[0].DeleteSetColumns[0] = "changed-id"
 	store.Tables[0].Relationships[0].ReferencedTable = "changed"
 	store.Tables[0].Relationships[0].Columns[0] = "changed-id"
+	store.Tables[0].Relationships[0].ReferencedColumns[0] = "changed-id"
 	store.Tables[0].Columns[1].Default = "changed-default"
 	store.Tables[0].Columns[1].GeneratedExpression = "changed-generated"
 	store.Hints["customer_id"] = generate.TableHint{RowName: "ChangedRow"}
@@ -136,13 +142,17 @@ func TestStoreObjectNamesKeepExistingSurfaceStable(t *testing.T) {
 
 func TestStoreObjectNamesPreserveDescriptorOwners(t *testing.T) {
 	parent := schema.MustTableDef("parent", schema.Integer("parent-id"), schema.PrimaryKey("parent-id"))
-	child := schema.MustTableDef("child", schema.Integer("child-id"), schema.Integer("parent-id"), schema.Text("same-Go-name"), schema.PrimaryKey("child-id"), schema.Unique("same-Go-name"), schema.Check("same-Go-name <> ''"), schema.Index("same_idx", "same-Go-name"))
-	child.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}, OnDelete: schema.SetNull}}
+	child := schema.MustTableDef("child", schema.Integer("child-id"), schema.Integer("parent-id"), schema.Text("same-Go-name"), schema.Text("computed"), schema.PrimaryKey("child-id"), schema.Unique("same-Go-name"), schema.Check("same-Go-name <> ''"), schema.Index("same_idx", "same-Go-name"))
+	child.Columns[2].Default = "same-Go-name"
+	child.Columns[3].GeneratedExpression = "same-Go-name"
+	child.Columns[3].GeneratedStorage = schema.GeneratedStored
+	child.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}, DeleteSetColumns: []string{"parent-id"}, OnDelete: schema.SetNull}}
 	child.Relationships = []schema.RelationshipDef{{Name: "Parent", Kind: schema.RelationshipBelongsTo, Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}}}
 	store := generate.Store{Package: "generated", Dir: t.TempDir(), Root: filepath.Dir(mustGetwd(t)), Tables: []schema.TableDef{parent, child}, Names: map[schema.ObjectName]generate.ObjectNames{{Name: "parent"}: {Accessor: "Parent", Columns: map[string]generate.ColumnNames{"parent-id": {Field: "ParentID", Accessor: "ParentIDColumn"}}}, {Name: "child"}: {Accessor: "Child", Columns: map[string]generate.ColumnNames{"child-id": {Field: "ChildID", Accessor: "ChildIDColumn"}, "parent-id": {Field: "ParentIDValue", Accessor: "ParentIDColumn"}, "same-Go-name": {Field: "SameGoName", Accessor: "SameGoNameColumn"}}}}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	for _, file := range plan.Files() {
+		require.NoError(t, os.WriteFile(file.Path, file.Source, 0o644))
 		if filepath.Base(file.Path) == "schema_gen.go" {
 			source := string(file.Source)
 			for _, physical := range []string{"parent-id", "child-id", "same-Go-name", "same-Go-name <> ''"} {
@@ -150,6 +160,18 @@ func TestStoreObjectNamesPreserveDescriptorOwners(t *testing.T) {
 			}
 		}
 	}
+	root := filepath.Dir(plan.Files()[0].Path)
+	repo := filepath.Dir(mustGetwd(t))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/owner\n\ngo 1.23\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+repo+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "owner_test.go"), []byte(`package generated
+import ("reflect"; "testing"; "github.com/lestrrat-go/rasql/schema")
+func TestDescriptorOwners(t *testing.T) { want := schema.MustTableDef("child", schema.Integer("child-id"), schema.Integer("parent-id"), schema.Text("same-Go-name"), schema.Text("computed"), schema.PrimaryKey("child-id"), schema.Unique("same-Go-name"), schema.Check("same-Go-name <> ''"), schema.Index("same_idx", "same-Go-name")); want.Columns[2].Default = "same-Go-name"; want.Columns[3].GeneratedExpression = "same-Go-name"; want.Columns[3].GeneratedStorage = schema.GeneratedStored; want.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}, DeleteSetColumns: []string{"parent-id"}, OnDelete: schema.SetNull}}; want.Relationships = []schema.RelationshipDef{{Name: "Parent", Kind: schema.RelationshipBelongsTo, Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}}}; for _, got := range Tables() { if got.Name == "child" && !reflect.DeepEqual(want, got) { t.Fatalf("descriptor mismatch: %#v", got) } } }
+`), 0o644))
+	command := exec.CommandContext(context.Background(), "go", "test", "-mod=mod", "./...")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOCACHE=/tmp/rasql-gocache")
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
 }
 
 func mustGetwd(t *testing.T) string {

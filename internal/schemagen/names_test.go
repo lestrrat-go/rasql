@@ -1,11 +1,31 @@
 package schemagen
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResolvedNamesKeepExistingEntriesStableWhenAppendingColumn(t *testing.T) {
+	beforeTable := schema.MustTableDef("users", schema.Integer("id"), schema.Text("display_name"))
+	before, err := ResolveNames("generated", []schema.TableDef{beforeTable}, NameOverrides{})
+	require.NoError(t, err)
+	afterTable := beforeTable.Clone()
+	afterTable.Columns = append(afterTable.Columns, schema.ColumnDef{Name: "unrelated", Type: schema.TextType{}})
+	after, err := ResolveNames("generated", []schema.TableDef{afterTable}, NameOverrides{})
+	require.NoError(t, err)
+	beforeObject, _ := before.Object(beforeTable)
+	afterObject, _ := after.Object(afterTable)
+	require.Equal(t, beforeObject, afterObject)
+	for _, column := range beforeTable.Columns {
+		beforeColumn, _ := before.Column(beforeTable, column.Name)
+		afterColumn, _ := after.Column(afterTable, column.Name)
+		require.True(t, reflect.DeepEqual(beforeColumn, afterColumn), column.Name)
+	}
+	require.Equal(t, before.Filename(beforeTable), after.Filename(afterTable))
+}
 
 func TestResolveNamesUsesPhysicalIdentityAndClonesOverrides(t *testing.T) {
 	mainTable := schema.MustTableDef("customer-id", schema.Integer("id"), schema.Text("foo_bar"))

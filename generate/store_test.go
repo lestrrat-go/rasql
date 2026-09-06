@@ -31,6 +31,27 @@ func TestStoreDefaultOutputCompatibilityGolden(t *testing.T) {
 	}
 }
 
+func TestStoreExtendedDefaultOutputCompatibilityGolden(t *testing.T) {
+	root := t.TempDir()
+	parent := schema.MustTableDef("events", schema.Integer("id"), schema.Time("created"), schema.Text("note", schema.Nullable()), schema.PrimaryKey("id"), schema.Unique("note"), schema.Check("id > 0"), schema.Index("events_note", "note"))
+	child := schema.MustTableDef("event_items", schema.Integer("id"), schema.Integer("event_id"), schema.Text("value"), schema.PrimaryKey("id"))
+	child.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"event_id"}, ReferencedTable: "events", ReferencedColumns: []string{"id"}}}
+	child.Relationships = []schema.RelationshipDef{{Name: "Event", Kind: schema.RelationshipBelongsTo, Columns: []string{"event_id"}, ReferencedTable: "events", ReferencedColumns: []string{"id"}}}
+	require.NoError(t, os.WriteFile(filepath.Join(root, "event_by_id.sql"), []byte("SELECT id, created FROM events WHERE id = {{bind \"id\"}}"), 0o600))
+	store := generate.Store{Package: "store", Root: root, Dir: "generated", Dialect: dialect.PostgreSQL(), Tables: []schema.TableDef{parent, child}, Queries: []generate.Query{{Input: "event_by_id.sql", Function: "EventByID", Output: "event_by_id_gen.go"}}}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	want := map[string]string{"event_by_id_gen.go": "8f7f59f3cded22263d220cbece9092e914304983c49423ccd8a77b39ece19f4e", "event_items_gen.go": "6a520bfc954525d33aac2cf8fef578d726168f303e877773c7e9f6875e9123ba", "events_gen.go": "97bf083b0c173a22e9a3799e55de794869916f794773a6b4be1437bd284fcab4", "schema_gen.go": "5694e41e46a297acddecf8055d16407f61c65518bb3bcd14bc538f11993ee50b", "schema_gen_test.go": "9455ecd97f415ae72dcba77d4129a26d718f3b08fa66a1d8f30c253b7773023b"}
+	for _, file := range plan.Files() {
+		name := filepath.Base(file.Path)
+		hash := sha256.Sum256(file.Source)
+		got := hex.EncodeToString(hash[:])
+		require.Contains(t, want, name)
+		require.Equal(t, filepath.Join(root, "generated", name), file.Path)
+		require.Equal(t, want[name], got, name)
+	}
+}
+
 // snapshotDir reads every regular file directly in dir into a name->content
 // map, for a before/after comparison that proves a call touched nothing.
 func snapshotDir(t *testing.T, dir string) map[string]string {
