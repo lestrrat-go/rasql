@@ -1800,6 +1800,10 @@ func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
 		source.WriteString(", Default: ")
 		source.WriteString(quote(column.Default))
 	}
+	if column.Collation != "" {
+		source.WriteString(", Collation: ")
+		source.WriteString(quote(column.Collation))
+	}
 	if column.GeneratedExpression != "" {
 		source.WriteString(", GeneratedExpression: ")
 		source.WriteString(quote(column.GeneratedExpression))

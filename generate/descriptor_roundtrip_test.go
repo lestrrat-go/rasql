@@ -81,10 +81,11 @@ func newTableDefFixture() schema.TableDef {
 				},
 			},
 			{
-				Name:     "name",
-				Type:     schema.TextType{Width: schema.NewTextWidth(255), Fixed: true},
-				Nullable: true,
-				Default:  "'unknown'",
+				Name:      "name",
+				Type:      schema.TextType{Width: schema.NewTextWidth(255), Fixed: true},
+				Nullable:  true,
+				Default:   "'unknown'",
+				Collation: "NOCASE",
 			},
 			{
 				Name: "amount",

@@ -164,6 +164,9 @@ type ColumnDef struct {
 	Nullable bool
 	Default  sqltext.Text
 
+	// Collation names the column's explicit collation, or is empty when the database default applies.
+	Collation string `json:",omitempty"`
+
 	// GeneratedExpression is the expression a generated column computes,
 	// exactly as the server reports it, or empty for an ordinary column.
 	// Its zero value, the empty string, means the column is not generated,
@@ -224,6 +227,7 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Type                json.RawMessage    `json:"Type"`
 		Nullable            bool               `json:"Nullable"`
 		Default             string             `json:"Default"`
+		Collation           string             `json:"Collation,omitempty"`
 		GeneratedExpression string             `json:"GeneratedExpression,omitempty"`
 		GeneratedStorage    GeneratedStorage   `json:"GeneratedStorage,omitempty"`
 		Identity            IdentityGeneration `json:"Identity,omitempty"`
@@ -238,6 +242,7 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Type:                typeData,
 		Nullable:            c.Nullable,
 		Default:             string(c.Default),
+		Collation:           c.Collation,
 		GeneratedExpression: string(c.GeneratedExpression),
 		GeneratedStorage:    c.GeneratedStorage,
 		Identity:            c.Identity,
@@ -252,6 +257,7 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Type                json.RawMessage    `json:"Type"`
 		Nullable            bool               `json:"Nullable"`
 		Default             string             `json:"Default"`
+		Collation           string             `json:"Collation,omitempty"`
 		GeneratedExpression string             `json:"GeneratedExpression,omitempty"`
 		GeneratedStorage    GeneratedStorage   `json:"GeneratedStorage,omitempty"`
 		Identity            IdentityGeneration `json:"Identity,omitempty"`
@@ -270,6 +276,7 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Type:                columnType,
 		Nullable:            wire.Nullable,
 		Default:             sqltext.Text(wire.Default),
+		Collation:           wire.Collation,
 		GeneratedExpression: sqltext.Text(wire.GeneratedExpression),
 		GeneratedStorage:    wire.GeneratedStorage,
 		Identity:            wire.Identity,
@@ -1189,6 +1196,11 @@ func (t TableDef) Validate() error {
 		}
 		if !validColumnType(column.Type) {
 			return validationError(path+".type", "unsupported column type %T", column.Type)
+		}
+		if column.Collation != "" {
+			if err := ValidateIdentifier(column.Collation); err != nil {
+				return validationError(path+".collation", "%s", err)
+			}
 		}
 		switch typed := column.Type.(type) {
 		case DecimalType:

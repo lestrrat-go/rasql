@@ -10,6 +10,7 @@ package rasqlmigrate
 // this package just for tests.
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 // dumpTestTable builds a minimal valid TableDef named name with a single
@@ -404,6 +406,49 @@ func TestDumpSQLiteTypeAllowed(t *testing.T) {
 		t.Run("refused/"+declaredType, func(t *testing.T) {
 			require.False(t, dumpSQLiteTypeAllowed(declaredType), "an unrecognized or lossy declared type must refuse, fail-closed")
 		})
+	}
+}
+
+func TestDumpSQLiteCollationGuard(t *testing.T) {
+	for _, collation := range []string{"BINARY", "nocase", "RTRIM"} {
+		t.Run(collation, func(t *testing.T) {
+			err := checkSQLiteCollations(schema.TableDef{
+				Name:    "members",
+				Columns: []schema.ColumnDef{{Name: "name", Type: schema.TextType{}, Collation: collation}},
+			})
+			require.NoError(t, err)
+		})
+	}
+	err := checkSQLiteCollations(schema.TableDef{
+		Name:    "members",
+		Columns: []schema.ColumnDef{{Name: "name", Type: schema.TextType{}, Collation: "custom"}},
+	})
+	require.ErrorContains(t, err, `column "name" uses collation "custom"`)
+}
+
+func TestDumpSQLiteCollationReplaysBehavior(t *testing.T) {
+	source, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, source.Close()) })
+	_, err = source.ExecContext(context.Background(), `CREATE TABLE inline_unique (name TEXT COLLATE NOCASE UNIQUE); CREATE TABLE table_unique (name TEXT COLLATE NOCASE, UNIQUE (name));`)
+	require.NoError(t, err)
+	files, err := dumpFilesFromDatabase(context.Background(), dialect.SQLite(), source, dumpOptions{Format: "schema"})
+	require.NoError(t, err)
+	target, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, target.Close()) })
+	for _, file := range files {
+		_, err = target.ExecContext(context.Background(), file.SQL)
+		require.NoError(t, err)
+	}
+	for _, table := range []string{"inline_unique", "table_unique"} {
+		_, err = target.ExecContext(context.Background(), `INSERT INTO `+table+` (name) VALUES ('a')`)
+		require.NoError(t, err)
+		var count int
+		require.NoError(t, target.QueryRowContext(context.Background(), `SELECT count(*) FROM `+table+` WHERE name = 'A'`).Scan(&count))
+		require.Equal(t, 1, count)
+		_, err = target.ExecContext(context.Background(), `INSERT INTO `+table+` (name) VALUES ('A')`)
+		require.Error(t, err)
 	}
 }
 

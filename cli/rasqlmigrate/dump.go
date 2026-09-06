@@ -259,6 +259,9 @@ func applyDumpGuards(ctx context.Context, transaction *sql.Tx, d dialect.Dialect
 	case "sqlite":
 		var violations []dumpTypeViolation
 		for _, table := range tables {
+			if err := checkSQLiteCollations(table); err != nil {
+				return nil, err
+			}
 			facts, err := fetchSQLiteColumnFacts(ctx, transaction, table)
 			if err != nil {
 				return nil, err
@@ -274,6 +277,20 @@ func applyDumpGuards(ctx context.Context, transaction *sql.Tx, d dialect.Dialect
 	default:
 		return tables, nil
 	}
+}
+
+func checkSQLiteCollations(table schema.TableDef) error {
+	for _, column := range table.Columns {
+		if column.Collation == "" {
+			continue
+		}
+		switch strings.ToUpper(column.Collation) {
+		case "BINARY", "NOCASE", "RTRIM":
+		default:
+			return fmt.Errorf("dump: table %q column %q uses collation %q, which SQLite dump cannot publish because the application collation implementation is unavailable", table.Name, column.Name, column.Collation)
+		}
+	}
+	return nil
 }
 
 // dumpColumnFact is one column's declared type and generation facts, read

@@ -4224,3 +4224,17 @@ func TestSQLiteInspectorTableNamesInRequiresRetainedConnectionForAttachedDatabas
 	_, err = inspector.TableNamesIn(t.Context(), "tenant")
 	require.ErrorContains(t, err, "retained")
 }
+
+func TestSQLiteInspectorReadsColumnCollation(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (name TEXT COLLATE NOCASE, note TEXT);`)
+	require.NoError(t, err)
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "members")
+	require.NoError(t, err)
+	require.Equal(t, "nocase", table.Columns[0].Collation)
+	require.Empty(t, table.Columns[1].Collation)
+}
