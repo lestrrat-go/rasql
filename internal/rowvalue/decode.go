@@ -115,17 +115,7 @@ func assign(destination reflect.Value, value any) error {
 		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 			destination.SetZero()
 			return nil
-		default:
-			return fmt.Errorf("expected %s, got NULL", destination.Type())
 		}
-	}
-	if destination.Kind() == reflect.Pointer {
-		decoded := reflect.New(destination.Type().Elem())
-		if err := assign(decoded.Elem(), value); err != nil {
-			return err
-		}
-		destination.Set(decoded)
-		return nil
 	}
 	if destination.CanAddr() {
 		if scanner, ok := destination.Addr().Interface().(sql.Scanner); ok {
@@ -134,6 +124,17 @@ func assign(destination reflect.Value, value any) error {
 			}
 			return nil
 		}
+	}
+	if value == nil {
+		return fmt.Errorf("expected %s, got NULL", destination.Type())
+	}
+	if destination.Kind() == reflect.Pointer {
+		decoded := reflect.New(destination.Type().Elem())
+		if err := assign(decoded.Elem(), value); err != nil {
+			return err
+		}
+		destination.Set(decoded)
+		return nil
 	}
 	if destination.Type() == timeType {
 		decoded, err := decodeTime(value)

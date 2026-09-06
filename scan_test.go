@@ -80,6 +80,13 @@ func TestScanValue(t *testing.T) {
 		require.Equal(t, int64(42), destination.value)
 	})
 
+	t.Run("sql.Scanner receives NULL", func(t *testing.T) {
+		destination := sql.NullString{String: "stale", Valid: true}
+		require.NoError(t, rasql.ScanValue(&destination, nil))
+		require.False(t, destination.Valid)
+		require.Empty(t, destination.String)
+	})
+
 	t.Run("nil destination", func(t *testing.T) {
 		var destination *int64
 		err := rasql.ScanValue(destination, int64(1))
