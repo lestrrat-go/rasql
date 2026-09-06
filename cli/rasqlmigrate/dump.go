@@ -18,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
+	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
@@ -758,54 +759,40 @@ func tableLess(a, b schema.TableDef) bool {
 // cycle, refused naming the remaining tables sorted by (Schema, Name). See
 // CLAUDE.md design section 5.
 func orderTablesByDependency(tables []schema.TableDef) ([]schema.TableDef, error) {
-	n := len(tables)
-	keyIndex := make(map[tableKey]int, n)
-	for i, t := range tables {
-		keyIndex[tableKeyOf(t)] = i
+	dependencies := make([]migrationorder.TableDependency, len(tables))
+	keys := make(map[tableKey]string, len(tables))
+	for index, table := range tables {
+		key := tableKeyOf(table)
+		encoded := table.Schema + "\x00" + table.Name
+		keys[key] = encoded
+		dependencies[index] = migrationorder.TableDependency{Key: encoded, Display: table.QualifiedName()}
 	}
-	dependsOn := make([]map[int]struct{}, n)
-	for i, t := range tables {
-		dependsOn[i] = make(map[int]struct{})
-		for _, fk := range t.ForeignKeys {
+	for index, table := range tables {
+		for _, fk := range table.ForeignKeys {
 			referencedSchema := fk.ReferencedSchema
 			if referencedSchema == "" {
-				referencedSchema = t.Schema
+				referencedSchema = table.Schema
 			}
-			j, ok := keyIndex[tableKey{schema: referencedSchema, name: fk.ReferencedTable}]
-			if !ok || j == i {
-				continue
+			if dependency, exists := keys[tableKey{schema: referencedSchema, name: fk.ReferencedTable}]; exists {
+				dependencies[index].DependsOn = append(dependencies[index].DependsOn, dependency)
 			}
-			dependsOn[i][j] = struct{}{}
 		}
 	}
-
-	remaining := make(map[int]struct{}, n)
-	for i := range tables {
-		remaining[i] = struct{}{}
+	orderedKeys, err := migrationorder.OrderTables(dependencies)
+	if err != nil {
+		remaining := make(map[int]struct{}, len(tables))
+		for index := range tables {
+			remaining[index] = struct{}{}
+		}
+		return nil, cycleError(tables, remaining)
 	}
-	ordered := make([]schema.TableDef, 0, n)
-	for len(remaining) > 0 {
-		next := -1
-		for i := range remaining {
-			ready := true
-			for dep := range dependsOn[i] {
-				if _, stillRemaining := remaining[dep]; stillRemaining {
-					ready = false
-					break
-				}
-			}
-			if !ready {
-				continue
-			}
-			if next == -1 || tableLess(tables[i], tables[next]) {
-				next = i
-			}
-		}
-		if next == -1 {
-			return nil, cycleError(tables, remaining)
-		}
-		ordered = append(ordered, tables[next])
-		delete(remaining, next)
+	byKey := make(map[string]schema.TableDef, len(tables))
+	for index, dependency := range dependencies {
+		byKey[dependency.Key] = tables[index]
+	}
+	ordered := make([]schema.TableDef, len(orderedKeys))
+	for index, key := range orderedKeys {
+		ordered[index] = byKey[key]
 	}
 	return ordered, nil
 }
