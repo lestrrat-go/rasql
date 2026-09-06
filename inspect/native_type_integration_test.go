@@ -4,10 +4,13 @@ package inspect_test
 
 import (
 	"database/sql"
+	"database/sql/driver"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -19,6 +22,40 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+// nativeTextValue deliberately keeps native values untyped. It proves that generated
+// any fields pass raw database values through while callers retain Scanner/Valuer control.
+type nativeTextValue struct {
+	Text  string
+	Valid bool
+}
+
+func (v *nativeTextValue) Scan(src any) error {
+	if src == nil {
+		v.Text = ""
+		v.Valid = false
+		return nil
+	}
+	switch value := src.(type) {
+	case string:
+		v.Text = value
+	case []byte:
+		v.Text = string(value)
+	case time.Time:
+		v.Text = value.Format(time.RFC3339Nano)
+	default:
+		return fmt.Errorf("nativeTextValue cannot scan %T", src)
+	}
+	v.Valid = true
+	return nil
+}
+
+func (v nativeTextValue) Value() (driver.Value, error) {
+	if !v.Valid {
+		return nil, nil
+	}
+	return v.Text, nil
+}
 
 func TestNativeTypeMySQL(t *testing.T) {
 	database := dbtest.MySQLDB(t)
@@ -37,6 +74,16 @@ func TestNativeTypeMySQL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"needs,comma", "quote's", "  spaced", "back\\slash", ""}, table.Columns[0].NativeType.Arguments)
 	require.Equal(t, []string{"one", "two"}, table.Columns[1].NativeType.Arguments)
+	_, err = database.ExecContext(t.Context(), "INSERT INTO `"+tableName+"` (`mood`, `flags`) VALUES (?, ?), (NULL, NULL)", nativeTextValue{Text: "quote's", Valid: true}, nativeTextValue{Text: "one,two", Valid: true})
+	require.NoError(t, err)
+	var mood, flags nativeTextValue
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT mood, flags FROM `"+tableName+"` ORDER BY mood IS NULL").Scan(&mood, &flags))
+	require.Equal(t, nativeTextValue{Text: "quote's", Valid: true}, mood)
+	require.Equal(t, nativeTextValue{Text: "one,two", Valid: true}, flags)
+	var nullMood, nullFlags nativeTextValue
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT mood, flags FROM `"+tableName+"` WHERE mood IS NULL").Scan(&nullMood, &nullFlags))
+	require.False(t, nullMood.Valid)
+	require.False(t, nullFlags.Valid)
 	catalogTables, err := catalog.FromQueryer(t.Context(), database, catalog.Options{Dialect: dialect.MySQL(), Include: []string{tableName}})
 	require.NoError(t, err)
 	require.Equal(t, table, catalogTables[0])

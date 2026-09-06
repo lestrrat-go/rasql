@@ -3,9 +3,11 @@
 package inspect_test
 
 import (
+	"database/sql"
 	"go/parser"
 	"go/token"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -59,6 +61,28 @@ func TestNativeTypePostgreSQL(t *testing.T) {
 	require.Equal(t, "time", byName["local_time"].NativeType.Name)
 	require.Equal(t, "date", byName["day"].NativeType.Name)
 	require.Equal(t, schema.NativeOther, byName["pair"].NativeType.Kind)
+	insertedAt := time.Date(2026, time.January, 2, 3, 4, 5, 123000000, time.UTC)
+	_, err = database.ExecContext(ctx, "INSERT INTO "+quoted(tableName)+" (mood, moods, amount, arbitrary, payload, payload_binary, happened, happened_plain, zoned_time, local_time, day, pair) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12), (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+		nativeTextValue{Text: "quote's", Valid: true}, nativeTextValue{Text: "{sad,happy}", Valid: true}, nativeTextValue{Text: "12.345", Valid: true}, nativeTextValue{Text: "987.65", Valid: true},
+		nativeTextValue{Text: `{"k":1}`, Valid: true}, nativeTextValue{Text: `{"raw":true}`, Valid: true}, insertedAt, insertedAt, nativeTextValue{Text: "03:04:05+00", Valid: true}, nativeTextValue{Text: "03:04:05", Valid: true},
+		nativeTextValue{Text: "2026-01-02", Valid: true}, nativeTextValue{Text: "(7)", Valid: true})
+	require.NoError(t, err)
+	var mood, moods, amount, arbitrary, payload, payloadBinary, happened, happenedPlain, zonedTime, localTime, day, pair nativeTextValue
+	require.NoError(t, database.QueryRowContext(ctx, "SELECT mood, moods, amount, arbitrary, payload, payload_binary, happened, happened_plain, zoned_time, local_time, day, pair FROM "+quoted(tableName)+" WHERE mood IS NOT NULL").Scan(&mood, &moods, &amount, &arbitrary, &payload, &payloadBinary, &happened, &happenedPlain, &zonedTime, &localTime, &day, &pair))
+	for _, value := range []*nativeTextValue{&mood, &moods, &amount, &arbitrary, &payload, &payloadBinary, &happened, &happenedPlain, &zonedTime, &localTime, &day, &pair} {
+		require.True(t, value.Valid)
+	}
+	require.Equal(t, "quote's", mood.Text)
+	require.Equal(t, "{sad,happy}", moods.Text)
+	require.Equal(t, "12.345", amount.Text)
+	require.Equal(t, `{"k":1}`, payload.Text)
+	require.Equal(t, `{"raw":true}`, payloadBinary.Text)
+	var nullValues [12]nativeTextValue
+	require.NoError(t, database.QueryRowContext(ctx, "SELECT mood, moods, amount, arbitrary, payload, payload_binary, happened, happened_plain, zoned_time, local_time, day, pair FROM "+quoted(tableName)+" WHERE mood IS NULL").Scan(&nullValues[0], &nullValues[1], &nullValues[2], &nullValues[3], &nullValues[4], &nullValues[5], &nullValues[6], &nullValues[7], &nullValues[8], &nullValues[9], &nullValues[10], &nullValues[11]))
+	for _, value := range nullValues {
+		require.False(t, value.Valid)
+	}
+	var _ sql.Scanner = (*nativeTextValue)(nil)
 
 	catalogTables, err := catalog.FromQueryer(ctx, database, catalog.Options{Dialect: dialect.PostgreSQL(), Include: []string{tableName}})
 	require.NoError(t, err)
