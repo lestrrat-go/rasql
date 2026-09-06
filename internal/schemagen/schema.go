@@ -1862,6 +1862,8 @@ func writeManyToManyRelationshipLoad(source *bytes.Buffer, relationship relation
 	source.WriteString(child)
 	source.WriteString(", error) {\n\t\tvar row ")
 	source.WriteString(child)
+	source.WriteString("\n\t\tvar zeroKey ")
+	source.WriteString(key)
 	source.WriteString("\n\t\tdestinations, err := row.ScanDestinations([]string{")
 	for index, column := range relationship.child.Columns {
 		if index > 0 {
@@ -1870,12 +1872,10 @@ func writeManyToManyRelationshipLoad(source *bytes.Buffer, relationship relation
 		source.WriteString(quote(column.Name))
 	}
 	source.WriteString("})\n\t\tif err != nil { return ")
-	writeZeroKey(source, key)
-	source.WriteString(", row, err }\n\t\t")
+	source.WriteString("zeroKey, row, err }\n\t\t")
 	writeScanValues(source, relationship)
 	source.WriteString("values = append(values, destinations...)\n\t\tif err := src.Scan(values...); err != nil { return ")
-	writeZeroKey(source, key)
-	source.WriteString(", row, err }\n\t\treturn ")
+	source.WriteString("zeroKey, row, err }\n\t\treturn ")
 	writeDecodedKey(source, relationship, key)
 	source.WriteString(", row, nil\n\t}, options)\n}\n\n")
 	source.WriteString("// Load fetches all targets through the join table in one query.\nfunc (r ")
@@ -2053,11 +2053,6 @@ func writeKeyValues(source *bytes.Buffer, relationship relationshipSpec, key str
 		}
 	}
 	source.WriteString("}, true }")
-}
-func writeZeroKey(source *bytes.Buffer, key string) {
-	source.WriteString("*new(")
-	source.WriteString(key)
-	source.WriteString(")")
 }
 func writeScanValues(source *bytes.Buffer, relationship relationshipSpec) {
 	source.WriteString("var ")

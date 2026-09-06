@@ -592,7 +592,7 @@ func TestSchemaGeneratedRelationshipShapesExecuteSQLite(t *testing.T) {
 		PrimaryKey:  []string{"id"},
 		ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"tenant_id", "account_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"tenant_id", "id"}}},
 	}
-	roles := schema.TableDef{Name: "roles", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}, Relationships: []schema.RelationshipDef{{Name: "Permissions", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "permissions", ReferencedColumns: []string{"id"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "role_permissions"}, SourceColumns: []string{"role_id"}, TargetColumns: []string{"permission_id"}}}}}
+	roles := schema.TableDef{Name: "roles", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}, {Name: "rank", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}, Relationships: []schema.RelationshipDef{{Name: "Permissions", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "permissions", ReferencedColumns: []string{"id"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "role_permissions"}, SourceColumns: []string{"role_id"}, TargetColumns: []string{"permission_id"}}}}}
 	userRoles := schema.TableDef{Name: "user_roles", Columns: []schema.ColumnDef{{Name: "user_id", Type: schema.IntegerType{}}, {Name: "role_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"user_id", "role_id"}}
 	permissions := schema.TableDef{Name: "permissions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}}
 	rolePermissions := schema.TableDef{Name: "role_permissions", Columns: []schema.ColumnDef{{Name: "role_id", Type: schema.IntegerType{}}, {Name: "permission_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"role_id", "permission_id"}}
@@ -609,6 +609,7 @@ func TestSchemaGeneratedRelationshipShapesExecuteSQLite(t *testing.T) {
 	for _, table := range allTables {
 		files[table.Name+"_gen.go"], err = schemagen.TableSurfaceSource("generated", table, allTables...)
 		require.NoError(t, err)
+		require.NotContains(t, string(files[table.Name+"_gen.go"]), "*new(")
 	}
 	require.Contains(t, string(files["accounts_gen.go"]), "type AccountsTableMembershipsKey struct")
 	require.Contains(t, string(files["accounts_gen.go"]), "ParentKey []rasql.ColumnRef")
@@ -731,7 +732,7 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 		"CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER)",
 		"CREATE TABLE accounts (tenant_id INTEGER NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (tenant_id, id))",
 		"CREATE TABLE memberships (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, account_id INTEGER NOT NULL)",
-		"CREATE TABLE roles (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+		"CREATE TABLE roles (id INTEGER PRIMARY KEY, name TEXT NOT NULL, rank INTEGER NOT NULL)",
 		"CREATE TABLE user_roles (user_id INTEGER NOT NULL, role_id INTEGER NOT NULL)",
 		"CREATE TABLE permissions (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
 		"CREATE TABLE role_permissions (role_id INTEGER NOT NULL, permission_id INTEGER NOT NULL)",
@@ -747,7 +748,7 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 		"INSERT INTO profiles VALUES (30, 1), (31, 1)",
 		"INSERT INTO accounts VALUES (7, 1), (8, 1)",
 		"INSERT INTO memberships VALUES (40, 7, 1), (41, 8, 1)",
-		"INSERT INTO roles VALUES (5, 'admin'), (6, 'reader')",
+		"INSERT INTO roles VALUES (5, 'admin', 1), (6, 'reader', 2)",
 		"INSERT INTO user_roles VALUES (1, 5), (1, 5), (1, 6)",
 		"INSERT INTO permissions VALUES (50, 'read'), (51, 'write')",
 		"INSERT INTO role_permissions VALUES (5, 50), (6, 51)",
@@ -865,6 +866,10 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 	require.True(t, called)
 	_, err = generated.Users().Roles().LoadThen(t.Context(), db, []generated.UsersRow{{ID: 1}}, rasql.RelationshipLoadOptions{}, nil)
 	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(t.Context(), "UPDATE roles SET rank = 'invalid' WHERE id = 5")
+	require.NoError(t, err)
+	_, err = generated.Users().Roles().Load(t.Context(), db, []generated.UsersRow{{ID: 1}})
+	require.Error(t, err)
 	require.NoError(t, sqlDB.Close())
 	called = false
 	_, err = generated.Users().Roles().LoadThen(t.Context(), db, []generated.UsersRow{{ID: 1}}, rasql.RelationshipLoadOptions{}, func([]generated.RolesRow) error { called = true; return nil })
