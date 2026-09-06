@@ -63,7 +63,7 @@ func TestNativeTypePostgreSQL(t *testing.T) {
 	catalogTables, err := catalog.FromQueryer(ctx, database, catalog.Options{Dialect: dialect.PostgreSQL(), Include: []string{tableName}})
 	require.NoError(t, err)
 	require.Len(t, catalogTables, 1)
-	require.Equal(t, table, &catalogTables[0])
+	require.Equal(t, table, catalogTables[0])
 	descriptor, err := generate.DescriptorSource("nativefixture", table)
 	require.NoError(t, err)
 	_, err = parser.ParseFile(token.NewFileSet(), "descriptor.go", descriptor, parser.AllErrors)
