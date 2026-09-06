@@ -96,10 +96,62 @@ type ColumnRef = query.ColumnRef
 // generated code can reach without importing query.
 type Join = query.Join
 
+type BinaryOperator = query.BinaryOperator
+type CaseWhen = query.CaseWhen
+type Case = query.Case
+type Cast = query.Cast
+type Filter = query.Filter
+type WindowFrame = query.WindowFrame
+type WindowSpec = query.WindowSpec
+type Over = query.Over
+type Identifier = query.Identifier
+type FragmentPart = query.FragmentPart
+type TrustedFragment = query.TrustedFragment
+
+const (
+	OperatorAdd      = query.OperatorAdd
+	OperatorSubtract = query.OperatorSubtract
+	OperatorMultiply = query.OperatorMultiply
+	OperatorDivide   = query.OperatorDivide
+	OperatorModulo   = query.OperatorModulo
+	WindowRows       = query.WindowRows
+)
+
 // Equal compares left and right for equality. It is query.Equal under a name
 // generated code can reach without importing query.
 func Equal(left any, right any) query.Binary {
 	return query.Equal(left, right)
+}
+
+func Add(left any, right any) query.Binary      { return query.Add(left, right) }
+func Subtract(left any, right any) query.Binary { return query.Subtract(left, right) }
+func Multiply(left any, right any) query.Binary { return query.Multiply(left, right) }
+func Divide(left any, right any) query.Binary   { return query.Divide(left, right) }
+func Modulo(left any, right any) query.Binary   { return query.Modulo(left, right) }
+func When(predicate query.Expression, result any) query.CaseWhen {
+	return query.When(predicate, result)
+}
+func SearchedCase(branches ...query.CaseWhen) query.Case { return query.SearchedCase(branches...) }
+func SimpleCase(operand any, branches ...query.CaseWhen) query.Case {
+	return query.SimpleCase(operand, branches...)
+}
+func CastAs(expression any, target schema.Type) query.Cast { return query.CastAs(expression, target) }
+func FilterWhere(aggregate query.Expression, predicate query.Expression) query.Filter {
+	return query.FilterWhere(aggregate, predicate)
+}
+func Window(partition []query.Expression, order ...query.Order) query.WindowSpec {
+	return query.Window(partition, order...)
+}
+func OverWindow(expression query.Expression, window query.WindowSpec) query.Over {
+	return query.OverWindow(expression, window)
+}
+func Ident(name string) query.Identifier { return query.Ident(name) }
+func Hole(value any) query.FragmentPart  { return query.Hole(value) }
+func IdentifierHole(identifier query.Identifier) query.FragmentPart {
+	return query.IdentifierHole(identifier)
+}
+func TrustedSQL(sql string, parts ...query.FragmentPart) query.TrustedFragment {
+	return query.TrustedSQL(sql, parts...)
 }
 
 // ColumnOf returns the named column of table. It returns the zero ColumnRef only

@@ -83,6 +83,33 @@ Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is wh
 
 `NewInsert` pairs each column with its value through `query.Set`, the same call `NewUpdate` takes, so the two cannot fall out of step. The rendered column list follows the order the assignments were given in. Passing `query.Defaults()` on its own writes the database default for every column instead. `NewInsertRows` keeps a separate column list because an `INSERT` names its columns once and supplies every row against that one list.
 
+<!-- INCLUDE(examples/query_expression_example_test.go#trusted_fragments) -->
+```go
+func Example_query_trustedFragments() {
+	accounts := query.MustTableRef(schema.MustTableDef("accounts", schema.Integer("id"), schema.Integer("balance")))
+	fragment := query.TrustedSQL("{} + {}", query.IdentifierHole(query.Ident("balance")), query.Hole(2))
+	statement, err := query.NewSelect(accounts, query.Project(fragment).As("total"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT "balance" + ? AS "total" FROM "accounts"
+	// 2
+}
+```
+source: [examples/query_expression_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_expression_example_test.go)
+<!-- END INCLUDE -->
+
+`query.TrustedSQL` lets an application supply trusted SQL syntax while `query.Hole` still binds values and `query.IdentifierHole` quotes one validated identifier.
+
 `NewInsertRows` names its columns once, takes every row's values as one `[][]any`, binds each plain Go value the way `Set` does, and renders the rows as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
 <!-- INCLUDE(examples/rasql_partial_update_example_test.go#partial_update) -->

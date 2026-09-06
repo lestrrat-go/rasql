@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
@@ -34,6 +35,16 @@ func (e *Error) Unwrap() error {
 // [UnsupportedMatchOperatorError], so a caller that only needs a presence
 // check can use errors.Is instead of errors.As.
 var ErrUnsupportedMatchOperator = errors.New("render: unsupported MATCH operator")
+
+var ErrUnsupportedAggregateFilter = errors.New("render: unsupported aggregate FILTER")
+
+type UnsupportedAggregateFilterError struct{ Dialect string }
+
+func (e *UnsupportedAggregateFilterError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express aggregate FILTER", e.Dialect)
+}
+
+func (e *UnsupportedAggregateFilterError) Unwrap() error { return ErrUnsupportedAggregateFilter }
 
 // UnsupportedMatchOperatorError reports that a statement compares an
 // expression with [query.OperatorMatch] against a dialect that has not been
@@ -354,6 +365,118 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 			return err
 		}
 		r.builder.WriteByte(')')
+		return nil
+	case query.Case:
+		r.builder.WriteString("(CASE")
+		if operand := expression.Operand(); operand != nil {
+			r.builder.WriteByte(' ')
+			if err := r.writeExpression(operand); err != nil {
+				return err
+			}
+		}
+		for _, branch := range expression.Branches() {
+			r.builder.WriteString(" WHEN ")
+			if err := r.writeExpression(branch.Predicate()); err != nil {
+				return err
+			}
+			r.builder.WriteString(" THEN ")
+			if err := r.writeExpression(branch.Result()); err != nil {
+				return err
+			}
+		}
+		if fallback, ok := expression.Fallback(); ok {
+			r.builder.WriteString(" ELSE ")
+			if err := r.writeExpression(fallback); err != nil {
+				return err
+			}
+		}
+		r.builder.WriteString(" END)")
+		return nil
+	case query.Cast:
+		r.builder.WriteString("CAST(")
+		if err := r.writeExpression(expression.Expression()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" AS ")
+		typeName, err := r.dialect.TypeName(schema.ColumnDef{Type: expression.Target()})
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(typeName)
+		r.builder.WriteByte(')')
+		return nil
+	case query.Filter:
+		if !r.dialect.Supports(dialect.CapabilityAggregateFilter) {
+			return &UnsupportedAggregateFilterError{Dialect: r.dialect.Name()}
+		}
+		if err := r.writeExpression(expression.Aggregate()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" FILTER (WHERE ")
+		if err := r.writeExpression(expression.Predicate()); err != nil {
+			return err
+		}
+		r.builder.WriteByte(')')
+		return nil
+	case query.Over:
+		if err := r.writeExpression(expression.Expression()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" OVER (")
+		window := expression.Window()
+		if partition := window.Partition(); len(partition) > 0 {
+			r.builder.WriteString("PARTITION BY ")
+			for i, part := range partition {
+				if i > 0 {
+					r.builder.WriteString(", ")
+				}
+				if err := r.writeExpression(part); err != nil {
+					return err
+				}
+			}
+		}
+		if orders := window.Order(); len(orders) > 0 {
+			if len(window.Partition()) > 0 {
+				r.builder.WriteByte(' ')
+			}
+			r.builder.WriteString("ORDER BY ")
+			for i, order := range orders {
+				if i > 0 {
+					r.builder.WriteString(", ")
+				}
+				if err := r.writeExpression(order.Expression()); err != nil {
+					return err
+				}
+				if order.Descending() {
+					r.builder.WriteString(" DESC")
+				}
+			}
+		}
+		r.builder.WriteString(")")
+		return nil
+	case query.TrustedFragment:
+		parts := expression.Parts()
+		fragments := strings.Split(expression.SQL(), "{}")
+		for i, fragment := range fragments {
+			r.builder.WriteString(fragment)
+			if i >= len(parts) {
+				continue
+			}
+			switch part := parts[i].(type) {
+			case interface{ ValueExpression() query.Expression }:
+				if err := r.writeExpression(part.ValueExpression()); err != nil {
+					return err
+				}
+			case interface{ IdentifierValue() query.Identifier }:
+				quoted, err := r.quoteIdentifier(part.IdentifierValue().Name())
+				if err != nil {
+					return err
+				}
+				r.builder.WriteString(quoted)
+			default:
+				return fmt.Errorf("unsupported fragment part %T", part)
+			}
+		}
 		return nil
 	case query.Logical:
 		r.builder.WriteByte('(')
