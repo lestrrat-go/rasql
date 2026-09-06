@@ -62,7 +62,7 @@ func validateOrderResultAlias(projection Projection, results map[string]int, pat
 	}
 }
 
-// validateSourceReference refuses a source a server could not tell apart from
+// validateSourceReference refuses a source exact-name validation could not tell apart from
 // one the statement already carries, and it is a separate check from the table
 // key on purpose. The key states which descriptor a column belongs to, and two
 // sources that differ by schema, by name or by alias hold different keys while

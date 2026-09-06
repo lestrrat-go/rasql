@@ -96,6 +96,22 @@ type Dialect interface {
 	Supports(Capability) bool
 }
 
+// IdentifierComparer is an optional dialect extension for identifier
+// resolution. Dialect implementations do not need to implement it.
+type IdentifierComparer interface {
+	IdentifiersEqual(left, right string) bool
+}
+
+// IdentifiersEqual compares identifiers using the dialect's resolution rule
+// when it provides one, and exact comparison otherwise.
+func IdentifiersEqual(d Dialect, left, right string) bool {
+	comparer, ok := d.(IdentifierComparer)
+	if ok {
+		return comparer.IdentifiersEqual(left, right)
+	}
+	return left == right
+}
+
 // PostgreSQL returns the PostgreSQL dialect.
 func PostgreSQL() Dialect {
 	return builtin{
@@ -162,7 +178,7 @@ func MySQL() Dialect {
 
 // SQLite returns the SQLite dialect.
 func SQLite() Dialect {
-	return builtin{
+	return sqliteBuiltin{builtin: builtin{
 		name:         "sqlite",
 		quote:        '"',
 		placeholder:  questionPlaceholder,
@@ -189,7 +205,32 @@ func SQLite() Dialect {
 			schema.KindJSON:    "TEXT",
 			schema.KindUUID:    "TEXT",
 		},
+	}}
+}
+
+type sqliteBuiltin struct {
+	builtin
+}
+
+// IdentifiersEqual follows SQLite's identifier comparison for ASCII letters.
+// SQLite does not Unicode-fold quoted identifiers.
+func (d sqliteBuiltin) IdentifiersEqual(left, right string) bool {
+	if len(left) != len(right) {
+		return false
 	}
+	for i := 0; i < len(left); i++ {
+		leftByte, rightByte := left[i], right[i]
+		if leftByte >= 'A' && leftByte <= 'Z' {
+			leftByte += 'a' - 'A'
+		}
+		if rightByte >= 'A' && rightByte <= 'Z' {
+			rightByte += 'a' - 'A'
+		}
+		if leftByte != rightByte {
+			return false
+		}
+	}
+	return true
 }
 
 type builtin struct {
