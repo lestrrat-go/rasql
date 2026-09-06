@@ -50,6 +50,7 @@ type DB struct {
 	handle                Handle
 	dialect               dialect.Dialect
 	hooks                 []Hook
+	relationshipBindLimit int
 	observers             []Observer
 	extensionErrorHandler ExtensionErrorHandler
 	invocationObservers   []InvocationObserver
@@ -68,10 +69,25 @@ type DB struct {
 // that transaction, and its Begin reports an error rather than nesting. Use
 // Atomic when work must compose inside an existing transaction.
 //
-// Optional hooks and observers observe every statement run through the returned
-// DB and, unless narrowed or extended by WithHooks, WithObservers, or by Begin's
-// own hooks parameter, every transaction Begin starts from it.
-func New(handle Handle, d dialect.Dialect, hooks ...Hook) (DB, error) {
+// Optional hooks and observers configure the returned DB and observe every
+// statement run through it and, unless narrowed or extended by WithHooks,
+// WithObservers, or by Begin's own hooks parameter, every transaction Begin
+// starts from it.
+type Option interface{ apply(*DB) error }
+
+type relationshipBindLimitOption int
+
+func (o relationshipBindLimitOption) apply(db *DB) error {
+	if o < 1 {
+		return fmt.Errorf("rasql: relationship bind limit must be positive")
+	}
+	db.relationshipBindLimit = int(o)
+	return nil
+}
+
+func WithRelationshipBindLimit(limit int) Option { return relationshipBindLimitOption(limit) }
+
+func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
 	if nilcheck.Is(handle) {
 		return DB{}, fmt.Errorf("rasql: handle must not be nil")
 	}
@@ -82,8 +98,27 @@ func New(handle Handle, d dialect.Dialect, hooks ...Hook) (DB, error) {
 	if transaction, ok := handle.(*sql.Tx); ok {
 		db.tx = transaction
 	}
-	return db.WithHooks(hooks...)
+	for _, option := range options {
+		switch value := option.(type) {
+		case Hook:
+			var err error
+			db, err = db.WithHooks(value)
+			if err != nil {
+				return DB{}, err
+			}
+		case Option:
+			if err := value.apply(&db); err != nil {
+				return DB{}, err
+			}
+		default:
+			return DB{}, fmt.Errorf("rasql: unsupported database option %T", option)
+		}
+	}
+	return db, nil
 }
+
+// RelationshipBindLimit returns the configured application bind budget.
+func (db DB) RelationshipBindLimit() int { return db.relationshipBindLimit }
 
 // WithHooks returns a copy of db that runs hooks around rendered queries and
 // mutations, appended after the hooks db already carries. Every transaction
