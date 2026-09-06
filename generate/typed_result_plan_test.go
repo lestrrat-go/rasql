@@ -85,3 +85,12 @@ func TestQueryPackagePlanClonesDescriptionAndChecksInputFreshness(t *testing.T) 
 	require.NoError(t, os.WriteFile(input, []byte("SELECT 2"), 0o644))
 	require.Error(t, plan.Commit())
 }
+
+func TestTypedResultNamesCannotCollideInStoreOrQueryPackage(t *testing.T) {
+	description := querydescribe.Description{Columns: []querydescribe.Column{{Name: "id", Binding: schema.GoBinding{Type: "int64"}}}}
+	queries := []generate.Query{{Function: "First", Output: "first_gen.go", SQL: "SELECT 1", ResultType: "SharedRow", Describer: fixedDescriber{description: description}}, {Function: "Second", Output: "second_gen.go", SQL: "SELECT 1", ResultType: "SharedRow", Describer: fixedDescriber{description}}}
+	_, err := (generate.QueryPackage{Package: "queries", Dir: t.TempDir(), Dialect: dialect.SQLite(), Queries: queries}).PlanContext(t.Context())
+	require.Error(t, err)
+	_, err = (generate.Store{Package: "queries", Dir: t.TempDir(), Dialect: dialect.SQLite(), Tables: []schema.TableDef{{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}}, Queries: queries}).PlanContext(t.Context())
+	require.Error(t, err)
+}
