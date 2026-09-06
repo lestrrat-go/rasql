@@ -47,6 +47,18 @@ func TestResolveGoBindingPreservesNullableDefaultsAndExplicitTypes(t *testing.T)
 	require.Equal(t, "NullUserID", resolved.For(true))
 }
 
+func TestGeneratedBindingDefaultsRemainUnchanged(t *testing.T) {
+	table := schema.TableDef{Name: "defaults", Columns: []schema.ColumnDef{
+		{Name: "value", Type: schema.TextType{}, Nullable: true},
+		{Name: "payload", Type: schema.JSONType{}, Nullable: true},
+	}}
+	source, err := schemagen.PackageSource("generated", table)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "Value   *string")
+	require.Contains(t, text, "Payload []byte")
+}
+
 func TestGeneratedBindingAliasCollisionIsRewritten(t *testing.T) {
 	table := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{
 		Name: "payload", Type: schema.TextType{}, GoBinding: &schema.GoBinding{

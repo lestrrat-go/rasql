@@ -37,6 +37,9 @@ func (goPackagesNameResolver) Name(directory, importPath string) (string, error)
 		return "", err
 	}
 	if len(loaded) != 1 || len(loaded[0].Errors) != 0 || !token.IsIdentifier(loaded[0].Name) {
+		if len(loaded) == 1 && len(loaded[0].Errors) > 0 {
+			return "", fmt.Errorf("package %q has no valid package name: %s", importPath, loaded[0].Errors[0].Msg)
+		}
 		return "", fmt.Errorf("package %q has no valid package name", importPath)
 	}
 	packageNames.Store(key, loaded[0].Name)

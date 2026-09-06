@@ -68,17 +68,9 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 		if err != nil {
 			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
 		}
-		resolved, err := schemagen.ResolveGoBinding(column)
-		if err != nil {
-			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
-		}
 		ref, err := bindingSet.Add(column)
 		if err != nil {
 			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
-		}
-		goType := resolved.For(false)
-		if goType == "time.Time" {
-			needsTime = true
 		}
 		parameterRefs[index] = ref
 		parameterBound[index] = true
@@ -96,6 +88,9 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
 		}
 		parameterTypes[index] = parameterType
+		if parameterType == "time.Time" {
+			needsTime = true
+		}
 	}
 
 	timeName := "time"
