@@ -2,7 +2,6 @@ package dynamic
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"iter"
 
@@ -20,14 +19,11 @@ import (
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
 func Query(ctx context.Context, db exec.DB, s query.Select) (iter.Seq2[Row, error], error) {
-	if err := db.Validate(); err != nil {
+	result, err := QueryResult(ctx, db, s)
+	if err != nil {
 		return nil, err
 	}
-	rendered, err := render.Select(db.Dialect(), s)
-	if err != nil {
-		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
-	}
-	return scanRendered(ctx, db, rendered), nil
+	return result.Rows(), nil
 }
 
 // QueryResult renders a SELECT and returns a lazy result with ordered column metadata.
@@ -39,8 +35,8 @@ func QueryResult(ctx context.Context, db exec.DB, s query.Select) (*Result, erro
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	return rowvalue.NewResult(func() (*sql.Rows, error) {
-		return db.QueryRendered(ctx, rendered)
+	return rowvalue.NewResult(func() (rowvalue.Source, error) {
+		return db.QueryOwned(ctx, rendered)
 	}), nil
 }
 
@@ -53,11 +49,11 @@ func QueryResult(ctx context.Context, db exec.DB, s query.Select) (*Result, erro
 // is first ranged over rather than when QueryWrite returns, so a write whose
 // sequence is abandoned never reaches the database.
 func QueryWrite(ctx context.Context, db exec.DB, s query.WriteStatement) (iter.Seq2[Row, error], error) {
-	rendered, err := exec.RenderWrite(db, s)
+	result, err := QueryWriteResult(ctx, db, s)
 	if err != nil {
 		return nil, err
 	}
-	return scanRendered(ctx, db, rendered), nil
+	return result.Rows(), nil
 }
 
 // QueryWriteResult renders a RETURNING write and returns a lazy result with ordered column metadata.
@@ -66,9 +62,15 @@ func QueryWriteResult(ctx context.Context, db exec.DB, s query.WriteStatement) (
 	if err != nil {
 		return nil, err
 	}
-	return rowvalue.NewResult(func() (*sql.Rows, error) {
-		return db.QueryRendered(ctx, rendered)
+	return rowvalue.NewResult(func() (rowvalue.Source, error) {
+		return db.QueryOwned(ctx, rendered)
 	}), nil
+}
+
+func resultForStatement(ctx context.Context, db exec.DB, rendered stmt.Statement) *Result {
+	return rowvalue.NewResult(func() (rowvalue.Source, error) {
+		return db.QueryOwned(ctx, rendered)
+	})
 }
 
 // scanRendered defers running s until the returned sequence is ranged over,

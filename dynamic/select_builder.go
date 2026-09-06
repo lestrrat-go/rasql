@@ -2,13 +2,11 @@ package dynamic
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"iter"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/exec"
-	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -159,9 +157,7 @@ func (b SelectBuilder) QueryResult(ctx context.Context, db exec.DB) (*Result, er
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	return rowvalue.NewResult(func() (*sql.Rows, error) {
-		return db.QueryRendered(ctx, s)
-	}), nil
+	return resultForStatement(ctx, db, s), nil
 }
 
 // Count executes COUNT(*) over the rows the statement matches.

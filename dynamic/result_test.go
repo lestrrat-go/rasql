@@ -1,6 +1,7 @@
 package dynamic_test
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -23,6 +24,14 @@ func TestQueryResultExposesImmutableOrderedMetadata(t *testing.T) {
 	database.SetMaxOpenConns(1)
 	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
+	var phases []rasql.Phase
+	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
+		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, completion rasql.Completion) error {
+			phases = append(phases, completion.Phase)
+			return nil
+		})
+	}))
+	require.NoError(t, err)
 	_, err = db.ExecRendered(t.Context(), stmtText("CREATE TABLE users (id INTEGER, name TEXT, nickname TEXT)"))
 	require.NoError(t, err)
 	_, err = db.ExecRendered(t.Context(), stmtText("INSERT INTO users VALUES (1, 'Ada', NULL)"))
@@ -37,6 +46,11 @@ func TestQueryResultExposesImmutableOrderedMetadata(t *testing.T) {
 	require.Equal(t, 2, header.Len())
 	names := header.Names()
 	require.Equal(t, []string{"runtime_alias", "nullable_alias"}, names)
+	index, ok := header.Index("runtime_alias")
+	require.True(t, ok)
+	require.Equal(t, 0, index)
+	_, ok = header.Index("missing")
+	require.False(t, ok)
 	names[0] = "changed"
 	namesAgain := header.Names()
 	require.Equal(t, []string{"runtime_alias", "nullable_alias"}, namesAgain)
@@ -54,6 +68,8 @@ func TestQueryResultExposesImmutableOrderedMetadata(t *testing.T) {
 	require.Nil(t, value)
 	_, ok = rows[0].Value(2)
 	require.False(t, ok)
+	_, ok = rows[0].Value(-1)
+	require.False(t, ok)
 	values := rows[0].Values()
 	values[0] = "changed"
 	valuesAgain := rows[0].Values()
@@ -66,6 +82,8 @@ func TestQueryResultExposesImmutableOrderedMetadata(t *testing.T) {
 	require.Nil(t, nickname)
 	require.NoError(t, result.Close())
 	require.NoError(t, result.Close())
+	require.Contains(t, phases, rasql.ExecutionPhase)
+	require.Contains(t, phases, rasql.ConsumptionPhase)
 }
 
 func TestQueryResultEmptyRowsRetainsHeaderAndExecutesOnce(t *testing.T) {
@@ -136,20 +154,27 @@ func TestResultCloseBeforeExecutionAndScanResultCompatibility(t *testing.T) {
 		t.Fatal("closed result yielded a row")
 	}
 
-	mock.ExpectQuery("SELECT name").WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow([]byte("Ada")))
+	mock.ExpectQuery("SELECT name").WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow([]byte("Ada")).AddRow([]byte("Bob")))
 	rows, err := database.QueryContext(t.Context(), "SELECT name")
 	require.NoError(t, err)
 	scanned := dynamic.ScanResult(rows)
+	rowCount := 0
 	for row, err := range scanned.Rows() {
 		require.NoError(t, err)
 		value, ok := row.Value(0)
 		require.True(t, ok)
 		bytes, ok := value.([]byte)
 		require.True(t, ok)
-		bytes[0] = 'X'
-		fresh, _ := row.Value(0)
-		require.Equal(t, []byte("Ada"), fresh)
+		if rowCount == 0 {
+			bytes[0] = 'X'
+			fresh, _ := row.Value(0)
+			require.Equal(t, []byte("Ada"), fresh)
+		} else {
+			require.Equal(t, []byte("Bob"), bytes)
+		}
+		rowCount++
 	}
+	require.Equal(t, 2, rowCount)
 }
 
 func TestResultRejectsDuplicateAndEmptyHeaders(t *testing.T) {
@@ -170,6 +195,11 @@ func TestResultRejectsDuplicateAndEmptyHeaders(t *testing.T) {
 			result := dynamic.ScanResult(rows)
 			_, err = result.Header()
 			require.Error(t, err)
+			if names[0] == "" {
+				require.ErrorContains(t, err, "row: column name at index 0 is empty")
+			} else {
+				require.ErrorContains(t, err, "row: duplicate column name \"same\"")
+			}
 			seen := false
 			for _, err := range result.Rows() {
 				seen = true
@@ -198,6 +228,21 @@ func TestBuilderResultMethodsExposeMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"name"}, header.Names())
 	require.NoError(t, result.Close())
+
+	deleteBuilder := dynamic.DeleteFrom(users).AllowAll().Returning(users.Column("name"))
+	mock.ExpectQuery(`DELETE FROM .* RETURNING .*`).WillReturnRows(sqlmock.NewRows([]string{"name"}))
+	result, err = deleteBuilder.QueryResult(t.Context(), db)
+	require.NoError(t, err)
+	header, err = result.Header()
+	require.NoError(t, err)
+	require.Equal(t, []string{"name"}, header.Names())
+	require.NoError(t, result.Close())
+	mock.ExpectQuery(`DELETE FROM .* RETURNING .*`).WillReturnRows(sqlmock.NewRows([]string{"name"}))
+	sequence, err := deleteBuilder.Query(t.Context(), db)
+	require.NoError(t, err)
+	for _, err := range sequence {
+		require.NoError(t, err)
+	}
 
 	deleteStatement, err := query.NewDelete(users)
 	require.NoError(t, err)
