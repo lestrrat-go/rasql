@@ -72,6 +72,91 @@ func TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults(t *testing.T) {
 	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
+type postgresSequenceState struct {
+	OID       int64
+	Name      string
+	Increment int64
+	Owned     bool
+}
+
+func postgresSequenceStateFor(t *testing.T, ctx context.Context, database *sql.DB, tableName, columnName string) postgresSequenceState {
+	t.Helper()
+	var state postgresSequenceState
+	err := database.QueryRowContext(ctx, `
+		SELECT seq.oid, seq.relname, ps.seqincrement,
+			EXISTS (
+				SELECT 1 FROM pg_depend own
+				WHERE own.classid = 'pg_class'::regclass AND own.objid = seq.oid
+				  AND own.refclassid = 'pg_class'::regclass AND own.refobjid = rel.oid
+				  AND own.refobjsubid = att.attnum AND own.deptype = 'a'
+			) AS owned
+		FROM pg_class rel
+		JOIN pg_namespace ns ON ns.oid = rel.relnamespace AND ns.nspname = current_schema()
+		JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attname = $2 AND NOT att.attisdropped
+		JOIN pg_attrdef ad ON ad.adrelid = att.attrelid AND ad.adnum = att.attnum
+		JOIN pg_depend dep ON dep.classid = 'pg_attrdef'::regclass AND dep.objid = ad.oid
+		JOIN pg_class seq ON seq.oid = dep.refobjid AND seq.relkind = 'S'
+		JOIN pg_sequence ps ON ps.seqrelid = seq.oid
+		WHERE rel.relname = $1`, tableName, columnName).Scan(&state.OID, &state.Name, &state.Increment, &state.Owned)
+	require.NoError(t, err)
+	return state
+}
+
+func TestDumpPostgreSQLSequenceExportReplayProof(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE shared_sequence START WITH 10 INCREMENT BY 1`)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE custom_sequence START WITH 10 INCREMENT BY 5`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (
+		shared_first BIGINT NOT NULL DEFAULT nextval('shared_sequence'),
+		shared_second BIGINT NOT NULL DEFAULT nextval('shared_sequence'),
+		custom_value BIGINT NOT NULL DEFAULT nextval('custom_sequence'),
+		control BIGSERIAL NOT NULL
+	)`)
+	dumpMustExec(t, ctx, source, `ALTER SEQUENCE custom_sequence OWNED BY sequence_cases.custom_value`)
+
+	sourceTables, err := catalog.FromDatabase(ctx, source, catalog.Options{Dialect: dialect.PostgreSQL()})
+	require.NoError(t, err)
+	require.Len(t, sourceTables, 1)
+	statement, err := renderPostgreSQLCreateTable(dialect.PostgreSQL(), sourceTables[0])
+	require.NoError(t, err)
+
+	sharedFirst := postgresSequenceStateFor(t, ctx, source, "sequence_cases", "shared_first")
+	sharedSecond := postgresSequenceStateFor(t, ctx, source, "sequence_cases", "shared_second")
+	custom := postgresSequenceStateFor(t, ctx, source, "sequence_cases", "custom_value")
+	require.Equal(t, sharedFirst.OID, sharedSecond.OID)
+	require.Equal(t, int64(1), sharedFirst.Increment)
+	require.Equal(t, int64(5), custom.Increment)
+	require.False(t, sharedFirst.Owned)
+	require.True(t, custom.Owned)
+
+	var sourceFirst, sourceSecond, sourceCustom int64
+	dumpMustExec(t, ctx, source, `INSERT INTO sequence_cases DEFAULT VALUES`)
+	require.NoError(t, source.QueryRowContext(ctx, `SELECT shared_first, shared_second, custom_value FROM sequence_cases`).Scan(&sourceFirst, &sourceSecond, &sourceCustom))
+	require.Equal(t, int64(10), sourceFirst)
+	require.Equal(t, int64(11), sourceSecond)
+	require.Equal(t, int64(10), sourceCustom)
+
+	target := dbtest.PostgreSQLDB(t)
+	_, err = target.ExecContext(ctx, statement+";")
+	require.NoError(t, err)
+	targetFirst := postgresSequenceStateFor(t, ctx, target, "sequence_cases", "shared_first")
+	targetSecond := postgresSequenceStateFor(t, ctx, target, "sequence_cases", "shared_second")
+	targetCustom := postgresSequenceStateFor(t, ctx, target, "sequence_cases", "custom_value")
+	require.NotEqual(t, targetFirst.OID, targetSecond.OID)
+	require.Equal(t, int64(1), targetFirst.Increment)
+	require.Equal(t, int64(1), targetCustom.Increment)
+	require.True(t, targetFirst.Owned)
+	require.True(t, targetCustom.Owned)
+
+	var targetFirstValue, targetSecondValue, targetCustomValue int64
+	dumpMustExec(t, ctx, target, `INSERT INTO sequence_cases DEFAULT VALUES`)
+	require.NoError(t, target.QueryRowContext(ctx, `SELECT shared_first, shared_second, custom_value FROM sequence_cases`).Scan(&targetFirstValue, &targetSecondValue, &targetCustomValue))
+	require.Equal(t, int64(1), targetFirstValue)
+	require.Equal(t, int64(1), targetSecondValue)
+	require.Equal(t, int64(1), targetCustomValue)
+}
+
 // dumpMustExec runs statement against database and fails the test on error.
 func dumpMustExec(t *testing.T, ctx context.Context, database *sql.DB, statement string) {
 	t.Helper()
