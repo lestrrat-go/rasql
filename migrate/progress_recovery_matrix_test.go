@@ -294,11 +294,12 @@ func TestRecoveryPublicMismatchRefusalAndResultCopies(t *testing.T) {
 	completed = append(completed, migration)
 	completed[0].Statements[0].Source = "changed again"
 	require.Equal(t, 1, fixture.Snapshot().Executions[string(migration.Statements[0].SQL)])
+	_ = database.Close()
 
 	fixture = dbtest.NewRecovery()
 	fixture.FailMigrationAt(1)
-	database, runner = openRecoveryRunner(t, fixture)
-	result, err = runner.ApplyResult(t.Context(), AllPending(), migration)
+	failureDatabase, failureRunner := openRecoveryRunner(t, fixture)
+	result, err = failureRunner.ApplyResult(t.Context(), AllPending(), migration)
 	var incompleteErr *IncompleteMigrationError
 	require.ErrorAs(t, err, &incompleteErr)
 	require.NotNil(t, result.Incomplete)
@@ -308,7 +309,7 @@ func TestRecoveryPublicMismatchRefusalAndResultCopies(t *testing.T) {
 	incompleteErr.Incomplete.Source = "mutated-error"
 	require.NotEqual(t, result.Incomplete.ID, incompleteErr.Incomplete.ID)
 	require.NotEqual(t, result.Incomplete.Source, incompleteErr.Incomplete.Source)
-	_ = database.Close()
+	_ = failureDatabase.Close()
 }
 
 func assertIncompleteResult(t *testing.T, result ExecutionResult, err error, migration Migration, direction Direction, sourceIndex int) {
