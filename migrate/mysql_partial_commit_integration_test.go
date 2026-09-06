@@ -37,11 +37,11 @@ func testMySQLApplyPureDML(t *testing.T) {
 		{Source: "002_fail.up.sql", SQL: sqltext.Text("INSERT INTO sec_t1_apply_dml_missing VALUES (1)")},
 	}}
 	_, firstErr := runner.Apply(ctx, migrate.AllPending(), migration)
-	requireMySQLNativeError(t, firstErr)
+	requireMySQLNativeError(t, firstErr, 1146)
 	require.Equal(t, int64(1), mysqlCounter(t, ctx, database, "sec_t1_apply_dml_counter"))
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_dml_history", migration.ID))
 	_, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
-	requireMySQLNativeError(t, retryErr)
+	requireMySQLNativeError(t, retryErr, 1146)
 	require.Equal(t, int64(2), mysqlCounter(t, ctx, database, "sec_t1_apply_dml_counter"))
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_dml_history", migration.ID))
 }
@@ -66,11 +66,11 @@ func testMySQLRevertPureDML(t *testing.T) {
 	requireApplied(t, ctx, runner, migration)
 	require.Equal(t, int64(2), mysqlCounter(t, ctx, database, "sec_t1_revert_dml_counter"))
 	_, firstErr := runner.Revert(ctx, migrate.Steps(1), migration)
-	requireMySQLNativeError(t, firstErr)
+	requireMySQLNativeError(t, firstErr, 1146)
 	require.Equal(t, int64(1), mysqlCounter(t, ctx, database, "sec_t1_revert_dml_counter"))
 	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_dml_history", migration.ID))
 	_, retryErr := runner.Revert(ctx, migrate.Steps(1), migration)
-	requireMySQLNativeError(t, retryErr)
+	requireMySQLNativeError(t, retryErr, 1146)
 	require.Equal(t, int64(0), mysqlCounter(t, ctx, database, "sec_t1_revert_dml_counter"))
 	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_dml_history", migration.ID))
 }
@@ -86,12 +86,12 @@ func testMySQLApplyImplicitCommitDDL(t *testing.T) {
 		{Source: "002_fail.up.sql", SQL: sqltext.Text("INSERT INTO sec_t1_apply_ddl_missing VALUES (1)")},
 	}}
 	_, firstErr := runner.Apply(ctx, migrate.AllPending(), migration)
-	requireMySQLNativeError(t, firstErr)
+	requireMySQLNativeError(t, firstErr, 1146)
 	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_apply_ddl_object"))
 	require.Equal(t, "InnoDB", mysqlTableEngine(t, ctx, database, "sec_t1_apply_ddl_object"))
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
 	_, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
-	requireMySQLNativeError(t, retryErr)
+	requireMySQLNativeError(t, retryErr, 1050)
 	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_apply_ddl_object"))
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
 }
@@ -114,11 +114,11 @@ func testMySQLRevertImplicitCommitDDL(t *testing.T) {
 	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_revert_ddl_object"))
 	require.Equal(t, "InnoDB", mysqlTableEngine(t, ctx, database, "sec_t1_revert_ddl_object"))
 	_, firstErr := runner.Revert(ctx, migrate.Steps(1), migration)
-	requireMySQLNativeError(t, firstErr)
+	requireMySQLNativeError(t, firstErr, 1146)
 	require.False(t, mysqlTableExists(t, ctx, database, "sec_t1_revert_ddl_object"))
 	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_ddl_history", migration.ID))
 	_, retryErr := runner.Revert(ctx, migrate.Steps(1), migration)
-	requireMySQLNativeError(t, retryErr)
+	requireMySQLNativeError(t, retryErr, 1051)
 	require.False(t, mysqlTableExists(t, ctx, database, "sec_t1_revert_ddl_object"))
 	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_ddl_history", migration.ID))
 }
@@ -128,16 +128,19 @@ func logMySQLDiagnostics(t *testing.T, ctx context.Context, database *sql.DB) {
 	var autocommit int
 	var version string
 	require.NoError(t, database.QueryRowContext(ctx, "SELECT @@autocommit, @@version").Scan(&autocommit, &version))
+	require.Equal(t, 1, autocommit)
+	require.NotEmpty(t, version)
 	var engine string
 	require.NoError(t, database.QueryRowContext(ctx, "SELECT COALESCE(MAX(ENGINE), '') FROM information_schema.tables WHERE table_schema = DATABASE() AND ENGINE IS NOT NULL").Scan(&engine))
 	t.Logf("mysql diagnostics: autocommit=%d version=%s existing_engine=%s", autocommit, version, engine)
 }
 
-func requireMySQLNativeError(t *testing.T, err error) {
+func requireMySQLNativeError(t *testing.T, err error, expectedNumber uint16) {
 	t.Helper()
 	require.Error(t, err)
 	var mysqlErr *gomysql.MySQLError
 	require.True(t, errors.As(err, &mysqlErr), "expected native MySQL error, got %T: %v", err, err)
+	require.Equal(t, expectedNumber, mysqlErr.Number)
 	t.Logf("mysql native error: number=%d message=%s", mysqlErr.Number, mysqlErr.Message)
 }
 
