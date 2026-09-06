@@ -62,7 +62,7 @@ func (r Runner) progress(ctx context.Context, queries queryer) (*progressEntry, 
 }
 
 // Reconcile resolves a retained migration intent after an interrupted
-// non-transactional migration. The check runs while the migration lock is held
+// nontransactional migration. The check runs while the migration lock is held
 // and must report whether the source took effect.
 func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations ...Migration) error {
 	if check == nil {
@@ -71,8 +71,8 @@ func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations 
 	if err := r.validate(); err != nil {
 		return err
 	}
-	if r.dialect.Name() != "mysql" {
-		return fmt.Errorf("migrate: reconcile is supported only for MySQL")
+	if r.dialect.Name() != "mysql" && r.dialect.Name() != "postgresql" {
+		return fmt.Errorf("migrate: reconcile is supported only for MySQL and PostgreSQL")
 	}
 	prepared, err := prepareMigrations(migrations)
 	if err != nil {
@@ -127,7 +127,11 @@ func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations 
 			return nil, fmt.Errorf("migrate: invalid reconcile decision %q", decision)
 		}
 	}
-	_, err = r.withMySQLLock(ctx, connection, run)
+	if r.dialect.Name() == "postgresql" {
+		_, err = r.withPostgreSQLLock(ctx, connection, run)
+	} else {
+		_, err = r.withMySQLLock(ctx, connection, run)
+	}
 	return err
 }
 

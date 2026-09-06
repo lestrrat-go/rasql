@@ -51,7 +51,7 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 			return err
 		}
 		var progress *progressEntry
-		if r.dialect.Name() == "mysql" {
+		if r.dialect.Name() == "mysql" || r.dialect.Name() == "postgresql" {
 			if err := r.ensureProgress(ctx, connection); err != nil {
 				return err
 			}
