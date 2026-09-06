@@ -158,9 +158,68 @@ The builders cover the common statements. These constructors build the same stat
 | `query.NewJoinedSelect(from, joins, groupBy, projections…)` | `SELECT` that carries its joins from the start; needed when a projection or a grouping expression reads a joined table, which the other two refuse because they validate before `WithJoin` can run. Pass a nil `groupBy` when the statement does not group. |
 | `query.NewInsert(into, values…)` | `INSERT` of one row. Pass `query.Set(column, value)` per column, or `query.Defaults()` on its own to write the database default for every column. |
 | `query.NewInsertRows(into, columns, rows)` | `INSERT` of several rows against one column list, which the rows fill in order. |
+| `query.NewInsertSelect(into, columns, source)` | `INSERT ... SELECT` from a validated `query.ResultQuery`. |
 | `query.NewUpdate(table, assignments…)` | `UPDATE`, with `query.Set(column, expression)` per assignment. A statement without `WithWhere` requires `AllowAll` before rendering or execution. |
 | `query.NewDelete(from)` | `DELETE`. A statement without `WithWhere` requires `AllowAll` before rendering or execution. |
 | `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |
+
+`query.ResultOf(select, columns...)` gives a validated `Select` or `Compound` a reusable result shape. `query.Derived`
+turns it into an aliased `FROM` or `JOIN` source, and `query.CommonTable` plus `Select.WithCTEs` renders a local CTE.
+`query.CompoundQuery` supports `UNION`, `UNION ALL`, `INTERSECT`, and `EXCEPT`; result arguments keep their left-to-right
+order. Relation columns carry the declared result metadata, so an outer statement can validate names before rendering.
+
+<!-- INCLUDE(examples/query_reusable_relation_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/schema"
+)
+
+func Example_queryReusableRelation() {
+	users := query.MustTableRef(schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "active", Type: schema.BooleanType{}},
+		},
+	})
+	filtered, err := query.NewSelect(users, users.Column("id"))
+	if err != nil {
+		return
+	}
+	filtered, err = filtered.WithWhere(query.Equal(users.Column("active"), true))
+	if err != nil {
+		return
+	}
+	result, err := query.ResultOf(filtered, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	if err != nil {
+		return
+	}
+	relation, err := query.Derived(result, "active_users")
+	if err != nil {
+		return
+	}
+	statement, err := query.NewSelect(relation, relation.Column("id"))
+	if err != nil {
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		return
+	}
+	fmt.Println(rendered.SQL())
+	// Output:
+	// SELECT "active_users"."id" FROM (SELECT "users"."id" FROM "users" WHERE ("users"."active" = $1)) AS "active_users"
+}
+```
+source: [examples/query_reusable_relation_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_reusable_relation_example_test.go)
+<!-- END INCLUDE -->
 
 Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithGroupBy`, `WithHaving`, `WithOrder`, `WithLimit`, `WithOffset`, and `WithDistinct` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](03-write-statements.md#reading-a-returning-clause) covers. `Update.AllowAll` and `Delete.AllowAll` return a new statement when a full-table mutation is intentional. Each method returns a new validated statement rather than changing the one it was called on.
 
@@ -253,7 +312,7 @@ A `HAVING` clause needs a statement that groups, so a statement that groups neit
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
 
-`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID()).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the aggregate constructors above. Validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, which only an aggregate does, so validation refuses it on a curated scalar call. [Scalar functions](#scalar-functions) states that rule, and it states what `query.Func` does with the modifier instead. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The derived table or CTE that would express one portably is unsupported. The builder's own `Count` in [Count rows](../orm/03-typed-queries.md#count-rows) rejects a distinct builder for a reason of its own, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
+`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID()).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the aggregate constructors above. Validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, which only an aggregate does, so validation refuses it on a curated scalar call. [Scalar functions](#scalar-functions) states that rule, and it states what `query.Func` does with the modifier instead. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The call takes exactly one argument, so a distinct count over several projected columns uses a reusable `ResultQuery` through `query.ResultOf` and `query.Derived` or `query.CommonTable`. The builder's own `Count` in [Count rows](../orm/03-typed-queries.md#count-rows) rejects a distinct builder for a reason of its own, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
 
 ### Scalar functions
 
@@ -440,7 +499,7 @@ func Example_query_correlated_projection() {
 	// The constructor declares users before it validates the projection, so the
 	// projection can read both the order and the enclosing user's columns.
 	ordersForUser, err := query.NewCorrelatedSelect(
-		orders, []query.TableRef{users},
+		orders, []query.RelationSource{users},
 		query.Project(query.Coalesce(orders.Column("amount"), users.Column("id"))).As("value"),
 	)
 	if err != nil {

@@ -11,7 +11,7 @@ import (
 // SelectBuilder builds parameterized SQL through an immutable fluent API.
 type SelectBuilder struct {
 	dialect          dialect.Dialect
-	from             query.TableRef
+	from             query.RelationRef
 	projections      []query.Projection
 	joins            []query.Join
 	predicates       []query.Expression
@@ -28,7 +28,14 @@ type SelectBuilder struct {
 
 // SelectFrom starts a fluent SELECT builder for d using from as its primary table.
 func SelectFrom(d dialect.Dialect, from query.TableRef) SelectBuilder {
-	return SelectBuilder{dialect: d, from: from}
+	return SelectFromRelation(d, from)
+}
+
+// SelectFromRelation starts a fluent SELECT builder for d using any reusable
+// relation as its primary source. SelectFrom remains the table-only entry
+// point for callers that have a TableRef.
+func SelectFromRelation(d dialect.Dialect, from query.RelationSource) SelectBuilder {
+	return SelectBuilder{dialect: d, from: query.RelationRefOf(from)}
 }
 
 // WithDialect returns a copy of b that renders for d.

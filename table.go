@@ -186,6 +186,40 @@ const (
 	LockWaitSkipLocked = query.LockWaitSkipLocked
 )
 
+type RelationRef = query.RelationRef
+type RelationSource = query.RelationSource
+type ResultColumn = query.ResultColumn
+type ResultQuery = query.ResultQuery
+type QueryBody = query.QueryBody
+type CTE = query.CTE
+type Compound = query.Compound
+type CompoundOperator = query.CompoundOperator
+
+const (
+	Union     = query.Union
+	UnionAll  = query.UnionAll
+	Intersect = query.Intersect
+	Except    = query.Except
+)
+
+func Relation(table query.TableRef) query.RelationRef { return query.Relation(table) }
+
+func Derived(result query.ResultQuery, alias string) (query.RelationRef, error) {
+	return query.Derived(result, alias)
+}
+
+func ResultOf(body query.QueryBody, columns ...query.ResultColumn) (query.ResultQuery, error) {
+	return query.ResultOf(body, columns...)
+}
+
+func CompoundQuery(left query.ResultQuery, operator query.CompoundOperator, right query.ResultQuery) (query.Compound, error) {
+	return query.CompoundQuery(left, operator, right)
+}
+
+func CommonTable(name string, result query.ResultQuery) (query.CTE, error) {
+	return query.CommonTable(name, result)
+}
+
 // Equal compares left and right for equality. It is query.Equal under a name
 // generated code can reach without importing query.
 func Equal(left any, right any) query.Binary {

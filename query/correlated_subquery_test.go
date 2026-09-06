@@ -143,7 +143,7 @@ func TestCorrelatedSubqueryReadsTheEnclosingTable(t *testing.T) {
 func TestNewCorrelatedSelectAcceptsProjectionReadingOuterTable(t *testing.T) {
 	f := newCorrelatedFixture(t)
 	projection := query.Project(query.Coalesce(f.ordersTotal, f.usersID)).As("value")
-	subquery, err := query.NewCorrelatedSelect(f.orders, []query.TableRef{f.users}, projection)
+	subquery, err := query.NewCorrelatedSelect(f.orders, []query.RelationSource{f.users}, projection)
 	require.NoError(t, err)
 	subquery, err = subquery.WithWhere(query.Equal(f.ordersUser, f.usersID))
 	require.NoError(t, err)
@@ -154,11 +154,11 @@ func TestNewCorrelatedSelectSupportsNestedProjectionConstruction(t *testing.T) {
 	f := newCorrelatedFixture(t)
 	items, err := f.orders.As("items")
 	require.NoError(t, err)
-	leaf, err := query.NewCorrelatedSelect(items, []query.TableRef{f.users}, query.Project(items.Column("amount")))
+	leaf, err := query.NewCorrelatedSelect(items, []query.RelationSource{f.users}, query.Project(items.Column("amount")))
 	require.NoError(t, err)
 	leaf, err = leaf.WithWhere(query.Equal(items.Column("user_id"), f.usersID))
 	require.NoError(t, err)
-	middle, err := query.NewCorrelatedSelect(f.orders, []query.TableRef{f.users}, query.Project(query.Scalar(leaf)).As("value"))
+	middle, err := query.NewCorrelatedSelect(f.orders, []query.RelationSource{f.users}, query.Project(query.Scalar(leaf)).As("value"))
 	require.NoError(t, err)
 	outer, err := query.NewSelect(f.users, f.usersID, query.Project(query.Scalar(middle)).As("value"))
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestNewCorrelatedJoinedSelectClonesInputs(t *testing.T) {
 	f := newCorrelatedFixture(t)
 	joinedUsers, err := f.users.As("u")
 	require.NoError(t, err)
-	correlations := []query.TableRef{f.users}
+	correlations := []query.RelationSource{f.users}
 	joins := []query.Join{query.InnerJoin(joinedUsers, query.Equal(f.ordersUser, joinedUsers.Column("id")))}
 	groupBy := []query.Expression{f.usersID}
 	statement, err := query.NewCorrelatedJoinedSelect(f.orders, correlations, joins, groupBy, f.ordersID)
@@ -177,8 +177,8 @@ func TestNewCorrelatedJoinedSelectClonesInputs(t *testing.T) {
 	correlations[0] = f.orders
 	joins[0] = query.LeftJoin(f.users, query.Equal(f.ordersUser, f.usersID))
 	groupBy[0] = f.ordersID
-	require.Equal(t, []query.TableRef{f.users}, statement.Correlations())
-	require.Equal(t, joinedUsers, statement.Joins()[0].Source())
+	require.Equal(t, []query.RelationRef{query.Relation(f.users)}, statement.Correlations())
+	require.Equal(t, query.Relation(joinedUsers), statement.Joins()[0].Source())
 	require.Equal(t, f.usersID, statement.GroupBy()[0])
 }
 

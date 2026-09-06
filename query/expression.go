@@ -13,7 +13,7 @@ type Expression interface {
 
 // ColumnRef is a typed reference to a table column.
 type ColumnRef struct {
-	source TableRef
+	source RelationRef
 	name   string
 }
 
@@ -29,10 +29,12 @@ func (c ColumnRef) Validate() error {
 	if err := c.source.validate(); err != nil {
 		return fmt.Errorf("query column: %q: %w", c.name, err)
 	}
-	if _, ok := c.source.column(c.name); !ok {
-		return fmt.Errorf("query column: table %q has no column %q", c.source.QualifiedName(), c.name)
+	for _, column := range c.source.Columns() {
+		if column.Name == c.name {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("query column: table %q has no column %q", c.source.QualifiedName(), c.name)
 }
 
 // Name returns the column name.
@@ -41,7 +43,7 @@ func (c ColumnRef) Name() string {
 }
 
 // Source returns the table that owns the column.
-func (c ColumnRef) Source() TableRef {
+func (c ColumnRef) Source() RelationRef {
 	return c.source
 }
 
@@ -92,14 +94,15 @@ func (c ExcludedColumn) Column() ColumnRef {
 // package builds one from a plain string, so it cannot become a way to place
 // arbitrary text in a rendered statement.
 type TableIdentifier struct {
-	table TableRef
+	table RelationRef
 }
 
 func (TableIdentifier) expression() {}
 
 // Table returns the table whose bare name is rendered.
 func (t TableIdentifier) Table() TableRef {
-	return t.table
+	table, _ := t.table.Table()
+	return table
 }
 
 // Value is a bound SQL argument. Its value is never interpolated into SQL text.
@@ -259,7 +262,7 @@ func Like(left any, right any) Binary {
 // directly; Match only builds the whole-table shape, since that is the one
 // bm25 and the target query in the rasql documentation both need.
 func Match(table TableRef, expr any) Binary {
-	return Binary{left: TableIdentifier{table: table}, operator: OperatorMatch, right: operand(expr)}
+	return Binary{left: TableIdentifier{table: Relation(table)}, operator: OperatorMatch, right: operand(expr)}
 }
 
 // Left returns the left expression.
@@ -813,7 +816,7 @@ func Avg(expression Expression) Function {
 // typed by hand.
 func BM25(table TableRef, weights ...float64) Function {
 	arguments := make([]any, 0, len(weights)+1)
-	arguments = append(arguments, TableIdentifier{table: table})
+	arguments = append(arguments, TableIdentifier{table: Relation(table)})
 	for _, weight := range weights {
 		arguments = append(arguments, weight)
 	}

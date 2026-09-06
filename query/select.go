@@ -74,18 +74,18 @@ const (
 // Join adds a joined table to a SELECT statement.
 type Join struct {
 	kind   JoinType
-	source TableRef
+	source RelationRef
 	on     Expression
 }
 
 // InnerJoin returns an INNER JOIN.
-func InnerJoin(source TableRef, on Expression) Join {
-	return Join{kind: JoinInner, source: source, on: on}
+func InnerJoin(source RelationSource, on Expression) Join {
+	return Join{kind: JoinInner, source: source.relationRef(), on: on}
 }
 
 // LeftJoin returns a LEFT JOIN.
-func LeftJoin(source TableRef, on Expression) Join {
-	return Join{kind: JoinLeft, source: source, on: on}
+func LeftJoin(source RelationSource, on Expression) Join {
+	return Join{kind: JoinLeft, source: source.relationRef(), on: on}
 }
 
 // Type returns the join type.
@@ -94,7 +94,7 @@ func (j Join) Type() JoinType {
 }
 
 // Source returns the joined table.
-func (j Join) Source() TableRef {
+func (j Join) Source() RelationRef {
 	return j.source
 }
 
@@ -242,11 +242,12 @@ func (o Order) Descending() bool {
 // Select is an immutable SELECT statement.
 type Select struct {
 	projections []Projection
-	from        TableRef
+	from        RelationRef
 	// correlations names the tables of an enclosing statement this one reads,
 	// which WithCorrelation declares and Correlations reports. It is empty for
 	// every statement that stands on its own.
-	correlations []TableRef
+	correlations []RelationRef
+	ctes         []CTE
 	joins        []Join
 	where        Expression
 	groupBy      []Expression
@@ -262,13 +263,13 @@ type Select struct {
 }
 
 // NewSelect creates a validated SELECT statement.
-func NewSelect(from TableRef, projections ...Projection) (Select, error) {
+func NewSelect(from RelationSource, projections ...Projection) (Select, error) {
 	return NewJoinedSelect(from, nil, nil, projections...)
 }
 
 // NewCorrelatedSelect creates a validated SELECT with correlations declared
 // before validating projections and other clauses that may read them.
-func NewCorrelatedSelect(from TableRef, correlations []TableRef, projections ...Projection) (Select, error) {
+func NewCorrelatedSelect(from RelationSource, correlations []RelationSource, projections ...Projection) (Select, error) {
 	return NewCorrelatedJoinedSelect(from, correlations, nil, nil, projections...)
 }
 
@@ -279,7 +280,7 @@ func NewCorrelatedSelect(from TableRef, correlations []TableRef, projections ...
 // NewSelect would refuse the projection set before WithGroupBy could make it
 // legal. A grouping expression must not call an aggregate function and must not
 // be a bare bound value.
-func NewGroupedSelect(from TableRef, groupBy []Expression, projections ...Projection) (Select, error) {
+func NewGroupedSelect(from RelationSource, groupBy []Expression, projections ...Projection) (Select, error) {
 	return NewJoinedSelect(from, nil, groupBy, projections...)
 }
 
@@ -293,17 +294,17 @@ func NewGroupedSelect(from TableRef, groupBy []Expression, projections ...Projec
 // reads the joined table, because validation has already refused it. Supply the
 // joins here whenever any projection or grouping expression reads a joined
 // table's column. Pass a nil groupBy for a statement that does not group.
-func NewJoinedSelect(from TableRef, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
+func NewJoinedSelect(from RelationSource, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
 	return NewCorrelatedJoinedSelect(from, nil, joins, groupBy, projections...)
 }
 
 // NewCorrelatedJoinedSelect creates a validated SELECT with correlations,
 // joins, and grouping installed before validation. Use it when a projection,
 // join condition, or grouping expression reads a declared outer table.
-func NewCorrelatedJoinedSelect(from TableRef, correlations []TableRef, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
+func NewCorrelatedJoinedSelect(from RelationSource, correlations []RelationSource, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
 	statement := Select{
-		from:         from,
-		correlations: append([]TableRef(nil), correlations...),
+		from:         from.relationRef(),
+		correlations: normalizeSources(correlations),
 		joins:        append([]Join(nil), joins...),
 		groupBy:      append([]Expression(nil), groupBy...),
 		projections:  append([]Projection(nil), projections...),
@@ -357,19 +358,31 @@ func NewCorrelatedJoinedSelect(from TableRef, correlations []TableRef, joins []J
 // statement is coming. Repeating the declaration is what tells it, and it also
 // leaves every level saying which enclosing tables the statements inside it
 // read.
-func (s Select) WithCorrelation(tables ...TableRef) (Select, error) {
+func (s Select) WithCorrelation(tables ...RelationSource) (Select, error) {
 	copy := s.clone()
-	copy.correlations = append(copy.correlations, tables...)
+	copy.correlations = append(copy.correlations, normalizeSources(tables)...)
 	if err := copy.Validate(); err != nil {
 		return Select{}, err
 	}
 	return copy, nil
 }
 
+// WithCTEs returns a copy of s with common table expressions prepended.
+func (s Select) WithCTEs(ctes ...CTE) (Select, error) {
+	copy := s.clone()
+	copy.ctes = append(copy.ctes, ctes...)
+	if err := copy.Validate(); err != nil {
+		return Select{}, err
+	}
+	return copy, nil
+}
+
+func (s Select) CTEs() []CTE { return append([]CTE(nil), s.ctes...) }
+
 // Correlations returns a copy of the enclosing tables s declared with
 // WithCorrelation. It is empty for a statement that stands on its own.
-func (s Select) Correlations() []TableRef {
-	return append([]TableRef(nil), s.correlations...)
+func (s Select) Correlations() []RelationRef {
+	return append([]RelationRef(nil), s.correlations...)
 }
 
 // WithJoin returns a copy of s with join appended.
@@ -500,7 +513,7 @@ func (s Select) Projections() []Projection {
 }
 
 // From returns the statement's primary table.
-func (s Select) From() TableRef {
+func (s Select) From() RelationRef {
 	return s.from
 }
 
@@ -552,11 +565,24 @@ func (s Select) Offset() (int, bool) {
 // declaration against the statement that really encloses it, and render.Select
 // refuses one rendered on its own.
 func (s Select) Validate() error {
+	if err := validateVisibleCTE(s.from, s.ctes, "from"); err != nil {
+		return err
+	}
 	if err := s.from.validate(); err != nil {
 		return validationError("from", "%s", err)
 	}
 	if len(s.projections) == 0 {
 		return validationError("projections", "must not be empty")
+	}
+	seenCTE := make(map[string]struct{}, len(s.ctes))
+	for i, cte := range s.ctes {
+		if _, exists := seenCTE[cte.name]; exists {
+			return validationError(fmt.Sprintf("ctes[%d]", i), "duplicates CTE name %q", cte.name)
+		}
+		seenCTE[cte.name] = struct{}{}
+		if err := cte.query.Body().Validate(); err != nil {
+			return validationError(fmt.Sprintf("ctes[%d]", i), "%s", err)
+		}
 	}
 
 	sources := sourceScope{keys: make(map[string]struct{}, len(s.correlations)+len(s.joins)+1)}
@@ -569,6 +595,9 @@ func (s Select) Validate() error {
 	// alias validateSourceReference names for two tables of one statement.
 	for i, correlated := range s.correlations {
 		path := fmt.Sprintf("correlations[%d]", i)
+		if err := validateVisibleCTE(correlated, s.ctes, path); err != nil {
+			return err
+		}
 		if err := correlated.validate(); err != nil {
 			return validationError(path, "%s", err)
 		}
@@ -588,6 +617,9 @@ func (s Select) Validate() error {
 		}
 		if err := join.source.validate(); err != nil {
 			return validationError(path+".source", "%s", err)
+		}
+		if err := validateVisibleCTE(join.source, s.ctes, path+".source"); err != nil {
+			return err
 		}
 		// The duplicate message is about one statement listing the same table
 		// twice, so it covers only the tables this statement selects from. A
@@ -668,13 +700,28 @@ func (s Select) Validate() error {
 // correlations declares. It exists so a join can tell a table this statement
 // already selects from, which is a plain duplicate, from one it declared a
 // correlation with, which is the ambiguity an alias repairs.
-func isCorrelatedSource(correlations []TableRef, source TableRef) bool {
+func isCorrelatedSource(correlations []RelationRef, source RelationRef) bool {
 	for _, correlated := range correlations {
 		if correlated.key() == source.key() {
 			return true
 		}
 	}
 	return false
+}
+
+func validateVisibleCTE(source RelationRef, ctes []CTE, path string) error {
+	if source.CTEName() == "" {
+		return nil
+	}
+	if len(ctes) == 0 {
+		return nil
+	}
+	for _, cte := range ctes {
+		if cte.id == source.cteID() {
+			return nil
+		}
+	}
+	return validationError(path, "references CTE %q outside its owning SELECT", source.CTEName())
 }
 
 // validateOrder validates one ORDER BY term. A term naming a projection's
@@ -794,7 +841,8 @@ func (s Select) resultNames() map[string]int {
 
 func (s Select) clone() Select {
 	copy := s
-	copy.correlations = append([]TableRef(nil), s.correlations...)
+	copy.correlations = append([]RelationRef(nil), s.correlations...)
+	copy.ctes = append([]CTE(nil), s.ctes...)
 	copy.projections = append([]Projection(nil), s.projections...)
 	copy.joins = append([]Join(nil), s.joins...)
 	copy.groupBy = append([]Expression(nil), s.groupBy...)

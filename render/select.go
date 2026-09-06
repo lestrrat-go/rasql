@@ -130,11 +130,36 @@ type renderer struct {
 	// reached anywhere else.
 	excludedStyle dialect.UpsertStyle
 	inExcluded    bool
+	cteScope      []query.CTE
 }
 
 func (r *renderer) writeSelect(s query.Select) error {
+	previous := r.cteScope
+	owned := append([]query.CTE(nil), previous...)
+	owned = append(owned, s.CTEs()...)
+	r.cteScope = owned
+	defer func() { r.cteScope = previous }()
 	if err := r.validateSelectSources(s); err != nil {
 		return err
+	}
+	if ctes := s.CTEs(); len(ctes) > 0 {
+		r.builder.WriteString("WITH ")
+		for i, cte := range ctes {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			name, err := r.quoteIdentifier(cte.Name())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(name)
+			r.builder.WriteString(" AS (")
+			if err := r.writeQueryBody(cte.Query().Body()); err != nil {
+				return err
+			}
+			r.builder.WriteByte(')')
+		}
+		r.builder.WriteByte(' ')
 	}
 	r.builder.WriteString("SELECT ")
 	if s.Distinct() {
@@ -297,13 +322,72 @@ func (r *renderer) writeLock(lock query.Lock) error {
 	return nil
 }
 
+func (r *renderer) writeQueryBody(body query.QueryBody) error {
+	switch body := body.(type) {
+	case query.Select:
+		return r.writeSelect(body)
+	case *query.Select:
+		if body == nil {
+			return fmt.Errorf("unsupported query body %T", body)
+		}
+		return r.writeSelect(*body)
+	case query.Compound:
+		return r.writeCompound(body)
+	case *query.Compound:
+		if body == nil {
+			return fmt.Errorf("unsupported query body %T", body)
+		}
+		return r.writeCompound(*body)
+	default:
+		return fmt.Errorf("unsupported query body %T", body)
+	}
+}
+
+func (r *renderer) writeCompound(compound query.Compound) error {
+	parenthesizeOperands := r.dialect.Name() != "sqlite"
+	if parenthesizeOperands {
+		r.builder.WriteByte('(')
+	}
+	if err := r.writeQueryBody(compound.Left().Body()); err != nil {
+		return err
+	}
+	if parenthesizeOperands {
+		r.builder.WriteByte(')')
+	}
+	r.builder.WriteByte(' ')
+	switch compound.Operator() {
+	case query.Union:
+		r.builder.WriteString("UNION")
+	case query.UnionAll:
+		r.builder.WriteString("UNION ALL")
+	case query.Intersect:
+		r.builder.WriteString("INTERSECT")
+	case query.Except:
+		r.builder.WriteString("EXCEPT")
+	default:
+		return fmt.Errorf("unsupported compound operator %d", compound.Operator())
+	}
+	if parenthesizeOperands {
+		r.builder.WriteString(" (")
+	} else {
+		r.builder.WriteByte(' ')
+	}
+	if err := r.writeQueryBody(compound.Right().Body()); err != nil {
+		return err
+	}
+	if parenthesizeOperands {
+		r.builder.WriteByte(')')
+	}
+	return nil
+}
+
 type visibleSource struct {
 	qualifier  string
 	schema     string
 	descriptor string
 }
 
-func visibleSourceFromTable(table query.TableRef) visibleSource {
+func visibleSourceFromTable(table query.RelationRef) visibleSource {
 	return visibleSource{
 		qualifier:  table.Qualifier(),
 		schema:     table.QualifierSchema(),
@@ -312,8 +396,29 @@ func visibleSourceFromTable(table query.TableRef) visibleSource {
 }
 
 func (r *renderer) validateSelectSources(s query.Select) error {
+	localCTEs := s.CTEs()
+	ctes := append(append([]query.CTE(nil), r.cteScope...), localCTEs...)
+	for i, left := range localCTEs {
+		for j := 0; j < i; j++ {
+			if dialect.IdentifiersEqual(r.dialect, localCTEs[j].Name(), left.Name()) {
+				return fmt.Errorf("CTE names %q and %q collide in the %s dialect", localCTEs[j].Name(), left.Name(), r.dialect.Name())
+			}
+		}
+	}
 	sources := make([]visibleSource, 0, len(s.Correlations())+1+len(s.Joins()))
-	add := func(table query.TableRef) error {
+	add := func(table query.RelationRef) error {
+		if cteName := table.CTEName(); cteName != "" {
+			found := false
+			for _, cte := range ctes {
+				if cte.Name() == cteName && cte.Identity() == table.CTEIdentity() {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("CTE %q is not defined by this SELECT", cteName)
+			}
+		}
 		candidate := visibleSourceFromTable(table)
 		for _, existing := range sources {
 			if !r.sourceIdentifiersConflict(existing, candidate) {
@@ -350,7 +455,46 @@ func (r *renderer) sourceIdentifiersConflict(left, right visibleSource) bool {
 	return true
 }
 
-func (r *renderer) writeTable(table query.TableRef) error {
+func (r *renderer) writeTable(table query.RelationRef) error {
+	if physical, ok := table.Table(); ok {
+		return r.writePhysicalTable(physical)
+	}
+	if cte := table.CTEName(); cte != "" {
+		name, err := r.quoteIdentifier(cte)
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(name)
+		if table.Alias() != cte {
+			r.builder.WriteString(" AS ")
+			alias, err := r.quoteIdentifier(table.Alias())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(alias)
+		}
+		return nil
+	}
+	if table.Alias() == "" {
+		return fmt.Errorf("relation %q must have an alias", table.QualifiedName())
+	}
+	if body := table.ResultBody(); body != nil {
+		r.builder.WriteByte('(')
+		if err := r.writeQueryBody(body); err != nil {
+			return err
+		}
+		r.builder.WriteString(") AS ")
+		alias, err := r.quoteIdentifier(table.Alias())
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(alias)
+		return nil
+	}
+	return fmt.Errorf("unsupported relation %q", table.QualifiedName())
+}
+
+func (r *renderer) writePhysicalTable(table query.TableRef) error {
 	name, err := r.quoteQualified(table.Schema(), table.Name())
 	if err != nil {
 		return err
