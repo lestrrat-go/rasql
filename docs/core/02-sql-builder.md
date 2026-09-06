@@ -57,6 +57,52 @@ source: [examples/query_render_select_example_test.go](https://github.com/lestrr
 
 `query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` builds the reference, and `query.NewSelect` reports a name the table does not hold.
 
+<!-- INCLUDE(examples/query_lock_upsert_example_test.go#row_lock) -->
+```go
+func Example_query_rowLock() {
+	queue := query.MustTableRef(schema.MustTableDef("queue", schema.Integer("id"), schema.Integer("claimed")))
+	statement, err := query.NewSelect(queue, queue.Column("id"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithWhere(query.Equal(queue.Column("claimed"), 0))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithOrder(query.Asc(queue.Column("id")))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithLimit(1)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithLock(query.RowLock(query.LockUpdate).Wait(query.LockWaitSkipLocked))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT "queue"."id" FROM "queue" WHERE ("queue"."claimed" = $1) ORDER BY "queue"."id" LIMIT $2 FOR UPDATE SKIP LOCKED
+	// 0 1
+}
+```
+source: [examples/query_lock_upsert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_lock_upsert_example_test.go)
+<!-- END INCLUDE -->
+
+`query.RowLock` appends a measured row-locking clause after ordering and paging. Use `LockWaitSkipLocked` when each worker should claim a different queued row.
+
 <!-- INCLUDE(examples/query_expression_example_test.go#expressions) -->
 ```go
 func Example_query_expressions() {

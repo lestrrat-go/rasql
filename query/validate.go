@@ -33,6 +33,38 @@ func validateAlias(alias string) error {
 	return nil
 }
 
+func validateLock(lock Lock, from TableRef, joins []Join) error {
+	switch lock.strength {
+	case LockUpdate, LockNoKeyUpdate, LockShare, LockKeyShare:
+	default:
+		return validationError("lock.strength", "unsupported lock strength %d", lock.strength)
+	}
+	switch lock.wait {
+	case LockWaitDefault, LockWaitNoWait, LockWaitSkipLocked:
+	default:
+		return validationError("lock.wait", "unsupported lock wait mode %d", lock.wait)
+	}
+	sources := map[string]struct{}{from.key(): {}}
+	for _, join := range joins {
+		sources[join.source.key()] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(lock.of))
+	for i, table := range lock.of {
+		path := fmt.Sprintf("lock.of[%d]", i)
+		if err := table.validate(); err != nil {
+			return validationError(path, "%s", err)
+		}
+		if _, ok := sources[table.key()]; !ok {
+			return validationError(path, "references a table outside the SELECT sources")
+		}
+		if _, ok := seen[table.key()]; ok {
+			return validationError(path, "duplicates table reference %q", table.QualifiedName())
+		}
+		seen[table.key()] = struct{}{}
+	}
+	return nil
+}
+
 // validateOrderResultAlias refuses an ORDER BY term built by AscResult or
 // DescResult that PostgreSQL and MySQL would themselves refuse. projection
 // must report a result name at all, that name must be a legal identifier, it

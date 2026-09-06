@@ -17,10 +17,12 @@ type WriteStatement interface {
 
 // Upsert is an immutable INSERT statement with conflict handling.
 type Upsert struct {
-	insert      Insert
-	conflict    []ColumnRef
-	assignments []Assignment
-	returning   []Projection
+	insert        Insert
+	conflict      []ColumnRef
+	assignments   []Assignment
+	returning     []Projection
+	conflictWhere Expression
+	updateWhere   Expression
 }
 
 func (Upsert) writeStatement() {}
@@ -51,6 +53,32 @@ func (s Upsert) WithReturning(projections ...Projection) (Upsert, error) {
 	}
 	return copy, nil
 }
+
+// WithConflictWhere returns a copy with the partial conflict-target predicate replaced.
+func (s Upsert) WithConflictWhere(predicate Expression) (Upsert, error) {
+	copy := s.clone()
+	copy.conflictWhere = predicate
+	if err := copy.Validate(); err != nil {
+		return Upsert{}, err
+	}
+	return copy, nil
+}
+
+// ConflictWhere returns the partial conflict-target predicate, if present.
+func (s Upsert) ConflictWhere() Expression { return s.conflictWhere }
+
+// WithUpdateWhere returns a copy with the conflict-update predicate replaced.
+func (s Upsert) WithUpdateWhere(predicate Expression) (Upsert, error) {
+	copy := s.clone()
+	copy.updateWhere = predicate
+	if err := copy.Validate(); err != nil {
+		return Upsert{}, err
+	}
+	return copy, nil
+}
+
+// UpdateWhere returns the conflict-update predicate, if present.
+func (s Upsert) UpdateWhere() Expression { return s.updateWhere }
 
 // Insert returns the underlying insert operation.
 func (s Upsert) Insert() Insert {
@@ -83,6 +111,12 @@ func (s Upsert) Validate() error {
 	if len(s.conflict) == 0 && len(s.assignments) == 0 {
 		return validationError("upsert", "requires conflict columns or assignments")
 	}
+	if s.conflictWhere != nil && len(s.conflict) == 0 {
+		return validationError("conflict_where", "requires conflict columns")
+	}
+	if s.updateWhere != nil && len(s.assignments) == 0 {
+		return validationError("update_where", "requires assignments")
+	}
 	sources, err := validateWriteTarget(s.insert.into, "insert.into")
 	if err != nil {
 		return err
@@ -109,6 +143,16 @@ func (s Upsert) Validate() error {
 		}
 		assigned[assignment.column.Name()] = struct{}{}
 		if err := validateClauseExpression(assignment.value, sources, "a conflict-update assignment", path+".value"); err != nil {
+			return err
+		}
+	}
+	if s.conflictWhere != nil {
+		if err := validateClauseExpression(s.conflictWhere, sources, "a conflict target predicate", "conflict_where"); err != nil {
+			return err
+		}
+	}
+	if s.updateWhere != nil {
+		if err := validateClauseExpression(s.updateWhere, sources, "a conflict-update predicate", "update_where"); err != nil {
 			return err
 		}
 	}

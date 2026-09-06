@@ -115,6 +115,51 @@ type Order struct {
 	descending       bool
 }
 
+// LockStrength identifies the row lock mode a SELECT requests.
+type LockStrength uint8
+
+const (
+	LockUpdate LockStrength = iota + 1
+	LockNoKeyUpdate
+	LockShare
+	LockKeyShare
+)
+
+// LockWait identifies what a row-locking SELECT does when a row is already locked.
+type LockWait uint8
+
+const (
+	LockWaitDefault LockWait = iota
+	LockWaitNoWait
+	LockWaitSkipLocked
+)
+
+// Lock is the optional row-locking clause of a SELECT.
+type Lock struct {
+	strength LockStrength
+	of       []TableRef
+	wait     LockWait
+}
+
+// RowLock creates a row-locking clause. Invalid strengths are rejected when the clause is attached to a SELECT.
+func RowLock(strength LockStrength) Lock { return Lock{strength: strength} }
+
+// Of returns a copy of l that limits the lock to the supplied local sources.
+func (l Lock) Of(tables ...TableRef) Lock {
+	l.of = append([]TableRef(nil), tables...)
+	return l
+}
+
+// Wait returns a copy of l with the requested lock wait behavior.
+func (l Lock) Wait(wait LockWait) Lock {
+	l.wait = wait
+	return l
+}
+
+func (l Lock) Strength() LockStrength { return l.strength }
+func (l Lock) Tables() []TableRef     { return append([]TableRef(nil), l.of...) }
+func (l Lock) WaitMode() LockWait     { return l.wait }
+
 // Asc orders expression in ascending order.
 func Asc(expression Expression) Order {
 	return Order{expression: expression}
@@ -212,6 +257,8 @@ type Select struct {
 	offset       int
 	hasOffset    bool
 	distinct     bool
+	lock         Lock
+	hasLock      bool
 }
 
 // NewSelect creates a validated SELECT statement.
@@ -411,6 +458,25 @@ func (s Select) WithOffset(offset int) (Select, error) {
 	return copy, nil
 }
 
+// WithLock returns a copy of s with its row-locking clause replaced.
+func (s Select) WithLock(lock Lock) (Select, error) {
+	copy := s.clone()
+	copy.lock = lock.clone()
+	copy.hasLock = true
+	if err := copy.Validate(); err != nil {
+		return Select{}, err
+	}
+	return copy, nil
+}
+
+// Lock returns the row-locking clause and reports whether one is set.
+func (s Select) Lock() (Lock, bool) {
+	if !s.hasLock {
+		return Lock{}, false
+	}
+	return s.lock.clone(), true
+}
+
 // Projections returns a copy of selected expressions.
 func (s Select) Projections() []Projection {
 	return append([]Projection(nil), s.projections...)
@@ -572,6 +638,11 @@ func (s Select) Validate() error {
 	if s.hasOffset && s.offset < 0 {
 		return validationError("offset", "must not be negative")
 	}
+	if s.hasLock {
+		if err := validateLock(s.lock, s.from, s.joins); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -710,5 +781,11 @@ func (s Select) clone() Select {
 	copy.joins = append([]Join(nil), s.joins...)
 	copy.groupBy = append([]Expression(nil), s.groupBy...)
 	copy.orderBy = append([]Order(nil), s.orderBy...)
+	copy.lock = s.lock.clone()
 	return copy
+}
+
+func (l Lock) clone() Lock {
+	l.of = append([]TableRef(nil), l.of...)
+	return l
 }

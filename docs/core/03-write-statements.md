@@ -83,6 +83,45 @@ Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is wh
 
 `NewInsert` pairs each column with its value through `query.Set`, the same call `NewUpdate` takes, so the two cannot fall out of step. The rendered column list follows the order the assignments were given in. Passing `query.Defaults()` on its own writes the database default for every column instead. `NewInsertRows` keeps a separate column list because an `INSERT` names its columns once and supplies every row against that one list.
 
+<!-- INCLUDE(examples/query_lock_upsert_example_test.go#conditional_upsert) -->
+```go
+func Example_query_conditionalUpsert() {
+	items := query.MustTableRef(schema.MustTableDef("items", schema.Integer("id"), schema.Integer("version"), schema.Text("payload")))
+	id, version, payload := items.Column("id"), items.Column("version"), items.Column("payload")
+	insert, err := query.NewInsert(items, query.Set(id, 1), query.Set(version, 3), query.Set(payload, "new"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
+		query.Set(version, query.Excluded(version)), query.Set(payload, query.Excluded(payload)),
+	})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithUpdateWhere(query.LessThan(version, query.Excluded(version)))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Upsert(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// INSERT INTO "items" ("id", "version", "payload") VALUES (?, ?, ?) ON CONFLICT ("id") DO UPDATE SET "version" = EXCLUDED."version", "payload" = EXCLUDED."payload" WHERE ("items"."version" < EXCLUDED."version")
+	// 1 3 new
+}
+```
+source: [examples/query_lock_upsert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_lock_upsert_example_test.go)
+<!-- END INCLUDE -->
+
+`Upsert.WithUpdateWhere` applies a version check after the conflict assignments, so an older incoming row leaves newer stored data unchanged.
+
 <!-- INCLUDE(examples/query_expression_example_test.go#trusted_fragments) -->
 ```go
 func Example_query_trustedFragments() {
