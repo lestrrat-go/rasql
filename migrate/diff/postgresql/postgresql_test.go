@@ -573,23 +573,25 @@ func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, diff.Plan{
-		Dialect: "postgresql",
-		Statements: []diff.PlannedStatement{
-			{
-				Source:     "001_add_column_members_email.sql",
-				SQL:        "ALTER TABLE members ADD COLUMN email text;\n",
-				ReverseSQL: "ALTER TABLE members DROP COLUMN email;\n",
-				Summary:    "add column members.email",
-			},
-			{
-				Source:     "002_create_index_members_email_idx.sql",
-				SQL:        "CREATE INDEX members_email_idx ON members (email);\n",
-				ReverseSQL: "DROP INDEX members_email_idx;\n",
-				Summary:    "create index members_email_idx",
-			},
+	require.Equal(t, []diff.PlannedStatement{
+		{
+			Source:     "001_add_column_members_email.sql",
+			SQL:        "ALTER TABLE members ADD COLUMN email text;\n",
+			ReverseSQL: "ALTER TABLE members DROP COLUMN email;\n",
+			Summary:    "add column members.email",
 		},
-	}, plan)
+		{
+			Source:     "002_create_index_members_email_idx.sql",
+			SQL:        "CREATE INDEX members_email_idx ON members (email);\n",
+			ReverseSQL: "DROP INDEX members_email_idx;\n",
+			Summary:    "create index members_email_idx",
+		},
+	}, plan.Statements)
+	require.Len(t, plan.Operations, 2)
+	require.Equal(t, []diff.ProposedOperation{
+		{ID: "add_column_postgresql_members_email", Table: "members", Column: "email", Kind: diff.OperationAddColumn},
+		{ID: "replace_constraint_postgresql_members_members_email_idx", Table: "members", Constraint: "members_email_idx", Kind: diff.OperationReplaceConstraint},
+	}, []diff.ProposedOperation{{ID: plan.Operations[0].ID, Table: plan.Operations[0].Table, Column: plan.Operations[0].Column, Kind: plan.Operations[0].Kind}, {ID: plan.Operations[1].ID, Table: plan.Operations[1].Table, Constraint: plan.Operations[1].Constraint, Kind: plan.Operations[1].Kind}})
 }
 
 func TestDiffGeneratesNewTable(t *testing.T) {
@@ -714,6 +716,65 @@ func TestDiffProposesConfirmedCompatibleRename(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, resolved.Statements[0].SQL, "name TO display_name")
 	require.Contains(t, resolved.Statements[0].ReverseSQL, "display_name TO name")
+}
+
+func TestDiffLowersQuotedRenameFromIndependentASTNames(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, `CREATE TABLE "members" ("Old Name" text);`)
+	target := parseSnapshot(t, analyzer, `CREATE TABLE "members" ("New Name" text);`)
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	resolved, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, RenameFrom: "Old Name"})
+	require.NoError(t, err)
+	expected := diff.ProposedOperation{
+		ID: "add_column_postgresql_members_new name", Table: "members", Column: "New Name",
+		Summary: "rename column members.New Name", Kind: diff.OperationAddColumn,
+		Forward: []diff.PlannedStatement{{
+			Source: "001_rename_column_members.sql",
+			SQL: "ALTER TABLE \"members\" RENAME COLUMN \"Old Name\" TO \"New Name\";\n",
+			ReverseSQL: "ALTER TABLE \"members\" RENAME COLUMN \"New Name\" TO \"Old Name\";\n",
+			Summary: "rename column members.New Name",
+		}},
+		Reverse: []diff.PlannedStatement{{
+			Source: "001_rename_column_members.sql",
+			SQL: "ALTER TABLE \"members\" RENAME COLUMN \"New Name\" TO \"Old Name\";\n",
+			ReverseSQL: "ALTER TABLE \"members\" RENAME COLUMN \"Old Name\" TO \"New Name\";\n",
+			Summary: "rename column members.New Name",
+		}},
+	}
+	require.Equal(t, expected, resolved.Operations[0])
+	require.Equal(t, expected.Forward[0], resolved.Statements[0])
+}
+
+func TestDiffLowersPostgreSQLBackfillInNativeOrder(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, `CREATE TABLE tasks (id bigint PRIMARY KEY, owner_id bigint);`)
+	target := parseSnapshot(t, analyzer, `CREATE TABLE tasks (id bigint PRIMARY KEY, owner_id bigint, owner_label text NOT NULL);`)
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	first, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, BackfillSQL: `UPDATE "tasks" SET "owner_label" = 'owner-' || "owner_id";`})
+	require.NoError(t, err)
+	require.Equal(t, diff.OperationAddColumn, first.Operations[0].Kind)
+	require.Equal(t, "add_column_postgresql_tasks_owner_label", first.Operations[0].ID)
+	require.Equal(t, "tasks", first.Operations[0].Table)
+	require.Equal(t, "owner_label", first.Operations[0].Column)
+	require.Equal(t, "add column tasks.owner_label", first.Operations[0].Summary)
+	require.Equal(t, []diff.PlannedStatement{{
+		Source: "001_add_column_tasks_owner_label.sql",
+		SQL: "ALTER TABLE tasks ADD COLUMN owner_label text;\nUPDATE \"tasks\" SET \"owner_label\" = 'owner-' || \"owner_id\";\nALTER TABLE tasks ALTER COLUMN owner_label SET NOT NULL;\n",
+		ReverseSQL: "ALTER TABLE tasks DROP COLUMN owner_label;\n",
+		Summary: "add column tasks.owner_label",
+	}}, first.Operations[0].Forward)
+	require.Equal(t, []diff.PlannedStatement{{
+		Source: "001_add_column_tasks_owner_label.sql",
+		SQL: "ALTER TABLE tasks DROP COLUMN owner_label;\n",
+		ReverseSQL: "ALTER TABLE tasks ADD COLUMN owner_label text;\nUPDATE \"tasks\" SET \"owner_label\" = 'owner-' || \"owner_id\";\nALTER TABLE tasks ALTER COLUMN owner_label SET NOT NULL;\n",
+		Summary: "add column tasks.owner_label",
+	}}, first.Operations[0].Reverse)
+	require.Equal(t, first.Operations[0].Forward, first.Operations[0].Forward)
+	require.Equal(t, first.Operations[0].Forward, first.Operations[0].Forward)
+	require.Equal(t, first.Operations[0].Forward[0], first.Statements[0])
+	require.Equal(t, "caller-supplied backfill has no inferred reverse", first.IrreversibleReason)
 }
 
 func TestDiffRefusesIncompatibleRenameCandidate(t *testing.T) {

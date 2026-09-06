@@ -135,22 +135,22 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		func(left, right tableDefinition) bool { return sameTableDefinition(left, right) },
 		func(left, right indexDefinition) bool { return sameIndex(left.statement, right.statement) },
 	)
-	generated := make([]generatedStatement, 0)
+	entries := make([]loweringEntry, 0)
 	diagnostics := make([]string, 0)
 	decisions := make([]diff.RequiredDecision, 0)
 	for _, entry := range comparison.Tables.Added {
-		statement, err := createTableStatement(entry.Value)
+		created, err := createTableEntry(entry.Value)
 		if err != nil {
 			return diff.Plan{}, err
 		}
-		generated = append(generated, statement)
+		entries = append(entries, created)
 	}
 	for _, pair := range comparison.Tables.Matched {
-		statements, tableDiagnostics, tableDecisions, err := diffTable(pair.Baseline, pair.Target)
+		tableEntries, tableDiagnostics, tableDecisions, err := diffTable(pair.Baseline, pair.Target)
 		if err != nil {
 			return diff.Plan{}, err
 		}
-		generated = append(generated, statements...)
+		entries = append(entries, tableEntries...)
 		diagnostics = append(diagnostics, tableDiagnostics...)
 		decisions = append(decisions, tableDecisions...)
 	}
@@ -163,11 +163,11 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			diagnostics = append(diagnostics, fmt.Sprintf("index %s uses CONCURRENTLY, which needs non-transactional migration support", displayName(*entry.Value.statement.Name)))
 			continue
 		}
-		statement, err := createIndexStatement(entry.Value.statement)
+		created, err := createIndexEntry(entry.Value)
 		if err != nil {
 			return diff.Plan{}, err
 		}
-		generated = append(generated, statement)
+		entries = append(entries, created)
 	}
 	for _, pair := range comparison.Indexes.Matched {
 		if !sameIndex(pair.Baseline.statement, pair.Target.statement) {
@@ -177,34 +177,152 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	for _, entry := range comparison.Indexes.Removed {
 		diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(*entry.Value.statement.Name)))
 	}
-	plan := diff.Plan{Dialect: "postgresql", Statements: make([]diff.PlannedStatement, len(generated))}
-	for index, statement := range generated {
-		plan.Statements[index] = diff.PlannedStatement{
-			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
-		}
-	}
-	if len(plan.Statements) > 0 {
-		if err := plan.Validate(); err != nil {
-			return diff.Plan{}, err
-		}
-		for index := range plan.Statements {
-			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
-		}
-	}
 	remaining := append([]string(nil), diagnostics...)
 	if len(remaining) > 0 {
 		return diff.Plan{}, manualMigrationError(remaining)
 	}
-	plan.Decisions = decisions
-	if len(plan.Decisions) == 0 {
-		plan.Decisions = nil
-	} else {
-		plan.Statements = nil
+	if len(decisions) == 0 {
+		decisions = nil
 	}
-	if len(plan.Decisions) > 0 {
-		plan.Operations = operationsFromGenerated("postgresql", generated)
+	if len(entries) == 0 {
+		return diff.Plan{Dialect: "postgresql"}, nil
 	}
-	return plan, nil
+	if err := validateLoweringSources(entries); err != nil {
+		return diff.Plan{}, err
+	}
+	baseOperations := previewOperations(entries)
+	owned, err := cloneLoweringEntries(entries)
+	if err != nil {
+		return diff.Plan{}, err
+	}
+	ownedDecisions := append([]diff.RequiredDecision(nil), decisions...)
+	return diff.NewPlan("postgresql", baseOperations, ownedDecisions, func(resolutions map[string]diff.Resolution) (diff.LoweringResult, error) {
+		// Every value captured by this closure is owned by the plan. Resolve may be
+		// called repeatedly, so start from fresh copies on every invocation.
+		run, err := cloneLoweringEntries(owned)
+		if err != nil {
+			return diff.LoweringResult{}, err
+		}
+		for index := range run {
+			if run[index].decisionID == "" {
+				continue
+			}
+			decision, ok := decisionByID(ownedDecisions, run[index].decisionID)
+			if !ok {
+				return diff.LoweringResult{}, fmt.Errorf("postgresql schema diff: missing decision %s", run[index].decisionID)
+			}
+			if _, ok := resolutions[decision.ID]; !ok {
+				return diff.LoweringResult{}, fmt.Errorf("postgresql schema diff: missing resolution %s", decision.ID)
+			}
+			table := run[index].target
+			if table.statement == nil {
+				return diff.LoweringResult{}, fmt.Errorf("postgresql schema diff: missing table %s", decision.Table)
+			}
+			switch decision.Kind {
+			case diff.DecisionRename:
+				_, _, err := renameIdentifiersFromEntry(run[index], decision)
+				if err != nil {
+					return diff.LoweringResult{}, err
+				}
+				run[index].action = lowerRenameColumn
+				run[index].operation.Column = decision.Target
+			case diff.DecisionBackfill:
+				if run[index].targetColumn == nil {
+					return diff.LoweringResult{}, fmt.Errorf("postgresql schema diff: missing backfill column %s", decision.Column)
+				}
+				run[index].action = lowerBackfill
+			}
+		}
+		irreversible := ""
+		for _, decision := range ownedDecisions {
+			if decision.Kind == diff.DecisionBackfill {
+				irreversible = "caller-supplied backfill has no inferred reverse"
+				break
+			}
+		}
+		operations := make([]diff.ProposedOperation, 0, len(run))
+		statements := make([]diff.PlannedStatement, 0)
+		for index := range run {
+			operation, err := lowerPostgreSQLEntry(run[index], resolutions)
+			if err != nil {
+				return diff.LoweringResult{}, err
+			}
+			numberSources(index+1, &operation)
+			operations = append(operations, operation)
+			statements = append(statements, operation.Forward...)
+		}
+		return diff.LoweringResult{Operations: operations, Statements: statements, IrreversibleReason: irreversible}, nil
+	})
+}
+
+func validateLoweringSources(entries []loweringEntry) error {
+	seen := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		prefix := "add_column_"
+		if entry.action == lowerCreateTable {
+			prefix = "create_table_"
+		}
+		if entry.action == lowerCreateIndex {
+			prefix = "create_index_"
+		}
+		source := prefix + filenamePart(entry.operation.Table)
+		if entry.action == lowerAddColumn || entry.action == lowerBackfill {
+			source += "_" + filenamePart(entry.operation.Column)
+		}
+		source += ".sql"
+		if previous, ok := seen[source]; ok {
+			return fmt.Errorf("migrate diff: duplicate generated SQL source %q for %q and %q", source, previous, entry.operation.Summary)
+		}
+		seen[source] = entry.operation.Summary
+	}
+	return nil
+}
+
+func decisionByID(decisions []diff.RequiredDecision, id string) (diff.RequiredDecision, bool) {
+	for _, decision := range decisions {
+		if decision.ID == id {
+			return decision, true
+		}
+	}
+	return diff.RequiredDecision{}, false
+}
+
+func renameIdentifiers(table pgquery.CreateTableStatement, decision diff.RequiredDecision) (string, string, error) {
+	for _, column := range table.Columns {
+		if column.Name.Name == decision.Target {
+			return renderIdentifier(pgquery.Identifier{Name: decision.Baseline, Quoted: column.Name.Quoted}), renderIdentifier(column.Name), nil
+		}
+	}
+	return "", "", fmt.Errorf("postgresql schema diff: rename target %s.%s is missing", decision.Table, decision.Target)
+}
+
+func tableColumn(table tableDefinition, name string) (pgquery.ColumnDefinition, error) {
+	for _, column := range table.statement.Columns {
+		if column.Name.Name == name {
+			return column, nil
+		}
+	}
+	return pgquery.ColumnDefinition{}, fmt.Errorf("postgresql schema diff: column %s.%s is missing", displayName(table.statement.Name), name)
+}
+
+func findColumn(table *pgquery.CreateTableStatement, name string) *pgquery.ColumnDefinition {
+	if table == nil {
+		return nil
+	}
+	for index := range table.Columns {
+		if table.Columns[index].Name.Name == name {
+			return &table.Columns[index]
+		}
+	}
+	return nil
+}
+
+func addColumnSQL(table tableDefinition, column pgquery.ColumnDefinition) (string, error) {
+	definition, err := renderColumnDefinition(table, column)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;\n", reverseName(table.statement.Name), definition), nil
 }
 
 func sameTableDefinition(left, right tableDefinition) bool {
@@ -214,14 +332,116 @@ func sameTableDefinition(left, right tableDefinition) bool {
 	return true
 }
 
-func operationsFromGenerated(dialect string, generated []generatedStatement) []diff.ProposedOperation {
-	operations := make([]diff.ProposedOperation, 0, len(generated))
-	for _, statement := range generated {
-		forward := diff.PlannedStatement{Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
-		reverse := diff.PlannedStatement{Source: forward.Source, SQL: statement.reverseSQL, ReverseSQL: statement.sql, Summary: statement.summary}
-		operations = append(operations, diff.ProposedOperation{ID: diff.OperationID(statement.kind, dialect, statement.table, statement.column, statement.constraint), Table: statement.table, Column: statement.column, Constraint: statement.constraint, Summary: statement.summary, Kind: statement.kind, Forward: []diff.PlannedStatement{forward}, Reverse: []diff.PlannedStatement{reverse}})
+func cloneLoweringEntries(in []loweringEntry) ([]loweringEntry, error) {
+	out := make([]loweringEntry, len(in))
+	for index := range in {
+		out[index] = in[index]
+		var err error
+		out[index].baseline, err = cloneTableDefinition(in[index].baseline)
+		if err != nil {
+			return nil, err
+		}
+		out[index].target, err = cloneTableDefinition(in[index].target)
+		if err != nil {
+			return nil, err
+		}
+		out[index].targetColumn, err = cloneColumnPointer(in[index].targetColumn)
+		if err != nil {
+			return nil, err
+		}
+		out[index].baselineColumn, err = cloneColumnPointer(in[index].baselineColumn)
+		if err != nil {
+			return nil, err
+		}
+		out[index].targetIndex, err = cloneIndex(in[index].targetIndex)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return operations
+	return out, nil
+}
+
+func previewOperations(entries []loweringEntry) []diff.ProposedOperation {
+	out := make([]diff.ProposedOperation, len(entries))
+	for index := range entries {
+		out[index] = entries[index].operation
+	}
+	return out
+}
+
+func numberSources(index int, operation *diff.ProposedOperation) {
+	for offset := range operation.Forward {
+		operation.Forward[offset].Source = fmt.Sprintf("%03d_%s", index, operation.Forward[offset].Source)
+	}
+	for offset := range operation.Reverse {
+		operation.Reverse[offset].Source = fmt.Sprintf("%03d_%s", index, operation.Reverse[offset].Source)
+	}
+}
+
+func renameIdentifiersFromEntry(entry loweringEntry, decision diff.RequiredDecision) (string, string, error) {
+	if entry.baselineColumn == nil || entry.targetColumn == nil {
+		return "", "", fmt.Errorf("postgresql schema diff: rename columns are missing")
+	}
+	if entry.baselineColumn.Name.Name != decision.Baseline || entry.targetColumn.Name.Name != decision.Target {
+		return "", "", fmt.Errorf("postgresql schema diff: rename candidate changed")
+	}
+	return renderIdentifier(entry.baselineColumn.Name), renderIdentifier(entry.targetColumn.Name), nil
+}
+
+func lowerPostgreSQLEntry(entry loweringEntry, resolutions map[string]diff.Resolution) (diff.ProposedOperation, error) {
+	op := entry.operation
+	var forward, reverse []diff.PlannedStatement
+	name := entry.operation.Summary
+	switch entry.action {
+	case lowerCreateTable:
+		sql, err := renderCreateTable(entry.target)
+		if err != nil {
+			return op, err
+		}
+		forward = []diff.PlannedStatement{{Source: "create_table_" + filenamePart(entry.operation.Table) + ".sql", SQL: sql, ReverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(entry.target.statement.Name)), Summary: name}}
+	case lowerCreateIndex:
+		copy := *entry.targetIndex
+		copy.IfNotExists = false
+		sql, err := serialize(&copy)
+		if err != nil {
+			return op, err
+		}
+		forward = []diff.PlannedStatement{{Source: "create_index_" + filenamePart(entry.operation.Constraint) + ".sql", SQL: sql, ReverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(*copy.Name)), Summary: name}}
+	case lowerRenameColumn:
+		from, to, err := renameIdentifiersFromEntry(entry, diff.RequiredDecision{Baseline: entry.baselineColumn.Name.Name, Target: entry.targetColumn.Name.Name})
+		if err != nil {
+			return op, err
+		}
+		forward = []diff.PlannedStatement{{Source: "rename_column_" + filenamePart(entry.operation.Table) + ".sql", SQL: fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;\n", reverseName(entry.target.statement.Name), from, to), ReverseSQL: fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;\n", reverseName(entry.target.statement.Name), to, from), Summary: name}}
+	case lowerBackfill:
+		column := *entry.targetColumn
+		staged := column
+		staged.Constraints = nil
+		for _, c := range column.Constraints {
+			if c.Kind != pgquery.ConstraintNotNull {
+				staged.Constraints = append(staged.Constraints, c)
+			}
+		}
+		add, err := addColumnSQL(entry.target, staged)
+		if err != nil {
+			return op, err
+		}
+		resolution := resolutions[entry.decisionID]
+		forward = []diff.PlannedStatement{{Source: "add_column_" + filenamePart(entry.operation.Table) + "_" + filenamePart(entry.operation.Column) + ".sql", SQL: add + strings.TrimSpace(resolution.BackfillSQL) + fmt.Sprintf("\nALTER TABLE %s ALTER COLUMN %s SET NOT NULL;\n", reverseName(entry.target.statement.Name), reverseIdentifier(column.Name)), ReverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(entry.target.statement.Name), reverseIdentifier(column.Name)), Summary: name}}
+	default:
+		if entry.targetColumn == nil {
+			return op, fmt.Errorf("postgresql schema diff: missing column for %s", name)
+		}
+		add, err := addColumnSQL(entry.target, *entry.targetColumn)
+		if err != nil {
+			return op, err
+		}
+		forward = []diff.PlannedStatement{{Source: "add_column_" + filenamePart(entry.operation.Table) + "_" + filenamePart(entry.operation.Column) + ".sql", SQL: add, ReverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(entry.target.statement.Name), reverseIdentifier(entry.targetColumn.Name)), Summary: name}}
+	}
+	forward[0].Source = strings.TrimPrefix(forward[0].Source, "000_")
+	reverse = []diff.PlannedStatement{{Source: forward[0].Source, SQL: forward[0].ReverseSQL, ReverseSQL: forward[0].SQL, Summary: forward[0].Summary}}
+	op.Forward, op.Reverse = forward, reverse
+	return op, nil
 }
 
 type schemaSnapshot struct {
@@ -297,11 +517,18 @@ func (s *schemaSnapshot) addTable(source string, statement *pgquery.CreateTableS
 		}
 		columns[column.Name.Name] = struct{}{}
 	}
-	s.tables[key] = cloneTableDefinition(tableDefinition{source: source, statement: statement, identities: identities, foreignKeys: foreignKeys})
+	cloned, err := cloneTableDefinition(tableDefinition{source: source, statement: statement, identities: identities, foreignKeys: foreignKeys})
+	if err != nil {
+		return err
+	}
+	s.tables[key] = cloned
 	return nil
 }
 
 func cloneIdentityModes(in map[string]identityMode) map[string]identityMode {
+	if in == nil {
+		return nil
+	}
 	out := make(map[string]identityMode, len(in))
 	for key, mode := range in {
 		out[key] = mode
@@ -309,6 +536,9 @@ func cloneIdentityModes(in map[string]identityMode) map[string]identityMode {
 	return out
 }
 func cloneForeignKeyActions(in map[foreignKeyKey]foreignKeyActions) map[foreignKeyKey]foreignKeyActions {
+	if in == nil {
+		return nil
+	}
 	out := make(map[foreignKeyKey]foreignKeyActions, len(in))
 	for key, actions := range in {
 		out[key] = actions
@@ -329,7 +559,11 @@ func (s *schemaSnapshot) addIndex(source string, statement *pgquery.CreateIndexS
 	if previous, exists := s.indexes[key]; exists {
 		return fmt.Errorf("postgresql schema source %q defines index %s already defined by %q", source, displayName(*statement.Name), previous.source)
 	}
-	s.indexes[key] = indexDefinition{source: source, statement: statement}
+	cloned, err := cloneIndex(statement)
+	if err != nil {
+		return err
+	}
+	s.indexes[key] = indexDefinition{source: source, statement: cloned}
 	return nil
 }
 
@@ -342,48 +576,47 @@ func sortedIndexKeys(indexes map[string]indexDefinition) []string {
 	return keys
 }
 
-type generatedStatement struct {
-	name       string
-	sql        string
-	reverseSQL string
-	summary    string
-	kind       diff.OperationKind
-	table      string
-	column     string
-	constraint string
+type loweringAction uint8
+
+const (
+	lowerCreateTable loweringAction = iota
+	lowerAddColumn
+	lowerCreateIndex
+	lowerRenameColumn
+	lowerBackfill
+)
+
+type loweringEntry struct {
+	operation      diff.ProposedOperation
+	action         loweringAction
+	baseline       tableDefinition
+	target         tableDefinition
+	targetColumn   *pgquery.ColumnDefinition
+	baselineColumn *pgquery.ColumnDefinition
+	targetIndex    *pgquery.CreateIndexStatement
+	decisionID     string
 }
 
-func createTableStatement(table tableDefinition) (generatedStatement, error) {
-	copy := cloneTableDefinition(table)
-	sql, err := renderCreateTable(copy)
+func createTableEntry(table tableDefinition) (loweringEntry, error) {
+	copy, err := cloneTableDefinition(table)
 	if err != nil {
-		return generatedStatement{}, err
+		return loweringEntry{}, err
 	}
 	name := displayName(copy.statement.Name)
-	return generatedStatement{
-		name: "create_table_" + filenamePart(name), sql: sql,
-		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.statement.Name)), summary: "create table " + name,
-		kind: diff.OperationCreateTable, table: name,
-	}, nil
+	return loweringEntry{operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationCreateTable, "postgresql", name, "", ""), Table: name, Summary: "create table " + name, Kind: diff.OperationCreateTable}, action: lowerCreateTable, target: copy}, nil
 }
 
-func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStatement, error) {
-	copy := *index
-	copy.IfNotExists = false
-	sql, err := serialize(&copy)
+func createIndexEntry(index indexDefinition) (loweringEntry, error) {
+	name := displayName(*index.statement.Name)
+	indexCopy, err := cloneIndex(index.statement)
 	if err != nil {
-		return generatedStatement{}, err
+		return loweringEntry{}, err
 	}
-	name := displayName(*copy.Name)
-	return generatedStatement{
-		name: "create_index_" + filenamePart(name), sql: sql,
-		reverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(*copy.Name)), summary: "create index " + name,
-		kind: diff.OperationReplaceConstraint, table: displayName(copy.Table), constraint: name,
-	}, nil
+	return loweringEntry{operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationReplaceConstraint, "postgresql", displayName(indexCopy.Table), "", name), Table: displayName(indexCopy.Table), Constraint: name, Summary: "create index " + name, Kind: diff.OperationReplaceConstraint}, action: lowerCreateIndex, targetIndex: indexCopy}, nil
 }
 
-func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string, []diff.RequiredDecision, error) {
-	generated := make([]generatedStatement, 0)
+func diffTable(baseline, target tableDefinition) ([]loweringEntry, []string, []diff.RequiredDecision, error) {
+	entries := make([]loweringEntry, 0)
 	diagnostics := make([]string, 0)
 	decisions := make([]diff.RequiredDecision, 0)
 	normalizedBaseline := normalizedTable(baseline.statement, false)
@@ -399,7 +632,7 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 	if baseline.statement.Persistence != target.statement.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.statement.Name)))
 	}
-	if !ast.Equal(normalizedBaseline.Constraints, normalizedTarget.Constraints) {
+	if !ast.Equal(normalizedBaseline.Constraints, normalizedTarget.Constraints) || !equalForeignKeyActions(baseline.foreignKeys, target.foreignKeys) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.statement.Name)))
 	}
 
@@ -429,6 +662,25 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 		rename = ast.Equal(left, right)
 		if rename {
 			decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionRename, "postgresql", displayName(target.statement.Name), added[0].Name.Name), Kind: diff.DecisionRename, Table: displayName(target.statement.Name), Column: added[0].Name.Name, Baseline: removed[0].Name.Name, Target: added[0].Name.Name, Reason: "column rename requires caller confirmation"})
+			name := displayName(target.statement.Name)
+			decisionID := diff.DecisionID(diff.DecisionRename, "postgresql", name, added[0].Name.Name)
+			clonedTarget, err := cloneTableDefinition(target)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			clonedBaseline, err := cloneTableDefinition(baseline)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			clonedTargetColumn, err := cloneColumnPointer(findColumn(target.statement, added[0].Name.Name))
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			clonedBaselineColumn, err := cloneColumnPointer(findColumn(baseline.statement, removed[0].Name.Name))
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			entries = append(entries, loweringEntry{operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationAddColumn, "postgresql", name, added[0].Name.Name, ""), Table: name, Column: added[0].Name.Name, Summary: "rename column " + name + "." + added[0].Name.Name, Kind: diff.OperationAddColumn}, action: lowerRenameColumn, target: clonedTarget, baseline: clonedBaseline, targetColumn: clonedTargetColumn, baselineColumn: clonedBaselineColumn, decisionID: decisionID})
 		}
 	}
 	for index, column := range target.statement.Columns {
@@ -439,30 +691,34 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 				continue
 			}
 			if columnRequiresBackfill(column) {
-				decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionBackfill, "postgresql", displayName(target.statement.Name), column.Name.Name), Kind: diff.DecisionBackfill, Table: displayName(target.statement.Name), Column: column.Name.Name, Target: column.Name.Name, Reason: "required column needs an application-specific backfill"})
+				name := displayName(target.statement.Name)
+				decisionID := diff.DecisionID(diff.DecisionBackfill, "postgresql", name, column.Name.Name)
+				decisions = append(decisions, diff.RequiredDecision{ID: decisionID, Kind: diff.DecisionBackfill, Table: name, Column: column.Name.Name, Target: column.Name.Name, Reason: "required column needs an application-specific backfill"})
+				clonedTarget, err := cloneTableDefinition(target)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				clonedColumn, err := cloneColumnPointer(&column)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				entries = append(entries, loweringEntry{operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationAddColumn, "postgresql", name, column.Name.Name, ""), Table: name, Column: column.Name.Name, Summary: "add column " + name + "." + column.Name.Name, Kind: diff.OperationAddColumn}, action: lowerBackfill, target: clonedTarget, targetColumn: clonedColumn, decisionID: decisionID})
 				continue
 			}
-			statement := &pgquery.AlterTableStatement{
-				Name: target.statement.Name,
-				Actions: []pgquery.AlterTableAction{{
-					Kind:   pgquery.AlterTableAddColumn,
-					Column: &column,
-				}},
-			}
-			sql, err := serialize(statement)
+			name := displayName(target.statement.Name)
+			clonedTarget, err := cloneTableDefinition(target)
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			name := displayName(target.statement.Name)
-			generated = append(generated, generatedStatement{
-				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
-				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.statement.Name), reverseIdentifier(column.Name)),
-				summary:    "add column " + name + "." + column.Name.Name,
-				kind:       diff.OperationAddColumn, table: name, column: column.Name.Name,
-			})
+			clonedColumn, err := cloneColumnPointer(&column)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			entries = append(entries, loweringEntry{operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationAddColumn, "postgresql", name, column.Name.Name, ""), Table: name, Column: column.Name.Name, Summary: "add column " + name + "." + column.Name.Name, Kind: diff.OperationAddColumn}, action: lowerAddColumn, target: clonedTarget, targetColumn: clonedColumn})
 			continue
 		}
-		if !ast.Equal(previous, normalizedColumn) {
+		identityChanged := baseline.identities[identifierKey(column.Name)] != target.identities[identifierKey(column.Name)]
+		if !ast.Equal(previous, normalizedColumn) || identityChanged {
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.statement.Name), column.Name.Name))
 		}
 	}
@@ -475,7 +731,7 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.statement.Name), column.Name.Name))
 		}
 	}
-	return generated, diagnostics, decisions, nil
+	return entries, diagnostics, decisions, nil
 }
 
 // normalizedTable converts syntax variants that describe the same PostgreSQL
