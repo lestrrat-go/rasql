@@ -54,28 +54,36 @@ func ApplyThrough(id string) ApplyTarget {
 // commit implicitly, so a failure can leave completed statements in place and
 // the migration unrecorded; resolve that state before running Apply again.
 func (r Runner) Apply(ctx context.Context, target ApplyTarget, migrations ...Migration) ([]Migration, error) {
+	result, err := r.ApplyResult(ctx, target, migrations...)
+	return result.Completed, err
+}
+
+func (r Runner) ApplyResult(ctx context.Context, target ApplyTarget, migrations ...Migration) (ExecutionResult, error) {
 	if err := r.validate(); err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 	prepared, err := prepareMigrations(migrations)
 	if err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 	connection, err := r.database.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("migrate: open database connection: %w", err)
+		return ExecutionResult{}, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
 
 	switch r.dialect.Name() {
 	case "postgresql":
-		return r.applyPostgreSQL(ctx, connection, target, prepared)
+		completed, err := r.applyPostgreSQL(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	case "mysql":
-		return r.applyMySQL(ctx, connection, target, prepared)
+		completed, err := r.applyMySQL(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	case "sqlite":
-		return r.applySQLite(ctx, connection, target, prepared)
+		completed, err := r.applySQLite(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	default:
-		return nil, fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
+		return ExecutionResult{}, fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
 	}
 }
 
@@ -101,18 +109,77 @@ func (r Runner) ApplyPlan(ctx context.Context, target ApplyTarget, migrations ..
 		return nil, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
-	if err := r.ensureHistory(ctx, connection); err != nil {
+	var result []Migration
+	plan := func() error {
+		var progress *progressEntry
+		var progressMigration preparedMigration
+		if err := r.ensureHistory(ctx, connection); err != nil {
+			return err
+		}
+		if r.dialect.Name() == "mysql" {
+			if err := r.ensureProgress(ctx, connection); err != nil {
+				return err
+			}
+			var err error
+			progress, err = r.progress(ctx, connection)
+			if err != nil {
+				return err
+			}
+			if progress != nil {
+				if err := r.validateProgress(progress, prepared); err != nil {
+					return err
+				}
+				if progress.direction != DirectionUp {
+					return fmt.Errorf("migrate: apply plan cannot inspect %s progress", progress.direction)
+				}
+				if progress.nextIndex <= progress.sourceIndex {
+					return incompleteError(*progress, errors.New("source outcome is uncertain; reconcile it before retrying"))
+				}
+				progressMigration = findProgressMigration(prepared, progress.id)
+				statements, err := progressStatements(progressMigration, progress.direction)
+				if err != nil {
+					return err
+				}
+				if progress.nextIndex == len(statements) {
+					if err := r.finalizeProgress(ctx, connection, *progress, progressMigration); err != nil {
+						return incompleteError(*progress, err)
+					}
+					progress = nil
+				} else {
+					progressMigration.statements = append([]Statement(nil), statements[progress.nextIndex:]...)
+					progressMigration.down = append([]Statement(nil), progressMigration.down...)
+				}
+			}
+		}
+		applied, err := r.applied(ctx, connection)
+		if err != nil {
+			return err
+		}
+		selected, err := selectApplies(applied, prepared, target)
+		if err != nil {
+			return err
+		}
+		if progress != nil {
+			ordered := make([]preparedMigration, 0, len(selected)+1)
+			ordered = append(ordered, progressMigration)
+			for _, migration := range selected {
+				if migration.id != progress.id {
+					ordered = append(ordered, migration)
+				}
+			}
+			selected = ordered
+		}
+		result = exportMigrations(selected)
+		return nil
+	}
+	if r.dialect.Name() == "mysql" {
+		if err := r.withMySQLReadLock(ctx, connection, plan); err != nil {
+			return nil, err
+		}
+	} else if err := plan(); err != nil {
 		return nil, err
 	}
-	applied, err := r.applied(ctx, connection)
-	if err != nil {
-		return nil, err
-	}
-	selected, err := selectApplies(applied, prepared, target)
-	if err != nil {
-		return nil, err
-	}
-	return exportMigrations(selected), nil
+	return result, nil
 }
 
 func (r Runner) applyPostgreSQL(ctx context.Context, connection *sql.Conn, target ApplyTarget, migrations []preparedMigration) ([]Migration, error) {
@@ -139,10 +206,13 @@ func (r Runner) applyPostgreSQL(ctx context.Context, connection *sql.Conn, targe
 
 func (r Runner) applyMySQL(ctx context.Context, connection *sql.Conn, target ApplyTarget, migrations []preparedMigration) ([]Migration, error) {
 	return r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
+		if err := r.ensureProgress(ctx, connection); err != nil {
+			return nil, err
+		}
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return nil, err
 		}
-		return r.applyPrepared(ctx, connection, connection, target, migrations)
+		return r.applyPreparedMySQL(ctx, connection, target, migrations)
 	})
 }
 
@@ -157,6 +227,13 @@ func (r Runner) withMySQLLock(ctx context.Context, connection *sql.Conn, run fun
 	migrationsApplied, operationErr := run()
 	cleanupErr := r.releaseMySQLLock(connection)
 	return migrationsApplied, errors.Join(operationErr, cleanupErr)
+}
+
+func (r Runner) withMySQLReadLock(ctx context.Context, connection *sql.Conn, run func() error) error {
+	_, err := r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
+		return nil, run()
+	})
+	return err
 }
 
 func (r Runner) releaseMySQLLock(connection *sql.Conn) error {

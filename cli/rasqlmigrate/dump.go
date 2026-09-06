@@ -135,6 +135,12 @@ type dumpOptions struct {
 // and the output step factored out, so both runDump and a live test share
 // one code path for the sweep, the guards, the ordering, and the rendering.
 func dumpFilesFromDatabase(ctx context.Context, d dialect.Dialect, database *sql.DB, opts dumpOptions) ([]dumpFile, error) {
+	historyTable := opts.HistoryTable
+	if historyTable == "" {
+		historyTable = "rasql_schema_migrations"
+	}
+	excludeTables := append([]string(nil), opts.Exclude...)
+	excludeTables = append(excludeTables, historyTable+"_progress")
 	transaction, err := runWithHardDeadline(ctx, func() (*sql.Tx, error) {
 		return database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
 	})
@@ -151,8 +157,8 @@ func dumpFilesFromDatabase(ctx context.Context, d dialect.Dialect, database *sql
 		return catalog.FromQueryer(ctx, transaction, catalog.Options{
 			Dialect:      d,
 			Include:      opts.Include,
-			Exclude:      opts.Exclude,
-			HistoryTable: opts.HistoryTable,
+			Exclude:      excludeTables,
+			HistoryTable: historyTable,
 		})
 	})
 	if err != nil {

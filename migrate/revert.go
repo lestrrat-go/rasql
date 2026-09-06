@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 )
@@ -54,28 +55,36 @@ func Steps(n int) RevertTarget {
 // place and the migration still recorded; resolve that state before running
 // Revert again.
 func (r Runner) Revert(ctx context.Context, target RevertTarget, migrations ...Migration) ([]Migration, error) {
+	result, err := r.RevertResult(ctx, target, migrations...)
+	return result.Completed, err
+}
+
+func (r Runner) RevertResult(ctx context.Context, target RevertTarget, migrations ...Migration) (ExecutionResult, error) {
 	if err := r.validate(); err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 	prepared, err := prepareMigrations(migrations)
 	if err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 	connection, err := r.database.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("migrate: open database connection: %w", err)
+		return ExecutionResult{}, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
 
 	switch r.dialect.Name() {
 	case "postgresql":
-		return r.revertPostgreSQL(ctx, connection, target, prepared)
+		completed, err := r.revertPostgreSQL(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	case "mysql":
-		return r.revertMySQL(ctx, connection, target, prepared)
+		completed, err := r.revertMySQL(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	case "sqlite":
-		return r.revertSQLite(ctx, connection, target, prepared)
+		completed, err := r.revertSQLite(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	default:
-		return nil, fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
+		return ExecutionResult{}, fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
 	}
 }
 
@@ -100,18 +109,83 @@ func (r Runner) RevertPlan(ctx context.Context, target RevertTarget, migrations 
 		return nil, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
-	if err := r.ensureHistory(ctx, connection); err != nil {
+	var result []Migration
+	plan := func() error {
+		var progress *progressEntry
+		var progressMigration preparedMigration
+		var finalizedProgress bool
+		if err := r.ensureHistory(ctx, connection); err != nil {
+			return err
+		}
+		if r.dialect.Name() == "mysql" {
+			if err := r.ensureProgress(ctx, connection); err != nil {
+				return err
+			}
+			var err error
+			progress, err = r.progress(ctx, connection)
+			if err != nil {
+				return err
+			}
+			if progress != nil {
+				if err := r.validateProgress(progress, prepared); err != nil {
+					return err
+				}
+				if progress.direction != DirectionDown {
+					return fmt.Errorf("migrate: revert plan cannot inspect %s progress", progress.direction)
+				}
+				if progress.nextIndex <= progress.sourceIndex {
+					return incompleteError(*progress, errors.New("source outcome is uncertain; reconcile it before retrying"))
+				}
+				progressMigration = findProgressMigration(prepared, progress.id)
+				statements, err := progressStatements(progressMigration, progress.direction)
+				if err != nil {
+					return err
+				}
+				if progress.nextIndex == len(statements) {
+					if err := r.finalizeProgress(ctx, connection, *progress, progressMigration); err != nil {
+						return incompleteError(*progress, err)
+					}
+					progress = nil
+					finalizedProgress = true
+				} else {
+					progressMigration.statements = append([]Statement(nil), progressMigration.statements...)
+					progressMigration.down = append([]Statement(nil), statements[progress.nextIndex:]...)
+				}
+			}
+		}
+		applied, err := r.applied(ctx, connection)
+		if err != nil {
+			return err
+		}
+		selected, err := selectReverts(applied, prepared, target)
+		if err != nil {
+			if finalizedProgress && len(applied) == 0 {
+				selected = nil
+			} else {
+				return err
+			}
+		}
+		if progress != nil {
+			ordered := make([]preparedMigration, 0, len(selected)+1)
+			ordered = append(ordered, progressMigration)
+			for _, migration := range selected {
+				if migration.id != progress.id {
+					ordered = append(ordered, migration)
+				}
+			}
+			selected = ordered
+		}
+		result = exportMigrations(selected)
+		return nil
+	}
+	if r.dialect.Name() == "mysql" {
+		if err := r.withMySQLReadLock(ctx, connection, plan); err != nil {
+			return nil, err
+		}
+	} else if err := plan(); err != nil {
 		return nil, err
 	}
-	applied, err := r.applied(ctx, connection)
-	if err != nil {
-		return nil, err
-	}
-	selected, err := selectReverts(applied, prepared, target)
-	if err != nil {
-		return nil, err
-	}
-	return exportMigrations(selected), nil
+	return result, nil
 }
 
 // exportMigrations copies prepared migrations back into the public type,
@@ -152,10 +226,13 @@ func (r Runner) revertPostgreSQL(ctx context.Context, connection *sql.Conn, targ
 
 func (r Runner) revertMySQL(ctx context.Context, connection *sql.Conn, target RevertTarget, migrations []preparedMigration) ([]Migration, error) {
 	return r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
+		if err := r.ensureProgress(ctx, connection); err != nil {
+			return nil, err
+		}
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return nil, err
 		}
-		return r.revertPrepared(ctx, connection, connection, target, migrations)
+		return r.revertPreparedMySQL(ctx, connection, target, migrations)
 	})
 }
 
@@ -286,6 +363,9 @@ func revertCount(appliedInOrder []preparedMigration, target RevertTarget) (int, 
 
 // forget deletes one migration's history record.
 func (r Runner) forget(ctx context.Context, executions executor, id string) error {
+	if err := journalWriteHook("history"); err != nil {
+		return err
+	}
 	placeholder, err := r.dialect.Placeholder(1)
 	if err != nil {
 		return fmt.Errorf("migrate: render migration history delete: %w", err)
