@@ -23,7 +23,7 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
 
 func TestPostgreSQLInspectorNormalizesColumnsAndPrimaryKey(t *testing.T) {
@@ -4219,4 +4219,28 @@ func TestSQLiteInspectorTableNamesInRequiresRetainedConnectionForAttachedDatabas
 	require.NoError(t, err)
 	_, err = inspector.TableNamesIn(t.Context(), "tenant")
 	require.ErrorContains(t, err, "retained")
+}
+
+func TestSQLiteInspectorReadsColumnCollation(t *testing.T) {
+	require.NoError(t, sqlite.RegisterCollationUtf8("QuotedCustom", func(left, right string) int {
+		if left < right {
+			return -1
+		}
+		if left > right {
+			return 1
+		}
+		return 0
+	}))
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (name TEXT COLLATE NOCASE, custom TEXT COLLATE "QuotedCustom", note TEXT);`)
+	require.NoError(t, err)
+	inspector, err := inspect.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	table, err := inspector.Table(t.Context(), "members")
+	require.NoError(t, err)
+	require.Equal(t, "nocase", table.Columns[0].Collation)
+	require.Equal(t, "QuotedCustom", table.Columns[1].Collation)
+	require.Empty(t, table.Columns[2].Collation)
 }

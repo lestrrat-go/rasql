@@ -327,6 +327,8 @@ A column also carries `Nullable`, `Default`, and its concrete `Type`. Type-speci
 | `ColumnDef.GeneratedExpression`, `.GeneratedStorage` | A generated column (see [Generated columns](08-inspection-facts.md#generated-columns)). |
 | `ColumnDef.Identity` | An identity column (see [Identity columns](#identity-columns)). |
 
+`ColumnDef.Collation` names a column's explicit collation without SQL quote delimiters. Its empty value means the database default applies. `render.CreateTable` places a stated collation after the column type and quotes it with the selected dialect.
+
 Identifiers must be simple. `schema.ValidateIdentifier` accepts a leading letter or underscore followed by letters, digits, or underscores. Everything else is rejected rather than quoted around.
 
 `schema.DecimalType` is an exact decimal, for money, quantities, and any other value a binary floating-point `FloatType` would round. A decimal type must set `Precision` and `Scale`, and `TableDef.Validate` rejects one that omits either. `Precision` is the total number of significant digits, at least 1. `Scale` is how many of those digits sit right of the decimal point, no more than `Precision`.

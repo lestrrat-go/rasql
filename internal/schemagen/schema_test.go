@@ -2235,3 +2235,12 @@ func stringIndex(t *testing.T, source []byte, value string) int {
 	require.NotEqual(t, len(source), index)
 	return index
 }
+
+func TestDescriptorSourceEmitsColumnCollation(t *testing.T) {
+	source, err := schemagen.DescriptorSource("generated", schema.TableDef{
+		Name:    "members",
+		Columns: []schema.ColumnDef{{Name: "name", Type: schema.TextType{}, Collation: "NOCASE"}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(source), `{Name: "name", Type: schema.TextType{}, Collation: "NOCASE"}`)
+}

@@ -1003,6 +1003,12 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 			Default:  text(column.defaultValue),
 			Hidden:   column.hidden == sqliteHiddenModule,
 		}
+		if definition != nil {
+			columnDef.Collation, err = sqliteColumnCollation(definition, column.name, tableName)
+			if err != nil {
+				return schema.TableDef{}, err
+			}
+		}
 		if column.hidden == sqliteHiddenGeneratedVirtual || column.hidden == sqliteHiddenGeneratedStored {
 			expression, err := sqliteGeneratedExpression(definition, column.name)
 			if err != nil {
@@ -1073,6 +1079,28 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 		return schema.TableDef{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
+}
+
+func sqliteColumnCollation(statement *sqlitequery.CreateTableStatement, columnName, tableName string) (string, error) {
+	var found string
+	for _, column := range statement.Columns {
+		if !strings.EqualFold(column.Name.Name, columnName) {
+			continue
+		}
+		for _, constraint := range column.Constraints {
+			if constraint.Kind != sqlitequery.ConstraintCollate {
+				continue
+			}
+			if constraint.Collation == nil || constraint.Collation.Name == "" {
+				return "", fmt.Errorf("inspect: SQLite table %q cannot be represented: column %q has an unnamed collation", tableName, columnName)
+			}
+			if found != "" {
+				return "", fmt.Errorf("inspect: SQLite table %q cannot be represented: column %q has duplicate collations", tableName, columnName)
+			}
+			found = constraint.Collation.Name
+		}
+	}
+	return found, nil
 }
 
 type sqliteTableOptions struct {
