@@ -18,7 +18,8 @@ const (
 // what reaches database/sql. Hooks cannot replace the SQL or its arguments.
 type Operation = exec.Operation
 
-// Hook observes and optionally rejects rendered database operations.
+// Hook observes and optionally rejects rendered database operations. New
+// observation code should use Observer; Hook.After remains for compatibility.
 //
 // Before methods run in registration order. After methods run in reverse
 // registration order and receive the execution or hook error, if any. A
