@@ -391,7 +391,7 @@ func (s Store) Plan() (Plan, error) {
 		}
 	}
 
-	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
+	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, packageName: s.Package, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans the store and commits the plan: it is Plan followed by

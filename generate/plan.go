@@ -79,13 +79,13 @@ func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 }
 
 // Plan is a rendered, uncommitted store package: every file's final bytes,
-// every destination already resolved, and every leftover already
-// identified.
+// every destination already resolved, and every leftover already identified.
 //
-// A Plan is a decision made at one instant. It reads the output directory
-// once, when Store.Plan builds it. A file that appears in the directory
-// afterwards is not reflected here; call Store.Plan again to see the
-// directory as it is now. The directory itself is the one exception: a plan
+// A Plan is a decision made at one instant. It snapshots the output bytes and
+// the explicit prune choice when Store.Plan builds it. Check and Commit rescan
+// ownership and refuse generated outputs that appear afterwards; call
+// Store.Plan again to decide whether a newly found file should be kept or
+// pruned. The directory itself is the one exception: a plan
 // records the deepest directory on Dir's own path that already existed, and
 // Commit refuses to act when that path no longer names that same directory,
 // since every orphan it would delete was recorded relative to it and every
@@ -107,6 +107,9 @@ type Plan struct {
 	// them -- is made from the plan alone, the same instant everything
 	// else about the plan was decided.
 	prune bool
+	// packageName is the generated package name used to revalidate ownership
+	// through the authorized output directory when this plan is held.
+	packageName string
 	// root is the store's resolved Root, made absolute, carried into the
 	// plan so Check can print a path relative to it instead of always
 	// absolute. Store.Plan makes it absolute there, against the same working
@@ -229,9 +232,10 @@ func (p Plan) Orphans() []string {
 //     confirm it is still a regular file or a symlink to one carrying
 //     rasqlgen's marker on its first line. All of it is checked fresh rather than trusted from
 //     Plan time, since a Plan can be held and acted on later, after the
-//     directory has changed underneath it. When Prune is false and there
-//     is at least one orphan, Commit refuses here, naming every one of
-//     them.
+//     directory has changed underneath it. A generated entry gained after
+//     Plan is refused rather than added to the old prune set. When Prune is
+//     false and there is at least one orphan, Commit refuses here, naming every
+//     one of them.
 //  2. Write every per-table file and every query file, in path order.
 //  3. Delete this run's leftovers: every path Orphans reported, in path
 //     order, and only when Prune is set -- otherwise step 1 already
@@ -384,6 +388,9 @@ func (p Plan) Commit() error {
 		}
 		writes = append(writes, commitWrite{file: f, destination: resolved, dir: into, name: filepath.Base(resolved)})
 	}
+	if err := p.validateCurrentOwnership(dir, realDir); err != nil {
+		return err
+	}
 	orphans := make([]validatedOrphan, 0, len(p.orphans))
 	for _, orphan := range p.orphans {
 		name := filepath.Base(orphan)
@@ -476,8 +483,10 @@ var ErrStale = errors.New("generate: generated package is stale")
 // acted on later, after the directory has changed underneath it: it reaches
 // the output directory through the plan's own anchor, re-resolves every
 // destination, refuses the same collisions, and re-reads every orphan's
-// marker. Each planned file is then compared through the very directory the
-// matching write would go through, so what Check compares is the file
+// marker. It also rescans package ownership and generated entries through
+// that directory before any planned file is compared. Each planned file is
+// then compared through the very directory the matching write would go
+// through, so what Check compares is the file
 // Commit would replace rather than whatever that path reaches on a second
 // resolution.
 //
@@ -591,6 +600,11 @@ func (p Plan) Check() error {
 			}
 		}
 		checks = append(checks, checkedFile{file: f, destination: resolved, dir: into, name: filepath.Base(resolved)})
+	}
+	if dir != nil {
+		if err := p.validateCurrentOwnership(dir, realDir); err != nil {
+			return err
+		}
 	}
 	for _, orphan := range p.orphans {
 		// A missing output directory took every leftover recorded in it with
@@ -1237,6 +1251,18 @@ func (m destinationMatch) describe(resolved, recorded string) string {
 // skipped and why; planned names this call's own about-to-be-written files,
 // which are skipped along with the rest.
 func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return requireStorePackageOwnsDirAt(root, dir, pkg, planned)
+}
+
+func requireStorePackageOwnsDirAt(root *os.Root, dir, pkg string, planned []File) error {
 	// own keeps the planned spelling. ownsEntry asks the filesystem whether a
 	// case-variant entry is the same directory entry, so a distinct file on a
 	// case-sensitive filesystem is not mistaken for a planned destination.
@@ -1244,7 +1270,7 @@ func requireStorePackageOwnsDir(dir, pkg string, planned []File) error {
 	for _, f := range planned {
 		own[filepath.Base(f.Path)] = struct{}{}
 	}
-	name, declared, err := scanForeignPackage(dir, pkg, own)
+	name, declared, err := scanForeignPackageAt(root, dir, pkg, own)
 	if err != nil {
 		return err
 	}
@@ -1316,7 +1342,10 @@ func scanForeignPackage(dir, pkg string, own map[string]struct{}) (name string, 
 		return "", "", err
 	}
 	defer func() { _ = root.Close() }()
+	return scanForeignPackageAt(root, dir, pkg, own)
+}
 
+func scanForeignPackageAt(root *os.Root, dir, pkg string, own map[string]struct{}) (name string, declared string, err error) {
 	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return "", "", err
@@ -1564,6 +1593,34 @@ func findOrphansAt(root *os.Root, dir string, planned []File) ([]string, fs.File
 	}
 	sort.Strings(orphans)
 	return orphans, dirInfo, nil
+}
+
+func (p Plan) validateCurrentOwnership(dir *os.Root, realDir string) error {
+	if err := requireStorePackageOwnsDirAt(dir, realDir, p.packageName, p.files); err != nil {
+		return err
+	}
+	current, _, err := findOrphansAt(dir, realDir, p.files)
+	if err != nil {
+		return fmt.Errorf("generate: scan %s for leftover files: %w", realDir, err)
+	}
+	recorded := make([]string, 0, len(current))
+	for _, orphan := range current {
+		found := false
+		for _, planned := range p.orphans {
+			if matchDestinations(orphan, planned) != distinctDestinations {
+				found = true
+				break
+			}
+		}
+		if !found {
+			recorded = append(recorded, orphan)
+		}
+	}
+	if len(recorded) == 0 {
+		return nil
+	}
+	sort.Strings(recorded)
+	return fmt.Errorf("generate: %s gained %d file(s) rasqlgen wrote that this plan does not write: %s; rerun Store.Plan", realDir, len(recorded), strings.Join(recorded, ", "))
 }
 
 // readGenfileMarker reports what the filesystem says the file named name,
