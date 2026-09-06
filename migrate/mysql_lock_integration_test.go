@@ -25,7 +25,7 @@ func TestMySQLLockReleasedAfterCancellation(t *testing.T) {
 	go func() {
 		_, err := runner.Apply(ctx, migrate.AllPending(), migrate.Migration{
 			ID:         "001_cancellation_probe",
-			Statements: []migrate.Statement{{Source: "001.sql", SQL: sqltext.Text("SELECT SLEEP(10)")}},
+			Statements: []migrate.Statement{{Source: "001.sql", SQL: sqltext.Text("SELECT SLEEP(1)")}},
 		})
 		done <- err
 	}()
