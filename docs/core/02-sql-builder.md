@@ -67,7 +67,7 @@ The tables below enumerate what the `query` package offers. The typed builder ta
 
 ### Statement constructors
 
-The builders cover the common statements. These constructors build the same statements directly. `dynamic.Query(ctx, db, statement)` runs a `Select`, and `rasql.Exec(ctx, db, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over a `rasql.DB`, so the same statement runs against a plain `DB` or a transaction, which is a `DB` too. A write refined with `WithReturning` reads its rows back through `dynamic.QueryWrite`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
+The builders cover the common statements. These constructors build the same statements directly. `dynamic.Query(ctx, db, statement)` runs a `Select`, and `dynamic.QueryResult(ctx, db, statement)` adds ordered metadata for generic consumers. `rasql.Exec(ctx, db, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over a `rasql.DB`, so the same statement runs against a plain `DB` or a transaction, which is a `DB` too. A write refined with `WithReturning` reads its rows back through `dynamic.QueryWrite`, `dynamic.QueryWriteResult`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
 
 | Constructor | Statement |
 | --- | --- |

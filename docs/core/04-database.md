@@ -14,7 +14,8 @@ A `rasql.DB` pairs a database handle with the dialect used to render SQL. Both b
 | `db.ExecRendered(ctx, statement)` | A rendered statement that returns no rows. |
 | `rasql.QueryRenderedAll[T](ctx, db, statement)` | The same, decoded into `T`. |
 | `rasql.Exec(ctx, db, statement)` | A `query.WriteStatement`, rendering it on the way. It rejects a write carrying a `RETURNING` clause, which `dynamic.QueryWrite` or `rasql.QueryWriteAll[T]` reads instead. |
-| `dynamic.Query(ctx, db, statement)` | A `query.Select`, rendering it on the way. |
+| `dynamic.Query(ctx, db, statement)` | A `query.Select`, rendering it on the way and returning dynamic rows. |
+| `dynamic.QueryResult(ctx, db, statement)` | A `query.Select`, rendering lazily and exposing ordered metadata with dynamic rows. |
 
 `rasql.Exec` and `dynamic.Query` take the statement rather than the rendered text, because a `rasql.DB` already holds the dialect to render with. `rasql.Exec` rejects a write carrying a `RETURNING` clause, and `dynamic.QueryWrite` reads the rows of one instead. [Writing rows](03-write-statements.md) covers the write side of that path, and [Dynamic rows](05-dynamic.md) covers the `dynamic` calls named here.
 

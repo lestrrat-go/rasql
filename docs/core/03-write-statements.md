@@ -120,7 +120,7 @@ Either keep conflict keys unique within one statement, or account for that updat
 
 ## Reading a `RETURNING` clause
 
-`WithReturning` adds a `RETURNING` clause on dialects that support it. Check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `dynamic.QueryWrite` renders and runs it, returning the same rangeable `dynamic.Row` sequence a `SELECT` does, and the typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode that sequence the way `TypedSelectBuilder.All` and `.One` do. The typed pair stays in `rasql`, because they name a Go type rather than a column string.
+`WithReturning` adds a `RETURNING` clause on dialects that support it. Check `dialect.CapabilityReturning` before relying on it, since MySQL does not. Once a statement carries one, `dynamic.QueryWrite` renders and runs it, returning the same rangeable `dynamic.Row` sequence a `SELECT` does, while `dynamic.QueryWriteResult` also exposes its ordered header. The typed `rasql.QueryWriteAll[T]` and `rasql.QueryWriteOne[T]` decode the sequence the way `TypedSelectBuilder.All` and `.One` do. The typed pair stays in `rasql`, because they name a Go type rather than a column string.
 
 <!-- INCLUDE(examples/rasql_returning_example_test.go) -->
 ```go

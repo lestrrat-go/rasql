@@ -2,10 +2,12 @@ package dynamic
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"iter"
 
 	"github.com/lestrrat-go/rasql/exec"
+	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -28,6 +30,20 @@ func Query(ctx context.Context, db exec.DB, s query.Select) (iter.Seq2[Row, erro
 	return scanRendered(ctx, db, rendered), nil
 }
 
+// QueryResult renders a SELECT and returns a lazy result with ordered column metadata.
+func QueryResult(ctx context.Context, db exec.DB, s query.Select) (*Result, error) {
+	if err := db.Validate(); err != nil {
+		return nil, err
+	}
+	rendered, err := render.Select(db.Dialect(), s)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	return rowvalue.NewResult(func() (*sql.Rows, error) {
+		return db.QueryRendered(ctx, rendered)
+	}), nil
+}
+
 // QueryWrite renders a write statement and returns a rangeable sequence of the
 // rows its RETURNING clause produces. The statement must carry at least one
 // returning projection, and the dialect must support RETURNING, which MySQL
@@ -42,6 +58,17 @@ func QueryWrite(ctx context.Context, db exec.DB, s query.WriteStatement) (iter.S
 		return nil, err
 	}
 	return scanRendered(ctx, db, rendered), nil
+}
+
+// QueryWriteResult renders a RETURNING write and returns a lazy result with ordered column metadata.
+func QueryWriteResult(ctx context.Context, db exec.DB, s query.WriteStatement) (*Result, error) {
+	rendered, err := exec.RenderWrite(db, s)
+	if err != nil {
+		return nil, err
+	}
+	return rowvalue.NewResult(func() (*sql.Rows, error) {
+		return db.QueryRendered(ctx, rendered)
+	}), nil
 }
 
 // scanRendered defers running s until the returned sequence is ranged over,

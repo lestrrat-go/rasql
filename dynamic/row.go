@@ -22,6 +22,15 @@ import (
 // than a map[string]any allocated fresh for every row.
 type Row = rowvalue.Row
 
+// Header describes the immutable ordered columns of one result.
+type Header = rowvalue.Header
+
+// Result owns one lazily opened dynamic result cursor.
+type Result = rowvalue.Result
+
+// ErrConcurrentUse reports overlapping use of one Result cursor operation.
+var ErrConcurrentUse = rowvalue.ErrConcurrentUse
+
 // NewRow validates column names and values and returns an independent row value.
 func NewRow(names []string, values []any) (Row, error) {
 	return rowvalue.NewRow(names, values)
@@ -67,7 +76,12 @@ func Decode[T any](r Row) (T, error) {
 // The sequence is single-use. Ranging over it a second time yields nothing,
 // because the underlying rows are already closed.
 func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
-	return rowvalue.Scan(rows)
+	return ScanResult(rows).Rows()
+}
+
+// ScanResult takes ownership of rows and exposes its ordered metadata.
+func ScanResult(rows *sql.Rows) *Result {
+	return rowvalue.ScanResult(rows)
 }
 
 type rowAccounting interface {

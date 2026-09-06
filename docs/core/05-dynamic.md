@@ -12,6 +12,7 @@ Predicates, aggregates, and statement constructors are the same ones [the SQL bu
 | --- | --- | --- |
 | `SELECT` without decoding | `dynamic.SelectFrom(table.Ref())` | `dynamic.SelectBuilder`, yielding `dynamic.Row` |
 | `SELECT` from a hand-built statement | `dynamic.Query(ctx, db, statement)` | `iter.Seq2[dynamic.Row, error]` |
+| `SELECT` with ordered metadata | `dynamic.QueryResult(ctx, db, statement)` | `*dynamic.Result`, with `Header` and positional values |
 | `DELETE` with no Go row type | `dynamic.DeleteFrom(table.Ref())` | `dynamic.DeleteBuilder` |
 | `DELETE` with `RETURNING`, undecoded | `dynamic.DeleteFrom(table.Ref()).Returning(...)` | `dynamic.DeleteReturningBuilder`, yielding `dynamic.Row` |
 | Write with `RETURNING`, undecoded | `query.New….WithReturning(...)` then `dynamic.QueryWrite(ctx, db, statement)` | `iter.Seq2[dynamic.Row, error]` |
@@ -37,6 +38,7 @@ Predicates, aggregates, and statement constructors are the same ones [the SQL bu
 | `Limit(n)`, `Offset(n)` | Pages the result. |
 | `Build(d)` | Renders `stmt.Statement` for a `dialect.Dialect` without executing. |
 | `Query(ctx, db)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. |
+| `QueryResult(ctx, db)` | Returns a lazy `dynamic.Result`; read `Header` for ordered names, then range `Rows` for positional values. |
 | `Count(ctx, db)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. |
 
 `dynamic.SelectBuilder` has no `All` or `One`: it has no Go type to collect into, so a caller ranges its `Query` sequence directly or reads one row with `dynamic.Get`.
@@ -74,8 +76,118 @@ Read the values of a row in one of three ways:
 | `dynamic.Get[T](result, "email")` | One named value, decoded as `T`. |
 | `dynamic.Assign(result, "email", &value)` | The same value, decoded into an existing destination. |
 | `dynamic.Decode[T](result)` | A whole struct, matching `rasql` tags or snake-cased field names. |
+| `result.Header()` | Ordered `dynamic.Header` metadata, including `Names`, `Len`, and `Index`. |
+| `result.Rows()` | A single-use sequence whose `dynamic.Row` values support `Value` and `Values` by position. |
+| `result.Close()` | Closes an opened cursor or prevents a lazy result from executing. |
 
 A debug `Handle` may return `nil` rows after logging. `dynamic.Scan` reads that as an empty result rather than an error.
+
+`dynamic.Result` keeps the ordered header even when the query returns no rows. `Header.Names()` and `Row.Values()` return fresh slices, while `Row.Value(index)` preserves SQL NULL as `nil, true` and returns `false` outside the header. The result is single-use and closes its cursor on exhaustion, an early break, or an error. A caller that exports columns without knowing their names can write a CSV directly from the header and indexed values:
+
+<!-- INCLUDE(examples/dynamic_csv_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/csv"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/dynamic"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
+	"github.com/lestrrat-go/rasql/stmt"
+	_ "modernc.org/sqlite"
+)
+
+func Example_dynamicCSV() {
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open database: %s\n", err)
+		return
+	}
+	defer func() { _ = database.Close() }()
+	database.SetMaxOpenConns(1)
+	db, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create database: %s\n", err)
+		return
+	}
+	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("CREATE TABLE users (name TEXT, email TEXT)"))); err != nil {
+		fmt.Printf("failed to create table: %s\n", err)
+		return
+	}
+	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("INSERT INTO users VALUES ('Ada', 'ada@example.com')"))); err != nil {
+		fmt.Printf("failed to insert row: %s\n", err)
+		return
+	}
+	users, err := query.NewTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		{Name: "name", Type: schema.TextType{}},
+		{Name: "email", Type: schema.TextType{}},
+	}})
+	if err != nil {
+		fmt.Printf("failed to define table: %s\n", err)
+		return
+	}
+	statement, err := query.NewSelect(users, users.Column("name").As("display_name"), users.Column("email").As("contact"))
+	if err != nil {
+		fmt.Printf("failed to build query: %s\n", err)
+		return
+	}
+	result, err := dynamic.QueryResult(ctx, db, statement)
+	if err != nil {
+		fmt.Printf("failed to prepare query: %s\n", err)
+		return
+	}
+	defer func() { _ = result.Close() }()
+	header, err := result.Header()
+	if err != nil {
+		fmt.Printf("failed to read header: %s\n", err)
+		return
+	}
+	var output bytes.Buffer
+	writer := csv.NewWriter(&output)
+	if err := writer.Write(header.Names()); err != nil {
+		fmt.Printf("failed to write header: %s\n", err)
+		return
+	}
+	for row, err := range result.Rows() {
+		if err != nil {
+			fmt.Printf("failed to read row: %s\n", err)
+			return
+		}
+		values := make([]string, header.Len())
+		for index := range values {
+			value, ok := row.Value(index)
+			if ok && value != nil {
+				values[index] = fmt.Sprint(value)
+			}
+		}
+		if err := writer.Write(values); err != nil {
+			fmt.Printf("failed to write row: %s\n", err)
+			return
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		fmt.Printf("failed to flush CSV: %s\n", err)
+		return
+	}
+	fmt.Print(output.String())
+
+	// Output:
+	// display_name,contact
+	// Ada,ada@example.com
+}
+```
+source: [examples/dynamic_csv_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/dynamic_csv_example_test.go)
+<!-- END INCLUDE -->
 
 ## Delete rows
 
