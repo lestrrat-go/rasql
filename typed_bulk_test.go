@@ -24,12 +24,30 @@ type bulkRecordingHandle struct {
 	calls []bulkCall
 }
 
+type bulkFailHandle struct {
+	calls  []bulkCall
+	failAt int
+	err    error
+}
+
 func (h *bulkRecordingHandle) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
 	return nil, fmt.Errorf("unexpected query call")
 }
 
 func (h *bulkRecordingHandle) ExecContext(_ context.Context, statement string, args ...any) (sql.Result, error) {
 	h.calls = append(h.calls, bulkCall{sql: statement, args: append([]any(nil), args...)})
+	return bulkResult{}, nil
+}
+
+func (h *bulkFailHandle) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	return nil, fmt.Errorf("unexpected query call")
+}
+
+func (h *bulkFailHandle) ExecContext(_ context.Context, statement string, args ...any) (sql.Result, error) {
+	h.calls = append(h.calls, bulkCall{sql: statement, args: append([]any(nil), args...)})
+	if len(h.calls) == h.failAt {
+		return nil, h.err
+	}
 	return bulkResult{}, nil
 }
 
@@ -107,6 +125,38 @@ func TestBulkPlanDefaultOnlyRowsRemainIndividualAndLimitsValidateBeforeExecution
 	}
 	_, err = rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{MaxRows: -1})
 	require.Error(t, err)
+	require.Len(t, handle.calls, 2)
+}
+
+type fixedBulkClassifier struct{ certainty rasql.FailureCertainty }
+
+func (c fixedBulkClassifier) Certainty(error) rasql.FailureCertainty { return c.certainty }
+
+func TestBulkPlanStopsAtFailedBatchAndKeepsOriginalIndexes(t *testing.T) {
+	table, a, b, _ := bulkTestTable()
+	plans := make([]rasql.CreatePlan[bulkTestRow], 0, 3)
+	for _, fields := range [][]rasql.MutationField[bulkTestRow]{
+		{rasql.SetField(a, "first")},
+		{rasql.SetField(a, "second")},
+		{rasql.SetField(b, 3)},
+	} {
+		plan, err := rasql.NewCreatePlan(table, fields...)
+		require.NoError(t, err)
+		plans = append(plans, plan)
+	}
+	bulk, err := rasql.NewBulkPlan(plans...)
+	require.NoError(t, err)
+	original := fmt.Errorf("driver rejected batch")
+	handle := &bulkFailHandle{failAt: 2, err: original}
+	db, err := rasql.New(handle, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{
+		MaxRows: 2, MaxBindParameters: 3, Classifier: fixedBulkClassifier{certainty: rasql.OutcomeRejected},
+	})
+	require.ErrorIs(t, err, original)
+	require.Equal(t, []rasql.InputRange{{First: 0, Last: 1}}, outcome.Completed)
+	require.Equal(t, []int{2}, outcome.Failed.Indexes)
+	require.Equal(t, rasql.OutcomeRejected, outcome.Failed.Certainty)
 	require.Len(t, handle.calls, 2)
 }
 
