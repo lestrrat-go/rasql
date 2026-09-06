@@ -43,7 +43,7 @@ func TestMySQLProgressJournalSeamApplyReconnectsAndReleasesLock(t *testing.T) {
 	require.NoError(t, err)
 	_, err = runner.Apply(t.Context(), AllPending(), migration)
 	require.ErrorIs(t, err, errLiveJournalFailure)
-	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, true, false)
+	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, true, true)
 	assertLiveLockAndPool(t, config, database, history)
 	require.NoError(t, database.Close())
 
@@ -85,7 +85,7 @@ func TestMySQLProgressRevertJournalSeamExecutedReconnects(t *testing.T) {
 	t.Cleanup(func() { journalWriteHook = previousHook })
 	_, err = runner.Revert(t.Context(), Steps(1), migration)
 	require.ErrorIs(t, err, errLiveJournalFailure)
-	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, false, true)
+	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, false, false)
 	assertLiveLockAndPool(t, config, database, history)
 	require.NoError(t, database.Close())
 	restarted := openLiveDatabase(t, config)
@@ -113,7 +113,7 @@ func TestMySQLProgressRevertNotExecutedReconnectsAndRetries(t *testing.T) {
 	require.NoError(t, func() error { _, err := runner.Apply(t.Context(), AllPending(), migration); return err }())
 	_, err = runner.Revert(t.Context(), Steps(1), migration)
 	require.Error(t, err)
-	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, false, true)
+	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, true, false)
 	assertLiveLockAndPool(t, config, database, history)
 	require.NoError(t, database.Close())
 	restarted := openLiveDatabase(t, config)
@@ -156,16 +156,16 @@ func (c *liveSchemaCheck) Check(ctx context.Context, connection *sql.Conn, _ Inc
 }
 
 func liveTwoTableMigration(id, first, second string, failSecondDown bool) Migration {
-	secondDown := "DROP TABLE " + second
+	firstDown := "DROP TABLE " + first
 	if failSecondDown {
-		secondDown = "DROP TABLE " + second + "_absent"
+		firstDown = "DROP TABLE " + first + "_absent"
 	}
 	return Migration{ID: id, Statements: []Statement{
 		{Source: "001_first.sql", SQL: sqltext.Text("CREATE TABLE " + first + " (id INT PRIMARY KEY)")},
 		{Source: "002_second.sql", SQL: sqltext.Text("CREATE TABLE " + second + " (id INT PRIMARY KEY)")},
 	}, Down: []Statement{
 		{Source: "002_second.down.sql", SQL: sqltext.Text("DROP TABLE " + second)},
-		{Source: "001_first.down.sql", SQL: sqltext.Text(secondDown)},
+		{Source: "001_first.down.sql", SQL: sqltext.Text(firstDown)},
 	}}
 }
 
