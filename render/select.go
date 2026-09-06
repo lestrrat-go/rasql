@@ -104,8 +104,9 @@ type renderer struct {
 	// — not only at the value's own top level. EXCLUDED means nothing outside
 	// a conflict-update assignment, so writeExcludedColumn refuses one
 	// reached anywhere else.
-	excludedStyle dialect.UpsertStyle
-	inExcluded    bool
+	excludedStyle       dialect.UpsertStyle
+	inExcluded          bool
+	expressionValidator func(query.Expression) error
 }
 
 type compilerEmitter struct {
@@ -141,6 +142,11 @@ func (e compilerEmitter) Argument(value any) error {
 }
 
 func (e compilerEmitter) Expression(expression query.Expression) error {
+	if e.renderer.expressionValidator != nil {
+		if err := e.renderer.expressionValidator(expression); err != nil {
+			return err
+		}
+	}
 	if sameExpression(e.skip, expression) {
 		return e.renderer.writeExpressionWithCompiler(expression, true)
 	}
@@ -164,10 +170,14 @@ func (r *renderer) writeSelect(s query.Select) error {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "projection")
+		}
 		if err := r.writeProjection(projection); err != nil {
 			return err
 		}
 	}
+	r.expressionValidator = nil
 
 	r.builder.WriteString(" FROM ")
 	if err := r.writeTable(s.From()); err != nil {
@@ -181,15 +191,23 @@ func (r *renderer) writeSelect(s query.Select) error {
 			return err
 		}
 		r.builder.WriteString(" ON ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "where")
+		}
 		if err := r.writeExpression(join.On()); err != nil {
 			return err
 		}
 	}
+	r.expressionValidator = nil
 	if where := s.Where(); where != nil {
 		r.builder.WriteString(" WHERE ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "where")
+		}
 		if err := r.writeExpression(where); err != nil {
 			return err
 		}
+		r.expressionValidator = nil
 	}
 
 	groupBy := s.GroupBy()
@@ -199,16 +217,24 @@ func (r *renderer) writeSelect(s query.Select) error {
 			if i > 0 {
 				r.builder.WriteString(", ")
 			}
+			r.expressionValidator = func(expression query.Expression) error {
+				return s.ValidateCompilerExpression(expression, "group")
+			}
 			if err := r.writeExpression(expression); err != nil {
 				return err
 			}
 		}
+		r.expressionValidator = nil
 	}
 	if having := s.Having(); having != nil {
 		r.builder.WriteString(" HAVING ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "having")
+		}
 		if err := r.writeExpression(having); err != nil {
 			return err
 		}
+		r.expressionValidator = nil
 	}
 
 	orders := s.OrderBy()
@@ -229,8 +255,14 @@ func (r *renderer) writeSelect(s query.Select) error {
 					return err
 				}
 				r.builder.WriteString(quoted)
-			} else if err := r.writeExpression(order.Expression()); err != nil {
-				return err
+			} else {
+				r.expressionValidator = func(expression query.Expression) error {
+					return s.ValidateCompilerExpression(expression, "order")
+				}
+				if err := r.writeExpression(order.Expression()); err != nil {
+					return err
+				}
+				r.expressionValidator = nil
 			}
 			if order.Descending() {
 				r.builder.WriteString(" DESC")
@@ -561,7 +593,7 @@ func sameExpression(left, right query.Expression) bool {
 	}
 	leftType := reflect.TypeOf(left)
 	if leftType != reflect.TypeOf(right) || !leftType.Comparable() {
-		return false
+		return reflect.DeepEqual(left, right)
 	}
 	return reflect.ValueOf(left).Interface() == reflect.ValueOf(right).Interface()
 }
