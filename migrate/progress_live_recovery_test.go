@@ -43,7 +43,7 @@ func TestMySQLProgressJournalSeamApplyReconnectsAndReleasesLock(t *testing.T) {
 	require.NoError(t, err)
 	_, err = runner.Apply(t.Context(), AllPending(), migration)
 	require.ErrorIs(t, err, errLiveJournalFailure)
-	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, true, true)
+	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, 1, true, true)
 	assertLiveLockAndPool(t, config, database, history)
 	require.NoError(t, database.Close())
 
@@ -54,7 +54,7 @@ func TestMySQLProgressJournalSeamApplyReconnectsAndReleasesLock(t *testing.T) {
 	require.NoError(t, restartedRunner.Reconcile(t.Context(), check, migration))
 	require.Equal(t, ReconcileExecuted, check.decision)
 	assertLiveLockAndPool(t, config, restarted, history)
-	assertLiveProgressAndEffect(t, config, restarted, history, first, second, 0, 0, true, true)
+	assertLiveProgressAndEffect(t, config, restarted, history, first, second, 0, 0, 0, true, true)
 	assertLiveHistoryCount(t, restarted, history, 1)
 	assertLiveLockAndPool(t, config, restarted, history)
 }
@@ -83,7 +83,7 @@ func TestMySQLProgressRevertJournalSeamExecutedReconnects(t *testing.T) {
 	t.Cleanup(func() { journalWriteHook = previousHook })
 	_, err = runner.Revert(t.Context(), Steps(1), migration)
 	require.ErrorIs(t, err, errLiveJournalFailure)
-	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, false, false)
+	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, 1, false, false)
 	assertLiveLockAndPool(t, config, database, history)
 	require.NoError(t, database.Close())
 	restarted := openLiveDatabase(t, config)
@@ -92,7 +92,7 @@ func TestMySQLProgressRevertJournalSeamExecutedReconnects(t *testing.T) {
 	check := &liveSchemaCheck{table: first, wantExists: false}
 	require.NoError(t, restartedRunner.Reconcile(t.Context(), check, migration))
 	require.Equal(t, ReconcileExecuted, check.decision)
-	assertLiveProgressAndEffect(t, config, restarted, history, first, second, 0, 0, false, false)
+	assertLiveProgressAndEffect(t, config, restarted, history, first, second, 0, 0, 0, false, false)
 	assertLiveHistoryCount(t, restarted, history, 0)
 	assertLiveLockAndPool(t, config, restarted, history)
 }
@@ -109,7 +109,7 @@ func TestMySQLProgressRevertNotExecutedReconnectsAndRetries(t *testing.T) {
 	require.NoError(t, func() error { _, err := runner.Apply(t.Context(), AllPending(), migration); return err }())
 	_, err = runner.Revert(t.Context(), Steps(1), migration)
 	require.Error(t, err)
-	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, true, false)
+	assertLiveProgressAndEffect(t, config, database, history, first, second, 1, 1, 1, true, false)
 	assertLiveLockAndPool(t, config, database, history)
 	require.NoError(t, database.Close())
 	restarted := openLiveDatabase(t, config)
@@ -122,7 +122,7 @@ func TestMySQLProgressRevertNotExecutedReconnectsAndRetries(t *testing.T) {
 	reverted, err := restartedRunner.Revert(t.Context(), Steps(1), migration)
 	require.NoError(t, err)
 	require.Len(t, reverted, 1)
-	assertLiveProgressAndEffect(t, config, restarted, history, first, second, 0, 0, false, false)
+	assertLiveProgressAndEffect(t, config, restarted, history, first, second, 0, 0, 0, false, false)
 	assertLiveLockAndPool(t, config, restarted, history)
 }
 
@@ -175,11 +175,12 @@ func openLiveDatabase(t *testing.T, config *mysql.Config) *sql.DB {
 	return database
 }
 
-func assertLiveProgressAndEffect(t *testing.T, config *mysql.Config, database *sql.DB, history, first, second string, wantSource, wantNext int, wantFirst, wantSecond bool) {
+func assertLiveProgressAndEffect(t *testing.T, config *mysql.Config, database *sql.DB, history, first, second string, wantSource, wantNext, wantProgressCount int, wantFirst, wantSecond bool) {
 	t.Helper()
 	inspection := openLiveDatabase(t, config)
 	var progressCount int
 	require.NoError(t, inspection.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM "+history+"_progress").Scan(&progressCount))
+	require.Equal(t, wantProgressCount, progressCount)
 	if progressCount > 0 {
 		var source, next int
 		require.NoError(t, inspection.QueryRowContext(t.Context(), "SELECT source_index, next_index FROM "+history+"_progress").Scan(&source, &next))

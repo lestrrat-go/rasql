@@ -130,7 +130,7 @@ func TestDiskRecoveryApplyStatusVerifyReconcileAndRetry(t *testing.T) {
 			require.ErrorContains(t, err, "002_index.up.sql")
 			output, err := runRecoveryCommand(t, fixture, "reconcile", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-id", "001_recovery", "-check", decision.query)
 			require.NoError(t, err)
-			require.Contains(t, output, "reconciled\t001_recovery\t"+map[string]string{"SELECT TRUE": "executed", "SELECT FALSE": "not_executed"}[decision.query])
+			require.Equal(t, "reconciled\t001_recovery\t"+map[string]string{"SELECT TRUE": "executed", "SELECT FALSE": "not_executed"}[decision.query]+"\tincomplete\n", output)
 			output, err = runRecoveryCommand(t, fixture, "apply", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
 			require.NoError(t, err)
 			require.Contains(t, output, "migration apply completed: 1 applied")
@@ -170,7 +170,7 @@ func TestDiskRecoveryRevertStatusVerifyReconcileAndRetry(t *testing.T) {
 			require.ErrorContains(t, err, "002_index.down.sql")
 			output, err := runRecoveryCommand(t, fixture, "reconcile", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-id", "001_recovery", "-check", decision.query)
 			require.NoError(t, err)
-			require.Contains(t, output, "reconciled\t001_recovery")
+			require.Equal(t, "reconciled\t001_recovery\t"+map[string]string{"SELECT TRUE": "executed", "SELECT FALSE": "not_executed"}[decision.query]+"\tincomplete\n", output)
 			output, err = runRecoveryCommand(t, fixture, "revert", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-steps", "1")
 			require.NoError(t, err)
 			require.Contains(t, output, "migration revert completed: 1 reverted")
@@ -203,17 +203,28 @@ func TestDiskRecoveryReconcileArgumentAndCheckErrors(t *testing.T) {
 		{"query error", "SELECT ERROR_CHECK", "query failure"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			before := fixture.Snapshot()
 			id := "001_recovery"
 			if test.name == "id mismatch" {
 				id = "wrong"
 			}
 			_, err := runRecoveryCommand(t, fixture, "reconcile", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-id", id, "-check", test.query)
 			require.ErrorContains(t, err, test.want)
-			require.NotNil(t, fixture.Snapshot().Progress)
+			after := fixture.Snapshot()
+			require.Equal(t, before.History, after.History)
+			require.Equal(t, before.Progress, after.Progress)
+			require.Equal(t, before.Effects, after.Effects)
+			require.Equal(t, before.Executions, after.Executions)
 		})
 	}
+	before := fixture.Snapshot()
 	_, err = runRecoveryCommand(t, fixture, "reconcile", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-id", "001_recovery", "-check", "SELECT TRUE", "extra")
 	require.ErrorContains(t, err, "no positional arguments")
+	after := fixture.Snapshot()
+	require.Equal(t, before.History, after.History)
+	require.Equal(t, before.Progress, after.Progress)
+	require.Equal(t, before.Effects, after.Effects)
+	require.Equal(t, before.Executions, after.Executions)
 }
 
 func executionCount(snapshot dbtest.Snapshot, prefix string) int {

@@ -72,6 +72,7 @@ func TestRecoveryPublicFiveWindows(t *testing.T) {
 					result, err = runner.RevertResult(t.Context(), Steps(1), migration)
 				}
 				require.Error(t, err)
+				assertIncompleteResult(t, result, err, migration, direction, test.wantIndex)
 				if test.wantProgress {
 					require.NotNil(t, result.Incomplete)
 				} else if !test.wantProgress || test.wantNext != 3 {
@@ -83,6 +84,14 @@ func TestRecoveryPublicFiveWindows(t *testing.T) {
 				snapshot := fixture.Snapshot()
 				if test.wantProgress {
 					require.NotNil(t, snapshot.Progress)
+					require.Equal(t, migration.ID, snapshot.Progress.ID)
+					require.Equal(t, checksum(migration.Statements), snapshot.Progress.Checksum)
+					require.Equal(t, string(direction), snapshot.Progress.Direction)
+					expectedSources := migration.Statements
+					if direction == DirectionDown {
+						expectedSources = migration.Down
+					}
+					require.Equal(t, expectedSources[test.wantIndex].Source, snapshot.Progress.Source)
 					require.Equal(t, test.wantIndex, snapshot.Progress.SourceIndex)
 					require.Equal(t, test.wantNext, snapshot.Progress.NextIndex)
 				} else {
@@ -218,6 +227,9 @@ func TestRecoveryPublicReconcileAllSourcesAndDecisions(t *testing.T) {
 					require.Equal(t, 1, check.calls)
 					require.Equal(t, int64(1), check.connectionID)
 					require.Equal(t, migration.ID, check.value.ID)
+					require.Equal(t, checksum(migration.Statements), check.value.Checksum)
+					require.Equal(t, statements[sourceIndex].Source, check.value.Source)
+					require.Equal(t, direction, check.value.Direction)
 					require.Equal(t, sourceIndex, check.value.SourceIndex)
 					snapshot := fixture.Snapshot()
 					require.Zero(t, snapshot.LockOwner)
@@ -282,7 +294,35 @@ func TestRecoveryPublicMismatchRefusalAndResultCopies(t *testing.T) {
 	completed = append(completed, migration)
 	completed[0].Statements[0].Source = "changed again"
 	require.Equal(t, 1, fixture.Snapshot().Executions[string(migration.Statements[0].SQL)])
+
+	fixture = dbtest.NewRecovery()
+	fixture.FailMigrationAt(1)
+	database, runner = openRecoveryRunner(t, fixture)
+	result, err = runner.ApplyResult(t.Context(), AllPending(), migration)
+	var incompleteErr *IncompleteMigrationError
+	require.ErrorAs(t, err, &incompleteErr)
+	require.NotNil(t, result.Incomplete)
+	require.Equal(t, migration.ID, result.Incomplete.ID)
+	require.Equal(t, result.Incomplete, &incompleteErr.Incomplete)
+	result.Incomplete.ID = "mutated-result"
+	incompleteErr.Incomplete.Source = "mutated-error"
+	require.NotEqual(t, result.Incomplete.ID, incompleteErr.Incomplete.ID)
+	require.NotEqual(t, result.Incomplete.Source, incompleteErr.Incomplete.Source)
 	_ = database.Close()
+}
+
+func assertIncompleteResult(t *testing.T, result ExecutionResult, err error, migration Migration, direction Direction, sourceIndex int) {
+	t.Helper()
+	require.NotNil(t, result.Incomplete)
+	require.Equal(t, migration.ID, result.Incomplete.ID)
+	require.Equal(t, checksum(migration.Statements), result.Incomplete.Checksum)
+	require.Equal(t, direction, result.Incomplete.Direction)
+	require.Equal(t, sourceIndex, result.Incomplete.SourceIndex)
+	sources := migration.Statements
+	if direction == DirectionDown {
+		sources = migration.Down
+	}
+	require.Equal(t, sources[sourceIndex].Source, result.Incomplete.Source)
 }
 
 func TestRecoveryPublicRevertAndCompatibilityResultCopies(t *testing.T) {
