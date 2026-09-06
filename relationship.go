@@ -209,7 +209,18 @@ func relationshipMembership(columns []query.ColumnRef, values [][]any) query.Exp
 		}
 		return query.In(columns[0], flat...)
 	}
-	return query.TupleIn(columns, values)
+	keys := make([]query.Expression, 0, len(values))
+	for _, value := range values {
+		components := make([]query.Expression, 0, len(columns))
+		for index, column := range columns {
+			components = append(components, query.Equal(column, value[index]))
+		}
+		keys = append(keys, query.And(components...))
+	}
+	if len(keys) == 1 {
+		return keys[0]
+	}
+	return query.Or(keys...)
 }
 
 func relationshipDefaultBindLimit(db DB) int {

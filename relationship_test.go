@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -40,6 +42,25 @@ func TestLoadHasManyPlanUsesPinnedSQLiteLimitAndScopedQueryCount(t *testing.T) {
 	require.NoError(t, err)
 	orders, err := rasql.TableOf[planOrder](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}, {Name: "created_at", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
 	require.NoError(t, err)
+	other, err := rasql.TableOf[planOrder](schema.TableDef{Name: "other", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	require.NoError(t, err)
+	for name, columns := range map[string][]query.ColumnRef{"empty columns": nil, "wrong table": {other.Column("id")}} {
+		t.Run(name, func(t *testing.T) {
+			_, err := rasql.LoadHasManyPlan(t.Context(), db, orders, columns, []relationshipUser{{1}}, func(user relationshipUser) int64 { return user.ID }, func(order planOrder) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{})
+			require.Error(t, err)
+		})
+	}
+	for name, options := range map[string]rasql.RelationshipLoadOptions{
+		"invalid filter": {Where: query.Equal(other.Column("id"), 1)},
+		"invalid order":  {OrderBy: []query.Order{query.Asc(other.Column("id"))}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := rasql.LoadHasManyPlan(t.Context(), db, orders, []query.ColumnRef{orders.Column("user_id")}, []relationshipUser{{1}}, func(user relationshipUser) int64 { return user.ID }, func(order planOrder) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
+			require.Error(t, err)
+		})
+	}
+	_, err = rasql.LoadHasManyPlan(t.Context(), db, orders, []query.ColumnRef{orders.Column("user_id")}, []relationshipUser{{1}}, func(user relationshipUser) int64 { return user.ID }, func(order planOrder) int64 { return order.UserID }, func(key int64) ([]any, bool) { return nil, true }, rasql.RelationshipLoadOptions{})
+	require.Error(t, err)
 	loaded, err := rasql.LoadHasManyPlan(context.Background(), db, orders, []query.ColumnRef{orders.Column("user_id")}, []relationshipUser{{ID: 1}, {ID: 1}, {ID: 2}, {ID: 3}}, func(user relationshipUser) int64 { return user.ID }, func(order planOrder) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{BindLimit: 2})
 	require.NoError(t, err)
 	require.Len(t, loaded[1], 2)
@@ -67,7 +88,13 @@ func TestLoadHasManyPlanCompositeIsolationAndDescriptorOrder(t *testing.T) {
 	require.NoError(t, err)
 	_, err = database.Exec("INSERT INTO orders VALUES (1,7,1),(2,8,1),(3,7,2)")
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
+	var bound [][]any
+	db, err := rasql.New(database, dialect.SQLite(), exec.HookFunc{BeforeFunc: func(_ context.Context, operation exec.Operation) error {
+		if operation.Kind() == exec.QueryOperation {
+			bound = append(bound, operation.Args())
+		}
+		return nil
+	}})
 	require.NoError(t, err)
 	orders, err := rasql.TableOf[compositeRelationshipOrder](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant_id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
 	require.NoError(t, err)
@@ -82,6 +109,71 @@ func TestLoadHasManyPlanCompositeIsolationAndDescriptorOrder(t *testing.T) {
 	require.Len(t, loaded["7:1"], 1)
 	require.Len(t, loaded["8:1"], 1)
 	require.Len(t, loaded["7:2"], 1)
+	require.Equal(t, [][]any{{int64(7), int64(1), int64(8), int64(1)}, {int64(7), int64(2)}}, bound)
+}
+
+func TestLoadHasManyPlanCompositeRenderingByDialect(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		dialect dialect.Dialect
+	}{
+		{name: "postgresql", dialect: dialect.PostgreSQL()},
+		{name: "mysql", dialect: dialect.MySQL()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, database.Close())
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+			var sqlText string
+			db, err := rasql.New(database, test.dialect, exec.HookFunc{BeforeFunc: func(_ context.Context, operation exec.Operation) error { sqlText = operation.SQL(); return nil }})
+			require.NoError(t, err)
+			orders, err := rasql.TableOf[compositeRelationshipOrder](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant_id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}}})
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT").WithArgs(int64(7), int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "user_id"}).AddRow(1, 7, 1))
+			_, err = rasql.LoadHasManyPlan(t.Context(), db, orders, []query.ColumnRef{orders.Column("tenant_id"), orders.Column("user_id")}, []compositeRelationshipUser{{7, 1}}, func(user compositeRelationshipUser) string { return fmt.Sprintf("%d:%d", user.TenantID, user.ID) }, func(order compositeRelationshipOrder) string {
+				return fmt.Sprintf("%d:%d", order.TenantID, order.UserID)
+			}, func(key string) ([]any, bool) { return []any{int64(7), int64(1)}, true }, rasql.RelationshipLoadOptions{BindLimit: 2})
+			require.NoError(t, err)
+			require.Contains(t, sqlText, "tenant_id")
+			require.Less(t, strings.Index(sqlText, "tenant_id"), strings.Index(sqlText, "user_id"))
+		})
+	}
+}
+
+func TestLoadHasManyPlanCompositeHighBitUnsignedComponent(t *testing.T) {
+	type key struct{ Tenant, Parent uint64 }
+	type row struct {
+		ID     int64
+		Tenant string
+		Parent uint64
+	}
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.Exec("CREATE TABLE rows (id INTEGER, tenant TEXT, parent INTEGER); INSERT INTO rows VALUES (1, '9223372036854775815', 1)")
+	require.NoError(t, err)
+	var bound [][]any
+	db, err := rasql.New(database, dialect.SQLite(), exec.HookFunc{BeforeFunc: func(_ context.Context, operation exec.Operation) error {
+		if operation.Kind() == exec.QueryOperation {
+			bound = append(bound, operation.Args())
+		}
+		return nil
+	}})
+	require.NoError(t, err)
+	table, err := rasql.TableOf[row](schema.TableDef{Name: "rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.TextType{}}, {Name: "parent", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	keyValue := uint64(1<<63) + 7
+	loaded, err := rasql.LoadHasManyPlan(t.Context(), db, table, []query.ColumnRef{table.Column("tenant"), table.Column("parent")}, []key{{Tenant: keyValue, Parent: 1}}, func(value key) key { return value }, func(value row) key {
+		tenant, _ := strconv.ParseUint(value.Tenant, 10, 64)
+		return key{Tenant: tenant, Parent: value.Parent}
+	}, func(value key) ([]any, bool) { return []any{value.Tenant, value.Parent}, true }, rasql.RelationshipLoadOptions{BindLimit: 2})
+	require.NoError(t, err)
+	require.Len(t, loaded[key{Tenant: keyValue, Parent: 1}], 1)
+	require.Equal(t, [][]any{{"9223372036854775815", uint64(1)}}, bound)
 }
 
 func TestLoadHasManyPlanBatchesAndCapsSQLite(t *testing.T) {
@@ -98,7 +190,7 @@ func TestLoadHasManyPlanBatchesAndCapsSQLite(t *testing.T) {
 	loaded, err := rasql.LoadHasManyPlan(t.Context(), db, orders, []query.ColumnRef{orders.Column("user_id")}, []relationshipUser{{ID: 1}, {ID: 1}, {ID: 2}, {ID: 3}}, func(user relationshipUser) int64 { return user.ID }, func(order planOrder) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{Where: query.Equal(orders.Column("active"), 1), OrderBy: []query.Order{query.Desc(orders.Column("created_at"))}, PerParentLimit: 5, BindLimit: 2})
 	require.NoError(t, err)
 	require.Len(t, loaded[1], 5)
-	require.Equal(t, int64(6), loaded[1][0].ID)
+	require.Equal(t, []int64{6, 5, 4, 3, 2}, []int64{loaded[1][0].ID, loaded[1][1].ID, loaded[1][2].ID, loaded[1][3].ID, loaded[1][4].ID})
 	require.Len(t, loaded[2], 1)
 	require.Empty(t, loaded[3])
 }
@@ -121,6 +213,81 @@ type unsignedRelationshipUser struct {
 type unsignedRelationshipOrder struct {
 	ID     uint64
 	UserID uint64
+}
+
+type belongsToParent struct{ ID int64 }
+type belongsToChild struct{ ParentID int64 }
+
+func TestLoadBelongsToPlanMissingAndDuplicateKeys(t *testing.T) {
+	newDB := func(t *testing.T, rows string) (rasql.DB, rasql.Table[belongsToParent]) {
+		database, err := sql.Open("sqlite", ":memory:")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
+		_, err = database.Exec("CREATE TABLE parents (id INTEGER); INSERT INTO parents VALUES " + rows)
+		require.NoError(t, err)
+		db, err := rasql.New(database, dialect.SQLite())
+		require.NoError(t, err)
+		parents, err := rasql.TableOf[belongsToParent](schema.TableDef{Name: "parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+		require.NoError(t, err)
+		return db, parents
+	}
+	t.Run("missing and nonexistent are omitted", func(t *testing.T) {
+		db, parents := newDB(t, "(1),(2)")
+		loaded, err := rasql.LoadBelongsToPlan(t.Context(), db, parents, []query.ColumnRef{parents.Column("id")}, []belongsToChild{{1}, {0}, {99}}, func(child belongsToChild) int64 { return child.ParentID }, func(parent belongsToParent) int64 { return parent.ID }, func(key int64) ([]any, bool) { return []any{key}, key != 0 }, rasql.RelationshipLoadOptions{})
+		require.NoError(t, err)
+		require.Contains(t, loaded, int64(1))
+		require.NotContains(t, loaded, int64(0))
+		require.NotContains(t, loaded, int64(99))
+	})
+	t.Run("duplicate scalar parent errors", func(t *testing.T) {
+		db, parents := newDB(t, "(1),(1)")
+		_, err := rasql.LoadBelongsToPlan(t.Context(), db, parents, []query.ColumnRef{parents.Column("id")}, []belongsToChild{{1}}, func(child belongsToChild) int64 { return child.ParentID }, func(parent belongsToParent) int64 { return parent.ID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{})
+		require.ErrorContains(t, err, "duplicate parent")
+	})
+	t.Run("all missing performs zero queries", func(t *testing.T) {
+		db, parents := newDB(t, "(1)")
+		queries := 0
+		db, err := db.WithHooks(exec.HookFunc{BeforeFunc: func(_ context.Context, operation exec.Operation) error {
+			if operation.Kind() == exec.QueryOperation {
+				queries++
+			}
+			return nil
+		}})
+		require.NoError(t, err)
+		loaded, err := rasql.LoadBelongsToPlan(t.Context(), db, parents, []query.ColumnRef{parents.Column("id")}, []belongsToChild{{0}}, func(child belongsToChild) int64 { return child.ParentID }, func(parent belongsToParent) int64 { return parent.ID }, func(key int64) ([]any, bool) { return nil, false }, rasql.RelationshipLoadOptions{})
+		require.NoError(t, err)
+		require.Empty(t, loaded)
+		require.Zero(t, queries)
+	})
+}
+
+func TestRelationshipPlanValidationAndBindPrecedence(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	db, err := rasql.New(database, dialect.PostgreSQL(), rasql.WithRelationshipBindLimit(10))
+	require.NoError(t, err)
+	orders, err := rasql.TableOf[planOrder](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}, {Name: "created_at", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	require.NoError(t, err)
+	for name, options := range map[string]rasql.RelationshipLoadOptions{
+		"negative limit":     {BindLimit: -1},
+		"negative cap":       {PerParentLimit: -1},
+		"one key cannot fit": {BindLimit: 1, Where: query.Equal(orders.Column("active"), 1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := rasql.LoadHasManyPlan(t.Context(), db, orders, []query.ColumnRef{orders.Column("user_id")}, []relationshipUser{{1}}, func(user relationshipUser) int64 { return user.ID }, func(order planOrder) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
+			require.Error(t, err)
+		})
+	}
+	for _, key := range []int64{1, 2, 3} {
+		mock.ExpectQuery("SELECT").WithArgs(key).WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "active", "created_at"}))
+	}
+	_, err = rasql.LoadHasManyPlan(t.Context(), db, orders, []query.ColumnRef{orders.Column("user_id")}, []relationshipUser{{1}, {2}, {3}}, func(user relationshipUser) int64 { return user.ID }, func(order planOrder) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{BindLimit: 1})
+	require.NoError(t, err)
 }
 
 func TestLoadRelationships(t *testing.T) {
