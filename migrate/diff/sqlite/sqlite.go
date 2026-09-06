@@ -346,6 +346,11 @@ func sqliteTokenWordPart(value byte) bool {
 // into the same representation regardless of whether the source used inline
 // or table-level syntax. SQLite inspection renders this normalized form.
 func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
+	originalColumns := make([]sqlitequery.ColumnDefinition, len(statement.Columns))
+	for index, column := range statement.Columns {
+		originalColumns[index] = column
+		originalColumns[index].Constraints = append([]sqlitequery.ColumnConstraint(nil), column.Constraints...)
+	}
 	var primaryKey sqlitequery.TableConstraint
 	var hasPrimaryKey bool
 	var inlineAutoincrement bool
@@ -431,7 +436,7 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 		primaryKey.Name = nil
 		for index := range statement.Columns {
 			column := &statement.Columns[index]
-			if !primaryKeyContainsColumn(primaryKey, column.Name.Name) || hasColumnConstraint(*column, sqlitequery.ConstraintNotNull) {
+			if !primaryKeyColumnImplicitlyNotNull(statement, primaryKey, originalColumns[index]) || hasColumnConstraint(*column, sqlitequery.ConstraintNotNull) {
 				continue
 			}
 			column.Constraints = append(column.Constraints, sqlitequery.ColumnConstraint{Kind: sqlitequery.ConstraintNotNull})
@@ -441,6 +446,37 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 		}
 	}
 	statement.Constraints = constraints
+}
+
+// primaryKeyColumnImplicitlyNotNull reports whether SQLite makes column
+// non-null solely because it is a member of this table's primary key.
+func primaryKeyColumnImplicitlyNotNull(table *sqlitequery.CreateTableStatement, primaryKey sqlitequery.TableConstraint, column sqlitequery.ColumnDefinition) bool {
+	if table == nil || primaryKey.Kind != sqlitequery.ConstraintPrimaryKey || !primaryKeyContainsColumn(primaryKey, column.Name.Name) {
+		return false
+	}
+	if table.Options.Strict || table.Options.WithoutRowID {
+		return true
+	}
+	if len(primaryKey.Columns) != 1 {
+		return false
+	}
+	indexed := primaryKey.Columns[0]
+	expression, ok := indexed.Expression.(*sqlitequery.IdentifierExpression)
+	if !ok || len(expression.Name) != 1 || indexed.Collation != nil ||
+		sqliteIdentifierKey(expression.Name[0].Name) != sqliteIdentifierKey(column.Name.Name) {
+		return false
+	}
+	if len(column.Type.Words) != 1 || !strings.EqualFold(column.Type.Words[0], "INTEGER") || len(column.Type.Modifiers) != 0 {
+		return false
+	}
+	// SQLite's inline INTEGER PRIMARY KEY DESC exception does not make the
+	// column a rowid alias. A table-level PRIMARY KEY(id DESC) remains one.
+	for _, constraint := range column.Constraints {
+		if constraint.Kind == sqlitequery.ConstraintPrimaryKey && constraint.Direction == sqlitequery.SortDescending {
+			return false
+		}
+	}
+	return true
 }
 
 func primaryKeyContainsColumn(constraint sqlitequery.TableConstraint, name string) bool {
