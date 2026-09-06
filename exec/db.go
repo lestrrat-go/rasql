@@ -271,19 +271,22 @@ func (db DB) QueryRendered(ctx context.Context, s stmt.Statement) (*sql.Rows, er
 		return nil, err
 	}
 	operation := Operation{kind: QueryOperation, stmt: s}
-	entered, err := db.beforeHooks(ctx, operation)
+	callContext, invocation := db.startInvocation(ctx, operation)
+	entered, err := db.beforeHooks(callContext, operation)
 	if err != nil {
-		if extensionErr := db.afterHooks(ctx, operation, entered, err); extensionErr != nil {
-			return nil, errors.Join(err, extensionErr)
+		if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+			err = errors.Join(err, extensionErr)
 		}
+		db.completeInvocation(invocation, operation, ExecutionPhase, callContext, err, 0, false)
 		return nil, err
 	}
-	rows, err := db.handle.QueryContext(ctx, s.SQL(), s.BoundArgs()...)
-	if err != nil {
-		err = fmt.Errorf("rasql: execute query: %w", err)
+	rows, driverErr := db.handle.QueryContext(callContext, s.SQL(), s.BoundArgs()...)
+	if driverErr != nil {
+		err = fmt.Errorf("rasql: execute query: %w", driverErr)
 	}
-	db.observe(ctx, operation, err)
-	if extensionErr := db.afterHooks(ctx, operation, entered, err); extensionErr != nil {
+	db.observe(callContext, operation, driverErr)
+	db.completeInvocation(invocation, operation, ExecutionPhase, callContext, err, 0, false)
+	if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
 		if rows != nil {
 			if closeErr := rows.Close(); closeErr != nil {
 				extensionErr.Errors = append(extensionErr.Errors, fmt.Errorf("rasql: close query rows: %w", closeErr))
@@ -305,13 +308,28 @@ func (db DB) QueryOwned(ctx context.Context, s stmt.Statement) (*Rows, error) {
 	}
 	operation := Operation{kind: QueryOperation, stmt: s}
 	callContext, execution := db.startInvocation(ctx, operation)
+	entered, err := db.beforeHooks(callContext, operation)
+	if err != nil {
+		if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+			err = errors.Join(err, extensionErr)
+		}
+		db.completeInvocation(execution, operation, ExecutionPhase, callContext, err, 0, false)
+		return nil, err
+	}
 	rows, driverErr := db.handle.QueryContext(callContext, s.SQL(), s.BoundArgs()...)
-	var err error
 	if driverErr != nil {
 		err = fmt.Errorf("rasql: execute query: %w", driverErr)
 	}
 	db.observe(callContext, operation, driverErr)
 	db.completeInvocation(execution, operation, ExecutionPhase, callContext, err, 0, false)
+	if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+		if rows != nil {
+			if closeErr := rows.Close(); closeErr != nil {
+				extensionErr.Errors = append(extensionErr.Errors, fmt.Errorf("rasql: close query rows: %w", closeErr))
+			}
+		}
+		return nil, errors.Join(err, extensionErr)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -325,19 +343,22 @@ func (db DB) ExecRendered(ctx context.Context, s stmt.Statement) (sql.Result, er
 		return nil, err
 	}
 	operation := Operation{kind: ExecOperation, stmt: s}
-	entered, err := db.beforeHooks(ctx, operation)
+	callContext, invocation := db.startInvocation(ctx, operation)
+	entered, err := db.beforeHooks(callContext, operation)
 	if err != nil {
-		if extensionErr := db.afterHooks(ctx, operation, entered, err); extensionErr != nil {
-			return nil, errors.Join(err, extensionErr)
+		if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+			err = errors.Join(err, extensionErr)
 		}
+		db.completeInvocation(invocation, operation, ExecutionPhase, callContext, err, 0, false)
 		return nil, err
 	}
-	result, driverErr := db.handle.ExecContext(ctx, s.SQL(), s.BoundArgs()...)
+	result, driverErr := db.handle.ExecContext(callContext, s.SQL(), s.BoundArgs()...)
 	if driverErr != nil {
 		err = fmt.Errorf("rasql: execute statement: %w", driverErr)
 	}
-	db.observe(ctx, operation, driverErr)
-	if extensionErr := db.afterHooks(ctx, operation, entered, err); extensionErr != nil {
+	db.observe(callContext, operation, driverErr)
+	db.completeInvocation(invocation, operation, ExecutionPhase, callContext, err, 0, false)
+	if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
 		return result, errors.Join(err, extensionErr)
 	}
 	return result, err

@@ -64,7 +64,7 @@ func scanRenderedOwned(ctx context.Context, db exec.DB, s stmt.Statement, autoFi
 		if autoFinish {
 			defer func() { _ = rows.Finish(nil, true) }()
 		}
-		scanSource(rows)(yield)
+		scanSource(rows, autoFinish)(yield)
 	}
 	return sequence, func(err error) {
 		if owned != nil {

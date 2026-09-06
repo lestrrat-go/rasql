@@ -70,9 +70,11 @@ func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
 	return rowvalue.Scan(rows)
 }
 
-func scanSource(rows *exec.Rows) iter.Seq2[Row, error] {
+func scanSource(rows *exec.Rows, autoFinish bool) iter.Seq2[Row, error] {
 	return func(yield func(Row, error) bool) {
-		defer func() { _ = rows.Finish(nil, true) }()
+		if autoFinish {
+			defer func() { _ = rows.Finish(nil, true) }()
+		}
 		for value, err := range rowvalue.ScanSource(rows, false) {
 			if err != nil {
 				_ = rows.Finish(err, false)
