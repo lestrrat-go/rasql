@@ -1320,6 +1320,11 @@ func validateRelationships(relationships []RelationshipDef, foreignKeys []Foreig
 		if err := ValidateIdentifier(relationship.Name); err != nil {
 			return validationError(path+".name", "%s", err)
 		}
+		if relationship.InverseName != "" {
+			if err := ValidateIdentifier(relationship.InverseName); err != nil {
+				return validationError(path+".inverse_name", "%s", err)
+			}
+		}
 		if relationship.Kind != RelationshipBelongsTo {
 			return validationError(path+".kind", "unsupported relationship kind %q", relationship.Kind)
 		}

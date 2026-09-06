@@ -581,10 +581,10 @@ func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 	source, err := schemagen.PackageSource("generated", users, memberships)
 	require.NoError(t, err)
 	text := string(source)
-	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+	require.Contains(t, text, "func (t UsersTable) BillingUserMemberships() UsersTableBillingUserMembershipsRelation")
 	require.Contains(t, text, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
-	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Join() rasql.Join")
-	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
+	require.Contains(t, text, "func (r UsersTableBillingUserMembershipsRelation) Join() rasql.Join")
+	require.Contains(t, text, "func (r UsersTableBillingUserMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
 	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Join() rasql.Join")
 	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
 }
@@ -619,8 +619,8 @@ func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
 		generateSource(foreignKeys),
 		generateSource([]schema.ForeignKeyDef{foreignKeys[1], foreignKeys[0]}),
 	} {
-		memberships := generatedMethodBlock(t, source, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
-		require.Contains(t, memberships, "ChildKey: child.BillingUserID")
+		billing := generatedMethodBlock(t, source, "func (t UsersTable) BillingUserMemberships() UsersTableBillingUserMembershipsRelation")
+		require.Contains(t, billing, "ChildKey: child.BillingUserID")
 		shipping := generatedMethodBlock(t, source, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
 		require.Contains(t, shipping, "ChildKey: child.ShippingUserID")
 	}
@@ -707,11 +707,8 @@ func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
 		}},
 	}
 
-	source, err := schemagen.PackageSource("generated", users, aliases)
-	require.NoError(t, err)
-	text := string(source)
-	require.Contains(t, text, "func (t UsersTable) UserAs() UsersTableUserAsRelation")
-	require.Contains(t, text, "func (r UsersTableUserAsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
+	_, err := schemagen.PackageSource("generated", users, aliases)
+	require.ErrorContains(t, err, "reserved generated method")
 }
 
 func generatedMethodBlock(t *testing.T, source, signature string) string {
@@ -759,7 +756,7 @@ func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
 	for _, expected := range []string{
 		"func (t MembershipsTable) BillingUser() MembershipsTableBillingUserRelation",
 		"func (t MembershipsTable) ShippingUser() MembershipsTableShippingUserRelation",
-		"func (t UsersTable) Memberships() UsersTableMembershipsRelation",
+		"func (t UsersTable) BillingUserMemberships() UsersTableBillingUserMembershipsRelation",
 		"func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation",
 		"func (r MembershipsTableBillingUserRelation) Load(ctx context.Context, db rasql.DB, children []MembershipsRow)",
 		"func (r MembershipsTableShippingUserRelation) Load(ctx context.Context, db rasql.DB, children []MembershipsRow)",
