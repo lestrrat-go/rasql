@@ -120,7 +120,7 @@ func TestSchemaEvolutionMySQLConstraintReplacementMatrix(t *testing.T) {
 				require.NoError(t, err)
 			}
 			if test.name == "foreign key" {
-				_, err = database.ExecContext(t.Context(), "INSERT INTO `evo_parent` VALUES (1, 101);")
+				_, err = database.ExecContext(t.Context(), "INSERT INTO `evo_parent` VALUES (1, 1);")
 				require.NoError(t, err)
 			}
 			seed := map[string]string{
