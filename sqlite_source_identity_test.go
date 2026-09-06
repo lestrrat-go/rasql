@@ -85,7 +85,7 @@ func TestSQLiteRejectsCaseOnlyCorrelationAliasInReadsAndWrites(t *testing.T) {
 	require.NoError(t, err)
 	rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { require.NoError(t, rows.Close()) }()
 	require.True(t, rows.Next())
 	var id int64
 	require.NoError(t, rows.Scan(&id))
