@@ -2,6 +2,7 @@ package rowvalue_test
 
 import (
 	"database/sql"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,11 +13,12 @@ import (
 
 type nullScanRecorder struct {
 	value any
+	err   error
 }
 
 func (r *nullScanRecorder) Scan(value any) error {
 	r.value = value
-	return nil
+	return r.err
 }
 
 func TestGetDecodesDriverValues(t *testing.T) {
@@ -161,17 +163,30 @@ func TestAssignDispatchesNULLToScanners(t *testing.T) {
 	result, err := rowvalue.NewRow([]string{"value"}, []any{nil})
 	require.NoError(t, err)
 
-	t.Run("stdlib scanner", func(t *testing.T) {
+	t.Run("stdlib NullString clears stale value", func(t *testing.T) {
 		destination := sql.NullString{String: "stale", Valid: true}
 		require.NoError(t, rowvalue.Assign(result, "value", &destination))
 		require.False(t, destination.Valid)
 		require.Empty(t, destination.String)
 	})
 
-	t.Run("custom scanner", func(t *testing.T) {
+	t.Run("stdlib NullInt64 clears stale value", func(t *testing.T) {
+		destination := sql.NullInt64{Int64: 42, Valid: true}
+		require.NoError(t, rowvalue.Assign(result, "value", &destination))
+		require.False(t, destination.Valid)
+		require.Zero(t, destination.Int64)
+	})
+
+	t.Run("custom scanner receives NULL", func(t *testing.T) {
 		destination := nullScanRecorder{value: "stale"}
 		require.NoError(t, rowvalue.Assign(result, "value", &destination))
 		require.Nil(t, destination.value)
+	})
+
+	t.Run("ordinary values still reject NULL", func(t *testing.T) {
+		var destination string
+		err := rowvalue.Assign(result, "value", &destination)
+		require.ErrorContains(t, err, "expected string, got NULL")
 	})
 
 	t.Run("nil pointer keeps nil semantics", func(t *testing.T) {
@@ -179,6 +194,39 @@ func TestAssignDispatchesNULLToScanners(t *testing.T) {
 		require.NoError(t, rowvalue.Assign(result, "value", &destination))
 		require.Nil(t, destination)
 	})
+}
+
+func TestAssignScannersReceiveNonNULLValuesAndErrors(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"text", "number"}, []any{"fresh", int64(7)})
+	require.NoError(t, err)
+
+	var text sql.NullString
+	require.NoError(t, rowvalue.Assign(result, "text", &text))
+	require.True(t, text.Valid)
+	require.Equal(t, "fresh", text.String)
+
+	var number sql.NullInt64
+	require.NoError(t, rowvalue.Assign(result, "number", &number))
+	require.True(t, number.Valid)
+	require.Equal(t, int64(7), number.Int64)
+
+	sentinel := errors.New("scanner failed")
+	destination := nullScanRecorder{err: sentinel}
+	err = rowvalue.Assign(result, "text", &destination)
+	require.ErrorIs(t, err, sentinel)
+	require.ErrorContains(t, err, `row: decode column "text"`)
+}
+
+func TestAssignNULLPointerDoesNotInvokeScanner(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"value"}, []any{nil})
+	require.NoError(t, err)
+
+	destination := &nullScanRecorder{value: "untouched"}
+	var pointer *nullScanRecorder = destination
+	require.NoError(t, rowvalue.Assign(result, "value", &pointer))
+	require.Nil(t, pointer)
+	// The scanner behind a pointer field is not reached for SQL NULL.
+	require.Equal(t, "untouched", destination.value)
 }
 
 func TestDecodeAndGetDispatchNULLToScanners(t *testing.T) {
@@ -190,7 +238,7 @@ func TestDecodeAndGetDispatchNULLToScanners(t *testing.T) {
 	require.False(t, got.Valid)
 
 	type decodedRow struct {
-		Value sql.NullString
+		Value sql.NullString `rasql:"value"`
 	}
 	decoded, err := rowvalue.Decode[decodedRow](result)
 	require.NoError(t, err)
