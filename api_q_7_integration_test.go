@@ -58,7 +58,7 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	}
 
 	inner, err := query.NewCorrelatedSelect(
-		orders.Ref(), []query.TableRef{users.Ref()},
+		orders.Ref(), []query.RelationSource{users.Ref()},
 		query.Project(query.Coalesce(orders.Ref().Column("amount"), users.Ref().Column("id"))).As("value"),
 	)
 	require.NoError(t, err)
@@ -72,13 +72,13 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	require.Equal(t, []apiQ7Result{{ID: 1, Value: 1}, {ID: 2, Value: 2}}, rows)
 
 	leaf, err := query.NewCorrelatedSelect(
-		orders.Ref(), []query.TableRef{users.Ref()}, query.Project(orders.Ref().Column("amount")),
+		orders.Ref(), []query.RelationSource{users.Ref()}, query.Project(orders.Ref().Column("amount")),
 	)
 	require.NoError(t, err)
 	leaf, err = leaf.WithWhere(query.Equal(orders.Ref().Column("user_id"), users.Ref().Column("id")))
 	require.NoError(t, err)
 	middle, err := query.NewCorrelatedSelect(
-		orders.Ref(), []query.TableRef{users.Ref()}, query.Project(query.Scalar(leaf)).As("value"),
+		orders.Ref(), []query.RelationSource{users.Ref()}, query.Project(query.Scalar(leaf)).As("value"),
 	)
 	require.NoError(t, err)
 	middle, err = middle.WithWhere(query.Equal(orders.Ref().Column("user_id"), users.Ref().Column("id")))

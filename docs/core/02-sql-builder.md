@@ -76,9 +76,15 @@ The builders cover the common statements. These constructors build the same stat
 | `query.NewJoinedSelect(from, joins, groupBy, projections…)` | `SELECT` that carries its joins from the start; needed when a projection or a grouping expression reads a joined table, which the other two refuse because they validate before `WithJoin` can run. Pass a nil `groupBy` when the statement does not group. |
 | `query.NewInsert(into, values…)` | `INSERT` of one row. Pass `query.Set(column, value)` per column, or `query.Defaults()` on its own to write the database default for every column. |
 | `query.NewInsertRows(into, columns, rows)` | `INSERT` of several rows against one column list, which the rows fill in order. |
+| `query.NewInsertSelect(into, columns, source)` | `INSERT ... SELECT` from a validated `query.ResultQuery`. |
 | `query.NewUpdate(table, assignments…)` | `UPDATE`, with `query.Set(column, expression)` per assignment. A statement without `WithWhere` requires `AllowAll` before rendering or execution. |
 | `query.NewDelete(from)` | `DELETE`. A statement without `WithWhere` requires `AllowAll` before rendering or execution. |
 | `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |
+
+`query.ResultOf(select, columns...)` gives a validated `Select` or `Compound` a reusable result shape. `query.Derived`
+turns it into an aliased `FROM` or `JOIN` source, and `query.CommonTable` plus `Select.WithCTEs` renders a local CTE.
+`query.CompoundQuery` supports `UNION`, `UNION ALL`, `INTERSECT`, and `EXCEPT`; result arguments keep their left-to-right
+order. Relation columns carry the declared result metadata, so an outer statement can validate names before rendering.
 
 Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithGroupBy`, `WithHaving`, `WithOrder`, `WithLimit`, `WithOffset`, and `WithDistinct` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](03-write-statements.md#reading-a-returning-clause) covers. `Update.AllowAll` and `Delete.AllowAll` return a new statement when a full-table mutation is intentional. Each method returns a new validated statement rather than changing the one it was called on.
 
@@ -358,7 +364,7 @@ func Example_query_correlated_projection() {
 	// The constructor declares users before it validates the projection, so the
 	// projection can read both the order and the enclosing user's columns.
 	ordersForUser, err := query.NewCorrelatedSelect(
-		orders, []query.TableRef{users},
+		orders, []query.RelationSource{users},
 		query.Project(query.Coalesce(orders.Column("amount"), users.Column("id"))).As("value"),
 	)
 	if err != nil {

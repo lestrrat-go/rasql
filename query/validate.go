@@ -74,7 +74,7 @@ func validateOrderResultAlias(projection Projection, results map[string]int, pat
 // and rasql cannot tell which of the two sources any already-written column
 // reference meant. Refusing names both tables and leaves the caller to pick an
 // alias with As, which is the one repair that keeps the statement theirs.
-func validateSourceReference(references []sourceReference, source TableRef, path string) error {
+func validateSourceReference(references []sourceReference, source RelationRef, path string) error {
 	candidate := source.reference()
 	for _, existing := range references {
 		if !existing.conflicts(candidate) {
@@ -112,7 +112,7 @@ type sourceScope struct {
 // newSourceScope returns a scope holding table alone. It is what a write
 // statement validates its own clauses against, since a write statement names
 // one table and joins none.
-func newSourceScope(table TableRef) sourceScope {
+func newSourceScope(table RelationRef) sourceScope {
 	scope := sourceScope{keys: make(map[string]struct{}, 1)}
 	scope.add(table)
 	return scope
@@ -121,7 +121,7 @@ func newSourceScope(table TableRef) sourceScope {
 // add records table as a source in scope. Call it only after
 // validateSourceReference has cleared table against the sources already there,
 // since the check reads exactly the references this appends to.
-func (s *sourceScope) add(table TableRef) {
+func (s *sourceScope) add(table RelationRef) {
 	s.keys[table.key()] = struct{}{}
 	s.references = append(s.references, table.reference())
 }
@@ -247,6 +247,15 @@ func validateRowValueExpression(expression Expression, sources sourceScope, clau
 	return err
 }
 
+func relationColumn(source RelationRef, name string) (schema.ColumnDef, bool) {
+	for _, column := range source.Columns() {
+		if column.Name == name {
+			return schema.ColumnDef{Name: column.Name, Type: column.Type}, true
+		}
+	}
+	return schema.ColumnDef{}, false
+}
+
 func validateExpression(expression Expression, ctx expressionContext, path string) (expressionUsage, error) {
 	if expression == nil || (reflect.ValueOf(expression).Kind() == reflect.Pointer && reflect.ValueOf(expression).IsNil()) {
 		return expressionUsage{}, validationError(path, "must not be nil")
@@ -264,7 +273,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if !inSources {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.source.QualifiedName())
 		}
-		if _, exists := expression.source.column(expression.name); !exists {
+		if _, exists := relationColumn(expression.source, expression.name); !exists {
 			return expressionUsage{}, validationError(path, "references unknown column %q", expression.name)
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
@@ -275,7 +284,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if _, exists := ctx.sources.keys[expression.column.source.key()]; !exists {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.column.source.QualifiedName())
 		}
-		if _, exists := expression.column.source.column(expression.column.name); !exists {
+		if _, exists := relationColumn(expression.column.source, expression.column.name); !exists {
 			return expressionUsage{}, validationError(path, "references unknown column %q", expression.column.name)
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil

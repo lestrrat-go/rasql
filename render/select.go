@@ -112,6 +112,25 @@ func (r *renderer) writeSelect(s query.Select) error {
 	if err := r.validateSelectSources(s); err != nil {
 		return err
 	}
+	if ctes := s.CTEs(); len(ctes) > 0 {
+		r.builder.WriteString("WITH ")
+		for i, cte := range ctes {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			name, err := r.quoteIdentifier(cte.Name())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(name)
+			r.builder.WriteString(" AS (")
+			if err := r.writeQueryBody(cte.Query().Body()); err != nil {
+				return err
+			}
+			r.builder.WriteByte(')')
+		}
+		r.builder.WriteByte(' ')
+	}
 	r.builder.WriteString("SELECT ")
 	if s.Distinct() {
 		r.builder.WriteString("DISTINCT ")
@@ -208,13 +227,60 @@ func (r *renderer) writeSelect(s query.Select) error {
 	return nil
 }
 
+func (r *renderer) writeQueryBody(body query.QueryBody) error {
+	switch body := body.(type) {
+	case query.Select:
+		return r.writeSelect(body)
+	case *query.Select:
+		if body == nil {
+			return fmt.Errorf("unsupported query body %T", body)
+		}
+		return r.writeSelect(*body)
+	case query.Compound:
+		return r.writeCompound(body)
+	case *query.Compound:
+		if body == nil {
+			return fmt.Errorf("unsupported query body %T", body)
+		}
+		return r.writeCompound(*body)
+	default:
+		return fmt.Errorf("unsupported query body %T", body)
+	}
+}
+
+func (r *renderer) writeCompound(compound query.Compound) error {
+	r.builder.WriteByte('(')
+	if err := r.writeQueryBody(compound.Left().Body()); err != nil {
+		return err
+	}
+	r.builder.WriteString(") ")
+	switch compound.Operator() {
+	case query.Union:
+		r.builder.WriteString("UNION")
+	case query.UnionAll:
+		r.builder.WriteString("UNION ALL")
+	case query.Intersect:
+		r.builder.WriteString("INTERSECT")
+	case query.Except:
+		r.builder.WriteString("EXCEPT")
+	default:
+		return fmt.Errorf("unsupported compound operator %d", compound.Operator())
+	}
+	r.builder.WriteString(" (")
+	if err := r.writeQueryBody(compound.Right().Body()); err != nil {
+		return err
+	}
+	r.builder.WriteByte(')')
+	return nil
+}
+
 type visibleSource struct {
 	qualifier  string
 	schema     string
 	descriptor string
 }
 
-func visibleSourceFromTable(table query.TableRef) visibleSource {
+func visibleSourceFromTable(table query.RelationRef) visibleSource {
 	return visibleSource{
 		qualifier:  table.Qualifier(),
 		schema:     table.QualifierSchema(),
@@ -224,7 +290,7 @@ func visibleSourceFromTable(table query.TableRef) visibleSource {
 
 func (r *renderer) validateSelectSources(s query.Select) error {
 	sources := make([]visibleSource, 0, len(s.Correlations())+1+len(s.Joins()))
-	add := func(table query.TableRef) error {
+	add := func(table query.RelationRef) error {
 		candidate := visibleSourceFromTable(table)
 		for _, existing := range sources {
 			if !r.sourceIdentifiersConflict(existing, candidate) {
@@ -261,7 +327,46 @@ func (r *renderer) sourceIdentifiersConflict(left, right visibleSource) bool {
 	return true
 }
 
-func (r *renderer) writeTable(table query.TableRef) error {
+func (r *renderer) writeTable(table query.RelationRef) error {
+	if physical, ok := table.Table(); ok {
+		return r.writePhysicalTable(physical)
+	}
+	if cte := table.CTEName(); cte != "" {
+		name, err := r.quoteIdentifier(cte)
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(name)
+		if table.Alias() != cte {
+			r.builder.WriteString(" AS ")
+			alias, err := r.quoteIdentifier(table.Alias())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(alias)
+		}
+		return nil
+	}
+	if table.Alias() == "" {
+		return fmt.Errorf("relation %q must have an alias", table.QualifiedName())
+	}
+	if body := table.ResultBody(); body != nil {
+		r.builder.WriteByte('(')
+		if err := r.writeQueryBody(body); err != nil {
+			return err
+		}
+		r.builder.WriteString(") AS ")
+		alias, err := r.quoteIdentifier(table.Alias())
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(alias)
+		return nil
+	}
+	return fmt.Errorf("unsupported relation %q", table.QualifiedName())
+}
+
+func (r *renderer) writePhysicalTable(table query.TableRef) error {
 	name, err := r.quoteQualified(table.Schema(), table.Name())
 	if err != nil {
 		return err

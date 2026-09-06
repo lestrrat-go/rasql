@@ -85,6 +85,10 @@ Inside an application, `rasql.Exec` runs any `query.WriteStatement`, which is wh
 
 `NewInsertRows` names its columns once, takes every row's values as one `[][]any`, binds each plain Go value the way `Set` does, and renders the rows as a single `INSERT` with several parenthesized `VALUES` groups. Rendering the rows as one statement does not make the insert atomic on its own: transaction scope, and whether a statement that fails partway rolls back the rows it already wrote, stay the caller's and the database's responsibility. A non-transactional MySQL table, for instance, keeps the rows written before the failure. Run the insert through the `rasql.DB` returned by `DB.Begin` when every row has to land or none of them. Bound parameters are still capped by the database (PostgreSQL and MySQL at 65535, SQLite's `modernc.org/sqlite` at 32766), so a very large row count needs chunking at the caller.
 
+`query.NewInsertSelect` uses a reusable `query.ResultQuery` instead of value rows. Its target columns must match the
+source projection count, and its source arguments render before any `RETURNING` arguments. A result query can also be
+wrapped with `query.Derived` or placed in a CTE before it is used by another statement.
+
 <!-- INCLUDE(examples/rasql_partial_update_example_test.go#partial_update) -->
 ```go
 statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email(), "ada@example.com"))

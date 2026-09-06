@@ -260,7 +260,7 @@ func (t TableRef) Definition() schema.TableDef {
 // ColumnRef.Validate runs the same existence check on its own, for a caller
 // holding a name it only learns while the program runs.
 func (t TableRef) Column(name string) ColumnRef {
-	return ColumnRef{source: t, name: name}
+	return Relation(t).Column(name)
 }
 
 // Identifier returns an expression for t's own name, rendered as a bare
@@ -269,7 +269,7 @@ func (t TableRef) Column(name string) ColumnRef {
 // table's own name in expression position, such as query.Match or
 // query.BM25 for SQLite's FTS5 module.
 func (t TableRef) Identifier() TableIdentifier {
-	return TableIdentifier{table: t}
+	return TableIdentifier{table: Relation(t)}
 }
 
 // column looks a column up on t's descriptor. It exists so the package's other
@@ -311,14 +311,6 @@ type sourceReference struct {
 	// that a message about two tables sharing one alias can still tell them
 	// apart.
 	descriptor string
-}
-
-func (t TableRef) reference() sourceReference {
-	return sourceReference{
-		qualifier:  t.Qualifier(),
-		schema:     t.QualifierSchema(),
-		descriptor: t.def().QualifiedName(),
-	}
 }
 
 // conflicts reports whether exact source names could resolve one column

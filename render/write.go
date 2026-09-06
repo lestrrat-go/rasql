@@ -132,7 +132,15 @@ func (r *renderer) writeInsertBase(s query.Insert) error {
 		}
 		r.builder.WriteString(name)
 	}
-	r.builder.WriteString(") VALUES ")
+	r.builder.WriteByte(')')
+	if source, ok := s.SelectSource(); ok {
+		r.builder.WriteByte(' ')
+		if err := r.writeQueryBody(source.Body()); err != nil {
+			return err
+		}
+		return nil
+	}
+	r.builder.WriteString(" VALUES ")
 	for i, values := range s.Rows() {
 		if i > 0 {
 			r.builder.WriteString(", ")
@@ -400,11 +408,11 @@ func expressionReadsWriteTarget(expression query.Expression, target query.TableR
 // to the unaliased form, so an alias hides nothing from the server and must
 // hide nothing from this check either.
 func selectReadsWriteTarget(statement query.Select, target query.TableRef) bool {
-	if sameBaseTable(statement.From(), target) {
+	if source, ok := statement.From().Table(); ok && sameBaseTable(source, target) {
 		return true
 	}
 	for _, join := range statement.Joins() {
-		if sameBaseTable(join.Source(), target) || expressionReadsWriteTarget(join.On(), target) {
+		if source, ok := join.Source().Table(); ok && sameBaseTable(source, target) || expressionReadsWriteTarget(join.On(), target) {
 			return true
 		}
 	}

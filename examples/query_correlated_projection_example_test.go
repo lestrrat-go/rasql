@@ -21,7 +21,7 @@ func Example_query_correlated_projection() {
 	// The constructor declares users before it validates the projection, so the
 	// projection can read both the order and the enclosing user's columns.
 	ordersForUser, err := query.NewCorrelatedSelect(
-		orders, []query.TableRef{users},
+		orders, []query.RelationSource{users},
 		query.Project(query.Coalesce(orders.Column("amount"), users.Column("id"))).As("value"),
 	)
 	if err != nil {

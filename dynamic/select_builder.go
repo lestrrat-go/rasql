@@ -27,6 +27,12 @@ func SelectFrom(table query.TableRef) SelectBuilder {
 	return SelectBuilder{builder: render.SelectFrom(nil, table)}
 }
 
+// SelectFromRelation starts a fluent SELECT builder using a reusable relation
+// as its primary source. SelectFrom remains the table-only entry point.
+func SelectFromRelation(source query.RelationSource) SelectBuilder {
+	return SelectBuilder{builder: render.SelectFromRelation(nil, source)}
+}
+
 // Select adds columns from the primary table by name.
 func (b SelectBuilder) Select(columns ...string) SelectBuilder {
 	b.builder = b.builder.Select(columns...)
