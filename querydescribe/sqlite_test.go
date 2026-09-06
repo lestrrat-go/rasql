@@ -3,7 +3,6 @@ package querydescribe_test
 import (
 	"context"
 	"database/sql"
-	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/querydescribe"
@@ -77,11 +76,14 @@ func TestSQLiteCountParserAcceptsQuotedReferencesAndRejectsCompound(t *testing.T
 	accepted := []string{
 		`SELECT count("id") AS "total" FROM counted`,
 		"SELECT /* count(*) */ count(`id`) AS `total` FROM counted",
+		`SELECT COUNT("counted"."id") AS "total" FROM counted`,
+		`SELECT COUNT([counted].[id]) AS [total] FROM counted`,
 	}
 	for _, sqlText := range accepted {
 		got, describeErr := querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "count", SQL: sqlText})
 		require.NoError(t, describeErr)
 		require.Equal(t, "int64", got.Columns[0].Binding.Type)
+		require.False(t, got.Columns[0].Nullable)
 	}
 	_, err = querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "compound", SQL: "SELECT count(*) AS total FROM counted UNION SELECT count(*) AS total FROM counted"})
 	require.ErrorIs(t, err, querydescribe.ErrIncomplete)
@@ -96,17 +98,17 @@ func TestSQLiteExpectedMismatchFields(t *testing.T) {
 	base, err := querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "expected", SQL: "SELECT id AS id, name AS name FROM expected_one"})
 	require.NoError(t, err)
 	cases := []struct {
-		name, field string
-		mutate      func(*querydescribe.Description)
+		name, field, expected, observed string
+		mutate                          func(*querydescribe.Description)
 	}{
-		{"count", "column count", func(d *querydescribe.Description) { d.Columns = d.Columns[:1] }},
-		{"order", "name", func(d *querydescribe.Description) { d.Columns[0], d.Columns[1] = d.Columns[1], d.Columns[0] }},
-		{"name", "name", func(d *querydescribe.Description) { d.Columns[0].Name = "other" }},
-		{"type", "binding", func(d *querydescribe.Description) { d.Columns[0].Binding.Type = "string" }},
-		{"nullable type", "binding", func(d *querydescribe.Description) { d.Columns[0].Binding.NullableType = "string" }},
-		{"imports", "binding", func(d *querydescribe.Description) { d.Columns[0].Binding.Imports = []schema.GoImport{{Path: "fmt"}} }},
-		{"nullability", "nullability", func(d *querydescribe.Description) { d.Columns[0].Nullable = !d.Columns[0].Nullable }},
-		{"cardinality", "cardinality", func(d *querydescribe.Description) { d.Cardinality = querydescribe.ExactlyOne }},
+		{"count", "column count", "1", "2", func(d *querydescribe.Description) { d.Columns = d.Columns[:1] }},
+		{"order", "column 0 name", "name", "id", func(d *querydescribe.Description) { d.Columns[0], d.Columns[1] = d.Columns[1], d.Columns[0] }},
+		{"name", "column 0 name", "other", "id", func(d *querydescribe.Description) { d.Columns[0].Name = "other" }},
+		{"type", "binding.type", "string", "int64", func(d *querydescribe.Description) { d.Columns[0].Binding.Type = "string" }},
+		{"nullable type", "binding.nullable_type", "string", "", func(d *querydescribe.Description) { d.Columns[0].Binding.NullableType = "string" }},
+		{"imports", "binding.imports", "[{fmt }]", "[]", func(d *querydescribe.Description) { d.Columns[0].Binding.Imports = []schema.GoImport{{Path: "fmt"}} }},
+		{"nullability", "nullability", "true", "false", func(d *querydescribe.Description) { d.Columns[0].Nullable = !d.Columns[0].Nullable }},
+		{"cardinality", "cardinality", "2", "0", func(d *querydescribe.Description) { d.Cardinality = querydescribe.ExactlyOne }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,7 +120,11 @@ func TestSQLiteExpectedMismatchFields(t *testing.T) {
 			tc.mutate(&want)
 			_, mismatch := querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "expected", SQL: "SELECT id AS id, name AS name FROM expected_one", Expected: &want})
 			require.ErrorIs(t, mismatch, querydescribe.ErrExpected)
-			require.True(t, strings.Contains(mismatch.Error(), tc.field), mismatch.Error())
+			require.Contains(t, mismatch.Error(), tc.field)
+			require.Contains(t, mismatch.Error(), "expected")
+			require.Contains(t, mismatch.Error(), tc.expected)
+			require.Contains(t, mismatch.Error(), "observed")
+			require.Contains(t, mismatch.Error(), tc.observed)
 		})
 	}
 }

@@ -92,8 +92,14 @@ func compare(expected, observed Description, name string) error {
 		if e.Nullable != o.Nullable {
 			return fmt.Errorf("%w: %s column %d nullability: expected %t, observed %t", ErrExpected, name, i, e.Nullable, o.Nullable)
 		}
-		if e.Binding.Type != o.Binding.Type || e.Binding.NullableType != o.Binding.NullableType || fmt.Sprint(e.Binding.Imports) != fmt.Sprint(o.Binding.Imports) {
-			return fmt.Errorf("%w: %s column %d binding differs", ErrExpected, name, i)
+		if e.Binding.Type != o.Binding.Type {
+			return fmt.Errorf("%w: %s column %d binding.type: expected %q, observed %q", ErrExpected, name, i, e.Binding.Type, o.Binding.Type)
+		}
+		if e.Binding.NullableType != o.Binding.NullableType {
+			return fmt.Errorf("%w: %s column %d binding.nullable_type: expected %q, observed %q", ErrExpected, name, i, e.Binding.NullableType, o.Binding.NullableType)
+		}
+		if fmt.Sprint(e.Binding.Imports) != fmt.Sprint(o.Binding.Imports) {
+			return fmt.Errorf("%w: %s column %d binding.imports: expected %q, observed %q", ErrExpected, name, i, fmt.Sprint(e.Binding.Imports), fmt.Sprint(o.Binding.Imports))
 		}
 	}
 	return nil

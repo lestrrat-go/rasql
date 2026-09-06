@@ -28,12 +28,12 @@ func (d sqliteDescriber) Describe(ctx context.Context, request Request) (Descrip
 	args := make([]any, len(request.Parameters))
 	rows, err := d.queryer.QueryContext(ctx, "SELECT * FROM ("+request.SQL+") AS rasql_description LIMIT 0", args...)
 	if err != nil {
-		return Description{}, err
+		return Description{}, fmt.Errorf("sqlite describe %s query: %w", request.Name, err)
 	}
 	defer func() { _ = rows.Close() }()
 	types, err := rows.ColumnTypes()
 	if err != nil {
-		return Description{}, fmt.Errorf("%w: %s column types: %v", ErrIncomplete, request.Name, err)
+		return Description{}, fmt.Errorf("%w: %s column types: %w", ErrIncomplete, request.Name, err)
 	}
 	if len(types) == 0 {
 		return Description{}, fmt.Errorf("%w: %s returned no columns", ErrIncomplete, request.Name)
@@ -147,8 +147,6 @@ func stripSQLCommentsAndStrings(s string) string {
 	return b.String()
 }
 
-var countRE = regexp.MustCompile(`(?is)^\s*count\s*\(\s*(\*|(?:[a-z_][a-z0-9_]*|"(?:[^"]|"")*"|` + "`(?:[^`]|``)*`" + `|\[(?:[^\]]|\]\])*\])(?:\s*\.\s*(?:[a-z_][a-z0-9_]*|"(?:[^"]|"")*"|` + "`(?:[^`]|``)*`" + `|\[(?:[^\]]|\]\])*\]))?)\s*\)\s+as\s+([a-z_][a-z0-9_]*|"(?:[^"]|"")*"|` + "`(?:[^`]|``)*`" + `|\[(?:[^\]]|\]\])*\])\s*$`)
-
 func countProjection(sqlText, name string, index, total int) bool {
 	if !validCountQueryShape(sqlText) {
 		return false
@@ -162,8 +160,167 @@ func countProjection(sqlText, name string, index, total int) bool {
 	if len(parts) != total || index >= len(parts) {
 		return false
 	}
-	match := countRE.FindStringSubmatch(stripSQLCommentsAndStringsPreservingQuotes(parts[index]))
-	return len(match) == 3 && unquoteIdentifier(match[2]) == name
+	return parseCountProjection(parts[index]) == name
+}
+
+// parseCountProjection recognizes the deliberately narrow inference case. It returns an empty
+// string for every expression outside COUNT(reference) AS alias.
+func parseCountProjection(expression string) string {
+	c := tokenCursor{input: expression}
+	if !c.word("count") || !c.punct('(') {
+		return ""
+	}
+	first, ok := c.take()
+	if !ok {
+		return ""
+	}
+	if first.kind != '*' {
+		if first.kind != 'w' && first.kind != 'i' {
+			return ""
+		}
+		if next, hasDot := c.take(); hasDot {
+			if next.kind == '.' {
+				if !c.identifier() {
+					return ""
+				}
+			} else {
+				c.peek = &next
+			}
+		}
+	}
+	if !c.punct(')') || !c.word("as") {
+		return ""
+	}
+	alias, ok := c.identifierValue()
+	if !ok || !c.eof() {
+		return ""
+	}
+	return alias
+}
+
+type sqlToken struct {
+	kind  byte
+	value string
+}
+
+type tokenCursor struct {
+	input string
+	pos   int
+	bad   bool
+	peek  *sqlToken
+}
+
+func (c *tokenCursor) next() (sqlToken, bool) {
+	if c.peek != nil {
+		t := *c.peek
+		c.peek = nil
+		return t, true
+	}
+	for c.pos < len(c.input) {
+		if c.input[c.pos] == ' ' || c.input[c.pos] == '\t' || c.input[c.pos] == '\r' || c.input[c.pos] == '\n' {
+			c.pos++
+			continue
+		}
+		if c.pos+1 < len(c.input) && c.input[c.pos:c.pos+2] == "--" {
+			c.pos = skipLineComment(c.input, c.pos+2)
+			continue
+		}
+		if c.pos+1 < len(c.input) && c.input[c.pos:c.pos+2] == "/*" {
+			start := c.pos
+			c.pos = skipBlockComment(c.input, c.pos+2)
+			if c.pos == len(c.input) && !strings.HasSuffix(c.input[start:], "*/") {
+				c.bad = true
+				return sqlToken{}, false
+			}
+			continue
+		}
+		ch := c.input[c.pos]
+		if ch == '\'' {
+			c.bad = true
+			return sqlToken{}, false
+		}
+		if ch == '"' || ch == '`' || ch == '[' {
+			start := c.pos
+			end, closed := quotedEnd(c.input, c.pos)
+			if !closed {
+				c.bad = true
+				return sqlToken{}, false
+			}
+			c.pos = end
+			return sqlToken{kind: 'i', value: unquoteIdentifier(c.input[start:end])}, true
+		}
+		if ch == '*' || ch == '(' || ch == ')' || ch == '.' {
+			c.pos++
+			return sqlToken{kind: ch}, true
+		}
+		if isIdentifierStart(ch) {
+			start := c.pos
+			c.pos++
+			for c.pos < len(c.input) && isIdentifierPart(c.input[c.pos]) {
+				c.pos++
+			}
+			return sqlToken{kind: 'w', value: c.input[start:c.pos]}, true
+		}
+		c.bad = true
+		return sqlToken{}, false
+	}
+	return sqlToken{}, false
+}
+
+func quotedEnd(s string, at int) (int, bool) {
+	quote := s[at]
+	if quote == '[' {
+		quote = ']'
+	}
+	for i := at + 1; i < len(s); i++ {
+		if s[i] != quote {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == quote {
+			i++
+			continue
+		}
+		return i + 1, true
+	}
+	return len(s), false
+}
+
+func (c *tokenCursor) take() (sqlToken, bool) { return c.next() }
+
+func (c *tokenCursor) word(want string) bool {
+	t, ok := c.take()
+	return ok && t.kind == 'w' && strings.EqualFold(t.value, want)
+}
+
+func (c *tokenCursor) punct(want byte) bool {
+	t, ok := c.take()
+	return ok && t.kind == want
+}
+
+func (c *tokenCursor) identifier() bool {
+	t, ok := c.take()
+	return ok && (t.kind == 'w' || t.kind == 'i')
+}
+
+func (c *tokenCursor) identifierValue() (string, bool) {
+	t, ok := c.take()
+	if !ok || (t.kind != 'w' && t.kind != 'i') {
+		return "", false
+	}
+	return t.value, true
+}
+
+func (c *tokenCursor) eof() bool {
+	_, ok := c.take()
+	return !ok && !c.bad
+}
+
+func isIdentifierStart(ch byte) bool {
+	return ch == '_' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+}
+
+func isIdentifierPart(ch byte) bool {
+	return isIdentifierStart(ch) || ch >= '0' && ch <= '9'
 }
 
 func validCountQueryShape(s string) bool {
@@ -246,10 +403,12 @@ func validCountQueryShape(s string) bool {
 			case isWordAt(s, i, "union"), isWordAt(s, i, "intersect"), isWordAt(s, i, "except"), isWordAt(s, i, "values"):
 				return false
 			}
+		} else if isWordAt(s, i, "select") {
+			return false
 		}
 		i++
 	}
-	return quote == 0 && !line && !block && depth == 0 && selects == 1 && froms == 1
+	return quote == 0 && !block && depth == 0 && selects == 1 && froms == 1
 }
 
 func splitProjection(s string) []string {
@@ -393,30 +552,6 @@ func skipBlockComment(s string, at int) int {
 		return at + 2
 	}
 	return len(s)
-}
-
-func stripSQLCommentsAndStringsPreservingQuotes(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		if i+1 < len(s) && s[i:i+2] == "--" {
-			i = skipLineComment(s, i+2)
-			b.WriteByte(' ')
-			continue
-		}
-		if i+1 < len(s) && s[i:i+2] == "/*" {
-			i = skipBlockComment(s, i+2)
-			b.WriteByte(' ')
-			continue
-		}
-		if s[i] == '\'' {
-			i = skipQuoted(s, i)
-			b.WriteByte(' ')
-			continue
-		}
-		b.WriteByte(s[i])
-		i++
-	}
-	return b.String()
 }
 
 func unquoteIdentifier(s string) string {
