@@ -22,6 +22,10 @@ import (
 // column's Go type instead; tables is optional and needed only when at
 // least one bind names a column.
 func GoSource(def namedsql.QueryDef, packageName string, functionName string, tables ...schema.TableDef) ([]byte, error) {
+	return GoSourceInDir("", def, packageName, functionName, tables...)
+}
+
+func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functionName string, tables ...schema.TableDef) ([]byte, error) {
 	if def.Name == "" || strings.TrimSpace(def.SQL) == "" {
 		return nil, fmt.Errorf("namedsql: invalid compiled template")
 	}
@@ -54,7 +58,7 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 	parameterRefs := make([]schemagen.BindingRef, len(def.Binds))
 	parameterBound := make([]bool, len(def.Binds))
 	needsTime := false
-	bindingSet := schemagen.NewBindingSet(schemagen.BindingSetOptions{Reserved: bindingReservedNames(packageName, functionName, stmtName, def)})
+	bindingSet := schemagen.NewBindingSet(schemagen.BindingSetOptions{Dir: dir, Reserved: bindingReservedNames(packageName, functionName, stmtName, def)})
 	for index, bind := range def.Binds {
 		if bind.Column == "" {
 			parameterTypes[index] = defaultParameterType

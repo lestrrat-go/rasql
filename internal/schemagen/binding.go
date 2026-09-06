@@ -53,6 +53,7 @@ type BindingSet struct {
 	options   BindingSetOptions
 	refs      []BindingRef
 	imports   map[string]schema.GoImport
+	requested map[string]map[string]struct{}
 	aliases   map[string]string
 	finalized bool
 }
@@ -60,7 +61,7 @@ type BindingSet struct {
 var packageNames sync.Map
 
 func NewBindingSet(options BindingSetOptions) *BindingSet {
-	return &BindingSet{options: options, imports: make(map[string]schema.GoImport), aliases: make(map[string]string)}
+	return &BindingSet{options: options, imports: make(map[string]schema.GoImport), aliases: make(map[string]string), requested: make(map[string]map[string]struct{})}
 }
 
 func (s *BindingSet) Add(column schema.ColumnDef) (BindingRef, error) {
@@ -76,10 +77,13 @@ func (s *BindingSet) Add(column schema.ColumnDef) (BindingRef, error) {
 		return BindingRef{}, fmt.Errorf("generate: column %q GoBinding: %w", column.Name, err)
 	}
 	for _, imported := range resolved.Imports {
-		if old, ok := s.imports[imported.Path]; ok && old.Name != imported.Name {
-			return BindingRef{}, fmt.Errorf("generate: import path %q has conflicting aliases %q and %q", imported.Path, old.Name, imported.Name)
+		if s.requested[imported.Path] == nil {
+			s.requested[imported.Path] = make(map[string]struct{})
 		}
-		s.imports[imported.Path] = imported
+		s.requested[imported.Path][imported.Name] = struct{}{}
+		if _, ok := s.imports[imported.Path]; !ok {
+			s.imports[imported.Path] = imported
+		}
 	}
 	ref := BindingRef{key: key, nullable: nullable, resolved: resolved}
 	s.refs = append(s.refs, ref)
@@ -88,7 +92,7 @@ func (s *BindingSet) Add(column schema.ColumnDef) (BindingRef, error) {
 
 func (s *BindingSet) Finalize() error {
 	if s.finalized {
-		return nil
+		return fmt.Errorf("schemagen: binding set is already finalized")
 	}
 	paths := make([]string, 0, len(s.imports))
 	for path := range s.imports {
@@ -101,6 +105,14 @@ func (s *BindingSet) Finalize() error {
 	}
 	for _, path := range paths {
 		imported := s.imports[path]
+		if len(s.requested[path]) > 1 {
+			aliases := make([]string, 0, len(s.requested[path]))
+			for alias := range s.requested[path] {
+				aliases = append(aliases, alias)
+			}
+			sort.Strings(aliases)
+			return fmt.Errorf("generate: import path %q has conflicting aliases %q and %q", path, aliases[0], aliases[1])
+		}
 		name := imported.Name
 		if name == "" {
 			name = packageNameFor(imported.Path, s.options.Dir)
@@ -182,10 +194,14 @@ func resolveBindingPackages(column schema.ColumnDef, dir string) (ResolvedBindin
 }
 
 func resolveBindingPackagesWithResolver(column schema.ColumnDef, dir string, resolver packageNameResolver) (ResolvedBinding, error) {
-	resolved, err := ResolveGoBinding(column)
-	if err != nil {
-		return ResolvedBinding{}, err
+	if column.GoBinding == nil {
+		return ResolveGoBinding(column)
 	}
+	clone := column
+	binding := *column.GoBinding
+	binding.Imports = append([]schema.GoImport(nil), column.GoBinding.Imports...)
+	clone.GoBinding = &binding
+	resolved := ResolvedBinding{Type: binding.Type, NullableType: binding.NullableType, Imports: binding.Imports}
 	for i, imported := range resolved.Imports {
 		if imported.Name == "" {
 			if resolver == nil {
@@ -201,7 +217,8 @@ func resolveBindingPackagesWithResolver(column schema.ColumnDef, dir string, res
 			resolved.Imports[i].Name = name
 		}
 	}
-	return resolved, nil
+	clone.GoBinding.Imports = resolved.Imports
+	return ResolveGoBinding(clone)
 }
 
 func canonicalBindingTypes(binding ResolvedBinding) (string, string, error) {
@@ -218,7 +235,10 @@ func canonicalBindingTypes(binding ResolvedBinding) (string, string, error) {
 }
 
 func canonicalBindingType(expression string, imports []schema.GoImport) (string, error) {
-	return rewriteBindingExpressionWithNames(expression, imports, func(path string) string { return "__rasql_import_" + strconv.Itoa(indexOfImport(path, imports)) })
+	return rewriteBindingExpressionWithNames(expression, imports, func(path string) string {
+		name := strings.NewReplacer("/", "_", ".", "_", "-", "_", "@", "_").Replace(path)
+		return "__rasql_import_" + name
+	})
 }
 
 func indexOfImport(path string, imports []schema.GoImport) int {
@@ -267,99 +287,138 @@ func rewriteBindingExpressionWithNames(expression string, imports []schema.GoImp
 	return output.String(), nil
 }
 
-type bindingState struct {
-	imports []schema.GoImport
-	aliases map[string]string
+type generatedBindings struct {
+	set  *BindingSet
+	refs map[string]BindingRef
 }
 
-func newBindingState(tables []schema.TableDef) bindingState {
-	// Kept for the table generator compatibility path; new query generation uses BindingSet.
-	used := map[string]struct{}{"fmt": {}, "time": {}, "context": {}, "rasql": {}, "schema": {}, "sqltext": {}}
-	paths := make(map[string]schema.GoImport)
+func newGeneratedBindings(dir, packageName string, tables, allTables []schema.TableDef) (generatedBindings, error) {
+	reserved := []string{packageName, "fmt", "time", "context", "rasql", "schema", "sqltext"}
+	for _, table := range allTables {
+		reserved = append(reserved, rowTypeName(table), tableTypeName(table.Name), variableName(table.Name), descriptorName(table.Name), definitionName(table.Name), definitionAccessorName(table.Name))
+		for _, column := range table.Columns {
+			reserved = append(reserved, goName(column.Name))
+		}
+		for _, relationship := range table.Relationships {
+			reserved = append(reserved, goName(relationship.Name), tableTypeName(table.Name)+goName(relationship.Name)+"Relation")
+		}
+	}
+	set := NewBindingSet(BindingSetOptions{Dir: dir, Reserved: reserved})
+	refs := make(map[string]BindingRef)
+	pathAliases := make(map[string]string)
+	selected := make(map[string]struct{})
+	add := func(table schema.TableDef, column schema.ColumnDef) { selected[bindingKey(table, column)] = struct{}{} }
 	for _, table := range tables {
 		for _, column := range table.Columns {
-			if column.GoBinding == nil {
+			add(table, column)
+		}
+	}
+	for _, table := range tables {
+		for _, relationship := range table.Relationships {
+			parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
+			if !ok {
 				continue
 			}
-			for _, imported := range column.GoBinding.Imports {
-				paths[imported.Path] = imported
+			if column, ok := parent.Column(firstName(relationship.ReferencedColumns)); ok {
+				add(parent, column)
+			}
+			if column, ok := table.Column(firstName(relationship.Columns)); ok {
+				add(table, column)
+			}
+		}
+		for _, child := range allTables {
+			for _, relationship := range child.Relationships {
+				if relationship.ReferencedSchema != table.Schema || relationship.ReferencedTable != table.Name {
+					continue
+				}
+				if column, ok := table.Column(firstName(relationship.ReferencedColumns)); ok {
+					add(table, column)
+				}
+				if column, ok := child.Column(firstName(relationship.Columns)); ok {
+					add(child, column)
+				}
 			}
 		}
 	}
-	ordered := make([]schema.GoImport, 0, len(paths))
-	for _, imported := range paths {
-		ordered = append(ordered, imported)
-	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
-	aliased := ordered[:0]
-	for _, imported := range ordered {
-		name := imported.Name
-		if name == "" {
-			parts := strings.Split(imported.Path, "/")
-			name = parts[len(parts)-1]
-		}
-		base := name
-		for suffix := 2; ; suffix++ {
-			if _, exists := used[name]; !exists {
-				break
+	for _, table := range allTables {
+		for _, column := range table.Columns {
+			if _, ok := selected[bindingKey(table, column)]; !ok {
+				continue
 			}
-			name = base + strconv.Itoa(suffix)
+			column = normalizeBindingAlias(column, pathAliases)
+			ref, err := set.Add(column)
+			if err != nil {
+				return generatedBindings{}, err
+			}
+			refs[bindingKey(table, column)] = ref
 		}
-		used[name] = struct{}{}
-		imported.Name = name
-		aliased = append(aliased, imported)
 	}
-	ordered = aliased
-	aliases := make(map[string]string, len(ordered))
-	for _, imported := range ordered {
-		aliases[imported.Path] = imported.Name
+	if err := set.Finalize(); err != nil {
+		return generatedBindings{}, err
 	}
-	return bindingState{imports: ordered, aliases: aliases}
+	return generatedBindings{set: set, refs: refs}, nil
 }
 
-func (b bindingState) typeFor(column schema.ColumnDef, nullable bool) string {
-	resolved, _ := ResolveGoBinding(column)
-	typeName := resolved.For(nullable)
+func normalizeBindingAlias(column schema.ColumnDef, aliases map[string]string) schema.ColumnDef {
 	if column.GoBinding == nil {
-		return typeName
+		return column
 	}
-	for _, imported := range column.GoBinding.Imports {
-		original := imported.Name
-		if original == "" {
-			parts := strings.Split(imported.Path, "/")
-			original = parts[len(parts)-1]
+	clone := column
+	binding := *column.GoBinding
+	binding.Imports = append([]schema.GoImport(nil), column.GoBinding.Imports...)
+	chosen := make(map[string]string, len(binding.Imports))
+	canRewrite := true
+	for _, imported := range binding.Imports {
+		if imported.Name == "" {
+			canRewrite = false
+			continue
 		}
-		if alias := b.aliases[imported.Path]; alias != "" && alias != original {
-			typeName = rewriteTypeSelector(typeName, original, alias)
+		alias, ok := aliases[imported.Path]
+		if !ok {
+			alias = imported.Name
+			aliases[imported.Path] = alias
 		}
+		chosen[imported.Path] = alias
 	}
-	return typeName
-}
-
-func rewriteTypeSelector(expression, from, to string) string {
-	expr, err := parser.ParseExpr(expression)
-	if err != nil {
-		return expression
-	}
-	ast.Inspect(expr, func(node ast.Node) bool {
-		selector, ok := node.(*ast.SelectorExpr)
-		if ok {
-			if ident, ok := selector.X.(*ast.Ident); ok && ident.Name == from {
-				ident.Name = to
+	if canRewrite {
+		if rewritten, err := rewriteBindingExpressionWithNames(binding.Type, binding.Imports, func(path string) string { return chosen[path] }); err == nil {
+			binding.Type = rewritten
+		}
+		if binding.NullableType != "" {
+			if rewritten, err := rewriteBindingExpressionWithNames(binding.NullableType, binding.Imports, func(path string) string { return chosen[path] }); err == nil {
+				binding.NullableType = rewritten
 			}
 		}
-		return true
-	})
-	var output strings.Builder
-	if err := format.Node(&output, token.NewFileSet(), expr); err != nil {
-		return expression
 	}
-	return output.String()
+	for i, imported := range binding.Imports {
+		binding.Imports[i].Name = chosen[imported.Path]
+	}
+	clone.GoBinding = &binding
+	return clone
 }
 
-// RewriteBindingType rewrites an import selector in a parsed Go type expression.
-func RewriteBindingType(expression, from, to string) string {
-	return rewriteTypeSelector(expression, from, to)
+func firstName(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
+}
+
+func bindingKey(table schema.TableDef, column schema.ColumnDef) string {
+	return table.Schema + "\x00" + table.Name + "\x00" + column.Name
+}
+
+func (b generatedBindings) ref(table schema.TableDef, column schema.ColumnDef) (BindingRef, bool) {
+	ref, ok := b.refs[bindingKey(table, column)]
+	return ref, ok
+}
+
+func (b generatedBindings) typeFor(table schema.TableDef, column schema.ColumnDef, nullable bool) (string, error) {
+	ref, ok := b.ref(table, column)
+	if !ok {
+		return "", fmt.Errorf("generate: missing binding reference for %s.%s", table.Name, column.Name)
+	}
+	return b.set.Type(ref, nullable)
 }
 
 // ResolvedBinding is the validated Go type and imports for one column.

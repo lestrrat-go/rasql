@@ -294,7 +294,7 @@ func (s Store) Plan() (Plan, error) {
 
 	files := make([]File, 0, len(sorted)+2+len(s.Queries))
 	for _, table := range sorted {
-		source, err := schemagen.TableSurfaceSource(s.Package, table, sorted...)
+		source, err := schemagen.TableSurfaceSourceInDir(dir, s.Package, table, sorted...)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -482,7 +482,7 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 	if err != nil {
 		return File{}, err
 	}
-	source, err := querygen.GoSource(compiled.QueryDef(), s.Package, q.Function, tables...)
+	source, err := querygen.GoSourceInDir(dir, compiled.QueryDef(), s.Package, q.Function, tables...)
 	if err != nil {
 		return File{}, err
 	}

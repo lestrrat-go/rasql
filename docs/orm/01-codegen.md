@@ -131,14 +131,14 @@ implementing `sql.Scanner` for reads and `driver.Valuer` for writes.
 users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{
 	Name: "id", Type: schema.TextType{}, GoBinding: &schema.GoBinding{
 		Type: "UserID", NullableType: "NullableUserID",
-	},
+	}, Nullable: true,
 }}}
 source, err := generate.PackageSource("store", users)
 if err != nil {
 	fmt.Println(err)
 	return
 }
-fmt.Println(strings.Contains(string(source), "ID UserID"))
+fmt.Println(strings.Contains(string(source), "ID NullableUserID"))
 fmt.Println(strings.Contains(string(source), "NullableUserID"))
 ```
 source: [examples/rasqlgen_binding_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_binding_example_test.go)

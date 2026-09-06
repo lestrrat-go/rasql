@@ -71,7 +71,7 @@ func WritePackage(packageName, directory string, tables ...schema.TableDef) erro
 		return err
 	}
 	for _, table := range sorted {
-		source, err := schemagen.TableSurfaceSource(packageName, table, sorted...)
+		source, err := schemagen.TableSurfaceSourceInDir(directory, packageName, table, sorted...)
 		if err != nil {
 			return err
 		}

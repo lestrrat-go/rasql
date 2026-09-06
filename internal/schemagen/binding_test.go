@@ -77,6 +77,35 @@ func TestRelationshipRejectsIncompatibleResolvedBindings(t *testing.T) {
 	require.NotContains(t, stringMustSource(t, parent, child), "OrdersTableUserRelation")
 }
 
+func TestRelationshipUsesCanonicalImportedBindingAndOutputAlias(t *testing.T) {
+	parent := schema.TableDef{Name: "users", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{
+		Name: "id", Type: schema.TextType{}, GoBinding: &schema.GoBinding{Type: "u.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "u"}}},
+	}}}
+	child := schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "user_id", Type: schema.TextType{}, GoBinding: &schema.GoBinding{Type: "url.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "url"}}}},
+	}, ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}, Relationships: []schema.RelationshipDef{{Name: "user", Kind: schema.RelationshipBelongsTo, Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}}
+	source, err := schemagen.PackageSource("generated", parent, child)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, `url "net/url"`)
+	require.Contains(t, text, "map[url.URL]")
+	require.Contains(t, text, "type OrdersTableUserRelation")
+}
+
+func TestRelationshipRejectsSameSelectorFromDifferentImportPaths(t *testing.T) {
+	parent := schema.TableDef{Name: "users", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{
+		Name: "id", Type: schema.TextType{}, GoBinding: &schema.GoBinding{Type: "x.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "x"}}},
+	}}}
+	child := schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "user_id", Type: schema.TextType{}, GoBinding: &schema.GoBinding{Type: "x.URL", Imports: []schema.GoImport{{Path: "html/template", Name: "x"}}}},
+	}, ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}, Relationships: []schema.RelationshipDef{{Name: "user", Kind: schema.RelationshipBelongsTo, Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}}
+	source, err := schemagen.PackageSource("generated", parent, child)
+	require.NoError(t, err)
+	require.NotContains(t, string(source), "OrdersTableUserRelation")
+}
+
 func stringMustSource(t *testing.T, tables ...schema.TableDef) string {
 	t.Helper()
 	source, err := schemagen.PackageSource("generated", tables...)
