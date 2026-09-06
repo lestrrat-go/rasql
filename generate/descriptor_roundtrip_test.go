@@ -54,7 +54,9 @@ func TestSchemaDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 	require.NoError(t, mainFixture.Validate(), "main fixture must itself be a valid descriptor")
 	require.NoError(t, virtualFixture.Validate(), "virtual-table fixture must itself be a valid descriptor")
 
-	roundTripDescriptors(t, mainFixture, virtualFixture)
+	owners := schema.TableDef{Schema: "public", Name: "owners", Columns: []schema.ColumnDef{{Name: "id", Type: schema.UUIDType{}}}, PrimaryKey: []string{"id"}}
+	ownerLinks := schema.TableDef{Schema: "public", Name: "owner_links", Columns: []schema.ColumnDef{{Name: "uid", Type: schema.UUIDType{}}, {Name: "owner_id", Type: schema.UUIDType{}}}, PrimaryKey: []string{"uid", "owner_id"}}
+	roundTripDescriptors(t, mainFixture, virtualFixture, owners, ownerLinks)
 }
 
 // newTableDefFixture returns a schema.TableDef covering every TableDef field

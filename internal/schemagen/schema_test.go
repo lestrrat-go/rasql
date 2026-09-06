@@ -598,7 +598,10 @@ func TestSchemaGeneratedRelationshipShapesExecuteSQLite(t *testing.T) {
 	userRoles := schema.TableDef{Name: "user_roles", Columns: []schema.ColumnDef{{Name: "user_id", Type: schema.IntegerType{}}, {Name: "role_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"user_id", "role_id"}}
 	permissions := schema.TableDef{Name: "permissions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}}
 	rolePermissions := schema.TableDef{Name: "role_permissions", Columns: []schema.ColumnDef{{Name: "role_id", Type: schema.IntegerType{}}, {Name: "permission_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"role_id", "permission_id"}}
-	allTables := []schema.TableDef{users, orders, profiles, accounts, memberships, roles, userRoles, permissions, rolePermissions}
+	compositeSources := schema.TableDef{Name: "composite_sources", Columns: []schema.ColumnDef{{Name: "left", Type: schema.TextType{}}, {Name: "right", Type: schema.TextType{}}}, PrimaryKey: []string{"left", "right"}, Relationships: []schema.RelationshipDef{{Name: "Targets", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"left", "right"}, ReferencedTable: "composite_targets", ReferencedColumns: []string{"left", "right"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "composite_links"}, SourceColumns: []string{"source_left", "source_right"}, TargetColumns: []string{"target_left", "target_right"}}}}}
+	compositeTargets := schema.TableDef{Name: "composite_targets", Columns: []schema.ColumnDef{{Name: "left", Type: schema.TextType{}}, {Name: "right", Type: schema.TextType{}}, {Name: "value", Type: schema.TextType{}}}, PrimaryKey: []string{"left", "right"}}
+	compositeLinks := schema.TableDef{Name: "composite_links", Columns: []schema.ColumnDef{{Name: "source_left", Type: schema.TextType{}}, {Name: "source_right", Type: schema.TextType{}}, {Name: "target_left", Type: schema.TextType{}}, {Name: "target_right", Type: schema.TextType{}}}, PrimaryKey: []string{"source_left", "source_right", "target_left", "target_right"}}
+	allTables := []schema.TableDef{users, orders, profiles, accounts, memberships, roles, userRoles, permissions, rolePermissions, compositeSources, compositeTargets, compositeLinks}
 	descriptor, err := schemagen.DescriptorSource("generated", allTables...)
 	require.NoError(t, err)
 	files := make(map[string][]byte)
@@ -697,6 +700,7 @@ const generatedRelationshipShapesSQLiteTest = `package generated_test
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"example.com/generated"
@@ -709,7 +713,7 @@ import (
 func TestRelationshipShapesSQLite(t *testing.T) {
 	sqlDB, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	db, err := rasql.New(sqlDB, dialect.SQLite())
 	require.NoError(t, err)
 	for _, statement := range []string{
@@ -722,6 +726,9 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 		"CREATE TABLE user_roles (user_id INTEGER NOT NULL, role_id INTEGER NOT NULL)",
 		"CREATE TABLE permissions (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
 		"CREATE TABLE role_permissions (role_id INTEGER NOT NULL, permission_id INTEGER NOT NULL)",
+		"CREATE TABLE composite_sources (left TEXT NOT NULL, right TEXT NOT NULL, PRIMARY KEY (left, right))",
+		"CREATE TABLE composite_targets (left TEXT NOT NULL, right TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (left, right))",
+		"CREATE TABLE composite_links (source_left TEXT NOT NULL, source_right TEXT NOT NULL, target_left TEXT NOT NULL, target_right TEXT NOT NULL)",
 		"INSERT INTO users VALUES (1), (2)",
 		"INSERT INTO orders VALUES (10, NULL), (11, 1)",
 		"INSERT INTO profiles VALUES (30, 1), (31, 1)",
@@ -731,6 +738,9 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 		"INSERT INTO user_roles VALUES (1, 5), (1, 6)",
 		"INSERT INTO permissions VALUES (50, 'read'), (51, 'write')",
 		"INSERT INTO role_permissions VALUES (5, 50), (6, 51)",
+		"INSERT INTO composite_sources VALUES ('source', 'key')",
+		"INSERT INTO composite_targets VALUES ('a|b', 'c', 'first'), ('a', 'b|c', 'second')",
+		"INSERT INTO composite_links VALUES ('source', 'key', 'a|b', 'c'), ('source', 'key', 'a', 'b|c')",
 	} {
 		_, err = sqlDB.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
@@ -757,7 +767,7 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 	_, err = generated.Users().Profiles().Load(t.Context(), db, []generated.UsersRow{{ID: 1}})
 	require.ErrorContains(t, err, "duplicate child")
 	called := false
-	roles, err := generated.Users().Roles().LoadThen(t.Context(), db, []generated.UsersRow{{ID: 1}, {ID: 2}}, rasql.RelationshipLoadOptions{}, func(rows []generated.RolesRow) error {
+	roles, err := generated.Users().Roles().LoadThen(t.Context(), db, []generated.UsersRow{{ID: 1}, {ID: 1}, {ID: 2}}, rasql.RelationshipLoadOptions{}, func(rows []generated.RolesRow) error {
 		called = true
 		require.Len(t, rows, 2)
 		permissions, err := generated.Roles().Permissions().Load(t.Context(), db, rows)
@@ -769,6 +779,30 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 	require.True(t, called)
 	require.Len(t, roles[1], 2)
 	require.Empty(t, roles[2])
+	compositeSources := []generated.CompositeSourcesRow{{Left: "source", Right: "key"}, {Left: "source", Right: "key"}}
+	called = false
+	_, err = generated.CompositeSources().Targets().LoadThen(t.Context(), db, compositeSources, rasql.RelationshipLoadOptions{}, func(rows []generated.CompositeTargetsRow) error {
+		called = true
+		require.Len(t, rows, 2)
+		require.Equal(t, "a|b", rows[0].Left)
+		require.Equal(t, "c", rows[0].Right)
+		require.Equal(t, "a", rows[1].Left)
+		require.Equal(t, "b|c", rows[1].Right)
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, called)
+	called = false
+	_, err = generated.Users().Roles().LoadThen(t.Context(), db, []generated.UsersRow{{ID: 1}}, rasql.RelationshipLoadOptions{}, func([]generated.RolesRow) error { called = true; return fmt.Errorf("callback failure") })
+	require.EqualError(t, err, "callback failure")
+	require.True(t, called)
+	_, err = generated.Users().Roles().LoadThen(t.Context(), db, []generated.UsersRow{{ID: 1}}, rasql.RelationshipLoadOptions{}, nil)
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	called = false
+	_, err = generated.Users().Roles().LoadThen(t.Context(), db, []generated.UsersRow{{ID: 1}}, rasql.RelationshipLoadOptions{}, func([]generated.RolesRow) error { called = true; return nil })
+	require.Error(t, err)
+	require.False(t, called)
 }
 
 func ptr(value int64) *int64 { return &value }
@@ -1464,7 +1498,7 @@ func TestSchemaRejectsReservedRelationshipMethod(t *testing.T) {
 	require.ErrorContains(t, err, `relationship "as" on table "orders" uses reserved generated method "As"`)
 }
 
-func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
+func TestSchemaRejectsReservedMethodNameForNullableRelationship(t *testing.T) {
 	users := schema.TableDef{
 		Name:       "users",
 		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
@@ -1484,10 +1518,8 @@ func TestSchemaAllowsReservedMethodNameForNullableRelationship(t *testing.T) {
 		}},
 	}
 
-	source, err := schemagen.PackageSource("generated", users, orders)
-	require.NoError(t, err)
-	require.Contains(t, string(source), "AsID *int64")
-	require.NotContains(t, string(source), "func (t OrdersTable) As() OrdersTableAsRelation")
+	err := schemagen.Validate("generated", users, orders)
+	require.ErrorContains(t, err, `relationship "As" on table "orders" uses reserved generated method "As"`)
 }
 
 func TestSchemaAppliesInitialismsToTableNames(t *testing.T) {
@@ -1553,6 +1585,7 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 			{Name: "bio", Type: schema.TextType{}, Nullable: true},
 			{Name: "price", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
 			{Name: "owner_id", Type: schema.IntegerType{}, Nullable: true},
+			{Name: "temporal_id", Type: schema.IntegerType{}, Nullable: true},
 			{Name: "combo_a", Type: schema.IntegerType{}, Nullable: true},
 			{Name: "combo_b", Type: schema.IntegerType{}, Nullable: true},
 			{Name: "status", Type: schema.TextType{}},
@@ -1634,12 +1667,12 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 			},
 			{
 				Name:              "fk_owner_temporal",
-				Columns:           []string{"owner_id"},
-				ReferencedTable:   "users",
+				Columns:           []string{"temporal_id"},
+				ReferencedTable:   "users_temporal",
 				ReferencedColumns: []string{"id"},
 				OnDelete:          schema.SetNull,
 				Temporal:          true,
-				DeleteSetColumns:  []string{"owner_id"},
+				DeleteSetColumns:  []string{"temporal_id"},
 			},
 		},
 		Relationships: []schema.RelationshipDef{
@@ -1647,6 +1680,7 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 				Name:              "Owner",
 				Kind:              schema.RelationshipBelongsTo,
 				Columns:           []string{"owner_id"},
+				ReferencedSchema:  "",
 				ReferencedTable:   "users",
 				ReferencedColumns: []string{"id"},
 			},
@@ -1662,7 +1696,10 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	}
 	require.NoError(t, widgets.Validate())
 
-	source, err := schemagen.DescriptorSource("generated", widgets)
+	users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	usersTemporal := schema.TableDef{Name: "users_temporal", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	combos := schema.TableDef{Schema: "app", Name: "combos", Columns: []schema.ColumnDef{{Name: "a", Type: schema.IntegerType{}}, {Name: "b", Type: schema.IntegerType{}}}, PrimaryKey: []string{"a", "b"}}
+	source, err := schemagen.DescriptorSource("generated", widgets, users, usersTemporal, combos)
 	require.NoError(t, err)
 	text := string(source)
 	require.Contains(t, text, `Schema: "app"`)
@@ -1695,9 +1732,9 @@ func TestDescriptorSourceStatesEveryOptionKind(t *testing.T) {
 	require.Contains(t, text, `{Expression: "bio", NullsOrder: schema.NullsFirst}`)
 	require.Contains(t, text, `{Name: "fk_owner", Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, Match: schema.MatchFull, OnDelete: schema.Cascade, OnUpdate: schema.Restrict, Deferrable: schema.DeferrableInitiallyDeferred, NotValid: true, NotEnforced: true}`)
 	require.Contains(t, text, `{Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
-	require.Contains(t, text, `{Name: "fk_owner_temporal", Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, OnDelete: schema.SetNull, Temporal: true, DeleteSetColumns: []string{"owner_id"}}`)
-	require.Contains(t, text, `{Name: "Owner", Kind: schema.RelationshipBelongsTo, Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)
-	require.Contains(t, text, `{Name: "Combo", Kind: schema.RelationshipBelongsTo, Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
+	require.Contains(t, text, `{Name: "fk_owner_temporal", Columns: []string{"temporal_id"}, ReferencedTable: "users_temporal", ReferencedColumns: []string{"id"}, OnDelete: schema.SetNull, Temporal: true, DeleteSetColumns: []string{"temporal_id"}}`)
+	require.Contains(t, text, `{Name: "Owner", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("optional"), Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)
+	require.Contains(t, text, `{Name: "Combo", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("optional"), Columns: []string{"combo_a", "combo_b"}, ReferencedSchema: "app", ReferencedTable: "combos", ReferencedColumns: []string{"a", "b"}}`)
 }
 
 // TestDescriptorSourceStatesVirtualTableFacts proves that VirtualTableModule,
