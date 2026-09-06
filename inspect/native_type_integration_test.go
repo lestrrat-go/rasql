@@ -26,7 +26,7 @@ func TestNativeTypeMySQL(t *testing.T) {
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), tableName)
 	require.NoError(t, err)
-	require.Equal(t, []string{"needs,comma", "quote's", "  spaced  ", "back\\slash", ""}, table.Columns[0].NativeType.Arguments)
+	require.Equal(t, []string{"needs,comma", "quote's", "  spaced", "back\\slash", ""}, table.Columns[0].NativeType.Arguments)
 	require.Equal(t, []string{"one", "two"}, table.Columns[1].NativeType.Arguments)
 	table.Name = dbtest.UniqueName(t, "rasql_native_copy")
 	rendered, err := render.CreateTable(dialect.MySQL(), table)

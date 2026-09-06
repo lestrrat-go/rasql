@@ -3461,6 +3461,8 @@ func normalizeType(dialectName string, databaseType string, characterMaximumLeng
 			return schema.UUIDType{}, nil
 		case "USER-DEFINED":
 			return schema.OpaqueType{}, nil
+		case "ARRAY":
+			return schema.OpaqueType{}, nil
 		}
 	case "mysql":
 		return normalizeMySQLType(typeName, databaseType)
