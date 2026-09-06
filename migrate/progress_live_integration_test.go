@@ -79,3 +79,29 @@ func TestMySQLProgressSurvivesRestartAndFinalizesWithoutReplay(t *testing.T) {
 	require.NoError(t, restarted.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM "+history).Scan(&historyCount))
 	require.Equal(t, 1, historyCount)
 }
+
+func TestMySQLProgressRevertNotExecutedRecovery(t *testing.T) {
+	database := dbtest.MySQLDB(t)
+	history := dbtest.UniqueName(t, "p7_revert_history")
+	table := dbtest.UniqueName(t, "p7_revert_effect")
+	migration := migrate.Migration{ID: "001_revert_progress", Statements: []migrate.Statement{{Source: "001.sql", SQL: sqltext.Text("CREATE TABLE " + table + " (id INT PRIMARY KEY)")}}, Down: []migrate.Statement{{Source: "001_drop.sql", SQL: sqltext.Text("DROP TABLE " + table)}, {Source: "002_fail.sql", SQL: sqltext.Text("DROP TABLE " + table + "_absent")}}}
+	runner, err := migrate.NewWithHistoryTable(database, dialect.MySQL(), history)
+	require.NoError(t, err)
+	require.NoError(t, func() error { _, err := runner.Apply(t.Context(), migrate.AllPending(), migration); return err }())
+	_, err = runner.Revert(t.Context(), migrate.Steps(1), migration)
+	require.Error(t, err)
+	var sourceIndex, nextIndex int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT source_index, next_index FROM "+history+"_progress").Scan(&sourceIndex, &nextIndex))
+	require.Equal(t, 1, sourceIndex)
+	require.Equal(t, 1, nextIndex)
+	check := &liveProgressCheck{query: "SELECT FALSE"}
+	require.NoError(t, runner.Reconcile(t.Context(), check, migration))
+	require.Equal(t, migrate.ReconcileNotExecuted, check.decision)
+	migration.Down[1].SQL = sqltext.Text("DROP TABLE IF EXISTS " + table + "_absent")
+	reverted, err := runner.Revert(t.Context(), migrate.Steps(1), migration)
+	require.NoError(t, err)
+	require.Len(t, reverted, 1)
+	var progressCount int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM "+history+"_progress").Scan(&progressCount))
+	require.Zero(t, progressCount)
+}
