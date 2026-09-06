@@ -62,13 +62,13 @@ func TestRunDiffPreviewsMySQLMigration(t *testing.T) {
 	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id bigint PRIMARY KEY, email text);\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"diff", "-dialect", "mysql", "-from", baseline, "-to", target}))
-	require.Equal(t, "-- operation add_column_mysql_members_email (add_column): add column members.email\n-- add_column_members_email.sql: add column members.email\nALTER TABLE `members` ADD COLUMN `email` text;\n-- reverse add_column_members_email.down.sql\nALTER TABLE `members` DROP COLUMN `email`;\n", outputBuffer.String())
+	require.Equal(t, "-- operation add_column_mysql_members_email (add_column): add column members.email\n-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE `members` ADD COLUMN `email` text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE `members` DROP COLUMN `email`;\n", outputBuffer.String())
 
 	migrationDirectory := filepath.Join(t.TempDir(), "002_add_member_email")
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"diff", "-dialect", "mysql", "-from", baseline, "-to", target, "-output", migrationDirectory}))
 	require.Equal(t, "created "+migrationDirectory+"\n", outputBuffer.String())
-	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "add_column_members_email.up.sql"))
+	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE `members` ADD COLUMN `email` text;\n", string(contents))
 }
@@ -449,6 +449,29 @@ func TestRunDiffLiveInspectsWithinOneTransaction(t *testing.T) {
 	require.Equal(t, 0, state.queriesOutsideTransaction)
 	require.True(t, state.transactionStarted)
 	require.True(t, state.transactionReadOnly)
+}
+
+func TestRunDiffLiveRollsBackAfterResolutionReadFailure(t *testing.T) {
+	previousOpenDatabase := openDatabase
+	state := &snapshotInspectionState{}
+	snapshotInspectionStateForTest = state
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+		snapshotInspectionStateForTest = nil
+	})
+	openDatabase = func(string, string) (*sql.DB, error) {
+		return sql.Open(snapshotInspectionDriverName, "")
+	}
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT NOT NULL);\n")
+	err := run([]string{
+		"diff-live", "-dialect", "sqlite", "-dsn", "secret.sqlite",
+		"-table", "members", "-to", target,
+		"-backfill", "backfill_sqlite_members_email=" + filepath.Join(t.TempDir(), "missing.sql"),
+	})
+	require.ErrorContains(t, err, "read -backfill")
+	require.EqualValues(t, 1, state.rollback.Load())
 }
 
 func TestLiveInspectionTxOptionsUseRepeatableReadWhereSupported(t *testing.T) {
@@ -975,6 +998,7 @@ type snapshotInspectionState struct {
 	queriesOutsideTransaction int
 	transactionStarted        bool
 	transactionReadOnly       bool
+	rollback                  atomic.Int32
 }
 
 type snapshotInspectionDriver struct{}
@@ -1036,6 +1060,7 @@ func (tx snapshotInspectionTx) Commit() error {
 
 func (tx snapshotInspectionTx) Rollback() error {
 	tx.conn.inTx = false
+	tx.conn.state.rollback.Add(1)
 	return nil
 }
 

@@ -63,12 +63,22 @@ PostgreSQL and MySQL caller-supplied native backfills are irreversible. Review a
 <!-- INCLUDE(examples/schema_evolution_example_test.go#schemaEvolution) -->
 ```go
 ctx := context.Background()
-database, err := sql.Open("sqlite", ":memory:")
+if err := os.MkdirAll(".tmp", 0o700); err != nil {
+	fmt.Println(err)
+	return
+}
+root, err := os.MkdirTemp(".tmp", "schema-evolution-*")
 if err != nil {
 	fmt.Println(err)
 	return
 }
-defer database.Close()
+defer func() { _ = os.RemoveAll(root) }()
+database, err := sql.Open("sqlite", filepath.Join(root, "schema.sqlite"))
+if err != nil {
+	fmt.Println(err)
+	return
+}
+defer func() { _ = database.Close() }()
 if _, err := database.ExecContext(ctx, "CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"); err != nil {
 	fmt.Println(err)
 	return
@@ -82,7 +92,7 @@ if err != nil {
 	fmt.Println(err)
 	return
 }
-defer connection.Close()
+defer func() { _ = connection.Close() }()
 analyzer := sqlite.New()
 inspector, err := inspect.New(connection, dialect.SQLite())
 if err != nil {
@@ -114,7 +124,7 @@ if err != nil {
 	fmt.Println(err)
 	return
 }
-target, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text("CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL DEFAULT '')")}})
+target, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text("CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL)")}})
 if err != nil {
 	fmt.Println(err)
 	return
@@ -131,26 +141,29 @@ for _, decision := range plan.Decisions {
 	fmt.Printf("decision %s (%s): %s\n", decision.ID, decision.Kind, decision.Reason)
 }
 fmt.Println("executable:", plan.Executable())
+if len(plan.Decisions) != 1 {
+	fmt.Printf("expected one decision, got %d\n", len(plan.Decisions))
+	return
+}
 resolved, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, BackfillSQL: "UPDATE members SET email = name || '@example.test' WHERE email IS NULL;"})
 if err != nil {
 	fmt.Println(err)
 	return
 }
-root := filepath.Join(".tmp", "schema-evolution-example")
-if err := diff.WriteMigration(filepath.Join(root, "001_schema_evolution"), resolved); err != nil {
+if err := diff.WriteMigration(filepath.Join(root, "migrations", "001_schema_evolution"), resolved); err != nil {
 	fmt.Println(err)
 	return
 }
-migrations, err := migrationdir.Load(root)
+migrations, err := migrationdir.Load(filepath.Join(root, "migrations"))
 if err != nil {
 	fmt.Println(err)
 	return
 }
 for _, statement := range migrations[0].Statements {
-	fmt.Println("up:", statement.Source)
+	fmt.Printf("up: %s %q\n", statement.Source, statement.SQL)
 }
 for _, statement := range migrations[0].Down {
-	fmt.Println("down:", statement.Source)
+	fmt.Printf("down: %s %q\n", statement.Source, statement.SQL)
 }
 ```
 source: [examples/schema_evolution_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_evolution_example_test.go)

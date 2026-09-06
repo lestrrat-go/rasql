@@ -307,10 +307,6 @@ func nativeDollarEnd(source string, start int) (int, bool) {
 	return endTag + close + len(tag), true
 }
 
-func nativeQuotedEnd(source string, start int) (int, bool) {
-	return nativeQuotedEndDialect("", source, start)
-}
-
 func nativeQuotedEndDialect(dialect, source string, start int) (int, bool) {
 	close := source[start]
 	if close == '[' {

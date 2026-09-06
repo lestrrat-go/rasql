@@ -29,11 +29,12 @@ import (
 )
 
 var (
-	openDatabase                    = sql.Open
-	commandOutput         io.Writer = os.Stdout
-	commandDiagnostics    io.Writer = os.Stdout
-	liveInspectionTimeout           = 30 * time.Second
-	commandMu             sync.Mutex
+	openDatabase                       = sql.Open
+	commandOutput            io.Writer = os.Stdout
+	commandDiagnostics       io.Writer = os.Stdout
+	liveInspectionTimeout              = 30 * time.Second
+	inspectSQLiteLiveCatalog           = sqlite.InspectLiveCatalog
+	commandMu                sync.Mutex
 )
 
 // Run executes the migration subcommands under the unified rasql command.
@@ -161,19 +162,19 @@ func runDiff(args []string) error {
 	if err != nil {
 		return err
 	}
-	if plan.Empty() {
-		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
-		return nil
-	}
 	if len(resolutions.values) > 0 {
 		parsed, parseErr := parseResolutions(resolutions.values)
 		if parseErr != nil {
 			return parseErr
 		}
-		plan, err = plan.Resolve(parsed...)
+		plan, err = resolveCLIPlan(plan, parsed)
 		if err != nil {
 			return err
 		}
+	}
+	if plan.Empty() {
+		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
+		return nil
 	}
 	if *outputDirectory == "" {
 		writeDiffPlan(commandOutput, plan)
@@ -254,15 +255,9 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return fmt.Errorf("parse inspected table %q: %w", *tableName, err)
 	}
-	if sqliteAnalyzer, ok := analyzer.(sqlite.Analyzer); ok {
-		facts, inspectErr := sqlite.InspectLiveCatalog(ctx, transaction, *tableName)
-		if inspectErr != nil {
-			return fmt.Errorf("inspect SQLite catalog: %w", inspectErr)
-		}
-		baseline, inspectErr = sqliteAnalyzer.AttachLiveCatalog(baseline, facts)
-		if inspectErr != nil {
-			return inspectErr
-		}
+	baseline, err = attachSQLiteLiveCatalog(ctx, transaction, analyzer, baseline, *tableName)
+	if err != nil {
+		return err
 	}
 	targetSources, err := diff.LoadSources(*targetDirectory)
 	if err != nil {
@@ -284,7 +279,7 @@ func runDiffLive(args []string) error {
 		if parseErr != nil {
 			return parseErr
 		}
-		plan, err = plan.Resolve(parsed...)
+		plan, err = resolveCLIPlan(plan, parsed)
 		if err != nil {
 			return err
 		}
@@ -302,6 +297,30 @@ func runDiffLive(args []string) error {
 	}
 	_, _ = fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
 	return nil
+}
+
+func resolveCLIPlan(plan diff.Plan, resolutions []diff.Resolution) (diff.Plan, error) {
+	resolved, err := plan.Resolve(resolutions...)
+	if err != nil && strings.HasPrefix(err.Error(), "migrate diff: backfill resolution ") {
+		return diff.Plan{}, fmt.Errorf("resolve -backfill: %w", err)
+	}
+	return resolved, err
+}
+
+type sqliteLiveCatalogQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func attachSQLiteLiveCatalog(ctx context.Context, queryer sqliteLiveCatalogQueryer, analyzer diff.Analyzer, baseline diff.Snapshot, tableName string) (diff.Snapshot, error) {
+	sqliteAnalyzer, ok := analyzer.(sqlite.Analyzer)
+	if !ok {
+		return baseline, nil
+	}
+	facts, err := inspectSQLiteLiveCatalog(ctx, queryer, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("inspect SQLite catalog: %w", err)
+	}
+	return sqliteAnalyzer.AttachLiveCatalog(baseline, facts)
 }
 
 func liveSchemaAnalyzer(ctx context.Context, transaction *sql.Tx, dialectName string) (diff.Analyzer, error) {

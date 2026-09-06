@@ -241,16 +241,19 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			}
 		}
 		operations := make([]diff.ProposedOperation, 0, len(run))
-		statements := make([]diff.PlannedStatement, 0)
+		var statements []diff.PlannedStatement
 		for index := range run {
 			operation, err := lowerPostgreSQLEntry(run[index], resolutions)
 			if err != nil {
 				return diff.LoweringResult{}, err
 			}
-			numberSources(index+1, &operation)
 			operations = append(operations, operation)
-			statements = append(statements, operation.Forward...)
 		}
+		actions := make([]loweringAction, len(run))
+		for index := range run {
+			actions[index] = run[index].action
+		}
+		statements = scheduleLoweredOperations(operations, actions)
 		return diff.LoweringResult{Operations: operations, Statements: statements, IrreversibleReason: irreversible}, nil
 	})
 }
@@ -265,9 +268,18 @@ func validateLoweringSources(entries []loweringEntry) error {
 		if entry.action == lowerCreateIndex {
 			prefix = "create_index_"
 		}
+		if entry.action == lowerAlterNullability {
+			prefix = "alter_nullability_"
+		}
+		if entry.action == lowerReplaceConstraint {
+			prefix = "replace_constraint_"
+		}
 		source := prefix + filenamePart(entry.operation.Table)
 		if entry.action == lowerAddColumn || entry.action == lowerBackfill {
 			source += "_" + filenamePart(entry.operation.Column)
+		}
+		if entry.action == lowerReplaceConstraint {
+			source += "_" + filenamePart(entry.operation.Constraint)
 		}
 		source += ".sql"
 		if previous, ok := seen[source]; ok {
@@ -287,6 +299,7 @@ func decisionByID(decisions []diff.RequiredDecision, id string) (diff.RequiredDe
 	return diff.RequiredDecision{}, false
 }
 
+//nolint:unused // Kept as a package-local compatibility path.
 func renameIdentifiers(table pgquery.CreateTableStatement, decision diff.RequiredDecision) (string, string, error) {
 	for _, column := range table.Columns {
 		if column.Name.Name == decision.Target {
@@ -296,6 +309,7 @@ func renameIdentifiers(table pgquery.CreateTableStatement, decision diff.Require
 	return "", "", fmt.Errorf("postgresql schema diff: rename target %s.%s is missing", decision.Table, decision.Target)
 }
 
+//nolint:unused // Kept as a package-local compatibility path.
 func tableColumn(table tableDefinition, name string) (pgquery.ColumnDefinition, error) {
 	for _, column := range table.statement.Columns {
 		if column.Name.Name == name {
@@ -332,6 +346,83 @@ func sameTableDefinition(left, right tableDefinition) bool {
 	return true
 }
 
+func identityFor(table tableDefinition, column pgquery.Identifier) (identityMode, bool) {
+	mode, ok := table.identities[identifierKey(column)]
+	return mode, ok
+}
+
+func sameColumnDefinition(leftTable tableDefinition, left pgquery.ColumnDefinition, rightTable tableDefinition, right pgquery.ColumnDefinition) bool {
+	return ast.Equal(normalizedColumn(left, false), normalizedColumn(right, false)) && sameIdentity(leftTable, left.Name, rightTable, right.Name)
+}
+
+func sameIdentity(leftTable tableDefinition, left pgquery.Identifier, rightTable tableDefinition, right pgquery.Identifier) bool {
+	leftMode, leftOK := identityFor(leftTable, left)
+	rightMode, rightOK := identityFor(rightTable, right)
+	return leftOK == rightOK && (!leftOK || leftMode == rightMode)
+}
+
+func sameColumnExceptNullability(leftTable tableDefinition, left pgquery.ColumnDefinition, rightTable tableDefinition, right pgquery.ColumnDefinition) bool {
+	left = withoutNullability(left)
+	right = withoutNullability(right)
+	return ast.Equal(normalizedColumn(left, false), normalizedColumn(right, false)) && sameIdentity(leftTable, left.Name, rightTable, right.Name)
+}
+
+func withoutNullability(column pgquery.ColumnDefinition) pgquery.ColumnDefinition {
+	cloned := column
+	cloned.Constraints = make([]pgquery.ColumnConstraint, 0, len(column.Constraints))
+	for _, constraint := range column.Constraints {
+		if constraint.Kind == pgquery.ConstraintNull || constraint.Kind == pgquery.ConstraintNotNull {
+			continue
+		}
+		cloned.Constraints = append(cloned.Constraints, constraint)
+	}
+	return cloned
+}
+
+func namedTableConstraints(table tableDefinition) (map[string]pgquery.TableConstraint, error) {
+	result := make(map[string]pgquery.TableConstraint, len(table.statement.Constraints))
+	for _, constraint := range table.statement.Constraints {
+		if constraint.Name == nil {
+			continue
+		}
+		key := identifierKey(*constraint.Name)
+		if _, exists := result[key]; exists {
+			return nil, fmt.Errorf("postgresql schema diff: table %s has duplicate constraint %s", displayName(table.statement.Name), displayName(pgquery.QualifiedName{*constraint.Name}))
+		}
+		result[key] = constraint
+	}
+	return result, nil
+}
+
+func foreignKeyActionsFor(table tableDefinition, constraint pgquery.TableConstraint) (foreignKeyActions, bool) {
+	if constraint.Name == nil {
+		return foreignKeyActions{}, false
+	}
+	key := foreignKeyKey{table: qualifiedNameKey(table.statement.Name), constraint: identifierKey(*constraint.Name)}
+	actions, ok := table.foreignKeys[key]
+	return actions, ok
+}
+
+func sameNamedConstraint(leftTable tableDefinition, left pgquery.TableConstraint, rightTable tableDefinition, right pgquery.TableConstraint) bool {
+	if !ast.Equal(left, right) {
+		return false
+	}
+	leftActions, leftHas := foreignKeyActionsFor(leftTable, left)
+	rightActions, rightHas := foreignKeyActionsFor(rightTable, right)
+	return leftHas == rightHas && (!leftHas || leftActions == rightActions)
+}
+
+func columnNullable(column pgquery.ColumnDefinition) bool {
+	return !hasColumnConstraint(column.Constraints, pgquery.ConstraintNotNull)
+}
+
+func identityModeName(mode identityMode, present bool) string {
+	if !present {
+		return "absent"
+	}
+	return string(mode)
+}
+
 func cloneLoweringEntries(in []loweringEntry) ([]loweringEntry, error) {
 	out := make([]loweringEntry, len(in))
 	for index := range in {
@@ -357,6 +448,20 @@ func cloneLoweringEntries(in []loweringEntry) ([]loweringEntry, error) {
 		if err != nil {
 			return nil, err
 		}
+		if in[index].baselineConstraint != nil {
+			constraint, cloneErr := cloneTableConstraint(*in[index].baselineConstraint)
+			if cloneErr != nil {
+				return nil, cloneErr
+			}
+			out[index].baselineConstraint = &constraint
+		}
+		if in[index].targetConstraint != nil {
+			constraint, cloneErr := cloneTableConstraint(*in[index].targetConstraint)
+			if cloneErr != nil {
+				return nil, cloneErr
+			}
+			out[index].targetConstraint = &constraint
+		}
 	}
 	return out, nil
 }
@@ -369,6 +474,7 @@ func previewOperations(entries []loweringEntry) []diff.ProposedOperation {
 	return out
 }
 
+//nolint:unused // Kept as a package-local compatibility path.
 func numberSources(index int, operation *diff.ProposedOperation) {
 	for offset := range operation.Forward {
 		operation.Forward[offset].Source = fmt.Sprintf("%03d_%s", index, operation.Forward[offset].Source)
@@ -407,6 +513,42 @@ func lowerPostgreSQLEntry(entry loweringEntry, resolutions map[string]diff.Resol
 			return op, err
 		}
 		forward = []diff.PlannedStatement{{Source: "create_index_" + filenamePart(entry.operation.Constraint) + ".sql", SQL: sql, ReverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(*copy.Name)), Summary: name}}
+	case lowerAlterNullability:
+		if entry.baselineColumn == nil || entry.targetColumn == nil {
+			return op, fmt.Errorf("postgresql schema diff: nullability columns are missing")
+		}
+		verb := "DROP NOT NULL"
+		reverseVerb := "SET NOT NULL"
+		if !columnNullable(*entry.targetColumn) {
+			verb, reverseVerb = reverseVerb, verb
+		}
+		forward = []diff.PlannedStatement{{Source: "alter_nullability_" + filenamePart(entry.operation.Table) + "_" + filenamePart(entry.operation.Column) + ".sql", SQL: fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s %s;\n", reverseName(entry.target.statement.Name), reverseIdentifier(entry.targetColumn.Name), verb), ReverseSQL: fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s %s;\n", reverseName(entry.target.statement.Name), reverseIdentifier(entry.targetColumn.Name), reverseVerb), Summary: name}}
+	case lowerReplaceConstraint:
+		if entry.baselineConstraint == nil || entry.targetConstraint == nil {
+			return op, fmt.Errorf("postgresql schema diff: replacement constraint is missing")
+		}
+		targetFragment, err := renderTableConstraint(entry.target, *entry.targetConstraint)
+		if err != nil {
+			return op, err
+		}
+		baselineFragment, err := renderTableConstraint(entry.baseline, *entry.baselineConstraint)
+		if err != nil {
+			return op, err
+		}
+		tableName := reverseName(entry.target.statement.Name)
+		constraintName := reverseIdentifier(*entry.targetConstraint.Name)
+		forward = []diff.PlannedStatement{
+			{Source: "drop_constraint_" + filenamePart(entry.operation.Table) + "_" + filenamePart(entry.operation.Constraint) + ".sql", SQL: fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT %s;\n", tableName, constraintName), Summary: name},
+			{Source: "add_constraint_" + filenamePart(entry.operation.Table) + "_" + filenamePart(entry.operation.Constraint) + ".sql", SQL: fmt.Sprintf("ALTER TABLE %s ADD %s;\n", tableName, targetFragment), Summary: name},
+		}
+		reverseDrop := fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT %s;\n", reverseName(entry.baseline.statement.Name), reverseIdentifier(*entry.baselineConstraint.Name))
+		reverseAdd := fmt.Sprintf("ALTER TABLE %s ADD %s;\n", reverseName(entry.baseline.statement.Name), baselineFragment)
+		forward[0].ReverseSQL = reverseAdd
+		forward[1].ReverseSQL = reverseDrop
+		reverse = []diff.PlannedStatement{
+			{Source: forward[0].Source, SQL: reverseDrop, ReverseSQL: reverseAdd, Summary: name},
+			{Source: forward[1].Source, SQL: reverseAdd, ReverseSQL: reverseDrop, Summary: name},
+		}
 	case lowerRenameColumn:
 		from, to, err := renameIdentifiersFromEntry(entry, diff.RequiredDecision{Baseline: entry.baselineColumn.Name.Name, Target: entry.targetColumn.Name.Name})
 		if err != nil {
@@ -438,8 +580,15 @@ func lowerPostgreSQLEntry(entry loweringEntry, resolutions map[string]diff.Resol
 		}
 		forward = []diff.PlannedStatement{{Source: "add_column_" + filenamePart(entry.operation.Table) + "_" + filenamePart(entry.operation.Column) + ".sql", SQL: add, ReverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(entry.target.statement.Name), reverseIdentifier(entry.targetColumn.Name)), Summary: name}}
 	}
-	forward[0].Source = strings.TrimPrefix(forward[0].Source, "000_")
-	reverse = []diff.PlannedStatement{{Source: forward[0].Source, SQL: forward[0].ReverseSQL, ReverseSQL: forward[0].SQL, Summary: forward[0].Summary}}
+	for index := range forward {
+		forward[index].Source = strings.TrimPrefix(forward[index].Source, "000_")
+	}
+	if entry.action != lowerReplaceConstraint {
+		reverse = []diff.PlannedStatement{{Source: forward[0].Source, SQL: forward[0].ReverseSQL, ReverseSQL: forward[0].SQL, Summary: forward[0].Summary}}
+	}
+	for index := range reverse {
+		reverse[index].Source = strings.TrimPrefix(reverse[index].Source, "000_")
+	}
 	op.Forward, op.Reverse = forward, reverse
 	return op, nil
 }
@@ -584,17 +733,63 @@ const (
 	lowerCreateIndex
 	lowerRenameColumn
 	lowerBackfill
+	lowerAlterNullability
+	lowerReplaceConstraint
 )
 
 type loweringEntry struct {
-	operation      diff.ProposedOperation
-	action         loweringAction
-	baseline       tableDefinition
-	target         tableDefinition
-	targetColumn   *pgquery.ColumnDefinition
-	baselineColumn *pgquery.ColumnDefinition
-	targetIndex    *pgquery.CreateIndexStatement
-	decisionID     string
+	operation          diff.ProposedOperation
+	action             loweringAction
+	baseline           tableDefinition
+	target             tableDefinition
+	targetColumn       *pgquery.ColumnDefinition
+	baselineColumn     *pgquery.ColumnDefinition
+	targetIndex        *pgquery.CreateIndexStatement
+	baselineConstraint *pgquery.TableConstraint
+	targetConstraint   *pgquery.TableConstraint
+	decisionID         string
+}
+
+type statementRef struct {
+	operation int
+	statement int
+}
+
+func scheduleLoweredOperations(operations []diff.ProposedOperation, actions []loweringAction) []diff.PlannedStatement {
+	forwardRefs := make([]statementRef, 0)
+	for index := range operations {
+		if actions[index] == lowerReplaceConstraint {
+			forwardRefs = append(forwardRefs, statementRef{operation: index, statement: 0})
+		}
+	}
+	for index := range operations {
+		if actions[index] != lowerReplaceConstraint {
+			forwardRefs = append(forwardRefs, statementRef{operation: index, statement: 0})
+		}
+	}
+	for index := range operations {
+		if actions[index] == lowerReplaceConstraint {
+			forwardRefs = append(forwardRefs, statementRef{operation: index, statement: 1})
+		}
+	}
+	statements := make([]diff.PlannedStatement, 0, len(forwardRefs))
+	sources := make(map[statementRef]string, len(forwardRefs))
+	for ordinal, ref := range forwardRefs {
+		statement := &operations[ref.operation].Forward[ref.statement]
+		statement.Source = fmt.Sprintf("%03d_%s", ordinal+1, statement.Source)
+		sources[ref] = statement.Source
+		statements = append(statements, *statement)
+	}
+	for index := range operations {
+		for statementIndex := range operations[index].Reverse {
+			forwardIndex := statementIndex
+			if actions[index] == lowerReplaceConstraint {
+				forwardIndex = len(operations[index].Forward) - statementIndex - 1
+			}
+			operations[index].Reverse[statementIndex].Source = sources[statementRef{operation: index, statement: forwardIndex}]
+		}
+	}
+	return statements
 }
 
 func createTableEntry(table tableDefinition) (loweringEntry, error) {
@@ -617,6 +812,7 @@ func createIndexEntry(index indexDefinition) (loweringEntry, error) {
 
 func diffTable(baseline, target tableDefinition) ([]loweringEntry, []string, []diff.RequiredDecision, error) {
 	entries := make([]loweringEntry, 0)
+	constraintEntries := make([]loweringEntry, 0)
 	diagnostics := make([]string, 0)
 	decisions := make([]diff.RequiredDecision, 0)
 	normalizedBaseline := normalizedTable(baseline.statement, false)
@@ -632,7 +828,61 @@ func diffTable(baseline, target tableDefinition) ([]loweringEntry, []string, []d
 	if baseline.statement.Persistence != target.statement.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.statement.Name)))
 	}
-	if !ast.Equal(normalizedBaseline.Constraints, normalizedTarget.Constraints) || !equalForeignKeyActions(baseline.foreignKeys, target.foreignKeys) {
+	constraintsChanged := !ast.Equal(normalizedBaseline.Constraints, normalizedTarget.Constraints) || !equalForeignKeyActions(baseline.foreignKeys, target.foreignKeys)
+	baseNamed, baseNamedErr := namedTableConstraints(baseline)
+	if baseNamedErr != nil {
+		return nil, nil, nil, baseNamedErr
+	}
+	targetNamed, targetNamedErr := namedTableConstraints(target)
+	if targetNamedErr != nil {
+		return nil, nil, nil, targetNamedErr
+	}
+	constraintReplacements := 0
+	unhandledConstraintChange := !ast.Equal(anonymousConstraints(normalizedBaseline.Constraints), anonymousConstraints(normalizedTarget.Constraints))
+	baseKeys := make([]string, 0, len(baseNamed))
+	for key := range baseNamed {
+		baseKeys = append(baseKeys, key)
+	}
+	sort.Strings(baseKeys)
+	for _, key := range baseKeys {
+		left := baseNamed[key]
+		right, exists := targetNamed[key]
+		if !exists {
+			unhandledConstraintChange = true
+			continue
+		}
+		if sameNamedConstraint(baseline, left, target, right) {
+			continue
+		}
+		if left.Kind != right.Kind || (left.Kind == pgquery.ConstraintForeignKey && (left.References == nil || right.References == nil)) {
+			unhandledConstraintChange = true
+			continue
+		}
+		if left.Name == nil || right.Name == nil {
+			continue
+		}
+		name := displayName(target.statement.Name)
+		constraintName := displayName(pgquery.QualifiedName{*right.Name})
+		leftCopy, cloneErr := cloneTableConstraint(left)
+		if cloneErr != nil {
+			return nil, nil, nil, cloneErr
+		}
+		rightCopy, cloneErr := cloneTableConstraint(right)
+		if cloneErr != nil {
+			return nil, nil, nil, cloneErr
+		}
+		constraintEntries = append(constraintEntries, loweringEntry{
+			operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationReplaceConstraint, "postgresql", name, "", constraintName), Table: name, Constraint: constraintName, Summary: "replace constraint " + name + "." + constraintName, Kind: diff.OperationReplaceConstraint},
+			action:    lowerReplaceConstraint, baseline: baseline, target: target, baselineConstraint: &leftCopy, targetConstraint: &rightCopy,
+		})
+		constraintReplacements++
+	}
+	for key := range targetNamed {
+		if _, exists := baseNamed[key]; !exists {
+			unhandledConstraintChange = true
+		}
+	}
+	if constraintsChanged && (unhandledConstraintChange || constraintReplacements == 0 && len(baseNamed) == len(targetNamed)) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s constraints changed", displayName(target.statement.Name)))
 	}
 
@@ -717,10 +967,25 @@ func diffTable(baseline, target tableDefinition) ([]loweringEntry, []string, []d
 			entries = append(entries, loweringEntry{operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationAddColumn, "postgresql", name, column.Name.Name, ""), Table: name, Column: column.Name.Name, Summary: "add column " + name + "." + column.Name.Name, Kind: diff.OperationAddColumn}, action: lowerAddColumn, target: clonedTarget, targetColumn: clonedColumn})
 			continue
 		}
-		identityChanged := baseline.identities[identifierKey(column.Name)] != target.identities[identifierKey(column.Name)]
-		if !ast.Equal(previous, normalizedColumn) || identityChanged {
-			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.statement.Name), column.Name.Name))
+		if sameColumnDefinition(baseline, previous, target, normalizedColumn) {
+			continue
 		}
+		baselineMode, baselineIdentity := identityFor(baseline, previous.Name)
+		targetMode, targetIdentity := identityFor(target, normalizedColumn.Name)
+		if baselineIdentity != targetIdentity || baselineIdentity && baselineMode != targetMode {
+			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s identity mode changed from %s to %s; manual migration required", displayName(target.statement.Name), column.Name.Name, identityModeName(baselineMode, baselineIdentity), identityModeName(targetMode, targetIdentity)))
+			continue
+		}
+		if sameColumnExceptNullability(baseline, previous, target, normalizedColumn) && columnNullable(previous) != columnNullable(normalizedColumn) {
+			name := displayName(target.statement.Name)
+			entries = append(entries, loweringEntry{
+				operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationAlterNullability, "postgresql", name, column.Name.Name, ""), Table: name, Column: column.Name.Name, Summary: "alter nullability " + name + "." + column.Name.Name, Kind: diff.OperationAlterNullability},
+				action:    lowerAlterNullability, baseline: baseline, target: target,
+				targetColumn: &column, baselineColumn: findColumn(baseline.statement, column.Name.Name),
+			})
+			continue
+		}
+		diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s changed", displayName(target.statement.Name), column.Name.Name))
 	}
 	for index, column := range baseline.statement.Columns {
 		normalizedColumn := normalizedBaseline.Columns[index]
@@ -731,7 +996,18 @@ func diffTable(baseline, target tableDefinition) ([]loweringEntry, []string, []d
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.statement.Name), column.Name.Name))
 		}
 	}
+	entries = append(entries, constraintEntries...)
 	return entries, diagnostics, decisions, nil
+}
+
+func anonymousConstraints(constraints []pgquery.TableConstraint) []pgquery.TableConstraint {
+	result := make([]pgquery.TableConstraint, 0)
+	for _, constraint := range constraints {
+		if constraint.Name == nil {
+			result = append(result, constraint)
+		}
+	}
+	return result
 }
 
 // normalizedTable converts syntax variants that describe the same PostgreSQL
