@@ -376,10 +376,54 @@ it once per enclosing row rather than once for the whole statement, and the row 
 `EXISTS` reading only its own tables asks nothing about the row being tested and merely reports whether a table is non-empty — and it reaches every other form too, so a
 scalar subquery counting one user's orders beside that user is the same mechanism.
 
-Call `query.Select.WithCorrelation(tables…)` to name the enclosing tables the statement reads, before the clause that reads them. Every builder method validates the copy
-it returns, and a statement under construction has no enclosing statement to ask, so `WithWhere` refuses a predicate naming a table this statement has not been told
-about. That is the same ordering `query.NewJoinedSelect` documents for a join a projection reads. A statement between the reader and the table declares it too, since
-validating that middle statement on its own has nothing else saying a third statement is coming.
+Call `query.NewCorrelatedSelect` or `query.NewCorrelatedJoinedSelect` when a projection, join, or grouping expression
+reads an enclosing table. These constructors install the declarations before the first validation. Use
+`query.Select.WithCorrelation(tables…)` to add declarations to a statement whose existing clauses do not read them.
+Every builder method validates the copy it returns. A statement between the reader and the table declares it too,
+since validating that middle statement on its own has nothing else saying a third statement is coming.
+
+<!-- INCLUDE(examples/query_correlated_projection_example_test.go#correlated_projection) -->
+```go
+func Example_query_correlated_projection() {
+	users := query.MustTableRef(schema.MustTableDef("users", schema.Integer("id")))
+	orders := query.MustTableRef(schema.MustTableDef(
+		"orders",
+		schema.Integer("id"), schema.Integer("user_id"), schema.Integer("amount"),
+	))
+
+	// The constructor declares users before it validates the projection, so the
+	// projection can read both the order and the enclosing user's columns.
+	ordersForUser, err := query.NewCorrelatedSelect(
+		orders, []query.TableRef{users},
+		query.Project(query.Coalesce(orders.Column("amount"), users.Column("id"))).As("value"),
+	)
+	if err != nil {
+		fmt.Printf("failed to build correlated select: %s\n", err)
+		return
+	}
+	ordersForUser, err = ordersForUser.WithWhere(query.Equal(orders.Column("user_id"), users.Column("id")))
+	if err != nil {
+		fmt.Printf("failed to add correlation predicate: %s\n", err)
+		return
+	}
+	statement, err := query.NewSelect(users, users.Column("id"), query.Project(query.Scalar(ordersForUser)).As("value"))
+	if err != nil {
+		fmt.Printf("failed to build outer select: %s\n", err)
+		return
+	}
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Printf("failed to render select: %s\n", err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+
+	// Output:
+	// SELECT "users"."id", (SELECT COALESCE("orders"."amount", "users"."id") AS "value" FROM "orders" WHERE ("orders"."user_id" = "users"."id")) AS "value" FROM "users"
+}
+```
+source: [examples/query_correlated_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_correlated_projection_example_test.go)
+<!-- END INCLUDE -->
 
 The enclosing statement may be a `SELECT`, a `DELETE`, or an `UPDATE`. Each one has the row a correlated subquery reads: a result row for a `SELECT`, and the row being
 written for the other two. `DELETE FROM users WHERE EXISTS (SELECT orders.id FROM orders WHERE orders.user_id = users.id)` is the shape that enables, and PostgreSQL 17,

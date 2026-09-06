@@ -219,6 +219,12 @@ func NewSelect(from TableRef, projections ...Projection) (Select, error) {
 	return NewJoinedSelect(from, nil, nil, projections...)
 }
 
+// NewCorrelatedSelect creates a validated SELECT with correlations declared
+// before validating projections and other clauses that may read them.
+func NewCorrelatedSelect(from TableRef, correlations []TableRef, projections ...Projection) (Select, error) {
+	return NewCorrelatedJoinedSelect(from, correlations, nil, nil, projections...)
+}
+
 // NewGroupedSelect creates a validated grouped SELECT statement.
 // It is NewSelect for a statement that groups. The grouping has to be supplied
 // here rather than added afterwards, because a grouped statement may project a
@@ -241,11 +247,19 @@ func NewGroupedSelect(from TableRef, groupBy []Expression, projections ...Projec
 // joins here whenever any projection or grouping expression reads a joined
 // table's column. Pass a nil groupBy for a statement that does not group.
 func NewJoinedSelect(from TableRef, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
+	return NewCorrelatedJoinedSelect(from, nil, joins, groupBy, projections...)
+}
+
+// NewCorrelatedJoinedSelect creates a validated SELECT with correlations,
+// joins, and grouping installed before validation. Use it when a projection,
+// join condition, or grouping expression reads a declared outer table.
+func NewCorrelatedJoinedSelect(from TableRef, correlations []TableRef, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
 	statement := Select{
-		from:        from,
-		joins:       append([]Join(nil), joins...),
-		groupBy:     append([]Expression(nil), groupBy...),
-		projections: append([]Projection(nil), projections...),
+		from:         from,
+		correlations: append([]TableRef(nil), correlations...),
+		joins:        append([]Join(nil), joins...),
+		groupBy:      append([]Expression(nil), groupBy...),
+		projections:  append([]Projection(nil), projections...),
 	}
 	if err := statement.Validate(); err != nil {
 		return Select{}, err
@@ -254,9 +268,12 @@ func NewJoinedSelect(from TableRef, joins []Join, groupBy []Expression, projecti
 }
 
 // WithCorrelation returns a copy of s that may read the columns of tables, the
-// tables of the statement s will be nested inside. It is what makes a
-// correlated subquery buildable: Subquery states what correlation means, and
-// this is where the statement says which enclosing tables it correlates with.
+// tables of the statement s will be nested inside. Use it when the existing
+// clauses do not already read those tables; use NewCorrelatedSelect or
+// NewCorrelatedJoinedSelect when constructing clauses that need the declaration.
+// It is what makes a correlated subquery buildable: Subquery states what
+// correlation means, and this is where the statement says which enclosing
+// tables it correlates with.
 //
 // Declare the correlation before the clause that reads the enclosing table.
 // Every builder method validates the copy it returns, and a statement under
