@@ -115,6 +115,51 @@ type Order struct {
 	descending       bool
 }
 
+// LockStrength identifies the row lock mode a SELECT requests.
+type LockStrength uint8
+
+const (
+	LockUpdate LockStrength = iota + 1
+	LockNoKeyUpdate
+	LockShare
+	LockKeyShare
+)
+
+// LockWait identifies what a row-locking SELECT does when a row is already locked.
+type LockWait uint8
+
+const (
+	LockWaitDefault LockWait = iota
+	LockWaitNoWait
+	LockWaitSkipLocked
+)
+
+// Lock is the optional row-locking clause of a SELECT.
+type Lock struct {
+	strength LockStrength
+	of       []TableRef
+	wait     LockWait
+}
+
+// RowLock creates a row-locking clause. Invalid strengths are rejected when the clause is attached to a SELECT.
+func RowLock(strength LockStrength) Lock { return Lock{strength: strength} }
+
+// Of returns a copy of l that limits the lock to the supplied local sources.
+func (l Lock) Of(tables ...TableRef) Lock {
+	l.of = append([]TableRef(nil), tables...)
+	return l
+}
+
+// Wait returns a copy of l with the requested lock wait behavior.
+func (l Lock) Wait(wait LockWait) Lock {
+	l.wait = wait
+	return l
+}
+
+func (l Lock) Strength() LockStrength { return l.strength }
+func (l Lock) Tables() []TableRef     { return append([]TableRef(nil), l.of...) }
+func (l Lock) WaitMode() LockWait     { return l.wait }
+
 // Asc orders expression in ascending order.
 func Asc(expression Expression) Order {
 	return Order{expression: expression}
@@ -212,11 +257,19 @@ type Select struct {
 	offset       int
 	hasOffset    bool
 	distinct     bool
+	lock         Lock
+	hasLock      bool
 }
 
 // NewSelect creates a validated SELECT statement.
 func NewSelect(from TableRef, projections ...Projection) (Select, error) {
 	return NewJoinedSelect(from, nil, nil, projections...)
+}
+
+// NewCorrelatedSelect creates a validated SELECT with correlations declared
+// before validating projections and other clauses that may read them.
+func NewCorrelatedSelect(from TableRef, correlations []TableRef, projections ...Projection) (Select, error) {
+	return NewCorrelatedJoinedSelect(from, correlations, nil, nil, projections...)
 }
 
 // NewGroupedSelect creates a validated grouped SELECT statement.
@@ -241,11 +294,19 @@ func NewGroupedSelect(from TableRef, groupBy []Expression, projections ...Projec
 // joins here whenever any projection or grouping expression reads a joined
 // table's column. Pass a nil groupBy for a statement that does not group.
 func NewJoinedSelect(from TableRef, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
+	return NewCorrelatedJoinedSelect(from, nil, joins, groupBy, projections...)
+}
+
+// NewCorrelatedJoinedSelect creates a validated SELECT with correlations,
+// joins, and grouping installed before validation. Use it when a projection,
+// join condition, or grouping expression reads a declared outer table.
+func NewCorrelatedJoinedSelect(from TableRef, correlations []TableRef, joins []Join, groupBy []Expression, projections ...Projection) (Select, error) {
 	statement := Select{
-		from:        from,
-		joins:       append([]Join(nil), joins...),
-		groupBy:     append([]Expression(nil), groupBy...),
-		projections: append([]Projection(nil), projections...),
+		from:         from,
+		correlations: append([]TableRef(nil), correlations...),
+		joins:        append([]Join(nil), joins...),
+		groupBy:      append([]Expression(nil), groupBy...),
+		projections:  append([]Projection(nil), projections...),
 	}
 	if err := statement.Validate(); err != nil {
 		return Select{}, err
@@ -254,9 +315,12 @@ func NewJoinedSelect(from TableRef, joins []Join, groupBy []Expression, projecti
 }
 
 // WithCorrelation returns a copy of s that may read the columns of tables, the
-// tables of the statement s will be nested inside. It is what makes a
-// correlated subquery buildable: Subquery states what correlation means, and
-// this is where the statement says which enclosing tables it correlates with.
+// tables of the statement s will be nested inside. Use it when the existing
+// clauses do not already read those tables; use NewCorrelatedSelect or
+// NewCorrelatedJoinedSelect when constructing clauses that need the declaration.
+// It is what makes a correlated subquery buildable: Subquery states what
+// correlation means, and this is where the statement says which enclosing
+// tables it correlates with.
 //
 // Declare the correlation before the clause that reads the enclosing table.
 // Every builder method validates the copy it returns, and a statement under
@@ -411,6 +475,25 @@ func (s Select) WithOffset(offset int) (Select, error) {
 	return copy, nil
 }
 
+// WithLock returns a copy of s with its row-locking clause replaced.
+func (s Select) WithLock(lock Lock) (Select, error) {
+	copy := s.clone()
+	copy.lock = lock.clone()
+	copy.hasLock = true
+	if err := copy.Validate(); err != nil {
+		return Select{}, err
+	}
+	return copy, nil
+}
+
+// Lock returns the row-locking clause and reports whether one is set.
+func (s Select) Lock() (Lock, bool) {
+	if !s.hasLock {
+		return Lock{}, false
+	}
+	return s.lock.clone(), true
+}
+
 // Projections returns a copy of selected expressions.
 func (s Select) Projections() []Projection {
 	return append([]Projection(nil), s.projections...)
@@ -481,8 +564,9 @@ func (s Select) Validate() error {
 	// tables, so a table this statement selects from that it also declared is
 	// refused: both would then be reachable, and a server would answer every
 	// column reference from this statement's copy without the SQL saying which
-	// was meant. The repair is the same alias validateSourceReference names for
-	// two tables of one statement.
+	// was meant. This validation compares exact names; rendering also applies
+	// the target dialect's identifier equality rule. The repair is the same
+	// alias validateSourceReference names for two tables of one statement.
 	for i, correlated := range s.correlations {
 		path := fmt.Sprintf("correlations[%d]", i)
 		if err := correlated.validate(); err != nil {
@@ -571,6 +655,11 @@ func (s Select) Validate() error {
 	}
 	if s.hasOffset && s.offset < 0 {
 		return validationError("offset", "must not be negative")
+	}
+	if s.hasLock {
+		if err := validateLock(s.lock, s.from, s.joins); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -710,5 +799,11 @@ func (s Select) clone() Select {
 	copy.joins = append([]Join(nil), s.joins...)
 	copy.groupBy = append([]Expression(nil), s.groupBy...)
 	copy.orderBy = append([]Order(nil), s.orderBy...)
+	copy.lock = s.lock.clone()
 	return copy
+}
+
+func (l Lock) clone() Lock {
+	l.of = append([]TableRef(nil), l.of...)
+	return l
 }

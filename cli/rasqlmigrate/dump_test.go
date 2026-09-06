@@ -14,6 +14,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 // dumpTestTable builds a minimal valid TableDef named name with a single
@@ -43,6 +45,41 @@ func dumpTestTable(schemaName, name string, references ...string) schema.TableDe
 		})
 	}
 	return table
+}
+
+func TestBuildMigrationFormatFilesKeepsBoundaryDependencyOrder(t *testing.T) {
+	tables := make([]schema.TableDef, 999)
+	for index := range tables {
+		tables[index] = dumpTestTable("main", "table_"+strconv.Itoa(index+1))
+	}
+	tables[998].Indexes = []schema.IndexDef{{Name: "boundary_idx", Columns: []string{"id"}}}
+	files, err := buildMigrationFormatFiles(dialect.SQLite(), tables)
+	require.NoError(t, err)
+	require.Equal(t, "0999_create_main_table_999.up.sql", files[1996].Name)
+	require.Equal(t, "1000_create_index_boundary_idx.up.sql", files[1998].Name)
+	root := t.TempDir()
+	migrationDirectory := filepath.Join(root, "001_boundary")
+	require.NoError(t, writeDumpOutput(migrationDirectory, "sqlite", files))
+	migrations, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	require.Equal(t, "0999_create_main_table_999.up.sql", migrations[0].Statements[998].Source)
+	require.Equal(t, "1000_create_index_boundary_idx.up.sql", migrations[0].Statements[999].Source)
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	for _, statement := range migrations[0].Statements {
+		_, err = database.Exec(string(statement.SQL))
+		require.NoError(t, err)
+	}
+	var objectCount int
+	require.NoError(t, database.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('table_999', 'boundary_idx')`).Scan(&objectCount))
+	require.Equal(t, 2, objectCount)
+	for _, statement := range migrations[0].Down {
+		_, err = database.Exec(string(statement.SQL))
+		require.NoError(t, err)
+	}
+	require.NoError(t, database.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('table_999', 'boundary_idx')`).Scan(&objectCount))
+	require.Equal(t, 0, objectCount)
 }
 
 func TestRunDumpFlagValidation(t *testing.T) {
@@ -176,6 +213,15 @@ func TestBuildSchemaFormatFilesLayout(t *testing.T) {
 	require.Equal(t, "audit__events.sql", files[1].Name, "a schema-qualified table is named <schema>__<table>")
 }
 
+func TestWriteDumpOutputWritesSchemaSources(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "schema")
+	files := []dumpFile{{Name: "members.sql", SQL: "CREATE TABLE members (id INTEGER);\n"}}
+	require.NoError(t, writeDumpOutput(output, "sqlite", files))
+	contents, err := os.ReadFile(filepath.Join(output, "members.sql"))
+	require.NoError(t, err)
+	require.Equal(t, files[0].SQL, string(contents))
+}
+
 func TestBuildMigrationFormatFilesLayout(t *testing.T) {
 	teams := schema.TableDef{Name: "teams", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
 	members := schema.TableDef{
@@ -199,7 +245,8 @@ func TestBuildMigrationFormatFilesLayout(t *testing.T) {
 		"002_create_members.up.sql",
 		"002_create_members.down.sql",
 		"003_create_index_members_team_id_idx.up.sql",
-	}, dumpFileNames(files), "index steps are numbered after every table step, with no .down.sql")
+		"003_create_index_members_team_id_idx.down.sql",
+	}, dumpFileNames(files), "schema-format dump files retain their explicit reverse sources")
 
 	root := t.TempDir()
 	migrationDirectory := filepath.Join(root, "001_initial")
@@ -211,7 +258,7 @@ func TestBuildMigrationFormatFilesLayout(t *testing.T) {
 	require.NoError(t, err, "migrationdir.Load must accept the directory a dump writes")
 	require.Len(t, loaded, 1)
 	require.Len(t, loaded[0].Statements, 3, "two CREATE TABLE statements and one CREATE INDEX statement")
-	require.Len(t, loaded[0].Down, 2, "only the two CREATE TABLE steps have a reverse source")
+	require.Len(t, loaded[0].Down, 3, "every generated step has a reverse source")
 }
 
 func dumpFileNames(files []dumpFile) []string {
@@ -238,14 +285,31 @@ func TestRunDumpPreviewWritesNothingToDisk(t *testing.T) {
 	require.Contains(t, outputBuffer.String(), `CREATE TABLE "main"."members"`)
 }
 
+func TestRunDumpSchemaOutputWritesPlainSources(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	output := filepath.Join(t.TempDir(), "schema")
+	setCommandOutput(t)
+	require.NoError(t, run([]string{"dump", "-dialect", "sqlite", "-dsn", dsn, "-output", output}))
+	entries, err := os.ReadDir(output)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "main__members.sql", entries[0].Name())
+}
+
 func TestWriteDumpOutputDirectoryHandling(t *testing.T) {
-	files := []dumpFile{{Name: "teams.sql", SQL: "CREATE TABLE teams (id INTEGER);\n"}}
+	files := []dumpFile{{Name: "teams.up.sql", SQL: "CREATE TABLE teams (id INTEGER);\n"}, {Name: "teams.down.sql", SQL: "DROP TABLE teams;\n"}}
 
 	t.Run("missing directory is created with parents", func(t *testing.T) {
 		root := t.TempDir()
 		target := filepath.Join(root, "nested", "db", "schema")
 		require.NoError(t, writeDumpOutput(target, "sqlite", files))
-		contents, err := os.ReadFile(filepath.Join(target, "teams.sql"))
+		contents, err := os.ReadFile(filepath.Join(target, "teams.up.sql"))
 		require.NoError(t, err)
 		require.Equal(t, files[0].SQL, string(contents))
 	})
@@ -253,7 +317,7 @@ func TestWriteDumpOutputDirectoryHandling(t *testing.T) {
 	t.Run("empty directory is used", func(t *testing.T) {
 		target := t.TempDir()
 		require.NoError(t, writeDumpOutput(target, "sqlite", files))
-		contents, err := os.ReadFile(filepath.Join(target, "teams.sql"))
+		contents, err := os.ReadFile(filepath.Join(target, "teams.up.sql"))
 		require.NoError(t, err)
 		require.Equal(t, files[0].SQL, string(contents))
 	})
@@ -436,6 +500,29 @@ func TestDumpColumnFactHasDefaultIdentitySequence(t *testing.T) {
 	for name, fact := range nonDefaultCases {
 		t.Run("refused/"+name, func(t *testing.T) {
 			require.False(t, fact.hasDefaultIdentitySequence())
+		})
+	}
+}
+
+func TestEligibleForBigSerialRewrite(t *testing.T) {
+	table := schema.TableDef{Name: "teams", Schema: "public", Columns: []schema.ColumnDef{{Name: "id"}}}
+	canonical := dumpColumnFact{Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", OwnedByColumn: true, SequenceReferences: 1, ReferencingDefaults: 1, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}}
+	eligible, reason := eligibleForBigSerialRewrite(table, canonical)
+	require.True(t, eligible)
+	require.Empty(t, reason)
+
+	cases := map[string]dumpColumnFact{
+		"ambiguous": {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", OwnedByColumn: true, SequenceReferences: 2, ReferencingDefaults: 1, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+		"shared":    {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", OwnedByColumn: true, SequenceReferences: 1, ReferencingDefaults: 2, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+		"unowned":   {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", SequenceReferences: 1, ReferencingDefaults: 1, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+		"custom":    {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "teams_id_seq", OwnedByColumn: true, SequenceReferences: 1, ReferencingDefaults: 1, Start: 10, Increment: 5, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+		"renamed":   {Name: "id", Sequence: &dumpSequenceFact{Schema: "public", Name: "renamed_sequence", OwnedByColumn: true, SequenceReferences: 1, ReferencingDefaults: 1, Start: 1, Increment: 1, Minimum: 1, Maximum: 9223372036854775807, Cache: 1}},
+	}
+	for name, fact := range cases {
+		t.Run(name, func(t *testing.T) {
+			eligible, reason := eligibleForBigSerialRewrite(table, fact)
+			require.False(t, eligible)
+			require.NotEmpty(t, reason)
 		})
 	}
 }

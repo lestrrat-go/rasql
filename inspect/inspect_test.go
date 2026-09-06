@@ -2985,12 +2985,8 @@ func TestSQLiteInspectorRecordsExpressionIndex(t *testing.T) {
 	}, table.Indexes)
 }
 
-// TestSQLiteInspectorRejectsUnrepresentableTableMetadata proves that
-// inspect.Table still refuses the SQLite objects this package genuinely
-// cannot describe: a view, which has no independent column, constraint, or
-// index structure of its own for a TableDef to hold, unlike a virtual
-// table or a shadow table, both of which TestSQLiteInspectorRecordsVirtualTable
-// and TestSQLiteInspectorRecordsShadowTable now prove inspect describes.
+// TestSQLiteInspectorRejectsViewThroughTable proves that inspect.Table keeps
+// its base-table contract while inspect.Object handles views.
 func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -3010,7 +3006,7 @@ func TestSQLiteInspectorRejectsUnrepresentableTableMetadata(t *testing.T) {
 		table string
 		want  string
 	}{
-		{table: "base_view", want: `table kind "view" is unsupported`},
+		{table: "base_view", want: `is a view, not a table`},
 	} {
 		t.Run(test.table, func(t *testing.T) {
 			_, err := inspector.Table(t.Context(), test.table)
