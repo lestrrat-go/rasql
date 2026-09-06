@@ -17,10 +17,12 @@ type WriteStatement interface {
 
 // Upsert is an immutable INSERT statement with conflict handling.
 type Upsert struct {
-	insert      Insert
-	conflict    []ColumnRef
-	assignments []Assignment
-	returning   []Projection
+	insert        Insert
+	conflict      []ColumnRef
+	assignments   []Assignment
+	returning     []Projection
+	conflictWhere Expression
+	updateWhere   Expression
 }
 
 func (Upsert) writeStatement() {}
@@ -51,6 +53,38 @@ func (s Upsert) WithReturning(projections ...Projection) (Upsert, error) {
 	}
 	return copy, nil
 }
+
+// WithConflictWhere returns a copy with the partial conflict-target predicate replaced.
+func (s Upsert) WithConflictWhere(predicate Expression) (Upsert, error) {
+	if nilcheck.Is(predicate) {
+		return Upsert{}, validationError("conflict_where", "must not be nil")
+	}
+	copy := s.clone()
+	copy.conflictWhere = predicate
+	if err := copy.Validate(); err != nil {
+		return Upsert{}, err
+	}
+	return copy, nil
+}
+
+// ConflictWhere returns the partial conflict-target predicate, if present.
+func (s Upsert) ConflictWhere() Expression { return s.conflictWhere }
+
+// WithUpdateWhere returns a copy with the conflict-update predicate replaced.
+func (s Upsert) WithUpdateWhere(predicate Expression) (Upsert, error) {
+	if nilcheck.Is(predicate) {
+		return Upsert{}, validationError("update_where", "must not be nil")
+	}
+	copy := s.clone()
+	copy.updateWhere = predicate
+	if err := copy.Validate(); err != nil {
+		return Upsert{}, err
+	}
+	return copy, nil
+}
+
+// UpdateWhere returns the conflict-update predicate, if present.
+func (s Upsert) UpdateWhere() Expression { return s.updateWhere }
 
 // Insert returns the underlying insert operation.
 func (s Upsert) Insert() Insert {
@@ -83,6 +117,18 @@ func (s Upsert) Validate() error {
 	if len(s.conflict) == 0 && len(s.assignments) == 0 {
 		return validationError("upsert", "requires conflict columns or assignments")
 	}
+	if s.conflictWhere != nil && nilcheck.Is(s.conflictWhere) {
+		return validationError("conflict_where", "must not be nil")
+	}
+	if s.updateWhere != nil && nilcheck.Is(s.updateWhere) {
+		return validationError("update_where", "must not be nil")
+	}
+	if s.conflictWhere != nil && len(s.conflict) == 0 {
+		return validationError("conflict_where", "requires conflict columns")
+	}
+	if s.updateWhere != nil && len(s.assignments) == 0 {
+		return validationError("update_where", "requires assignments")
+	}
 	sources, err := validateWriteTarget(s.insert.into, "insert.into")
 	if err != nil {
 		return err
@@ -108,7 +154,18 @@ func (s Upsert) Validate() error {
 			return validationError(path+".column", "duplicates column %q", assignment.column.Name())
 		}
 		assigned[assignment.column.Name()] = struct{}{}
-		if err := validateClauseExpression(assignment.value, sources, "a conflict-update assignment", path+".value"); err != nil {
+		if err := validateExcludedClauseExpression(assignment.value, sources, "a conflict-update assignment", path+".value"); err != nil {
+			return err
+		}
+	}
+	if s.conflictWhere != nil {
+		ctx := clauseContext(sources, "a conflict target predicate")
+		if _, err := validateExpression(s.conflictWhere, ctx, "conflict_where"); err != nil {
+			return err
+		}
+	}
+	if s.updateWhere != nil {
+		if err := validateExcludedClauseExpression(s.updateWhere, sources, "a conflict-update predicate", "update_where"); err != nil {
 			return err
 		}
 	}
@@ -158,6 +215,7 @@ type Insert struct {
 	columns       []ColumnRef
 	rows          [][]Expression
 	defaultValues bool
+	selectSource  *ResultQuery
 	returning     []Projection
 }
 
@@ -253,6 +311,12 @@ func NewInsertRows(into TableRef, columns []ColumnRef, rows [][]any) (Insert, er
 	return validatedInsert(statement)
 }
 
+// NewInsertSelect creates an INSERT whose rows come from a reusable query.
+func NewInsertSelect(into TableRef, columns []ColumnRef, source ResultQuery) (Insert, error) {
+	copy := cloneResultQuery(source)
+	return validatedInsert(Insert{into: into, columns: append([]ColumnRef(nil), columns...), selectSource: &copy})
+}
+
 // validatedInsert validates statement and returns it, or the zero Insert and
 // the validation error.
 func validatedInsert(statement Insert) (Insert, error) {
@@ -329,6 +393,13 @@ func (s Insert) UsesDefaultValues() bool {
 	return s.defaultValues
 }
 
+func (s Insert) SelectSource() (ResultQuery, bool) {
+	if s.selectSource == nil {
+		return ResultQuery{}, false
+	}
+	return *s.selectSource, true
+}
+
 // Returning returns a copy of the returning projections.
 func (s Insert) Returning() []Projection {
 	return append([]Projection(nil), s.returning...)
@@ -346,6 +417,36 @@ func (s Insert) Validate() error {
 		}
 		if len(s.rows) > 0 {
 			return validationError("rows", "must be empty for a default-values insert")
+		}
+		return validateProjections(s.returning, sources, "returning")
+	}
+	if s.selectSource != nil {
+		if len(s.rows) > 0 {
+			return validationError("rows", "must be empty for an INSERT SELECT")
+		}
+		if s.selectSource.body == nil {
+			return validationError("select", "source must not be empty")
+		}
+		if len(s.columns) == 0 {
+			return validationError("columns", "must not be empty")
+		}
+		seen := make(map[string]struct{}, len(s.columns))
+		for i, column := range s.columns {
+			if err := validateTargetColumn(column, s.into, fmt.Sprintf("columns[%d]", i)); err != nil {
+				return err
+			}
+			if _, exists := seen[column.Name()]; exists {
+				return validationError(fmt.Sprintf("columns[%d]", i), "duplicates column %q", column.Name())
+			}
+			seen[column.Name()] = struct{}{}
+		}
+		if len(s.columns) != len(s.selectSource.columns) {
+			return validationError("columns", "has %d columns for %d source results", len(s.columns), len(s.selectSource.columns))
+		}
+		for i, column := range s.columns {
+			if err := validateTargetColumn(column, s.into, fmt.Sprintf("columns[%d]", i)); err != nil {
+				return err
+			}
 		}
 		return validateProjections(s.returning, sources, "returning")
 	}
@@ -383,6 +484,11 @@ func (s Insert) clone() Insert {
 	copy := s
 	copy.columns = append([]ColumnRef(nil), s.columns...)
 	copy.rows = cloneRows(s.rows)
+	if s.selectSource != nil {
+		result := *s.selectSource
+		result.columns = cloneResultColumns(result.columns)
+		copy.selectSource = &result
+	}
 	copy.returning = append([]Projection(nil), s.returning...)
 	return copy
 }
@@ -644,14 +750,14 @@ func validateWriteTarget(table TableRef, path string) (sourceScope, error) {
 	if table.Alias() != "" {
 		return sourceScope{}, validationError(path+".alias", "write targets must not use an alias")
 	}
-	return newSourceScope(table), nil
+	return newSourceScope(Relation(table)), nil
 }
 
 func validateTargetColumn(column ColumnRef, table TableRef, path string) error {
 	if err := column.source.validate(); err != nil {
 		return validationError(path, "%s", err)
 	}
-	if column.source.key() != table.key() {
+	if column.source.key() != Relation(table).key() {
 		return validationError(path, "belongs to table %q instead of target %q", column.source.QualifiedName(), table.QualifiedName())
 	}
 	if _, exists := table.column(column.name); !exists {

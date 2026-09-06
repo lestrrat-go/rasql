@@ -121,6 +121,29 @@ func TestNewTableAssemblesForeignKeyAndRelationship(t *testing.T) {
 	}}, table.Relationships)
 }
 
+func TestRelationshipNamedSupportsInverseName(t *testing.T) {
+	table, err := schema.NewTableDef("orders",
+		schema.Integer("id"),
+		schema.Integer("customer_id"),
+		schema.PrimaryKey("id"),
+		schema.ForeignKey("customer_id", schema.References("customers", "id"),
+			schema.RelationshipNamed("customer", schema.InverseNamed("Orders"))),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "Orders", table.Relationships[0].InverseName)
+}
+
+func TestRelationshipNamedRejectsInvalidInverseName(t *testing.T) {
+	_, err := schema.NewTableDef("orders",
+		schema.Integer("id"),
+		schema.Integer("customer_id"),
+		schema.PrimaryKey("id"),
+		schema.ForeignKey("customer_id", schema.References("customers", "id"),
+			schema.RelationshipNamed("customer", schema.InverseNamed("not-valid"))),
+	)
+	require.ErrorContains(t, err, "relationships[0].inverse_name")
+}
+
 // TestForeignKeyWithoutAsDeclaresNoRelationship covers the common case: a
 // foreign key with no RelationshipNamed leaves Relationships empty, so
 // rasqlgen derives its own name from the local column exactly as it does

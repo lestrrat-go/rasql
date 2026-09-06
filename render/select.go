@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
@@ -18,6 +19,19 @@ type Error struct {
 	Dialect string
 	Err     error
 }
+
+var ErrUnsupportedSelectLock = errors.New("render: unsupported SELECT row lock")
+
+type UnsupportedSelectLockError struct {
+	Dialect string
+	Clause  string
+}
+
+func (e *UnsupportedSelectLockError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express SELECT %s", e.Dialect, e.Clause)
+}
+
+func (e *UnsupportedSelectLockError) Unwrap() error { return ErrUnsupportedSelectLock }
 
 func (e *Error) Error() string {
 	if e.Dialect == "" {
@@ -34,6 +48,16 @@ func (e *Error) Unwrap() error {
 // [UnsupportedMatchOperatorError], so a caller that only needs a presence
 // check can use errors.Is instead of errors.As.
 var ErrUnsupportedMatchOperator = errors.New("render: unsupported MATCH operator")
+
+var ErrUnsupportedAggregateFilter = errors.New("render: unsupported aggregate FILTER")
+
+type UnsupportedAggregateFilterError struct{ Dialect string }
+
+func (e *UnsupportedAggregateFilterError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express aggregate FILTER", e.Dialect)
+}
+
+func (e *UnsupportedAggregateFilterError) Unwrap() error { return ErrUnsupportedAggregateFilter }
 
 // UnsupportedMatchOperatorError reports that a statement compares an
 // expression with [query.OperatorMatch] against a dialect that has not been
@@ -106,6 +130,7 @@ type renderer struct {
 	// reached anywhere else.
 	excludedStyle           dialect.UpsertStyle
 	inExcluded              bool
+	cteScope                []query.CTE
 	expressionValidator     func(query.Expression) error
 	compilerExpressionDepth int
 }
@@ -161,6 +186,33 @@ func (r *renderer) compiler() dialect.Compiler {
 func (r *renderer) writeSelect(s query.Select) error {
 	previousValidator := r.expressionValidator
 	defer func() { r.expressionValidator = previousValidator }()
+	previous := r.cteScope
+	owned := append([]query.CTE(nil), previous...)
+	owned = append(owned, s.CTEs()...)
+	r.cteScope = owned
+	defer func() { r.cteScope = previous }()
+	if err := r.validateSelectSources(s); err != nil {
+		return err
+	}
+	if ctes := s.CTEs(); len(ctes) > 0 {
+		r.builder.WriteString("WITH ")
+		for i, cte := range ctes {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			name, err := r.quoteIdentifier(cte.Name())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(name)
+			r.builder.WriteString(" AS (")
+			if err := r.writeQueryBody(cte.Query().Body()); err != nil {
+				return err
+			}
+			r.builder.WriteByte(')')
+		}
+		r.builder.WriteByte(' ')
+	}
 	r.builder.WriteString("SELECT ")
 	if s.Distinct() {
 		r.builder.WriteString("DISTINCT ")
@@ -287,10 +339,247 @@ func (r *renderer) writeSelect(s query.Select) error {
 			return err
 		}
 	}
+	if lock, ok := s.Lock(); ok {
+		if err := r.writeLock(lock); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (r *renderer) writeTable(table query.TableRef) error {
+func (r *renderer) writeLock(lock query.Lock) error {
+	strength := lock.Strength()
+	baseCapability := dialect.CapabilitySelectForUpdate
+	clause := "FOR UPDATE"
+	switch strength {
+	case query.LockNoKeyUpdate:
+		if r.dialect.Name() != "postgresql" {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR NO KEY UPDATE"}
+		}
+		clause = "FOR NO KEY UPDATE"
+	case query.LockShare:
+		baseCapability = dialect.CapabilitySelectForShare
+		clause = "FOR SHARE"
+	case query.LockKeyShare:
+		if r.dialect.Name() != "postgresql" {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR KEY SHARE"}
+		}
+		baseCapability = dialect.CapabilitySelectForShare
+		clause = "FOR KEY SHARE"
+	}
+	if !r.dialect.Supports(baseCapability) {
+		return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: clause}
+	}
+	if len(lock.Tables()) > 0 && !r.dialect.Supports(dialect.CapabilitySelectLockOf) {
+		return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... OF"}
+	}
+	switch lock.WaitMode() {
+	case query.LockWaitNoWait:
+		if !r.dialect.Supports(dialect.CapabilitySelectLockNoWait) {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... NOWAIT"}
+		}
+	case query.LockWaitSkipLocked:
+		if !r.dialect.Supports(dialect.CapabilitySelectLockSkipLocked) {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... SKIP LOCKED"}
+		}
+	}
+	r.builder.WriteByte(' ')
+	r.builder.WriteString(clause)
+	if tables := lock.Tables(); len(tables) > 0 {
+		r.builder.WriteString(" OF ")
+		for i, table := range tables {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			name, err := r.quoteIdentifier(table.Qualifier())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(name)
+		}
+	}
+	switch lock.WaitMode() {
+	case query.LockWaitNoWait:
+		r.builder.WriteString(" NOWAIT")
+	case query.LockWaitSkipLocked:
+		r.builder.WriteString(" SKIP LOCKED")
+	}
+	return nil
+}
+
+func (r *renderer) writeQueryBody(body query.QueryBody) error {
+	switch body := body.(type) {
+	case query.Select:
+		return r.writeSelect(body)
+	case *query.Select:
+		if body == nil {
+			return fmt.Errorf("unsupported query body %T", body)
+		}
+		return r.writeSelect(*body)
+	case query.Compound:
+		return r.writeCompound(body)
+	case *query.Compound:
+		if body == nil {
+			return fmt.Errorf("unsupported query body %T", body)
+		}
+		return r.writeCompound(*body)
+	default:
+		return fmt.Errorf("unsupported query body %T", body)
+	}
+}
+
+func (r *renderer) writeCompound(compound query.Compound) error {
+	parenthesizeOperands := r.dialect.Name() != "sqlite"
+	if parenthesizeOperands {
+		r.builder.WriteByte('(')
+	}
+	if err := r.writeQueryBody(compound.Left().Body()); err != nil {
+		return err
+	}
+	if parenthesizeOperands {
+		r.builder.WriteByte(')')
+	}
+	r.builder.WriteByte(' ')
+	switch compound.Operator() {
+	case query.Union:
+		r.builder.WriteString("UNION")
+	case query.UnionAll:
+		r.builder.WriteString("UNION ALL")
+	case query.Intersect:
+		r.builder.WriteString("INTERSECT")
+	case query.Except:
+		r.builder.WriteString("EXCEPT")
+	default:
+		return fmt.Errorf("unsupported compound operator %d", compound.Operator())
+	}
+	if parenthesizeOperands {
+		r.builder.WriteString(" (")
+	} else {
+		r.builder.WriteByte(' ')
+	}
+	if err := r.writeQueryBody(compound.Right().Body()); err != nil {
+		return err
+	}
+	if parenthesizeOperands {
+		r.builder.WriteByte(')')
+	}
+	return nil
+}
+
+type visibleSource struct {
+	qualifier  string
+	schema     string
+	descriptor string
+}
+
+func visibleSourceFromTable(table query.RelationRef) visibleSource {
+	return visibleSource{
+		qualifier:  table.Qualifier(),
+		schema:     table.QualifierSchema(),
+		descriptor: table.Definition().QualifiedName(),
+	}
+}
+
+func (r *renderer) validateSelectSources(s query.Select) error {
+	localCTEs := s.CTEs()
+	ctes := append(append([]query.CTE(nil), r.cteScope...), localCTEs...)
+	for i, left := range localCTEs {
+		for j := 0; j < i; j++ {
+			if dialect.IdentifiersEqual(r.dialect, localCTEs[j].Name(), left.Name()) {
+				return fmt.Errorf("CTE names %q and %q collide in the %s dialect", localCTEs[j].Name(), left.Name(), r.dialect.Name())
+			}
+		}
+	}
+	sources := make([]visibleSource, 0, len(s.Correlations())+1+len(s.Joins()))
+	add := func(table query.RelationRef) error {
+		if cteName := table.CTEName(); cteName != "" {
+			found := false
+			for _, cte := range ctes {
+				if cte.Name() == cteName && cte.Identity() == table.CTEIdentity() {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("CTE %q is not defined by this SELECT", cteName)
+			}
+		}
+		candidate := visibleSourceFromTable(table)
+		for _, existing := range sources {
+			if !r.sourceIdentifiersConflict(existing, candidate) {
+				continue
+			}
+			return fmt.Errorf("sources %q and %q share the rendered qualifier %q in the %s dialect; use a distinct alias", existing.descriptor, candidate.descriptor, candidate.qualifier, r.dialect.Name())
+		}
+		sources = append(sources, candidate)
+		return nil
+	}
+	for _, correlation := range s.Correlations() {
+		if err := add(correlation); err != nil {
+			return err
+		}
+	}
+	if err := add(s.From()); err != nil {
+		return err
+	}
+	for _, join := range s.Joins() {
+		if err := add(join.Source()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *renderer) sourceIdentifiersConflict(left, right visibleSource) bool {
+	if !dialect.IdentifiersEqual(r.dialect, left.qualifier, right.qualifier) {
+		return false
+	}
+	if left.schema != "" && right.schema != "" {
+		return dialect.IdentifiersEqual(r.dialect, left.schema, right.schema)
+	}
+	return true
+}
+
+func (r *renderer) writeTable(table query.RelationRef) error {
+	if physical, ok := table.Table(); ok {
+		return r.writePhysicalTable(physical)
+	}
+	if cte := table.CTEName(); cte != "" {
+		name, err := r.quoteIdentifier(cte)
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(name)
+		if table.Alias() != cte {
+			r.builder.WriteString(" AS ")
+			alias, err := r.quoteIdentifier(table.Alias())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(alias)
+		}
+		return nil
+	}
+	if table.Alias() == "" {
+		return fmt.Errorf("relation %q must have an alias", table.QualifiedName())
+	}
+	if body := table.ResultBody(); body != nil {
+		r.builder.WriteByte('(')
+		if err := r.writeQueryBody(body); err != nil {
+			return err
+		}
+		r.builder.WriteString(") AS ")
+		alias, err := r.quoteIdentifier(table.Alias())
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(alias)
+		return nil
+	}
+	return fmt.Errorf("unsupported relation %q", table.QualifiedName())
+}
+
+func (r *renderer) writePhysicalTable(table query.TableRef) error {
 	name, err := r.quoteQualified(table.Schema(), table.Name())
 	if err != nil {
 		return err
@@ -403,6 +692,118 @@ func (r *renderer) writeExpressionBuiltin(expression query.Expression) error {
 			return err
 		}
 		r.builder.WriteByte(')')
+		return nil
+	case query.Case:
+		r.builder.WriteString("(CASE")
+		if operand := expression.Operand(); operand != nil {
+			r.builder.WriteByte(' ')
+			if err := r.writeExpression(operand); err != nil {
+				return err
+			}
+		}
+		for _, branch := range expression.Branches() {
+			r.builder.WriteString(" WHEN ")
+			if err := r.writeExpression(branch.Predicate()); err != nil {
+				return err
+			}
+			r.builder.WriteString(" THEN ")
+			if err := r.writeExpression(branch.Result()); err != nil {
+				return err
+			}
+		}
+		if fallback, ok := expression.Fallback(); ok {
+			r.builder.WriteString(" ELSE ")
+			if err := r.writeExpression(fallback); err != nil {
+				return err
+			}
+		}
+		r.builder.WriteString(" END)")
+		return nil
+	case query.Cast:
+		r.builder.WriteString("CAST(")
+		if err := r.writeExpression(expression.Expression()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" AS ")
+		typeName, err := r.dialect.TypeName(schema.ColumnDef{Type: expression.Target()})
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(typeName)
+		r.builder.WriteByte(')')
+		return nil
+	case query.Filter:
+		if !r.dialect.Supports(dialect.CapabilityAggregateFilter) {
+			return &UnsupportedAggregateFilterError{Dialect: r.dialect.Name()}
+		}
+		if err := r.writeExpression(expression.Aggregate()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" FILTER (WHERE ")
+		if err := r.writeExpression(expression.Predicate()); err != nil {
+			return err
+		}
+		r.builder.WriteByte(')')
+		return nil
+	case query.Over:
+		if err := r.writeExpression(expression.Expression()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" OVER (")
+		window := expression.Window()
+		if partition := window.Partition(); len(partition) > 0 {
+			r.builder.WriteString("PARTITION BY ")
+			for i, part := range partition {
+				if i > 0 {
+					r.builder.WriteString(", ")
+				}
+				if err := r.writeExpression(part); err != nil {
+					return err
+				}
+			}
+		}
+		if orders := window.Order(); len(orders) > 0 {
+			if len(window.Partition()) > 0 {
+				r.builder.WriteByte(' ')
+			}
+			r.builder.WriteString("ORDER BY ")
+			for i, order := range orders {
+				if i > 0 {
+					r.builder.WriteString(", ")
+				}
+				if err := r.writeExpression(order.Expression()); err != nil {
+					return err
+				}
+				if order.Descending() {
+					r.builder.WriteString(" DESC")
+				}
+			}
+		}
+		r.builder.WriteString(")")
+		return nil
+	case query.TrustedFragment:
+		parts := expression.Parts()
+		fragments := strings.Split(expression.SQL(), "{}")
+		for i, fragment := range fragments {
+			r.builder.WriteString(fragment)
+			if i >= len(parts) {
+				continue
+			}
+			switch part := parts[i].(type) {
+			case interface{ ValueExpression() query.Expression }:
+				if err := r.writeExpression(part.ValueExpression()); err != nil {
+					return err
+				}
+			case interface{ IdentifierValue() query.Identifier }:
+				quoted, err := r.quoteIdentifier(part.IdentifierValue().Name())
+				if err != nil {
+					return err
+				}
+				r.builder.WriteString(quoted)
+			default:
+				return fmt.Errorf("unsupported fragment part %T", part)
+			}
+		}
 		return nil
 	case query.Logical:
 		r.builder.WriteByte('(')

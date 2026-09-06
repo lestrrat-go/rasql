@@ -12,8 +12,12 @@ type ForeignKeyOption interface {
 type foreignKeyBuilder struct {
 	key              ForeignKeyDef
 	relationshipName string
+	relationshipOpts []RelationshipOption
 	hasRelationship  bool
 }
+
+// RelationshipOption configures the relationship derived by RelationshipNamed.
+type RelationshipOption func(*RelationshipDef)
 
 // foreignKeyTableOption carries either a built foreignKeyBuilder or the
 // first error a ForeignKeyOption reported, the same deferred-error shape
@@ -34,14 +38,18 @@ func (o foreignKeyTableOption) applyTable(b *tableBuilder) error {
 	if o.builder.relationshipName == "" {
 		return validationError("foreign_keys", "RelationshipNamed name must not be empty")
 	}
-	b.relationships = append(b.relationships, RelationshipDef{
+	relationship := RelationshipDef{
 		Name:              o.builder.relationshipName,
 		Kind:              RelationshipBelongsTo,
 		Columns:           append([]string(nil), o.builder.key.Columns...),
 		ReferencedSchema:  o.builder.key.ReferencedSchema,
 		ReferencedTable:   o.builder.key.ReferencedTable,
 		ReferencedColumns: append([]string(nil), o.builder.key.ReferencedColumns...),
-	})
+	}
+	for _, option := range o.builder.relationshipOpts {
+		option(&relationship)
+	}
+	b.relationships = append(b.relationships, relationship)
 	return nil
 }
 
@@ -133,21 +141,31 @@ func (o onUpdateForeignKeyOption) applyForeignKey(b *foreignKeyBuilder) error {
 	return nil
 }
 
-// asForeignKeyOption names the belongs-to relationship derived from a
-// foreign key.
-type asForeignKeyOption string
-
 // RelationshipNamed derives a schema.RelationshipDef of kind
 // RelationshipBelongsTo from the foreign key, named name, exactly as
 // schema.TableDef{Relationships: ...} would state one by hand. Set it when
 // the generated method name should differ from the one rasqlgen would
-// otherwise derive from the local column name.
-func RelationshipNamed(name string) ForeignKeyOption {
-	return asForeignKeyOption(name)
+// otherwise derive from the local column name. Relationship options can pin
+// the public inverse method when shorthand would be ambiguous.
+func RelationshipNamed(name string, options ...RelationshipOption) ForeignKeyOption {
+	return asForeignKeyOption{name: name, options: options}
+}
+
+type asForeignKeyOption struct {
+	name    string
+	options []RelationshipOption
 }
 
 func (o asForeignKeyOption) applyForeignKey(b *foreignKeyBuilder) error {
 	b.hasRelationship = true
-	b.relationshipName = string(o)
+	b.relationshipName = o.name
+	b.relationshipOpts = append([]RelationshipOption(nil), o.options...)
 	return nil
+}
+
+// InverseNamed pins the generated inverse method name on the referenced table.
+func InverseNamed(name string) RelationshipOption {
+	return func(relationship *RelationshipDef) {
+		relationship.InverseName = name
+	}
 }

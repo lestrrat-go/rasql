@@ -1,6 +1,10 @@
 package query
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/schema"
+)
 
 // Expression is a dialect-neutral SQL expression. External expressions may
 // implement this exported marker and be supplied to a dialect.Compiler.
@@ -18,7 +22,7 @@ type CustomExpression interface {
 
 // ColumnRef is a typed reference to a table column.
 type ColumnRef struct {
-	source TableRef
+	source RelationRef
 	name   string
 }
 
@@ -34,10 +38,12 @@ func (c ColumnRef) Validate() error {
 	if err := c.source.validate(); err != nil {
 		return fmt.Errorf("query column: %q: %w", c.name, err)
 	}
-	if _, ok := c.source.column(c.name); !ok {
-		return fmt.Errorf("query column: table %q has no column %q", c.source.QualifiedName(), c.name)
+	for _, column := range c.source.Columns() {
+		if column.Name == c.name {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("query column: table %q has no column %q", c.source.QualifiedName(), c.name)
 }
 
 // Name returns the column name.
@@ -46,7 +52,7 @@ func (c ColumnRef) Name() string {
 }
 
 // Source returns the table that owns the column.
-func (c ColumnRef) Source() TableRef {
+func (c ColumnRef) Source() RelationRef {
 	return c.source
 }
 
@@ -97,14 +103,15 @@ func (c ExcludedColumn) Column() ColumnRef {
 // package builds one from a plain string, so it cannot become a way to place
 // arbitrary text in a rendered statement.
 type TableIdentifier struct {
-	table TableRef
+	table RelationRef
 }
 
 func (TableIdentifier) ExpressionNode() {}
 
 // Table returns the table whose bare name is rendered.
 func (t TableIdentifier) Table() TableRef {
-	return t.table
+	table, _ := t.table.Table()
+	return table
 }
 
 // Value is a bound SQL argument. Its value is never interpolated into SQL text.
@@ -171,7 +178,12 @@ const (
 	// builds the common shape directly; Compare accepts this constant too,
 	// for the less common shape that tests one column rather than the whole
 	// table.
-	OperatorMatch BinaryOperator = "MATCH"
+	OperatorMatch    BinaryOperator = "MATCH"
+	OperatorAdd      BinaryOperator = "+"
+	OperatorSubtract BinaryOperator = "-"
+	OperatorMultiply BinaryOperator = "*"
+	OperatorDivide   BinaryOperator = "/"
+	OperatorModulo   BinaryOperator = "%"
 )
 
 // Binary combines two expressions with an operator.
@@ -233,6 +245,12 @@ func LessThanOrEqual(left any, right any) Binary {
 	return Compare(left, OperatorLessThanOrEqual, right)
 }
 
+func Add(left any, right any) Binary      { return Compare(left, OperatorAdd, right) }
+func Subtract(left any, right any) Binary { return Compare(left, OperatorSubtract, right) }
+func Multiply(left any, right any) Binary { return Compare(left, OperatorMultiply, right) }
+func Divide(left any, right any) Binary   { return Compare(left, OperatorDivide, right) }
+func Modulo(left any, right any) Binary   { return Compare(left, OperatorModulo, right) }
+
 // Like compares left and right with SQL LIKE. Either operand may be a plain
 // Go value, which is bound; nil binds as NULL, so IsNull is what tests for
 // NULL.
@@ -253,7 +271,7 @@ func Like(left any, right any) Binary {
 // directly; Match only builds the whole-table shape, since that is the one
 // bm25 and the target query in the rasql documentation both need.
 func Match(table TableRef, expr any) Binary {
-	return Binary{left: TableIdentifier{table: table}, operator: OperatorMatch, right: operand(expr)}
+	return Binary{left: TableIdentifier{table: Relation(table)}, operator: OperatorMatch, right: operand(expr)}
 }
 
 // Left returns the left expression.
@@ -270,6 +288,144 @@ func (b Binary) Operator() BinaryOperator {
 func (b Binary) Right() Expression {
 	return b.right
 }
+
+// CaseWhen is one WHEN branch of a CASE expression.
+type CaseWhen struct {
+	predicate Expression
+	result    Expression
+}
+
+func When(predicate Expression, result any) CaseWhen {
+	return CaseWhen{predicate: predicate, result: operand(result)}
+}
+
+func (w CaseWhen) Predicate() Expression { return w.predicate }
+func (w CaseWhen) Result() Expression    { return w.result }
+
+// Case is a searched or simple CASE expression.
+type Case struct {
+	operand     Expression
+	branches    []CaseWhen
+	fallback    Expression
+	hasFallback bool
+}
+
+func (Case) ExpressionNode() {}
+
+func SearchedCase(branches ...CaseWhen) Case {
+	return Case{branches: append([]CaseWhen(nil), branches...)}
+}
+
+func SimpleCase(operandValue any, branches ...CaseWhen) Case {
+	return Case{operand: operand(operandValue), branches: append([]CaseWhen(nil), branches...)}
+}
+
+func (c Case) Else(value any) Case {
+	c.fallback = operand(value)
+	c.hasFallback = true
+	return c
+}
+
+func (c Case) Operand() Expression          { return c.operand }
+func (c Case) Branches() []CaseWhen         { return append([]CaseWhen(nil), c.branches...) }
+func (c Case) Fallback() (Expression, bool) { return c.fallback, c.hasFallback }
+
+// Cast converts an expression to a schema type.
+type Cast struct {
+	expr   Expression
+	target schema.ColumnType
+}
+
+func (Cast) ExpressionNode() {}
+
+func CastAs(expressionValue any, target schema.ColumnType) Cast {
+	return Cast{expr: operand(expressionValue), target: target}
+}
+
+func (c Cast) Expression() Expression    { return c.expr }
+func (c Cast) Target() schema.ColumnType { return c.target }
+
+// Filter applies an aggregate FILTER (WHERE ...) predicate.
+type Filter struct {
+	aggregate Expression
+	predicate Expression
+}
+
+func (Filter) ExpressionNode() {}
+
+func FilterWhere(aggregate Expression, predicate Expression) Filter {
+	return Filter{aggregate: aggregate, predicate: predicate}
+}
+
+func (f Filter) Aggregate() Expression { return f.aggregate }
+func (f Filter) Predicate() Expression { return f.predicate }
+
+type WindowFrame string
+
+const WindowRows WindowFrame = "ROWS"
+
+type WindowSpec struct {
+	partition []Expression
+	order     []Order
+}
+
+func Window(partition []Expression, order ...Order) WindowSpec {
+	return WindowSpec{partition: append([]Expression(nil), partition...), order: append([]Order(nil), order...)}
+}
+
+func (w WindowSpec) Partition() []Expression { return append([]Expression(nil), w.partition...) }
+func (w WindowSpec) Order() []Order          { return append([]Order(nil), w.order...) }
+
+type Over struct {
+	expr   Expression
+	window WindowSpec
+}
+
+func (Over) ExpressionNode() {}
+
+func OverWindow(expression Expression, window WindowSpec) Over {
+	return Over{expr: expression, window: window}
+}
+
+func (o Over) Expression() Expression { return o.expr }
+func (o Over) Window() WindowSpec     { return o.window }
+
+type Identifier struct{ name string }
+
+func Ident(name string) Identifier { return Identifier{name: name} }
+func (i Identifier) Name() string  { return i.name }
+
+type FragmentPart interface{ fragmentPart() }
+
+type fragmentHole struct{ value Expression }
+
+func (fragmentHole) fragmentPart()                 {}
+func (h fragmentHole) ValueExpression() Expression { return h.value }
+
+func Hole(value any) FragmentPart { return fragmentHole{value: operand(value)} }
+
+type identifierHole struct{ identifier Identifier }
+
+func (identifierHole) fragmentPart()                 {}
+func (h identifierHole) IdentifierValue() Identifier { return h.identifier }
+
+func IdentifierHole(identifier Identifier) FragmentPart {
+	return identifierHole{identifier: identifier}
+}
+
+type TrustedFragment struct {
+	sql   string
+	parts []FragmentPart
+}
+
+func (TrustedFragment) ExpressionNode() {}
+
+func TrustedSQL(sql string, parts ...FragmentPart) TrustedFragment {
+	return TrustedFragment{sql: sql, parts: append([]FragmentPart(nil), parts...)}
+}
+
+func (f TrustedFragment) SQL() string           { return f.sql }
+func (f TrustedFragment) Parts() []FragmentPart { return append([]FragmentPart(nil), f.parts...) }
 
 // LogicalOperator combines multiple boolean expressions.
 type LogicalOperator string
@@ -667,7 +823,7 @@ func Avg(expression Expression) Function {
 // typed by hand.
 func BM25(table TableRef, weights ...float64) Function {
 	arguments := make([]any, 0, len(weights)+1)
-	arguments = append(arguments, TableIdentifier{table: table})
+	arguments = append(arguments, TableIdentifier{table: Relation(table)})
 	for _, weight := range weights {
 		arguments = append(arguments, weight)
 	}

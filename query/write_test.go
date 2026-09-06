@@ -12,9 +12,13 @@ import (
 // checked for a RETURNING clause without a type switch.
 var (
 	_ query.WriteStatement = query.Insert{}
+	_ query.WriteStatement = (*query.Insert)(nil)
 	_ query.WriteStatement = query.Update{}
+	_ query.WriteStatement = (*query.Update)(nil)
 	_ query.WriteStatement = query.Delete{}
+	_ query.WriteStatement = (*query.Delete)(nil)
 	_ query.WriteStatement = query.Upsert{}
+	_ query.WriteStatement = (*query.Upsert)(nil)
 )
 
 var (
