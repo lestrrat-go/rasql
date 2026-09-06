@@ -241,15 +241,6 @@ func canonicalBindingType(expression string, imports []schema.GoImport) (string,
 	})
 }
 
-func indexOfImport(path string, imports []schema.GoImport) int {
-	for i, imported := range imports {
-		if imported.Path == path {
-			return i
-		}
-	}
-	return -1
-}
-
 func rewriteBindingExpression(expression string, imports []schema.GoImport, aliases map[string]string) (string, error) {
 	return rewriteBindingExpressionWithNames(expression, imports, func(path string) string { return aliases[path] })
 }
