@@ -1117,6 +1117,11 @@ source: [examples/rasql_debug_query_example_test.go](https://github.com/lestrrat
 
 When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `rasql.DB` needed.
 
+Static SQL packages can describe a query against SQLite before publishing generated code. A described query gets an
+ordered result row type and a typed execution helper. The helper follows the configured cardinality: `Many` returns an
+iterator, `ZeroOrOne` reports whether a row was found, and `ExactlyOne` returns `ErrNoRows` when the query is empty.
+The describer validates selected columns and observes nullability from the database before source generation.
+
 
 ## Next
 

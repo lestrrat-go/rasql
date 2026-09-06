@@ -216,11 +216,12 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 		for index, bind := range def.Binds {
 			source.WriteString(", " + bind.Name + " " + parameterTypes[index])
 		}
-		if def.Result.Cardinality == 0 {
+		switch def.Result.Cardinality {
+		case 0:
 			source.WriteString(") (iter.Seq2[" + resultType + ", error], error) { return rasql.QueryRendered[" + resultType + "](ctx, db, " + functionName + "(")
-		} else if def.Result.Cardinality == 1 {
+		case 1:
 			source.WriteString(") (" + resultType + ", bool, error) { return rasql.QueryRenderedOptional[" + resultType + "](ctx, db, " + functionName + "(")
-		} else {
+		default:
 			source.WriteString(") (" + resultType + ", error) { return rasql.QueryRenderedOne[" + resultType + "](ctx, db, " + functionName + "(")
 		}
 		for index, bind := range def.Binds {
