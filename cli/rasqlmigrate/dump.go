@@ -900,15 +900,14 @@ func quoteQualifiedTableName(d dialect.Dialect, table schema.TableDef) (string, 
 }
 
 // buildMigrationFormatFiles builds one .up.sql/.down.sql pair per CREATE
-// TABLE statement, and one .up.sql per CREATE INDEX statement with no
-// matching .down.sql, numbered in dependency order: every step for a table
+// TABLE statement and one .up.sql/.down.sql pair per CREATE INDEX statement,
+// numbered in dependency order.
 // (its create, then its own indexes, in table.Indexes order) is numbered
 // before the next table's steps begin. Dropping the table undoes its
 // indexes too, and reverting an index step ahead of the table drop that
 // still references it in a foreign key is what MySQL error 1553 exists to
 // prevent -- see internal/migrationdir's doc on reverse sources running in
-// descending filename order, and docs/core/07-migrations.md's note that a
-// migration may hold fewer reverse sources than forward ones.
+// descending filename order.
 func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]dumpFile, error) {
 	var files []dumpFile
 	step := 0
@@ -935,7 +934,18 @@ func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]d
 		for i, indexSQL := range indexSQLs {
 			step++
 			indexStem := fmt.Sprintf("%03d_create_index_%s", step, filenamePart(table.Indexes[i].Name))
-			files = append(files, dumpFile{Name: indexStem + ".up.sql", SQL: indexSQL + ";\n"})
+			indexName, err := d.QuoteIdentifier(table.Indexes[i].Name)
+			if err != nil {
+				return nil, fmt.Errorf("table %q index %q: %w", table.Name, table.Indexes[i].Name, err)
+			}
+			dropIndexSQL := "DROP INDEX " + indexName + ";\n"
+			if d.Name() == "mysql" {
+				dropIndexSQL = "DROP INDEX " + indexName + " ON " + dropName + ";\n"
+			}
+			files = append(files,
+				dumpFile{Name: indexStem + ".up.sql", SQL: indexSQL + ";\n"},
+				dumpFile{Name: indexStem + ".down.sql", SQL: dropIndexSQL},
+			)
 		}
 	}
 	return files, nil
@@ -991,9 +1001,22 @@ func writeDumpOutput(outputDirectory, dialectName string, files []dumpFile) erro
 		return fmt.Errorf("dump: stat output directory %q: %w", outputDirectory, err)
 	}
 
-	plan := diff.Plan{Dialect: dialectName, Statements: make([]diff.PlannedStatement, len(files))}
-	for i, f := range files {
-		plan.Statements[i] = diff.PlannedStatement{Source: f.Name, SQL: f.SQL, Summary: f.Name}
+	byName := make(map[string]string)
+	for _, file := range files {
+		if strings.HasSuffix(file.Name, ".down.sql") {
+			byName[strings.TrimSuffix(file.Name, ".down.sql")] = file.SQL
+		}
 	}
+	statements := make([]diff.PlannedStatement, 0, len(files))
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name, ".up.sql") {
+			continue
+		}
+		stem := strings.TrimSuffix(file.Name, ".up.sql")
+		statements = append(statements, diff.PlannedStatement{
+			Source: stem + ".sql", SQL: file.SQL, ReverseSQL: byName[stem], Summary: file.Name,
+		})
+	}
+	plan := diff.Plan{Dialect: dialectName, Statements: statements}
 	return diff.WriteMigration(outputDirectory, plan)
 }

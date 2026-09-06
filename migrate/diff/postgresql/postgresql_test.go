@@ -552,14 +552,16 @@ func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 		Dialect: "postgresql",
 		Statements: []diff.PlannedStatement{
 			{
-				Source:  "001_add_column_members_email.sql",
-				SQL:     "ALTER TABLE members ADD COLUMN email text;\n",
-				Summary: "add column members.email",
+				Source:     "001_add_column_members_email.sql",
+				SQL:        "ALTER TABLE members ADD COLUMN email text;\n",
+				ReverseSQL: "ALTER TABLE members DROP COLUMN email;\n",
+				Summary:    "add column members.email",
 			},
 			{
-				Source:  "002_create_index_members_email_idx.sql",
-				SQL:     "CREATE INDEX members_email_idx ON members (email);\n",
-				Summary: "create index members_email_idx",
+				Source:     "002_create_index_members_email_idx.sql",
+				SQL:        "CREATE INDEX members_email_idx ON members (email);\n",
+				ReverseSQL: "DROP INDEX members_email_idx;\n",
+				Summary:    "create index members_email_idx",
 			},
 		},
 	}, plan)
@@ -576,9 +578,10 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
 	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_create_table_projects.sql",
-		SQL:     "CREATE TABLE projects (id bigint PRIMARY KEY, owner_id bigint NOT NULL);\n",
-		Summary: "create table projects",
+		Source:     "001_create_table_projects.sql",
+		SQL:        "CREATE TABLE projects (id bigint PRIMARY KEY, owner_id bigint NOT NULL);\n",
+		ReverseSQL: "DROP TABLE projects;\n",
+		Summary:    "create table projects",
 	}}, plan.Statements)
 }
 
@@ -611,9 +614,10 @@ func TestDiffGeneratesNewRequiredColumnWithDefault(t *testing.T) {
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
 	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_add_column_members_active.sql",
-		SQL:     "ALTER TABLE members ADD COLUMN active boolean NOT NULL DEFAULT TRUE;\n",
-		Summary: "add column members.active",
+		Source:     "001_add_column_members_active.sql",
+		SQL:        "ALTER TABLE members ADD COLUMN active boolean NOT NULL DEFAULT TRUE;\n",
+		ReverseSQL: "ALTER TABLE members DROP COLUMN active;\n",
+		Summary:    "add column members.active",
 	}}, plan.Statements)
 }
 

@@ -181,9 +181,7 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 	plan := diff.Plan{Dialect: "mysql", Statements: make([]diff.PlannedStatement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
-			Source:  statement.name + ".sql",
-			SQL:     statement.sql,
-			Summary: statement.summary,
+			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
 		}
 	}
 	if len(plan.Statements) > 0 {
@@ -253,9 +251,10 @@ func (s *schemaSnapshot) addIndex(source string, statement *mysqlquery.CreateInd
 }
 
 type generatedStatement struct {
-	name    string
-	sql     string
-	summary string
+	name       string
+	sql        string
+	reverseSQL string
+	summary    string
 }
 
 const (
@@ -274,9 +273,8 @@ func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStat
 	// WriteMigration prefixes each generated statement with its sequence position, so equal normalized
 	// components remain distinct in the public migration output; this is covered by its ordered plan.
 	return generatedStatement{
-		name:    "create_table_" + filenamePart(name),
-		sql:     sql,
-		summary: "create table " + name,
+		name: "create_table_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
 	}, nil
 }
 
@@ -289,9 +287,8 @@ func createIndexStatement(index *mysqlquery.CreateIndexStatement) (generatedStat
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name),
-		sql:     sql,
-		summary: "create index " + name,
+		name: "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP INDEX %s ON %s;\n", reverseName(copy.Name), reverseName(copy.Table)), summary: "create index " + name,
 	}, nil
 }
 
@@ -336,9 +333,9 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 			}
 			name := displayName(target.Name)
 			generated = append(generated, generatedStatement{
-				name:    "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name),
-				sql:     sql,
-				summary: "add column " + name + "." + column.Name.Name,
+				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
+				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.Name), reverseIdentifier(column.Name)),
+				summary:    "add column " + name + "." + column.Name.Name,
 			})
 			continue
 		}
@@ -657,6 +654,21 @@ func qualifiedNameKey(name mysqlquery.QualifiedName, caseInsensitive bool) strin
 
 func displayName(name mysqlquery.QualifiedName) string {
 	return name.String()
+}
+
+func reverseName(name mysqlquery.QualifiedName) string {
+	parts := make([]string, len(name))
+	for index, part := range name {
+		parts[index] = reverseIdentifier(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func reverseIdentifier(identifier mysqlquery.Identifier) string {
+	if !identifier.Quoted {
+		return identifier.Name
+	}
+	return "`" + strings.ReplaceAll(identifier.Name, "`", "``") + "`"
 }
 
 func filenamePart(value string) string {
