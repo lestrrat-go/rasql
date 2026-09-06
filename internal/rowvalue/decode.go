@@ -243,7 +243,11 @@ func assign(destination reflect.Value, value any) error {
 			destination.SetFloat(float64(source.Uint()))
 			return nil
 		case source.Kind() == reflect.Float32 || source.Kind() == reflect.Float64:
-			destination.SetFloat(source.Float())
+			value := source.Float()
+			if !math.IsInf(value, 0) && !math.IsNaN(value) && destination.OverflowFloat(value) {
+				return fmt.Errorf("%v overflows %s", value, destination.Type())
+			}
+			destination.SetFloat(value)
 			return nil
 		}
 	}

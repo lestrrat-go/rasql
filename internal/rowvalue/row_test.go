@@ -3,6 +3,7 @@ package rowvalue_test
 import (
 	"database/sql"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -75,6 +76,97 @@ func TestGetRejectsWrongType(t *testing.T) {
 
 	_, err = rowvalue.Get[int64](result, "id")
 	require.Error(t, err)
+}
+
+func TestAssignFloat32RejectsFiniteOverflow(t *testing.T) {
+	tooLarge := math.Nextafter(float64(math.MaxFloat32), math.Inf(1))
+	for _, test := range []struct {
+		name  string
+		value float64
+	}{
+		{name: "positive", value: tooLarge},
+		{name: "negative", value: -tooLarge},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := rowvalue.NewRow([]string{"ratio"}, []any{test.value})
+			require.NoError(t, err)
+
+			_, err = rowvalue.Get[float32](result, "ratio")
+			require.ErrorContains(t, err, `row: decode column "ratio"`)
+			require.ErrorContains(t, err, "overflows float32")
+
+			type row struct {
+				Ratio float32
+			}
+			_, err = rowvalue.Decode[row](result)
+			require.ErrorContains(t, err, `row: decode column "ratio"`)
+			require.ErrorContains(t, err, "overflows float32")
+		})
+	}
+}
+
+func TestAssignFloat32PreservesRangeAndSpecialValues(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value float64
+		check func(*testing.T, float32)
+	}{
+		{name: "ordinary", value: 1.5, check: func(t *testing.T, got float32) {
+			require.Equal(t, float32(1.5), got)
+		}},
+		{name: "maximum", value: math.MaxFloat32, check: func(t *testing.T, got float32) {
+			require.Equal(t, float32(math.MaxFloat32), got)
+		}},
+		{name: "positive infinity", value: math.Inf(1), check: func(t *testing.T, got float32) {
+			require.True(t, math.IsInf(float64(got), 1))
+		}},
+		{name: "negative infinity", value: math.Inf(-1), check: func(t *testing.T, got float32) {
+			require.True(t, math.IsInf(float64(got), -1))
+		}},
+		{name: "NaN", value: math.NaN(), check: func(t *testing.T, got float32) {
+			require.True(t, math.IsNaN(float64(got)))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := rowvalue.NewRow([]string{"ratio"}, []any{test.value})
+			require.NoError(t, err)
+			got, err := rowvalue.Get[float32](result, "ratio")
+			require.NoError(t, err)
+			test.check(t, got)
+		})
+	}
+}
+
+func TestAssignFloat64AcceptsLargeAndSpecialValues(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value float64
+		check func(*testing.T, float64)
+	}{
+		{name: "positive large", value: 1e100, check: func(t *testing.T, got float64) {
+			require.Equal(t, 1e100, got)
+		}},
+		{name: "negative large", value: -1e100, check: func(t *testing.T, got float64) {
+			require.Equal(t, -1e100, got)
+		}},
+		{name: "positive infinity", value: math.Inf(1), check: func(t *testing.T, got float64) {
+			require.True(t, math.IsInf(got, 1))
+		}},
+		{name: "negative infinity", value: math.Inf(-1), check: func(t *testing.T, got float64) {
+			require.True(t, math.IsInf(got, -1))
+		}},
+		{name: "NaN", value: math.NaN(), check: func(t *testing.T, got float64) {
+			require.True(t, math.IsNaN(got))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := rowvalue.NewRow([]string{"ratio"}, []any{test.value})
+			require.NoError(t, err)
+			got, err := rowvalue.Get[float64](result, "ratio")
+			require.NoError(t, err)
+			test.check(t, got)
+		})
+	}
 }
 
 func TestGetAndDecodePopulateTypedValues(t *testing.T) {
