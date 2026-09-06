@@ -51,7 +51,7 @@ This page covers the ORM, the builder that knows the Go type of a row. [The SQL 
 | | Typed `rasql` | `rasql/dynamic` |
 | --- | --- | --- |
 | Table input | `rasql.Table[T]`, usually generated | `query.TableRef` |
-| Column names | Generated accessors such as `users.ID()` | Strings such as `"id"`, or `query` projections |
+| Column names | Generated typed accessors such as `users.ID()` | Strings such as `"id"`, or `query` projections |
 | Result rows | `T`, decoded by the typed builder | `dynamic.Row`, read with `dynamic.Get` or `dynamic.Decode` |
 | Database handle | `rasql.DB` | The same `rasql.DB` |
 
@@ -59,7 +59,7 @@ Both facades build the same dialect-neutral statements and execute them through 
 
 `rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
 
-Columns come from the generated table value, so `users.ID()` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](02-generated-store.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
+Columns come from the generated table value, so `users.ID()` is a typed reference already bound to the `users` table. Use `users.ID().Ref()` when a dynamic `query.ColumnRef` is required. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](02-generated-store.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
 
 Generated relationship methods provide a typed join and eager-loading path for the supported relationship slice described in [Relationships](../core/01-schema.md#relationships). A child relation such as `orders.User()` exposes `Join()` for a fluent query and `Load(ctx, db, children)` for one batched lookup that returns related rows grouped by foreign-key value. The inverse parent relation such as `users.Orders()` returns children grouped by parent key. Use the ordinary `Join` API for unsupported relationship shapes.
 
@@ -74,6 +74,11 @@ Nullable referenced columns use their nullable generated form. Query
 configuration can set an explicit binding for a standalone parameter or
 override a nullable column deliberately; unconfigured standalone parameters
 remain `any`.
+
+Use `query.TypedIsNull` and `query.TypedIsNotNull` with generated nullable
+accessors. The dynamic `query.IsNull` and `query.IsNotNull` functions remain
+available for `query.Expression` values and do not satisfy typed `Where` or
+`Having` calls.
 
 ## Operation reference
 
