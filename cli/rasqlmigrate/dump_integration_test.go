@@ -36,7 +36,7 @@ import (
 func runPostgreSQLDumpCommand(t *testing.T, outputDirectory string) error {
 	t.Helper()
 	config := dbtest.PostgreSQLConfig(t)
-	return runDump([]string{"-dialect", "postgresql", "-dsn", config.ConnString(), "-format", "schema", "-output", outputDirectory})
+	return runDump([]string{"-dialect", "postgresql", "-dsn", config.ConnString(), "-table", "sequence_cases", "-format", "schema", "-output", outputDirectory})
 }
 
 func TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults(t *testing.T) {
