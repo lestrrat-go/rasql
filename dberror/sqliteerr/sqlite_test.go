@@ -1,7 +1,9 @@
 package sqliteerr_test
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -29,6 +31,7 @@ INSERT INTO users (id, email, parent_id, score) VALUES (1, 'ada@example.com', 1,
 		code     string
 	}{
 		{"unique", `INSERT INTO users (id, email, parent_id, score) VALUES (2, 'ada@example.com', 1, 1)`, dberror.UniqueViolation, "2067"},
+		{"primary key", `INSERT INTO users (id, email, parent_id, score) VALUES (1, 'bob@example.com', 1, 1)`, dberror.UniqueViolation, "1555"},
 		{"foreign key", `INSERT INTO users (id, email, parent_id, score) VALUES (2, 'bob@example.com', 99, 1)`, dberror.ForeignKeyViolation, "787"},
 		{"not null", `INSERT INTO users (id, email, parent_id, score) VALUES (2, NULL, 1, 1)`, dberror.NotNullViolation, "1299"},
 		{"check", `INSERT INTO users (id, email, parent_id, score) VALUES (2, 'bob@example.com', 1, 0)`, dberror.CheckViolation, "275"},
@@ -59,7 +62,12 @@ func TestSQLiteLockClassification(t *testing.T) {
 	require.NoError(t, err)
 	transaction, err := first.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transaction.Rollback()) })
+	t.Cleanup(func() {
+		rollbackErr := transaction.Rollback()
+		if !errors.Is(rollbackErr, sql.ErrTxDone) {
+			require.NoError(t, rollbackErr)
+		}
+	})
 	_, err = transaction.ExecContext(t.Context(), `INSERT INTO locks (id, value) VALUES (1, 'held')`)
 	require.NoError(t, err)
 	_, err = second.ExecContext(t.Context(), `PRAGMA busy_timeout = 100`)
@@ -73,4 +81,17 @@ func TestSQLiteLockClassification(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, dberror.TransactionConflict, metadata.Category)
 	require.Contains(t, []string{"5", "6", "517"}, metadata.NativeCode)
+	wrapper := fmt.Errorf("write failed: %w", err)
+	var recovered *sqlite.Error
+	require.True(t, errors.As(wrapper, &recovered))
+	require.Same(t, native, recovered)
+	joined := errors.Join(context.Canceled, wrapper)
+	metadata, ok = dberror.Classify(joined, sqliteerr.New())
+	require.True(t, ok)
+	require.Equal(t, dberror.TransactionConflict, metadata.Category)
+	require.ErrorIs(t, joined, context.Canceled)
+	sentinel := errors.New("sentinel")
+	metadata, ok = dberror.Classify(sentinel, sqliteerr.New())
+	require.False(t, ok)
+	require.Equal(t, dberror.Metadata{}, metadata)
 }

@@ -1,6 +1,7 @@
 package pgerr_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -31,11 +32,28 @@ func TestClassifyMappingsAndWrappers(t *testing.T) {
 		require.Equal(t, "users_email_key", metadata.Constraint)
 		require.Equal(t, "users", metadata.Table)
 		require.Equal(t, "email", metadata.Column)
+		var recovered *pgconn.PgError
+		require.True(t, errors.As(fmt.Errorf("exec: %w", native), &recovered))
+		require.Same(t, native, recovered)
 	}
-	metadata, ok := dberror.Classify(&pgconn.PgError{Code: "99999"}, pgerr.New())
+	native := &pgconn.PgError{Code: "23505"}
+	joined := errors.Join(context.Canceled, fmt.Errorf("exec: %w", native))
+	metadata, ok := dberror.Classify(joined, pgerr.New())
+	require.True(t, ok)
+	require.Equal(t, dberror.UniqueViolation, metadata.Category)
+	require.ErrorIs(t, joined, context.Canceled)
+	var recovered *pgconn.PgError
+	require.True(t, errors.As(joined, &recovered))
+	require.Same(t, native, recovered)
+	metadata, ok = dberror.Classify(context.Canceled, pgerr.New())
 	require.False(t, ok)
 	require.Equal(t, dberror.Metadata{}, metadata)
-	var native *pgconn.PgError
-	wrapped := fmt.Errorf("exec: %w", &pgconn.PgError{Code: "23505"})
-	require.True(t, errors.As(wrapped, &native))
+	sentinel := errors.New("sentinel")
+	wrapped := fmt.Errorf("exec: %w", sentinel)
+	metadata, ok = dberror.Classify(wrapped, pgerr.New())
+	require.False(t, ok)
+	require.ErrorIs(t, wrapped, sentinel)
+	metadata, ok = dberror.Classify(&pgconn.PgError{Code: "99999"}, pgerr.New())
+	require.False(t, ok)
+	require.Equal(t, dberror.Metadata{}, metadata)
 }

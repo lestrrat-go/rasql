@@ -1,6 +1,8 @@
 package mysqlerr_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -26,8 +28,28 @@ func TestClassifyMappingsAndWrappers(t *testing.T) {
 		require.Equal(t, testCase.category, metadata.Category)
 		require.Equal(t, fmt.Sprint(testCase.number), metadata.NativeCode)
 		require.Equal(t, "42000", metadata.SQLState)
+		var recovered *mysql.MySQLError
+		require.True(t, errors.As(fmt.Errorf("exec: %w", native), &recovered))
+		require.Same(t, native, recovered)
 	}
-	metadata, ok := dberror.Classify(&mysql.MySQLError{Number: 9999}, mysqlerr.New())
+	native := &mysql.MySQLError{Number: 1062}
+	joined := errors.Join(context.Canceled, fmt.Errorf("exec: %w", native))
+	metadata, ok := dberror.Classify(joined, mysqlerr.New())
+	require.True(t, ok)
+	require.Equal(t, dberror.UniqueViolation, metadata.Category)
+	require.ErrorIs(t, joined, context.Canceled)
+	var recovered *mysql.MySQLError
+	require.True(t, errors.As(joined, &recovered))
+	require.Same(t, native, recovered)
+	metadata, ok = dberror.Classify(context.Canceled, mysqlerr.New())
+	require.False(t, ok)
+	require.Equal(t, dberror.Metadata{}, metadata)
+	sentinel := errors.New("sentinel")
+	wrapped := fmt.Errorf("exec: %w", sentinel)
+	metadata, ok = dberror.Classify(wrapped, mysqlerr.New())
+	require.False(t, ok)
+	require.ErrorIs(t, wrapped, sentinel)
+	metadata, ok = dberror.Classify(&mysql.MySQLError{Number: 9999}, mysqlerr.New())
 	require.False(t, ok)
 	require.Equal(t, dberror.Metadata{}, metadata)
 }
