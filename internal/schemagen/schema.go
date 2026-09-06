@@ -737,7 +737,11 @@ func validateMutationMethods(table schema.TableDef) error {
 		if method == "" || !token.IsIdentifier(method) {
 			return fmt.Errorf("generate: column %q on table %q cannot become a mutation method", column.Name, table.Name)
 		}
-		for _, name := range []string{method, "Default" + method} {
+		createNames := []string{method}
+		if column.Default != "" {
+			createNames = append(createNames, "Default"+method)
+		}
+		for _, name := range createNames {
 			if owner, exists := createMethods[name]; exists {
 				return fmt.Errorf("generate: column %q on table %q collides with create method %q from %q", column.Name, table.Name, name, owner)
 			}
@@ -753,7 +757,11 @@ func validateMutationMethods(table schema.TableDef) error {
 		if _, isPrimary := primary[column.Name]; isPrimary {
 			continue
 		}
-		for _, name := range []string{method, "Default" + method} {
+		patchNames := []string{method}
+		if column.Default != "" {
+			patchNames = append(patchNames, "Default"+method)
+		}
+		for _, name := range patchNames {
 			if owner, exists := patchMethods[name]; exists {
 				return fmt.Errorf("generate: column %q on table %q collides with patch method %q from %q", column.Name, table.Name, name, owner)
 			}
