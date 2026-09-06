@@ -141,6 +141,49 @@ func TestRunDumpRejectsTableAndExcludeTogether(t *testing.T) {
 	require.ErrorContains(t, err, "options.Include and options.Exclude must not both be set")
 }
 
+func TestRunDumpIncludesSelectedSQLiteTable(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	output := setCommandOutput(t)
+	require.NoError(t, run([]string{"dump", "-dialect", "sqlite", "-dsn", dsn, "-table", "members"}))
+	require.Contains(t, output.String(), `CREATE TABLE "main"."members"`)
+}
+
+func TestDumpSQLiteSweepExcludesMigrationProgressTable(t *testing.T) {
+	testCases := []struct {
+		name         string
+		historyTable string
+		progress     string
+	}{
+		{name: "default history", historyTable: "", progress: "rasql_schema_migrations_progress"},
+		{name: "custom history", historyTable: "app_migrations", progress: "app_migrations_progress"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "application.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			_, err = database.ExecContext(t.Context(), `CREATE TABLE app (id INTEGER PRIMARY KEY)`)
+			require.NoError(t, err)
+			_, err = database.ExecContext(t.Context(), `CREATE TABLE `+testCase.progress+` (id INTEGER PRIMARY KEY)`)
+			require.NoError(t, err)
+
+			files, err := dumpFilesFromDatabase(t.Context(), dialect.SQLite(), database, dumpOptions{
+				Format:       "schema",
+				HistoryTable: testCase.historyTable,
+			})
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			require.Equal(t, "main__app.sql", files[0].Name)
+		})
+	}
+}
+
 func TestOrderTablesByDependencyOrdersByForeignKey(t *testing.T) {
 	tables := []schema.TableDef{
 		dumpTestTable("", "audits", "members"),
