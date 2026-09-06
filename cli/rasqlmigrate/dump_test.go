@@ -23,7 +23,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
 
 // dumpTestTable builds a minimal valid TableDef named name with a single
@@ -441,15 +441,46 @@ func TestDumpSQLiteCollationReplaysBehavior(t *testing.T) {
 		_, err = target.ExecContext(context.Background(), file.SQL)
 		require.NoError(t, err)
 	}
-	for _, table := range []string{"inline_unique", "table_unique"} {
-		_, err = target.ExecContext(context.Background(), `INSERT INTO `+table+` (name) VALUES ('a')`)
-		require.NoError(t, err)
-		var count int
-		require.NoError(t, target.QueryRowContext(context.Background(), `SELECT count(*) FROM `+table+` WHERE name = 'A'`).Scan(&count))
-		require.Equal(t, 1, count)
-		_, err = target.ExecContext(context.Background(), `INSERT INTO `+table+` (name) VALUES ('A')`)
-		require.Error(t, err)
+	for _, database := range []*sql.DB{source, target} {
+		for _, table := range []string{"inline_unique", "table_unique"} {
+			_, err = database.ExecContext(context.Background(), `INSERT INTO `+table+` (name) VALUES ('b'), ('A')`)
+			require.NoError(t, err)
+			rows, err := database.QueryContext(context.Background(), `SELECT name FROM `+table+` ORDER BY name`)
+			require.NoError(t, err)
+			var names []string
+			for rows.Next() {
+				var name string
+				require.NoError(t, rows.Scan(&name))
+				names = append(names, name)
+			}
+			require.NoError(t, rows.Close())
+			require.Equal(t, []string{"A", "b"}, names)
+			_, err = database.ExecContext(context.Background(), `INSERT INTO `+table+` (name) VALUES ('a')`)
+			var sqliteErr *sqlite.Error
+			require.ErrorAs(t, err, &sqliteErr)
+			require.Equal(t, 2067, sqliteErr.Code())
+		}
 	}
+}
+
+func TestDumpSQLiteCustomCollationRefusesBeforePublication(t *testing.T) {
+	require.NoError(t, sqlite.RegisterCollationUtf8("rasql_custom", func(left, right string) int {
+		if left < right {
+			return -1
+		}
+		if left > right {
+			return 1
+		}
+		return 0
+	}))
+	source, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, source.Close()) })
+	_, err = source.ExecContext(context.Background(), `CREATE TABLE custom_members (name TEXT COLLATE rasql_custom);`)
+	require.NoError(t, err)
+	files, err := dumpFilesFromDatabase(context.Background(), dialect.SQLite(), source, dumpOptions{Format: "schema"})
+	require.ErrorContains(t, err, `table "custom_members" column "name" uses collation "rasql_custom"`)
+	require.Nil(t, files)
 }
 
 // TestDumpColumnFactHasDefaultIdentitySequence pins the guard
