@@ -10,6 +10,7 @@ import (
 	pgquery "github.com/lestrrat-go/rasql-pg/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -129,16 +130,14 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(entry.Value.statement.Name)))
 	}
 
+	nontransactional := false
 	for _, entry := range comparison.Indexes.Added {
-		if entry.Value.statement.Concurrently {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s uses CONCURRENTLY, which needs non-transactional migration support", displayName(*entry.Value.statement.Name)))
-			continue
-		}
 		statement, err := createIndexStatement(entry.Value.statement)
 		if err != nil {
 			return diff.Plan{}, err
 		}
 		generated = append(generated, statement)
+		nontransactional = nontransactional || statement.nontransactional
 	}
 	for _, pair := range comparison.Indexes.Matched {
 		if !sameIndex(pair.Baseline.statement, pair.Target.statement) {
@@ -153,6 +152,9 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	}
 
 	plan := diff.Plan{Dialect: "postgresql", Statements: make([]diff.PlannedStatement, len(generated))}
+	if nontransactional {
+		plan.Mode = migrate.ExecutionModeNonTransactional
+	}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
 			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
@@ -227,10 +229,11 @@ func sortedIndexKeys(indexes map[string]indexDefinition) []string {
 }
 
 type generatedStatement struct {
-	name       string
-	sql        string
-	reverseSQL string
-	summary    string
+	name             string
+	sql              string
+	reverseSQL       string
+	summary          string
+	nontransactional bool
 }
 
 func createTableStatement(table *pgquery.CreateTableStatement) (generatedStatement, error) {
@@ -255,9 +258,14 @@ func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStateme
 		return generatedStatement{}, err
 	}
 	name := displayName(*copy.Name)
+	reverse := "DROP INDEX " + reverseName(*copy.Name) + ";\n"
+	if copy.Concurrently {
+		reverse = "DROP INDEX CONCURRENTLY " + reverseName(*copy.Name) + ";\n"
+	}
 	return generatedStatement{
 		name: "create_index_" + filenamePart(name), sql: sql,
-		reverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(*copy.Name)), summary: "create index " + name,
+		reverseSQL: reverse, summary: "create index " + name,
+		nontransactional: copy.Concurrently,
 	}, nil
 }
 

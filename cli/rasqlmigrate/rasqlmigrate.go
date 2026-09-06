@@ -440,6 +440,13 @@ func revertTarget(through string, steps int) (migrate.RevertTarget, error) {
 func writeRevertPlan(output io.Writer, plan []migrate.Migration) {
 	first := true
 	for _, migration := range plan {
+		if migration.Mode == migrate.ExecutionModeNonTransactional {
+			if !first {
+				_, _ = fmt.Fprintln(output)
+			}
+			first = false
+			_, _ = fmt.Fprintf(output, "-- %s mode: nontransactional\n", migration.ID)
+		}
 		for _, statement := range migration.Down {
 			if !first {
 				_, _ = fmt.Fprintln(output)
@@ -726,6 +733,9 @@ func driverForDialect(name string) (string, error) {
 func writePlan(output io.Writer, migrations []migrate.Migration) {
 	first := true
 	for _, migration := range migrations {
+		if migration.Mode == migrate.ExecutionModeNonTransactional {
+			_, _ = fmt.Fprintf(output, "-- %s mode: nontransactional\n", migration.ID)
+		}
 		for _, statement := range migration.Statements {
 			if !first {
 				_, _ = fmt.Fprintln(output)
@@ -741,6 +751,9 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 }
 
 func writeDiffPlan(output io.Writer, plan diff.Plan) {
+	if plan.Mode == migrate.ExecutionModeNonTransactional {
+		_, _ = fmt.Fprintln(output, "-- mode: nontransactional")
+	}
 	for index, statement := range plan.Statements {
 		if index > 0 {
 			_, _ = fmt.Fprintln(output)

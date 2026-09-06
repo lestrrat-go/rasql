@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/schema"
@@ -721,7 +722,7 @@ func TestParseRejectsIndexOnlySourceForMissingTable(t *testing.T) {
 	require.EqualError(t, err, `postgresql schema source "indexes.sql" defines index orphan_idx on missing table missing`)
 }
 
-func TestDiffRejectsConcurrentIndex(t *testing.T) {
+func TestDiffPlansConcurrentIndexAsNonTransactional(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, `
@@ -729,8 +730,12 @@ func TestDiffRejectsConcurrentIndex(t *testing.T) {
 		CREATE INDEX CONCURRENTLY members_id_idx ON members (id);
 	`)
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "uses CONCURRENTLY")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, migrate.ExecutionModeNonTransactional, plan.Mode)
+	require.Len(t, plan.Statements, 1)
+	require.Contains(t, plan.Statements[0].SQL, "CREATE INDEX CONCURRENTLY")
+	require.Contains(t, plan.Statements[0].ReverseSQL, "DROP INDEX CONCURRENTLY")
 }
 
 func parseSnapshot(t *testing.T, analyzer postgresql.Analyzer, source string) diff.Snapshot {
