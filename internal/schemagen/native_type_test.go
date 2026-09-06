@@ -56,12 +56,18 @@ func TestNativeRuntime(t *testing.T) {
  row := &generated.EventsRow{}
  require.NoError(t, row.ScanRow(source{}))
  require.Equal(t, "happy", row.Mood)
+ require.Equal(t, []string{"sad"}, row.Moods)
  require.Equal(t, "amount", row.Amount)
  require.Equal(t, "one", row.Choice)
- destinations, err := row.ScanDestinations([]string{"role", "mood"}); require.NoError(t, err)
- *destinations[0].(*any) = "reader"; *destinations[1].(*any) = nil
- require.Nil(t, row.Mood)
- value, ok := row.ColumnValue("role"); require.True(t, ok); require.Equal(t, "reader", value)
+ require.Equal(t, "admin", row.Role)
+ destinations, err := row.ScanDestinations([]string{"mood", "moods", "amount", "choice", "role"}); require.NoError(t, err)
+ for _, destination := range destinations { *destination.(*any) = nil }
+ require.Nil(t, row.Mood); require.Nil(t, row.Moods); require.Nil(t, row.Amount); require.Nil(t, row.Choice); require.Nil(t, row.Role)
+ for _, column := range []string{"mood", "moods", "amount", "choice", "role"} { value, ok := row.ColumnValue(column); require.True(t, ok); require.Nil(t, value) }
+ _ = query.Equal(generated.Events().Mood(), query.Bind("happy"))
+ _ = query.Equal(generated.Events().Moods(), query.Bind([]string{"sad"}))
+ _ = query.Equal(generated.Events().Amount(), query.Bind("amount"))
+ _ = query.Equal(generated.Events().Choice(), query.Bind("one"))
  _ = query.Equal(generated.Events().Role(), query.Bind("admin"))
 }
 `

@@ -23,6 +23,9 @@ func TestLiveSourcesRejectsBothForeignNativeDialects(t *testing.T) {
 		var unsupported *render.ErrUnsupportedNativeType
 		require.ErrorAs(t, err, &unsupported)
 		require.Nil(t, sources)
+		require.Equal(t, analyzer.Dialect(), unsupported.Dialect)
+		require.Equal(t, "events", unsupported.Table)
+		require.Equal(t, "value", unsupported.Column)
 		require.Equal(t, *native, unsupported.Native)
 	}
 }
@@ -36,7 +39,28 @@ func TestLiveSourcesPreservesSQLiteNativeTypeAndRejectsForeignType(t *testing.T)
 	_, err = pgdiff.New().LiveSources(desired)
 	var unsupported *render.ErrUnsupportedNativeType
 	require.ErrorAs(t, err, &unsupported)
+	require.Equal(t, "postgresql", unsupported.Dialect)
+	require.Equal(t, "events", unsupported.Table)
+	require.Equal(t, "value", unsupported.Column)
 	require.Equal(t, *native, unsupported.Native)
+}
+
+func TestLiveSourcesNativeTypeReachesForwardPlan(t *testing.T) {
+	analyzer := sqlite.New()
+	native := &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}
+	sources, err := analyzer.LiveSources(schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.TextType{}, Nullable: true, NativeType: native}}})
+	require.NoError(t, err)
+	plan, err := analyzer.Diff(parseSnapshot(t, analyzer, `CREATE TABLE "events" ("id" INTEGER NOT NULL);`), mustParseSQLiteSources(t, analyzer, sources))
+	require.NoError(t, err)
+	require.NotEmpty(t, plan.Statements)
+	require.Contains(t, string(plan.Statements[0].SQL), "varchar(12)")
+}
+
+func mustParseSQLiteSources(t *testing.T, analyzer sqlite.Analyzer, sources []diff.Source) diff.Snapshot {
+	t.Helper()
+	snapshot, err := analyzer.Parse(sources)
+	require.NoError(t, err)
+	return snapshot
 }
 
 // TestLiveSourcesRejectsStrictTable proves that an inspected table carrying

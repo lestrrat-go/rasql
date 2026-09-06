@@ -43,12 +43,25 @@ func TestCreateTableNativeRendererMatrix(t *testing.T) {
 	}{
 		{"postgres domain", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "amount_domain", Kind: schema.NativeDomain}, `CREATE TABLE "events" ("value" "app"."amount_domain" NOT NULL)`},
 		{"postgres array", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum}}, `CREATE TABLE "events" ("value" "app"."mood"[] NOT NULL)`},
+		{"postgres nested array", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "moods", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "moods", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum}}}, `CREATE TABLE "events" ("value" "app"."mood"[][] NOT NULL)`},
+		{"postgres ordinary type", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "money_type", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" "app"."money_type" NOT NULL)`},
 		{"postgres timestamp precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timestamptz", Kind: schema.NativeBuiltin, Arguments: []string{"3"}}, `CREATE TABLE "events" ("value" "pg_catalog"."timestamptz"(3) NOT NULL)`},
 		{"postgres timestamp zero precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timestamp", Kind: schema.NativeBuiltin, Arguments: []string{"0"}}, `CREATE TABLE "events" ("value" "pg_catalog"."timestamp"(0) NOT NULL)`},
 		{"postgres time precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Name: "time", Kind: schema.NativeBuiltin, Arguments: []string{"3"}}, `CREATE TABLE "events" ("value" "time"(3) NOT NULL)`},
 		{"postgres timetz precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timetz", Kind: schema.NativeBuiltin, Arguments: []string{"0"}}, `CREATE TABLE "events" ("value" "pg_catalog"."timetz"(0) NOT NULL)`},
 		{"mysql escaping", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "mysql", Name: "choice", Kind: schema.NativeEnum, Arguments: []string{"a\\b", "quote's"}}, "CREATE TABLE `events` (`value` ENUM('a\\\\b', 'quote''s') NOT NULL)"},
+		{"mysql all labels", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "mysql", Name: "choice", Kind: schema.NativeEnum, Arguments: []string{"a,b", "quote's", `quote"`, `back\\slash`, " spaced ", ""}}, "CREATE TABLE `events` (`value` ENUM('a,b', 'quote''s', 'quote\"', 'back\\\\\\\\slash', ' spaced ', '') NOT NULL)"},
+		{"mysql set", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "mysql", Name: "flags", Kind: schema.NativeSet, Arguments: []string{"one", "two"}}, "CREATE TABLE `events` (`value` SET('one', 'two') NOT NULL)"},
 		{"sqlite declaration", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}, `CREATE TABLE "events" ("value" VARCHAR(12) NOT NULL)`},
+		{"sqlite integer", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "INTEGER", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" INTEGER NOT NULL)`},
+		{"sqlite int2", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "INT2", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" INT2 NOT NULL)`},
+		{"sqlite int8", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "INT8", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" INT8 NOT NULL)`},
+		{"sqlite double", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "DOUBLE PRECISION", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" "DOUBLE PRECISION" NOT NULL)`},
+		{"sqlite boolean", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "BOOLEAN", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" BOOLEAN NOT NULL)`},
+		{"sqlite json", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "JSON", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" JSON NOT NULL)`},
+		{"sqlite date", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "DATE", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" DATE NOT NULL)`},
+		{"sqlite time", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "TIME", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" TIME NOT NULL)`},
+		{"sqlite blob", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "BLOB", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" BLOB NOT NULL)`},
 		{"sqlite quoted declaration", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: `A"B`, Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" "A""B" NOT NULL)`},
 	}
 	for _, test := range tests {
@@ -57,6 +70,17 @@ func TestCreateTableNativeRendererMatrix(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.want, statement.SQL())
 		})
+	}
+}
+
+func TestCreateTableRejectsUnknownNativeShapesWithoutStatement(t *testing.T) {
+	for _, native := range []*schema.NativeTypeDef{
+		{Dialect: "postgresql", Name: "unknown", Kind: schema.NativeTypeKind("unknown")},
+		{Dialect: "postgresql", Name: "broken", Kind: schema.NativeArray},
+	} {
+		statement, err := render.CreateTable(dialect.PostgreSQL(), schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: native}}})
+		require.Error(t, err)
+		require.Empty(t, statement.SQL())
 	}
 }
 

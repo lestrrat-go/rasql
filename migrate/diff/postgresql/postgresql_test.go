@@ -56,6 +56,17 @@ func TestLiveSourcesPreservesNativeTypeAndRejectsCrossDialect(t *testing.T) {
 	require.Equal(t, *native, unsupported.Native)
 }
 
+func TestLiveSourcesNativeTypeReachesForwardPlan(t *testing.T) {
+	analyzer := postgresql.New()
+	native := &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum, Arguments: []string{"sad", "happy"}}
+	sources, err := analyzer.LiveSources(schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "mood", Type: schema.OpaqueType{}, Nullable: true, NativeType: native}}})
+	require.NoError(t, err)
+	plan, err := analyzer.Diff(parseSnapshot(t, analyzer, `CREATE TABLE "events" ();`), parseSources(t, analyzer, sources))
+	require.NoError(t, err)
+	require.NotEmpty(t, plan.Statements)
+	require.Contains(t, string(plan.Statements[0].SQL), `"app"."mood"`)
+}
+
 // TestLiveSourcesRejectsGeneratedColumn proves that an inspected
 // PostgreSQL table carrying a generated column does not reach diff-live's
 // generated desired-schema sources as a silently downgraded plain writable

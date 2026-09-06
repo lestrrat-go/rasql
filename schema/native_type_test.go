@@ -53,6 +53,12 @@ func TestNativeTypeValidationRejectsInvalidShapes(t *testing.T) {
 }
 
 func TestNativeTypeValidationMatrix(t *testing.T) {
+	for _, native := range []*schema.NativeTypeDef{
+		{Dialect: "postgresql", Schema: "bad.schema", Name: "value", Kind: schema.NativeOther},
+		{Dialect: "postgresql", Schema: "public", Name: "bad.name", Kind: schema.NativeOther},
+	} {
+		require.Error(t, (schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: native}}}).Validate())
+	}
 	for _, kind := range []schema.NativeTypeKind{schema.NativeBuiltin, schema.NativeDomain, schema.NativeEnum, schema.NativeSet, schema.NativeArray, schema.NativeOther} {
 		dialect := "postgresql"
 		if kind == schema.NativeSet {
@@ -97,4 +103,23 @@ func TestNativeTypeValidationMatrix(t *testing.T) {
 	nilJSON, err := json.Marshal(nilArguments)
 	require.NoError(t, err)
 	require.NotEqual(t, string(emptyJSON), string(nilJSON))
+	for _, original := range []schema.NativeTypeDef{empty, nilArguments} {
+		var decoded schema.NativeTypeDef
+		require.NoError(t, json.Unmarshal(mustJSON(t, original), &decoded))
+		require.True(t, reflect.DeepEqual(original, decoded))
+	}
+	labels := []string{"comma,label", "apostrophe's", `quote"label`, `back\\slash`, " leading", "trailing ", ""}
+	enum := &schema.NativeTypeDef{Dialect: "mysql", Name: "enum", Kind: schema.NativeEnum, Arguments: labels}
+	require.NoError(t, (schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.TextType{}, NativeType: enum}}}).Validate())
+	nested := &schema.NativeTypeDef{Dialect: "postgresql", Name: "outer", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Name: "inner", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Name: "leaf", Kind: schema.NativeOther}}}
+	cloneNested := (schema.TableDef{Columns: []schema.ColumnDef{{NativeType: nested}}}).Clone().Columns[0].NativeType
+	cloneNested.Element.Element.Name = "changed"
+	require.Equal(t, "leaf", nested.Element.Element.Name)
+}
+
+func mustJSON(t *testing.T, value schema.NativeTypeDef) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	require.NoError(t, err)
+	return encoded
 }

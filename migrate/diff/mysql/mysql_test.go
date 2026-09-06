@@ -25,6 +25,9 @@ func TestLiveSourcesRejectsBothForeignNativeDialects(t *testing.T) {
 		var unsupported *render.ErrUnsupportedNativeType
 		require.ErrorAs(t, err, &unsupported)
 		require.Nil(t, sources)
+		require.Equal(t, analyzer.Dialect(), unsupported.Dialect)
+		require.Equal(t, "events", unsupported.Table)
+		require.Equal(t, "choice", unsupported.Column)
 		require.Equal(t, *native, unsupported.Native)
 	}
 }
@@ -38,7 +41,28 @@ func TestLiveSourcesPreservesMySQLNativeTypeAndRejectsForeignType(t *testing.T) 
 	_, err = pgdiff.New().LiveSources(desired)
 	var unsupported *render.ErrUnsupportedNativeType
 	require.ErrorAs(t, err, &unsupported)
+	require.Equal(t, "postgresql", unsupported.Dialect)
+	require.Equal(t, "events", unsupported.Table)
+	require.Equal(t, "choice", unsupported.Column)
 	require.Equal(t, *native, unsupported.Native)
+}
+
+func TestLiveSourcesNativeTypeReachesForwardPlan(t *testing.T) {
+	analyzer := mysql.New()
+	native := &schema.NativeTypeDef{Dialect: "mysql", Name: "enum", Kind: schema.NativeEnum, Arguments: []string{"sad", "happy"}}
+	sources, err := analyzer.LiveSources(schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "mood", Type: schema.TextType{}, Nullable: true, NativeType: native}}})
+	require.NoError(t, err)
+	plan, err := analyzer.Diff(parseSnapshot(t, analyzer, "CREATE TABLE `events` ();"), mustParseMySQLSources(t, analyzer, sources))
+	require.NoError(t, err)
+	require.NotEmpty(t, plan.Statements)
+	require.Contains(t, string(plan.Statements[0].SQL), "enum('sad', 'happy')")
+}
+
+func mustParseMySQLSources(t *testing.T, analyzer mysql.Analyzer, sources []diff.Source) diff.Snapshot {
+	t.Helper()
+	snapshot, err := analyzer.Parse(sources)
+	require.NoError(t, err)
+	return snapshot
 }
 
 func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
