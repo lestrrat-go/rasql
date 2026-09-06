@@ -138,14 +138,11 @@ func (b SelectBuilder) Build(d dialect.Dialect) (stmt.Statement, error) {
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
 func (b SelectBuilder) Query(ctx context.Context, db exec.DB) (iter.Seq2[Row, error], error) {
-	if err := db.Validate(); err != nil {
+	result, err := b.QueryResult(ctx, db)
+	if err != nil {
 		return nil, err
 	}
-	s, err := b.Build(db.Dialect())
-	if err != nil {
-		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
-	}
-	return scanRendered(ctx, db, s), nil
+	return result.Rows(), nil
 }
 
 // QueryResult renders the statement and returns a lazy result with ordered metadata.

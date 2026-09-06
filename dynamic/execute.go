@@ -73,14 +73,6 @@ func resultForStatement(ctx context.Context, db exec.DB, rendered stmt.Statement
 	})
 }
 
-// scanRendered defers running s until the returned sequence is ranged over,
-// so obtaining a sequence and abandoning it opens no cursor. Owned rows stay
-// inside the closure, where consumption completion remains under this package.
-func scanRendered(ctx context.Context, db exec.DB, s stmt.Statement) iter.Seq2[Row, error] {
-	sequence, _ := scanRenderedOwned(ctx, db, s, true)
-	return sequence
-}
-
 func scanRenderedOwned(ctx context.Context, db exec.DB, s stmt.Statement, autoFinish bool) (iter.Seq2[Row, error], func(error)) {
 	var owned *exec.Rows
 	sequence := func(yield func(Row, error) bool) {

@@ -89,10 +89,17 @@ func (r *Result) Close() error {
 	if r == nil {
 		return nil
 	}
-	if !r.beginOperation() {
+	r.mu.Lock()
+	if r.busy {
+		r.mu.Unlock()
 		return ErrConcurrentUse
 	}
-	r.mu.Lock()
+	if r.closed {
+		err := r.closeErr
+		r.mu.Unlock()
+		return err
+	}
+	r.busy = true
 	r.closed = true
 	source := r.source
 	r.mu.Unlock()
@@ -113,7 +120,7 @@ func (r *Result) Close() error {
 func (r *Result) beginOperation() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.busy {
+	if r.busy || r.closed {
 		return false
 	}
 	r.busy = true

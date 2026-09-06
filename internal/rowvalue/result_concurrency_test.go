@@ -97,6 +97,26 @@ func TestResultClosesAfterEarlyBreakAndScanFailure(t *testing.T) {
 	require.Equal(t, 1, failing.closeCount)
 }
 
+func TestResultClosesEachSourceExactlyOnce(t *testing.T) {
+	opened := &valueSource{}
+	result := NewResult(func() (Source, error) { return opened, nil })
+	_, err := result.Header()
+	require.NoError(t, err)
+	require.NoError(t, result.Close())
+	require.NoError(t, result.Close())
+	require.Equal(t, 1, opened.closeCount)
+
+	exhausted := &valueSource{}
+	result = NewResult(func() (Source, error) { return exhausted, nil })
+	for row, err := range result.Rows() {
+		require.NoError(t, err)
+		require.Equal(t, "value", row.Values()[0])
+	}
+	require.NoError(t, result.Close())
+	require.NoError(t, result.Close())
+	require.Equal(t, 1, exhausted.closeCount)
+}
+
 type valueSource struct {
 	scanErr    error
 	closeCount int
