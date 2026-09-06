@@ -36,7 +36,7 @@ import (
 func runPostgreSQLDumpCommand(t *testing.T, outputDirectory string) error {
 	t.Helper()
 	config := dbtest.PostgreSQLConfig(t)
-	return runDump([]string{"-dialect", "PostgreSQL", "-dsn", config.ConnString(), "-format", "schema", "-output", outputDirectory})
+	return runDump([]string{"-dialect", "postgresql", "-dsn", config.ConnString(), "-format", "schema", "-output", outputDirectory})
 }
 
 func TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults(t *testing.T) {
@@ -271,8 +271,8 @@ func TestDumpPostgreSQLSerialColumnReplaysAsBigserial(t *testing.T) {
 		require.Equal(t, int64(1), targetState.ReferencingDefaults)
 		require.True(t, targetState.Owned)
 		var sourceValue, targetValue int64
-		dumpMustExec(t, ctx, source, `INSERT INTO teams DEFAULT VALUES`)
-		dumpMustExec(t, ctx, target, `INSERT INTO teams DEFAULT VALUES`)
+		dumpMustExec(t, ctx, source, `INSERT INTO teams (name) VALUES ('source')`)
+		dumpMustExec(t, ctx, target, `INSERT INTO teams (name) VALUES ('source')`)
 		require.NoError(t, source.QueryRowContext(ctx, `SELECT id FROM teams`).Scan(&sourceValue))
 		require.NoError(t, target.QueryRowContext(ctx, `SELECT id FROM teams`).Scan(&targetValue))
 		require.Equal(t, sourceValue, targetValue)
