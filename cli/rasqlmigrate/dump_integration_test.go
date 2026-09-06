@@ -35,7 +35,8 @@ import (
 
 func runPostgreSQLDumpCommand(t *testing.T, outputDirectory string) error {
 	t.Helper()
-	config := dbtest.PostgreSQLConfig(t)
+	config := dbtest.PostgreSQLConfig(t).Copy()
+	config.RuntimeParams["search_path"] = "public"
 	return runDump([]string{"-dialect", "postgresql", "-dsn", config.ConnString(), "-table", "sequence_cases", "-format", "schema", "-output", outputDirectory})
 }
 
