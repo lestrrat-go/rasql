@@ -69,8 +69,10 @@ type DB struct {
 // is how an application already holding a *sql.Tx hands it to this package
 // without a second type.
 //
-// Optional hooks and observers configure the returned DB and observe every statement run through it and, unless narrowed or extended by WithHooks, WithObservers, or by Begin's
-// own hooks parameter, every transaction Begin starts from it.
+// Optional hooks and observers configure the returned DB and observe every
+// statement run through it and, unless narrowed or extended by WithHooks,
+// WithObservers, or by Begin's own hooks parameter, every transaction Begin
+// starts from it.
 type Option interface{ apply(*DB) error }
 
 type relationshipBindLimitOption int
