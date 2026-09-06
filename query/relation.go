@@ -214,6 +214,9 @@ func (r RelationRef) CTEName() string {
 	return r.cte.name
 }
 
+// CTEIdentity reports the identity of a CTE source for renderer scope checks.
+func (r RelationRef) CTEIdentity() uint64 { return r.cteID() }
+
 func (r RelationRef) cteID() uint64 {
 	if r.cte == nil {
 		return 0
@@ -316,6 +319,7 @@ func (c Compound) Operator() CompoundOperator { return c.operator }
 
 func (c CTE) Name() string       { return c.name }
 func (c CTE) Query() ResultQuery { return cloneResultQuery(c.query) }
+func (c CTE) Identity() uint64   { return c.id }
 
 func cloneResultQuery(result ResultQuery) ResultQuery {
 	result.columns = cloneResultColumns(result.columns)

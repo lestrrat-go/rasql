@@ -1,6 +1,7 @@
 package render_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -101,11 +102,60 @@ func TestRenderCompoundOperatorsAndDerivedJoin(t *testing.T) {
 			nil, users.Column("id"), derived.Column("marker"),
 		)
 		require.NoError(t, err)
-		rendered, err := render.Select(dialect.SQLite(), joined)
+		rendered, err := render.Select(dialect.PostgreSQL(), joined)
 		require.NoError(t, err)
-		require.Contains(t, rendered.SQL(), testCase.text)
+		expected := fmt.Sprintf(`SELECT "users"."id", "r"."marker" FROM "users" INNER JOIN ((SELECT "users"."id", $1 FROM "users") %s (SELECT "users"."id", $2 FROM "users")) AS "r" ON ("users"."id" = "r"."id")`, testCase.text)
+		require.Equal(t, expected, rendered.SQL())
 		require.Equal(t, []any{7, 8}, rendered.Args())
 	}
+}
+
+func TestRenderInsertSelectSourceArgumentsPrecedeReturning(t *testing.T) {
+	users := query.MustTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	source, err := query.NewSelect(users, users.Column("id"), query.Project(query.Bind(3)))
+	require.NoError(t, err)
+	source, err = source.WithWhere(query.Equal(users.Column("id"), query.Bind(4)))
+	require.NoError(t, err)
+	result, err := query.ResultOf(source,
+		query.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		query.ResultColumn{Name: "marker", Type: schema.IntegerType{}},
+	)
+	require.NoError(t, err)
+	_, err = query.NewInsertSelect(users, []query.ColumnRef{users.Column("id"), users.Column("id")}, result)
+	require.Error(t, err)
+	// Use distinct target columns so the source and RETURNING argument order is tested.
+	usersWithMarker := query.MustTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "marker", Type: schema.IntegerType{}}}})
+	insert, err := query.NewInsertSelect(usersWithMarker, []query.ColumnRef{usersWithMarker.Column("id"), usersWithMarker.Column("marker")}, result)
+	require.NoError(t, err)
+	insert, err = insert.WithReturning(query.Project(query.Bind(9)))
+	require.NoError(t, err)
+	rendered, err := render.Insert(dialect.PostgreSQL(), insert)
+	require.NoError(t, err)
+	require.Equal(t, `INSERT INTO "users" ("id", "marker") SELECT "users"."id", $1 FROM "users" WHERE ("users"."id" = $2) RETURNING $3`, rendered.SQL())
+	require.Equal(t, []any{3, 4, 9}, rendered.Args())
+}
+
+func TestRenderReusableRelationPagingAndCount(t *testing.T) {
+	users := query.MustTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	base, err := query.NewSelect(users, users.Column("id"))
+	require.NoError(t, err)
+	result, err := query.ResultOf(base, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	derived, err := query.Derived(result, "r")
+	require.NoError(t, err)
+	paged, err := query.NewSelect(derived, derived.Column("id"))
+	require.NoError(t, err)
+	paged, err = paged.WithLimit(5)
+	require.NoError(t, err)
+	paged, err = paged.WithOffset(2)
+	require.NoError(t, err)
+	rendered, err := render.Select(dialect.PostgreSQL(), paged)
+	require.NoError(t, err)
+	require.Equal(t, `SELECT "r"."id" FROM (SELECT "users"."id" FROM "users") AS "r" LIMIT $1 OFFSET $2`, rendered.SQL())
+	require.Equal(t, []any{5, 2}, rendered.Args())
+	counted, err := render.SelectFromRelation(dialect.PostgreSQL(), derived).Select("id").BuildCount()
+	require.NoError(t, err)
+	require.Equal(t, `SELECT COUNT(*) AS "count" FROM (SELECT "users"."id" FROM "users") AS "r"`, counted.SQL())
 }
 
 func TestReusableRelationValidationBoundaries(t *testing.T) {
@@ -134,4 +184,26 @@ func TestReusableRelationValidationBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	_, err = render.Select(dialect.SQLite(), statement)
 	require.ErrorContains(t, err, "collide")
+}
+
+func TestRenderCTEVisibleToNestedBody(t *testing.T) {
+	users := query.MustTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	base, err := query.NewSelect(users, users.Column("id"))
+	require.NoError(t, err)
+	result, err := query.ResultOf(base, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	cte, err := query.CommonTable("local", result)
+	require.NoError(t, err)
+	ref, err := cte.Ref("")
+	require.NoError(t, err)
+	inner, err := query.NewSelect(ref, ref.Column("id"))
+	require.NoError(t, err)
+	outer, err := query.NewSelect(users, query.Project(query.Scalar(inner)))
+	require.NoError(t, err)
+	outer, err = outer.WithCTEs(cte)
+	require.NoError(t, err)
+	rendered, err := render.Select(dialect.SQLite(), outer)
+	require.NoError(t, err)
+	require.Contains(t, rendered.SQL(), `WITH "local" AS`)
+	require.Contains(t, rendered.SQL(), `FROM "local"`)
 }

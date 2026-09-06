@@ -106,9 +106,15 @@ type renderer struct {
 	// reached anywhere else.
 	excludedStyle dialect.UpsertStyle
 	inExcluded    bool
+	cteScope      []query.CTE
 }
 
 func (r *renderer) writeSelect(s query.Select) error {
+	previous := r.cteScope
+	owned := append([]query.CTE(nil), previous...)
+	owned = append(owned, s.CTEs()...)
+	r.cteScope = owned
+	defer func() { r.cteScope = previous }()
 	if err := r.validateSelectSources(s); err != nil {
 		return err
 	}
@@ -289,11 +295,12 @@ func visibleSourceFromTable(table query.RelationRef) visibleSource {
 }
 
 func (r *renderer) validateSelectSources(s query.Select) error {
-	ctes := s.CTEs()
-	for i, left := range ctes {
+	localCTEs := s.CTEs()
+	ctes := append(append([]query.CTE(nil), r.cteScope...), localCTEs...)
+	for i, left := range localCTEs {
 		for j := 0; j < i; j++ {
-			if dialect.IdentifiersEqual(r.dialect, ctes[j].Name(), left.Name()) {
-				return fmt.Errorf("CTE names %q and %q collide in the %s dialect", ctes[j].Name(), left.Name(), r.dialect.Name())
+			if dialect.IdentifiersEqual(r.dialect, localCTEs[j].Name(), left.Name()) {
+				return fmt.Errorf("CTE names %q and %q collide in the %s dialect", localCTEs[j].Name(), left.Name(), r.dialect.Name())
 			}
 		}
 	}
@@ -302,7 +309,7 @@ func (r *renderer) validateSelectSources(s query.Select) error {
 		if cteName := table.CTEName(); cteName != "" {
 			found := false
 			for _, cte := range ctes {
-				if cte.Name() == cteName {
+				if cte.Name() == cteName && cte.Identity() == table.CTEIdentity() {
 					found = true
 					break
 				}
