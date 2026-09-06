@@ -43,6 +43,10 @@ func TestCreateTableNativeRendererMatrix(t *testing.T) {
 	}{
 		{"postgres domain", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "amount_domain", Kind: schema.NativeDomain}, `CREATE TABLE "events" ("value" "app"."amount_domain" NOT NULL)`},
 		{"postgres array", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum}}, `CREATE TABLE "events" ("value" "app"."mood"[] NOT NULL)`},
+		{"postgres timestamp precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timestamptz", Kind: schema.NativeBuiltin, Arguments: []string{"3"}}, `CREATE TABLE "events" ("value" "pg_catalog"."timestamptz"(3) NOT NULL)`},
+		{"postgres timestamp zero precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timestamp", Kind: schema.NativeBuiltin, Arguments: []string{"0"}}, `CREATE TABLE "events" ("value" "pg_catalog"."timestamp"(0) NOT NULL)`},
+		{"postgres time precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Name: "time", Kind: schema.NativeBuiltin, Arguments: []string{"3"}}, `CREATE TABLE "events" ("value" "time"(3) NOT NULL)`},
+		{"postgres timetz precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timetz", Kind: schema.NativeBuiltin, Arguments: []string{"0"}}, `CREATE TABLE "events" ("value" "pg_catalog"."timetz"(0) NOT NULL)`},
 		{"mysql escaping", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "mysql", Name: "choice", Kind: schema.NativeEnum, Arguments: []string{"a\\b", "quote's"}}, "CREATE TABLE `events` (`value` ENUM('a\\\\b', 'quote''s') NOT NULL)"},
 		{"sqlite declaration", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR(12)", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" VARCHAR(12) NOT NULL)`},
 	}

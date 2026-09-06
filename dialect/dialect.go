@@ -290,6 +290,24 @@ func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, erro
 			}
 			return native.Name, true, nil
 		}
+		if d.name == "postgresql" && native.Kind == schema.NativeBuiltin && len(native.Arguments) > 0 {
+			if len(native.Arguments) != 1 || native.Arguments[0] == "" {
+				return "", false, nil
+			}
+			for _, char := range native.Arguments[0] {
+				if char < '0' || char > '9' {
+					return "", false, nil
+				}
+			}
+			if native.Name != "time" && native.Name != "timetz" && native.Name != "timestamp" && native.Name != "timestamptz" {
+				return "", false, nil
+			}
+			name, err := qualified()
+			if err != nil {
+				return "", false, err
+			}
+			return name + "(" + native.Arguments[0] + ")", true, nil
+		}
 		name, err := qualified()
 		return name, err == nil, err
 	case schema.NativeArray:
