@@ -47,7 +47,9 @@ func TestNativeConsumerCompilesAndExercisesGeneratedRuntime(t *testing.T) {
 import (
  "testing"
  "example.com/generated"
+ "github.com/lestrrat-go/rasql/dialect"
  "github.com/lestrrat-go/rasql/query"
+ "github.com/lestrrat-go/rasql/render"
  "github.com/stretchr/testify/require"
 )
 type source struct{}
@@ -60,6 +62,15 @@ func TestNativeRuntime(t *testing.T) {
  require.Equal(t, "amount", row.Amount)
  require.Equal(t, "one", row.Choice)
  require.Equal(t, "admin", row.Role)
+ for _, test := range []struct { column query.ColumnRef; value any }{
+  {generated.Events().Mood(), "happy"}, {generated.Events().Moods(), []string{"sad"}}, {generated.Events().Amount(), "amount"}, {generated.Events().Choice(), "one"}, {generated.Events().Role(), "admin"},
+ } {
+  statement, err := query.NewSelect(generated.Events().Ref(), test.column); require.NoError(t, err)
+  statement, err = statement.WithWhere(query.Equal(test.column, query.Bind(test.value))); require.NoError(t, err)
+  rendered, err := render.Select(dialect.PostgreSQL(), statement); require.NoError(t, err)
+  require.Contains(t, rendered.SQL(), " = $1")
+  require.Equal(t, []any{test.value}, rendered.Args())
+ }
  destinations, err := row.ScanDestinations([]string{"mood", "moods", "amount", "choice", "role"}); require.NoError(t, err)
  for _, destination := range destinations { *destination.(*any) = nil }
  require.Nil(t, row.Mood); require.Nil(t, row.Moods); require.Nil(t, row.Amount); require.Nil(t, row.Choice); require.Nil(t, row.Role)

@@ -42,12 +42,21 @@ func TestNativeTypeValidationRejectsInvalidShapes(t *testing.T) {
 	}
 	array := &schema.NativeTypeDef{Dialect: "postgresql", Name: "outer", Kind: schema.NativeArray}
 	current := array
-	for range 32 {
+	for range 30 {
 		current.Element = &schema.NativeTypeDef{Dialect: "postgresql", Name: "nested", Kind: schema.NativeArray}
 		current = current.Element
 	}
-	current.Element = &schema.NativeTypeDef{Dialect: "postgresql", Name: "too_deep", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Name: "leaf", Kind: schema.NativeOther}}
+	current.Element = &schema.NativeTypeDef{Dialect: "postgresql", Name: "leaf", Kind: schema.NativeOther}
 	err := (schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: array}}}).Validate()
+	require.NoError(t, err)
+	depth33 := &schema.NativeTypeDef{Dialect: "postgresql", Name: "outer", Kind: schema.NativeArray}
+	current = depth33
+	for range 31 {
+		current.Element = &schema.NativeTypeDef{Dialect: "postgresql", Name: "nested", Kind: schema.NativeArray}
+		current = current.Element
+	}
+	current.Element = &schema.NativeTypeDef{Dialect: "postgresql", Name: "leaf", Kind: schema.NativeOther}
+	err = (schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: depth33}}}).Validate()
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "depth"))
 }
