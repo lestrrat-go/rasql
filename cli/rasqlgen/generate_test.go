@@ -28,6 +28,8 @@ func newGenerateDatabase(t *testing.T, dir string) string {
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
 	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE VIEW active_users AS SELECT id, email FROM users")
+	require.NoError(t, err)
 	return path
 }
 
@@ -111,6 +113,17 @@ func TestGenerateSelectsTables(t *testing.T) {
 		require.FileExists(t, filepath.Join(dir, "internal", "store", "users_gen.go"))
 		require.NoFileExists(t, filepath.Join(dir, "internal", "store", "posts_gen.go"))
 	})
+}
+
+func TestGenerateIncludesViewsOnlyWhenOptedIn(t *testing.T) {
+	dir := t.TempDir()
+	databasePath := newGenerateDatabase(t, dir)
+	output, err := runGenerate(t, dir, databasePath)
+	require.NoError(t, err, output)
+	require.NoFileExists(t, filepath.Join(dir, "internal", "store", "active_users_gen.go"))
+	output, err = runGenerate(t, dir, databasePath, "-include", "active_users", "-include-views")
+	require.NoError(t, err, output)
+	require.FileExists(t, filepath.Join(dir, "internal", "store", "active_users_gen.go"))
 }
 
 // TestGenerateResolvesOutputAgainstTheModuleRoot requires an -output with no

@@ -14,6 +14,16 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+func requireTableOperation[T any](table Table[T], operation schema.Operation) error {
+	if isNilTable(table) {
+		return fmt.Errorf("rasql: table must not be nil")
+	}
+	if !table.Ref().Definition().Supports(operation) {
+		return fmt.Errorf("rasql: object %q does not support operation %d", table.Ref().Definition().QualifiedName(), operation)
+	}
+	return nil
+}
+
 // ColumnValuer is implemented by row types that supply their own column values.
 // Insert and Update prefer it over struct tags, so a generated row type carries
 // its own mapping instead of restating it as a tag.
@@ -46,6 +56,9 @@ func InsertWithOptions[T any](ctx context.Context, db DB, table Table[T], value 
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
+	if err := requireTableOperation(table, schema.OperationInsert); err != nil {
+		return nil, err
+	}
 	defaults, err := insertDefaults(options)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: configure INSERT: %w", err)
@@ -74,6 +87,9 @@ func InsertMany[T any](ctx context.Context, db DB, table Table[T], values []T) (
 // the supported dialects do not share a multi-row default-values syntax.
 func InsertManyWithOptions[T any](ctx context.Context, db DB, table Table[T], values []T, options ...InsertOption) (sql.Result, error) {
 	if err := db.Validate(); err != nil {
+		return nil, err
+	}
+	if err := requireTableOperation(table, schema.OperationInsert); err != nil {
 		return nil, err
 	}
 	defaults, err := insertDefaults(options)
@@ -258,6 +274,9 @@ func UpdateWithOptions[T any](ctx context.Context, db DB, table Table[T], value 
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
+	if err := requireTableOperation(table, schema.OperationUpdate); err != nil {
+		return nil, err
+	}
 	config, err := updateOptions(options)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: configure UPDATE: %w", err)
@@ -274,6 +293,9 @@ func UpdateWithOptions[T any](ctx context.Context, db DB, table Table[T], value 
 // operation cannot silently fall back to a primary-key update.
 func UpdateMany[T any](ctx context.Context, db DB, table Table[T], value T, options ...UpdateOption) (sql.Result, error) {
 	if err := db.Validate(); err != nil {
+		return nil, err
+	}
+	if err := requireTableOperation(table, schema.OperationUpdate); err != nil {
 		return nil, err
 	}
 	config, err := updateOptions(options)

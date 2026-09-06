@@ -13,7 +13,14 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Table associates a SQL table with the Go type of one of its rows.
+// ReadTable associates a queryable SQL object with the Go type of one of its rows.
+type ReadTable[T any] interface {
+	Ref() query.TableRef
+	Column(name string) ColumnRef
+	tableRow() T
+}
+
+// Table associates a writable SQL table with the Go type of one of its rows.
 // Only this package implements it; generated table types embed it.
 //
 // Some values satisfy Table[T] with no typed table behind them, such as a nil
@@ -22,12 +29,8 @@ import (
 // error from the call, as an error from the Build of the statement the call
 // feeds, or as a panic where the name says it panics.
 type Table[T any] interface {
-	// Ref returns the dialect-neutral table backing the descriptor.
-	Ref() query.TableRef
-	// Column returns a reference to a named column of the table.
-	Column(name string) ColumnRef
-	// tableRow keeps T inferable and stops implementations outside this package.
-	tableRow() T
+	ReadTable[T]
+	writableTable()
 }
 
 // typedTable is the only implementation of Table.
@@ -35,13 +38,52 @@ type typedTable[T any] struct {
 	source query.TableRef
 }
 
+type readTable[T any] struct {
+	source query.TableRef
+}
+
+func (readTable[T]) tableRow() T                    { var zero T; return zero }
+func (t readTable[T]) Ref() query.TableRef          { return t.source }
+func (t readTable[T]) Column(name string) ColumnRef { return t.source.Column(name) }
+func (typedTable[T]) writableTable()                {}
+
+// ReadTableOf creates a queryable typed object from a validated schema definition.
+func ReadTableOf[T any](definition schema.TableDef) (ReadTable[T], error) {
+	source, err := query.NewTableRef(definition)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: table definition: %w", err)
+	}
+	return readTable[T]{source: source}, nil
+}
+
+// MustReadTableOf creates a queryable typed object or panics when definition is invalid.
+func MustReadTableOf[T any](definition schema.TableDef) ReadTable[T] {
+	table, err := ReadTableOf[T](definition)
+	if err != nil {
+		panic(err)
+	}
+	return table
+}
+
 // TableOf creates a typed table from a validated schema definition.
 func TableOf[T any](definition schema.TableDef) (Table[T], error) {
+	if err := requireWritableDefinition(definition); err != nil {
+		return nil, err
+	}
 	source, err := query.NewTableRef(definition)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table definition: %w", err)
 	}
 	return typedTable[T]{source: source}, nil
+}
+
+func requireWritableDefinition(definition schema.TableDef) error {
+	for _, operation := range []schema.Operation{schema.OperationInsert, schema.OperationUpdate, schema.OperationDelete} {
+		if !definition.Supports(operation) {
+			return fmt.Errorf("rasql: object %q does not support operation %d", definition.QualifiedName(), operation)
+		}
+	}
+	return nil
 }
 
 // MustTableOf creates a typed table or panics when definition is invalid.
@@ -74,6 +116,11 @@ func TableFrom[T any](definition schema.TableDef) Table[T] {
 	return typedTable[T]{source: query.TableRefFrom(definition)}
 }
 
+// ReadTableFrom creates a queryable typed object from a descriptor known to be valid.
+func ReadTableFrom[T any](definition schema.TableDef) ReadTable[T] {
+	return readTable[T]{source: query.TableRefFrom(definition)}
+}
+
 // As returns table under alias. Generated table types have their own As with
 // the same fixed body; this one serves dynamic code and the generated
 // implementation.
@@ -86,6 +133,18 @@ func As[T any](table Table[T], alias string) (Table[T], error) {
 		return nil, fmt.Errorf("rasql: table alias: %w", err)
 	}
 	return typedTable[T]{source: aliased}, nil
+}
+
+// AsRead returns a queryable typed object under alias.
+func AsRead[T any](table ReadTable[T], alias string) (ReadTable[T], error) {
+	if isNilReadTable(table) {
+		return nil, fmt.Errorf("rasql: table alias: table must not be nil")
+	}
+	aliased, err := table.Ref().As(alias)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: table alias: %w", err)
+	}
+	return readTable[T]{source: aliased}, nil
 }
 
 // ColumnRef is a reference to one column of one table. It is query.ColumnRef
@@ -173,6 +232,20 @@ func ColumnOf[T any](table Table[T], name string) ColumnRef {
 	return table.Column(name)
 }
 
+func isNilReadTable[T any](table ReadTable[T]) bool {
+	if nilcheck.Is(table) {
+		return true
+	}
+	if !dereferencesNil(func() { table.tableRow() }) {
+		return false
+	}
+	if !dereferencesNil(func() { _ = table.Ref() }) {
+		return false
+	}
+	return true
+
+}
+
 // Ref returns the dialect-neutral table backing the descriptor.
 func (t typedTable[T]) Ref() query.TableRef {
 	return t.source
@@ -198,6 +271,9 @@ func CreateTable[T any](ctx context.Context, db DB, table Table[T]) error {
 }
 
 func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
+	if !table.Supports(schema.OperationDDL) {
+		return fmt.Errorf("rasql: object %q does not support DDL", table.QualifiedName())
+	}
 	if err := db.Validate(); err != nil {
 		return err
 	}
