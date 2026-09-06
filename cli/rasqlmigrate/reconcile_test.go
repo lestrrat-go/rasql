@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -76,4 +78,148 @@ func TestDiskMigrationStatusAndVerifyUseRealDirectory(t *testing.T) {
 	output.Reset()
 	require.NoError(t, Run([]string{"verify", "-dir", migrationsRoot, "-dialect", "sqlite", "-dsn", dsn}, &output, &output))
 	require.Contains(t, output.String(), "migration verification passed")
+}
+
+func writeRecoveryMigrationDirectory(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "migrations")
+	directory := filepath.Join(root, "001_recovery")
+	require.NoError(t, os.MkdirAll(directory, 0o755))
+	for _, file := range []struct{ name, contents string }{
+		{"001_create.up.sql", "CREATE TABLE recovery_one"},
+		{"002_index.up.sql", "CREATE INDEX recovery_two"},
+		{"003_seed.up.sql", "INSERT INTO recovery_three"},
+		{"001_create.down.sql", "DROP TABLE recovery_one"},
+		{"002_index.down.sql", "DROP INDEX recovery_two"},
+		{"003_seed.down.sql", "DELETE FROM recovery_three"},
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(directory, file.name), []byte(file.contents), 0o644))
+	}
+	return root
+}
+
+func runRecoveryCommand(t *testing.T, fixture *dbtest.Recovery, args ...string) (string, error) {
+	t.Helper()
+	previous := openDatabase
+	openDatabase = func(string, string) (*sql.DB, error) { return fixture.Open() }
+	t.Cleanup(func() { openDatabase = previous })
+	var output bytes.Buffer
+	err := Run(args, &output, &output)
+	return output.String(), err
+}
+
+func TestDiskRecoveryApplyStatusVerifyReconcileAndRetry(t *testing.T) {
+	directory := writeRecoveryMigrationDirectory(t)
+	for _, decision := range []struct {
+		name, query string
+	}{
+		{name: "executed", query: "SELECT TRUE"},
+		{name: "not executed", query: "SELECT FALSE"},
+	} {
+		t.Run(decision.name, func(t *testing.T) {
+			fixture := dbtest.NewRecovery()
+			fixture.FailMigrationAt(1)
+			_, err := runRecoveryCommand(t, fixture, "apply", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
+			require.Error(t, err)
+			status, err := runRecoveryCommand(t, fixture, "status", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
+			require.NoError(t, err)
+			require.Contains(t, status, "incomplete\t001_recovery")
+			require.Contains(t, status, "source=002_index.up.sql direction=up index=1")
+			_, err = runRecoveryCommand(t, fixture, "verify", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
+			require.ErrorContains(t, err, "002_index.up.sql")
+			output, err := runRecoveryCommand(t, fixture, "reconcile", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-id", "001_recovery", "-check", decision.query)
+			require.NoError(t, err)
+			require.Contains(t, output, "reconciled\t001_recovery\t"+map[string]string{"SELECT TRUE": "executed", "SELECT FALSE": "not_executed"}[decision.query])
+			output, err = runRecoveryCommand(t, fixture, "apply", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
+			require.NoError(t, err)
+			require.Contains(t, output, "migration apply completed: 1 applied")
+			snapshot := fixture.Snapshot()
+			require.Nil(t, snapshot.Progress)
+			require.Equal(t, 1, executionCount(snapshot, "CREATE TABLE recovery_one"))
+			wantMiddle := 1
+			if decision.name == "executed" {
+				wantMiddle = 0
+			}
+			require.Equal(t, wantMiddle, executionCount(snapshot, "CREATE INDEX recovery_two"))
+			require.Equal(t, 1, executionCount(snapshot, "INSERT INTO recovery_three"))
+		})
+	}
+}
+
+func TestDiskRecoveryRevertStatusVerifyReconcileAndRetry(t *testing.T) {
+	directory := writeRecoveryMigrationDirectory(t)
+	for _, decision := range []struct {
+		name, query string
+	}{
+		{name: "executed", query: "SELECT TRUE"},
+		{name: "not executed", query: "SELECT FALSE"},
+	} {
+		t.Run(decision.name, func(t *testing.T) {
+			fixture := dbtest.NewRecovery()
+			_, err := runRecoveryCommand(t, fixture, "apply", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
+			require.NoError(t, err)
+			fixture.FailMigrationAt(1)
+			_, err = runRecoveryCommand(t, fixture, "revert", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-steps", "1")
+			require.Error(t, err)
+			status, err := runRecoveryCommand(t, fixture, "status", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
+			require.NoError(t, err)
+			require.Contains(t, status, "incomplete\t001_recovery")
+			require.Contains(t, status, "source=002_index.down.sql direction=down index=1")
+			_, err = runRecoveryCommand(t, fixture, "verify", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
+			require.ErrorContains(t, err, "002_index.down.sql")
+			output, err := runRecoveryCommand(t, fixture, "reconcile", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-id", "001_recovery", "-check", decision.query)
+			require.NoError(t, err)
+			require.Contains(t, output, "reconciled\t001_recovery")
+			output, err = runRecoveryCommand(t, fixture, "revert", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-steps", "1")
+			require.NoError(t, err)
+			require.Contains(t, output, "migration revert completed: 1 reverted")
+			snapshot := fixture.Snapshot()
+			require.Nil(t, snapshot.Progress)
+			require.Empty(t, snapshot.History)
+			require.Equal(t, 1, executionCount(snapshot, "DROP TABLE recovery_one"))
+			wantMiddle := 1
+			if decision.name == "executed" {
+				wantMiddle = 0
+			}
+			require.Equal(t, wantMiddle, executionCount(snapshot, "DROP INDEX recovery_two"))
+			require.Equal(t, 1, executionCount(snapshot, "DELETE FROM recovery_three"))
+		})
+	}
+}
+
+func TestDiskRecoveryReconcileArgumentAndCheckErrors(t *testing.T) {
+	directory := writeRecoveryMigrationDirectory(t)
+	fixture := dbtest.NewRecovery()
+	fixture.FailMigrationAt(1)
+	_, err := runRecoveryCommand(t, fixture, "apply", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN())
+	require.Error(t, err)
+	for _, test := range []struct{ name, query, want string }{
+		{"id mismatch", "SELECT TRUE", "does not match"},
+		{"no rows", "SELECT NO_ROWS", "no rows"},
+		{"multiple rows", "SELECT MULTIPLE_ROWS", "more than one"},
+		{"null", "SELECT NULL_CHECK", "NULL"},
+		{"non boolean", "SELECT TEXT_CHECK", "couldn't convert"},
+		{"query error", "SELECT ERROR_CHECK", "query failure"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			id := "001_recovery"
+			if test.name == "id mismatch" {
+				id = "wrong"
+			}
+			_, err := runRecoveryCommand(t, fixture, "reconcile", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-id", id, "-check", test.query)
+			require.ErrorContains(t, err, test.want)
+			require.NotNil(t, fixture.Snapshot().Progress)
+		})
+	}
+	_, err = runRecoveryCommand(t, fixture, "reconcile", "-dir", directory, "-dialect", "mysql", "-dsn", fixture.DSN(), "-id", "001_recovery", "-check", "SELECT TRUE", "extra")
+	require.ErrorContains(t, err, "no positional arguments")
+}
+
+func executionCount(snapshot dbtest.Snapshot, prefix string) int {
+	for query, count := range snapshot.Executions {
+		if strings.HasPrefix(query, prefix) {
+			return count
+		}
+	}
+	return 0
 }

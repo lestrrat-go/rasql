@@ -280,6 +280,20 @@ func (c *recoveryConn) QueryContext(ctx context.Context, query string, _ []drive
 	defer c.state.mu.Unlock()
 	q := strings.ToUpper(strings.TrimSpace(query))
 	switch {
+	case strings.Contains(q, "ERROR_CHECK"):
+		return nil, errors.New("recovery check query failure")
+	case strings.Contains(q, "NO_ROWS"):
+		return rows([]string{"value"}), nil
+	case strings.Contains(q, "MULTIPLE_ROWS"):
+		return &recoveryRows{columns: []string{"value"}, values: [][]driver.Value{{true}, {false}}}, nil
+	case strings.Contains(q, "NULL_CHECK"):
+		return rows([]string{"value"}, nil), nil
+	case strings.Contains(q, "TEXT_CHECK"):
+		return rows([]string{"value"}, "yes"), nil
+	case strings.Contains(q, "SELECT TRUE"):
+		return rows([]string{"value"}, true), nil
+	case strings.Contains(q, "SELECT FALSE"):
+		return rows([]string{"value"}, false), nil
 	case strings.Contains(q, "CONNECTION_ID"):
 		return rows([]string{"connection_id"}, c.id), nil
 	case strings.Contains(q, "GET_LOCK"):
