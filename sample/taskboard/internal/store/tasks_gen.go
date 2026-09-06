@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // TasksRow is one row of the "tasks" table.
@@ -129,25 +130,46 @@ type TasksTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t TasksTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t TasksTable) ID() query.TypedColumn[TasksRow, int64] {
+	return query.TypedColumnOf[TasksRow, int64](rasql.ColumnOf(t.Table, "id"))
+}
+func (t TasksTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // ProjectID returns a reference to the "project_id" column.
-func (t TasksTable) ProjectID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "project_id") }
+func (t TasksTable) ProjectID() query.TypedColumn[TasksRow, int64] {
+	return query.TypedColumnOf[TasksRow, int64](rasql.ColumnOf(t.Table, "project_id"))
+}
+func (t TasksTable) ProjectIDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "project_id") }
 
 // AssigneeID returns a reference to the "assignee_id" column.
-func (t TasksTable) AssigneeID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "assignee_id") }
+func (t TasksTable) AssigneeID() query.NullableColumn[TasksRow, *int64] {
+	return query.NullableColumnOf[TasksRow, *int64](rasql.ColumnOf(t.Table, "assignee_id"))
+}
+func (t TasksTable) AssigneeIDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "assignee_id") }
 
 // Title returns a reference to the "title" column.
-func (t TasksTable) Title() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "title") }
+func (t TasksTable) Title() query.TypedColumn[TasksRow, string] {
+	return query.TypedColumnOf[TasksRow, string](rasql.ColumnOf(t.Table, "title"))
+}
+func (t TasksTable) TitleRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "title") }
 
 // IsOpen returns a reference to the "is_open" column.
-func (t TasksTable) IsOpen() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "is_open") }
+func (t TasksTable) IsOpen() query.TypedColumn[TasksRow, bool] {
+	return query.TypedColumnOf[TasksRow, bool](rasql.ColumnOf(t.Table, "is_open"))
+}
+func (t TasksTable) IsOpenRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "is_open") }
 
 // CreatedAt returns a reference to the "created_at" column.
-func (t TasksTable) CreatedAt() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "created_at") }
+func (t TasksTable) CreatedAt() query.TypedColumn[TasksRow, time.Time] {
+	return query.TypedColumnOf[TasksRow, time.Time](rasql.ColumnOf(t.Table, "created_at"))
+}
+func (t TasksTable) CreatedAtRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "created_at") }
 
 // DueOn returns a reference to the "due_on" column.
-func (t TasksTable) DueOn() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "due_on") }
+func (t TasksTable) DueOn() query.NullableColumn[TasksRow, *time.Time] {
+	return query.NullableColumnOf[TasksRow, *time.Time](rasql.ColumnOf(t.Table, "due_on"))
+}
+func (t TasksTable) DueOnRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "due_on") }
 
 // Tasks returns the descriptor for the "tasks" table.
 func Tasks() TasksTable {
@@ -175,7 +197,7 @@ type TasksTableProjectRelation struct {
 func (t TasksTable) Project() TasksTableProjectRelation {
 	child := t
 	parent := Projects()
-	return TasksTableProjectRelation{Parent: parent, Child: child, ParentKey: parent.ID(), ChildKey: child.ProjectID()}
+	return TasksTableProjectRelation{Parent: parent, Child: child, ParentKey: parent.ID().Ref(), ChildKey: child.ProjectID().Ref()}
 }
 
 // Join returns an INNER JOIN for the relationship.

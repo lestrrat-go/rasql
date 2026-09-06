@@ -114,7 +114,7 @@ func (repository Repository) CloseTask(ctx context.Context, taskID int64) error 
 // AllProjects returns every project in id order, for the form's project list.
 func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, error) {
 	projects := Projects()
-	rows, err := rasql.SelectFrom(projects).OrderAsc(projects.ID()).All(ctx, repository.db)
+	rows, err := rasql.SelectFrom(projects).OrderAsc(projects.ID().Ref()).All(ctx, repository.db)
 	if err != nil {
 		return nil, fmt.Errorf("read projects: %w", err)
 	}
@@ -126,7 +126,7 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 // AllMembers returns every member in id order, for the form's member list.
 func (repository Repository) AllMembers(ctx context.Context) ([]MembersRow, error) {
 	members := Members()
-	rows, err := rasql.SelectFrom(members).OrderAsc(members.ID()).All(ctx, repository.db)
+	rows, err := rasql.SelectFrom(members).OrderAsc(members.ID().Ref()).All(ctx, repository.db)
 	if err != nil {
 		return nil, fmt.Errorf("read members: %w", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // ProjectsRow is one row of the "projects" table.
@@ -65,10 +66,16 @@ type ProjectsTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t ProjectsTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t ProjectsTable) ID() query.TypedColumn[ProjectsRow, int64] {
+	return query.TypedColumnOf[ProjectsRow, int64](rasql.ColumnOf(t.Table, "id"))
+}
+func (t ProjectsTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // Name returns a reference to the "name" column.
-func (t ProjectsTable) Name() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
+func (t ProjectsTable) Name() query.TypedColumn[ProjectsRow, string] {
+	return query.TypedColumnOf[ProjectsRow, string](rasql.ColumnOf(t.Table, "name"))
+}
+func (t ProjectsTable) NameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
 
 // Projects returns the descriptor for the "projects" table.
 func Projects() ProjectsTable {
@@ -96,7 +103,7 @@ type ProjectsTableTasksRelation struct {
 func (t ProjectsTable) Tasks() ProjectsTableTasksRelation {
 	child := Tasks()
 	parent := t
-	return ProjectsTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.ID(), ChildKey: child.ProjectID()}
+	return ProjectsTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.ID().Ref(), ChildKey: child.ProjectID().Ref()}
 }
 
 // Join returns an INNER JOIN for the relationship.

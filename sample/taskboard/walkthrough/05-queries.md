@@ -157,7 +157,7 @@ The add form offers a project and an owner to pick from. Both are whole-table re
 // AllProjects returns every project in id order, for the form's project list.
 func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, error) {
 	projects := Projects()
-	rows, err := rasql.SelectFrom(projects).OrderAsc(projects.ID()).All(ctx, repository.db)
+	rows, err := rasql.SelectFrom(projects).OrderAsc(projects.ID().Ref()).All(ctx, repository.db)
 	if err != nil {
 		return nil, fmt.Errorf("read projects: %w", err)
 	}
