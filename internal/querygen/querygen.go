@@ -256,7 +256,13 @@ func exportedName(name string) string {
 	if out.Len() == 0 {
 		return "Result"
 	}
-	return out.String()
+	result := out.String()
+	for suffix, replacement := range map[string]string{"Id": "ID", "Url": "URL", "Uri": "URI", "Http": "HTTP", "Api": "API"} {
+		if strings.HasSuffix(result, suffix) {
+			result = strings.TrimSuffix(result, suffix) + replacement
+		}
+	}
+	return result
 }
 
 func writeBindingImports(source *bytes.Buffer, imports []schema.GoImport) {
