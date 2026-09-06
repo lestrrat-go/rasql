@@ -92,5 +92,6 @@ func TestConditionalUpsertRendersAndGates(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `INSERT INTO "items" ("id", "version", "payload") VALUES (?, ?, ?) ON CONFLICT ("id") WHERE ("items"."version" > ?) DO UPDATE SET "version" = EXCLUDED."version", "payload" = EXCLUDED."payload" WHERE ("items"."version" < EXCLUDED."version")`, sqlite.SQL())
 	_, err = render.Upsert(dialect.MySQL(), statement)
-	require.ErrorAs(t, err, new(*render.UnsupportedUpsertPredicateError))
+	var target *render.UnsupportedUpsertPredicateError
+	require.ErrorAs(t, err, &target)
 }
