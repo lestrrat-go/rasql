@@ -319,7 +319,9 @@ func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) 
 	// returns either way. It reads through the same static-scan path a
 	// generated row type takes, so the counted value never becomes an any this
 	// package owns.
-	counted, err := exactlyOne(scanTypedRenderedStatic[countRow](ctx, db, s))
+	countRows, finish := scanTypedRenderedOwned(ctx, db, s, scanTypedRowsStatic[countRow], false)
+	counted, err := exactlyOne(countRows)
+	finish(err)
 	if err != nil {
 		return 0, err
 	}
@@ -404,11 +406,21 @@ func resultMetadata(statement query.Select, supplied []query.ResultColumn, suppl
 // [ErrMultipleRows] when it matched more than one.
 func (b TypedSelectBuilder[T]) One(ctx context.Context, db DB) (T, error) {
 	var zero T
-	rows, err := b.Query(ctx, db)
-	if err != nil {
+	if err := db.Validate(); err != nil {
 		return zero, err
 	}
-	return exactlyOne(rows)
+	s, err := b.Build(db.Dialect())
+	if err != nil {
+		return zero, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	scan := scanTypedRows[T]
+	if b.staticScan {
+		scan = scanTypedRowsStatic[T]
+	}
+	rows, finish := scanTypedRenderedOwned(ctx, db, s, scan, false)
+	value, err := exactlyOne(rows)
+	finish(err)
+	return value, err
 }
 
 func (b TypedSelectBuilder[T]) withError(err error) TypedSelectBuilder[T] {

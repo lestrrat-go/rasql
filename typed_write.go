@@ -237,7 +237,10 @@ func QueryWriteOne[T any](ctx context.Context, db DB, statement query.WriteState
 	if err != nil {
 		return zero, err
 	}
-	return exactlyOne(scanTypedRendered[T](ctx, db, rendered))
+	rows, finish := scanTypedRenderedOwned(ctx, db, rendered, scanTypedRows[T], false)
+	value, err := exactlyOne(rows)
+	finish(err)
+	return value, err
 }
 
 // Update encodes value's rasql-tagged fields and updates its table row.

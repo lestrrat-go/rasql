@@ -66,6 +66,8 @@ const (
 	// — MATCH (cols) AGAINST (expr), not a binary operator — while
 	// PostgreSQL has neither.
 	CapabilityMatchOperator
+	// CapabilitySavepoint reports whether the dialect supports transactional savepoints.
+	CapabilitySavepoint
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -119,7 +121,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex | CapabilitySavepoint,
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
@@ -149,7 +151,7 @@ func MySQL() Dialect {
 		quote:        '`',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertDuplicateKey,
-		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget,
+		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilitySavepoint,
 		decimalName:  "DECIMAL",
 		maxPrecision: 65,
 		maxScale:     30,
@@ -183,7 +185,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator | CapabilitySavepoint,
 		decimalName:  "TEXT",
 		// varcharText is left false: SQLite already drops schema.DecimalType's
 		// Precision and Scale for the same reason (see decimalTypeName below),
