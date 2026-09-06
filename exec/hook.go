@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -17,6 +18,12 @@ const (
 	QueryOperation OperationKind = iota
 	// ExecOperation identifies a statement executed through ExecContext.
 	ExecOperation
+	// BeginOperation identifies a transaction begin.
+	BeginOperation
+	// CommitOperation identifies a transaction commit.
+	CommitOperation
+	// RollbackOperation identifies a transaction rollback.
+	RollbackOperation
 )
 
 // String returns the short name used for the operation kind.
@@ -26,6 +33,12 @@ func (k OperationKind) String() string {
 		return "query"
 	case ExecOperation:
 		return "exec"
+	case BeginOperation:
+		return "begin"
+	case CommitOperation:
+		return "commit"
+	case RollbackOperation:
+		return "rollback"
 	default:
 		return "unknown"
 	}
@@ -154,6 +167,61 @@ func (f ObserverFunc) Observe(ctx context.Context, operation Operation, err erro
 	return f(ctx, operation, err)
 }
 
+// Phase identifies the lifecycle phase represented by a Completion.
+type Phase uint8
+
+const (
+	// ExecutionPhase reports the driver call.
+	ExecutionPhase Phase = iota
+	// ConsumptionPhase reports row iteration and decoding.
+	ConsumptionPhase
+	// TransactionPhase reports begin, commit, or rollback.
+	TransactionPhase
+)
+
+// Completion describes one completed operation lifecycle phase.
+type Completion struct {
+	Operation  Operation
+	Phase      Phase
+	Started    time.Time
+	Finished   time.Time
+	Err        error
+	RowsRead   int64
+	EarlyClose bool
+}
+
+// InvocationObserver starts an independent lifecycle observation session.
+type InvocationObserver interface {
+	Start(context.Context, Operation) (context.Context, CompletionObserver)
+}
+
+// CompletionObserver receives the terminal event for an invocation session.
+type CompletionObserver interface {
+	Complete(context.Context, Completion) error
+}
+
+// InvocationObserverFunc adapts a function into an InvocationObserver.
+type InvocationObserverFunc func(context.Context, Operation) (context.Context, CompletionObserver)
+
+// Start implements InvocationObserver.
+func (f InvocationObserverFunc) Start(ctx context.Context, operation Operation) (context.Context, CompletionObserver) {
+	if f == nil {
+		return ctx, nil
+	}
+	return f(ctx, operation)
+}
+
+// CompletionObserverFunc adapts a function into a CompletionObserver.
+type CompletionObserverFunc func(context.Context, Completion) error
+
+// Complete implements CompletionObserver.
+func (f CompletionObserverFunc) Complete(ctx context.Context, completion Completion) error {
+	if f == nil {
+		return nil
+	}
+	return f(ctx, completion)
+}
+
 func appendHooks(current []Hook, additions []Hook) ([]Hook, error) {
 	if len(additions) == 0 {
 		return append([]Hook(nil), current...), nil
@@ -175,6 +243,18 @@ func appendObservers(current []Observer, additions []Observer) ([]Observer, erro
 	for _, observer := range additions {
 		if nilcheck.Is(observer) {
 			return nil, fmt.Errorf("rasql: observer must not be nil")
+		}
+		observers = append(observers, observer)
+	}
+	return observers, nil
+}
+
+func appendInvocationObservers(current []InvocationObserver, additions []InvocationObserver) ([]InvocationObserver, error) {
+	observers := make([]InvocationObserver, 0, len(current)+len(additions))
+	observers = append(observers, current...)
+	for _, observer := range additions {
+		if nilcheck.Is(observer) {
+			return nil, fmt.Errorf("rasql: invocation observer must not be nil")
 		}
 		observers = append(observers, observer)
 	}
@@ -203,6 +283,53 @@ func (db DB) observe(ctx context.Context, operation Operation, driverErr error) 
 func (db DB) reportExtensionError(ctx context.Context, extensionErr ExtensionError) {
 	if db.extensionErrorHandler != nil {
 		db.extensionErrorHandler.HandleExtensionError(ctx, extensionErr)
+	}
+}
+
+type invocation struct {
+	contexts    []context.Context
+	completions []CompletionObserver
+	started     time.Time
+}
+
+func (db DB) startInvocation(ctx context.Context, operation Operation) (context.Context, invocation) {
+	current := ctx
+	started := time.Now()
+	result := invocation{started: started}
+	for _, observer := range db.invocationObservers {
+		derived, completion := observer.Start(current, operation)
+		if derived == nil {
+			derived = current
+		}
+		current = derived
+		result.contexts = append(result.contexts, current)
+		result.completions = append(result.completions, completion)
+	}
+	return current, result
+}
+
+func (db DB) completeInvocation(invocation invocation, operation Operation, phase Phase, ctx context.Context, err error, rowsRead int64, earlyClose bool) {
+	completion := Completion{
+		Operation:  operation,
+		Phase:      phase,
+		Started:    invocation.started,
+		Finished:   time.Now(),
+		Err:        err,
+		RowsRead:   rowsRead,
+		EarlyClose: earlyClose,
+	}
+	for index := len(invocation.completions) - 1; index >= 0; index-- {
+		observer := invocation.completions[index]
+		if observer == nil {
+			continue
+		}
+		observerContext := ctx
+		if index < len(invocation.contexts) && invocation.contexts[index] != nil {
+			observerContext = invocation.contexts[index]
+		}
+		if observerErr := observer.Complete(observerContext, completion); observerErr != nil {
+			db.reportExtensionError(ctx, ExtensionError{Operation: operation, Errors: []error{observerErr}, succeeded: err == nil})
+		}
 	}
 }
 

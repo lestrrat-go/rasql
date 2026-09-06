@@ -44,19 +44,32 @@ func QueryWrite(ctx context.Context, db exec.DB, s query.WriteStatement) (iter.S
 	return scanRendered(ctx, db, rendered), nil
 }
 
-// scanRendered defers running s until the returned sequence is ranged
-// over, so obtaining a sequence and abandoning it opens no cursor. Every
-// terminal that hands result rows to Scan goes through it, which keeps the
-// rule in one place: the *sql.Rows is created and consumed inside the same
-// closure.
+// scanRendered defers running s until the returned sequence is ranged over,
+// so obtaining a sequence and abandoning it opens no cursor. Owned rows stay
+// inside the closure, where consumption completion remains under this package.
 func scanRendered(ctx context.Context, db exec.DB, s stmt.Statement) iter.Seq2[Row, error] {
-	return func(yield func(Row, error) bool) {
-		rows, err := db.QueryRendered(ctx, s)
+	sequence, _ := scanRenderedOwned(ctx, db, s, true)
+	return sequence
+}
+
+func scanRenderedOwned(ctx context.Context, db exec.DB, s stmt.Statement, autoFinish bool) (iter.Seq2[Row, error], func(error)) {
+	var owned *exec.Rows
+	sequence := func(yield func(Row, error) bool) {
+		rows, err := db.QueryOwned(ctx, s)
 		if err != nil {
 			yield(Row{}, err)
 			return
 		}
-		Scan(rows)(yield)
+		owned = rows
+		if autoFinish {
+			defer func() { _ = rows.Finish(nil, true) }()
+		}
+		scanSource(rows)(yield)
+	}
+	return sequence, func(err error) {
+		if owned != nil {
+			_ = owned.Finish(err, true)
+		}
 	}
 }
 

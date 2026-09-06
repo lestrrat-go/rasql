@@ -2,18 +2,18 @@ package rasql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"iter"
 	"reflect"
 
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // scanTypedRows maps runtime result-column names to generated fields before
 // Scan. Other row types use the dynamic decoder.
-func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
+func scanTypedRows[T any](rows exec.RowSource) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		if rows == nil {
@@ -22,15 +22,16 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 
 		var probe T
 		if _, dynamic := any(&probe).(DestinationScanner); !dynamic {
-			decodeRows[T](rowvalue.Scan(rows))(yield)
+			defer finishRawRows(rows)
+			decodeRows[T](rowvalue.ScanSource(rows, false), rows)(yield)
 			return
 		}
-		defer func() {
-			_ = rows.Close()
-		}()
+		defer finishRawRows(rows)
 		names, err := rows.Columns()
 		if err != nil {
-			yield(zero, fmt.Errorf("row: read result columns: %w", err))
+			err = fmt.Errorf("row: read result columns: %w", err)
+			finishRows(rows, err, true)
+			yield(zero, err)
 			return
 		}
 		index := 0
@@ -38,28 +39,35 @@ func scanTypedRows[T any](rows *sql.Rows) iter.Seq2[T, error] {
 		scanner := any(&result).(DestinationScanner)
 		destinations, err := scanner.ScanDestinations(names)
 		if err != nil {
-			yield(zero, fmt.Errorf("rasql: configure result scan: %w", err))
+			err = fmt.Errorf("rasql: configure result scan: %w", err)
+			finishRows(rows, err, true)
+			yield(zero, err)
 			return
 		}
 		for rows.Next() {
 			if err := rows.Scan(destinations...); err != nil {
-				yield(zero, fmt.Errorf("rasql: scan row %d: %w", index, err))
+				err = fmt.Errorf("rasql: scan row %d: %w", index, err)
+				finishRows(rows, err, true)
+				yield(zero, err)
 				return
 			}
 			index++
+			recordRow(rows)
 			if !yield(result, nil) {
 				return
 			}
 		}
 		if err := rows.Err(); err != nil {
-			yield(zero, fmt.Errorf("row: iterate result rows: %w", err))
+			err = fmt.Errorf("row: iterate result rows: %w", err)
+			finishRows(rows, err, false)
+			yield(zero, err)
 		}
 	}
 }
 
 // scanTypedRowsStatic scans a complete, statically-known generated row
 // projection directly into its fields. Other row types use the dynamic decoder.
-func scanTypedRowsStatic[T any](rows *sql.Rows) iter.Seq2[T, error] {
+func scanTypedRowsStatic[T any](rows exec.RowSource) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		if rows == nil {
@@ -69,26 +77,29 @@ func scanTypedRowsStatic[T any](rows *sql.Rows) iter.Seq2[T, error] {
 		var result T
 		scanner, ok := any(&result).(Scanner)
 		if !ok {
-			decodeRows[T](rowvalue.Scan(rows))(yield)
+			defer finishRawRows(rows)
+			decodeRows[T](rowvalue.ScanSource(rows, false), rows)(yield)
 			return
 		}
-
-		defer func() {
-			_ = rows.Close()
-		}()
+		defer finishRawRows(rows)
 		index := 0
 		for rows.Next() {
 			if err := scanner.ScanRow(rows); err != nil {
-				yield(zero, fmt.Errorf("rasql: scan row %d: %w", index, err))
+				err = fmt.Errorf("rasql: scan row %d: %w", index, err)
+				finishRows(rows, err, true)
+				yield(zero, err)
 				return
 			}
 			index++
+			recordRow(rows)
 			if !yield(result, nil) {
 				return
 			}
 		}
 		if err := rows.Err(); err != nil {
-			yield(zero, fmt.Errorf("row: iterate result rows: %w", err))
+			err = fmt.Errorf("row: iterate result rows: %w", err)
+			finishRows(rows, err, false)
+			yield(zero, err)
 		}
 	}
 }
@@ -96,44 +107,94 @@ func scanTypedRowsStatic[T any](rows *sql.Rows) iter.Seq2[T, error] {
 // scanTypedRendered defers the query until iteration begins and maps each
 // result column to a generated row field at runtime.
 func scanTypedRendered[T any](ctx context.Context, db DB, s stmt.Statement) iter.Seq2[T, error] {
-	return scanTypedRenderedWith(ctx, db, s, scanTypedRows[T])
+	rows, _ := scanTypedRenderedOwned(ctx, db, s, scanTypedRows[T], true)
+	return rows
 }
 
 // scanTypedRenderedStatic defers the query until iteration begins and scans a
 // statically-known complete generated row projection directly into its fields.
 func scanTypedRenderedStatic[T any](ctx context.Context, db DB, s stmt.Statement) iter.Seq2[T, error] {
-	return scanTypedRenderedWith(ctx, db, s, scanTypedRowsStatic[T])
+	rows, _ := scanTypedRenderedOwned(ctx, db, s, scanTypedRowsStatic[T], true)
+	return rows
 }
 
-func scanTypedRenderedWith[T any](ctx context.Context, db DB, s stmt.Statement, scan func(*sql.Rows) iter.Seq2[T, error]) iter.Seq2[T, error] {
-	return func(yield func(T, error) bool) {
+func scanTypedRenderedOwned[T any](ctx context.Context, db DB, s stmt.Statement, scan func(exec.RowSource) iter.Seq2[T, error], autoFinish bool) (iter.Seq2[T, error], func(error)) {
+	var owned *exec.Rows
+	sequence := func(yield func(T, error) bool) {
 		var zero T
-		rows, err := db.QueryRendered(ctx, s)
+		rows, err := db.QueryOwned(ctx, s)
 		if err != nil {
 			yield(zero, err)
 			return
 		}
+		owned = rows
+		if autoFinish {
+			defer func() { _ = rows.Finish(nil, true) }()
+		}
 		scan(rows)(yield)
+	}
+	return sequence, func(err error) {
+		if owned != nil {
+			_ = owned.Finish(err, true)
+		}
+	}
+}
+
+func scanTypedRenderedWith[T any](ctx context.Context, db DB, s stmt.Statement, scan func(exec.RowSource) iter.Seq2[T, error]) iter.Seq2[T, error] {
+	rows, _ := scanTypedRenderedOwned(ctx, db, s, scan, true)
+	return rows
+}
+
+type rowAccounting interface {
+	RecordRow()
+	Finish(error, bool) error
+}
+
+func recordRow(rows exec.RowSource) {
+	if accounting, ok := rows.(rowAccounting); ok {
+		accounting.RecordRow()
+	}
+}
+
+func finishRows(rows exec.RowSource, err error, earlyClose bool) {
+	if accounting, ok := rows.(rowAccounting); ok {
+		_ = accounting.Finish(err, earlyClose)
+		return
+	}
+	_ = rows.Close()
+}
+
+func finishRawRows(rows exec.RowSource) {
+	if _, ok := rows.(rowAccounting); !ok {
+		_ = rows.Close()
 	}
 }
 
 // decodeRows adapts a rangeable sequence of rowvalue.Row into one that decodes
 // each row as T.
-func decodeRows[T any](rows iter.Seq2[rowvalue.Row, error]) iter.Seq2[T, error] {
+func decodeRows[T any](rows iter.Seq2[rowvalue.Row, error], sources ...exec.RowSource) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
+		var source exec.RowSource
+		if len(sources) > 0 {
+			source = sources[0]
+		}
 		index := 0
 		for result, err := range rows {
 			if err != nil {
+				finishRows(source, err, false)
 				yield(zero, err)
 				return
 			}
 			decoded, err := rowvalue.Decode[T](result)
 			if err != nil {
-				yield(zero, fmt.Errorf("rasql: decode row %d: %w", index, err))
+				err = fmt.Errorf("rasql: decode row %d: %w", index, err)
+				finishRows(source, err, true)
+				yield(zero, err)
 				return
 			}
 			index++
+			recordRow(source)
 			if !yield(decoded, nil) {
 				return
 			}

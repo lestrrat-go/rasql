@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"iter"
 
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/internal/rowvalue"
 )
 
@@ -67,4 +68,21 @@ func Decode[T any](r Row) (T, error) {
 // because the underlying rows are already closed.
 func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
 	return rowvalue.Scan(rows)
+}
+
+func scanSource(rows *exec.Rows) iter.Seq2[Row, error] {
+	return func(yield func(Row, error) bool) {
+		defer func() { _ = rows.Finish(nil, true) }()
+		for value, err := range rowvalue.ScanSource(rows, false) {
+			if err != nil {
+				_ = rows.Finish(err, false)
+				yield(Row{}, err)
+				return
+			}
+			rows.RecordRow()
+			if !yield(value, nil) {
+				return
+			}
+		}
+	}
 }

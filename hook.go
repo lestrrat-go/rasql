@@ -10,6 +10,12 @@ const (
 	QueryOperation = exec.QueryOperation
 	// ExecOperation identifies a statement executed through ExecContext.
 	ExecOperation = exec.ExecOperation
+	// BeginOperation identifies a transaction begin.
+	BeginOperation = exec.BeginOperation
+	// CommitOperation identifies a transaction commit.
+	CommitOperation = exec.CommitOperation
+	// RollbackOperation identifies a transaction rollback.
+	RollbackOperation = exec.RollbackOperation
 )
 
 // Operation is the immutable, rendered statement passed to a Hook.
@@ -45,3 +51,27 @@ type Observer = exec.Observer
 
 // ObserverFunc adapts a function into an Observer.
 type ObserverFunc = exec.ObserverFunc
+
+// Phase identifies a lifecycle phase.
+type Phase = exec.Phase
+
+const (
+	ExecutionPhase   = exec.ExecutionPhase
+	ConsumptionPhase = exec.ConsumptionPhase
+	TransactionPhase = exec.TransactionPhase
+)
+
+// Completion describes one completed operation lifecycle phase.
+type Completion = exec.Completion
+
+// InvocationObserver observes a complete operation lifecycle.
+type InvocationObserver = exec.InvocationObserver
+
+// InvocationObserverFunc adapts a function into an InvocationObserver.
+type InvocationObserverFunc = exec.InvocationObserverFunc
+
+// CompletionObserver receives a terminal lifecycle event.
+type CompletionObserver = exec.CompletionObserver
+
+// CompletionObserverFunc adapts a function into a CompletionObserver.
+type CompletionObserverFunc = exec.CompletionObserverFunc
