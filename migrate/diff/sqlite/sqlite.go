@@ -583,9 +583,10 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		}
 		statements := make([]diff.PlannedStatement, len(generated))
 		for index, statement := range generated {
-			statements[index] = diff.PlannedStatement{Source: fmt.Sprintf("%03d_%s.sql", index+1, statement.name), SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
+			statements[index] = diff.PlannedStatement{Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
 		}
 		plan := diff.Plan{Dialect: "sqlite", Statements: statements}
+		diff.NumberSources(plan.Statements)
 		if err := plan.Validate(); err != nil {
 			return diff.Plan{}, err
 		}
@@ -643,8 +644,9 @@ func indexesForTable(indexes map[string]indexDefinition, table sqlitequery.Quali
 
 func operationsFromGenerated(dialect string, generated []generatedStatement) []diff.ProposedOperation {
 	operations := make([]diff.ProposedOperation, 0, len(generated))
-	for _, statement := range generated {
-		forward := diff.PlannedStatement{Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
+	for index, statement := range generated {
+		source := fmt.Sprintf("%03d_%s.sql", index+1, statement.name)
+		forward := diff.PlannedStatement{Source: source, SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
 		reverse := diff.PlannedStatement{Source: forward.Source, SQL: statement.reverseSQL, ReverseSQL: statement.sql, Summary: statement.summary}
 		operations = append(operations, diff.ProposedOperation{ID: diff.OperationID(statement.kind, dialect, statement.table, statement.column, statement.constraint), Table: statement.table, Column: statement.column, Constraint: statement.constraint, Summary: statement.summary, Kind: statement.kind, Forward: []diff.PlannedStatement{forward}, Reverse: []diff.PlannedStatement{reverse}})
 	}

@@ -79,6 +79,33 @@ func TestConfigIsOptional(t *testing.T) {
 	require.FileExists(t, filepath.Join(dir, "internal", "store", "users_gen.go"))
 }
 
+func TestConfigReadLimitBoundary(t *testing.T) {
+	const limit = 1 << 20
+	for _, testCase := range []struct {
+		name       string
+		extraBytes int
+		wantSize   int
+		wantError  string
+		wantAbsent string
+	}{
+		{name: "at limit", extraBytes: limit - 2, wantSize: limit, wantError: "unsupported -dialect", wantAbsent: "byte limit"},
+		{name: "past limit", extraBytes: limit - 1, wantSize: limit + 1, wantError: "1048576-byte limit", wantAbsent: "unsupported -dialect"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.json")
+			data := append([]byte("{}"), bytes.Repeat([]byte{' '}, testCase.extraBytes)...)
+			require.Len(t, data, testCase.wantSize)
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+
+			_, err := runConfigured(t, dir, "-config", path)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), testCase.wantError)
+			require.NotContains(t, err.Error(), testCase.wantAbsent)
+		})
+	}
+}
+
 func TestConfigFlagOverrides(t *testing.T) {
 	t.Run("a typed flag wins", func(t *testing.T) {
 		dir, databasePath := configModule(t, `{"package": "store", "output": "internal/store", "dialect": "sqlite"}`)

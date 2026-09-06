@@ -27,6 +27,12 @@ func SelectFrom(table query.TableRef) SelectBuilder {
 	return SelectBuilder{builder: render.SelectFrom(nil, table)}
 }
 
+// SelectFromRelation starts a fluent SELECT builder using a reusable relation
+// as its primary source. SelectFrom remains the table-only entry point.
+func SelectFromRelation(source query.RelationSource) SelectBuilder {
+	return SelectBuilder{builder: render.SelectFromRelation(nil, source)}
+}
+
 // Select adds columns from the primary table by name.
 func (b SelectBuilder) Select(columns ...string) SelectBuilder {
 	b.builder = b.builder.Select(columns...)
@@ -165,7 +171,10 @@ func (b SelectBuilder) Count(ctx context.Context, db exec.DB) (int64, error) {
 	// Count consumes the sequence itself, so the statement runs before Count
 	// returns either way. It goes through scanRendered so that no call site
 	// outside that one closure holds a *sql.Rows.
-	return exactlyOne(countValues(scanRendered(ctx, db, s)))
+	rows, finish := scanRenderedOwned(ctx, db, s, false)
+	counted, err := exactlyOne(countValues(rows))
+	finish(err)
+	return counted, err
 }
 
 // countValues adapts a sequence of result rows into the int64 held by each

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,6 +16,30 @@ import (
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDiffNumbersLargePlan(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE existing (id BIGINT PRIMARY KEY);")
+	var source strings.Builder
+	for index := 0; index < 1000; index++ {
+		source.WriteString("CREATE TABLE table_")
+		source.WriteString(strconv.Itoa(index))
+		source.WriteString(" (id BIGINT PRIMARY KEY); ")
+	}
+	target := parseSnapshot(t, analyzer, source.String()+"CREATE TABLE existing (id BIGINT PRIMARY KEY);")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Len(t, plan.Statements, 1000)
+	sources := make([]string, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		sources[index] = statement.Source
+	}
+	sorted := append([]string(nil), sources...)
+	sort.Strings(sorted)
+	require.Equal(t, sources, sorted)
+	require.Equal(t, "0001_", sources[0][:5])
+	require.Equal(t, "1000_", sources[len(sources)-1][:5])
+}
 
 func TestDiffWriteMigrationLoadsExactArtifact(t *testing.T) {
 	analyzer := mysql.New()

@@ -13,6 +13,7 @@ import (
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
+	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -244,6 +245,27 @@ func operationsFromGenerated(dialect string, generated []generatedStatement) []d
 		operations = append(operations, diff.ProposedOperation{ID: diff.OperationID(statement.kind, dialect, statement.table, statement.column, statement.constraint), Table: statement.table, Column: statement.column, Constraint: statement.constraint, Summary: statement.summary, Kind: statement.kind, Forward: []diff.PlannedStatement{forward}, Reverse: []diff.PlannedStatement{reverse}})
 	}
 	return operations
+}
+
+func orderAddedTables(entries []diff.SchemaEntry[tableDefinition], tableNames LowerCaseTableNames) ([]string, error) {
+	dependencies := make([]migrationorder.TableDependency, len(entries))
+	for index, entry := range entries {
+		statement := entry.Value.statement
+		dependencies[index] = migrationorder.TableDependency{Key: entry.Key, Display: displayName(statement.Name)}
+		for _, constraint := range statement.Constraints {
+			if constraint.References != nil {
+				dependencies[index].DependsOn = append(dependencies[index].DependsOn, tableNameKey(constraint.References.Table, tableNames))
+			}
+		}
+		for _, column := range statement.Columns {
+			for _, constraint := range column.Constraints {
+				if constraint.References != nil {
+					dependencies[index].DependsOn = append(dependencies[index].DependsOn, tableNameKey(constraint.References.Table, tableNames))
+				}
+			}
+		}
+	}
+	return migrationorder.OrderTables(dependencies)
 }
 
 type schemaSnapshot struct {

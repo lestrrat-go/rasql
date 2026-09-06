@@ -1,6 +1,6 @@
 # Migrations
 
-`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so resolve any failed partial migration before retrying.
+`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. PostgreSQL and SQLite apply each migration atomically. MySQL DDL may commit before a migration record is written, so the runner records progress and blocks uncertain work until it is reconciled.
 
 Run the command outside the application, before it starts. The application then opens a database whose schema is already in place.
 
@@ -218,7 +218,17 @@ rasql migrate verify \
 
 `apply` runs every pending migration, oldest first, and prints one `applied<TAB>ID` line per migration followed by a count. Pass `-to ID` to stop at a chosen migration, which applies `ID` and every pending migration before it and leaves the rest pending. Naming a migration that is already applied applies nothing. Pass `-dry-run` to print the forward SQL the run would execute without running it. That dry run reads the history table, so it prints only what is still pending, while [`plan`](#create-and-review-a-migration) prints every supplied source and never opens a database.
 
-`status` reports `applied`, `pending`, `changed`, `out_of_order`, and `unknown` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
+`status` reports `applied`, `pending`, `changed`, `out_of_order`, `unknown`, and `incomplete` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
+
+If MySQL stops during a migration, `status` shows the source and direction that need review. Use a read-only query returning one non-NULL boolean to reconcile it after checking the database:
+
+```sh
+rasql migrate reconcile \
+  -dir db/migrations -dialect mysql -dsn "$DATABASE_URL" \
+  -id 20240901_add_owner -check 'SELECT EXISTS (SELECT 1 FROM owners WHERE id = 1)'
+```
+
+`true` records the source as executed and `false` removes its pending intent so the source can run later. The command never executes migration SQL or accepts a force outcome.
 
 ## Revert a migration
 
@@ -244,7 +254,7 @@ A reverted migration becomes `pending` again, so `apply` runs it once more. That
 
 The whole run is refused, before any statement runs, when a selected migration's forward sources no longer match their recorded checksum, when `-to` names a migration that is not applied, when `-steps` exceeds the number applied, or when the history disagrees with the supplied migrations. A refused run changes nothing.
 
-PostgreSQL and SQLite revert a migration atomically, so a failed revert leaves the database as it was. MySQL commits DDL implicitly, so a revert that fails partway can leave a schema half undone with the migration still recorded. Resolve that state by hand before running `revert` again. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go`.
+PostgreSQL and SQLite revert a migration atomically, so a failed revert leaves the database as it was. MySQL commits DDL implicitly, so a revert that fails partway retains a progress row and blocks replay until reconciliation. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go`.
 
 ## Generate PostgreSQL, MySQL, and SQLite migrations
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -380,6 +381,19 @@ type PlannedStatement struct {
 	SQL        string
 	ReverseSQL string
 	Summary    string
+}
+
+// NumberSources prefixes each unnumbered SQL source with its plan ordinal.
+// The shared width keeps lexical source order equal to numeric plan order,
+// including plans that cross the 999-source boundary.
+func NumberSources(statements []PlannedStatement) {
+	if len(statements) == 0 {
+		return
+	}
+	width := max(3, len(strconv.Itoa(len(statements))))
+	for index := range statements {
+		statements[index].Source = fmt.Sprintf("%0*d_%s", width, index+1, statements[index].Source)
+	}
 }
 
 // Empty reports whether a plan contains no generated SQL sources.

@@ -184,14 +184,29 @@ func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
 	mock.ExpectQuery("SELECT GET_LOCK(?, ?)").
 		WithArgs("rasql_schema_migrations", 30).
 		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS `rasql_schema_migrations_progress` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `checksum` CHAR(64) NOT NULL, `direction` VARCHAR(16) NOT NULL, `source_index` INTEGER NOT NULL, `source` TEXT NOT NULL, `next_index` INTEGER NOT NULL, `started_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS `rasql_schema_migrations` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `checksum` CHAR(64) NOT NULL, `applied_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT `id`, `checksum`, `direction`, `source_index`, `source`, `next_index` FROM `rasql_schema_migrations_progress` ORDER BY `id`").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum", "direction", "source_index", "source", "next_index"}))
 	mock.ExpectQuery("SELECT `id`, `checksum` FROM `rasql_schema_migrations` ORDER BY `id`").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum"}))
+	mock.ExpectExec("INSERT INTO `rasql_schema_migrations_progress` (`id`, `checksum`, `direction`, `source_index`, `source`, `next_index`) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE `checksum`=VALUES(`checksum`), `direction`=VALUES(`direction`), `source_index`=VALUES(`source_index`), `source`=VALUES(`source`), `next_index`=VALUES(`next_index`)").
+		WithArgs("001_create_users", sqlmock.AnyArg(), "up", 0, "001.sql", 0).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(string(migration.Statements[0].SQL)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("UPDATE `rasql_schema_migrations_progress` SET `next_index`=?, `source`=? WHERE `id`=?").
+		WithArgs(1, "001.sql", "001_create_users").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT `id`, `checksum` FROM `rasql_schema_migrations` ORDER BY `id`").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum"}))
 	mock.ExpectExec("INSERT INTO `rasql_schema_migrations` (`id`, `checksum`) VALUES (?, ?)").
 		WithArgs("001_create_users", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM `rasql_schema_migrations_progress` WHERE `id`=?").
+		WithArgs("001_create_users").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT RELEASE_LOCK(?)").
 		WithArgs("rasql_schema_migrations").

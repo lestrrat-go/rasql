@@ -10,6 +10,7 @@ require (
 	github.com/lestrrat-go/rasql-pg v0.0.0-20260803045404-7e3faf0c19bd
 	github.com/lestrrat-go/rasql-sqlite v0.0.0-20260814113622-515430720d82
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/tools v0.47.0
 	modernc.org/sqlite v1.55.0
 )
 
@@ -27,6 +28,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
+	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.29.0 // indirect

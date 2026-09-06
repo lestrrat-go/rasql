@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
@@ -60,11 +61,28 @@ func buildMySQLPlan(baseline, target *schemaSnapshot) (diff.Plan, error) {
 
 func compareMySQL(baseline, target *schemaSnapshot) (loweringModel, error) {
 	model := loweringModel{}
+	added := make([]diff.SchemaEntry[tableDefinition], 0, len(target.tables))
+	for _, key := range sortedTableKeys(target.tables) {
+		if _, exists := baseline.tables[key]; !exists {
+			added = append(added, diff.SchemaEntry[tableDefinition]{Key: key, Value: target.tables[key]})
+		}
+	}
+	addedOrder, err := orderAddedTables(added, target.lowerCaseTableNames)
+	if err != nil {
+		addedOrder = make([]string, 0, len(added))
+		for _, entry := range added {
+			addedOrder = append(addedOrder, entry.Key)
+		}
+		sort.Strings(addedOrder)
+	}
+	for _, key := range addedOrder {
+		targetTable := target.tables[key]
+		model.entries = append(model.entries, loweringEntry{operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationCreateTable, "mysql", displayName(targetTable.statement.Name), "", ""), Table: displayName(targetTable.statement.Name), Summary: "create table " + displayName(targetTable.statement.Name), Kind: diff.OperationCreateTable}, tableKey: key, table: targetTable.statement.Name, targetTable: &targetTable})
+	}
 	for _, key := range sortedTableKeys(target.tables) {
 		targetTable := target.tables[key]
 		baselineTable, exists := baseline.tables[key]
 		if !exists {
-			model.entries = append(model.entries, loweringEntry{operation: diff.ProposedOperation{ID: diff.OperationID(diff.OperationCreateTable, "mysql", displayName(targetTable.statement.Name), "", ""), Table: displayName(targetTable.statement.Name), Summary: "create table " + displayName(targetTable.statement.Name), Kind: diff.OperationCreateTable}, tableKey: key, table: targetTable.statement.Name, targetTable: &targetTable})
 			continue
 		}
 		normalizedBaseline := normalizedTable(baselineTable.statement, baseline.lowerCaseTableNames)
@@ -450,7 +468,7 @@ func lowerMySQL(model loweringModel, resolutions map[string]diff.Resolution) (di
 	}
 	ordered, err := scheduleMySQLActions(model, all)
 	if err != nil {
-		return diff.LoweringResult{}, err
+		return diff.LoweringResult{}, fmt.Errorf("mysql schema diff: dependency cycle involving %w; manual migration required", err)
 	}
 	return buildMySQLLoweringWithOwners(owners, ordered, irreversible), nil
 }
@@ -490,8 +508,12 @@ func mysqlActionKey(action mysqlAction) string {
 	return fmt.Sprintf("%d/%d/%s/%s/%d", action.operationIndex, action.stage, action.tableKey, action.objectKey, action.ordinal)
 }
 
-func mysqlSource(position int, stem string) string {
-	return fmt.Sprintf("%03d_%s.sql", position+1, filenamePart(stem))
+func mysqlSource(position, total int, stem string) string {
+	width := 3
+	if digits := len(strconv.Itoa(total)); digits > width {
+		width = digits
+	}
+	return fmt.Sprintf("%0*d_%s.sql", width, position+1, filenamePart(stem))
 }
 
 func reverseStatement(statement diff.PlannedStatement) diff.PlannedStatement {
@@ -805,7 +827,7 @@ func scheduleMySQLActions(model loweringModel, actions []mysqlAction) ([]mysqlAc
 				}
 				parent := qualifiedNameKey(referencedTableName(entry.table, constraint.References.Table), true)
 				for j := range actions {
-					if actions[j].stage == stageCreateTable && actions[j].tableKey == parent {
+					if actions[j].stage == stageCreateTable && actions[j].tableKey == parent && actions[j].tableKey != actions[i].tableKey {
 						actions[i].dependencies = append(actions[i].dependencies, mysqlActionKey(actions[j]))
 					}
 				}
@@ -952,7 +974,7 @@ func buildMySQLLoweringWithOwners(owners []mysqlScheduledOperation, ordered []my
 	}
 	irreversibleOwners := make(map[int]struct{})
 	for position, action := range ordered {
-		forward := diff.PlannedStatement{Source: mysqlSource(position, action.stem), SQL: action.sql, ReverseSQL: action.reverseSQL, Summary: action.summary}
+		forward := diff.PlannedStatement{Source: mysqlSource(position, len(ordered), action.stem), SQL: action.sql, ReverseSQL: action.reverseSQL, Summary: action.summary}
 		result.Statements = append(result.Statements, forward)
 		result.Operations[action.operationIndex].Forward = append(result.Operations[action.operationIndex].Forward, forward)
 		if action.irreversible {

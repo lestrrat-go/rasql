@@ -1545,6 +1545,13 @@ func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
 		return "", fmt.Errorf("column %q: %w", column.Name, err)
 	}
 	definition := name + " " + typeName
+	if column.Collation != "" {
+		collation, err := r.quoteIdentifier(column.Collation)
+		if err != nil {
+			return "", err
+		}
+		definition += " COLLATE " + collation
+	}
 	if !column.Nullable {
 		definition += " NOT NULL"
 	}

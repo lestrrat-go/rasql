@@ -4,12 +4,14 @@ package postgresql
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
 	pgquery "github.com/lestrrat-go/rasql-pg/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
+	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -138,8 +140,16 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	entries := make([]loweringEntry, 0)
 	diagnostics := make([]string, 0)
 	decisions := make([]diff.RequiredDecision, 0)
+	addedOrder, err := orderAddedTables(comparison.Tables.Added)
+	if err != nil {
+		return diff.Plan{}, fmt.Errorf("postgresql schema diff requires manual migration: %w", err)
+	}
+	addedByKey := make(map[string]diff.SchemaEntry[tableDefinition], len(comparison.Tables.Added))
 	for _, entry := range comparison.Tables.Added {
-		created, err := createTableEntry(entry.Value)
+		addedByKey[entry.Key] = entry
+	}
+	for _, key := range addedOrder {
+		created, err := createTableEntry(addedByKey[key].Value)
 		if err != nil {
 			return diff.Plan{}, err
 		}
@@ -297,6 +307,27 @@ func decisionByID(decisions []diff.RequiredDecision, id string) (diff.RequiredDe
 		}
 	}
 	return diff.RequiredDecision{}, false
+}
+
+func orderAddedTables(entries []diff.SchemaEntry[tableDefinition]) ([]string, error) {
+	dependencies := make([]migrationorder.TableDependency, len(entries))
+	for index, entry := range entries {
+		statement := entry.Value.statement
+		dependencies[index] = migrationorder.TableDependency{Key: entry.Key, Display: displayName(statement.Name)}
+		for _, constraint := range statement.Constraints {
+			if constraint.References != nil {
+				dependencies[index].DependsOn = append(dependencies[index].DependsOn, qualifiedNameKey(constraint.References.Table))
+			}
+		}
+		for _, column := range statement.Columns {
+			for _, constraint := range column.Constraints {
+				if constraint.References != nil {
+					dependencies[index].DependsOn = append(dependencies[index].DependsOn, qualifiedNameKey(constraint.References.Table))
+				}
+			}
+		}
+	}
+	return migrationorder.OrderTables(dependencies)
 }
 
 //nolint:unused // Kept as a package-local compatibility path.
@@ -776,7 +807,11 @@ func scheduleLoweredOperations(operations []diff.ProposedOperation, actions []lo
 	sources := make(map[statementRef]string, len(forwardRefs))
 	for ordinal, ref := range forwardRefs {
 		statement := &operations[ref.operation].Forward[ref.statement]
-		statement.Source = fmt.Sprintf("%03d_%s", ordinal+1, statement.Source)
+		width := 3
+		if digits := len(strconv.Itoa(len(forwardRefs))); digits > width {
+			width = digits
+		}
+		statement.Source = fmt.Sprintf("%0*d_%s", width, ordinal+1, statement.Source)
 		sources[ref] = statement.Source
 		statements = append(statements, *statement)
 	}
