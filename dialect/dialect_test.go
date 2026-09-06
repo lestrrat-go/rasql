@@ -69,6 +69,12 @@ func TestBuiltinsRenderIdentifiersAndPlaceholders(t *testing.T) {
 	}
 }
 
+func TestBuiltinsSupportSavepoints(t *testing.T) {
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
+		require.True(t, d.Supports(dialect.CapabilitySavepoint), d.Name())
+	}
+}
+
 func TestBuiltinsRejectInvalidInput(t *testing.T) {
 	for _, test := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
 		_, err := test.QuoteIdentifier("not-valid")

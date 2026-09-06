@@ -55,7 +55,7 @@ A transaction is not a separate type. `DB.Begin` takes `*sql.TxOptions` and opti
 
 The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation. Calling `Commit` or `Rollback` on a `DB` that is not a transaction returns an error rather than being a compile-time mistake, since one concrete type now covers both cases.
 
-A transaction still cannot be nested: calling `Begin` on a `DB` that is already a transaction returns an error instead of opening a savepoint. An application that already holds a native `*sql.Tx` can hand it straight to `rasql.New` instead of calling `Begin`. The resulting `DB` is a transaction the same way one returned by `Begin` is.
+A transaction still cannot be nested with `Begin`: calling it on a `DB` that is already a transaction returns an error. Use `DB.Atomic` for composable work. It owns a transaction on a pool DB and creates a private savepoint when called with a transaction DB, so a nested callback can fail without rolling back unrelated outer writes. Savepoint cleanup errors remain available through the returned error; a callback panic is re-thrown after cleanup, or as `rasql.AtomicPanic` when cleanup also fails. The built-in dialects declare savepoint syntax support, while live engine recovery should be verified against the target deployment. An application that already holds a native `*sql.Tx` can hand it straight to `rasql.New` and use `Atomic` on the resulting transaction DB.
 
 <!-- INCLUDE(examples/rasql_transaction_example_test.go) -->
 ```go
