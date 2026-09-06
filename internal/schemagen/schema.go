@@ -467,6 +467,7 @@ func prepareSchema(packageName string, tables []schema.TableDef) ([]schema.Table
 		return nil, packageNameError(packageName)
 	}
 	clones := make([]schema.TableDef, len(tables))
+	declaredImports := make(map[string]string)
 	for i, table := range tables {
 		if err := table.Validate(); err != nil {
 			return nil, fmt.Errorf("generate: table at index %d: %w", i, err)
@@ -475,6 +476,14 @@ func prepareSchema(packageName string, tables []schema.TableDef) ([]schema.Table
 		for _, column := range clones[i].Columns {
 			if _, err := ResolveGoBinding(column); err != nil {
 				return nil, err
+			}
+			if column.GoBinding != nil {
+				for _, imported := range column.GoBinding.Imports {
+					if previous, exists := declaredImports[imported.Path]; exists && previous != imported.Name {
+						return nil, fmt.Errorf("generate: import path %q has conflicting aliases %q and %q", imported.Path, previous, imported.Name)
+					}
+					declaredImports[imported.Path] = imported.Name
+				}
 			}
 		}
 		clones[i].Relationships = mergeRelationships(clones[i])

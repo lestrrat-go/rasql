@@ -3,8 +3,9 @@ package schemagen
 import (
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
-	"regexp"
+	"go/token"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,11 @@ func newBindingState(tables []schema.TableDef) bindingState {
 	}
 	ordered := make([]schema.GoImport, 0, len(paths))
 	for _, imported := range paths {
+		ordered = append(ordered, imported)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
+	aliased := ordered[:0]
+	for _, imported := range ordered {
 		name := imported.Name
 		if name == "" {
 			parts := strings.Split(imported.Path, "/")
@@ -45,16 +51,10 @@ func newBindingState(tables []schema.TableDef) bindingState {
 			name = base + strconv.Itoa(suffix)
 		}
 		used[name] = struct{}{}
-		original := imported.Name
-		if original == "" {
-			parts := strings.Split(imported.Path, "/")
-			original = parts[len(parts)-1]
-		}
 		imported.Name = name
-		ordered = append(ordered, imported)
-		_ = original
+		aliased = append(aliased, imported)
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
+	ordered = aliased
 	aliases := make(map[string]string, len(ordered))
 	for _, imported := range ordered {
 		aliases[imported.Path] = imported.Name
@@ -75,10 +75,36 @@ func (b bindingState) typeFor(column schema.ColumnDef, nullable bool) string {
 			original = parts[len(parts)-1]
 		}
 		if alias := b.aliases[imported.Path]; alias != "" && alias != original {
-			typeName = regexp.MustCompile(`\b`+regexp.QuoteMeta(original)+`\b`).ReplaceAllString(typeName, alias)
+			typeName = rewriteTypeSelector(typeName, original, alias)
 		}
 	}
 	return typeName
+}
+
+func rewriteTypeSelector(expression, from, to string) string {
+	expr, err := parser.ParseExpr(expression)
+	if err != nil {
+		return expression
+	}
+	ast.Inspect(expr, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if ok {
+			if ident, ok := selector.X.(*ast.Ident); ok && ident.Name == from {
+				ident.Name = to
+			}
+		}
+		return true
+	})
+	var output strings.Builder
+	if err := format.Node(&output, token.NewFileSet(), expr); err != nil {
+		return expression
+	}
+	return output.String()
+}
+
+// RewriteBindingType rewrites an import selector in a parsed Go type expression.
+func RewriteBindingType(expression, from, to string) string {
+	return rewriteTypeSelector(expression, from, to)
 }
 
 // ResolvedBinding is the validated Go type and imports for one column.

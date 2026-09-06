@@ -52,6 +52,7 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 	}
 
 	parameterTypes := make([]string, len(def.Binds))
+	parameterColumns := make([]schema.ColumnDef, len(def.Binds))
 	needsTime := false
 	bindingImports := make(map[string]schema.GoImport)
 	for index, bind := range def.Binds {
@@ -67,7 +68,7 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		if err != nil {
 			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
 		}
-		goType := resolved.For(column.Nullable)
+		goType := resolved.For(false)
 		for _, imported := range resolved.Imports {
 			bindingImports[imported.Path] = imported
 		}
@@ -75,6 +76,7 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 			needsTime = true
 		}
 		parameterTypes[index] = goType
+		parameterColumns[index] = column
 	}
 
 	timeName := "time"
@@ -83,6 +85,40 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		for index, parameterType := range parameterTypes {
 			if parameterType == "time.Time" {
 				parameterTypes[index] = timeName + ".Time"
+			}
+		}
+	}
+	paths := make([]string, 0, len(bindingImports))
+	for path := range bindingImports {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	usedImports := map[string]struct{}{packageName: {}, functionName: {}, stmtName: {}, "stmt": {}, "time": {}}
+	for _, bind := range def.Binds {
+		usedImports[bind.Name] = struct{}{}
+	}
+	for _, path := range paths {
+		imported := bindingImports[path]
+		original := imported.Name
+		if original == "" {
+			parts := strings.Split(path, "/")
+			original = parts[len(parts)-1]
+		}
+		alias := original
+		for suffix := 2; ; suffix++ {
+			if _, exists := usedImports[alias]; !exists {
+				break
+			}
+			alias = original + strconv.Itoa(suffix)
+		}
+		usedImports[alias] = struct{}{}
+		imported.Name = alias
+		bindingImports[path] = imported
+		if alias != original {
+			for i, column := range parameterColumns {
+				if column.GoBinding != nil {
+					parameterTypes[i] = schemagen.RewriteBindingType(parameterTypes[i], original, alias)
+				}
 			}
 		}
 	}
