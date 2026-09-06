@@ -259,6 +259,20 @@ func TestConfigCompilesInlineQueries(t *testing.T) {
 	require.Contains(t, string(source), "func UserByID(id any)")
 }
 
+func TestConfigPropagatesStaticParameterBindings(t *testing.T) {
+	dir, databasePath := configModule(t, `{
+  "package": "store",
+  "output": "internal/store",
+  "dialect": "sqlite",
+  "queries": [{"sql": "SELECT id FROM users LIMIT {{bind \"limit\"}}", "function": "Limited", "bindings": {"limit": {"Go": {"Type": "int"}}}}]
+}`)
+	output, err := runConfigured(t, dir, "-dsn", databasePath)
+	require.NoError(t, err, output)
+	source, err := os.ReadFile(filepath.Join(dir, "internal", "store", "limited_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func Limited(limit int)")
+}
+
 // TestConfigInlineQueryOutputNamesUseTheFunction pins the derivation an
 // inline query depends on, including the acronym the naive rule would split
 // into u_s_e_r_by_i_d.

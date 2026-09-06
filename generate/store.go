@@ -118,6 +118,9 @@ func (hint TableHint) Apply(table schema.TableDef) schema.TableDef {
 // Query is one static SQL template compiled into a generated function
 // inside the store package.
 type Query struct {
+	// Bindings overrides generated Go parameter types by bind name.
+	Bindings map[string]namedsql.ParameterBinding
+
 	// Input is the template file, resolved against the Store's Root when
 	// relative. Exactly one of Input and SQL is required.
 	Input string
@@ -294,7 +297,7 @@ func (s Store) Plan() (Plan, error) {
 
 	files := make([]File, 0, len(sorted)+2+len(s.Queries))
 	for _, table := range sorted {
-		source, err := schemagen.TableSurfaceSource(s.Package, table, sorted...)
+		source, err := schemagen.TableSurfaceSourceInDir(dir, s.Package, table, sorted...)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -482,7 +485,11 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 	if err != nil {
 		return File{}, err
 	}
-	source, err := querygen.GoSource(compiled.QueryDef(), s.Package, q.Function, tables...)
+	definition, err := compiled.QueryDef().WithBindings(q.Bindings)
+	if err != nil {
+		return File{}, err
+	}
+	source, err := querygen.GoSourceInDir(dir, definition, s.Package, q.Function, tables...)
 	if err != nil {
 		return File{}, err
 	}

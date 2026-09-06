@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -89,6 +91,58 @@ func TestStoreCompilesTypedQuery(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(generated), "func UserByEmail(email string)")
 	require.NoError(t, store.Check())
+}
+
+func TestStoreCompilesExplicitStaticParameter(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users LIMIT {{bind "limit"}}`,
+			Function: "LimitedUsers",
+			Output:   "limited_users_gen.go",
+			Bindings: map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}},
+		}},
+	}
+	require.NoError(t, store.Write())
+	generated, err := os.ReadFile(filepath.Join(root, "store", "limited_users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(generated), "func LimitedUsers(limit int)")
+}
+
+func TestStorePlanCopiesBindingMapAndImports(t *testing.T) {
+	root := t.TempDir()
+	bindings := map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "url.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "url"}}}}}
+	store := generate.Store{Package: "store", Root: root, Dir: "store", Tables: []schema.TableDef{usersTableDef()}, Dialect: dialect.PostgreSQL(), Queries: []generate.Query{{
+		SQL: `SELECT id FROM users LIMIT {{bind "limit"}}`, Function: "Limited", Output: "limited_gen.go", Bindings: bindings,
+	}},
+	}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	input := bindings["limit"]
+	input.Go.Imports[0].Name = "changed-input"
+	bindings["limit"] = input
+	store.Queries[0].Bindings["limit"] = namedsql.ParameterBinding{Go: schema.GoBinding{Type: "changed.Type"}}
+	var found bool
+	for _, file := range plan.Files() {
+		if strings.Contains(string(file.Source), `url "net/url"`) {
+			found = true
+		}
+	}
+	require.True(t, found)
+}
+
+func TestStoreRejectsUnknownExplicitBinding(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{Package: "store", Root: root, Dir: "store", Tables: []schema.TableDef{usersTableDef()}, Dialect: dialect.PostgreSQL(), Queries: []generate.Query{{
+		SQL: `SELECT id FROM users LIMIT {{bind "limit"}}`, Function: "Limited", Output: "limited_gen.go", Bindings: map[string]namedsql.ParameterBinding{"other": {Go: schema.GoBinding{Type: "int"}}},
+	}}}
+	_, err := store.Plan()
+	require.ErrorContains(t, err, `binding "other" does not name a query parameter`)
 }
 
 // TestStoreRejectsTypedBindNamingAnAbsentTable requires Plan to fail, naming

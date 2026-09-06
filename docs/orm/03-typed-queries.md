@@ -67,6 +67,14 @@ Every builder is immutable. Each call returns a new builder, so a partly built q
 
 A typed query is built from the same `query` expressions [The SQL builder](../core/02-sql-builder.md) describes and renders through the same `render` package. What the root package adds is the row type: the table value knows it, so the builder decodes each result row without being told the shape a second time.
 
+When a bind names a schema column, generated static query code uses that
+column's resolved `GoBinding` type. This keeps a named application ID or
+scanner-backed value identical between query parameters and generated rows.
+Nullable referenced columns use their nullable generated form. Query
+configuration can set an explicit binding for a standalone parameter or
+override a nullable column deliberately; unconfigured standalone parameters
+remain `any`.
+
 ## Operation reference
 
 The tables in this section enumerate every operation the typed API offers. The sections after them show the common ones in use. Predicates, aggregates, and statement constructors live in [the SQL builder reference](../core/02-sql-builder.md#operation-reference).
