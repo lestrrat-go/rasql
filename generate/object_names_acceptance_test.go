@@ -81,3 +81,46 @@ func TestConsumer(t *testing.T) {
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }
+
+func TestGeneratedObjectNamesSQLiteRelationships(t *testing.T) {
+	repo, err := os.Getwd()
+	require.NoError(t, err)
+	repo = filepath.Dir(repo)
+	users := schema.MustTableDef("users", schema.Integer("id"), schema.Text("name"))
+	users.PrimaryKey = []string{"id"}
+	posts := schema.MustTableDef("posts", schema.Integer("id"), schema.Integer("user_id"), schema.Text("body"))
+	posts.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}
+	posts.Relationships = []schema.RelationshipDef{{Name: "User", Kind: schema.RelationshipBelongsTo, Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}
+	root := t.TempDir()
+	store := generate.Store{Package: "generated", Root: repo, Dir: root, Tables: []schema.TableDef{users, posts}, Names: map[schema.ObjectName]generate.ObjectNames{
+		{Name: "users"}: {Accessor: "Users", TableType: "UsersTable", RowType: "UsersRow", FileBase: "users", Columns: map[string]generate.ColumnNames{"id": {Field: "UserIDValue", Accessor: "UserIDColumn"}}},
+		{Name: "posts"}: {Accessor: "Posts", TableType: "PostsTable", RowType: "PostsRow", FileBase: "posts", Columns: map[string]generate.ColumnNames{"id": {Field: "PostIDValue", Accessor: "PostIDColumn"}, "user_id": {Field: "UserIDValue", Accessor: "UserIDColumn"}}},
+	}}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	for _, file := range plan.Files() {
+		require.NoError(t, os.MkdirAll(filepath.Dir(file.Path), 0o755))
+		require.NoError(t, os.WriteFile(file.Path, file.Source, 0o644))
+	}
+	mod := "module example.com/relations\n\ngo 1.23\n\nrequire (\n github.com/lestrrat-go/rasql v0.0.0\n modernc.org/sqlite v1.55.0\n)\n\nreplace github.com/lestrrat-go/rasql => " + repo + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(mod), 0o644))
+	consumer := `package generated
+import ("context"; "database/sql"; "testing"; "github.com/lestrrat-go/rasql"; "github.com/lestrrat-go/rasql/dialect"; "github.com/lestrrat-go/rasql/query"; _ "modernc.org/sqlite")
+func TestRelationships(t *testing.T) {
+ db, err := sql.Open("sqlite", ":memory:"); if err != nil { t.Fatal(err) }; defer db.Close(); db.SetMaxOpenConns(1)
+ if _, err = db.ExecContext(context.Background(), "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT); CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, body TEXT)"); err != nil { t.Fatal(err) }
+ rdb, err := rasql.New(db, dialect.SQLite()); if err != nil { t.Fatal(err) }
+ userInsert, err := query.NewInsert(Users().Ref(), query.Set(Users().UserIDColumn(), 7), query.Set(Users().Name(), "user")); if err != nil { t.Fatal(err) }; if _, err = rasql.Exec(context.Background(), rdb, userInsert); err != nil { t.Fatal(err) }
+ postInsert, err := query.NewInsert(Posts().Ref(), query.Set(Posts().PostIDColumn(), 8), query.Set(Posts().UserIDColumn(), 7), query.Set(Posts().Body(), "post")); if err != nil { t.Fatal(err) }; if _, err = rasql.Exec(context.Background(), rdb, postInsert); err != nil { t.Fatal(err) }
+ users, err := rasql.SelectFrom(Users()).All(context.Background(), rdb); if err != nil { t.Fatal(err) }; posts, err := rasql.SelectFrom(Posts()).All(context.Background(), rdb); if err != nil { t.Fatal(err) }
+ parents, err := Posts().User().Load(context.Background(), rdb, posts); if err != nil || parents[7].UserIDValue != 7 { t.Fatalf("belongs-to: %#v %v", parents, err) }
+ children, err := Users().Posts().Load(context.Background(), rdb, users); if err != nil || len(children[7]) != 1 || children[7][0].UserIDValue != 7 { t.Fatalf("has-many: %#v %v", children, err) }
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "relationships_test.go"), []byte(consumer), 0o644))
+	command := exec.CommandContext(context.Background(), "go", "test", "-mod=mod", "./...")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOCACHE=/tmp/rasql-gocache")
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+}
