@@ -152,7 +152,7 @@ func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
 	names, known := returningNames(statement)
 	var result T
 	if _, ok := any(&result).(completeRow); ok {
-		if target, ok := writeTargetTable(statement); ok && known {
+		if target, ok := writeTargetTable(statement); ok {
 			returned := make(map[string]struct{}, len(names))
 			for _, name := range names {
 				if name != "" {
@@ -192,6 +192,7 @@ func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
 
 func returningNames(statement query.WriteStatement) ([]string, bool) {
 	names := make([]string, len(statement.Returning()))
+	known := true
 	for index, projection := range statement.Returning() {
 		if name := projection.ResultAlias(); name != "" {
 			names[index] = name
@@ -199,11 +200,12 @@ func returningNames(statement query.WriteStatement) ([]string, bool) {
 		}
 		column, ok := projection.ProjectedExpression().(query.ColumnRef)
 		if !ok {
-			return nil, false
+			known = false
+			continue
 		}
 		names[index] = column.Name()
 	}
-	return names, true
+	return names, known
 }
 
 func writeTargetTable(statement query.WriteStatement) (query.TableRef, bool) {

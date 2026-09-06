@@ -125,6 +125,35 @@ func TestReturningPreflightAcceptsPartialAndCustomResults(t *testing.T) {
 	require.NoError(t, err)
 	_, err = rasql.QueryWriteOne[rejectingReturningScanner](t.Context(), db, rejecting)
 	require.ErrorContains(t, err, "rasql: configure result scan: unsupported returning column")
+
+	aliased, err := query.NewDelete(users)
+	require.NoError(t, err)
+	aliased, err = aliased.WithWhere(query.Equal(id, int64(1)))
+	require.NoError(t, err)
+	aliased, err = aliased.WithReturning(query.Lower(email).As("email"))
+	require.NoError(t, err)
+	_, err = rasql.QueryWriteOne[rejectingReturningScanner](t.Context(), db, aliased)
+	require.ErrorContains(t, err, "rasql: configure result scan: unsupported returning column")
+}
+
+func TestReturningPreflightChecksKnownColumnsAlongsideUnknownExpressions(t *testing.T) {
+	db, database, users := returningPreflightDB(t)
+	id := users.Column("id")
+	email := users.Column("email")
+	_, err := database.ExecContext(t.Context(), `INSERT INTO users (id, email) VALUES (1, 'ada@example.com')`)
+	require.NoError(t, err)
+
+	statement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	statement, err = statement.WithWhere(query.Equal(id, int64(1)))
+	require.NoError(t, err)
+	statement, err = statement.WithReturning(id, query.Lower(email))
+	require.NoError(t, err)
+	_, err = rasql.QueryWriteOne[generatedReturningUser](t.Context(), db, statement)
+	require.EqualError(t, err, `rasql: RETURNING projections omit generated row column "email"`)
+	var count int
+	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM users`).Scan(&count))
+	require.Equal(t, 1, count)
 }
 
 func TestReturningPreflightDefersUnknownExpressionNames(t *testing.T) {
