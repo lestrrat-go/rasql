@@ -58,6 +58,39 @@ func TestSQLiteTypedSelectRoundTripsBooleanAndTime(t *testing.T) {
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+func TestSQLiteTypedSelectDispatchesNULLToScannerFields(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+	database.SetMaxOpenConns(1)
+
+	db, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	type record struct {
+		ID   int64          `rasql:"id"`
+		Note sql.NullString `rasql:"note"`
+	}
+	records, err := rasql.TableOf[record](schema.TableDef{
+		Name: "records",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "note", Type: schema.TextType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
+	_, err = database.ExecContext(t.Context(), `INSERT INTO records (id, note) VALUES (1, NULL)`)
+	require.NoError(t, err)
+
+	actual, err := rasql.SelectFrom(records).WhereEqual(records.Column("id"), int64(1)).One(t.Context(), db)
+	require.NoError(t, err)
+	require.False(t, actual.Note.Valid)
+	require.Empty(t, actual.Note.String)
+}
+
 func TestSQLiteTypedSelectWhereInFiltersRows(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)

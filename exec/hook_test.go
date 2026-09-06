@@ -2,6 +2,7 @@ package exec_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -11,6 +12,52 @@ import (
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHooksIsolateByteArgumentsAcrossExecution(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	var observed [][]byte
+	mutatingHook := exec.HookFunc{BeforeFunc: func(_ context.Context, operation exec.Operation) error {
+		args := operation.Args()
+		args[0].([]byte)[0] = 'x'
+		named := args[1].(sql.NamedArg)
+		named.Value.([]byte)[0] = 'x'
+		return nil
+	}}
+	observingHook := exec.HookFunc{
+		BeforeFunc: func(_ context.Context, operation exec.Operation) error {
+			args := operation.Args()
+			observed = append(observed, append([]byte(nil), args[0].([]byte)...), append([]byte(nil), args[1].(sql.NamedArg).Value.([]byte)...))
+			return nil
+		},
+		AfterFunc: func(_ context.Context, operation exec.Operation, err error) error {
+			require.NoError(t, err)
+			args := operation.Args()
+			observed = append(observed, append([]byte(nil), args[0].([]byte)...), append([]byte(nil), args[1].(sql.NamedArg).Value.([]byte)...))
+			return nil
+		},
+	}
+	db, err := exec.New(database, dialect.SQLite(), mutatingHook, observingHook)
+	require.NoError(t, err)
+	s := stmt.New("UPDATE blobs SET direct = ?, named = ?", []byte("abc"), sql.Named("payload", []byte("xyz")))
+	for range 2 {
+		mock.ExpectExec("UPDATE blobs SET direct = ?, named = ?").
+			WithArgs([]byte("abc"), []byte("xyz")).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		_, err = db.ExecRendered(t.Context(), s)
+		require.NoError(t, err)
+	}
+	require.Equal(t, [][]byte{
+		[]byte("abc"), []byte("xyz"), []byte("abc"), []byte("xyz"),
+		[]byte("abc"), []byte("xyz"), []byte("abc"), []byte("xyz"),
+	}, observed)
+}
 
 func TestClientHooksRunInOrderAndPreserveStatement(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))

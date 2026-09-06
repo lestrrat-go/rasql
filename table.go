@@ -13,7 +13,14 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Table associates a SQL table with the Go type of one of its rows.
+// ReadTable associates a queryable SQL object with the Go type of one of its rows.
+type ReadTable[T any] interface {
+	Ref() query.TableRef
+	Column(name string) ColumnRef
+	tableRow() T
+}
+
+// Table associates a writable SQL table with the Go type of one of its rows.
 // Only this package implements it; generated table types embed it.
 //
 // Some values satisfy Table[T] with no typed table behind them, such as a nil
@@ -22,12 +29,8 @@ import (
 // error from the call, as an error from the Build of the statement the call
 // feeds, or as a panic where the name says it panics.
 type Table[T any] interface {
-	// Ref returns the dialect-neutral table backing the descriptor.
-	Ref() query.TableRef
-	// Column returns a reference to a named column of the table.
-	Column(name string) ColumnRef
-	// tableRow keeps T inferable and stops implementations outside this package.
-	tableRow() T
+	ReadTable[T]
+	writableTable()
 }
 
 // typedTable is the only implementation of Table.
@@ -35,13 +38,52 @@ type typedTable[T any] struct {
 	source query.TableRef
 }
 
+type readTable[T any] struct {
+	source query.TableRef
+}
+
+func (readTable[T]) tableRow() T                    { var zero T; return zero }
+func (t readTable[T]) Ref() query.TableRef          { return t.source }
+func (t readTable[T]) Column(name string) ColumnRef { return t.source.Column(name) }
+func (typedTable[T]) writableTable()                {}
+
+// ReadTableOf creates a queryable typed object from a validated schema definition.
+func ReadTableOf[T any](definition schema.TableDef) (ReadTable[T], error) {
+	source, err := query.NewTableRef(definition)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: table definition: %w", err)
+	}
+	return readTable[T]{source: source}, nil
+}
+
+// MustReadTableOf creates a queryable typed object or panics when definition is invalid.
+func MustReadTableOf[T any](definition schema.TableDef) ReadTable[T] {
+	table, err := ReadTableOf[T](definition)
+	if err != nil {
+		panic(err)
+	}
+	return table
+}
+
 // TableOf creates a typed table from a validated schema definition.
 func TableOf[T any](definition schema.TableDef) (Table[T], error) {
+	if err := requireWritableDefinition(definition); err != nil {
+		return nil, err
+	}
 	source, err := query.NewTableRef(definition)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table definition: %w", err)
 	}
 	return typedTable[T]{source: source}, nil
+}
+
+func requireWritableDefinition(definition schema.TableDef) error {
+	for _, operation := range []schema.Operation{schema.OperationInsert, schema.OperationUpdate, schema.OperationDelete} {
+		if !definition.Supports(operation) {
+			return fmt.Errorf("rasql: object %q does not support operation %d", definition.QualifiedName(), operation)
+		}
+	}
+	return nil
 }
 
 // MustTableOf creates a typed table or panics when definition is invalid.
@@ -74,6 +116,11 @@ func TableFrom[T any](definition schema.TableDef) Table[T] {
 	return typedTable[T]{source: query.TableRefFrom(definition)}
 }
 
+// ReadTableFrom creates a queryable typed object from a descriptor known to be valid.
+func ReadTableFrom[T any](definition schema.TableDef) ReadTable[T] {
+	return readTable[T]{source: query.TableRefFrom(definition)}
+}
+
 // As returns table under alias. Generated table types have their own As with
 // the same fixed body; this one serves dynamic code and the generated
 // implementation.
@@ -88,6 +135,18 @@ func As[T any](table Table[T], alias string) (Table[T], error) {
 	return typedTable[T]{source: aliased}, nil
 }
 
+// AsRead returns a queryable typed object under alias.
+func AsRead[T any](table ReadTable[T], alias string) (ReadTable[T], error) {
+	if isNilReadTable(table) {
+		return nil, fmt.Errorf("rasql: table alias: table must not be nil")
+	}
+	aliased, err := table.Ref().As(alias)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: table alias: %w", err)
+	}
+	return readTable[T]{source: aliased}, nil
+}
+
 // ColumnRef is a reference to one column of one table. It is query.ColumnRef
 // under a name generated code can reach without importing query.
 type ColumnRef = query.ColumnRef
@@ -96,11 +155,74 @@ type ColumnRef = query.ColumnRef
 // generated code can reach without importing query.
 type Join = query.Join
 
+type BinaryOperator = query.BinaryOperator
+type CaseWhen = query.CaseWhen
+type Case = query.Case
+type Cast = query.Cast
+type Filter = query.Filter
+type WindowFrame = query.WindowFrame
+type WindowSpec = query.WindowSpec
+type Over = query.Over
+type Identifier = query.Identifier
+type FragmentPart = query.FragmentPart
+type TrustedFragment = query.TrustedFragment
+type LockStrength = query.LockStrength
+type LockWait = query.LockWait
+type Lock = query.Lock
+
+const (
+	OperatorAdd        = query.OperatorAdd
+	OperatorSubtract   = query.OperatorSubtract
+	OperatorMultiply   = query.OperatorMultiply
+	OperatorDivide     = query.OperatorDivide
+	OperatorModulo     = query.OperatorModulo
+	WindowRows         = query.WindowRows
+	LockUpdate         = query.LockUpdate
+	LockNoKeyUpdate    = query.LockNoKeyUpdate
+	LockShare          = query.LockShare
+	LockKeyShare       = query.LockKeyShare
+	LockWaitDefault    = query.LockWaitDefault
+	LockWaitNoWait     = query.LockWaitNoWait
+	LockWaitSkipLocked = query.LockWaitSkipLocked
+)
+
 // Equal compares left and right for equality. It is query.Equal under a name
 // generated code can reach without importing query.
 func Equal(left any, right any) query.Binary {
 	return query.Equal(left, right)
 }
+
+func Add(left any, right any) query.Binary      { return query.Add(left, right) }
+func Subtract(left any, right any) query.Binary { return query.Subtract(left, right) }
+func Multiply(left any, right any) query.Binary { return query.Multiply(left, right) }
+func Divide(left any, right any) query.Binary   { return query.Divide(left, right) }
+func Modulo(left any, right any) query.Binary   { return query.Modulo(left, right) }
+func When(predicate query.Expression, result any) query.CaseWhen {
+	return query.When(predicate, result)
+}
+func SearchedCase(branches ...query.CaseWhen) query.Case { return query.SearchedCase(branches...) }
+func SimpleCase(operand any, branches ...query.CaseWhen) query.Case {
+	return query.SimpleCase(operand, branches...)
+}
+func CastAs(expression any, target schema.Type) query.Cast { return query.CastAs(expression, target) }
+func FilterWhere(aggregate query.Expression, predicate query.Expression) query.Filter {
+	return query.FilterWhere(aggregate, predicate)
+}
+func Window(partition []query.Expression, order ...query.Order) query.WindowSpec {
+	return query.Window(partition, order...)
+}
+func OverWindow(expression query.Expression, window query.WindowSpec) query.Over {
+	return query.OverWindow(expression, window)
+}
+func Ident(name string) query.Identifier { return query.Ident(name) }
+func Hole(value any) query.FragmentPart  { return query.Hole(value) }
+func IdentifierHole(identifier query.Identifier) query.FragmentPart {
+	return query.IdentifierHole(identifier)
+}
+func TrustedSQL(sql string, parts ...query.FragmentPart) query.TrustedFragment {
+	return query.TrustedSQL(sql, parts...)
+}
+func RowLock(strength query.LockStrength) query.Lock { return query.RowLock(strength) }
 
 // ColumnOf returns the named column of table. It returns the zero ColumnRef only
 // when table has no typed table behind it, so a wrapper that never reached a
@@ -119,6 +241,20 @@ func ColumnOf[T any](table Table[T], name string) ColumnRef {
 		return ColumnRef{}
 	}
 	return table.Column(name)
+}
+
+func isNilReadTable[T any](table ReadTable[T]) bool {
+	if nilcheck.Is(table) {
+		return true
+	}
+	if !dereferencesNil(func() { table.tableRow() }) {
+		return false
+	}
+	if !dereferencesNil(func() { _ = table.Ref() }) {
+		return false
+	}
+	return true
+
 }
 
 // Ref returns the dialect-neutral table backing the descriptor.
@@ -146,6 +282,9 @@ func CreateTable[T any](ctx context.Context, db DB, table Table[T]) error {
 }
 
 func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
+	if !table.Supports(schema.OperationDDL) {
+		return fmt.Errorf("rasql: object %q does not support DDL", table.QualifiedName())
+	}
 	if err := db.Validate(); err != nil {
 		return err
 	}
@@ -153,12 +292,12 @@ func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
 	if err != nil {
 		return fmt.Errorf("rasql: render CREATE TABLE: %w", err)
 	}
-	if _, err := db.ExecRendered(ctx, statement); err != nil {
-		return fmt.Errorf("rasql: execute CREATE TABLE: %w", err)
-	}
 	indexes, err := render.CreateIndexes(db.Dialect(), table)
 	if err != nil {
 		return fmt.Errorf("rasql: render CREATE INDEX: %w", err)
+	}
+	if _, err := db.ExecRendered(ctx, statement); err != nil {
+		return fmt.Errorf("rasql: execute CREATE TABLE: %w", err)
 	}
 	for _, index := range indexes {
 		if _, err := db.ExecRendered(ctx, index); err != nil {

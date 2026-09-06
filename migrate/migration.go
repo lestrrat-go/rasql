@@ -2,14 +2,69 @@
 package migrate
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/lestrrat-go/rasql/sqltext"
 )
+
+type Direction string
+
+const (
+	DirectionUp   Direction = "up"
+	DirectionDown Direction = "down"
+)
+
+type IncompleteMigration struct {
+	ID          string
+	Checksum    string
+	Source      string
+	Direction   Direction
+	SourceIndex int
+}
+
+type ExecutionResult struct {
+	Completed  []Migration
+	Incomplete *IncompleteMigration
+}
+
+type IncompleteMigrationError struct {
+	Incomplete IncompleteMigration
+	Cause      error
+}
+
+func (e *IncompleteMigrationError) Error() string {
+	return fmt.Sprintf("migrate: incomplete %s migration %q at source %q (index %d): %v", e.Incomplete.Direction, e.Incomplete.ID, e.Incomplete.Source, e.Incomplete.SourceIndex, e.Cause)
+}
+
+func (e *IncompleteMigrationError) Unwrap() error { return e.Cause }
+
+type ReconcileDecision string
+
+const (
+	ReconcileExecuted    ReconcileDecision = "executed"
+	ReconcileNotExecuted ReconcileDecision = "not_executed"
+)
+
+type ReconcileCheck interface {
+	Check(context.Context, *sql.Conn, IncompleteMigration) (ReconcileDecision, error)
+}
+
+func executionResult(completed []Migration, err error) (ExecutionResult, error) {
+	result := ExecutionResult{Completed: append([]Migration(nil), completed...)}
+	var incomplete *IncompleteMigrationError
+	if errors.As(err, &incomplete) {
+		value := incomplete.Incomplete
+		result.Incomplete = &value
+	}
+	return result, err
+}
 
 // Migration is one ordered database change and the sources that undo it.
 //
@@ -27,9 +82,9 @@ type Migration struct {
 	// reverse script can be added or corrected for a migration that is
 	// already applied without invalidating its history record.
 	//
-	// Every migration read from disk has them, because a migration with no
-	// reverse source fails to load. A Migration built in Go may leave them
-	// empty, and Revert then refuses to select it.
+	// A migration read from disk may have no reverse sources when it carries
+	// an explicit irreversibility marker. A Migration built in Go may also
+	// leave them empty, and Revert then refuses to select it.
 	Down []Statement
 }
 

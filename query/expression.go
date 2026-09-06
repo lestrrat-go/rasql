@@ -1,6 +1,10 @@
 package query
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/schema"
+)
 
 // Expression is a dialect-neutral SQL expression.
 type Expression interface {
@@ -162,7 +166,12 @@ const (
 	// builds the common shape directly; Compare accepts this constant too,
 	// for the less common shape that tests one column rather than the whole
 	// table.
-	OperatorMatch BinaryOperator = "MATCH"
+	OperatorMatch    BinaryOperator = "MATCH"
+	OperatorAdd      BinaryOperator = "+"
+	OperatorSubtract BinaryOperator = "-"
+	OperatorMultiply BinaryOperator = "*"
+	OperatorDivide   BinaryOperator = "/"
+	OperatorModulo   BinaryOperator = "%"
 )
 
 // Binary combines two expressions with an operator.
@@ -224,6 +233,12 @@ func LessThanOrEqual(left any, right any) Binary {
 	return Compare(left, OperatorLessThanOrEqual, right)
 }
 
+func Add(left any, right any) Binary      { return Compare(left, OperatorAdd, right) }
+func Subtract(left any, right any) Binary { return Compare(left, OperatorSubtract, right) }
+func Multiply(left any, right any) Binary { return Compare(left, OperatorMultiply, right) }
+func Divide(left any, right any) Binary   { return Compare(left, OperatorDivide, right) }
+func Modulo(left any, right any) Binary   { return Compare(left, OperatorModulo, right) }
+
 // Like compares left and right with SQL LIKE. Either operand may be a plain
 // Go value, which is bound; nil binds as NULL, so IsNull is what tests for
 // NULL.
@@ -261,6 +276,146 @@ func (b Binary) Operator() BinaryOperator {
 func (b Binary) Right() Expression {
 	return b.right
 }
+
+// CaseWhen is one WHEN branch of a CASE expression.
+type CaseWhen struct {
+	predicate Expression
+	result    Expression
+}
+
+func (CaseWhen) expression() {}
+
+func When(predicate Expression, result any) CaseWhen {
+	return CaseWhen{predicate: predicate, result: operand(result)}
+}
+
+func (w CaseWhen) Predicate() Expression { return w.predicate }
+func (w CaseWhen) Result() Expression    { return w.result }
+
+// Case is a searched or simple CASE expression.
+type Case struct {
+	operand     Expression
+	branches    []CaseWhen
+	fallback    Expression
+	hasFallback bool
+}
+
+func (Case) expression() {}
+
+func SearchedCase(branches ...CaseWhen) Case {
+	return Case{branches: append([]CaseWhen(nil), branches...)}
+}
+
+func SimpleCase(operandValue any, branches ...CaseWhen) Case {
+	return Case{operand: operand(operandValue), branches: append([]CaseWhen(nil), branches...)}
+}
+
+func (c Case) Else(value any) Case {
+	c.fallback = operand(value)
+	c.hasFallback = true
+	return c
+}
+
+func (c Case) Operand() Expression          { return c.operand }
+func (c Case) Branches() []CaseWhen         { return append([]CaseWhen(nil), c.branches...) }
+func (c Case) Fallback() (Expression, bool) { return c.fallback, c.hasFallback }
+
+// Cast converts an expression to a schema type.
+type Cast struct {
+	expr   Expression
+	target schema.ColumnType
+}
+
+func (Cast) expression() {}
+
+func CastAs(expressionValue any, target schema.ColumnType) Cast {
+	return Cast{expr: operand(expressionValue), target: target}
+}
+
+func (c Cast) Expression() Expression    { return c.expr }
+func (c Cast) Target() schema.ColumnType { return c.target }
+
+// Filter applies an aggregate FILTER (WHERE ...) predicate.
+type Filter struct {
+	aggregate Expression
+	predicate Expression
+}
+
+func (Filter) expression() {}
+
+func FilterWhere(aggregate Expression, predicate Expression) Filter {
+	return Filter{aggregate: aggregate, predicate: predicate}
+}
+
+func (f Filter) Aggregate() Expression { return f.aggregate }
+func (f Filter) Predicate() Expression { return f.predicate }
+
+type WindowFrame string
+
+const WindowRows WindowFrame = "ROWS"
+
+type WindowSpec struct {
+	partition []Expression
+	order     []Order
+}
+
+func Window(partition []Expression, order ...Order) WindowSpec {
+	return WindowSpec{partition: append([]Expression(nil), partition...), order: append([]Order(nil), order...)}
+}
+
+func (w WindowSpec) Partition() []Expression { return append([]Expression(nil), w.partition...) }
+func (w WindowSpec) Order() []Order          { return append([]Order(nil), w.order...) }
+
+type Over struct {
+	expr   Expression
+	window WindowSpec
+}
+
+func (Over) expression() {}
+
+func OverWindow(expression Expression, window WindowSpec) Over {
+	return Over{expr: expression, window: window}
+}
+
+func (o Over) Expression() Expression { return o.expr }
+func (o Over) Window() WindowSpec     { return o.window }
+
+type Identifier struct{ name string }
+
+func Ident(name string) Identifier { return Identifier{name: name} }
+func (i Identifier) Name() string  { return i.name }
+
+type FragmentPart interface{ fragmentPart() }
+
+type fragmentHole struct{ value Expression }
+
+func (fragmentHole) fragmentPart()                 {}
+func (h fragmentHole) ValueExpression() Expression { return h.value }
+
+func Hole(value any) FragmentPart { return fragmentHole{value: operand(value)} }
+
+type identifierHole struct{ identifier Identifier }
+
+func (identifierHole) fragmentPart()                 {}
+func (h identifierHole) IdentifierValue() Identifier { return h.identifier }
+
+func IdentifierHole(identifier Identifier) FragmentPart {
+	return identifierHole{identifier: identifier}
+}
+
+type TrustedFragment struct {
+	sql   string
+	parts []FragmentPart
+}
+
+func (TrustedFragment) expression() {}
+
+func TrustedSQL(sql string, parts ...FragmentPart) TrustedFragment {
+	return TrustedFragment{sql: sql, parts: append([]FragmentPart(nil), parts...)}
+}
+
+func (f TrustedFragment) SQL() string           { return f.sql }
+func (f TrustedFragment) Parts() []FragmentPart { return append([]FragmentPart(nil), f.parts...) }
 
 // LogicalOperator combines multiple boolean expressions.
 type LogicalOperator string

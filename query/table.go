@@ -321,8 +321,9 @@ func (t TableRef) reference() sourceReference {
 	}
 }
 
-// conflicts reports whether a server could resolve one column reference to both
-// sources.
+// conflicts reports whether exact source names could resolve one column
+// reference to both sources. Rendering applies dialect-specific identifier
+// equality separately.
 //
 // Two sources that render their columns under different leading identifiers are
 // always distinguishable, so they never conflict. When the leading identifier is

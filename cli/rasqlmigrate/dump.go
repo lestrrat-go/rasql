@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -16,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
+	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
@@ -133,6 +136,12 @@ type dumpOptions struct {
 // and the output step factored out, so both runDump and a live test share
 // one code path for the sweep, the guards, the ordering, and the rendering.
 func dumpFilesFromDatabase(ctx context.Context, d dialect.Dialect, database *sql.DB, opts dumpOptions) ([]dumpFile, error) {
+	historyTable := opts.HistoryTable
+	if historyTable == "" {
+		historyTable = "rasql_schema_migrations"
+	}
+	excludeTables := append([]string(nil), opts.Exclude...)
+	excludeTables = append(excludeTables, historyTable+"_progress")
 	transaction, err := runWithHardDeadline(ctx, func() (*sql.Tx, error) {
 		return database.BeginTx(ctx, liveInspectionTxOptions(d.Name()))
 	})
@@ -149,8 +158,8 @@ func dumpFilesFromDatabase(ctx context.Context, d dialect.Dialect, database *sql
 		return catalog.FromQueryer(ctx, transaction, catalog.Options{
 			Dialect:      d,
 			Include:      opts.Include,
-			Exclude:      opts.Exclude,
-			HistoryTable: opts.HistoryTable,
+			Exclude:      excludeTables,
+			HistoryTable: historyTable,
 		})
 	})
 	if err != nil {
@@ -226,6 +235,11 @@ func applyDumpGuards(ctx context.Context, transaction *sql.Tx, d dialect.Dialect
 			for _, fact := range facts {
 				if fact.Identity && !fact.hasDefaultIdentitySequence() {
 					return nil, fmt.Errorf("dump: table %q column %q is an identity column with a non-default sequence (start %s, increment %s, minimum %s, maximum %s, cycle %s), which render would silently drop since it only emits a bare GENERATED ... AS IDENTITY clause; rewrite the sequence to bigint's own defaults, or dump the other tables with -table", table.Name, fact.Name, fact.IdentityStart.String, fact.IdentityIncrement.String, fact.IdentityMinimum.String, fact.IdentityMaximum.String, fact.IdentityCycle.String)
+				}
+				if fact.Sequence != nil && !fact.Identity {
+					if eligible, reason := eligibleForBigSerialRewrite(table, fact); !eligible {
+						return nil, fmt.Errorf("dump: table %q column %q sequence %q is not eligible for BIGSERIAL rewriting: %s", table.Name, fact.Name, fact.Sequence.Schema+"."+fact.Sequence.Name, reason)
+					}
 				}
 			}
 			if violation, bad := firstTypeViolation(table, facts, dumpPostgreSQLTypeAllowed); bad {
@@ -311,6 +325,18 @@ type dumpColumnFact struct {
 	IdentityMinimum   sql.NullString
 	IdentityMaximum   sql.NullString
 	IdentityCycle     sql.NullString
+	Sequence          *dumpSequenceFact
+}
+
+type dumpSequenceFact struct {
+	Schema, Name        string
+	OwnedByColumn       bool
+	SequenceReferences  int64
+	ReferencingDefaults int64
+	Start, Increment    int64
+	Minimum, Maximum    int64
+	Cache               int64
+	Cycle               bool
 }
 
 // hasDefaultIdentitySequence reports whether f's identity sequence facts
@@ -326,6 +352,42 @@ func (f dumpColumnFact) hasDefaultIdentitySequence() bool {
 		f.IdentityCycle.String == "NO"
 }
 
+func eligibleForBigSerialRewrite(table schema.TableDef, fact dumpColumnFact) (bool, string) {
+	if fact.Sequence == nil {
+		return false, "the default does not resolve to a sequence"
+	}
+	sequence := fact.Sequence
+	if !sequence.OwnedByColumn {
+		return false, "the sequence is not owned by this column"
+	}
+	if sequence.SequenceReferences != 1 {
+		return false, fmt.Sprintf("the default references %d sequences", sequence.SequenceReferences)
+	}
+	if sequence.ReferencingDefaults != 1 {
+		return false, fmt.Sprintf("the sequence has %d column defaults", sequence.ReferencingDefaults)
+	}
+	if sequence.Start != 1 || sequence.Increment != 1 || sequence.Minimum != 1 || sequence.Maximum != 9223372036854775807 || sequence.Cache != 1 || sequence.Cycle {
+		return false, "the sequence settings are not PostgreSQL's BIGINT serial defaults"
+	}
+	for _, column := range table.Columns {
+		if column.Name != fact.Name {
+			continue
+		}
+		expected := table.Name + "_" + column.Name + "_seq"
+		if len(expected) > 63 {
+			return false, "the generated sequence name would be truncated"
+		}
+		if sequence.Name != expected {
+			return false, fmt.Sprintf("the sequence name is %q, want %q", sequence.Name, expected)
+		}
+		if table.Schema != "" && sequence.Schema != table.Schema {
+			return false, fmt.Sprintf("the sequence is in schema %q, want %q", sequence.Schema, table.Schema)
+		}
+		return true, ""
+	}
+	return false, "the sequence column is not present in the table descriptor"
+}
+
 // fetchPostgreSQLColumnFacts reads tableName's columns' data_type, identity
 // status, and identity sequence facts in one round trip -- the same query
 // section 4.2 always needed, extended to also carry the declared type the
@@ -335,7 +397,30 @@ func (f dumpColumnFact) hasDefaultIdentitySequence() bool {
 func fetchPostgreSQLColumnFacts(ctx context.Context, transaction *sql.Tx, tableName string) ([]dumpColumnFact, error) {
 	rows, err := runWithHardDeadline(ctx, func() (*sql.Rows, error) {
 		return transaction.QueryContext(ctx,
-			`SELECT column_name, data_type, is_identity, identity_start, identity_increment, identity_minimum, identity_maximum, identity_cycle FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1`,
+			`SELECT c.column_name, c.data_type, c.is_identity, c.identity_start, c.identity_increment, c.identity_minimum, c.identity_maximum, c.identity_cycle,
+				ds.sequence_schema, ds.sequence_name, ds.owned_by_column, ds.sequence_references, ds.referencing_defaults,
+				ds.sequence_start, ds.sequence_increment, ds.sequence_minimum, ds.sequence_maximum, ds.sequence_cache, ds.sequence_cycle
+			 FROM information_schema.columns c
+			 JOIN pg_namespace n ON n.nspname = c.table_schema
+			 JOIN pg_class rel ON rel.relname = c.table_name AND rel.relnamespace = n.oid
+			 JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attname = c.column_name AND NOT a.attisdropped
+			 LEFT JOIN LATERAL (
+				SELECT seqns.nspname AS sequence_schema, seq.relname AS sequence_name, refs.sequence_references,
+					EXISTS (SELECT 1 FROM pg_depend own WHERE own.classid = 'pg_class'::regclass AND own.objid = seq.oid AND own.refclassid = 'pg_class'::regclass AND own.refobjid = rel.oid AND own.refobjsubid = a.attnum AND own.deptype = 'a') AS owned_by_column,
+					(SELECT count(DISTINCT ad2.oid) FROM pg_attrdef ad2 JOIN pg_depend dep2 ON dep2.classid = 'pg_attrdef'::regclass AND dep2.objid = ad2.oid AND dep2.refclassid = 'pg_class'::regclass AND dep2.deptype = 'n' WHERE dep2.refobjid = seq.oid) AS referencing_defaults,
+					ps.seqstart AS sequence_start, ps.seqincrement AS sequence_increment, ps.seqmin AS sequence_minimum, ps.seqmax AS sequence_maximum, ps.seqcache AS sequence_cache, ps.seqcycle AS sequence_cycle
+				FROM (
+					SELECT count(DISTINCT dep.refobjid) AS sequence_references, min(dep.refobjid) AS sequence_oid
+					FROM pg_attrdef ad
+					JOIN pg_depend dep ON dep.classid = 'pg_attrdef'::regclass AND dep.objid = ad.oid AND dep.refclassid = 'pg_class'::regclass AND dep.deptype = 'n'
+					JOIN pg_class referenced ON referenced.oid = dep.refobjid AND referenced.relkind = 'S'
+					WHERE ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+				) refs
+				JOIN pg_class seq ON seq.oid = refs.sequence_oid
+				JOIN pg_namespace seqns ON seqns.oid = seq.relnamespace
+				JOIN pg_sequence ps ON ps.seqrelid = seq.oid
+			) ds ON true
+			 WHERE c.table_schema = current_schema() AND c.table_name = $1`,
 			tableName)
 	})
 	if err != nil {
@@ -346,10 +431,13 @@ func fetchPostgreSQLColumnFacts(ctx context.Context, transaction *sql.Tx, tableN
 	for rows.Next() {
 		var name, declaredType, isIdentity string
 		var identityStart, identityIncrement, identityMinimum, identityMaximum, identityCycle sql.NullString
-		if err := rows.Scan(&name, &declaredType, &isIdentity, &identityStart, &identityIncrement, &identityMinimum, &identityMaximum, &identityCycle); err != nil {
+		var sequenceSchema, sequenceName sql.NullString
+		var ownedByColumn, sequenceCycle sql.NullBool
+		var sequenceReferences, referencingDefaults, sequenceStart, sequenceIncrement, sequenceMinimum, sequenceMaximum, sequenceCache sql.NullInt64
+		if err := rows.Scan(&name, &declaredType, &isIdentity, &identityStart, &identityIncrement, &identityMinimum, &identityMaximum, &identityCycle, &sequenceSchema, &sequenceName, &ownedByColumn, &sequenceReferences, &referencingDefaults, &sequenceStart, &sequenceIncrement, &sequenceMinimum, &sequenceMaximum, &sequenceCache, &sequenceCycle); err != nil {
 			return nil, fmt.Errorf("dump: read columns for table %q: %w", tableName, err)
 		}
-		facts = append(facts, dumpColumnFact{
+		fact := dumpColumnFact{
 			Name:              name,
 			DeclaredType:      declaredType,
 			Identity:          isIdentity == "YES",
@@ -358,7 +446,11 @@ func fetchPostgreSQLColumnFacts(ctx context.Context, transaction *sql.Tx, tableN
 			IdentityMinimum:   identityMinimum,
 			IdentityMaximum:   identityMaximum,
 			IdentityCycle:     identityCycle,
-		})
+		}
+		if sequenceName.Valid {
+			fact.Sequence = &dumpSequenceFact{Schema: sequenceSchema.String, Name: sequenceName.String, OwnedByColumn: ownedByColumn.Bool, SequenceReferences: sequenceReferences.Int64, ReferencingDefaults: referencingDefaults.Int64, Start: sequenceStart.Int64, Increment: sequenceIncrement.Int64, Minimum: sequenceMinimum.Int64, Maximum: sequenceMaximum.Int64, Cache: sequenceCache.Int64, Cycle: sequenceCycle.Bool}
+		}
+		facts = append(facts, fact)
 	}
 	return facts, rows.Err()
 }
@@ -667,54 +759,40 @@ func tableLess(a, b schema.TableDef) bool {
 // cycle, refused naming the remaining tables sorted by (Schema, Name). See
 // CLAUDE.md design section 5.
 func orderTablesByDependency(tables []schema.TableDef) ([]schema.TableDef, error) {
-	n := len(tables)
-	keyIndex := make(map[tableKey]int, n)
-	for i, t := range tables {
-		keyIndex[tableKeyOf(t)] = i
+	dependencies := make([]migrationorder.TableDependency, len(tables))
+	keys := make(map[tableKey]string, len(tables))
+	for index, table := range tables {
+		key := tableKeyOf(table)
+		encoded := table.Schema + "\x00" + table.Name
+		keys[key] = encoded
+		dependencies[index] = migrationorder.TableDependency{Key: encoded, Display: table.QualifiedName()}
 	}
-	dependsOn := make([]map[int]struct{}, n)
-	for i, t := range tables {
-		dependsOn[i] = make(map[int]struct{})
-		for _, fk := range t.ForeignKeys {
+	for index, table := range tables {
+		for _, fk := range table.ForeignKeys {
 			referencedSchema := fk.ReferencedSchema
 			if referencedSchema == "" {
-				referencedSchema = t.Schema
+				referencedSchema = table.Schema
 			}
-			j, ok := keyIndex[tableKey{schema: referencedSchema, name: fk.ReferencedTable}]
-			if !ok || j == i {
-				continue
+			if dependency, exists := keys[tableKey{schema: referencedSchema, name: fk.ReferencedTable}]; exists {
+				dependencies[index].DependsOn = append(dependencies[index].DependsOn, dependency)
 			}
-			dependsOn[i][j] = struct{}{}
 		}
 	}
-
-	remaining := make(map[int]struct{}, n)
-	for i := range tables {
-		remaining[i] = struct{}{}
+	orderedKeys, err := migrationorder.OrderTables(dependencies)
+	if err != nil {
+		remaining := make(map[int]struct{}, len(tables))
+		for index := range tables {
+			remaining[index] = struct{}{}
+		}
+		return nil, cycleError(tables, remaining)
 	}
-	ordered := make([]schema.TableDef, 0, n)
-	for len(remaining) > 0 {
-		next := -1
-		for i := range remaining {
-			ready := true
-			for dep := range dependsOn[i] {
-				if _, stillRemaining := remaining[dep]; stillRemaining {
-					ready = false
-					break
-				}
-			}
-			if !ready {
-				continue
-			}
-			if next == -1 || tableLess(tables[i], tables[next]) {
-				next = i
-			}
-		}
-		if next == -1 {
-			return nil, cycleError(tables, remaining)
-		}
-		ordered = append(ordered, tables[next])
-		delete(remaining, next)
+	byKey := make(map[string]schema.TableDef, len(tables))
+	for index, dependency := range dependencies {
+		byKey[dependency.Key] = tables[index]
+	}
+	ordered := make([]schema.TableDef, len(orderedKeys))
+	for index, key := range orderedKeys {
+		ordered[index] = byKey[key]
 	}
 	return ordered, nil
 }
@@ -900,17 +978,20 @@ func quoteQualifiedTableName(d dialect.Dialect, table schema.TableDef) (string, 
 }
 
 // buildMigrationFormatFiles builds one .up.sql/.down.sql pair per CREATE
-// TABLE statement, and one .up.sql per CREATE INDEX statement with no
-// matching .down.sql, numbered in dependency order: every step for a table
+// TABLE statement and one .up.sql/.down.sql pair per CREATE INDEX statement,
+// numbered in dependency order.
 // (its create, then its own indexes, in table.Indexes order) is numbered
 // before the next table's steps begin. Dropping the table undoes its
 // indexes too, and reverting an index step ahead of the table drop that
 // still references it in a foreign key is what MySQL error 1553 exists to
 // prevent -- see internal/migrationdir's doc on reverse sources running in
-// descending filename order, and docs/core/07-migrations.md's note that a
-// migration may hold fewer reverse sources than forward ones.
+// descending filename order.
 func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]dumpFile, error) {
 	var files []dumpFile
+	total := 0
+	for _, table := range tables {
+		total += 1 + len(table.Indexes)
+	}
 	step := 0
 	for _, table := range tables {
 		step++
@@ -922,7 +1003,7 @@ func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]d
 		if err != nil {
 			return nil, fmt.Errorf("table %q: %w", table.Name, err)
 		}
-		stem := fmt.Sprintf("%03d_create_%s", step, filenamePart(dumpFileBaseName(table)))
+		stem := numberedDumpStem(step, total, "create_"+filenamePart(dumpFileBaseName(table)))
 		files = append(files,
 			dumpFile{Name: stem + ".up.sql", SQL: createSQL + ";\n"},
 			dumpFile{Name: stem + ".down.sql", SQL: "DROP TABLE " + dropName + ";\n"},
@@ -934,11 +1015,27 @@ func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]d
 		}
 		for i, indexSQL := range indexSQLs {
 			step++
-			indexStem := fmt.Sprintf("%03d_create_index_%s", step, filenamePart(table.Indexes[i].Name))
-			files = append(files, dumpFile{Name: indexStem + ".up.sql", SQL: indexSQL + ";\n"})
+			indexStem := numberedDumpStem(step, total, "create_index_"+filenamePart(table.Indexes[i].Name))
+			indexName, err := d.QuoteIdentifier(table.Indexes[i].Name)
+			if err != nil {
+				return nil, fmt.Errorf("table %q index %q: %w", table.Name, table.Indexes[i].Name, err)
+			}
+			dropIndexSQL := "DROP INDEX " + indexName + ";\n"
+			if d.Name() == "mysql" {
+				dropIndexSQL = "DROP INDEX " + indexName + " ON " + dropName + ";\n"
+			}
+			files = append(files,
+				dumpFile{Name: indexStem + ".up.sql", SQL: indexSQL + ";\n"},
+				dumpFile{Name: indexStem + ".down.sql", SQL: dropIndexSQL},
+			)
 		}
 	}
 	return files, nil
+}
+
+func numberedDumpStem(step, total int, suffix string) string {
+	width := max(3, len(strconv.Itoa(total)))
+	return fmt.Sprintf("%0*d_%s", width, step, suffix)
 }
 
 // writeDumpPreview prints one "-- <name>" header per file followed by its
@@ -960,9 +1057,9 @@ func writeDumpPreview(output io.Writer, files []dumpFile) {
 // with its parents, empty is used, and anything else already there --
 // including a dotfile -- refuses the run before anything is written, since a
 // dump must never overwrite checked-in DDL and there is no -force flag. The
-// actual write goes through diff.WriteMigration, which writes through a
-// sibling temporary directory and one os.Rename so a failure partway leaves
-// outputDirectory untouched.
+// migration-format writes go through diff.WriteMigration, and schema-format
+// writes use the same sibling temporary-directory and one os.Rename pattern
+// so a failure partway leaves outputDirectory untouched.
 func writeDumpOutput(outputDirectory, dialectName string, files []dumpFile) error {
 	info, err := os.Stat(outputDirectory)
 	switch {
@@ -991,9 +1088,53 @@ func writeDumpOutput(outputDirectory, dialectName string, files []dumpFile) erro
 		return fmt.Errorf("dump: stat output directory %q: %w", outputDirectory, err)
 	}
 
-	plan := diff.Plan{Dialect: dialectName, Statements: make([]diff.PlannedStatement, len(files))}
-	for i, f := range files {
-		plan.Statements[i] = diff.PlannedStatement{Source: f.Name, SQL: f.SQL, Summary: f.Name}
+	byName := make(map[string]string)
+	hasMigrationSuffix := false
+	for _, file := range files {
+		if strings.HasSuffix(file.Name, ".up.sql") || strings.HasSuffix(file.Name, ".down.sql") {
+			hasMigrationSuffix = true
+		}
+		if strings.HasSuffix(file.Name, ".down.sql") {
+			byName[strings.TrimSuffix(file.Name, ".down.sql")] = file.SQL
+		}
 	}
+	if !hasMigrationSuffix {
+		return writeSchemaDumpOutput(outputDirectory, files)
+	}
+	statements := make([]diff.PlannedStatement, 0, len(files))
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name, ".up.sql") {
+			continue
+		}
+		stem := strings.TrimSuffix(file.Name, ".up.sql")
+		statements = append(statements, diff.PlannedStatement{
+			Source: stem + ".sql", SQL: file.SQL, ReverseSQL: byName[stem], Summary: file.Name,
+		})
+	}
+	plan := diff.Plan{Dialect: dialectName, Statements: statements}
 	return diff.WriteMigration(outputDirectory, plan)
+}
+
+func writeSchemaDumpOutput(outputDirectory string, files []dumpFile) error {
+	parent := filepath.Dir(outputDirectory)
+	temporary, err := os.MkdirTemp(parent, "."+filepath.Base(outputDirectory)+".tmp-")
+	if err != nil {
+		return fmt.Errorf("dump: create temporary output directory: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(temporary)
+		}
+	}()
+	for _, file := range files {
+		if err := os.WriteFile(filepath.Join(temporary, file.Name), []byte(file.SQL), 0o600); err != nil {
+			return fmt.Errorf("dump: write schema source %q: %w", file.Name, err)
+		}
+	}
+	if err := os.Rename(temporary, outputDirectory); err != nil {
+		return fmt.Errorf("dump: create output directory %q: %w", outputDirectory, err)
+	}
+	committed = true
+	return nil
 }

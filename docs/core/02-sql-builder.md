@@ -57,6 +57,88 @@ source: [examples/query_render_select_example_test.go](https://github.com/lestrr
 
 `query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` builds the reference, and `query.NewSelect` reports a name the table does not hold.
 
+<!-- INCLUDE(examples/query_lock_upsert_example_test.go#row_lock) -->
+```go
+func Example_query_rowLock() {
+	queue := query.MustTableRef(schema.MustTableDef("queue", schema.Integer("id"), schema.Integer("claimed")))
+	statement, err := query.NewSelect(queue, queue.Column("id"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithWhere(query.Equal(queue.Column("claimed"), 0))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithOrder(query.Asc(queue.Column("id")))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithLimit(1)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithLock(query.RowLock(query.LockUpdate).Wait(query.LockWaitSkipLocked))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT "queue"."id" FROM "queue" WHERE ("queue"."claimed" = $1) ORDER BY "queue"."id" LIMIT $2 FOR UPDATE SKIP LOCKED
+	// 0 1
+}
+```
+source: [examples/query_lock_upsert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_lock_upsert_example_test.go)
+<!-- END INCLUDE -->
+
+`query.RowLock` appends a measured row-locking clause after ordering and paging. Use `LockWaitSkipLocked` when each worker should claim a different queued row.
+
+<!-- INCLUDE(examples/query_expression_example_test.go#expressions) -->
+```go
+func Example_query_expressions() {
+	accounts := query.MustTableRef(schema.MustTableDef("accounts",
+		schema.Integer("id"), schema.Integer("balance"), schema.Text("email")))
+	id, balance := accounts.Column("id"), accounts.Column("balance")
+	label := query.SearchedCase(
+		query.When(query.GreaterThan(balance, 100), "large"),
+	).Else("small")
+	statement, err := query.NewSelect(accounts, query.Project(query.CastAs(query.Add(balance, 1), schema.IntegerType{})).As("next"), query.Project(label).As("size"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithWhere(query.Equal(id, 1))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT CAST(("accounts"."balance" + $1) AS BIGINT) AS "next", (CASE WHEN ("accounts"."balance" > $2) THEN $3 ELSE $4 END) AS "size" FROM "accounts" WHERE ("accounts"."id" = $5)
+	// 1 100 large small 1
+}
+```
+source: [examples/query_expression_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_expression_example_test.go)
+<!-- END INCLUDE -->
+
+`query.Add`, `query.SearchedCase`, and `query.CastAs` compose computed projections while keeping values as bound arguments.
+
 ## Run a rendered statement
 
 A `stmt.Statement` carries the SQL text and the arguments, so `database/sql` runs it directly through `QueryContext` or `ExecContext`. [The database handle](04-database.md#run-a-rendered-statement) covers running one through a `rasql.DB` instead, which adds hooks and row decoding.
@@ -340,10 +422,54 @@ it once per enclosing row rather than once for the whole statement, and the row 
 `EXISTS` reading only its own tables asks nothing about the row being tested and merely reports whether a table is non-empty — and it reaches every other form too, so a
 scalar subquery counting one user's orders beside that user is the same mechanism.
 
-Call `query.Select.WithCorrelation(tables…)` to name the enclosing tables the statement reads, before the clause that reads them. Every builder method validates the copy
-it returns, and a statement under construction has no enclosing statement to ask, so `WithWhere` refuses a predicate naming a table this statement has not been told
-about. That is the same ordering `query.NewJoinedSelect` documents for a join a projection reads. A statement between the reader and the table declares it too, since
-validating that middle statement on its own has nothing else saying a third statement is coming.
+Call `query.NewCorrelatedSelect` or `query.NewCorrelatedJoinedSelect` when a projection, join, or grouping expression
+reads an enclosing table. These constructors install the declarations before the first validation. Use
+`query.Select.WithCorrelation(tables…)` to add declarations to a statement whose existing clauses do not read them.
+Every builder method validates the copy it returns. A statement between the reader and the table declares it too,
+since validating that middle statement on its own has nothing else saying a third statement is coming.
+
+<!-- INCLUDE(examples/query_correlated_projection_example_test.go#correlated_projection) -->
+```go
+func Example_query_correlated_projection() {
+	users := query.MustTableRef(schema.MustTableDef("users", schema.Integer("id")))
+	orders := query.MustTableRef(schema.MustTableDef(
+		"orders",
+		schema.Integer("id"), schema.Integer("user_id"), schema.Integer("amount"),
+	))
+
+	// The constructor declares users before it validates the projection, so the
+	// projection can read both the order and the enclosing user's columns.
+	ordersForUser, err := query.NewCorrelatedSelect(
+		orders, []query.TableRef{users},
+		query.Project(query.Coalesce(orders.Column("amount"), users.Column("id"))).As("value"),
+	)
+	if err != nil {
+		fmt.Printf("failed to build correlated select: %s\n", err)
+		return
+	}
+	ordersForUser, err = ordersForUser.WithWhere(query.Equal(orders.Column("user_id"), users.Column("id")))
+	if err != nil {
+		fmt.Printf("failed to add correlation predicate: %s\n", err)
+		return
+	}
+	statement, err := query.NewSelect(users, users.Column("id"), query.Project(query.Scalar(ordersForUser)).As("value"))
+	if err != nil {
+		fmt.Printf("failed to build outer select: %s\n", err)
+		return
+	}
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Printf("failed to render select: %s\n", err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+
+	// Output:
+	// SELECT "users"."id", (SELECT COALESCE("orders"."amount", "users"."id") AS "value" FROM "orders" WHERE ("orders"."user_id" = "users"."id")) AS "value" FROM "users"
+}
+```
+source: [examples/query_correlated_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_correlated_projection_example_test.go)
+<!-- END INCLUDE -->
 
 The enclosing statement may be a `SELECT`, a `DELETE`, or an `UPDATE`. Each one has the row a correlated subquery reads: a result row for a `SELECT`, and the row being
 written for the other two. `DELETE FROM users WHERE EXISTS (SELECT orders.id FROM orders WHERE orders.user_id = users.id)` is the shape that enables, and PostgreSQL 17,

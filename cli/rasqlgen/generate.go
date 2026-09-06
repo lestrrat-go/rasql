@@ -70,6 +70,7 @@ func (c command) runGenerate(args []string) error {
 	include := flags.String("include", "", "comma-separated tables to generate, instead of every base table")
 	exclude := flags.String("exclude", "", "comma-separated tables to skip; not accepted with -include")
 	historyTable := flags.String("history-table", "", "migration history table to skip (default: rasql_schema_migrations)")
+	includeViews := flags.Bool("include-views", false, "include views in generated output")
 	prune := flags.Bool("prune", true, "delete a generated file this run no longer writes, instead of refusing the run")
 	check := flags.Bool("check", false, "report whether the generated package is current instead of writing it")
 	timeout := flags.Duration("timeout", defaultInspectionTimeout, "limit on the whole run")
@@ -134,6 +135,9 @@ func (c command) runGenerate(args []string) error {
 	if !typed.has("exclude") && len(settings.Tables.Exclude) > 0 {
 		excludeTables = settings.Tables.Exclude
 	}
+	if !typed.has("include-views") {
+		*includeViews = settings.Tables.IncludeViews
+	}
 	hints, err := settings.hints()
 	if err != nil {
 		return err
@@ -157,6 +161,7 @@ func (c command) runGenerate(args []string) error {
 		Include:      includeTables,
 		Exclude:      excludeTables,
 		HistoryTable: *historyTable,
+		IncludeViews: *includeViews,
 	})
 	if err != nil {
 		return fmt.Errorf("generate: %w", dsnredact.Error(err, *dsn))

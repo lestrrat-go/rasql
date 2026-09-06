@@ -35,8 +35,9 @@ func scanTypedRows[T any](rows exec.RowSource) iter.Seq2[T, error] {
 			return
 		}
 		index := 0
-		var result T
-		scanner := any(&result).(DestinationScanner)
+		var first T
+		result := &first
+		scanner := any(result).(DestinationScanner)
 		destinations, err := scanner.ScanDestinations(names)
 		if err != nil {
 			err = fmt.Errorf("rasql: configure result scan: %w", err)
@@ -45,6 +46,19 @@ func scanTypedRows[T any](rows exec.RowSource) iter.Seq2[T, error] {
 			return
 		}
 		for rows.Next() {
+			if index > 0 {
+				// Destinations point into the result, so bind them again for each row.
+				var next T
+				result = &next
+				scanner = any(result).(DestinationScanner)
+				destinations, err = scanner.ScanDestinations(names)
+				if err != nil {
+					err = fmt.Errorf("rasql: configure result scan: %w", err)
+					finishRows(rows, err, true)
+					yield(zero, err)
+					return
+				}
+			}
 			if err := rows.Scan(destinations...); err != nil {
 				err = fmt.Errorf("rasql: scan row %d: %w", index, err)
 				finishRows(rows, err, true)
@@ -53,7 +67,7 @@ func scanTypedRows[T any](rows exec.RowSource) iter.Seq2[T, error] {
 			}
 			index++
 			recordRow(rows)
-			if !yield(result, nil) {
+			if !yield(*result, nil) {
 				return
 			}
 		}
@@ -74,8 +88,8 @@ func scanTypedRowsStatic[T any](rows exec.RowSource) iter.Seq2[T, error] {
 			return
 		}
 
-		var result T
-		scanner, ok := any(&result).(Scanner)
+		var probe T
+		_, ok := any(&probe).(Scanner)
 		if !ok {
 			defer finishRawRows(rows)
 			decodeRows[T](rowvalue.ScanSource(rows, false), rows)(yield)
@@ -84,6 +98,8 @@ func scanTypedRowsStatic[T any](rows exec.RowSource) iter.Seq2[T, error] {
 		defer finishRawRows(rows)
 		index := 0
 		for rows.Next() {
+			var result T
+			scanner := any(&result).(Scanner)
 			if err := scanner.ScanRow(rows); err != nil {
 				err = fmt.Errorf("rasql: scan row %d: %w", index, err)
 				finishRows(rows, err, true)
