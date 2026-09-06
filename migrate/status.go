@@ -67,14 +67,6 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 				if progress.direction != DirectionUp && progress.direction != DirectionDown {
 					return fmt.Errorf("migrate: invalid progress direction %q", progress.direction)
 				}
-				migration := findProgressMigration(prepared, progress.id)
-				statements, _ := progressStatements(migration, progress.direction)
-				if progress.nextIndex == len(statements) && progress.nextIndex == progress.sourceIndex+1 {
-					if err := r.finalizeProgress(ctx, connection, *progress, migration); err != nil {
-						return incompleteError(*progress, err)
-					}
-					progress = nil
-				}
 			}
 		}
 		applied, err := r.applied(ctx, connection)

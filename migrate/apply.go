@@ -136,12 +136,7 @@ func (r Runner) ApplyPlan(ctx context.Context, target ApplyTarget, migrations ..
 				}
 				migration := findProgressMigration(prepared, progress.id)
 				statements, _ := progressStatements(migration, progress.direction)
-				if progress.nextIndex == len(statements) {
-					if err := r.finalizeProgress(ctx, connection, *progress, migration); err != nil {
-						return incompleteError(*progress, err)
-					}
-					progress = nil
-				}
+				_ = statements
 			}
 		}
 		applied, err := r.applied(ctx, connection)
