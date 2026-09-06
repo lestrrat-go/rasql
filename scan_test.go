@@ -2,6 +2,7 @@ package rasql_test
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -97,6 +98,12 @@ func TestScanValue(t *testing.T) {
 		var destination bool
 		err := rasql.ScanValue(&destination, "not a bool")
 		require.Error(t, err)
+	})
+
+	t.Run("incompatible interface returns an error", func(t *testing.T) {
+		var destination fmt.Stringer
+		err := rasql.ScanValue(&destination, "not a Stringer")
+		require.ErrorContains(t, err, "expected fmt.Stringer, got string")
 	})
 }
 

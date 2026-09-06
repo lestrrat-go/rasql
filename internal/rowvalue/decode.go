@@ -158,9 +158,6 @@ func assign(destination reflect.Value, value any) error {
 	}
 
 	switch destination.Kind() {
-	case reflect.Interface:
-		destination.Set(source)
-		return nil
 	case reflect.String:
 		switch source.Kind() {
 		case reflect.String:

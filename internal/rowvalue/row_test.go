@@ -3,6 +3,7 @@ package rowvalue_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -15,6 +16,12 @@ import (
 type nullScanRecorder struct {
 	value any
 	err   error
+}
+
+type stringerValue string
+
+func (v stringerValue) String() string {
+	return string(v)
 }
 
 func (r *nullScanRecorder) Scan(value any) error {
@@ -76,6 +83,42 @@ func TestGetRejectsWrongType(t *testing.T) {
 
 	_, err = rowvalue.Get[int64](result, "id")
 	require.Error(t, err)
+}
+
+func TestInterfaceDecodingReturnsConversionErrors(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"value"}, []any{"text"})
+	require.NoError(t, err)
+
+	_, err = rowvalue.Get[fmt.Stringer](result, "value")
+	require.ErrorContains(t, err, "expected fmt.Stringer, got string")
+
+	type row struct {
+		Value fmt.Stringer
+	}
+	_, err = rowvalue.Decode[row](result)
+	require.ErrorContains(t, err, `row: decode column "value": expected fmt.Stringer, got string`)
+}
+
+func TestInterfaceDecodingAcceptsImplementedValuesAndAny(t *testing.T) {
+	value := stringerValue("implemented")
+	result, err := rowvalue.NewRow([]string{"value", "payload", "missing"}, []any{value, []byte("payload"), nil})
+	require.NoError(t, err)
+
+	got, err := rowvalue.Get[fmt.Stringer](result, "value")
+	require.NoError(t, err)
+	require.Equal(t, "implemented", got.String())
+
+	gotAny, err := rowvalue.Get[any](result, "value")
+	require.NoError(t, err)
+	require.Equal(t, value, gotAny)
+
+	gotBytes, err := rowvalue.Get[any](result, "payload")
+	require.NoError(t, err)
+	require.Equal(t, []byte("payload"), gotBytes)
+
+	gotNil, err := rowvalue.Get[any](result, "missing")
+	require.NoError(t, err)
+	require.Nil(t, gotNil)
 }
 
 func TestAssignFloat32RejectsFiniteOverflow(t *testing.T) {
