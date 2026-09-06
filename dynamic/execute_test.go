@@ -55,6 +55,14 @@ func TestSelectBuilderExecutesQuery(t *testing.T) {
 	})
 	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
+	var phases []rasql.Phase
+	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
+		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, completion rasql.Completion) error {
+			phases = append(phases, completion.Phase)
+			return nil
+		})
+	}))
+	require.NoError(t, err)
 	users := dynamicUsersTable(t)
 	mock.ExpectQuery("SELECT \"users\".\"id\", \"users\".\"email\" FROM \"users\" WHERE (\"users\".\"id\" = $1)").
 		WithArgs(42).
@@ -66,6 +74,8 @@ func TestSelectBuilderExecutesQuery(t *testing.T) {
 		Query(t.Context(), db)
 	rows := collectRows(t, sequence, err)
 	require.Len(t, rows, 1)
+	require.Contains(t, phases, rasql.ExecutionPhase)
+	require.Contains(t, phases, rasql.ConsumptionPhase)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

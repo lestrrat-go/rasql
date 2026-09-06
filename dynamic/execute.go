@@ -6,6 +6,7 @@ import (
 	"iter"
 
 	"github.com/lestrrat-go/rasql/exec"
+	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -18,6 +19,15 @@ import (
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
 func Query(ctx context.Context, db exec.DB, s query.Select) (iter.Seq2[Row, error], error) {
+	result, err := QueryResult(ctx, db, s)
+	if err != nil {
+		return nil, err
+	}
+	return result.Rows(), nil
+}
+
+// QueryResult renders a SELECT and returns a lazy result with ordered column metadata.
+func QueryResult(ctx context.Context, db exec.DB, s query.Select) (*Result, error) {
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
@@ -25,7 +35,9 @@ func Query(ctx context.Context, db exec.DB, s query.Select) (iter.Seq2[Row, erro
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	return scanRendered(ctx, db, rendered), nil
+	return rowvalue.NewResult(func() (rowvalue.Source, error) {
+		return db.QueryOwned(ctx, rendered)
+	}), nil
 }
 
 // QueryWrite renders a write statement and returns a rangeable sequence of the
@@ -37,19 +49,28 @@ func Query(ctx context.Context, db exec.DB, s query.Select) (iter.Seq2[Row, erro
 // is first ranged over rather than when QueryWrite returns, so a write whose
 // sequence is abandoned never reaches the database.
 func QueryWrite(ctx context.Context, db exec.DB, s query.WriteStatement) (iter.Seq2[Row, error], error) {
+	result, err := QueryWriteResult(ctx, db, s)
+	if err != nil {
+		return nil, err
+	}
+	return result.Rows(), nil
+}
+
+// QueryWriteResult renders a RETURNING write and returns a lazy result with ordered column metadata.
+func QueryWriteResult(ctx context.Context, db exec.DB, s query.WriteStatement) (*Result, error) {
 	rendered, err := exec.RenderWrite(db, s)
 	if err != nil {
 		return nil, err
 	}
-	return scanRendered(ctx, db, rendered), nil
+	return rowvalue.NewResult(func() (rowvalue.Source, error) {
+		return db.QueryOwned(ctx, rendered)
+	}), nil
 }
 
-// scanRendered defers running s until the returned sequence is ranged over,
-// so obtaining a sequence and abandoning it opens no cursor. Owned rows stay
-// inside the closure, where consumption completion remains under this package.
-func scanRendered(ctx context.Context, db exec.DB, s stmt.Statement) iter.Seq2[Row, error] {
-	sequence, _ := scanRenderedOwned(ctx, db, s, true)
-	return sequence
+func resultForStatement(ctx context.Context, db exec.DB, rendered stmt.Statement) *Result {
+	return rowvalue.NewResult(func() (rowvalue.Source, error) {
+		return db.QueryOwned(ctx, rendered)
+	})
 }
 
 func scanRenderedOwned(ctx context.Context, db exec.DB, s stmt.Statement, autoFinish bool) (iter.Seq2[Row, error], func(error)) {
