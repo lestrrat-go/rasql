@@ -24,17 +24,17 @@ func toNameOverrides(names map[schema.ObjectName]ObjectNames) schemagen.NameOver
 
 // ObjectNames assigns generated Go names to one physical table.
 type ObjectNames struct {
-	Accessor  string
-	TableType string
-	RowType   string
-	FileBase  string
-	Columns   map[string]ColumnNames
+	Accessor  string                 `json:"accessor,omitempty"`
+	TableType string                 `json:"table_type,omitempty"`
+	RowType   string                 `json:"row_type,omitempty"`
+	FileBase  string                 `json:"file_base,omitempty"`
+	Columns   map[string]ColumnNames `json:"columns,omitempty"`
 }
 
 // ColumnNames assigns generated Go names to one physical column.
 type ColumnNames struct {
-	Field    string
-	Accessor string
+	Field    string `json:"field,omitempty"`
+	Accessor string `json:"accessor,omitempty"`
 }
 
 var fileBasePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)

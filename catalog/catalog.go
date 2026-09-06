@@ -335,34 +335,55 @@ func objectIdentity(object schema.ObjectName) string {
 
 func sweepNamespaces(ctx context.Context, inspector inspect.Inspector, options Options) ([]schema.TableDef, error) {
 	var tables []schema.TableDef
+	allNames := make([]inspect.TableName, 0)
 	for _, namespace := range options.Namespaces {
 		names, err := inspector.TableNamesIn(ctx, namespace)
 		if err != nil {
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
-		for _, name := range names {
-			historyTable := options.HistoryTable
-			if historyTable == "" {
-				historyTable = defaultHistoryTable
-			}
-			if name.Schema == "" && name.Name == historyTable {
-				continue
-			}
-			if containsName(options.Exclude, name.Name) {
-				continue
-			}
-			table, err := inspector.TableIn(ctx, name.Schema, name.Name)
-			if err != nil {
-				return nil, fmt.Errorf("catalog: %w", err)
-			}
-			tables = append(tables, table)
+		allNames = append(allNames, names...)
+	}
+	if err := rejectAmbiguousLegacyExcludes(allNames, options.Exclude); err != nil {
+		return nil, err
+	}
+	for _, name := range allNames {
+		historyTable := options.HistoryTable
+		if historyTable == "" {
+			historyTable = defaultHistoryTable
 		}
+		if isDefaultHistoryIdentity(name, historyTable) || containsName(options.Exclude, name.Name) {
+			continue
+		}
+		table, err := inspector.TableIn(ctx, name.Schema, name.Name)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		tables = append(tables, table)
 	}
 	tables = applyObjectExcludes(tables, options.ExcludeObjects)
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("catalog: sweep found no tables to describe: %w", ErrNoTables)
 	}
 	return tables, nil
+}
+
+func rejectAmbiguousLegacyExcludes(names []inspect.TableName, excludes []string) error {
+	for _, excluded := range excludes {
+		matches := make([]string, 0, 2)
+		for _, name := range names {
+			if name.Name == excluded {
+				matches = append(matches, objectIdentity(schema.ObjectName{Schema: name.Schema, Name: name.Name}))
+			}
+		}
+		if len(matches) > 1 {
+			return fmt.Errorf("catalog: excluded table %q is ambiguous; use ExcludeObjects with one of %s", excluded, matches)
+		}
+	}
+	return nil
+}
+
+func isDefaultHistoryIdentity(name inspect.TableName, history string) bool {
+	return name.Name == history && (name.Schema == "" || name.Schema == "main")
 }
 
 func containsName(values []string, target string) bool {
@@ -420,15 +441,13 @@ func sweepTables(ctx context.Context, inspector inspect.Inspector, options Optio
 	if historyTable == "" {
 		historyTable = defaultHistoryTable
 	}
-	excluded := make(map[string]struct{}, len(options.Exclude)+1)
-	excluded[historyTable] = struct{}{}
-	for _, name := range options.Exclude {
-		excluded[name] = struct{}{}
+	if err := rejectAmbiguousLegacyExcludes(names, options.Exclude); err != nil {
+		return nil, err
 	}
 
 	tables := make([]schema.TableDef, 0, len(names))
 	for _, name := range names {
-		if _, skip := excluded[name.Name]; skip {
+		if isDefaultHistoryIdentity(name, historyTable) || containsName(options.Exclude, name.Name) {
 			continue
 		}
 		table, err := describeSweptTable(ctx, inspector, name)
@@ -437,6 +456,7 @@ func sweepTables(ctx context.Context, inspector inspect.Inspector, options Optio
 		}
 		tables = append(tables, table)
 	}
+	tables = applyObjectExcludes(tables, options.ExcludeObjects)
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("catalog: sweep found no tables to describe: %w", ErrNoTables)
 	}

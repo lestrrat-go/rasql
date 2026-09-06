@@ -167,10 +167,8 @@ func (i Inspector) TableIn(ctx context.Context, databaseName string, tableName s
 // On SQLite, Schema names the database the table lives in ("main", "temp",
 // or an attached database name), exactly as PRAGMA table_list's own schema
 // column reports it, or as TableNamesIn was called with. On PostgreSQL and
-// MySQL, Schema is always empty: this deliberately matches what Table itself
-// produces for those two dialects today, since schema.TableDef.Schema
-// reaches rendered DML, and filling it with current_schema() or DATABASE()
-// would silently qualify SQL that is unqualified now.
+// MySQL, default enumeration leaves Schema empty for compatibility, while
+// TableNamesIn and TableIn preserve the explicitly requested namespace.
 type TableName struct {
 	Schema string
 	Name   string
@@ -187,13 +185,11 @@ func tableNameLess(left, right TableName) bool {
 }
 
 // TableNames returns the base tables in the inspected scope, excluding
-// views, sorted by Schema and then Name. PostgreSQL scopes to
-// current_schema() and MySQL to DATABASE(), the same scope Table reads
-// columns from, and both report every TableName.Schema empty (see TableName).
-// SQLite has no single equivalent scope: like Table's own default, it
-// reports across main, temp, and every database attached to the connection,
-// with TableName.Schema naming which one each table came from. Use
-// TableNamesIn to scope SQLite to one database.
+// views, sorted by Schema and then Name. PostgreSQL and MySQL use their
+// connection defaults and leave Schema empty. SQLite reports across main,
+// temp, and every database attached to the connection, with TableName.Schema
+// naming which one each table came from. Use TableNamesIn to scope any
+// dialect to one explicit namespace.
 func (i Inspector) TableNames(ctx context.Context) ([]TableName, error) {
 	return i.tableNames(ctx, "")
 }
@@ -301,7 +297,7 @@ func (i Inspector) informationSchemaTable(ctx context.Context, namespace, tableN
 				return schema.TableDef{}, err
 			}
 			queries.mysqlIndexHasExpression = hasExpression
-			queries.indexes = mysqlStatisticsIndexesQuery(hasExpression, hasVisibility)
+			queries.indexes = (informationQueries{indexes: mysqlStatisticsIndexesQuery(hasExpression, hasVisibility)}).scoped(namespace).indexes
 		}
 		table.Indexes, err = i.readIndexes(ctx, queries.indexes, queries.mysqlIndexHasExpression, arguments(queries.indexes)...)
 		if err != nil {

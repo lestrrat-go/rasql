@@ -167,6 +167,10 @@ func (c command) runGenerate(args []string) error {
 	if err != nil {
 		return err
 	}
+	names, err := settings.names()
+	if err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
@@ -196,6 +200,7 @@ func (c command) runGenerate(args []string) error {
 		Hints:   hints,
 		Dialect: spec.dialect,
 		Queries: queries,
+		Names:   names,
 		Prune:   *prune,
 	}
 	if *check {

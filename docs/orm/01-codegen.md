@@ -46,6 +46,10 @@ module root. Write it once and check it in:
   "tables": {
     "namespaces": ["billing", "audit"],
     "include_objects": [{"schema": "billing", "name": "events"}, {"schema": "audit", "name": "events"}],
+    "names": {
+      "billing.events": {"accessor": "BillingEvents", "table_type": "BillingEventsTable", "row_type": "BillingEventsRow", "file_base": "billing_events"},
+      "audit.events": {"accessor": "AuditEvents", "table_type": "AuditEventsTable", "row_type": "AuditEventsRow", "file_base": "audit_events"}
+    },
     "exclude": ["audit_log"],
     "history_table": "schema_migrations",
     "row_names": {"users": "User"}

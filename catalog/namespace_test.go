@@ -69,4 +69,33 @@ func TestFromQueryerRejectsAmbiguousLegacyIncludeAcrossNamespaces(t *testing.T) 
 		Include:    []string{"events"},
 	})
 	require.ErrorContains(t, err, "is ambiguous")
+	_, err = catalog.FromQueryer(t.Context(), conn, catalog.Options{
+		Dialect:    dialect.SQLite(),
+		Namespaces: []string{"main", "audit"},
+		Exclude:    []string{"events"},
+	})
+	require.ErrorContains(t, err, "excluded table \"events\" is ambiguous")
+}
+
+func TestFromQueryerDefaultHistoryOnlySkipsDefaultSQLiteIdentity(t *testing.T) {
+	database := mustCreateSQLiteDB(t, "CREATE TABLE rasql_schema_migrations (id INTEGER PRIMARY KEY)")
+	database.SetMaxOpenConns(1)
+	conn, err := database.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS audit")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), "CREATE TABLE audit.rasql_schema_migrations (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+
+	tables, err := catalog.FromQueryer(t.Context(), conn, catalog.Options{Dialect: dialect.SQLite()})
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Equal(t, "audit", tables[0].Schema)
+
+	_, err = catalog.FromQueryer(t.Context(), conn, catalog.Options{
+		Dialect:        dialect.SQLite(),
+		ExcludeObjects: []schema.ObjectName{{Schema: "audit", Name: "rasql_schema_migrations"}},
+	})
+	require.ErrorIs(t, err, catalog.ErrNoTables)
 }

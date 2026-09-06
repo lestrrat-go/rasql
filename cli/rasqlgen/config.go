@@ -91,6 +91,27 @@ type configTables struct {
 	// to read better, or to break a collision between one table's derived
 	// row name and another table's generated names, which refuses the run.
 	RowNames map[string]string `json:"row_names"`
+
+	Names map[string]generate.ObjectNames `json:"names"`
+}
+
+func (c config) names() (map[schema.ObjectName]generate.ObjectNames, error) {
+	if len(c.Tables.Names) == 0 {
+		return nil, nil
+	}
+	result := make(map[schema.ObjectName]generate.ObjectNames, len(c.Tables.Names))
+	for identity, names := range c.Tables.Names {
+		parts := strings.Split(identity, ".")
+		switch {
+		case len(parts) == 1 && parts[0] != "":
+			result[schema.ObjectName{Name: parts[0]}] = names
+		case len(parts) == 2 && parts[0] != "" && parts[1] != "":
+			result[schema.ObjectName{Schema: parts[0], Name: parts[1]}] = names
+		default:
+			return nil, fmt.Errorf("generate: config names key %q must be table or namespace.table", identity)
+		}
+	}
+	return result, nil
 }
 
 // configQuery is one static SQL template compiled into a generated function.

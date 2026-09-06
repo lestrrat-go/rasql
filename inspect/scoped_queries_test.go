@@ -29,6 +29,17 @@ func TestInformationQueriesScopeEveryMySQLMetadataFamily(t *testing.T) {
 	}
 }
 
+func TestMySQLDynamicIndexQueryUsesRequestedNamespace(t *testing.T) {
+	query := (informationQueries{indexes: mysqlStatisticsIndexesQuery(true, true)}).scoped("audit").indexes
+	if strings.Contains(query, "DATABASE()") {
+		t.Fatalf("scoped index query still uses connection default: %s", query)
+	}
+	args := (informationQueries{indexes: query}).argumentsScoped(query, "audit", "events")
+	if len(args) != 2 || args[0] != "audit" || args[1] != "events" {
+		t.Fatalf("scoped index arguments = %#v, want namespace and table", args)
+	}
+}
+
 func TestInformationQueriesScopeEveryPostgreSQLMetadataFamily(t *testing.T) {
 	queries := informationQueries{
 		columns:              "WHERE table_schema = current_schema() AND table_name = $1",
