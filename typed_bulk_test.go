@@ -10,6 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dberror"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
@@ -260,6 +261,85 @@ func TestBulkCallerTransactionIsNotDurable(t *testing.T) {
 	var count int
 	require.NoError(t, sqlDB.QueryRow(`SELECT count(*) FROM items WHERE a = 'caller'`).Scan(&count))
 	require.Zero(t, count)
+}
+
+func TestGeneratedCreateBuildersRunThroughBulkSQLite(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = database.Close() }()
+	database.SetMaxOpenConns(1)
+	_, err = database.Exec(`CREATE TABLE users (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		email TEXT NOT NULL,
+		nickname TEXT,
+		status TEXT NOT NULL DEFAULT 'pending',
+		first_name TEXT NOT NULL DEFAULT '',
+		last_name TEXT NOT NULL DEFAULT ''
+	)`)
+	require.NoError(t, err)
+	db, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	plans := []rasql.CreatePlan[store.UsersRow]{
+		store.NewUsersCreate().Email("one@example.com").FirstName("One").LastName("User").Plan(),
+		store.NewUsersCreate().Email("two@example.com").ClearNickname().FirstName("Two").LastName("User").Plan(),
+		store.NewUsersCreate().Email("three@example.com").Status("").FirstName("Three").LastName("User").Plan(),
+		store.NewUsersCreate().Email("four@example.com").DefaultStatus().FirstName("Four").LastName("User").Plan(),
+	}
+	bulk, err := rasql.NewBulkPlan(plans...)
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{MaxRows: 2, MaxBindParameters: 6})
+	require.NoError(t, err)
+	require.Equal(t, []rasql.InputRange{{First: 0, Last: 3}}, outcome.Completed)
+	rows, err := database.Query(`SELECT email, nickname, status FROM users ORDER BY id`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var got []struct {
+		email, status string
+		nickname      *string
+	}
+	for rows.Next() {
+		var row struct {
+			email, status string
+			nickname      *string
+		}
+		require.NoError(t, rows.Scan(&row.email, &row.nickname, &row.status))
+		got = append(got, row)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, got, 4)
+	require.Equal(t, "pending", got[0].status)
+	require.Nil(t, got[1].nickname)
+	require.Equal(t, "", got[2].status)
+	require.Equal(t, "pending", got[3].status)
+}
+
+func TestBulkPlanRejectsInvalidInputsBeforeHandleCalls(t *testing.T) {
+	table, a, b, _ := bulkTestTable()
+	invalid, constructorErr := rasql.NewCreatePlan(table)
+	require.Error(t, constructorErr)
+	_, err := rasql.NewBulkPlan(invalid)
+	require.ErrorIs(t, err, constructorErr)
+	other := rasql.MustTableOf[bulkTestRow](schema.TableDef{Name: "other", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	otherA := query.TypedColumnOf[bulkTestRow, int64](other.Column("id"))
+	otherPlan, err := rasql.NewCreatePlan(other, rasql.SetField(otherA, 1))
+	require.NoError(t, err)
+	valid, err := rasql.NewCreatePlan(table, rasql.SetField(a, "valid"))
+	require.NoError(t, err)
+	_, err = rasql.NewBulkPlan(valid, otherPlan)
+	require.ErrorContains(t, err, "mixed tables")
+	wide, err := rasql.NewCreatePlan(table, rasql.SetField(a, "wide"), rasql.SetField(b, 1))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(wide)
+	require.NoError(t, err)
+	handle := &bulkRecordingHandle{}
+	db, err := rasql.New(handle, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{MaxBindParameters: 1})
+	require.ErrorContains(t, err, "uses 2 bind parameters")
+	require.Empty(t, handle.calls)
+	_, err = rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{MaxRows: -1})
+	require.Error(t, err)
+	require.Empty(t, handle.calls)
 }
 
 func TestBulkOwnedRollbackFailureMarksAttemptedIndexesUnknown(t *testing.T) {
