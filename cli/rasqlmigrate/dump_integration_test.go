@@ -25,6 +25,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -39,6 +40,32 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+// TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults pins the desired
+// live behavior for ordinary sequence defaults before the catalog repair: a
+// shared sequence and an owned sequence with non-default settings must not be
+// rewritten as independent BIGSERIAL columns.
+func TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE shared_sequence START WITH 10 INCREMENT BY 1`)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE custom_sequence START WITH 10 INCREMENT BY 5`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (
+		shared_first BIGINT NOT NULL DEFAULT nextval('shared_sequence'),
+		shared_second BIGINT NOT NULL DEFAULT nextval('shared_sequence'),
+		custom_value BIGINT NOT NULL DEFAULT nextval('custom_sequence'),
+		control BIGSERIAL NOT NULL
+	)`)
+	dumpMustExec(t, ctx, source, `ALTER SEQUENCE custom_sequence OWNED BY sequence_cases.custom_value`)
+
+	outputDirectory := filepath.Join(t.TempDir(), "schema")
+	_, err := dumpFilesFromDatabase(ctx, dialect.PostgreSQL(), source, dumpOptions{Format: "schema"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sequence_cases")
+	require.Contains(t, err.Error(), "shared_sequence")
+	_, statErr := os.Stat(outputDirectory)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
 
 // dumpMustExec runs statement against database and fails the test on error.
 func dumpMustExec(t *testing.T, ctx context.Context, database *sql.DB, statement string) {
