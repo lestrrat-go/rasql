@@ -567,8 +567,9 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		if err := plan.Validate(); err != nil {
 			return diff.Plan{}, err
 		}
-		for index := range plan.Statements {
-			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
+		diff.NumberSources(plan.Statements)
+		if err := plan.Validate(); err != nil {
+			return diff.Plan{}, err
 		}
 	}
 	return plan, nil

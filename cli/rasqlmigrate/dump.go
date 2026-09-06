@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -994,6 +995,10 @@ func quoteQualifiedTableName(d dialect.Dialect, table schema.TableDef) (string, 
 // descending filename order.
 func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]dumpFile, error) {
 	var files []dumpFile
+	total := 0
+	for _, table := range tables {
+		total += 1 + len(table.Indexes)
+	}
 	step := 0
 	for _, table := range tables {
 		step++
@@ -1005,7 +1010,7 @@ func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]d
 		if err != nil {
 			return nil, fmt.Errorf("table %q: %w", table.Name, err)
 		}
-		stem := fmt.Sprintf("%03d_create_%s", step, filenamePart(dumpFileBaseName(table)))
+		stem := numberedDumpStem(step, total, "create_"+filenamePart(dumpFileBaseName(table)))
 		files = append(files,
 			dumpFile{Name: stem + ".up.sql", SQL: createSQL + ";\n"},
 			dumpFile{Name: stem + ".down.sql", SQL: "DROP TABLE " + dropName + ";\n"},
@@ -1017,7 +1022,7 @@ func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]d
 		}
 		for i, indexSQL := range indexSQLs {
 			step++
-			indexStem := fmt.Sprintf("%03d_create_index_%s", step, filenamePart(table.Indexes[i].Name))
+			indexStem := numberedDumpStem(step, total, "create_index_"+filenamePart(table.Indexes[i].Name))
 			indexName, err := d.QuoteIdentifier(table.Indexes[i].Name)
 			if err != nil {
 				return nil, fmt.Errorf("table %q index %q: %w", table.Name, table.Indexes[i].Name, err)
@@ -1033,6 +1038,11 @@ func buildMigrationFormatFiles(d dialect.Dialect, tables []schema.TableDef) ([]d
 		}
 	}
 	return files, nil
+}
+
+func numberedDumpStem(step, total int, suffix string) string {
+	width := max(3, len(strconv.Itoa(total)))
+	return fmt.Sprintf("%0*d_%s", width, step, suffix)
 }
 
 // writeDumpPreview prints one "-- <name>" header per file followed by its

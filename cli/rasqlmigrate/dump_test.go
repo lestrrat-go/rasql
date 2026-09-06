@@ -14,6 +14,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 // dumpTestTable builds a minimal valid TableDef named name with a single
@@ -43,6 +45,41 @@ func dumpTestTable(schemaName, name string, references ...string) schema.TableDe
 		})
 	}
 	return table
+}
+
+func TestBuildMigrationFormatFilesKeepsBoundaryDependencyOrder(t *testing.T) {
+	tables := make([]schema.TableDef, 999)
+	for index := range tables {
+		tables[index] = dumpTestTable("main", "table_"+strconv.Itoa(index+1))
+	}
+	tables[998].Indexes = []schema.IndexDef{{Name: "boundary_idx", Columns: []string{"id"}}}
+	files, err := buildMigrationFormatFiles(dialect.SQLite(), tables)
+	require.NoError(t, err)
+	require.Equal(t, "0999_create_main_table_999.up.sql", files[1996].Name)
+	require.Equal(t, "1000_create_index_boundary_idx.up.sql", files[1998].Name)
+	root := t.TempDir()
+	migrationDirectory := filepath.Join(root, "001_boundary")
+	require.NoError(t, writeDumpOutput(migrationDirectory, "sqlite", files))
+	migrations, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	require.Equal(t, "0999_create_main_table_999.up.sql", migrations[0].Statements[998].Source)
+	require.Equal(t, "1000_create_index_boundary_idx.up.sql", migrations[0].Statements[999].Source)
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	for _, statement := range migrations[0].Statements {
+		_, err = database.Exec(string(statement.SQL))
+		require.NoError(t, err)
+	}
+	var objectCount int
+	require.NoError(t, database.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('table_999', 'boundary_idx')`).Scan(&objectCount))
+	require.Equal(t, 2, objectCount)
+	for _, statement := range migrations[0].Down {
+		_, err = database.Exec(string(statement.SQL))
+		require.NoError(t, err)
+	}
+	require.NoError(t, database.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('table_999', 'boundary_idx')`).Scan(&objectCount))
+	require.Equal(t, 0, objectCount)
 }
 
 func TestRunDumpFlagValidation(t *testing.T) {
