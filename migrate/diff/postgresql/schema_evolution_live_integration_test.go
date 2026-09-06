@@ -242,7 +242,7 @@ func TestPostgreSQLSchemaEvolutionOpaqueBackfillArtifact(t *testing.T) {
 	_, err = runner.Revert(t.Context(), migrate.Steps(1), migration)
 	require.Error(t, err)
 	require.ErrorContains(t, err, migration.ID)
-	require.ErrorContains(t, err, "irreversible")
+	require.EqualError(t, err, `migrate: migration "001_opaque" has no reverse SQL source`)
 	require.Equal(t, beforeRevert, inspectPostgreSQLTable(t, database, tasks))
 	status, err := runner.Status(t.Context(), migration)
 	require.NoError(t, err)

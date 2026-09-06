@@ -75,10 +75,10 @@ func TestSchemaEvolutionMySQLConstraintReplacementMatrix(t *testing.T) {
 		},
 		{
 			name:     "foreign key",
-			baseline: "CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_code` UNIQUE (`code`)); CREATE TABLE `evo_fk` (`id` BIGINT NOT NULL, `parent_id` BIGINT NOT NULL, CONSTRAINT `fk_evo` FOREIGN KEY (`parent_id`) REFERENCES `evo_parent` (`id`));",
-			target:   "CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_code` UNIQUE (`code`)); CREATE TABLE `evo_fk` (`id` BIGINT NOT NULL, `parent_id` BIGINT NOT NULL, CONSTRAINT `fk_evo` FOREIGN KEY (`parent_id`) REFERENCES `evo_parent` (`code`));",
+			baseline: "CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_id` UNIQUE (`id`), CONSTRAINT `uq_parent_code` UNIQUE (`code`)); CREATE TABLE `evo_fk` (`id` BIGINT NOT NULL, `parent_id` BIGINT NOT NULL, CONSTRAINT `fk_evo` FOREIGN KEY (`parent_id`) REFERENCES `evo_parent` (`id`));",
+			target:   "CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_id` UNIQUE (`id`), CONSTRAINT `uq_parent_code` UNIQUE (`code`)); CREATE TABLE `evo_fk` (`id` BIGINT NOT NULL, `parent_id` BIGINT NOT NULL, CONSTRAINT `fk_evo` FOREIGN KEY (`parent_id`) REFERENCES `evo_parent` (`code`));",
 			baselineExec: []string{
-				"CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_code` UNIQUE (`code`));",
+				"CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_id` UNIQUE (`id`), CONSTRAINT `uq_parent_code` UNIQUE (`code`));",
 				"CREATE TABLE `evo_fk` (`id` BIGINT NOT NULL, `parent_id` BIGINT NOT NULL, CONSTRAINT `fk_evo` FOREIGN KEY (`parent_id`) REFERENCES `evo_parent` (`id`));",
 			},
 			want:    mysqlConstraintCatalog{Name: "fk_evo", Kind: "FOREIGN KEY"},
@@ -327,7 +327,7 @@ func TestSchemaEvolutionMySQLBackfillIsIrreversibleLive(t *testing.T) {
 	runner, err := migrate.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	_, err = runner.Revert(t.Context(), migrate.Steps(1), migration)
-	require.ErrorContains(t, err, "irreversible")
+	require.EqualError(t, err, `migrate: migration "001_schema_evolution" has no reverse SQL source`)
 	var afterRefusal struct {
 		State    string
 		Nullable string
