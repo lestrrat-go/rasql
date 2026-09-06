@@ -365,24 +365,24 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		predicateContext := ctx
 		predicateContext.allowsAggregate = false
 		predicateContext.aggregateDepth = 0
-		predicateUsage, err := validateExpression(expression.predicate, predicateContext, path+".predicate")
+		_, err = validateExpression(expression.predicate, predicateContext, path+".predicate")
 		if err != nil {
 			return expressionUsage{}, err
 		}
-		return expressionUsage{aggregate: true, bareColumn: predicateUsage.bareColumn}, nil
+		return expressionUsage{aggregate: true}, nil
 	case Over:
-		usage, err := validateExpression(expression.expr, ctx, path+".expression")
+		_, err := validateExpression(expression.expr, ctx, path+".expression")
 		if err != nil {
 			return expressionUsage{}, err
 		}
 		windowContext := ctx
 		windowContext.allowsAggregate = false
 		windowContext.aggregateDepth = 0
-		windowUsage, err := validateWindow(expression.window, windowContext, path+".window")
+		_, err = validateWindow(expression.window, windowContext, path+".window")
 		if err != nil {
 			return expressionUsage{}, err
 		}
-		return expressionUsage{aggregate: true, bareColumn: usage.bareColumn || windowUsage.bareColumn}, nil
+		return expressionUsage{aggregate: true}, nil
 	case TrustedFragment:
 		if strings.Count(expression.sql, "{}") != len(expression.parts) {
 			return expressionUsage{}, validationError(path, "contains %d fragment markers for %d parts", strings.Count(expression.sql, "{}"), len(expression.parts))

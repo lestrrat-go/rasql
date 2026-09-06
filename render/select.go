@@ -36,6 +36,16 @@ func (e *Error) Unwrap() error {
 // check can use errors.Is instead of errors.As.
 var ErrUnsupportedMatchOperator = errors.New("render: unsupported MATCH operator")
 
+var ErrUnsupportedAggregateFilter = errors.New("render: unsupported aggregate FILTER")
+
+type UnsupportedAggregateFilterError struct{ Dialect string }
+
+func (e *UnsupportedAggregateFilterError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express aggregate FILTER", e.Dialect)
+}
+
+func (e *UnsupportedAggregateFilterError) Unwrap() error { return ErrUnsupportedAggregateFilter }
+
 // UnsupportedMatchOperatorError reports that a statement compares an
 // expression with [query.OperatorMatch] against a dialect that has not been
 // granted [dialect.CapabilityMatchOperator]. query.Validate accepts MATCH
@@ -340,6 +350,9 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 		r.builder.WriteByte(')')
 		return nil
 	case query.Filter:
+		if !r.dialect.Supports(dialect.CapabilityAggregateFilter) {
+			return &UnsupportedAggregateFilterError{Dialect: r.dialect.Name()}
+		}
 		if err := r.writeExpression(expression.Aggregate()); err != nil {
 			return err
 		}
