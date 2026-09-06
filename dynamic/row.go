@@ -70,18 +70,32 @@ func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
 	return rowvalue.Scan(rows)
 }
 
-func scanSource(rows *exec.Rows, autoFinish bool) iter.Seq2[Row, error] {
+type rowAccounting interface {
+	RecordRow()
+	Finish(error, bool) error
+}
+
+func scanSource(source exec.RowSource, autoFinish bool) iter.Seq2[Row, error] {
 	return func(yield func(Row, error) bool) {
+		owner, _ := source.(rowAccounting)
 		if autoFinish {
-			defer func() { _ = rows.Finish(nil, true) }()
+			defer func() {
+				if owner != nil {
+					_ = owner.Finish(nil, true)
+				}
+			}()
 		}
-		for value, err := range rowvalue.ScanSource(rows, false) {
+		for value, err := range rowvalue.ScanSource(source, false) {
 			if err != nil {
-				_ = rows.Finish(err, false)
+				if owner != nil {
+					_ = owner.Finish(err, false)
+				}
 				yield(Row{}, err)
 				return
 			}
-			rows.RecordRow()
+			if owner != nil {
+				owner.RecordRow()
+			}
 			if !yield(value, nil) {
 				return
 			}

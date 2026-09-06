@@ -3,7 +3,9 @@ package exec_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -111,15 +113,21 @@ func TestTransactionLifecycleReportsCommitFailure(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE users SET name = ?").WithArgs("ada").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
-	require.ErrorContains(t, tx.Commit(), "commit transaction")
+	_, err = tx.ExecRendered(t.Context(), stmt.New("UPDATE users SET name = ?", "ada"))
+	require.NoError(t, err)
 	require.Len(t, phases, 2)
+	require.Equal(t, exec.ExecutionPhase, phases[1].Phase)
+	require.ErrorContains(t, tx.Commit(), "commit transaction")
+	require.Len(t, phases, 3)
 	require.Equal(t, exec.TransactionPhase, phases[0].Phase)
 	require.Equal(t, exec.BeginOperation, phases[0].Operation.Kind())
-	require.Equal(t, exec.CommitOperation, phases[1].Operation.Kind())
-	require.ErrorContains(t, phases[1].Err, "commit transaction")
+	require.Equal(t, exec.ExecOperation, phases[1].Operation.Kind())
+	require.Equal(t, exec.CommitOperation, phases[2].Operation.Kind())
+	require.ErrorContains(t, phases[2].Err, "commit transaction")
 }
 
 func TestInvocationObserversPropagateContextAndReverseCompletion(t *testing.T) {
@@ -335,6 +343,74 @@ func TestCompletionErrorsGoOnlyToHandler(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, reported, 1)
 	require.ErrorContains(t, reported[0], "completion reporter failed")
+}
+
+func TestDelayedDriverSeparatesExecutionAndConsumptionDuration(t *testing.T) {
+	database := openLifecycleDatabase(t, lifecycleDriverConfig{queryDelay: 2 * time.Millisecond, nextDelay: 5 * time.Millisecond}, nil)
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	var completions []exec.Completion
+	db, err = db.WithInvocationObservers(exec.ExtensionErrorHandlerFunc(func(context.Context, exec.ExtensionError) {}), exec.InvocationObserverFunc(func(ctx context.Context, _ exec.Operation) (context.Context, exec.CompletionObserver) {
+		return ctx, exec.CompletionObserverFunc(func(_ context.Context, value exec.Completion) error {
+			completions = append(completions, value)
+			return nil
+		})
+	}))
+	require.NoError(t, err)
+	rows, err := db.QueryOwned(t.Context(), stmt.New("SELECT value"))
+	require.NoError(t, err)
+	require.True(t, rows.Next())
+	require.NoError(t, rows.Close())
+	require.Len(t, completions, 2)
+	executionDuration := completions[0].Finished.Sub(completions[0].Started)
+	consumptionDuration := completions[1].Finished.Sub(completions[1].Started)
+	require.Greater(t, executionDuration, time.Millisecond)
+	require.Greater(t, consumptionDuration, executionDuration)
+}
+
+func TestConcurrentInvocationsKeepDerivedMarkersPaired(t *testing.T) {
+	recorder := &lifecycleDriverRecorder{}
+	database := openLifecycleDatabase(t, lifecycleDriverConfig{}, recorder)
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	var next atomic.Int64
+	var mu sync.Mutex
+	executionMarkers := make([]string, 0, 2)
+	consumptionMarkers := make([]string, 0, 2)
+	db, err = db.WithInvocationObservers(exec.ExtensionErrorHandlerFunc(func(context.Context, exec.ExtensionError) {}), exec.InvocationObserverFunc(func(ctx context.Context, _ exec.Operation) (context.Context, exec.CompletionObserver) {
+		marker := "marker-" + fmt.Sprint(next.Add(1))
+		return context.WithValue(ctx, lifecycleMarkerKey{}, marker), exec.CompletionObserverFunc(func(ctx context.Context, value exec.Completion) error {
+			mu.Lock()
+			if value.Phase == exec.ExecutionPhase {
+				executionMarkers = append(executionMarkers, ctx.Value(lifecycleMarkerKey{}).(string))
+			} else {
+				consumptionMarkers = append(consumptionMarkers, ctx.Value(lifecycleMarkerKey{}).(string))
+			}
+			mu.Unlock()
+			return nil
+		})
+	}))
+	require.NoError(t, err)
+	var group sync.WaitGroup
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			rows, queryErr := db.QueryOwned(t.Context(), stmt.New("SELECT value"))
+			if queryErr != nil {
+				return
+			}
+			_ = rows.Close()
+		}()
+	}
+	group.Wait()
+	recorder.mu.Lock()
+	markers := append([]string(nil), recorder.markers...)
+	recorder.mu.Unlock()
+	require.Len(t, markers, 2)
+	require.ElementsMatch(t, markers, executionMarkers)
+	require.Len(t, consumptionMarkers, 2)
+	require.NotEqual(t, executionMarkers, consumptionMarkers)
 }
 
 type lifecycleKey struct{}
