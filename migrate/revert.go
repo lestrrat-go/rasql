@@ -112,6 +112,8 @@ func (r Runner) RevertPlan(ctx context.Context, target RevertTarget, migrations 
 	var result []Migration
 	plan := func() error {
 		var progress *progressEntry
+		var progressMigration preparedMigration
+		var finalizedProgress bool
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return err
 		}
@@ -134,9 +136,21 @@ func (r Runner) RevertPlan(ctx context.Context, target RevertTarget, migrations 
 				if progress.nextIndex <= progress.sourceIndex {
 					return incompleteError(*progress, errors.New("source outcome is uncertain; reconcile it before retrying"))
 				}
-				migration := findProgressMigration(prepared, progress.id)
-				statements, _ := progressStatements(migration, progress.direction)
-				_ = statements
+				progressMigration = findProgressMigration(prepared, progress.id)
+				statements, err := progressStatements(progressMigration, progress.direction)
+				if err != nil {
+					return err
+				}
+				if progress.nextIndex == len(statements) {
+					if err := r.finalizeProgress(ctx, connection, *progress, progressMigration); err != nil {
+						return incompleteError(*progress, err)
+					}
+					progress = nil
+					finalizedProgress = true
+				} else {
+					progressMigration.statements = append([]Statement(nil), progressMigration.statements...)
+					progressMigration.down = append([]Statement(nil), statements[progress.nextIndex:]...)
+				}
 			}
 		}
 		applied, err := r.applied(ctx, connection)
@@ -145,10 +159,21 @@ func (r Runner) RevertPlan(ctx context.Context, target RevertTarget, migrations 
 		}
 		selected, err := selectReverts(applied, prepared, target)
 		if err != nil {
-			return err
+			if finalizedProgress && len(applied) == 0 {
+				selected = nil
+			} else {
+				return err
+			}
 		}
 		if progress != nil {
-			selected = prioritizeProgress(selected, prepared, progress.id)
+			ordered := make([]preparedMigration, 0, len(selected)+1)
+			ordered = append(ordered, progressMigration)
+			for _, migration := range selected {
+				if migration.id != progress.id {
+					ordered = append(ordered, migration)
+				}
+			}
+			selected = ordered
 		}
 		result = exportMigrations(selected)
 		return nil
