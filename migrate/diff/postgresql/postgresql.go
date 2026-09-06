@@ -10,6 +10,7 @@ import (
 	pgquery "github.com/lestrrat-go/rasql-pg/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
+	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -110,8 +111,16 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	)
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	addedOrder, err := orderAddedTables(comparison.Tables.Added)
+	if err != nil {
+		return diff.Plan{}, fmt.Errorf("postgresql schema diff requires manual migration: %w", err)
+	}
+	addedByKey := make(map[string]diff.SchemaEntry[tableDefinition], len(comparison.Tables.Added))
 	for _, entry := range comparison.Tables.Added {
-		statement, err := createTableStatement(entry.Value.statement)
+		addedByKey[entry.Key] = entry
+	}
+	for _, key := range addedOrder {
+		statement, err := createTableStatement(addedByKey[key].Value.statement)
 		if err != nil {
 			return diff.Plan{}, err
 		}
@@ -167,6 +176,27 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		}
 	}
 	return plan, nil
+}
+
+func orderAddedTables(entries []diff.SchemaEntry[tableDefinition]) ([]string, error) {
+	dependencies := make([]migrationorder.TableDependency, len(entries))
+	for index, entry := range entries {
+		statement := entry.Value.statement
+		dependencies[index] = migrationorder.TableDependency{Key: entry.Key, Display: displayName(statement.Name)}
+		for _, constraint := range statement.Constraints {
+			if constraint.References != nil {
+				dependencies[index].DependsOn = append(dependencies[index].DependsOn, qualifiedNameKey(constraint.References.Table))
+			}
+		}
+		for _, column := range statement.Columns {
+			for _, constraint := range column.Constraints {
+				if constraint.References != nil {
+					dependencies[index].DependsOn = append(dependencies[index].DependsOn, qualifiedNameKey(constraint.References.Table))
+				}
+			}
+		}
+	}
+	return migrationorder.OrderTables(dependencies)
 }
 
 type schemaSnapshot struct {

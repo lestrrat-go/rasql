@@ -13,6 +13,7 @@ import (
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
+	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -130,15 +131,28 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	added := make([]diff.SchemaEntry[tableDefinition], 0, len(target.tables))
+	for _, key := range sortedTableKeys(target.tables) {
+		if _, exists := baseline.tables[key]; !exists {
+			added = append(added, diff.SchemaEntry[tableDefinition]{Key: key, Value: target.tables[key]})
+		}
+	}
+	addedOrder, err := orderAddedTables(added, a.lowerCaseTableNames)
+	if err != nil {
+		return diff.Plan{}, fmt.Errorf("mysql schema diff requires manual migration: %w", err)
+	}
+	for _, key := range addedOrder {
+		targetTable := target.tables[key]
+		statement, err := createTableStatement(targetTable.statement)
+		if err != nil {
+			return diff.Plan{}, err
+		}
+		generated = append(generated, statement)
+	}
 	for _, key := range sortedTableKeys(target.tables) {
 		targetTable := target.tables[key]
 		baselineTable, exists := baseline.tables[key]
 		if !exists {
-			statement, err := createTableStatement(targetTable.statement)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
 			continue
 		}
 		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement, a.lowerCaseTableNames)
@@ -193,6 +207,27 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 		}
 	}
 	return plan, nil
+}
+
+func orderAddedTables(entries []diff.SchemaEntry[tableDefinition], tableNames LowerCaseTableNames) ([]string, error) {
+	dependencies := make([]migrationorder.TableDependency, len(entries))
+	for index, entry := range entries {
+		statement := entry.Value.statement
+		dependencies[index] = migrationorder.TableDependency{Key: entry.Key, Display: displayName(statement.Name)}
+		for _, constraint := range statement.Constraints {
+			if constraint.References != nil {
+				dependencies[index].DependsOn = append(dependencies[index].DependsOn, tableNameKey(constraint.References.Table, tableNames))
+			}
+		}
+		for _, column := range statement.Columns {
+			for _, constraint := range column.Constraints {
+				if constraint.References != nil {
+					dependencies[index].DependsOn = append(dependencies[index].DependsOn, tableNameKey(constraint.References.Table, tableNames))
+				}
+			}
+		}
+	}
+	return migrationorder.OrderTables(dependencies)
 }
 
 type schemaSnapshot struct {
