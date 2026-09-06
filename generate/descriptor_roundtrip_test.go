@@ -2,7 +2,7 @@ package generate_test
 
 import (
 	"bytes"
-	"fmt"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,6 +93,11 @@ func newTableDefFixture() schema.TableDef {
 					Scale:     schema.NewDecimalScale(2),
 					Unsigned:  true,
 					ZeroFill:  true,
+				},
+				GoBinding: &schema.GoBinding{
+					Type:         "u.URL",
+					NullableType: "*u.URL",
+					Imports:      []schema.GoImport{{Path: "net/url", Name: "u"}},
 				},
 			},
 			{Name: "score", Type: schema.FloatType{}},
@@ -444,7 +449,11 @@ func withEachCoveredFieldDropped(value reflect.Value, visit func(name string)) {
 // any difference in how either side formats a value makes every table's
 // comparison fail.
 func descriptorFingerprint(table schema.TableDef) string {
-	return fmt.Sprintf("%#v", table)
+	data, err := json.Marshal(table)
+	if err != nil {
+		return err.Error()
+	}
+	return string(data)
 }
 
 // TestDescriptorFingerprintChangesWhenAnyFieldIsDropped is the evidence that
@@ -575,6 +584,7 @@ const roundTripCheckRowsPlaceholder = "\t\t// ROWS\n"
 const roundTripCheckTemplate = `package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -613,7 +623,11 @@ func RunDescriptorRoundTripCheck() string {
 // own descriptorFingerprint (generate/descriptor_roundtrip_test.go) does,
 // since the want strings above came from there.
 func descriptorFingerprint(definition schema.TableDef) string {
-	return fmt.Sprintf("%#v", definition)
+	data, err := json.Marshal(definition)
+	if err != nil {
+		return err.Error()
+	}
+	return string(data)
 }
 
 // fingerprintDifference reports where want and got first differ, with the

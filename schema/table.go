@@ -159,10 +159,11 @@ func (w *IntegerDisplayWidth) UnmarshalJSON(data []byte) error {
 
 // ColumnDef describes a table column.
 type ColumnDef struct {
-	Name     string
-	Type     ColumnType
-	Nullable bool
-	Default  sqltext.Text
+	Name      string
+	Type      ColumnType
+	Nullable  bool
+	Default   sqltext.Text
+	GoBinding *GoBinding `json:",omitempty"`
 
 	// GeneratedExpression is the expression a generated column computes,
 	// exactly as the server reports it, or empty for an ordinary column.
@@ -224,6 +225,7 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Type                json.RawMessage    `json:"Type"`
 		Nullable            bool               `json:"Nullable"`
 		Default             string             `json:"Default"`
+		GoBinding           *GoBinding         `json:",omitempty"`
 		GeneratedExpression string             `json:"GeneratedExpression,omitempty"`
 		GeneratedStorage    GeneratedStorage   `json:"GeneratedStorage,omitempty"`
 		Identity            IdentityGeneration `json:"Identity,omitempty"`
@@ -238,6 +240,7 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Type:                typeData,
 		Nullable:            c.Nullable,
 		Default:             string(c.Default),
+		GoBinding:           c.GoBinding,
 		GeneratedExpression: string(c.GeneratedExpression),
 		GeneratedStorage:    c.GeneratedStorage,
 		Identity:            c.Identity,
@@ -252,6 +255,7 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Type                json.RawMessage    `json:"Type"`
 		Nullable            bool               `json:"Nullable"`
 		Default             string             `json:"Default"`
+		GoBinding           *GoBinding         `json:",omitempty"`
 		GeneratedExpression string             `json:"GeneratedExpression,omitempty"`
 		GeneratedStorage    GeneratedStorage   `json:"GeneratedStorage,omitempty"`
 		Identity            IdentityGeneration `json:"Identity,omitempty"`
@@ -270,6 +274,7 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Type:                columnType,
 		Nullable:            wire.Nullable,
 		Default:             sqltext.Text(wire.Default),
+		GoBinding:           wire.GoBinding,
 		GeneratedExpression: sqltext.Text(wire.GeneratedExpression),
 		GeneratedStorage:    wire.GeneratedStorage,
 		Identity:            wire.Identity,
@@ -1114,6 +1119,7 @@ func cloneColumns(source []ColumnDef) []ColumnDef {
 	clone := slices.Clone(source)
 	for i := range clone {
 		clone[i].Type = cloneColumnType(clone[i].Type)
+		clone[i].GoBinding = clone[i].GoBinding.Clone()
 	}
 	return clone
 }
