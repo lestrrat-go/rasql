@@ -31,6 +31,21 @@ func TestTemplateCompilesAndBindsInPlaceholderOrder(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestQueryDefWithBindingsClonesAndValidates(t *testing.T) {
+	template, err := namedsql.Parse("users", `SELECT id FROM users WHERE id = {{bind "id"}} AND limit = {{bind "limit"}}`)
+	require.NoError(t, err)
+	compiled, err := template.Compile(dialect.SQLite())
+	require.NoError(t, err)
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"limit": {Go: schema.GoBinding{Type: "int"}},
+	})
+	require.NoError(t, err)
+	definition.Binds[1].Binding.Go.Imports = []schema.GoImport{{Path: "changed"}}
+	require.Nil(t, compiled.QueryDef().Binds[1].Binding)
+	_, err = compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{"missing": {Go: schema.GoBinding{Type: "int"}}})
+	require.ErrorContains(t, err, "does not name a query parameter")
+}
+
 func TestTemplateCompilePreservesCompleteLiteralMarker(t *testing.T) {
 	const literalMarker = "\x00rasql-bind-0\x00"
 	parsed, err := namedsql.Parse("marker_collision", literalMarker+"{{bind \"a\"}}")

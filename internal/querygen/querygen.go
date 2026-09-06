@@ -17,10 +17,10 @@ import (
 )
 
 // GoSource returns a Go function that creates this static statement. A bind
-// that names no column generates an any parameter, as it always has. A bind
-// that names a column resolves it against tables and generates that
-// column's Go type instead; tables is optional and needed only when at
-// least one bind names a column.
+// that names no column generates an any parameter unless an explicit binding
+// supplies its type. A bind that names a column resolves it against tables
+// and generates its nullable or non-null Go type; tables is optional and
+// needed only when at least one bind names a column.
 func GoSource(def namedsql.QueryDef, packageName string, functionName string, tables ...schema.TableDef) ([]byte, error) {
 	return GoSourceInDir("", def, packageName, functionName, tables...)
 }
@@ -57,16 +57,30 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 	parameterTypes := make([]string, len(def.Binds))
 	parameterRefs := make([]schemagen.BindingRef, len(def.Binds))
 	parameterBound := make([]bool, len(def.Binds))
+	parameterNullable := make([]bool, len(def.Binds))
 	needsTime := false
 	bindingSet := schemagen.NewBindingSet(schemagen.BindingSetOptions{Dir: dir, Reserved: bindingReservedNames(packageName, functionName, stmtName, def)})
 	for index, bind := range def.Binds {
+		var column schema.ColumnDef
 		if bind.Column == "" {
-			parameterTypes[index] = defaultParameterType
-			continue
-		}
-		column, err := resolveColumn(bind, tables)
-		if err != nil {
-			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
+			if bind.Binding == nil {
+				parameterTypes[index] = defaultParameterType
+				continue
+			}
+			column = schema.ColumnDef{Name: bind.Name, Type: schema.TextType{}, GoBinding: bind.Binding.Go.Clone()}
+			parameterNullable[index] = bind.Binding.Nullable
+		} else {
+			var err error
+			column, err = resolveColumn(bind, tables)
+			if err != nil {
+				return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
+			}
+			if bind.Binding != nil {
+				column.GoBinding = bind.Binding.Go.Clone()
+				parameterNullable[index] = bind.Binding.Nullable
+			} else {
+				parameterNullable[index] = column.Nullable
+			}
 		}
 		ref, err := bindingSet.Add(column)
 		if err != nil {
@@ -83,7 +97,7 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 			parameterTypes[index] = defaultParameterType
 			continue
 		}
-		parameterType, err := bindingSet.Type(parameterRefs[index], false)
+		parameterType, err := bindingSet.Type(parameterRefs[index], parameterNullable[index])
 		if err != nil {
 			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
 		}

@@ -174,7 +174,7 @@ func TestGoSourceUntypedBindGoldenBytes(t *testing.T) {
 	require.Equal(t, want, string(source))
 }
 
-func TestGoSourceNullableReferencedColumnKeepsNonNullParameter(t *testing.T) {
+func TestGoSourceNullableReferencedColumnUsesNullableParameter(t *testing.T) {
 	parsed, err := namedsql.Parse("user_by_email", `SELECT id FROM users WHERE email = {{bind "email" users.email}}`)
 	require.NoError(t, err)
 	compiled, err := parsed.Compile(dialect.PostgreSQL())
@@ -185,7 +185,52 @@ func TestGoSourceNullableReferencedColumnKeepsNonNullParameter(t *testing.T) {
 	}}
 	source, err := querygen.GoSource(compiled.QueryDef(), "generated", "UserByEmail", table)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "func UserByEmail(email string)")
+	require.Contains(t, string(source), "func UserByEmail(email *string)")
+}
+
+func TestGoSourceExplicitBindingsResolveStandaloneAndOverrideColumns(t *testing.T) {
+	parsed, err := namedsql.Parse("users", `SELECT id FROM users WHERE nickname = {{bind "nickname" users.nickname}} LIMIT {{bind "limit"}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	table := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+	}}
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"limit":    {Go: schema.GoBinding{Type: "int"}},
+		"nickname": {Go: schema.GoBinding{Type: "UserName", NullableType: "NullableUserName"}, Nullable: false},
+	})
+	require.NoError(t, err)
+	source, err := querygen.GoSource(definition, "generated", "Users", table)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func Users(nickname UserName, limit int)")
+}
+
+func TestGoSourceExplicitBindingStillRequiresReferencedColumn(t *testing.T) {
+	parsed, err := namedsql.Parse("users", `SELECT id FROM users WHERE nickname = {{bind "nickname" users.missing}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"nickname": {Go: schema.GoBinding{Type: "string"}},
+	})
+	require.NoError(t, err)
+	_, err = querygen.GoSource(definition, "generated", "Users", schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	require.ErrorContains(t, err, "has no column missing")
+}
+
+func TestGoSourceExplicitBindingRejectsMalformedType(t *testing.T) {
+	parsed, err := namedsql.Parse("users", `SELECT id FROM users WHERE id = {{bind "id"}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"id": {Go: schema.GoBinding{Type: "[]"}},
+	})
+	require.NoError(t, err)
+	_, err = querygen.GoSource(definition, "generated", "Users")
+	require.ErrorContains(t, err, "does not parse")
 }
 
 // TestGoSourceTypedBindGoldenBytes pins the exact emitted bytes of the case

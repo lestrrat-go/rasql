@@ -8,6 +8,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -89,6 +90,27 @@ func TestStoreCompilesTypedQuery(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(generated), "func UserByEmail(email string)")
 	require.NoError(t, store.Check())
+}
+
+func TestStoreCompilesExplicitStaticParameter(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users LIMIT {{bind "limit"}}`,
+			Function: "LimitedUsers",
+			Output:   "limited_users_gen.go",
+			Bindings: map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}},
+		}},
+	}
+	require.NoError(t, store.Write())
+	generated, err := os.ReadFile(filepath.Join(root, "store", "limited_users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(generated), "func LimitedUsers(limit int)")
 }
 
 // TestStoreRejectsTypedBindNamingAnAbsentTable requires Plan to fail, naming

@@ -26,6 +26,10 @@ A typed query is built from the same `query` expressions [The SQL builder](../co
 When a bind names a schema column, generated static query code uses that
 column's resolved `GoBinding` type. This keeps a named application ID or
 scanner-backed value identical between query parameters and generated rows.
+Nullable referenced columns use their nullable generated form. Query
+configuration can set an explicit binding for a standalone parameter or
+override a nullable column deliberately; unconfigured standalone parameters
+remain `any`.
 
 ## Operation reference
 

@@ -60,7 +60,7 @@ func TestBindingsRoundTrip(t *testing.T) {
  dbsql,err:=sql.Open("sqlite",":memory:"); if err!=nil { t.Fatal(err) }; defer dbsql.Close(); dbsql.SetMaxOpenConns(1)
  db,err:=rasql.New(dbsql,dialect.SQLite()); if err!=nil { t.Fatal(err) }; ctx:=context.Background()
  if err=rasql.CreateTable(ctx,db,generated.Users()); err!=nil { t.Fatal(err) }; if err=rasql.CreateTable(ctx,db,generated.Orders()); err!=nil { t.Fatal(err) }
- if _,err=rasql.Insert(ctx,db,generated.Users(),generated.UsersRow{ID:types.UserID("u1")}); err!=nil { t.Fatal(err) }
+ nickname:="Ada"; if _,err=rasql.Insert(ctx,db,generated.Users(),generated.UsersRow{ID:types.UserID("u1"),Nickname:&nickname}); err!=nil { t.Fatal(err) }; if _,err=rasql.Insert(ctx,db,generated.Users(),generated.UsersRow{ID:types.UserID("u2")}); err!=nil { t.Fatal(err) }
  want:=generated.OrdersRow{ID:1,UserID:types.UserID("u1"),OtherID:other.OtherID("o1"),Amount:types.NullableDecimal{Data:"12.50",Valid:true},Payload:types.NullableJSON{Data:` + "`" + `{"ok":true}` + "`" + `,Valid:true}}
  if _,err=rasql.Insert(ctx,db,generated.Orders(),want); err!=nil { t.Fatal(err) }
  nulls:=generated.OrdersRow{ID:2,UserID:types.UserID("u1"),OtherID:other.OtherID("o2"),Amount:types.NullableDecimal{},Payload:types.NullableJSON{}}
@@ -69,6 +69,9 @@ func TestBindingsRoundTrip(t *testing.T) {
  got,err=rasql.SelectFrom(generated.Orders()).WhereEqual(generated.Orders().ID(),int64(2)).One(ctx,db); if err!=nil { t.Fatal(err) }; if got.Amount.Valid || got.Payload.Valid { t.Fatalf("NULL wrappers %#v",got) }
  rows,err:=generated.Orders().User().Load(ctx,db,[]generated.OrdersRow{got}); if err!=nil { t.Fatal(err) }; if rows[types.UserID("u1")].ID!=types.UserID("u1") { t.Fatalf("relationship %#v",rows) }
  staticRows,err:=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByUser(types.UserID("u1"))); if err!=nil { t.Fatal(err) }; if len(staticRows)!=2 || staticRows[0].UserID!=types.UserID("u1") { t.Fatalf("static rows %#v",staticRows) }
+ namedRows,err:=rasql.QueryRenderedAll[generated.UsersRow](ctx,db,generated.UserByNickname(&nickname)); if err!=nil { t.Fatal(err) }; if len(namedRows)!=1 || namedRows[0].Nickname==nil || *namedRows[0].Nickname!=nickname { t.Fatalf("named rows %#v",namedRows) }
+ namedRows,err=rasql.QueryRenderedAll[generated.UsersRow](ctx,db,generated.UserByNickname(nil)); if err!=nil { t.Fatal(err) }; if len(namedRows)!=1 || namedRows[0].Nickname!=nil { t.Fatalf("NULL named rows %#v",namedRows) }
+ limitedRows,err:=rasql.QueryRenderedAll[generated.UsersRow](ctx,db,generated.LimitedUsers(1)); if err!=nil { t.Fatal(err) }; if len(limitedRows)!=1 { t.Fatalf("limited rows %#v",limitedRows) }
  if err=rasql.CreateTable(ctx,db,generated.BadValues()); err!=nil { t.Fatal(err) }; if _,err=dbsql.ExecContext(ctx,"INSERT INTO bad_values (id,value) VALUES (?,?)",1,"bad"); err!=nil { t.Fatal(err) }; _,err=rasql.SelectFrom(generated.BadValues()).One(ctx,db); if err==nil || !strings.Contains(err.Error(), "NoScan") { t.Fatalf("want NoScan scan error, got %v",err) }
 }
 `
@@ -97,16 +100,34 @@ func TestGeneratedGoBindingsRunInSQLiteConsumer(t *testing.T) {
 	require.NoError(t, err)
 	querySource, err := querygen.GoSourceInDir(dir, compiled.QueryDef(), "generated", "OrderByUser", users, orders)
 	require.NoError(t, err)
+	nicknameQuery, err := namedsql.Parse("user_by_nickname", `SELECT id, nickname FROM users WHERE nickname IS {{bind "nickname" users.nickname}}`)
+	require.NoError(t, err)
+	nicknameCompiled, err := nicknameQuery.Compile(dialect.SQLite())
+	require.NoError(t, err)
+	nicknameSource, err := querygen.GoSourceInDir(dir, nicknameCompiled.QueryDef(), "generated", "UserByNickname", users)
+	require.NoError(t, err)
+	limitQuery, err := namedsql.Parse("limited_users", `SELECT id, nickname FROM users LIMIT {{bind "limit"}}`)
+	require.NoError(t, err)
+	limitCompiled, err := limitQuery.Compile(dialect.SQLite())
+	require.NoError(t, err)
+	limitDefinition, err := limitCompiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}})
+	require.NoError(t, err)
+	limitSource, err := querygen.GoSourceInDir(dir, limitDefinition, "generated", "LimitedUsers", users)
+	require.NoError(t, err)
 	storeSource, err := schemagen.PackageSourceInDir(dir, "generated", users, orders, bad)
 	require.NoError(t, err)
 	require.Contains(t, string(storeSource), "types2.UserID")
 	require.Contains(t, string(storeSource), "types.OtherID")
 	require.Contains(t, string(storeSource), "NullableDecimal")
 	require.Contains(t, string(querySource), "func OrderByUser(id types.UserID)")
+	require.Contains(t, string(nicknameSource), "func UserByNickname(nickname *string)")
+	require.Contains(t, string(limitSource), "func LimitedUsers(limit int)")
 	packageDir := filepath.Join(dir, "generated")
 	require.NoError(t, os.Mkdir(packageDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "store_gen.go"), storeSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "query_gen.go"), querySource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "nickname_gen.go"), nicknameSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "limit_gen.go"), limitSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "types.go"), []byte(bindingConsumerTypes), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "consumer_test.go"), []byte(bindingConsumerTest), 0o600))
 	command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "./...")
@@ -119,7 +140,7 @@ func bindingTables() (schema.TableDef, schema.TableDef, schema.TableDef) {
 	userID := &schema.GoBinding{Type: "types.UserID", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "types"}}}
 	otherID := &schema.GoBinding{Type: "types.OtherID", Imports: []schema.GoImport{{Path: "example.com/other/v2", Name: "types"}}}
 	orders := schema.TableDef{Name: "orders", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.TextType{}, GoBinding: userID}, {Name: "other_id", Type: schema.TextType{}, GoBinding: otherID}, {Name: "amount", Type: schema.DecimalType{Precision: 10, Scale: schema.NewDecimalScale(2)}, Nullable: true, GoBinding: &schema.GoBinding{Type: "types.Decimal", NullableType: "types.NullableDecimal", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "types"}}}}, {Name: "payload", Type: schema.JSONType{}, Nullable: true, GoBinding: &schema.GoBinding{Type: "types.JSONValue", NullableType: "types.NullableJSON", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "types"}}}}}, ForeignKeys: []schema.ForeignKeyDef{{Name: "orders_user_fk", Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}, Relationships: []schema.RelationshipDef{{Name: "user", Kind: schema.RelationshipBelongsTo, Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}}
-	users := schema.TableDef{Name: "users", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.TextType{}, GoBinding: userID}}}
+	users := schema.TableDef{Name: "users", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.TextType{}, GoBinding: userID}, {Name: "nickname", Type: schema.TextType{}, Nullable: true}}}
 	bad := schema.TableDef{Name: "bad_values", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.TextType{}, Nullable: true, GoBinding: &schema.GoBinding{Type: "NoScan", NullableType: "NoScan"}}}}
 	return users, orders, bad
 }

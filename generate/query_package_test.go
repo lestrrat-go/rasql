@@ -673,6 +673,26 @@ func TestQueryPackageTypesBindsFromTables(t *testing.T) {
 	require.Contains(t, string(generated), "func UserByEmail(email string)")
 }
 
+func TestQueryPackageAppliesExplicitParameterBindings(t *testing.T) {
+	root := t.TempDir()
+	queries := generate.QueryPackage{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users LIMIT {{bind "limit"}}`,
+			Function: "Users",
+			Output:   "users_gen.go",
+			Bindings: map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}},
+		}},
+	}
+	require.NoError(t, queries.Write())
+	generated, err := os.ReadFile(filepath.Join(root, "store", "users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(generated), "func Users(limit int)")
+}
+
 // TestQueryPackageRejectsTypedBindWithoutTables pins the "error, never a
 // silent any" decision on the standalone path: a QueryPackage with no
 // Tables cannot resolve a bind that names a column, and Plan fails naming

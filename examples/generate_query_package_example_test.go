@@ -7,6 +7,8 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // Example_generate_query_package builds a generate.QueryPackage from static
@@ -37,7 +39,7 @@ func Example_generate_query_package() {
 		Dialect: dialect.PostgreSQL(),
 		Queries: []generate.Query{
 			{Input: template, Function: "UserByEmail", Output: "user_by_email_gen.go"},
-			{SQL: "SELECT count(*) FROM users", Function: "CountUsers", Output: "count_users_gen.go"},
+			{SQL: `SELECT count(*) FROM users LIMIT {{bind "limit"}}`, Function: "CountUsers", Output: "count_users_gen.go", Bindings: map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}}},
 		},
 	}
 
