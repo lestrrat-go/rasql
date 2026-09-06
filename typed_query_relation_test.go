@@ -55,6 +55,11 @@ func TestTypedReusableQueryValues(t *testing.T) {
 	require.Equal(t, dtoSQL.Args(), []any{7})
 	require.Contains(t, baseStatement.SQL(), `"users"."id"`)
 	require.NotContains(t, dtoSQL.SQL(), `"users"."id", "users"."email"`)
+	invalid := rasql.RebindResult[reusableEmail](base,
+		[]query.ResultColumn{{Name: "email", Type: schema.TextType{}}},
+		users.Column("id"), users.Column("email"))
+	_, err = invalid.Build(dialect.PostgreSQL())
+	require.ErrorContains(t, err, "result columns count")
 }
 
 func TestRenderSelectBuilderQueryAndReplaceProject(t *testing.T) {

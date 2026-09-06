@@ -228,7 +228,16 @@ func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (stmt.Statement, error) 
 	if b.err != nil {
 		return stmt.Statement{}, b.err
 	}
-	return b.builder.WithDialect(d).Build()
+	statement, err := b.Select()
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	if len(b.resultColumns) > 0 {
+		if _, err := query.ResultOf(statement, b.resultColumns...); err != nil {
+			return stmt.Statement{}, err
+		}
+	}
+	return render.Select(d, statement)
 }
 
 func (b TypedSelectBuilder[T]) Select() (query.Select, error) {
