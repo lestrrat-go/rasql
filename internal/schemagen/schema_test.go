@@ -687,12 +687,16 @@ func TestNullableComposite(t *testing.T) {
  db, err := rasql.New(raw, dialect.SQLite()); require.NoError(t, err)
  for _, statement := range []string{"CREATE TABLE parents (tenant_id INTEGER NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (tenant_id,id))", "CREATE TABLE children (id INTEGER PRIMARY KEY, tenant_id INTEGER, parent_id INTEGER)", "INSERT INTO parents VALUES (7,1),(8,1)", "INSERT INTO children VALUES (10,7,1),(11,8,1),(12,NULL,1)"} { _, err = raw.ExecContext(t.Context(), statement); require.NoError(t, err) }
  seven, one := int64(7), int64(1); eight := int64(8)
- loaded, err := generated.Children().Parents().Load(t.Context(), db, []generated.ChildrenRow{{ID:10, TenantID:&seven, ParentID:&one}, {ID:11, TenantID:&eight, ParentID:&one}, {ID:12, TenantID:nil, ParentID:&one}})
- require.NoError(t, err); require.Len(t, loaded, 2)
- require.Len(t, loaded, 2)
- seen := make(map[int64]bool)
- for _, row := range loaded { seen[row.TenantID] = true }
- require.True(t, seen[7]); require.True(t, seen[8])
+	loaded, err := generated.Children().Parents().Load(t.Context(), db, []generated.ChildrenRow{{ID:10, TenantID:&seven, ParentID:&one}, {ID:11, TenantID:&eight, ParentID:&one}, {ID:12, TenantID:nil, ParentID:&one}})
+	require.NoError(t, err); require.Len(t, loaded, 2)
+	require.Len(t, loaded, 2)
+	seen := make(map[int64]bool)
+	for _, row := range loaded { seen[row.TenantID] = true }
+	require.True(t, seen[7]); require.True(t, seen[8])
+	inverse, err := generated.Parents().Children().Load(t.Context(), db, []generated.ParentsRow{{TenantID:7, ID:1}, {TenantID:8, ID:1}})
+	require.NoError(t, err)
+	require.Equal(t, int64(10), inverse[generated.ParentsTableChildrenKey{TenantID:7, ID:1}][0].ID)
+	require.Equal(t, int64(11), inverse[generated.ParentsTableChildrenKey{TenantID:8, ID:1}][0].ID)
 }
 `
 

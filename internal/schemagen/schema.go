@@ -789,25 +789,6 @@ func validateRowName(table schema.TableDef) error {
 	return nil
 }
 
-func relationshipSupported(child, parent schema.TableDef, relationship schema.RelationshipDef) (schema.ColumnDef, schema.ColumnDef, string, bool) {
-	if relationship.Kind != schema.RelationshipBelongsTo || len(relationship.Columns) != 1 || len(relationship.ReferencedColumns) != 1 {
-		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
-	}
-	childColumn, ok := child.Column(relationship.Columns[0])
-	if !ok || childColumn.Nullable {
-		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
-	}
-	parentColumn, ok := parent.Column(relationship.ReferencedColumns[0])
-	if !ok || parentColumn.Nullable || len(parent.PrimaryKey) != 1 || parent.PrimaryKey[0] != parentColumn.Name {
-		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
-	}
-	keyType, ok := relationKeyType(parentColumn)
-	if !ok || keyType != ColumnGoType(childColumn) {
-		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
-	}
-	return parentColumn, childColumn, keyType, true
-}
-
 func relationshipColumnsSupported(child, parent schema.TableDef, relationship schema.RelationshipDef) ([]schema.ColumnDef, []schema.ColumnDef, string, bool) {
 	if (relationship.Kind != schema.RelationshipBelongsTo && relationship.Kind != schema.RelationshipHasOne && relationship.Kind != schema.RelationshipHasMany) || len(relationship.Columns) == 0 || len(relationship.Columns) != len(relationship.ReferencedColumns) {
 		return nil, nil, "", false
