@@ -137,6 +137,9 @@ func TestDumpPostgreSQLSequenceExportReplayProof(t *testing.T) {
 	require.Equal(t, int64(11), sourceSecond)
 	require.Equal(t, int64(10), sourceCustom)
 
+	dumpMustExec(t, ctx, source, `DROP TABLE sequence_cases CASCADE`)
+	dumpMustExec(t, ctx, source, `DROP SEQUENCE shared_sequence`)
+	dumpMustExec(t, ctx, source, `DROP SEQUENCE custom_sequence`)
 	target := dbtest.PostgreSQLDB(t)
 	_, err = target.ExecContext(ctx, statement+";")
 	require.NoError(t, err)
