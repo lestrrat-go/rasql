@@ -196,6 +196,8 @@ func (r Runner) upsertProgress(ctx context.Context, connection executor, migrati
 	statement := "INSERT INTO " + r.progressSQL + " (" + r.idSQL + ", " + r.checksumSQL + ", " + r.progressColumn("direction") + ", " + r.progressColumn("source_index") + ", " + r.progressColumn("source") + ", " + r.progressColumn("next_index") + ") VALUES (" + first + ", " + second + ", " + third + ", " + fourth + ", " + fifth + ", " + sixth + ")"
 	if r.dialect.Name() == "mysql" {
 		statement += " ON DUPLICATE KEY UPDATE " + r.checksumSQL + "=VALUES(" + r.checksumSQL + "), " + r.progressColumn("direction") + "=VALUES(" + r.progressColumn("direction") + "), " + r.progressColumn("source_index") + "=VALUES(" + r.progressColumn("source_index") + "), " + r.progressColumn("source") + "=VALUES(" + r.progressColumn("source") + "), " + r.progressColumn("next_index") + "=VALUES(" + r.progressColumn("next_index") + ")"
+	} else if r.dialect.Name() == "postgresql" {
+		statement += " ON CONFLICT (" + r.idSQL + ") DO UPDATE SET " + r.checksumSQL + "=EXCLUDED." + r.checksumSQL + ", " + r.progressColumn("direction") + "=EXCLUDED." + r.progressColumn("direction") + ", " + r.progressColumn("source_index") + "=EXCLUDED." + r.progressColumn("source_index") + ", " + r.progressColumn("source") + "=EXCLUDED." + r.progressColumn("source") + ", " + r.progressColumn("next_index") + "=EXCLUDED." + r.progressColumn("next_index")
 	}
 	if _, err := connection.ExecContext(ctx, statement, migration.id, migration.checksum, direction, index, migrationSource(migration, direction, index), index); err != nil {
 		return err

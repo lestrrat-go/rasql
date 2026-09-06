@@ -132,6 +132,15 @@ func prepareMigrations(migrations []Migration) ([]preparedMigration, error) {
 	return prepared, nil
 }
 
+func needsProgress(migrations []preparedMigration) bool {
+	for _, migration := range migrations {
+		if migration.mode == ExecutionModeNonTransactional {
+			return true
+		}
+	}
+	return false
+}
+
 type queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }

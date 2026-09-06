@@ -116,7 +116,7 @@ func (r Runner) RevertPlan(ctx context.Context, target RevertTarget, migrations 
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return err
 		}
-		if r.dialect.Name() == "mysql" || r.dialect.Name() == "postgresql" {
+		if r.dialect.Name() == "mysql" || (r.dialect.Name() == "postgresql" && needsProgress(prepared)) {
 			if err := r.ensureProgress(ctx, connection); err != nil {
 				return err
 			}

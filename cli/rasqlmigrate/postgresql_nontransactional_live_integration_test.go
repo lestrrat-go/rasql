@@ -29,6 +29,7 @@ func TestPostgreSQLCLIConcurrentIndexRoundTrip(t *testing.T) {
 	write("001_create_users", "001_create_users.down.sql", "DROP TABLE users;\n")
 	write("002_users_index", "001_users_index.up.sql", "CREATE INDEX CONCURRENTLY users_id_idx ON users (id);\n")
 	write("002_users_index", "001_users_index.down.sql", "DROP INDEX CONCURRENTLY users_id_idx;\n")
+	require.NoError(t, os.WriteFile(filepath.Join(migrations, "002_users_index", ".rasql-mode"), []byte("nontransactional\n"), 0o600))
 	var output bytes.Buffer
 	require.NoError(t, Run([]string{"apply", "-dir", migrations, "-dialect", "postgresql", "-dsn", dsn}, &output, &output))
 	var valid, ready bool
