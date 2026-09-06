@@ -7,10 +7,12 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dberror"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 type bulkTestRow struct{}
@@ -158,6 +160,105 @@ func TestBulkPlanStopsAtFailedBatchAndKeepsOriginalIndexes(t *testing.T) {
 	require.Equal(t, []int{2}, outcome.Failed.Indexes)
 	require.Equal(t, rasql.OutcomeRejected, outcome.Failed.Certainty)
 	require.Len(t, handle.calls, 2)
+}
+
+type bulkCategoryClassifier struct{ category dberror.Category }
+
+func (c bulkCategoryClassifier) Classify(error) (dberror.Metadata, bool) {
+	return dberror.Metadata{Category: c.category}, true
+}
+
+func TestConstraintFailureClassifierOnlyRejectsConstraintCategories(t *testing.T) {
+	for _, test := range []struct {
+		category  dberror.Category
+		certainty rasql.FailureCertainty
+	}{
+		{dberror.UniqueViolation, rasql.OutcomeRejected},
+		{dberror.ForeignKeyViolation, rasql.OutcomeRejected},
+		{dberror.NotNullViolation, rasql.OutcomeRejected},
+		{dberror.CheckViolation, rasql.OutcomeRejected},
+		{dberror.TransactionConflict, rasql.OutcomeUnknown},
+		{dberror.Unknown, rasql.OutcomeUnknown},
+	} {
+		classifier := rasql.ConstraintFailureClassifier{Classifiers: []dberror.Classifier{bulkCategoryClassifier{category: test.category}}}
+		require.Equal(t, test.certainty, classifier.Certainty(fmt.Errorf("driver error")))
+	}
+	classifier := rasql.ConstraintFailureClassifier{}
+	require.Equal(t, rasql.OutcomeUnknown, classifier.Certainty(nil))
+}
+
+func TestBulkAtomicRollbackClearsConfirmedProgress(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+	sqlDB.SetMaxOpenConns(1)
+	_, err = sqlDB.Exec(`CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT NOT NULL UNIQUE)`)
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(`INSERT INTO items (a) VALUES ('duplicate')`)
+	require.NoError(t, err)
+	table := rasql.MustTableOf[bulkTestRow](schema.TableDef{
+		Name: "items", PrimaryKey: []string{"id"},
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways}, {Name: "a", Type: schema.TextType{}}},
+	})
+	a := query.TypedColumnOf[bulkTestRow, string](table.Column("a"))
+	makeBulk := func(first string) rasql.BulkPlan[bulkTestRow] {
+		firstPlan, planErr := rasql.NewCreatePlan(table, rasql.SetField(a, first))
+		require.NoError(t, planErr)
+		secondPlan, planErr := rasql.NewCreatePlan(table, rasql.SetField(a, "duplicate"))
+		require.NoError(t, planErr)
+		bulk, planErr := rasql.NewBulkPlan(firstPlan, secondPlan)
+		require.NoError(t, planErr)
+		return bulk
+	}
+	db, err := rasql.New(sqlDB, dialect.SQLite())
+	require.NoError(t, err)
+	classifier := rasql.ConstraintFailureClassifier{Classifiers: []dberror.Classifier{bulkCategoryClassifier{category: dberror.UniqueViolation}}}
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, makeBulk("non-atomic"), rasql.BulkOptions{MaxRows: 1, Classifier: classifier})
+	require.Error(t, err)
+	require.Equal(t, []rasql.InputRange{{First: 0, Last: 0}}, outcome.Completed)
+	require.Equal(t, rasql.OutcomeRejected, outcome.Failed.Certainty)
+	require.True(t, outcome.Durable)
+	var count int
+	require.NoError(t, sqlDB.QueryRow(`SELECT count(*) FROM items WHERE a = 'non-atomic'`).Scan(&count))
+	require.Equal(t, 1, count)
+
+	outcome, err = rasql.ExecBulkCreate(t.Context(), db, makeBulk("atomic"), rasql.BulkOptions{MaxRows: 1, Atomic: true, Classifier: classifier})
+	require.Error(t, err)
+	require.Empty(t, outcome.Completed)
+	require.Equal(t, rasql.OutcomeRejected, outcome.Failed.Certainty)
+	require.False(t, outcome.Durable)
+	require.NoError(t, sqlDB.QueryRow(`SELECT count(*) FROM items WHERE a = 'atomic'`).Scan(&count))
+	require.Equal(t, 0, count)
+}
+
+func TestBulkCallerTransactionIsNotDurable(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+	sqlDB.SetMaxOpenConns(1)
+	_, err = sqlDB.Exec(`CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT NOT NULL)`)
+	require.NoError(t, err)
+	table := rasql.MustTableOf[bulkTestRow](schema.TableDef{
+		Name: "items", PrimaryKey: []string{"id"},
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways}, {Name: "a", Type: schema.TextType{}}},
+	})
+	a := query.TypedColumnOf[bulkTestRow, string](table.Column("a"))
+	plan, err := rasql.NewCreatePlan(table, rasql.SetField(a, "caller"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(plan)
+	require.NoError(t, err)
+	tx, err := sqlDB.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	db, err := rasql.New(tx, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []rasql.InputRange{{First: 0, Last: 0}}, outcome.Completed)
+	require.False(t, outcome.Durable)
+	require.NoError(t, tx.Rollback())
+	var count int
+	require.NoError(t, sqlDB.QueryRow(`SELECT count(*) FROM items WHERE a = 'caller'`).Scan(&count))
+	require.Zero(t, count)
 }
 
 func pointer(value string) *string { return &value }

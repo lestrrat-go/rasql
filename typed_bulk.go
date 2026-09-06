@@ -194,12 +194,18 @@ func executeBulkBatches[T any](ctx context.Context, db DB, groups []bulkBatch[T]
 			}
 			indexes := append([]int(nil), group.indexes...)
 			outcome.Failed = &FailedBatch{Indexes: indexes, Certainty: certainty, Err: wrapped}
+			outcome.Durable = !bulkDBIsTransaction(db)
 			return outcome, wrapped
 		}
 		outcome.Completed = appendBulkRange(outcome.Completed, group.indexes)
 	}
-	outcome.Durable = db.Handle() != nil
+	outcome.Durable = !bulkDBIsTransaction(db)
 	return outcome, nil
+}
+
+func bulkDBIsTransaction(db DB) bool {
+	transaction, ok := db.Handle().(*sql.Tx)
+	return ok && transaction != nil
 }
 
 type bulkBatch[T any] struct {
