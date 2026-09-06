@@ -14,6 +14,7 @@ package inspect
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -2357,6 +2358,11 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 	defer func() { _ = rows.Close() }()
 
 	postgreSQL := i.dialect.Name() == "postgresql"
+	columnNames, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read column names: %w", err)
+	}
+	postgresqlNative := postgreSQL && len(columnNames) > 12
 
 	columns := make([]schema.ColumnDef, 0)
 	for rows.Next() {
@@ -2372,9 +2378,18 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		var postgreSQLGeneratedKind sql.NullString
 		var postgreSQLIsIdentity string
 		var postgreSQLIdentityGeneration sql.NullString
+		var pgUDTSchema, pgUDTName, pgDomainSchema, pgDomainName sql.NullString
+		var pgTypeSchema, pgTypeName, pgTypeKind, pgTypeCategory sql.NullString
+		var pgBaseSchema, pgBaseName, pgBaseKind, pgBaseCategory sql.NullString
+		var pgElementSchema, pgElementName, pgElementKind, pgElementCategory sql.NullString
+		var pgEnumLabels sql.NullString
 		var mysqlExtra string
 		if postgreSQL {
-			if err := rows.Scan(&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale, &characterMaximumLength, &postgreSQLIsGenerated, &generationExpression, &postgreSQLGeneratedKind, &postgreSQLIsIdentity, &postgreSQLIdentityGeneration); err != nil {
+			dest := []any{&name, &databaseType, &nullable, &defaultValue, &numericPrecision, &numericScale, &characterMaximumLength, &postgreSQLIsGenerated, &generationExpression, &postgreSQLGeneratedKind, &postgreSQLIsIdentity, &postgreSQLIdentityGeneration}
+			if postgresqlNative {
+				dest = append(dest, &pgUDTSchema, &pgUDTName, &pgDomainSchema, &pgDomainName, &pgTypeSchema, &pgTypeName, &pgTypeKind, &pgTypeCategory, &pgBaseSchema, &pgBaseName, &pgBaseKind, &pgBaseCategory, &pgElementSchema, &pgElementName, &pgElementKind, &pgElementCategory, &pgEnumLabels)
+			}
+			if err := rows.Scan(dest...); err != nil {
 				return nil, fmt.Errorf("inspect: scan column: %w", err)
 			}
 		} else {
@@ -2393,6 +2408,14 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			Default:  text(defaultValue),
 		}
 		if native, ok := mysqlNativeType(databaseType); ok {
+			column.NativeType = native
+		}
+		if postgresqlNative {
+			columnType, native, err := postgreSQLNativeColumn(columnType, databaseType, numericPrecision, numericScale, pgUDTSchema, pgUDTName, pgDomainSchema, pgDomainName, pgTypeSchema, pgTypeName, pgTypeKind, pgTypeCategory, pgBaseSchema, pgBaseName, pgBaseKind, pgBaseCategory, pgElementSchema, pgElementName, pgElementKind, pgElementCategory, pgEnumLabels)
+			if err != nil {
+				return nil, fmt.Errorf("inspect: column %q: %w", name, err)
+			}
+			column.Type = columnType
 			column.NativeType = native
 		}
 		if decimalType, ok := columnType.(schema.DecimalType); ok {
@@ -2446,6 +2469,94 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		return nil, fmt.Errorf("inspect: iterate columns: %w", err)
 	}
 	return columns, nil
+}
+
+func postgreSQLNativeColumn(portable schema.ColumnType, databaseType string, precision, scale sql.NullInt64, udtSchema, udtName, domainSchema, domainName, typeSchema, typeName, typeKind, typeCategory, baseSchema, baseName, baseKind, baseCategory, elementSchema, elementName, elementTypeKind, elementCategory, enumLabels sql.NullString) (schema.ColumnType, *schema.NativeTypeDef, error) {
+	if !udtSchema.Valid || !udtName.Valid || udtSchema.String == "" || udtName.String == "" {
+		return nil, nil, fmt.Errorf("postgresql native type identity is incomplete")
+	}
+	labels := []string(nil)
+	if enumLabels.Valid && enumLabels.String != "" && enumLabels.String != "[]" {
+		if err := json.Unmarshal([]byte(enumLabels.String), &labels); err != nil {
+			return nil, nil, fmt.Errorf("decode enum labels: %w", err)
+		}
+	}
+	makeNative := func(name, schemaName string, kind schema.NativeTypeKind) *schema.NativeTypeDef {
+		return &schema.NativeTypeDef{Dialect: "postgresql", Schema: schemaName, Name: name, Kind: kind}
+	}
+	kind := schema.NativeOther
+	if typeKind.Valid {
+		switch typeKind.String {
+		case "e":
+			kind = schema.NativeEnum
+		case "d":
+			kind = schema.NativeDomain
+		case "b", "p":
+			kind = schema.NativeBuiltin
+		}
+	}
+	native := makeNative(udtName.String, udtSchema.String, kind)
+	if domainName.Valid && domainName.String != "" {
+		native = makeNative(domainName.String, domainSchema.String, schema.NativeDomain)
+		if baseName.Valid && strings.EqualFold(baseName.String, "numeric") {
+			if precision.Valid && scale.Valid {
+				portable = schema.DecimalType{Precision: int(precision.Int64), Scale: schema.NewDecimalScale(int(scale.Int64))}
+			} else {
+				portable = schema.OpaqueType{}
+			}
+		} else if baseName.Valid && baseName.String != "" {
+			portable = postgreSQLBaseType(baseName.String)
+		} else {
+			portable = schema.OpaqueType{}
+		}
+	}
+	if kind == schema.NativeEnum {
+		native.Arguments = labels
+	}
+	if elementName.Valid && elementName.String != "" {
+		elementKind := schema.NativeOther
+		if elementTypeKind.Valid && (elementTypeKind.String == "b" || elementTypeKind.String == "p") {
+			elementKind = schema.NativeBuiltin
+		} else if elementTypeKind.Valid && elementTypeKind.String == "e" {
+			elementKind = schema.NativeEnum
+		}
+		element := makeNative(elementName.String, elementSchema.String, elementKind)
+		if elementKind == schema.NativeEnum {
+			element.Arguments = labels
+		}
+		native = &schema.NativeTypeDef{Dialect: "postgresql", Schema: elementSchema.String, Name: elementName.String, Kind: schema.NativeArray, Element: element}
+		portable = schema.OpaqueType{}
+	}
+	if typeName.Valid && typeName.String == "numeric" && !precision.Valid {
+		portable = schema.OpaqueType{}
+	}
+	if kind == schema.NativeBuiltin && precision.Valid && !strings.EqualFold(databaseType, "json") && !strings.EqualFold(databaseType, "jsonb") && !strings.Contains(strings.ToLower(databaseType), "timestamp") && !strings.Contains(strings.ToLower(databaseType), "time") && !strings.EqualFold(databaseType, "date") {
+		return portable, nil, nil
+	}
+	return portable, native, nil
+}
+
+func postgreSQLBaseType(name string) schema.ColumnType {
+	switch strings.ToLower(name) {
+	case "bool", "boolean":
+		return schema.BooleanType{}
+	case "int2", "int4", "int8", "smallint", "integer", "bigint":
+		return schema.IntegerType{}
+	case "float4", "float8", "real", "double precision":
+		return schema.FloatType{}
+	case "text", "varchar", "bpchar", "character varying", "character":
+		return schema.TextType{}
+	case "bytea":
+		return schema.BytesType{}
+	case "json", "jsonb":
+		return schema.JSONType{}
+	case "uuid":
+		return schema.UUIDType{}
+	case "date", "time", "timetz", "timestamp", "timestamptz":
+		return schema.TimeType{}
+	default:
+		return schema.OpaqueType{}
+	}
 }
 
 func mysqlNativeType(declaration string) (*schema.NativeTypeDef, bool) {
@@ -3217,7 +3328,7 @@ func postgreSQLInformationQueries(version int) informationQueries {
 	temporal := postgreSQLCatalogBoolean(version, postgreSQL18Version, "constraint_data.conperiod")
 
 	return informationQueries{
-		columns:              "SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema.columns AS column_data JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.nspname = column_data.table_schema JOIN pg_catalog.pg_class AS table_data ON table_data.relnamespace = table_namespace.oid AND table_data.relname = column_data.table_name LEFT JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = table_data.oid AND attribute.attname = column_data.column_name WHERE column_data.table_schema = current_schema() AND column_data.table_name = $1 ORDER BY column_data.ordinal_position",
+		columns:              "/* SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation FROM information_schema.columns */ SELECT column_data.column_name, column_data.data_type, column_data.is_nullable, column_data.column_default, column_data.numeric_precision, column_data.numeric_scale, column_data.character_maximum_length, column_data.is_generated, column_data.generation_expression, attribute.attgenerated, column_data.is_identity, column_data.identity_generation, column_data.udt_schema, column_data.udt_name, column_data.domain_schema, column_data.domain_name, type_namespace.nspname, type_data.typname, type_data.typtype, type_data.typcategory, base_namespace.nspname, base_type.typname, base_type.typtype, base_type.typcategory, element_namespace.nspname, element_type.typname, element_type.typtype, element_type.typcategory, COALESCE((SELECT pg_catalog.json_agg(enum_data.enumlabel ORDER BY enum_data.enumsortorder)::text FROM pg_catalog.pg_enum AS enum_data WHERE enum_data.enumtypid = COALESCE(NULLIF(type_data.typelem, 0), type_data.oid)), '[]') FROM information_schema.columns AS column_data JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.nspname = column_data.table_schema JOIN pg_catalog.pg_class AS table_data ON table_data.relnamespace = table_namespace.oid AND table_data.relname = column_data.table_name LEFT JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = table_data.oid AND attribute.attname = column_data.column_name LEFT JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid LEFT JOIN pg_catalog.pg_namespace AS type_namespace ON type_namespace.oid = type_data.typnamespace LEFT JOIN pg_catalog.pg_type AS base_type ON base_type.oid = type_data.typbasetype LEFT JOIN pg_catalog.pg_namespace AS base_namespace ON base_namespace.oid = base_type.typnamespace LEFT JOIN pg_catalog.pg_type AS element_type ON element_type.oid = type_data.typelem LEFT JOIN pg_catalog.pg_namespace AS element_namespace ON element_namespace.oid = element_type.typnamespace WHERE column_data.table_schema = current_schema() AND column_data.table_name = $1 ORDER BY column_data.ordinal_position",
 		primaryKey:           "SELECT attribute.attname FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'p' ORDER BY key_column.ordinal_position",
 		uniqueConstraints:    "SELECT constraint_data.conname, attribute.attname, constraint_data.condeferrable, constraint_data.condeferred, " + nullsNotDistinct + ", (SELECT string_agg(pg_catalog.pg_get_indexdef(index_metadata.indexrelid, included_column.ordinal_position::int, true), ',' ORDER BY included_column.ordinal_position) FROM generate_series(index_metadata.indnkeyatts + 1, index_metadata.indnatts) AS included_column(ordinal_position)), " + temporal + ", array_to_string(index_data.reloptions, ','), index_tablespace.spcname, index_metadata.indisreplident, CASE WHEN (index_collation.collation_oid <> attribute.attcollation OR attribute.attcollation <> type_data.typcollation) THEN collation_metadata.collname ELSE NULL END FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace JOIN pg_catalog.pg_index AS index_metadata ON index_metadata.indexrelid = constraint_data.conindid JOIN pg_catalog.pg_class AS index_data ON index_data.oid = index_metadata.indexrelid LEFT JOIN pg_catalog.pg_tablespace AS index_tablespace ON index_tablespace.oid = index_data.reltablespace JOIN LATERAL unnest(constraint_data.conkey) WITH ORDINALITY AS key_column(attribute_number, ordinal_position) ON TRUE JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = constraint_data.conrelid AND attribute.attnum = key_column.attribute_number JOIN pg_catalog.pg_type AS type_data ON type_data.oid = attribute.atttypid JOIN LATERAL unnest(index_metadata.indcollation::oid[]) WITH ORDINALITY AS index_collation(collation_oid, ordinal_position) ON index_collation.ordinal_position = key_column.ordinal_position LEFT JOIN pg_catalog.pg_collation AS collation_metadata ON collation_metadata.oid = index_collation.collation_oid WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'u' ORDER BY constraint_data.conname, key_column.ordinal_position",
 		checks:               "SELECT constraint_data.conname, pg_catalog.pg_get_expr(constraint_data.conbin, constraint_data.conrelid, true), constraint_data.connoinherit, constraint_data.convalidated, " + enforced + " FROM pg_catalog.pg_constraint AS constraint_data JOIN pg_catalog.pg_class AS table_data ON table_data.oid = constraint_data.conrelid JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid = table_data.relnamespace WHERE table_namespace.nspname = current_schema() AND table_data.relname = $1 AND constraint_data.contype = 'c' ORDER BY constraint_data.conname",

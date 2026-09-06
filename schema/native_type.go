@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -27,6 +28,46 @@ type NativeTypeDef struct {
 	Kind      NativeTypeKind `json:"Kind"`
 	Arguments []string       `json:"Arguments,omitempty"`
 	Element   *NativeTypeDef `json:"Element,omitempty"`
+}
+
+func (n NativeTypeDef) MarshalJSON() ([]byte, error) {
+	type nativeWire struct {
+		Dialect   string         `json:"Dialect"`
+		Schema    string         `json:"Schema,omitempty"`
+		Name      string         `json:"Name"`
+		Kind      NativeTypeKind `json:"Kind"`
+		Arguments *[]string      `json:"Arguments,omitempty"`
+		Element   *NativeTypeDef `json:"Element,omitempty"`
+	}
+	var arguments *[]string
+	if n.Arguments != nil {
+		copyOfArguments := append([]string(nil), n.Arguments...)
+		arguments = &copyOfArguments
+	}
+	return json.Marshal(nativeWire{Dialect: n.Dialect, Schema: n.Schema, Name: n.Name, Kind: n.Kind, Arguments: arguments, Element: n.Element})
+}
+
+func (n *NativeTypeDef) UnmarshalJSON(data []byte) error {
+	type nativeWire struct {
+		Dialect   string         `json:"Dialect"`
+		Schema    string         `json:"Schema"`
+		Name      string         `json:"Name"`
+		Kind      NativeTypeKind `json:"Kind"`
+		Arguments *[]string      `json:"Arguments"`
+		Element   *NativeTypeDef `json:"Element"`
+	}
+	var wire nativeWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	n.Dialect, n.Schema, n.Name, n.Kind, n.Element = wire.Dialect, wire.Schema, wire.Name, wire.Kind, wire.Element
+	if wire.Arguments == nil {
+		n.Arguments = nil
+		return nil
+	}
+	n.Arguments = make([]string, len(*wire.Arguments))
+	copy(n.Arguments, *wire.Arguments)
+	return nil
 }
 
 // OpaqueType represents a native type with no portable rasql equivalent.
@@ -88,6 +129,27 @@ func (n *NativeTypeDef) validate(path string, depth int) error {
 	}
 	if n.Kind == "" {
 		return validationError(path+".kind", "must not be empty")
+	}
+	switch n.Kind {
+	case NativeBuiltin, NativeDomain, NativeEnum, NativeSet, NativeArray, NativeOther:
+	default:
+		return validationError(path+".kind", "is unsupported")
+	}
+	if n.Schema != "" {
+		if err := ValidateIdentifier(n.Schema); err != nil {
+			return validationError(path+".schema", "%s", err.Error())
+		}
+	}
+	if n.Dialect == "postgresql" {
+		if err := ValidateIdentifier(n.Name); err != nil {
+			return validationError(path+".name", "%s", err.Error())
+		}
+	}
+	if n.Dialect == "mysql" && (n.Kind == NativeDomain || n.Kind == NativeArray) {
+		return validationError(path+".kind", "is unsupported for mysql")
+	}
+	if n.Dialect == "postgresql" && n.Kind == NativeSet {
+		return validationError(path+".kind", "is unsupported for postgresql")
 	}
 	if n.Kind != NativeArray && n.Element != nil {
 		return validationError(path+".element", "is only valid for array native types")
