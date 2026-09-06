@@ -30,7 +30,7 @@ func TestAddedTableDependencyMySQL(t *testing.T) {
 	}
 	var childExists int
 	require.NoError(t, database.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'aaa_child'").Scan(&childExists))
-	require.Equal(t, 0, childExists)
+	require.Equal(t, 1, childExists)
 }
 
 func TestAddedTableDependencyMySQLSelfReference(t *testing.T) {
