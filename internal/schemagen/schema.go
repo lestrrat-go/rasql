@@ -470,30 +470,6 @@ func prepareSchema(packageName string, tables []schema.TableDef) ([]schema.Table
 	return clones, nil
 }
 
-func derivedRelationships(table schema.TableDef) []schema.RelationshipDef {
-	relationships := make([]schema.RelationshipDef, 0, len(table.ForeignKeys))
-	for _, key := range table.ForeignKeys {
-		if len(key.Columns) == 0 {
-			continue
-		}
-		name := key.Columns[0]
-		name = strings.TrimSuffix(name, "_id")
-		name = variableName(name)
-		if name == "" {
-			name = variableName(key.ReferencedTable)
-		}
-		relationships = append(relationships, schema.RelationshipDef{
-			Name:              name,
-			Kind:              schema.RelationshipBelongsTo,
-			Columns:           append([]string(nil), key.Columns...),
-			ReferencedSchema:  key.ReferencedSchema,
-			ReferencedTable:   key.ReferencedTable,
-			ReferencedColumns: append([]string(nil), key.ReferencedColumns...),
-		})
-	}
-	return relationships
-}
-
 func mergeRelationships(table schema.TableDef) []schema.RelationshipDef {
 	relationships := make([]schema.RelationshipDef, 0, len(table.ForeignKeys))
 	matched := make([]bool, len(table.ForeignKeys))
@@ -511,10 +487,17 @@ func mergeRelationships(table schema.TableDef) []schema.RelationshipDef {
 		if matched[index] {
 			continue
 		}
-		derived := derivedRelationships(schema.TableDef{ForeignKeys: []schema.ForeignKeyDef{key}})
+		derived := schema.RelationshipsFromForeignKeys(schema.TableDef{ForeignKeys: []schema.ForeignKeyDef{key}})
 		relationships = append(relationships, derived...)
 	}
 	return relationships
+}
+
+func relationshipTargetSchema(relationship schema.RelationshipDef) string {
+	if relationship.ResolvedReferencedSchema != "" {
+		return relationship.ResolvedReferencedSchema
+	}
+	return relationship.ReferencedSchema
 }
 
 func relationshipMatchesForeignKey(relationship schema.RelationshipDef, key schema.ForeignKeyDef) bool {
@@ -721,7 +704,7 @@ func relationshipSupported(child, parent schema.TableDef, relationship schema.Re
 }
 
 func relationshipSupportedForTable(table schema.TableDef, relationship schema.RelationshipDef, allTables []schema.TableDef) bool {
-	parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
+	parent, ok := relationshipTable(allTables, relationshipTargetSchema(relationship), relationship.ReferencedTable)
 	if !ok {
 		return false
 	}
@@ -997,7 +980,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef) []rel
 	result := make([]relationshipSpec, 0)
 	usedMethods := make(map[string]struct{})
 	for _, relationship := range table.Relationships {
-		parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
+		parent, ok := relationshipTable(allTables, relationshipTargetSchema(relationship), relationship.ReferencedTable)
 		if !ok {
 			continue
 		}
@@ -1031,7 +1014,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef) []rel
 	candidates := make([]inverseRelationshipCandidate, 0)
 	for _, child := range allTables {
 		for _, relationship := range child.Relationships {
-			if relationship.ReferencedTable != table.Name || relationship.ReferencedSchema != table.Schema {
+			if relationship.ReferencedTable != table.Name || relationshipTargetSchema(relationship) != table.Schema {
 				continue
 			}
 			parentColumn, childColumn, keyType, ok := relationshipSupported(child, table, relationship)
@@ -1087,7 +1070,7 @@ func relationshipIdentity(child schema.TableDef, relationship schema.Relationshi
 		child.Name,
 		relationship.Name,
 		strings.Join(relationship.Columns, "\x00"),
-		relationship.ReferencedSchema,
+		relationshipTargetSchema(relationship),
 		relationship.ReferencedTable,
 		strings.Join(relationship.ReferencedColumns, "\x00"),
 	}, "\x00")
@@ -1989,6 +1972,10 @@ func writeRelationshipDefLiteral(source *bytes.Buffer, relationship schema.Relat
 	if relationship.ReferencedSchema != "" {
 		source.WriteString(", ReferencedSchema: ")
 		source.WriteString(quote(relationship.ReferencedSchema))
+	}
+	if relationship.ResolvedReferencedSchema != "" {
+		source.WriteString(", ResolvedReferencedSchema: ")
+		source.WriteString(quote(relationship.ResolvedReferencedSchema))
 	}
 	source.WriteString(", ReferencedTable: ")
 	source.WriteString(quote(relationship.ReferencedTable))

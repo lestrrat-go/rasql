@@ -208,6 +208,7 @@ func selectTables(ctx context.Context, queryer inspect.Queryer, options Options)
 	if err != nil {
 		return nil, err
 	}
+	normalizeRelationships(tables, options.Dialect)
 
 	sort.Slice(tables, func(i, j int) bool {
 		if tables[i].Schema != tables[j].Schema {
@@ -216,6 +217,52 @@ func selectTables(ctx context.Context, queryer inspect.Queryer, options Options)
 		return tables[i].Name < tables[j].Name
 	})
 	return tables, nil
+}
+
+func normalizeRelationships(tables []schema.TableDef, selectedDialect dialect.Dialect) {
+	if selectedDialect.Name() != dialect.SQLite().Name() {
+		return
+	}
+	for index := range tables {
+		table := &tables[index]
+		derived := schema.RelationshipsFromForeignKeys(*table)
+		matched := make([]bool, len(table.ForeignKeys))
+		relationships := append([]schema.RelationshipDef(nil), table.Relationships...)
+		for _, relationship := range relationships {
+			for keyIndex, key := range table.ForeignKeys {
+				if matched[keyIndex] || key.ReferencedSchema != relationship.ReferencedSchema || key.ReferencedTable != relationship.ReferencedTable ||
+					!slicesEqual(key.Columns, relationship.Columns) || !slicesEqual(key.ReferencedColumns, relationship.ReferencedColumns) {
+					continue
+				}
+				matched[keyIndex] = true
+				break
+			}
+		}
+		for keyIndex, relationship := range derived {
+			if matched[keyIndex] {
+				continue
+			}
+			relationships = append(relationships, relationship)
+		}
+		for relIndex := range relationships {
+			if relationships[relIndex].ReferencedSchema == "" && table.Schema != "" {
+				relationships[relIndex].ResolvedReferencedSchema = table.Schema
+			}
+		}
+		table.Relationships = relationships
+	}
+}
+
+func slicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // describeIncluded reads exactly the named tables, in the order given,

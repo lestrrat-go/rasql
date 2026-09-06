@@ -285,12 +285,15 @@ type RelationshipDef struct {
 	Name string
 	// InverseName overrides the generated method name on the referenced table.
 	// Empty lets the generator derive an unambiguous name. It does not affect DDL.
-	InverseName       string `json:",omitempty"`
-	Kind              RelationshipKind
-	Columns           []string
-	ReferencedSchema  string
-	ReferencedTable   string
-	ReferencedColumns []string
+	InverseName      string `json:",omitempty"`
+	Kind             RelationshipKind
+	Columns          []string
+	ReferencedSchema string
+	// ResolvedReferencedSchema is the catalog-resolved schema identity used to
+	// match ReferencedTable. Empty means use ReferencedSchema. It does not affect DDL.
+	ResolvedReferencedSchema string `json:",omitempty"`
+	ReferencedTable          string
+	ReferencedColumns        []string
 }
 
 // Clone returns a copy of r that shares no slice with r. Each field keeps
