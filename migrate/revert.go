@@ -148,7 +148,7 @@ func (r Runner) RevertPlan(ctx context.Context, target RevertTarget, migrations 
 			return err
 		}
 		if progress != nil {
-			selected = []preparedMigration{findProgressMigration(prepared, progress.id)}
+			selected = prioritizeProgress(selected, prepared, progress.id)
 		}
 		result = exportMigrations(selected)
 		return nil

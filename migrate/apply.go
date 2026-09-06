@@ -148,7 +148,7 @@ func (r Runner) ApplyPlan(ctx context.Context, target ApplyTarget, migrations ..
 			return err
 		}
 		if progress != nil {
-			selected = []preparedMigration{findProgressMigration(prepared, progress.id)}
+			selected = prioritizeProgress(selected, prepared, progress.id)
 		}
 		result = exportMigrations(selected)
 		return nil

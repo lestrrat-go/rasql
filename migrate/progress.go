@@ -135,6 +135,27 @@ func findProgressMigration(migrations []preparedMigration, id string) preparedMi
 	return preparedMigration{}
 }
 
+func prioritizeProgress(selected, migrations []preparedMigration, id string) []preparedMigration {
+	var prioritized []preparedMigration
+	for _, migration := range selected {
+		if migration.id == id {
+			prioritized = append(prioritized, migration)
+		}
+	}
+	if len(prioritized) == 0 {
+		migration := findProgressMigration(migrations, id)
+		if migration.id != "" {
+			prioritized = append(prioritized, migration)
+		}
+	}
+	for _, migration := range selected {
+		if migration.id != id {
+			prioritized = append(prioritized, migration)
+		}
+	}
+	return prioritized
+}
+
 func (r Runner) upsertProgress(ctx context.Context, connection executor, migration preparedMigration, direction Direction, index int) error {
 	first, err := r.dialect.Placeholder(1)
 	if err != nil {
@@ -229,7 +250,10 @@ func (r Runner) restoreKnownCheckpoint(ctx context.Context, connection executor,
 	if nextIndex > len(statements) {
 		return fmt.Errorf("migrate: progress checkpoint %d is outside source count %d", nextIndex, len(statements))
 	}
-	return r.upsertProgress(ctx, connection, migration, direction, nextIndex-1)
+	if err := r.upsertProgress(ctx, connection, migration, direction, nextIndex-1); err != nil {
+		return err
+	}
+	return r.checkpointProgress(ctx, connection, migration, direction, nextIndex-1)
 }
 
 func (r Runner) finalizeProgress(ctx context.Context, connection interface {

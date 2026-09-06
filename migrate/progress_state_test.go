@@ -44,3 +44,10 @@ func TestProgressStatementsRejectsUnknownDirection(t *testing.T) {
 	_, err := progressStatements(preparedMigration{}, "sideways")
 	require.ErrorContains(t, err, "invalid progress direction")
 }
+
+func TestPrioritizeProgressPreservesRemainingPlanSuffix(t *testing.T) {
+	migrations := []preparedMigration{{id: "001"}, {id: "002"}, {id: "003"}}
+	selected := []preparedMigration{migrations[0], migrations[1], migrations[2]}
+	ordered := prioritizeProgress(selected, migrations, "002")
+	require.Equal(t, []string{"002", "001", "003"}, []string{ordered[0].id, ordered[1].id, ordered[2].id})
+}
