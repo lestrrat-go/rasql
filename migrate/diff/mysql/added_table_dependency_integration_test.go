@@ -5,9 +5,11 @@ package mysql_test
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +57,7 @@ func TestAddedTableDependencyMySQLSelfReference(t *testing.T) {
 }
 
 func TestAddedTableDependencyMySQLCycle(t *testing.T) {
+	ctx := t.Context()
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE existing_table (id BIGINT PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, "CREATE TABLE existing_table (id BIGINT PRIMARY KEY); CREATE TABLE aaa_child (id BIGINT PRIMARY KEY, owner_id BIGINT, FOREIGN KEY (owner_id) REFERENCES zzz_owner(id)); CREATE TABLE zzz_owner (id BIGINT PRIMARY KEY, child_id BIGINT, FOREIGN KEY (child_id) REFERENCES aaa_child(id));")
@@ -63,6 +66,14 @@ func TestAddedTableDependencyMySQLCycle(t *testing.T) {
 	require.ErrorContains(t, err, "aaa_child")
 	require.ErrorContains(t, err, "zzz_owner")
 	require.Empty(t, plan.Statements)
+	output := filepath.Join(t.TempDir(), "cycle-migration")
+	require.Error(t, diff.WriteMigration(output, plan))
+	require.NoDirExists(t, output)
+
+	database := dbtest.MySQLDB(t)
+	var exists int
+	require.NoError(t, database.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('aaa_child', 'zzz_owner')").Scan(&exists))
+	require.Equal(t, 0, exists)
 }
 
 func mysqlExec(t *testing.T, ctx context.Context, database *sql.DB, statement string) {

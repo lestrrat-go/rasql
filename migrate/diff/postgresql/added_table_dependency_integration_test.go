@@ -5,9 +5,11 @@ package postgresql_test
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +59,7 @@ func TestAddedTableDependencyPostgreSQLSelfReference(t *testing.T) {
 }
 
 func TestAddedTableDependencyPostgreSQLCycle(t *testing.T) {
+	ctx := t.Context()
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE existing_table (id bigint PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, "CREATE TABLE existing_table (id bigint PRIMARY KEY); CREATE TABLE aaa_child (id bigint PRIMARY KEY, owner_id bigint REFERENCES zzz_owner(id)); CREATE TABLE zzz_owner (id bigint PRIMARY KEY, child_id bigint REFERENCES aaa_child(id));")
@@ -65,6 +68,16 @@ func TestAddedTableDependencyPostgreSQLCycle(t *testing.T) {
 	require.ErrorContains(t, err, "aaa_child")
 	require.ErrorContains(t, err, "zzz_owner")
 	require.Empty(t, plan.Statements)
+	output := filepath.Join(t.TempDir(), "cycle-migration")
+	require.Error(t, diff.WriteMigration(output, plan))
+	require.NoDirExists(t, output)
+
+	database := dbtest.PostgreSQLDB(t)
+	var exists sql.NullString
+	require.NoError(t, database.QueryRowContext(ctx, "SELECT to_regclass('aaa_child')").Scan(&exists))
+	require.False(t, exists.Valid)
+	require.NoError(t, database.QueryRowContext(ctx, "SELECT to_regclass('zzz_owner')").Scan(&exists))
+	require.False(t, exists.Valid)
 }
 
 func postgresExec(t *testing.T, ctx context.Context, database *sql.DB, statement string) {
