@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	mysqldiff "github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	pgdiff "github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
 	"github.com/lestrrat-go/rasql/render"
@@ -13,6 +14,18 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+func TestLiveSourcesRejectsBothForeignNativeDialects(t *testing.T) {
+	native := &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}
+	desired := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: native}}}
+	for _, analyzer := range []diff.LiveAnalyzer{pgdiff.New(), mysqldiff.New()} {
+		sources, err := analyzer.LiveSources(desired)
+		var unsupported *render.ErrUnsupportedNativeType
+		require.ErrorAs(t, err, &unsupported)
+		require.Nil(t, sources)
+		require.Equal(t, *native, unsupported.Native)
+	}
+}
 
 func TestLiveSourcesPreservesSQLiteNativeTypeAndRejectsForeignType(t *testing.T) {
 	native := &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}

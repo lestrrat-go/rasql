@@ -82,3 +82,32 @@ func TestCreateTableRejectsMalformedSQLiteNativeArguments(t *testing.T) {
 		require.Equal(t, "events", unsupported.Table)
 	}
 }
+
+type dialectWithoutNativeNamer struct{ dialect.Dialect }
+
+func TestCreateTableNativeRefusalMatrix(t *testing.T) {
+	tests := []struct {
+		name    string
+		dialect dialect.Dialect
+		native  *schema.NativeTypeDef
+	}{
+		{"postgres to mysql", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum}},
+		{"postgres to sqlite", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum}},
+		{"mysql to postgres", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "mysql", Name: "choice", Kind: schema.NativeSet, Arguments: []string{"a", "b"}}},
+		{"mysql to sqlite", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "mysql", Name: "choice", Kind: schema.NativeEnum, Arguments: []string{"a", "b"}}},
+		{"sqlite to postgres", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}},
+		{"sqlite to mysql", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}},
+		{"missing namer", dialectWithoutNativeNamer{Dialect: dialect.SQLite()}, &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := render.CreateTable(test.dialect, schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: test.native}}})
+			var unsupported *render.ErrUnsupportedNativeType
+			require.ErrorAs(t, err, &unsupported)
+			require.Equal(t, test.dialect.Name(), unsupported.Dialect)
+			require.Equal(t, "events", unsupported.Table)
+			require.Equal(t, "value", unsupported.Column)
+			require.Equal(t, *test.native, unsupported.Native)
+		})
+	}
+}

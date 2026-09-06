@@ -6,11 +6,27 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	mysqldiff "github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
+	sqliteDiff "github.com/lestrrat-go/rasql/migrate/diff/sqlite"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLiveSourcesNativeCrossDialectRefusalMatrix(t *testing.T) {
+	native := &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum, Arguments: []string{"sad", "happy"}}
+	desired := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "mood", Type: schema.OpaqueType{}, NativeType: native}}}
+	for _, analyzer := range []diff.LiveAnalyzer{mysqldiff.New(), sqliteDiff.New()} {
+		sources, err := analyzer.LiveSources(desired)
+		var unsupported *render.ErrUnsupportedNativeType
+		require.ErrorAs(t, err, &unsupported)
+		require.Nil(t, sources)
+		require.Equal(t, analyzer.Dialect(), unsupported.Dialect)
+		require.Equal(t, "events", unsupported.Table)
+		require.Equal(t, "mood", unsupported.Column)
+		require.Equal(t, *native, unsupported.Native)
+	}
+}
 
 func TestDiffLiveMatchesInlinePrimaryKey(t *testing.T) {
 	analyzer := postgresql.New()

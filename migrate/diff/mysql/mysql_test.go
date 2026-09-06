@@ -10,11 +10,24 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	pgdiff "github.com/lestrrat-go/rasql/migrate/diff/postgresql"
+	sqlitediff "github.com/lestrrat-go/rasql/migrate/diff/sqlite"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLiveSourcesRejectsBothForeignNativeDialects(t *testing.T) {
+	native := &schema.NativeTypeDef{Dialect: "mysql", Name: "enum", Kind: schema.NativeEnum, Arguments: []string{"a", "b"}}
+	desired := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "choice", Type: schema.OpaqueType{}, NativeType: native}}}
+	for _, analyzer := range []diff.LiveAnalyzer{pgdiff.New(), sqlitediff.New()} {
+		sources, err := analyzer.LiveSources(desired)
+		var unsupported *render.ErrUnsupportedNativeType
+		require.ErrorAs(t, err, &unsupported)
+		require.Nil(t, sources)
+		require.Equal(t, *native, unsupported.Native)
+	}
+}
 
 func TestLiveSourcesPreservesMySQLNativeTypeAndRejectsForeignType(t *testing.T) {
 	native := &schema.NativeTypeDef{Dialect: "mysql", Name: "enum", Kind: schema.NativeEnum, Arguments: []string{"a", "b"}}
