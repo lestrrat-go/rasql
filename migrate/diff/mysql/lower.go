@@ -219,6 +219,19 @@ func withoutNullability(in []mysqlquery.ColumnConstraint) []mysqlquery.ColumnCon
 	}
 	return out
 }
+
+func withoutNullDefault(in []mysqlquery.ColumnConstraint) []mysqlquery.ColumnConstraint {
+	out := make([]mysqlquery.ColumnConstraint, 0, len(in))
+	for _, constraint := range in {
+		literal, ok := constraint.Expression.(*mysqlquery.Literal)
+		if constraint.Kind == mysqlquery.ConstraintDefault && ok && literal.Kind == mysqlquery.NullLiteral {
+			continue
+		}
+		out = append(out, constraint)
+	}
+	return out
+}
+
 func required(in []mysqlquery.ColumnConstraint) bool {
 	for _, c := range in {
 		if c.Kind == mysqlquery.ConstraintNotNull {
@@ -543,6 +556,12 @@ func actionsForEntry(model loweringModel, operationIndex int, entry loweringEntr
 			if !ok || strings.TrimSpace(resolution.BackfillSQL) == "" {
 				return nil, false, fmt.Errorf("missing resolution for %s", operation.Column)
 			}
+			final := target
+			final.AST.Constraints = withoutNullDefault(final.AST.Constraints)
+			finalColumn, renderErr := renderFullColumn(final)
+			if renderErr != nil {
+				return nil, false, renderErr
+			}
 			nullable := target
 			nullable.AST.Constraints = withoutNullability(nullable.AST.Constraints)
 			staged, renderErr := renderFullColumn(nullable)
@@ -552,7 +571,7 @@ func actionsForEntry(model loweringModel, operationIndex int, entry loweringEntr
 			add := base(stageAddNullableColumn, "add_column_"+displayName(entry.table)+"_"+operation.Column, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;\n", table, staged), reverse, operation.Summary)
 			backfill := base(stageBackfill, "backfill_"+displayName(entry.table)+"_"+operation.Column, resolution.BackfillSQL, "", operation.Summary)
 			backfill.irreversible = true
-			modify := base(stageTransformColumn, "require_column_"+displayName(entry.table)+"_"+operation.Column, fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s;\n", table, full), fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s;\n", table, staged), operation.Summary)
+			modify := base(stageTransformColumn, "require_column_"+displayName(entry.table)+"_"+operation.Column, fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s;\n", table, finalColumn), fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s;\n", table, staged), operation.Summary)
 			modify.dependencies = []string{mysqlActionKey(backfill)}
 			backfill.dependencies = []string{mysqlActionKey(add)}
 			return []mysqlAction{add, backfill, modify}, true, nil

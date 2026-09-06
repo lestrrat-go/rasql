@@ -44,17 +44,18 @@ type mysqlEvolutionFixture struct {
 
 func TestSchemaEvolutionMySQLConstraintReplacementMatrix(t *testing.T) {
 	tests := []struct {
-		name        string
-		baseline    string
-		target      string
-		want        mysqlConstraintCatalog
-		wantKey     mysqlKeyCatalog
-		baseKey     mysqlKeyCatalog
-		wantRef     mysqlReferenceCatalog
-		baseRef     mysqlReferenceCatalog
-		check       string
-		checkClause string
-		baseClause  string
+		name         string
+		baseline     string
+		target       string
+		baselineExec []string
+		want         mysqlConstraintCatalog
+		wantKey      mysqlKeyCatalog
+		baseKey      mysqlKeyCatalog
+		wantRef      mysqlReferenceCatalog
+		baseRef      mysqlReferenceCatalog
+		check        string
+		checkClause  string
+		baseClause   string
 	}{
 		{
 			name:     "primary",
@@ -76,11 +77,15 @@ func TestSchemaEvolutionMySQLConstraintReplacementMatrix(t *testing.T) {
 			name:     "foreign key",
 			baseline: "CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_code` UNIQUE (`code`)); CREATE TABLE `evo_fk` (`id` BIGINT NOT NULL, `parent_id` BIGINT NOT NULL, CONSTRAINT `fk_evo` FOREIGN KEY (`parent_id`) REFERENCES `evo_parent` (`id`));",
 			target:   "CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_code` UNIQUE (`code`)); CREATE TABLE `evo_fk` (`id` BIGINT NOT NULL, `parent_id` BIGINT NOT NULL, CONSTRAINT `fk_evo` FOREIGN KEY (`parent_id`) REFERENCES `evo_parent` (`code`));",
-			want:     mysqlConstraintCatalog{Name: "fk_evo", Kind: "FOREIGN KEY"},
-			wantKey:  mysqlKeyCatalog{Constraint: "fk_evo", Column: "parent_id", ReferencedTable: "evo_parent", ReferencedColumn: "code"},
-			baseKey:  mysqlKeyCatalog{Constraint: "fk_evo", Column: "parent_id", ReferencedTable: "evo_parent", ReferencedColumn: "id"},
-			wantRef:  mysqlReferenceCatalog{Constraint: "fk_evo", Match: "NONE", Update: "RESTRICT", Delete: "RESTRICT"},
-			baseRef:  mysqlReferenceCatalog{Constraint: "fk_evo", Match: "NONE", Update: "RESTRICT", Delete: "RESTRICT"},
+			baselineExec: []string{
+				"CREATE TABLE `evo_parent` (`id` BIGINT NOT NULL, `code` BIGINT NOT NULL, CONSTRAINT `uq_parent_code` UNIQUE (`code`));",
+				"CREATE TABLE `evo_fk` (`id` BIGINT NOT NULL, `parent_id` BIGINT NOT NULL, CONSTRAINT `fk_evo` FOREIGN KEY (`parent_id`) REFERENCES `evo_parent` (`id`));",
+			},
+			want:    mysqlConstraintCatalog{Name: "fk_evo", Kind: "FOREIGN KEY"},
+			wantKey: mysqlKeyCatalog{Constraint: "fk_evo", Column: "parent_id", ReferencedTable: "evo_parent", ReferencedColumn: "code"},
+			baseKey: mysqlKeyCatalog{Constraint: "fk_evo", Column: "parent_id", ReferencedTable: "evo_parent", ReferencedColumn: "id"},
+			wantRef: mysqlReferenceCatalog{Constraint: "fk_evo", Match: "NONE", Update: "NO ACTION", Delete: "NO ACTION"},
+			baseRef: mysqlReferenceCatalog{Constraint: "fk_evo", Match: "NONE", Update: "NO ACTION", Delete: "NO ACTION"},
 		},
 		{
 			name:        "check",
@@ -105,8 +110,15 @@ func TestSchemaEvolutionMySQLConstraintReplacementMatrix(t *testing.T) {
 				require.Equal(t, statement.SQL, string(fixture.Migration.Statements[index].SQL))
 			}
 			database := dbtest.MySQLDB(t)
-			_, err := database.ExecContext(t.Context(), test.baseline)
-			require.NoError(t, err)
+			baselineExec := test.baselineExec
+			if len(baselineExec) == 0 {
+				baselineExec = []string{test.baseline}
+			}
+			var err error
+			for _, statement := range baselineExec {
+				_, err = database.ExecContext(t.Context(), statement)
+				require.NoError(t, err)
+			}
 			if test.name == "foreign key" {
 				_, err = database.ExecContext(t.Context(), "INSERT INTO `evo_parent` VALUES (1, 101);")
 				require.NoError(t, err)
@@ -217,7 +229,7 @@ func TestSchemaEvolutionMySQLArtifactRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assertMySQLColumnFacts(t, database, "evo_order", "due_on")
 	assertMySQLConstraint(t, database, "evo_order", mysqlConstraintCatalog{Name: "uq_order", Kind: "UNIQUE"}, mysqlKeyCatalog{Constraint: "uq_order", Column: "id"}, mysqlReferenceCatalog{}, "", "")
-	assertMySQLConstraint(t, database, "evo_order", mysqlConstraintCatalog{Name: "fk_order", Kind: "FOREIGN KEY"}, mysqlKeyCatalog{Constraint: "fk_order", Column: "parent_id", ReferencedTable: "evo_order_parent", ReferencedColumn: "id"}, mysqlReferenceCatalog{Constraint: "fk_order", Match: "NONE", Update: "RESTRICT", Delete: "RESTRICT"}, "", "")
+	assertMySQLConstraint(t, database, "evo_order", mysqlConstraintCatalog{Name: "fk_order", Kind: "FOREIGN KEY"}, mysqlKeyCatalog{Constraint: "fk_order", Column: "parent_id", ReferencedTable: "evo_order_parent", ReferencedColumn: "id"}, mysqlReferenceCatalog{Constraint: "fk_order", Match: "NONE", Update: "NO ACTION", Delete: "NO ACTION"}, "", "")
 	require.True(t, liveIndexExists(t, database, "evo_order", "ix_order_quantity"))
 	var quantity int
 	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT quantity FROM `evo_order` WHERE id = 1").Scan(&quantity))
@@ -225,7 +237,7 @@ func TestSchemaEvolutionMySQLArtifactRoundTrip(t *testing.T) {
 	_, err = runner.Revert(t.Context(), migrate.Steps(1), loaded...)
 	require.NoError(t, err)
 	assertMySQLConstraint(t, database, "evo_order", mysqlConstraintCatalog{Name: "uq_order", Kind: "UNIQUE"}, mysqlKeyCatalog{Constraint: "uq_order", Column: "code"}, mysqlReferenceCatalog{}, "", "")
-	assertMySQLConstraint(t, database, "evo_order", mysqlConstraintCatalog{Name: "fk_order", Kind: "FOREIGN KEY"}, mysqlKeyCatalog{Constraint: "fk_order", Column: "parent_id", ReferencedTable: "evo_order_parent", ReferencedColumn: "id"}, mysqlReferenceCatalog{Constraint: "fk_order", Match: "NONE", Update: "RESTRICT", Delete: "RESTRICT"}, "", "")
+	assertMySQLConstraint(t, database, "evo_order", mysqlConstraintCatalog{Name: "fk_order", Kind: "FOREIGN KEY"}, mysqlKeyCatalog{Constraint: "fk_order", Column: "parent_id", ReferencedTable: "evo_order_parent", ReferencedColumn: "id"}, mysqlReferenceCatalog{Constraint: "fk_order", Match: "NONE", Update: "NO ACTION", Delete: "NO ACTION"}, "", "")
 	require.False(t, liveIndexExists(t, database, "evo_order", "ix_order_quantity"))
 	var code string
 	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT code FROM `evo_order` WHERE id = 1").Scan(&code))
@@ -273,7 +285,23 @@ func TestSchemaEvolutionMySQLBackfillIsIrreversibleLive(t *testing.T) {
 	require.NoError(t, err)
 	assertOperationStatementSlices(t, resolved.Operations, resolved.Statements)
 	require.Equal(t, "caller-supplied MySQL backfill has no inferred reverse", resolved.IrreversibleReason)
-	require.Equal(t, fixture.Migration.Statements, migrationStatementsFromPlan(resolved, false))
+	expectedStatements := []diff.PlannedStatement{
+		{Source: "001_add_column_evo_backfill_state.sql", SQL: "ALTER TABLE `evo_backfill` ADD COLUMN `state` varchar(20) DEFAULT NULL;\n", ReverseSQL: "ALTER TABLE `evo_backfill` DROP COLUMN `state`;\n", Summary: "add column evo_backfill.state"},
+		{Source: "002_backfill_evo_backfill_state.sql", SQL: resolution.BackfillSQL, Summary: "add column evo_backfill.state"},
+		{Source: "003_require_column_evo_backfill_state.sql", SQL: "ALTER TABLE `evo_backfill` MODIFY COLUMN `state` varchar(20) NOT NULL;\n", ReverseSQL: "ALTER TABLE `evo_backfill` MODIFY COLUMN `state` varchar(20) DEFAULT NULL;\n", Summary: "add column evo_backfill.state"},
+	}
+	require.Equal(t, expectedStatements, resolved.Statements)
+	expectedMigrationStatements := []migrate.Statement{
+		{Source: "001_add_column_evo_backfill_state.up.sql", SQL: sqltext.Text(expectedStatements[0].SQL)},
+		{Source: "002_backfill_evo_backfill_state.up.sql", SQL: sqltext.Text(expectedStatements[1].SQL)},
+		{Source: "003_require_column_evo_backfill_state.up.sql", SQL: sqltext.Text(expectedStatements[2].SQL)},
+	}
+	require.Equal(t, expectedMigrationStatements, fixture.Migration.Statements)
+	for _, expected := range expectedStatements {
+		actual, readErr := os.ReadFile(filepath.Join(fixture.Root, "migrations", "001_schema_evolution", expected.Source[:len(expected.Source)-len(".sql")]+".up.sql"))
+		require.NoError(t, readErr)
+		require.Equal(t, expected.SQL, string(actual))
+	}
 	require.Empty(t, fixture.Migration.Down)
 	marker, err := os.ReadFile(filepath.Join(fixture.Root, "migrations", "001_schema_evolution", ".rasql-irreversible"))
 	require.NoError(t, err)
@@ -287,10 +315,27 @@ func TestSchemaEvolutionMySQLBackfillIsIrreversibleLive(t *testing.T) {
 	var state string
 	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT state FROM `evo_backfill` WHERE id = 1").Scan(&state))
 	require.Equal(t, "open", state)
+	var nullable, defaultValue sql.NullString
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'evo_backfill' AND column_name = 'state'").Scan(&nullable, &defaultValue))
+	require.Equal(t, "NO", nullable.String)
+	require.False(t, defaultValue.Valid)
+	beforeRefusal := struct {
+		State    string
+		Nullable string
+		Default  sql.NullString
+	}{State: state, Nullable: nullable.String, Default: defaultValue}
 	runner, err := migrate.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	_, err = runner.Revert(t.Context(), migrate.Steps(1), migration)
 	require.ErrorContains(t, err, "irreversible")
+	var afterRefusal struct {
+		State    string
+		Nullable string
+		Default  sql.NullString
+	}
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT state FROM `evo_backfill` WHERE id = 1").Scan(&afterRefusal.State))
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'evo_backfill' AND column_name = 'state'").Scan(&afterRefusal.Nullable, &afterRefusal.Default))
+	require.Equal(t, beforeRefusal, afterRefusal)
 }
 
 func TestSchemaEvolutionMySQLFullMetadataLive(t *testing.T) {
@@ -342,20 +387,6 @@ func buildMySQLSchemaEvolutionFixture(t *testing.T, baseline, target string, res
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 	return mysqlEvolutionFixture{Root: root, Plan: plan, Migration: loaded[0]}
-}
-
-func migrationStatementsFromPlan(plan diff.Plan, reverse bool) []migrate.Statement {
-	statements := make([]migrate.Statement, len(plan.Statements))
-	for index, statement := range plan.Statements {
-		stem := statement.Source[:len(statement.Source)-4]
-		if reverse {
-			reverseIndex := len(plan.Statements) - index - 1
-			statements[reverseIndex] = migrate.Statement{Source: stem + ".down.sql", SQL: sqltext.Text(statement.ReverseSQL)}
-			continue
-		}
-		statements[index] = migrate.Statement{Source: stem + ".up.sql", SQL: sqltext.Text(statement.SQL)}
-	}
-	return statements
 }
 
 func migrationPath(root string) string {

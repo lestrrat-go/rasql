@@ -546,8 +546,8 @@ func lowerPostgreSQLEntry(entry loweringEntry, resolutions map[string]diff.Resol
 		forward[0].ReverseSQL = reverseAdd
 		forward[1].ReverseSQL = reverseDrop
 		reverse = []diff.PlannedStatement{
-			{Source: forward[0].Source, SQL: reverseDrop, ReverseSQL: reverseAdd, Summary: name},
-			{Source: forward[1].Source, SQL: reverseAdd, ReverseSQL: reverseDrop, Summary: name},
+			{Source: forward[1].Source, SQL: forward[1].ReverseSQL, ReverseSQL: forward[1].SQL, Summary: name},
+			{Source: forward[0].Source, SQL: forward[0].ReverseSQL, ReverseSQL: forward[0].SQL, Summary: name},
 		}
 	case lowerRenameColumn:
 		from, to, err := renameIdentifiersFromEntry(entry, diff.RequiredDecision{Baseline: entry.baselineColumn.Name.Name, Target: entry.targetColumn.Name.Name})

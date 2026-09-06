@@ -81,7 +81,7 @@ func TestSchemaEvolutionMySQLRequiredAddStagesBackfill(t *testing.T) {
 	require.Len(t, resolved.Statements, 3)
 	require.Equal(t, "ALTER TABLE `tasks` ADD COLUMN `state` varchar(20) DEFAULT NULL;\n", resolved.Statements[0].SQL)
 	require.Equal(t, "UPDATE `tasks` SET `state` = 'open';", resolved.Statements[1].SQL)
-	require.Equal(t, "ALTER TABLE `tasks` MODIFY COLUMN `state` varchar(20) NOT NULL DEFAULT NULL;\n", resolved.Statements[2].SQL)
+	require.Equal(t, "ALTER TABLE `tasks` MODIFY COLUMN `state` varchar(20) NOT NULL;\n", resolved.Statements[2].SQL)
 	require.Empty(t, resolved.Operations[0].Reverse)
 	require.Equal(t, "caller-supplied MySQL backfill has no inferred reverse", resolved.IrreversibleReason)
 }

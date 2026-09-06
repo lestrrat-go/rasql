@@ -175,7 +175,8 @@ func TestPostgreSQLSchemaEvolutionOpaqueBackfillArtifact(t *testing.T) {
 	original := snapshotPublicPlan(t, plan)
 	root := t.TempDir()
 	err = diff.WriteMigration(filepath.Join(root, "001_opaque"), plan)
-	require.ErrorContains(t, err, "required decisions")
+	require.ErrorContains(t, err, "migrate diff: unresolved decisions:")
+	require.ErrorContains(t, err, decision.ID)
 	entries, readErr := os.ReadDir(root)
 	require.NoError(t, readErr)
 	require.Empty(t, entries)
@@ -295,9 +296,9 @@ func assertLoadedStatements(t *testing.T, actual []migrate.Statement, expected [
 
 type taskRow struct {
 	ID, ProjectID, AssigneeID int64
-	Title                    string
-	IsOpen                   bool
-	CreatedAt                time.Time
+	Title                     string
+	IsOpen                    bool
+	CreatedAt                 time.Time
 }
 
 func readTaskRow(t *testing.T, database *sql.DB, table string, id int64) taskRow {

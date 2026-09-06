@@ -848,9 +848,16 @@ func TestTaskboardNullabilityAndForeignKeyReplacement(t *testing.T) {
 	addForward := diff.PlannedStatement{Source: "003_add_constraint_tasks_tasks_assignee_id_fkey.sql", SQL: "ALTER TABLE \"tasks\" ADD CONSTRAINT \"tasks_assignee_id_fkey\" FOREIGN KEY (\"assignee_id\") REFERENCES \"members\" (\"id\") ON DELETE SET NULL ON UPDATE NO ACTION;\n", ReverseSQL: "ALTER TABLE \"tasks\" DROP CONSTRAINT \"tasks_assignee_id_fkey\";\n", Summary: name}
 	expectedOperations := []diff.ProposedOperation{
 		{ID: "alter_nullability_postgresql_tasks_assignee_id", Table: "tasks", Column: "assignee_id", Summary: "alter nullability tasks.assignee_id", Kind: diff.OperationAlterNullability, Forward: []diff.PlannedStatement{alterForward}, Reverse: []diff.PlannedStatement{{Source: alterForward.Source, SQL: alterForward.ReverseSQL, ReverseSQL: alterForward.SQL, Summary: alterForward.Summary}}},
-		{ID: "replace_constraint_postgresql_tasks_tasks_assignee_id_fkey", Table: "tasks", Constraint: "tasks_assignee_id_fkey", Summary: name, Kind: diff.OperationReplaceConstraint, Forward: []diff.PlannedStatement{dropForward, addForward}, Reverse: []diff.PlannedStatement{{Source: addForward.Source, SQL: addForward.ReverseSQL, ReverseSQL: dropForward.ReverseSQL, Summary: name}, {Source: dropForward.Source, SQL: dropForward.ReverseSQL, ReverseSQL: dropForward.SQL, Summary: name}}},
+		{ID: "replace_constraint_postgresql_tasks_tasks_assignee_id_fkey", Table: "tasks", Constraint: "tasks_assignee_id_fkey", Summary: name, Kind: diff.OperationReplaceConstraint, Forward: []diff.PlannedStatement{dropForward, addForward}, Reverse: []diff.PlannedStatement{{Source: addForward.Source, SQL: addForward.ReverseSQL, ReverseSQL: addForward.SQL, Summary: name}, {Source: dropForward.Source, SQL: dropForward.ReverseSQL, ReverseSQL: dropForward.SQL, Summary: name}}},
 	}
 	require.Equal(t, expectedOperations, resolved.Operations)
+	operation := resolved.Operations[1]
+	require.Equal(t, addForward.Source, operation.Reverse[0].Source)
+	require.Equal(t, addForward.ReverseSQL, operation.Reverse[0].SQL)
+	require.Equal(t, addForward.SQL, operation.Reverse[0].ReverseSQL)
+	require.Equal(t, dropForward.Source, operation.Reverse[1].Source)
+	require.Equal(t, dropForward.ReverseSQL, operation.Reverse[1].SQL)
+	require.Equal(t, dropForward.SQL, operation.Reverse[1].ReverseSQL)
 	require.Equal(t, []diff.PlannedStatement{dropForward, alterForward, addForward}, resolved.Statements)
 	root := t.TempDir()
 	require.NoError(t, diff.WriteMigration(filepath.Join(root, "001_taskboard"), resolved))
@@ -927,7 +934,7 @@ func TestDiffLowersNamedConstraintReplacements(t *testing.T) {
 					{Source: "002_add_constraint_things_" + test.constraint + ".sql", SQL: "ALTER TABLE things ADD " + test.targetFragment + ";\n", ReverseSQL: "ALTER TABLE things DROP CONSTRAINT " + test.constraint + ";\n", Summary: "replace constraint things." + test.constraint},
 				},
 				Reverse: []diff.PlannedStatement{
-					{Source: "002_add_constraint_things_" + test.constraint + ".sql", SQL: "ALTER TABLE things DROP CONSTRAINT " + test.constraint + ";\n", ReverseSQL: "ALTER TABLE things ADD " + test.baselineFragment + ";\n", Summary: "replace constraint things." + test.constraint},
+					{Source: "002_add_constraint_things_" + test.constraint + ".sql", SQL: "ALTER TABLE things DROP CONSTRAINT " + test.constraint + ";\n", ReverseSQL: "ALTER TABLE things ADD " + test.targetFragment + ";\n", Summary: "replace constraint things." + test.constraint},
 					{Source: "001_drop_constraint_things_" + test.constraint + ".sql", SQL: "ALTER TABLE things ADD " + test.baselineFragment + ";\n", ReverseSQL: "ALTER TABLE things DROP CONSTRAINT " + test.constraint + ";\n", Summary: "replace constraint things." + test.constraint},
 				},
 			}}, resolved.Operations)
