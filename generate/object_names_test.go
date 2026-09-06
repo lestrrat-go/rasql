@@ -78,6 +78,7 @@ func TestStoreObjectNamesPlanIsHeldSnapshot(t *testing.T) {
 	table := schema.MustTableDef("customer_id", schema.Integer("id"), schema.Text("name"))
 	table.PrimaryKey = []string{"id"}
 	table.UniqueConstraints = []schema.UniqueDef{{Columns: []string{"name"}}}
+	table.Checks = []schema.CheckDef{{Name: "customer_name_check", Expression: "name <> ''"}}
 	table.Indexes = []schema.IndexDef{{Name: "customer_name_idx", Columns: []string{"name"}}}
 	table.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"id"}, ReferencedTable: "customer_id", ReferencedColumns: []string{"id"}, DeleteSetColumns: []string{"id"}, OnDelete: schema.SetNull}}
 	table.Relationships = []schema.RelationshipDef{{Name: "Self", Kind: schema.RelationshipBelongsTo, Columns: []string{"id"}, ReferencedTable: "customer_id", ReferencedColumns: []string{"id"}}}
@@ -103,7 +104,12 @@ func TestStoreObjectNamesPlanIsHeldSnapshot(t *testing.T) {
 	store.Tables[0].Columns = append(store.Tables[0].Columns, schema.ColumnDef{Name: "extra", Type: schema.TextType{}})
 	store.Tables[0].PrimaryKey[0] = "changed-id"
 	store.Tables[0].UniqueConstraints[0].Columns[0] = "changed-name"
+	store.Tables[0].Checks[0].Expression = "changed-check"
+	store.Tables[0].Checks[0].Name = "changed-check-name"
 	store.Tables[0].Indexes[0].Columns[0] = "changed-name"
+	store.Tables[0].Indexes[0].Name = "changed-index"
+	store.Tables[0].Indexes[0].Unique = true
+	store.Tables[0].Indexes[0].Predicate = "changed-predicate"
 	store.Tables[0].ForeignKeys[0].ReferencedTable = "changed"
 	store.Tables[0].ForeignKeys[0].Columns[0] = "changed-id"
 	store.Tables[0].ForeignKeys[0].ReferencedColumns[0] = "changed-id"
@@ -164,12 +170,30 @@ func TestStoreObjectNamesPreserveDescriptorOwners(t *testing.T) {
 	repo := filepath.Dir(mustGetwd(t))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/owner\n\ngo 1.23\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+repo+"\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "owner_test.go"), []byte(`package generated
-import ("reflect"; "testing"; "github.com/lestrrat-go/rasql/schema")
-func TestDescriptorOwners(t *testing.T) { want := schema.MustTableDef("child", schema.Integer("child-id"), schema.Integer("parent-id"), schema.Text("same-Go-name"), schema.Text("computed"), schema.PrimaryKey("child-id"), schema.Unique("same-Go-name"), schema.Check("same-Go-name <> ''"), schema.Index("same_idx", "same-Go-name")); want.Columns[2].Default = "same-Go-name"; want.Columns[3].GeneratedExpression = "same-Go-name"; want.Columns[3].GeneratedStorage = schema.GeneratedStored; want.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}, DeleteSetColumns: []string{"parent-id"}, OnDelete: schema.SetNull}}; want.Relationships = []schema.RelationshipDef{{Name: "Parent", Kind: schema.RelationshipBelongsTo, Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}}}; for _, got := range Tables() { if got.Name == "child" && !reflect.DeepEqual(want, got) { t.Fatalf("descriptor mismatch: %#v", got) } } }
+import (
+ "reflect"
+ "testing"
+ "github.com/lestrrat-go/rasql/schema"
+)
+func TestDescriptorOwners(t *testing.T) {
+ want := schema.MustTableDef("child",
+  schema.Integer("child-id"), schema.Integer("parent-id"), schema.Text("same-Go-name"), schema.Text("computed"),
+  schema.PrimaryKey("child-id"), schema.Unique("same-Go-name"), schema.Check("same-Go-name <> ''"),
+  schema.Index("same_idx", "same-Go-name"),
+ )
+ want.Columns[2].Default = "same-Go-name"
+ want.Columns[3].GeneratedExpression = "same-Go-name"
+ want.Columns[3].GeneratedStorage = schema.GeneratedStored
+ want.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}, DeleteSetColumns: []string{"parent-id"}, OnDelete: schema.SetNull}}
+ want.Relationships = []schema.RelationshipDef{{Name: "Parent", Kind: schema.RelationshipBelongsTo, Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}}}
+ matches := 0
+ for _, got := range Tables() { if got.Name == "child" { matches++; if !reflect.DeepEqual(want, got) { t.Fatalf("descriptor mismatch: %#v", got) } } }
+ if matches != 1 { t.Fatalf("found %d child descriptors", matches) }
+}
 `), 0o644))
 	command := exec.CommandContext(context.Background(), "go", "test", "-mod=mod", "./...")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE=/tmp/rasql-gocache")
+	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(repo, ".tmp", "go-build"))
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }

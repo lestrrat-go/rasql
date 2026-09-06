@@ -77,7 +77,7 @@ func TestConsumer(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "consumer_test.go"), []byte(consumer), 0o644))
 	command := exec.CommandContext(context.Background(), "go", "test", "-mod=mod", "./...")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE=/tmp/rasql-gocache")
+	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(repo, ".tmp", "go-build"))
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }
@@ -120,7 +120,7 @@ func TestRelationships(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "relationships_test.go"), []byte(consumer), 0o644))
 	command := exec.CommandContext(context.Background(), "go", "test", "-mod=mod", "./...")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE=/tmp/rasql-gocache")
+	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(repo, ".tmp", "go-build"))
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }
