@@ -151,18 +151,12 @@ func (r Runner) revertPostgreSQL(ctx context.Context, connection *sql.Conn, targ
 }
 
 func (r Runner) revertMySQL(ctx context.Context, connection *sql.Conn, target RevertTarget, migrations []preparedMigration) ([]Migration, error) {
-	var acquired int
-	if err := connection.QueryRowContext(ctx, "SELECT GET_LOCK(?, ?)", r.historyTable, 30).Scan(&acquired); err != nil {
-		return nil, fmt.Errorf("migrate: acquire MySQL migration lock: %w", err)
-	}
-	if acquired != 1 {
-		return nil, fmt.Errorf("migrate: acquire MySQL migration lock: timed out")
-	}
-	defer r.releaseMySQLLock(connection)
-	if err := r.ensureHistory(ctx, connection); err != nil {
-		return nil, err
-	}
-	return r.revertPrepared(ctx, connection, connection, target, migrations)
+	return r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
+		if err := r.ensureHistory(ctx, connection); err != nil {
+			return nil, err
+		}
+		return r.revertPrepared(ctx, connection, connection, target, migrations)
+	})
 }
 
 func (r Runner) revertSQLite(ctx context.Context, connection *sql.Conn, target RevertTarget, migrations []preparedMigration) ([]Migration, error) {

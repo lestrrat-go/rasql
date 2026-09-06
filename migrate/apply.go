@@ -3,9 +3,14 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"sort"
+	"time"
 )
+
+const mysqlLockReleaseTimeout = 5 * time.Second
 
 // ApplyTarget names how far forward an apply goes. Build one with AllPending
 // or ApplyThrough.
@@ -133,6 +138,15 @@ func (r Runner) applyPostgreSQL(ctx context.Context, connection *sql.Conn, targe
 }
 
 func (r Runner) applyMySQL(ctx context.Context, connection *sql.Conn, target ApplyTarget, migrations []preparedMigration) ([]Migration, error) {
+	return r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
+		if err := r.ensureHistory(ctx, connection); err != nil {
+			return nil, err
+		}
+		return r.applyPrepared(ctx, connection, connection, target, migrations)
+	})
+}
+
+func (r Runner) withMySQLLock(ctx context.Context, connection *sql.Conn, run func() ([]Migration, error)) ([]Migration, error) {
 	var acquired int
 	if err := connection.QueryRowContext(ctx, "SELECT GET_LOCK(?, ?)", r.historyTable, 30).Scan(&acquired); err != nil {
 		return nil, fmt.Errorf("migrate: acquire MySQL migration lock: %w", err)
@@ -140,16 +154,39 @@ func (r Runner) applyMySQL(ctx context.Context, connection *sql.Conn, target App
 	if acquired != 1 {
 		return nil, fmt.Errorf("migrate: acquire MySQL migration lock: timed out")
 	}
-	defer r.releaseMySQLLock(connection)
-	if err := r.ensureHistory(ctx, connection); err != nil {
-		return nil, err
-	}
-	return r.applyPrepared(ctx, connection, connection, target, migrations)
+	migrationsApplied, operationErr := run()
+	cleanupErr := r.releaseMySQLLock(connection)
+	return migrationsApplied, errors.Join(operationErr, cleanupErr)
 }
 
-func (r Runner) releaseMySQLLock(connection *sql.Conn) {
-	var released int
-	_ = connection.QueryRowContext(context.Background(), "SELECT RELEASE_LOCK(?)", r.historyTable).Scan(&released)
+func (r Runner) releaseMySQLLock(connection *sql.Conn) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), mysqlLockReleaseTimeout)
+	defer cancel()
+
+	var released sql.NullInt64
+	err := connection.QueryRowContext(cleanupCtx, "SELECT RELEASE_LOCK(?)", r.historyTable).Scan(&released)
+	if err == nil && released.Valid && released.Int64 == 1 {
+		return nil
+	}
+
+	var releaseErr error
+	switch {
+	case err != nil:
+		releaseErr = fmt.Errorf("migrate: release MySQL migration lock: %w", err)
+	case !released.Valid:
+		releaseErr = errors.New("migrate: release MySQL migration lock: unexpected release result NULL")
+	default:
+		releaseErr = fmt.Errorf("migrate: release MySQL migration lock: unexpected release result %d", released.Int64)
+	}
+
+	markBadErr := connection.Raw(func(any) error { return driver.ErrBadConn })
+	if markBadErr != nil {
+		if errors.Is(markBadErr, driver.ErrBadConn) {
+			return errors.Join(releaseErr, fmt.Errorf("migrate: marked MySQL migration connection bad: %w", markBadErr))
+		}
+		return errors.Join(releaseErr, fmt.Errorf("migrate: could not mark MySQL migration connection bad: %w", markBadErr))
+	}
+	return fmt.Errorf("%w; MySQL migration connection marked bad", releaseErr)
 }
 
 func (r Runner) applySQLite(ctx context.Context, connection *sql.Conn, target ApplyTarget, migrations []preparedMigration) ([]Migration, error) {
