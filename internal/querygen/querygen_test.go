@@ -174,6 +174,20 @@ func TestGoSourceUntypedBindGoldenBytes(t *testing.T) {
 	require.Equal(t, want, string(source))
 }
 
+func TestGoSourceNullableReferencedColumnKeepsNonNullParameter(t *testing.T) {
+	parsed, err := namedsql.Parse("user_by_email", `SELECT id FROM users WHERE email = {{bind "email" users.email}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	table := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "email", Type: schema.TextType{}, Nullable: true},
+	}}
+	source, err := querygen.GoSource(compiled.QueryDef(), "generated", "UserByEmail", table)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func UserByEmail(email string)")
+}
+
 // TestGoSourceTypedBindGoldenBytes pins the exact emitted bytes of the case
 // that exercises the most emitter branches: a time.Time bind in a package
 // named "time", which forces both the grouped import block and the "time1"
