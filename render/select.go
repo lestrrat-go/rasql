@@ -109,6 +109,9 @@ type renderer struct {
 }
 
 func (r *renderer) writeSelect(s query.Select) error {
+	if err := r.validateSelectSources(s); err != nil {
+		return err
+	}
 	r.builder.WriteString("SELECT ")
 	if s.Distinct() {
 		r.builder.WriteString("DISTINCT ")
@@ -203,6 +206,59 @@ func (r *renderer) writeSelect(s query.Select) error {
 		}
 	}
 	return nil
+}
+
+type visibleSource struct {
+	qualifier  string
+	schema     string
+	descriptor string
+}
+
+func visibleSourceFromTable(table query.TableRef) visibleSource {
+	return visibleSource{
+		qualifier:  table.Qualifier(),
+		schema:     table.QualifierSchema(),
+		descriptor: table.Definition().QualifiedName(),
+	}
+}
+
+func (r *renderer) validateSelectSources(s query.Select) error {
+	sources := make([]visibleSource, 0, len(s.Correlations())+1+len(s.Joins()))
+	add := func(table query.TableRef) error {
+		candidate := visibleSourceFromTable(table)
+		for _, existing := range sources {
+			if !r.sourceIdentifiersConflict(existing, candidate) {
+				continue
+			}
+			return fmt.Errorf("sources %q and %q share the rendered qualifier %q in the %s dialect; use a distinct alias", existing.descriptor, candidate.descriptor, candidate.qualifier, r.dialect.Name())
+		}
+		sources = append(sources, candidate)
+		return nil
+	}
+	for _, correlation := range s.Correlations() {
+		if err := add(correlation); err != nil {
+			return err
+		}
+	}
+	if err := add(s.From()); err != nil {
+		return err
+	}
+	for _, join := range s.Joins() {
+		if err := add(join.Source()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *renderer) sourceIdentifiersConflict(left, right visibleSource) bool {
+	if !dialect.IdentifiersEqual(r.dialect, left.qualifier, right.qualifier) {
+		return false
+	}
+	if left.schema != "" && right.schema != "" {
+		return dialect.IdentifiersEqual(r.dialect, left.schema, right.schema)
+	}
+	return true
 }
 
 func (r *renderer) writeTable(table query.TableRef) error {

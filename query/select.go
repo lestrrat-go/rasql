@@ -481,8 +481,9 @@ func (s Select) Validate() error {
 	// tables, so a table this statement selects from that it also declared is
 	// refused: both would then be reachable, and a server would answer every
 	// column reference from this statement's copy without the SQL saying which
-	// was meant. The repair is the same alias validateSourceReference names for
-	// two tables of one statement.
+	// was meant. This validation compares exact names; rendering also applies
+	// the target dialect's identifier equality rule. The repair is the same
+	// alias validateSourceReference names for two tables of one statement.
 	for i, correlated := range s.correlations {
 		path := fmt.Sprintf("correlations[%d]", i)
 		if err := correlated.validate(); err != nil {
