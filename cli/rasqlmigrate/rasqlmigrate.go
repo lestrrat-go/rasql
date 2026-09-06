@@ -114,8 +114,8 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
 	_, _ = fmt.Fprintln(output)
 	_, _ = fmt.Fprintln(output, "-dir holds one directory per migration, named for its ID, which you create yourself.")
-	_, _ = fmt.Fprintln(output, "Each holds a .up.sql source for every step forward with the .down.sql that undoes it")
-	_, _ = fmt.Fprintln(output, "beside it, one native SQL statement per file. Migrations run in directory-name order,")
+	_, _ = fmt.Fprintln(output, "Each holds .up.sql sources with matching .down.sql files, or .rasql-irreversible with a reason,")
+	_, _ = fmt.Fprintln(output, "and one native SQL statement per file. Migrations run in directory-name order,")
 	_, _ = fmt.Fprintln(output, "forward sources in ascending filename order and reverse sources in descending order,")
 	_, _ = fmt.Fprintln(output, "so pad the numbers you name them with. The forward sources of an applied migration")
 	_, _ = fmt.Fprintln(output, "must never change; revert it with revert, or add a new migration.")
@@ -648,5 +648,15 @@ func writeDiffPlan(output io.Writer, plan diff.Plan) {
 		if !strings.HasSuffix(statement.SQL, "\n") {
 			_, _ = fmt.Fprintln(output)
 		}
+		if statement.ReverseSQL != "" {
+			_, _ = fmt.Fprintf(output, "-- reverse %s\n", strings.TrimSuffix(statement.Source, ".sql")+".down.sql")
+			_, _ = fmt.Fprint(output, statement.ReverseSQL)
+			if !strings.HasSuffix(statement.ReverseSQL, "\n") {
+				_, _ = fmt.Fprintln(output)
+			}
+		}
+	}
+	if plan.IrreversibleReason != "" {
+		_, _ = fmt.Fprintf(output, "irreversible: %s\n", plan.IrreversibleReason)
 	}
 }

@@ -524,9 +524,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	plan := diff.Plan{Dialect: "sqlite", Statements: make([]diff.PlannedStatement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
-			Source:  statement.name + ".sql",
-			SQL:     statement.sql,
-			Summary: statement.summary,
+			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
 		}
 	}
 	if len(plan.Statements) > 0 {
@@ -613,9 +611,10 @@ func sortedIndexKeys(indexes map[string]indexDefinition) []string {
 }
 
 type generatedStatement struct {
-	name    string
-	sql     string
-	summary string
+	name       string
+	sql        string
+	reverseSQL string
+	summary    string
 }
 
 func createTableStatement(table tableDefinition) (generatedStatement, error) {
@@ -627,9 +626,8 @@ func createTableStatement(table tableDefinition) (generatedStatement, error) {
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_table_" + filenamePart(name),
-		sql:     sql,
-		summary: "create table " + name,
+		name: "create_table_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
 	}, nil
 }
 
@@ -642,9 +640,8 @@ func createIndexStatement(index *sqlitequery.CreateIndexStatement) (generatedSta
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(name),
-		sql:     sql,
-		summary: "create index " + name,
+		name: "create_index_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(copy.Name)), summary: "create index " + name,
 	}, nil
 }
 
@@ -697,9 +694,9 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 			}
 			name := displayName(target.normalized.Name)
 			generated = append(generated, generatedStatement{
-				name:    "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name),
-				sql:     sql,
-				summary: "add column " + name + "." + column.Name.Name,
+				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
+				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.normalized.Name), reverseIdentifier(column.Name)),
+				summary:    "add column " + name + "." + column.Name.Name,
 			})
 			continue
 		}
@@ -1225,6 +1222,21 @@ func displayName(name sqlitequery.QualifiedName) string {
 		name = name[1:]
 	}
 	return name.String()
+}
+
+func reverseName(name sqlitequery.QualifiedName) string {
+	parts := make([]string, len(name))
+	for index, part := range name {
+		parts[index] = reverseIdentifier(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func reverseIdentifier(identifier sqlitequery.Identifier) string {
+	if !identifier.Quoted {
+		return identifier.Name
+	}
+	return `"` + strings.ReplaceAll(identifier.Name, `"`, `""`) + `"`
 }
 
 func filenamePart(value string) string {

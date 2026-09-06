@@ -176,6 +176,15 @@ func TestBuildSchemaFormatFilesLayout(t *testing.T) {
 	require.Equal(t, "audit__events.sql", files[1].Name, "a schema-qualified table is named <schema>__<table>")
 }
 
+func TestWriteDumpOutputWritesSchemaSources(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "schema")
+	files := []dumpFile{{Name: "members.sql", SQL: "CREATE TABLE members (id INTEGER);\n"}}
+	require.NoError(t, writeDumpOutput(output, "sqlite", files))
+	contents, err := os.ReadFile(filepath.Join(output, "members.sql"))
+	require.NoError(t, err)
+	require.Equal(t, files[0].SQL, string(contents))
+}
+
 func TestBuildMigrationFormatFilesLayout(t *testing.T) {
 	teams := schema.TableDef{Name: "teams", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
 	members := schema.TableDef{
@@ -199,7 +208,8 @@ func TestBuildMigrationFormatFilesLayout(t *testing.T) {
 		"002_create_members.up.sql",
 		"002_create_members.down.sql",
 		"003_create_index_members_team_id_idx.up.sql",
-	}, dumpFileNames(files), "index steps are numbered after every table step, with no .down.sql")
+		"003_create_index_members_team_id_idx.down.sql",
+	}, dumpFileNames(files), "schema-format dump files retain their explicit reverse sources")
 
 	root := t.TempDir()
 	migrationDirectory := filepath.Join(root, "001_initial")
@@ -211,7 +221,7 @@ func TestBuildMigrationFormatFilesLayout(t *testing.T) {
 	require.NoError(t, err, "migrationdir.Load must accept the directory a dump writes")
 	require.Len(t, loaded, 1)
 	require.Len(t, loaded[0].Statements, 3, "two CREATE TABLE statements and one CREATE INDEX statement")
-	require.Len(t, loaded[0].Down, 2, "only the two CREATE TABLE steps have a reverse source")
+	require.Len(t, loaded[0].Down, 3, "every generated step has a reverse source")
 }
 
 func dumpFileNames(files []dumpFile) []string {
@@ -239,13 +249,13 @@ func TestRunDumpPreviewWritesNothingToDisk(t *testing.T) {
 }
 
 func TestWriteDumpOutputDirectoryHandling(t *testing.T) {
-	files := []dumpFile{{Name: "teams.sql", SQL: "CREATE TABLE teams (id INTEGER);\n"}}
+	files := []dumpFile{{Name: "teams.up.sql", SQL: "CREATE TABLE teams (id INTEGER);\n"}, {Name: "teams.down.sql", SQL: "DROP TABLE teams;\n"}}
 
 	t.Run("missing directory is created with parents", func(t *testing.T) {
 		root := t.TempDir()
 		target := filepath.Join(root, "nested", "db", "schema")
 		require.NoError(t, writeDumpOutput(target, "sqlite", files))
-		contents, err := os.ReadFile(filepath.Join(target, "teams.sql"))
+		contents, err := os.ReadFile(filepath.Join(target, "teams.up.sql"))
 		require.NoError(t, err)
 		require.Equal(t, files[0].SQL, string(contents))
 	})
@@ -253,7 +263,7 @@ func TestWriteDumpOutputDirectoryHandling(t *testing.T) {
 	t.Run("empty directory is used", func(t *testing.T) {
 		target := t.TempDir()
 		require.NoError(t, writeDumpOutput(target, "sqlite", files))
-		contents, err := os.ReadFile(filepath.Join(target, "teams.sql"))
+		contents, err := os.ReadFile(filepath.Join(target, "teams.up.sql"))
 		require.NoError(t, err)
 		require.Equal(t, files[0].SQL, string(contents))
 	})

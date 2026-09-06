@@ -250,14 +250,16 @@ func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 		Dialect: "mysql",
 		Statements: []diff.PlannedStatement{
 			{
-				Source:  "001_add_column_members_email.sql",
-				SQL:     "ALTER TABLE members ADD COLUMN email text;\n",
-				Summary: "add column members.email",
+				Source:     "001_add_column_members_email.sql",
+				SQL:        "ALTER TABLE members ADD COLUMN email text;\n",
+				ReverseSQL: "ALTER TABLE members DROP COLUMN email;\n",
+				Summary:    "add column members.email",
 			},
 			{
-				Source:  "002_create_index_members_members_email_idx.sql",
-				SQL:     "CREATE INDEX members_email_idx ON members (email);\n",
-				Summary: "create index members_email_idx",
+				Source:     "002_create_index_members_members_email_idx.sql",
+				SQL:        "CREATE INDEX members_email_idx ON members (email);\n",
+				ReverseSQL: "DROP INDEX members_email_idx ON members;\n",
+				Summary:    "create index members_email_idx",
 			},
 		},
 	}, plan)
@@ -282,14 +284,16 @@ func TestDiffKeepsSameNamedIndexesDistinctByTable(t *testing.T) {
 		Dialect: "mysql",
 		Statements: []diff.PlannedStatement{
 			{
-				Source:  "001_create_index_members_common_idx.sql",
-				SQL:     "CREATE INDEX common_idx ON members (email);\n",
-				Summary: "create index common_idx",
+				Source:     "001_create_index_members_common_idx.sql",
+				SQL:        "CREATE INDEX common_idx ON members (email);\n",
+				ReverseSQL: "DROP INDEX common_idx ON members;\n",
+				Summary:    "create index common_idx",
 			},
 			{
-				Source:  "002_create_index_projects_common_idx.sql",
-				SQL:     "CREATE INDEX common_idx ON projects (name);\n",
-				Summary: "create index common_idx",
+				Source:     "002_create_index_projects_common_idx.sql",
+				SQL:        "CREATE INDEX common_idx ON projects (name);\n",
+				ReverseSQL: "DROP INDEX common_idx ON projects;\n",
+				Summary:    "create index common_idx",
 			},
 		},
 	}, plan)
@@ -322,9 +326,10 @@ func TestDiffAllowsSameNamedIndexesOnDifferentTables(t *testing.T) {
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
 	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_create_index_projects_shared_idx.sql",
-		SQL:     "CREATE INDEX shared_idx ON projects (name);\n",
-		Summary: "create index shared_idx",
+		Source:     "001_create_index_projects_shared_idx.sql",
+		SQL:        "CREATE INDEX shared_idx ON projects (name);\n",
+		ReverseSQL: "DROP INDEX shared_idx ON projects;\n",
+		Summary:    "create index shared_idx",
 	}}, plan.Statements)
 }
 
@@ -337,14 +342,16 @@ func TestDiffGeneratedSQLRetainsTargetIdentifierSpelling(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []diff.PlannedStatement{
 		{
-			Source:  "001_add_column_members_email.sql",
-			SQL:     "ALTER TABLE `Members` ADD COLUMN `Email` text;\n",
-			Summary: "add column Members.Email",
+			Source:     "001_add_column_members_email.sql",
+			SQL:        "ALTER TABLE `Members` ADD COLUMN `Email` text;\n",
+			ReverseSQL: "ALTER TABLE `Members` DROP COLUMN `Email`;\n",
+			Summary:    "add column Members.Email",
 		},
 		{
-			Source:  "002_create_index_members_members_email_idx.sql",
-			SQL:     "CREATE INDEX `Members_Email_IDX` ON `Members` (`Email`);\n",
-			Summary: "create index Members_Email_IDX",
+			Source:     "002_create_index_members_members_email_idx.sql",
+			SQL:        "CREATE INDEX `Members_Email_IDX` ON `Members` (`Email`);\n",
+			ReverseSQL: "DROP INDEX `Members_Email_IDX` ON `Members`;\n",
+			Summary:    "create index Members_Email_IDX",
 		},
 	}, plan.Statements)
 }
@@ -383,9 +390,10 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
 	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_create_table_projects.sql",
-		SQL:     "CREATE TABLE projects (id bigint PRIMARY KEY, owner_id bigint NOT NULL);\n",
-		Summary: "create table projects",
+		Source:     "001_create_table_projects.sql",
+		SQL:        "CREATE TABLE projects (id bigint PRIMARY KEY, owner_id bigint NOT NULL);\n",
+		ReverseSQL: "DROP TABLE projects;\n",
+		Summary:    "create table projects",
 	}}, plan.Statements)
 }
 
@@ -409,7 +417,7 @@ func TestDiffWritesMigrationForMaximumLengthMultibyteIdentifiers(t *testing.T) {
 	require.NoError(t, diff.WriteMigration(directory, plan))
 	entries, err := os.ReadDir(directory)
 	require.NoError(t, err)
-	require.Len(t, entries, 2)
+	require.Len(t, entries, 4)
 }
 
 func TestDiffRejectsCollidingGeneratedStatementNames(t *testing.T) {
@@ -441,9 +449,10 @@ func TestDiffGeneratesNewRequiredColumnWithDefault(t *testing.T) {
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
 	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_add_column_members_active.sql",
-		SQL:     "ALTER TABLE members ADD COLUMN active boolean NOT NULL DEFAULT TRUE;\n",
-		Summary: "add column members.active",
+		Source:     "001_add_column_members_active.sql",
+		SQL:        "ALTER TABLE members ADD COLUMN active boolean NOT NULL DEFAULT TRUE;\n",
+		ReverseSQL: "ALTER TABLE members DROP COLUMN active;\n",
+		Summary:    "add column members.active",
 	}}, plan.Statements)
 }
 

@@ -41,13 +41,13 @@ func TestRunDiffPreviewsAndWritesPostgreSQLMigration(t *testing.T) {
 	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id bigint PRIMARY KEY, email text);\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"diff", "-dialect", "postgresql", "-from", baseline, "-to", target}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 
 	migrationDirectory := filepath.Join(t.TempDir(), "002_add_member_email")
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"diff", "-dialect", "postgresql", "-from", baseline, "-to", target, "-output", migrationDirectory}))
 	require.Equal(t, "created "+migrationDirectory+"\n", outputBuffer.String())
-	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
+	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
 }
@@ -59,13 +59,13 @@ func TestRunDiffPreviewsMySQLMigration(t *testing.T) {
 	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id bigint PRIMARY KEY, email text);\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"diff", "-dialect", "mysql", "-from", baseline, "-to", target}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 
 	migrationDirectory := filepath.Join(t.TempDir(), "002_add_member_email")
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"diff", "-dialect", "mysql", "-from", baseline, "-to", target, "-output", migrationDirectory}))
 	require.Equal(t, "created "+migrationDirectory+"\n", outputBuffer.String())
-	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
+	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
 }
@@ -77,13 +77,13 @@ func TestRunDiffPreviewsSQLiteMigration(t *testing.T) {
 	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id integer PRIMARY KEY, email text);\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"diff", "-dialect", "sqlite", "-from", baseline, "-to", target}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 
 	migrationDirectory := filepath.Join(t.TempDir(), "002_add_member_email")
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"diff", "-dialect", "sqlite", "-from", baseline, "-to", target, "-output", migrationDirectory}))
 	require.Equal(t, "created "+migrationDirectory+"\n", outputBuffer.String())
-	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
+	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
 }
@@ -105,7 +105,7 @@ func TestRunDiffLivePreviewsSQLiteMigration(t *testing.T) {
 		"-table", "members",
 		"-to", target,
 	}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 }
 
 func TestRunDiffLiveAddsNullableSQLiteInlineForeignKeyColumn(t *testing.T) {
@@ -126,7 +126,7 @@ func TestRunDiffLiveAddsNullableSQLiteInlineForeignKeyColumn(t *testing.T) {
 		"-table", "children",
 		"-to", target,
 	}))
-	require.Equal(t, "-- 001_add_column_children_parent_id.sql: add column children.parent_id\nALTER TABLE children ADD COLUMN parent_id integer REFERENCES parents (id);\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_children_parent_id.sql: add column children.parent_id\nALTER TABLE children ADD COLUMN parent_id integer REFERENCES parents (id);\n-- reverse 001_add_column_children_parent_id.down.sql\nALTER TABLE children DROP COLUMN parent_id;\n", outputBuffer.String())
 }
 
 func TestRunDiffLiveInspectsMixedCaseSQLiteTable(t *testing.T) {
@@ -168,7 +168,7 @@ func TestRunDiffLiveMatchesMixedCaseSQLiteTableWhenSelectedLowercase(t *testing.
 		"-table", "members",
 		"-to", target,
 	}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 }
 
 func TestRunDiffLivePreservesSQLiteForeignKeys(t *testing.T) {
@@ -563,6 +563,40 @@ func TestRunApplyStatusAndVerifySQLiteSQLSources(t *testing.T) {
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"verify", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
 	require.Equal(t, "migration verification passed\n", outputBuffer.String())
+}
+
+func TestRunDiffGeneratedSQLiteMigrationRoundTrip(t *testing.T) {
+	baseline := filepath.Join(t.TempDir(), "baseline")
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, baseline, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY);\n")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT);\n")
+	directory := filepath.Join(t.TempDir(), "001_add_email")
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE members (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	setCommandOutput(t)
+	require.NoError(t, run([]string{"diff", "-dialect", "sqlite", "-from", baseline, "-to", target, "-output", directory}))
+	require.NoError(t, run([]string{"plan", "-dir", filepath.Dir(directory)}))
+	require.NoError(t, run([]string{"apply", "-dir", filepath.Dir(directory), "-dialect", "sqlite", "-dsn", dsn}))
+	require.NoError(t, run([]string{"status", "-dir", filepath.Dir(directory), "-dialect", "sqlite", "-dsn", dsn}))
+	require.NoError(t, run([]string{"verify", "-dir", filepath.Dir(directory), "-dialect", "sqlite", "-dsn", dsn}))
+
+	database, err = sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	var column string
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT name FROM pragma_table_info('members') WHERE name = 'email'").Scan(&column))
+	require.Equal(t, "email", column)
+	require.NoError(t, database.Close())
+
+	require.NoError(t, run([]string{"revert", "-dir", filepath.Dir(directory), "-dialect", "sqlite", "-dsn", dsn, "-steps", "1"}))
+	database, err = sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	err = database.QueryRowContext(t.Context(), "SELECT name FROM pragma_table_info('members') WHERE name = 'email'").Scan(&column)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	require.NoError(t, database.Close())
 }
 
 // TestRunApplyToStopsAtTheNamedMigration pins what -to means on apply: the
