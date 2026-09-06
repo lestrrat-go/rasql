@@ -454,6 +454,21 @@ func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables 
 	if owner, exists := identifiers[q.Function]; exists {
 		return File{}, fmt.Errorf("function %q collides with %s", q.Function, owner)
 	}
+	if q.Describer != nil {
+		resultName := q.ResultType
+		if resultName == "" {
+			resultName = q.Function + "Row"
+		}
+		helperName := "Query" + q.Function
+		if q.Cardinality != querydescribe.Many {
+			helperName += "One"
+		}
+		for _, name := range []string{resultName, helperName} {
+			if owner, exists := identifiers[name]; exists {
+				return File{}, fmt.Errorf("query %q generated identifier %q collides with %s", q.Function, name, owner)
+			}
+		}
+	}
 	if q.Output == "" {
 		return File{}, errors.New("output is required")
 	}
@@ -468,6 +483,18 @@ func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables 
 	}
 	filenames[filenameKey(q.Output)] = fmt.Sprintf("query %q, which generates %s", q.Function, q.Output)
 	identifiers[q.Function] = fmt.Sprintf("query %q", q.Function)
+	if q.Describer != nil {
+		resultName := q.ResultType
+		if resultName == "" {
+			resultName = q.Function + "Row"
+		}
+		helperName := "Query" + q.Function
+		if q.Cardinality != querydescribe.Many {
+			helperName += "One"
+		}
+		identifiers[resultName] = fmt.Sprintf("query %q result type", q.Function)
+		identifiers[helperName] = fmt.Sprintf("query %q helper", q.Function)
+	}
 
 	d := q.Dialect
 	if d == nil {

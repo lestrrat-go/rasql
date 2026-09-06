@@ -35,6 +35,9 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 	if !isUsableGoIdentifier(functionName) {
 		return nil, fmt.Errorf("namedsql %q: invalid function name %q", def.Name, functionName)
 	}
+	if def.Result != nil && def.ResultType != "" && (!isUsableGoIdentifier(def.ResultType) || def.ResultType[0] < 'A' || def.ResultType[0] > 'Z') {
+		return nil, fmt.Errorf("namedsql %q: invalid exported result type %q", def.Name, def.ResultType)
+	}
 	if functionName == "init" || (packageName == "main" && functionName == "main") {
 		return nil, fmt.Errorf("namedsql %q: function name %q cannot be generated in package %q", def.Name, functionName, packageName)
 	}
@@ -109,6 +112,7 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 
 	timeName := "time"
 	typed := def.Result != nil
+	typedMany := typed && def.Result.Cardinality == 0
 	if needsTime || typed {
 		timeName = availableGoIdentifier("time", reservedNames)
 		for index, parameterType := range parameterTypes {
@@ -144,7 +148,10 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 			source.WriteByte(' ')
 		}
 		if typed {
-			source.WriteString("\"context\"\n\t\"fmt\"\n\t\"iter\"\n")
+			source.WriteString("\"context\"\n\t\"fmt\"\n")
+			if typedMany {
+				source.WriteString("\t\"iter\"\n")
+			}
 		}
 		if needsTime {
 			source.WriteString("\"time\"\n")
@@ -159,7 +166,11 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 	} else if len(bindingImports) > 0 || typed {
 		source.WriteString("import (\n")
 		if typed {
-			source.WriteString("\t\"context\"\n\t\"fmt\"\n\t\"iter\"\n\t\"github.com/lestrrat-go/rasql\"\n")
+			source.WriteString("\t\"context\"\n\t\"fmt\"\n")
+			if typedMany {
+				source.WriteString("\t\"iter\"\n")
+			}
+			source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
 		}
 		writeBindingImports(&source, bindingImports)
 		source.WriteString("\n\t")
@@ -207,12 +218,16 @@ func GoSourceInDir(dir string, def namedsql.QueryDef, packageName string, functi
 			}
 			source.WriteString("\t" + exportedName(column.Name) + " " + typ + " `rasql:\"" + column.Name + "\"`\n")
 		}
-		source.WriteString("}\n\nfunc (r *" + resultType + ") ScanDestinations(columns []string) ([]any, error) {\n\tm := rasql.NewScanMask(len(columns)); dest := make([]any, len(columns))\n\tfor i, name := range columns { switch name {\n")
-		for _, column := range def.Result.Columns {
-			source.WriteString("\tcase " + strconv.Quote(column.Name) + ": if !m.Mark(i) { return nil, fmt.Errorf(\"duplicate result column\") }; dest[i] = &r." + exportedName(column.Name) + "\n")
+		source.WriteString("}\n\nfunc (r *" + resultType + ") ScanDestinations(columns []string) ([]any, error) {\n\tm := rasql.NewScanMask(" + strconv.Itoa(len(def.Result.Columns)) + "); dest := make([]any, len(columns))\n\tfor i, name := range columns { switch name {\n")
+		for index, column := range def.Result.Columns {
+			source.WriteString("\tcase " + strconv.Quote(column.Name) + ": if !m.Mark(" + strconv.Itoa(index) + ") { return nil, fmt.Errorf(\"duplicate result column\") }; dest[i] = &r." + exportedName(column.Name) + "\n")
 		}
 		source.WriteString("\tdefault: return nil, fmt.Errorf(\"unknown result column %s\", name) } }; return dest, nil\n}\n")
-		source.WriteString("\nfunc Query" + functionName + "(ctx context.Context, db rasql.DB")
+		helperName := "Query" + functionName
+		if def.Result.Cardinality != 0 {
+			helperName += "One"
+		}
+		source.WriteString("\nfunc " + helperName + "(ctx context.Context, db rasql.DB")
 		for index, bind := range def.Binds {
 			source.WriteString(", " + bind.Name + " " + parameterTypes[index])
 		}

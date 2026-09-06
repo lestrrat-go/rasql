@@ -698,6 +698,21 @@ func (p QueryPackage) planQuery(ctx context.Context, root, dir string, query Que
 	if owner, exists := functions[query.Function]; exists {
 		return File{}, fmt.Errorf("generate: query function %q collides with %s", query.Function, owner)
 	}
+	if query.Describer != nil {
+		resultName := query.ResultType
+		if resultName == "" {
+			resultName = query.Function + "Row"
+		}
+		helperName := "Query" + query.Function
+		if query.Cardinality != querydescribe.Many {
+			helperName += "One"
+		}
+		for _, name := range []string{resultName, helperName} {
+			if owner, exists := functions[name]; exists {
+				return File{}, fmt.Errorf("query %q generated identifier %q collides with %s", query.Function, name, owner)
+			}
+		}
+	}
 
 	d := query.Dialect
 	if d == nil {
@@ -752,6 +767,18 @@ func (p QueryPackage) planQuery(ctx context.Context, root, dir string, query Que
 
 	filenames[filenameKey(query.Output)] = fmt.Sprintf("query %q", query.Function)
 	functions[query.Function] = fmt.Sprintf("query output %q", query.Output)
+	if query.Describer != nil {
+		resultName := query.ResultType
+		if resultName == "" {
+			resultName = query.Function + "Row"
+		}
+		helperName := "Query" + query.Function
+		if query.Cardinality != querydescribe.Many {
+			helperName += "One"
+		}
+		functions[resultName] = fmt.Sprintf("query %q result type", query.Function)
+		functions[helperName] = fmt.Sprintf("query %q helper", query.Function)
+	}
 	path := filepath.Join(dir, query.Output)
 	destination, err := genfile.ResolveDestination(path)
 	if err != nil {
