@@ -27,9 +27,9 @@ type Migration struct {
 	// reverse script can be added or corrected for a migration that is
 	// already applied without invalidating its history record.
 	//
-	// Every migration read from disk has them, because a migration with no
-	// reverse source fails to load. A Migration built in Go may leave them
-	// empty, and Revert then refuses to select it.
+	// A migration read from disk may have no reverse sources when it carries
+	// an explicit irreversibility marker. A Migration built in Go may also
+	// leave them empty, and Revert then refuses to select it.
 	Down []Statement
 }
 
