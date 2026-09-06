@@ -146,3 +146,41 @@ func TestStorePlanContextChecksQueryInputFreshnessBeforePublication(t *testing.T
 	_, err = os.Stat(filepath.Join(root, "generated"))
 	require.Error(t, err)
 }
+
+func TestStoreHeldPlanRejectsAllFreshnessFailuresBeforePublication(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{"removed", func(t *testing.T, path string) { require.NoError(t, os.Remove(path)) }},
+		{"replaced", func(t *testing.T, path string) { require.NoError(t, os.WriteFile(path, []byte("SELECT 2"), 0o644)) }},
+		{"oversized", func(t *testing.T, path string) { require.NoError(t, os.WriteFile(path, make([]byte, 64<<20+1), 0o644)) }},
+		{"unreadable", func(t *testing.T, path string) {
+			require.NoError(t, os.Remove(path))
+			require.NoError(t, os.Mkdir(path, 0o755))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, action := range []string{"check", "commit"} {
+				t.Run(action, func(t *testing.T) {
+					root := t.TempDir()
+					require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/storefresh\n\ngo 1.26\n"), 0o644))
+					input := filepath.Join(root, "report.sql")
+					require.NoError(t, os.WriteFile(input, []byte("SELECT 1"), 0o644))
+					store := generate.Store{Package: "store", Root: root, Dir: filepath.Join(root, "generated"), Dialect: dialect.SQLite(), Tables: []schema.TableDef{{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}}, Queries: []generate.Query{{Function: "Report", Output: "report_gen.go", Input: input}}}
+					plan, err := store.PlanContext(t.Context())
+					require.NoError(t, err)
+					tc.mutate(t, input)
+					if action == "check" {
+						require.Error(t, plan.Check())
+					} else {
+						require.Error(t, plan.Commit())
+					}
+					_, statErr := os.Stat(filepath.Join(root, "generated"))
+					require.Error(t, statErr)
+				})
+			}
+		})
+	}
+}
