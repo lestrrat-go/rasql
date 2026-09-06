@@ -567,10 +567,7 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 }
 
 func TestSchemaGeneratedRelationshipShapesExecuteSQLite(t *testing.T) {
-	users := schema.TableDef{
-		Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"},
-		Relationships: []schema.RelationshipDef{{Name: "Roles", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "roles", ReferencedColumns: []string{"id"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "user_roles"}, SourceColumns: []string{"user_id"}, TargetColumns: []string{"role_id"}}}},
-	}
+	users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "code", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}, Relationships: []schema.RelationshipDef{{Name: "Roles", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "roles", ReferencedColumns: []string{"id"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "user_roles"}, SourceColumns: []string{"user_id"}, TargetColumns: []string{"role_id"}}}, {Name: "LogicalOrders", Kind: schema.RelationshipHasMany, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "logical_orders", ReferencedColumns: []string{"user_id"}}}}
 	orders := schema.TableDef{
 		Name:        "orders",
 		Columns:     []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}, Nullable: true}},
@@ -598,10 +595,13 @@ func TestSchemaGeneratedRelationshipShapesExecuteSQLite(t *testing.T) {
 	userRoles := schema.TableDef{Name: "user_roles", Columns: []schema.ColumnDef{{Name: "user_id", Type: schema.IntegerType{}}, {Name: "role_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"user_id", "role_id"}}
 	permissions := schema.TableDef{Name: "permissions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}}
 	rolePermissions := schema.TableDef{Name: "role_permissions", Columns: []schema.ColumnDef{{Name: "role_id", Type: schema.IntegerType{}}, {Name: "permission_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"role_id", "permission_id"}}
+	logicalOrders := schema.TableDef{Name: "logical_orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	alternate := schema.TableDef{Name: "alternate", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "code", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}, UniqueConstraints: []schema.UniqueDef{{Columns: []string{"code"}}}}
+	references := schema.TableDef{Name: "references_table", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "alternate_code", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}, ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"alternate_code"}, ReferencedTable: "alternate", ReferencedColumns: []string{"code"}}}, Relationships: []schema.RelationshipDef{{Name: "Alternate", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipRequired, Columns: []string{"alternate_code"}, ReferencedTable: "alternate", ReferencedColumns: []string{"code"}}}}
 	compositeSources := schema.TableDef{Name: "composite_sources", Columns: []schema.ColumnDef{{Name: "left", Type: schema.TextType{}}, {Name: "right", Type: schema.TextType{}}}, PrimaryKey: []string{"left", "right"}, Relationships: []schema.RelationshipDef{{Name: "Targets", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"left", "right"}, ReferencedTable: "composite_targets", ReferencedColumns: []string{"left", "right"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "composite_links"}, SourceColumns: []string{"source_left", "source_right"}, TargetColumns: []string{"target_left", "target_right"}}}}}
 	compositeTargets := schema.TableDef{Name: "composite_targets", Columns: []schema.ColumnDef{{Name: "left", Type: schema.TextType{}}, {Name: "right", Type: schema.TextType{}}, {Name: "value", Type: schema.TextType{}}}, PrimaryKey: []string{"left", "right"}}
 	compositeLinks := schema.TableDef{Name: "composite_links", Columns: []schema.ColumnDef{{Name: "source_left", Type: schema.TextType{}}, {Name: "source_right", Type: schema.TextType{}}, {Name: "target_left", Type: schema.TextType{}}, {Name: "target_right", Type: schema.TextType{}}}, PrimaryKey: []string{"source_left", "source_right", "target_left", "target_right"}}
-	allTables := []schema.TableDef{users, orders, profiles, accounts, memberships, roles, userRoles, permissions, rolePermissions, compositeSources, compositeTargets, compositeLinks}
+	allTables := []schema.TableDef{users, orders, profiles, accounts, memberships, roles, userRoles, permissions, rolePermissions, logicalOrders, alternate, references, compositeSources, compositeTargets, compositeLinks}
 	descriptor, err := schemagen.DescriptorSource("generated", allTables...)
 	require.NoError(t, err)
 	files := make(map[string][]byte)
@@ -699,6 +699,7 @@ func TestNullableComposite(t *testing.T) {
 const generatedRelationshipShapesSQLiteTest = `package generated_test
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -706,6 +707,8 @@ import (
 	"example.com/generated"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/exec"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -717,7 +720,7 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 	db, err := rasql.New(sqlDB, dialect.SQLite())
 	require.NoError(t, err)
 	for _, statement := range []string{
-		"CREATE TABLE users (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE users (id INTEGER PRIMARY KEY, code TEXT NOT NULL)",
 		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER)",
 		"CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER)",
 		"CREATE TABLE accounts (tenant_id INTEGER NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (tenant_id, id))",
@@ -726,18 +729,24 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 		"CREATE TABLE user_roles (user_id INTEGER NOT NULL, role_id INTEGER NOT NULL)",
 		"CREATE TABLE permissions (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
 		"CREATE TABLE role_permissions (role_id INTEGER NOT NULL, permission_id INTEGER NOT NULL)",
+		"CREATE TABLE logical_orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)",
+		"CREATE TABLE alternate (id INTEGER PRIMARY KEY, code TEXT UNIQUE NOT NULL)",
+		"CREATE TABLE references_table (id INTEGER PRIMARY KEY, alternate_code TEXT NOT NULL, FOREIGN KEY (alternate_code) REFERENCES alternate(code))",
 		"CREATE TABLE composite_sources (left TEXT NOT NULL, right TEXT NOT NULL, PRIMARY KEY (left, right))",
 		"CREATE TABLE composite_targets (left TEXT NOT NULL, right TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (left, right))",
 		"CREATE TABLE composite_links (source_left TEXT NOT NULL, source_right TEXT NOT NULL, target_left TEXT NOT NULL, target_right TEXT NOT NULL)",
-		"INSERT INTO users VALUES (1), (2)",
+		"INSERT INTO users VALUES (1, 'one'), (2, 'two')",
 		"INSERT INTO orders VALUES (10, NULL), (11, 1)",
 		"INSERT INTO profiles VALUES (30, 1), (31, 1)",
 		"INSERT INTO accounts VALUES (7, 1), (8, 1)",
 		"INSERT INTO memberships VALUES (40, 7, 1), (41, 8, 1)",
 		"INSERT INTO roles VALUES (5, 'admin'), (6, 'reader')",
-		"INSERT INTO user_roles VALUES (1, 5), (1, 6)",
+		"INSERT INTO user_roles VALUES (1, 5), (1, 5), (1, 6)",
 		"INSERT INTO permissions VALUES (50, 'read'), (51, 'write')",
 		"INSERT INTO role_permissions VALUES (5, 50), (6, 51)",
+		"INSERT INTO logical_orders VALUES (70, 1), (71, 1)",
+		"INSERT INTO alternate VALUES (90, 'alt-1')",
+		"INSERT INTO references_table VALUES (80, 'alt-1')",
 		"INSERT INTO composite_sources VALUES ('source', 'key')",
 		"INSERT INTO composite_targets VALUES ('a|b', 'c', 'first'), ('a', 'b|c', 'second')",
 		"INSERT INTO composite_links VALUES ('source', 'key', 'a|b', 'c'), ('source', 'key', 'a', 'b|c')",
@@ -754,6 +763,15 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 		loaded = row
 	}
 	require.Equal(t, int64(1), loaded.ID)
+	references, err := generated.ReferencesTable().Alternate().Load(t.Context(), db, []generated.ReferencesTableRow{{ID: 80, AlternateCode: "alt-1"}})
+	require.NoError(t, err)
+	require.Equal(t, "alt-1", references["alt-1"].Code)
+	logical, err := generated.Users().LogicalOrders().Load(t.Context(), db, []generated.UsersRow{{ID: 1}})
+	require.NoError(t, err)
+	require.Len(t, logical[1], 2)
+	var ddl string
+	require.NoError(t, sqlDB.QueryRowContext(t.Context(), "SELECT sql FROM sqlite_master WHERE name = 'logical_orders'").Scan(&ddl))
+	require.NotContains(t, ddl, "FOREIGN KEY")
 
 	accounts, err := generated.Accounts().Memberships().Load(t.Context(), db, []generated.AccountsRow{{TenantID: 7, ID: 1}, {TenantID: 8, ID: 1}})
 	require.NoError(t, err)
@@ -777,8 +795,30 @@ func TestRelationshipShapesSQLite(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, called)
-	require.Len(t, roles[1], 2)
+	require.Len(t, roles[1], 3)
 	require.Empty(t, roles[2])
+	require.Equal(t, int64(1), generated.Users().Roles().SourceKey(generated.UsersRow{ID: 1}))
+	require.Equal(t, int64(1), generated.Users().Roles().TargetKey(generated.RolesRow{ID: 1}))
+	ordered, err := generated.Users().Roles().LoadWith(t.Context(), db, []generated.UsersRow{{ID: 1}}, rasql.RelationshipLoadOptions{OrderBy: []query.Order{query.Desc(generated.Roles().Name())}, PerParentLimit: 1})
+	require.NoError(t, err)
+	require.Len(t, ordered[1], 1)
+	require.Equal(t, int64(6), ordered[1][0].ID)
+	queries := 0
+	hooked, err := db.WithHooks(exec.HookFunc{BeforeFunc: func(_ context.Context, _ exec.Operation) error { queries++; return nil }})
+	require.NoError(t, err)
+	_, err = generated.Users().Roles().LoadThen(t.Context(), hooked, []generated.UsersRow{{ID: 1}, {ID: 2}}, rasql.RelationshipLoadOptions{}, func(rows []generated.RolesRow) error {
+		_, err := generated.Roles().Permissions().Load(t.Context(), hooked, rows)
+		return err
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, queries)
+	queries = 0
+	_, err = generated.Users().Roles().LoadThen(t.Context(), hooked, []generated.UsersRow{{ID: 1}, {ID: 2}}, rasql.RelationshipLoadOptions{BindLimit: 1}, func(rows []generated.RolesRow) error {
+		_, err := generated.Roles().Permissions().LoadWith(t.Context(), hooked, rows, rasql.RelationshipLoadOptions{BindLimit: 1})
+		return err
+	})
+	require.NoError(t, err)
+	require.Equal(t, 4, queries)
 	compositeSources := []generated.CompositeSourcesRow{{Left: "source", Right: "key"}, {Left: "source", Right: "key"}}
 	called = false
 	_, err = generated.CompositeSources().Targets().LoadThen(t.Context(), db, compositeSources, rasql.RelationshipLoadOptions{}, func(rows []generated.CompositeTargetsRow) error {
