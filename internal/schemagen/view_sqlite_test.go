@@ -22,8 +22,6 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)")
 	require.NoError(t, err)
-	_, err = database.ExecContext(t.Context(), "INSERT INTO users VALUES (1, 'ada@example.com')")
-	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), "CREATE VIEW active_users AS SELECT id, email FROM users")
 	require.NoError(t, err)
 	inspector, err := inspect.New(database, dialect.SQLite())
@@ -43,7 +41,7 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 	require.NoError(t, err)
 	directory := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
-	usage := []byte("package generated_test\n\nimport (\n\t\"context\"\n\t\"database/sql\"\n\t\"fmt\"\n\t\"testing\"\n\t\"github.com/lestrrat-go/rasql\"\n\t\"github.com/lestrrat-go/rasql/dialect\"\n\t\"example.com/generated\"\n\t_ \"modernc.org/sqlite\"\n)\nfunc TestRead(t *testing.T) {\n db, err := sql.Open(\"sqlite\", `" + databasePath + "`); if err != nil { t.Fatal(err) }; defer db.Close(); rdb, _ := rasql.New(db, dialect.SQLite()); rows, err := rasql.SelectFrom(generated.ActiveUsers()).All(context.Background(), rdb); if err != nil { t.Fatal(err) }; fmt.Println(rows[0].Email)\n}\n")
+	usage := []byte("package generated_test\n\nimport (\n\t\"context\"\n\t\"database/sql\"\n\t\"fmt\"\n\t\"testing\"\n\t\"github.com/lestrrat-go/rasql\"\n\t\"github.com/lestrrat-go/rasql/dialect\"\n\t\"example.com/generated\"\n\t_ \"modernc.org/sqlite\"\n)\nfunc TestRead(t *testing.T) {\n db, err := sql.Open(\"sqlite\", `" + databasePath + "`); if err != nil { t.Fatal(err) }; defer db.Close(); rdb, _ := rasql.New(db, dialect.SQLite()); if _, err := rasql.Insert(context.Background(), rdb, generated.Users(), generated.UserRow{ID: 1, Email: \"ada@example.com\"}); err != nil { t.Fatal(err) }; rows, err := rasql.SelectFrom(generated.ActiveUsers()).All(context.Background(), rdb); if err != nil { t.Fatal(err) }; fmt.Println(rows[0].Email)\n}\n")
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "usage_test.go"), usage, 0o600))
 	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(filepath.Join(filepath.Dir(filename), "../..")) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
