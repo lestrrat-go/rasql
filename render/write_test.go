@@ -2,6 +2,7 @@ package render_test
 
 import (
 	"database/sql"
+	"reflect"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -11,6 +12,78 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+func TestWriteDispatchesValueAndPointerStatementsIdentically(t *testing.T) {
+	users, id, email := writeTable(t)
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
+	require.NoError(t, err)
+	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
+	require.NoError(t, err)
+	update, err = update.AllowAll()
+	require.NoError(t, err)
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	deleteStatement, err = deleteStatement.AllowAll()
+	require.NoError(t, err)
+	upsert, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(email, query.Excluded(email))})
+	require.NoError(t, err)
+	insertReturning, err := insert.WithReturning(id, email)
+	require.NoError(t, err)
+	updateReturning, err := update.WithReturning(id, email)
+	require.NoError(t, err)
+	deleteReturning, err := deleteStatement.WithReturning(id, email)
+	require.NoError(t, err)
+	upsertReturning, err := upsert.WithReturning(id, email)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		dialect dialect.Dialect
+		value   query.WriteStatement
+		pointer query.WriteStatement
+	}{
+		{name: "insert postgres", dialect: dialect.PostgreSQL(), value: insert, pointer: &insert},
+		{name: "insert sqlite", dialect: dialect.SQLite(), value: insert, pointer: &insert},
+		{name: "update postgres", dialect: dialect.PostgreSQL(), value: update, pointer: &update},
+		{name: "update sqlite", dialect: dialect.SQLite(), value: update, pointer: &update},
+		{name: "delete postgres", dialect: dialect.PostgreSQL(), value: deleteStatement, pointer: &deleteStatement},
+		{name: "delete sqlite", dialect: dialect.SQLite(), value: deleteStatement, pointer: &deleteStatement},
+		{name: "upsert postgres", dialect: dialect.PostgreSQL(), value: upsert, pointer: &upsert},
+		{name: "upsert sqlite", dialect: dialect.SQLite(), value: upsert, pointer: &upsert},
+		{name: "insert returning postgres", dialect: dialect.PostgreSQL(), value: insertReturning, pointer: &insertReturning},
+		{name: "insert returning sqlite", dialect: dialect.SQLite(), value: insertReturning, pointer: &insertReturning},
+		{name: "update returning postgres", dialect: dialect.PostgreSQL(), value: updateReturning, pointer: &updateReturning},
+		{name: "update returning sqlite", dialect: dialect.SQLite(), value: updateReturning, pointer: &updateReturning},
+		{name: "delete returning postgres", dialect: dialect.PostgreSQL(), value: deleteReturning, pointer: &deleteReturning},
+		{name: "delete returning sqlite", dialect: dialect.SQLite(), value: deleteReturning, pointer: &deleteReturning},
+		{name: "upsert returning postgres", dialect: dialect.PostgreSQL(), value: upsertReturning, pointer: &upsertReturning},
+		{name: "upsert returning sqlite", dialect: dialect.SQLite(), value: upsertReturning, pointer: &upsertReturning},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			value, err := render.Write(testCase.dialect, testCase.value)
+			require.NoError(t, err)
+			pointer, err := render.Write(testCase.dialect, testCase.pointer)
+			require.NoError(t, err)
+			require.Equal(t, value.SQL(), pointer.SQL())
+			require.True(t, reflect.DeepEqual(value.Args(), pointer.Args()))
+		})
+	}
+}
+
+func TestWriteRejectsNilStatements(t *testing.T) {
+	tests := []query.WriteStatement{
+		(*query.Insert)(nil),
+		(*query.Update)(nil),
+		(*query.Delete)(nil),
+		(*query.Upsert)(nil),
+		nil,
+	}
+	for _, statement := range tests {
+		_, err := render.Write(dialect.SQLite(), statement)
+		require.EqualError(t, err, "render: write statement must not be nil")
+	}
+}
 
 func TestWriteStatementsRenderForBuiltInDialects(t *testing.T) {
 	users, id, email := writeTable(t)
@@ -1058,21 +1131,14 @@ func TestSQLiteUpsertExecutesNestedExcludedColumn(t *testing.T) {
 	require.Equal(t, "grace@example.com", actual)
 }
 
-// TestUpdateRejectsExcludedColumnOutsideUpsertAssignment proves the scope of
-// the renderer fix above: validation admits ExcludedColumn wherever its
-// source table is in scope, which includes an UPDATE's own WHERE clause, but
-// EXCLUDED means nothing there. writeExcludedColumn refuses it with a named
-// error instead of falling through to the generic "unsupported expression"
-// message the same shape reported before this change added a case for it.
+// TestUpdateRejectsExcludedColumnOutsideUpsertAssignment proves that query
+// validation refuses EXCLUDED outside an upsert conflict-update action.
 func TestUpdateRejectsExcludedColumnOutsideUpsertAssignment(t *testing.T) {
 	users, id, email := writeTable(t)
 	update, err := query.NewUpdate(users, query.Set(email, query.Bind("grace@example.com")))
 	require.NoError(t, err)
-	update, err = update.WithWhere(query.Equal(id, query.Excluded(id)))
-	require.NoError(t, err)
-
-	_, err = render.Update(dialect.SQLite(), update)
-	require.ErrorContains(t, err, `references the excluded column "id" outside an upsert conflict-update assignment`)
+	_, err = update.WithWhere(query.Equal(id, query.Excluded(id)))
+	require.ErrorContains(t, err, "EXCLUDED")
 }
 
 func TestSQLiteMultiRowInsertExecutes(t *testing.T) {

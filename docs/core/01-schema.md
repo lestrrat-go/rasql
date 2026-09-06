@@ -49,7 +49,8 @@ func Example_schema_table_definition() {
 	// constraint itself. RelationshipNamed additionally derives the belongs-to
 	// schema.RelationshipDef that rasqlgen would otherwise name on its own
 	// from the local column, letting the generated method read
-	// orders.Buyer() rather than orders.Customer().
+	// orders.Buyer() rather than orders.Customer(). InverseNamed pins the
+	// public inverse method when a child has several links to one parent.
 	orders := schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
@@ -176,6 +177,8 @@ none of those facts has an option-form constructor.
 ## Relationships
 
 `ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`. The `schema.RelationshipNamed` foreign-key option states one explicitly instead, in the option form. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
+
+An inverse method uses the child table shorthand only when that child has one relationship to the parent. Multiple relationships receive names that include the relationship name, so adding a foreign key cannot silently change an existing method's join. Use `schema.InverseNamed` with `schema.RelationshipNamed` to pin a public inverse method across descriptor changes.
 
 The generated API covers one bounded slice: a non-null single-column foreign key that targets a non-null single-column primary key with the same generated Go type. When both tables are generated in the package, the child table exposes a belongs-to method and the parent table exposes the inverse has-many method. Each relation exposes `Join` and `Load`. `Load` fetches all related rows with one secondary `IN` query and groups them by key. Callers must split very large parent slices themselves when they approach the database parameter limit.
 
@@ -746,3 +749,13 @@ For PostgreSQL and SQLite, `Table` never returns a descriptor silently missing c
 ## Next
 
 [Querying](../02-querying.md) reads rows through these descriptors, or [Writing rows](../orm/04-writing.md) puts rows into them.
+# Typed read surfaces for views
+
+Inspected views expose `schema.ObjectView` and read-only operations. Generated
+view wrappers embed `rasql.ReadTable[T]`, so typed selects and relationship
+loads compile while insert, update, delete, and table DDL require
+`rasql.Table[T]` and fail at compile time.
+
+Use `rasql.ReadTableOf[T]` for a hand-built queryable descriptor. Use
+`catalog.Options{IncludeViews: true}` when generating a store that includes
+inspected views.

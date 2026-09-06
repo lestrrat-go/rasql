@@ -2,8 +2,13 @@ package sqlite_test
 
 import (
 	"database/sql"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
 	"github.com/lestrrat-go/rasql/schema"
@@ -11,6 +16,53 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+func TestDiffNumbersLargePlan(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE existing (id INTEGER PRIMARY KEY);")
+	var source strings.Builder
+	for index := 0; index < 1000; index++ {
+		source.WriteString("CREATE TABLE table_")
+		source.WriteString(strconv.Itoa(index))
+		source.WriteString(" (id INTEGER PRIMARY KEY); ")
+	}
+	target := parseSnapshot(t, analyzer, source.String()+"CREATE TABLE existing (id INTEGER PRIMARY KEY);")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Len(t, plan.Statements, 1000)
+	sources := make([]string, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		sources[index] = statement.Source
+	}
+	sorted := append([]string(nil), sources...)
+	sort.Strings(sorted)
+	require.Equal(t, sources, sorted)
+	require.Equal(t, "0001_", sources[0][:5])
+	require.Equal(t, "1000_", sources[len(sources)-1][:5])
+}
+
+func TestDiffWriteMigrationLoadsExactArtifact(t *testing.T) {
+	analyzer := sqlite.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id INTEGER PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT); CREATE INDEX members_email_idx ON members (email);")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	root := t.TempDir()
+	require.NoError(t, diff.WriteMigration(filepath.Join(root, "001_add_email"), plan))
+	loaded, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Len(t, loaded[0].Statements, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		require.Equal(t, statement.Source[:len(statement.Source)-4]+".up.sql", loaded[0].Statements[index].Source)
+		require.Equal(t, statement.SQL, string(loaded[0].Statements[index].SQL))
+	}
+	require.Len(t, loaded[0].Down, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		require.Equal(t, statement.Source[:len(statement.Source)-4]+".down.sql", loaded[0].Down[len(plan.Statements)-index-1].Source)
+		require.Equal(t, statement.ReverseSQL, string(loaded[0].Down[len(plan.Statements)-index-1].SQL))
+	}
+}
 
 // TestLiveSourcesRejectsStrictTable proves that an inspected table carrying
 // Strict does not reach diff-live's generated desired-schema sources as a
@@ -126,14 +178,16 @@ func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 		Dialect: "sqlite",
 		Statements: []diff.PlannedStatement{
 			{
-				Source:  "001_add_column_members_email.sql",
-				SQL:     "ALTER TABLE members ADD COLUMN email text;\n",
-				Summary: "add column members.email",
+				Source:     "001_add_column_members_email.sql",
+				SQL:        "ALTER TABLE members ADD COLUMN email text;\n",
+				ReverseSQL: "ALTER TABLE members DROP COLUMN email;\n",
+				Summary:    "add column members.email",
 			},
 			{
-				Source:  "002_create_index_members_email_idx.sql",
-				SQL:     "CREATE INDEX members_email_idx ON members (email);\n",
-				Summary: "create index members_email_idx",
+				Source:     "002_create_index_members_email_idx.sql",
+				SQL:        "CREATE INDEX members_email_idx ON members (email);\n",
+				ReverseSQL: "DROP INDEX members_email_idx;\n",
+				Summary:    "create index members_email_idx",
 			},
 		},
 	}, plan)
@@ -180,9 +234,10 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
 	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_create_table_projects.sql",
-		SQL:     "CREATE TABLE projects (id integer PRIMARY KEY, owner_id integer NOT NULL);\n",
-		Summary: "create table projects",
+		Source:     "001_create_table_projects.sql",
+		SQL:        "CREATE TABLE projects (id integer PRIMARY KEY, owner_id integer NOT NULL);\n",
+		ReverseSQL: "DROP TABLE projects;\n",
+		Summary:    "create table projects",
 	}}, plan.Statements)
 }
 

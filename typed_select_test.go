@@ -77,7 +77,7 @@ func TestTypedSelect(t *testing.T) {
 	t.Run("scans known projection directly", testTypedSelectScansKnownProjectionDirectly)
 	t.Run("maps partial generated scan columns", testTypedSelectMapsPartialGeneratedScanColumns)
 	t.Run("projects with runtime column mapping", testTypedSelectProjectUsesRuntimeColumnMapping)
-	t.Run("builds generated scan destinations once", testTypedSelectBuildsGeneratedScanDestinationsOnce)
+	t.Run("builds generated scan destinations per row", testTypedSelectBuildsGeneratedScanDestinationsPerRow)
 	t.Run("One stops after a second row", testTypedSelectOneStopsAfterSecondRow)
 	t.Run("One reports no rows", testTypedSelectOneNoRows)
 	t.Run("One reports query failure", testTypedSelectOneQueryFailureIsNotNoRows)
@@ -201,7 +201,7 @@ func testTypedSelectProjectUsesRuntimeColumnMapping(t *testing.T) {
 	require.Equal(t, directScanUser{ID: 7, Email: "ada@example.com"}, result)
 }
 
-func testTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
+func testTypedSelectBuildsGeneratedScanDestinationsPerRow(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -229,7 +229,7 @@ func testTypedSelectBuildsGeneratedScanDestinationsOnce(t *testing.T) {
 		All(t.Context(), db)
 	require.NoError(t, err)
 	require.Equal(t, []plannedScanUser{{Name: "Ada Lovelace"}, {Name: "Grace Hopper"}}, rows)
-	require.Equal(t, 1, plannedScanCalls)
+	require.Equal(t, 2, plannedScanCalls)
 }
 
 func testTypedSelectOneStopsAfterSecondRow(t *testing.T) {

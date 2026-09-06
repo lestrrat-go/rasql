@@ -34,6 +34,31 @@ type planOnceEmptyTag struct {
 	Name string `rasql:""`
 }
 
+type decoderValidationRow struct {
+	ID    int64  `rasql:"id"`
+	Email string `rasql:"email"`
+}
+
+func TestNewDecoderValidatesStructureAndColumns(t *testing.T) {
+	_, err := NewDecoder[int]()
+	require.EqualError(t, err, "row: decode destination int must be a struct")
+
+	type empty struct{}
+	_, err = NewDecoder[empty]()
+	require.EqualError(t, err, "row: decode destination rowvalue.empty has no exported fields")
+
+	decoder, err := NewDecoder[decoderValidationRow]()
+	require.NoError(t, err)
+	require.NoError(t, decoder.ValidateColumns([]string{"id", "email", "extra"}))
+	require.EqualError(t, decoder.ValidateColumns([]string{"id"}), `row: column "email" is not present`)
+
+	row, err := NewRow([]string{"id", "email"}, []any{int64(7), "ada@example.com"})
+	require.NoError(t, err)
+	decoded, err := decoder.Decode(row)
+	require.NoError(t, err)
+	require.Equal(t, decoderValidationRow{ID: 7, Email: "ada@example.com"}, decoded)
+}
+
 // TestPlanIsBuiltOncePerType decodes each row type many times over and checks
 // that decodePlanBuilds advances by exactly one per type, proving planFor
 // caches rather than rebuilds on every Decode call.

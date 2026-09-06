@@ -10,9 +10,20 @@ import (
 	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/internal/method"
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
+	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
+
+func requireTableOperation[T any](table Table[T], operation schema.Operation) error {
+	if isNilTable(table) {
+		return fmt.Errorf("rasql: table must not be nil")
+	}
+	if !table.Ref().Definition().Supports(operation) {
+		return fmt.Errorf("rasql: object %q does not support operation %d", table.Ref().Definition().QualifiedName(), operation)
+	}
+	return nil
+}
 
 // ColumnValuer is implemented by row types that supply their own column values.
 // Insert and Update prefer it over struct tags, so a generated row type carries
@@ -46,6 +57,9 @@ func InsertWithOptions[T any](ctx context.Context, db DB, table Table[T], value 
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
+	if err := requireTableOperation(table, schema.OperationInsert); err != nil {
+		return nil, err
+	}
 	defaults, err := insertDefaults(options)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: configure INSERT: %w", err)
@@ -74,6 +88,9 @@ func InsertMany[T any](ctx context.Context, db DB, table Table[T], values []T) (
 // the supported dialects do not share a multi-row default-values syntax.
 func InsertManyWithOptions[T any](ctx context.Context, db DB, table Table[T], values []T, options ...InsertOption) (sql.Result, error) {
 	if err := db.Validate(); err != nil {
+		return nil, err
+	}
+	if err := requireTableOperation(table, schema.OperationInsert); err != nil {
 		return nil, err
 	}
 	defaults, err := insertDefaults(options)
@@ -136,43 +153,75 @@ func insertDefaults(options []InsertOption) (map[string]struct{}, error) {
 // every row type it emits, so the pair stands in for the generated contract
 // without a marker method on the generated type. A row type that maps part of a
 // table states it by declaring [DestinationScanner] alone, and typed writes
-// leave its RETURNING projections alone.
+// validate its known RETURNING names through that mapping.
 type completeRow interface {
 	Scanner
 	DestinationScanner
 }
 
+// validateTypedWriteReturning rejects statically knowable decoder errors before
+// a write renders or executes. Names produced only by the database stay late.
 func validateTypedWriteReturning[T any](statement query.WriteStatement) error {
 	if nilcheck.Is(statement) || len(statement.Returning()) == 0 {
 		return nil
 	}
+	names, known := returningNames(statement)
 	var result T
-	if _, ok := any(&result).(completeRow); !ok {
-		return nil
-	}
-
-	target, ok := writeTargetTable(statement)
-	if !ok {
-		return nil
-	}
-	returned := make(map[string]struct{}, len(statement.Returning()))
-	for _, projection := range statement.Returning() {
-		name := projection.ResultAlias()
-		if name == "" {
-			column, ok := projection.ProjectedExpression().(query.ColumnRef)
-			if !ok {
-				continue
+	if _, ok := any(&result).(completeRow); ok {
+		if target, ok := writeTargetTable(statement); ok {
+			returned := make(map[string]struct{}, len(names))
+			for _, name := range names {
+				if name != "" {
+					returned[name] = struct{}{}
+				}
 			}
-			name = column.Name()
+			for _, column := range target.Definition().Columns {
+				if _, ok := returned[column.Name]; !ok {
+					return fmt.Errorf("rasql: RETURNING projections omit generated row column %q", column.Name)
+				}
+			}
 		}
-		returned[name] = struct{}{}
+		if known {
+			if _, err := any(&result).(DestinationScanner).ScanDestinations(names); err != nil {
+				return fmt.Errorf("rasql: configure result scan: %w", err)
+			}
+		}
+		return nil
 	}
-	for _, column := range target.Definition().Columns {
-		if _, ok := returned[column.Name]; !ok {
-			return fmt.Errorf("rasql: RETURNING projections omit generated row column %q", column.Name)
+	if scanner, ok := any(&result).(DestinationScanner); ok {
+		if known {
+			if _, err := scanner.ScanDestinations(names); err != nil {
+				return fmt.Errorf("rasql: configure result scan: %w", err)
+			}
 		}
+		return nil
+	}
+	decoder, err := rowvalue.NewDecoder[T]()
+	if err != nil {
+		return err
+	}
+	if known {
+		return decoder.ValidateColumns(names)
 	}
 	return nil
+}
+
+func returningNames(statement query.WriteStatement) ([]string, bool) {
+	names := make([]string, len(statement.Returning()))
+	known := true
+	for index, projection := range statement.Returning() {
+		if name := projection.ResultAlias(); name != "" {
+			names[index] = name
+			continue
+		}
+		column, ok := projection.ProjectedExpression().(query.ColumnRef)
+		if !ok {
+			known = false
+			continue
+		}
+		names[index] = column.Name()
+	}
+	return names, known
 }
 
 func writeTargetTable(statement query.WriteStatement) (query.TableRef, bool) {
@@ -210,8 +259,9 @@ func writeTargetTable(statement query.WriteStatement) (query.TableRef, bool) {
 	}
 }
 
-// QueryWriteAll runs statement through QueryWrite and decodes every
-// returned row as T. The RETURNING projections must cover the columns T maps.
+// QueryWriteAll runs statement through QueryWrite and decodes every returned
+// row as T. Locally knowable RETURNING names are validated before execution;
+// driver-selected names and row-dependent decode errors remain late.
 func QueryWriteAll[T any](ctx context.Context, db DB, statement query.WriteStatement) ([]T, error) {
 	if err := validateTypedWriteReturning[T](statement); err != nil {
 		return nil, err
@@ -224,7 +274,8 @@ func QueryWriteAll[T any](ctx context.Context, db DB, statement query.WriteState
 }
 
 // QueryWriteOne runs statement through QueryWrite and decodes exactly one
-// returned row as T.
+// returned row as T. Locally knowable RETURNING names are validated before
+// execution; driver-selected names and row-dependent decode errors remain late.
 // It returns [ErrNoRows] when RETURNING produced no rows and [ErrMultipleRows]
 // when it produced more than one, the same sentinels
 // [TypedSelectBuilder.One] reports.
@@ -258,6 +309,9 @@ func UpdateWithOptions[T any](ctx context.Context, db DB, table Table[T], value 
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
+	if err := requireTableOperation(table, schema.OperationUpdate); err != nil {
+		return nil, err
+	}
 	config, err := updateOptions(options)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: configure UPDATE: %w", err)
@@ -274,6 +328,9 @@ func UpdateWithOptions[T any](ctx context.Context, db DB, table Table[T], value 
 // operation cannot silently fall back to a primary-key update.
 func UpdateMany[T any](ctx context.Context, db DB, table Table[T], value T, options ...UpdateOption) (sql.Result, error) {
 	if err := db.Validate(); err != nil {
+		return nil, err
+	}
+	if err := requireTableOperation(table, schema.OperationUpdate); err != nil {
 		return nil, err
 	}
 	config, err := updateOptions(options)

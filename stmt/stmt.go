@@ -2,7 +2,12 @@
 // whatever produced them to whatever executes them.
 package stmt
 
-import "github.com/lestrrat-go/rasql/sqltext"
+import (
+	"bytes"
+	"database/sql"
+
+	"github.com/lestrrat-go/rasql/sqltext"
+)
 
 // Statement is parameterized SQL ready for execution.
 type Statement struct {
@@ -13,8 +18,8 @@ type Statement struct {
 // New pairs SQL text with its bound arguments in placeholder order.
 //
 // It adopts args rather than copying it, so the caller must not modify a
-// slice it passes with "...". Args returns a copy for a caller that needs
-// one.
+// slice it passes with "...". Args returns a copy of the slice and supported
+// mutable byte values for a caller that needs an inspection copy.
 func New(sql sqltext.Text, args ...any) Statement {
 	return Statement{sql: string(sql), args: args}
 }
@@ -24,9 +29,26 @@ func (s Statement) SQL() string {
 	return s.sql
 }
 
-// Args returns a copy of the bound arguments in placeholder order.
+// Args returns an inspection copy of the bound arguments in placeholder order.
+// It also clones direct []byte values and []byte values inside sql.NamedArg.
 func (s Statement) Args() []any {
-	return append([]any(nil), s.args...)
+	args := make([]any, len(s.args))
+	for index, value := range s.args {
+		args[index] = cloneArg(value)
+	}
+	return args
+}
+
+func cloneArg(value any) any {
+	switch value := value.(type) {
+	case []byte:
+		return bytes.Clone(value)
+	case sql.NamedArg:
+		value.Value = cloneArg(value.Value)
+		return value
+	default:
+		return value
+	}
 }
 
 // BoundArgs returns the bound arguments in placeholder order without copying
