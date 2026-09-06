@@ -37,7 +37,7 @@ func TestRenderReusableRelationsAndInsertSelect(t *testing.T) {
 	require.NoError(t, err)
 	rendered, err = render.Select(dialect.SQLite(), compoundSelect)
 	require.NoError(t, err)
-	require.Equal(t, `SELECT "all_users"."user_id" FROM ((SELECT "users"."id" FROM "users") UNION ALL (SELECT "users"."id" FROM "users")) AS "all_users"`, rendered.SQL())
+	require.Equal(t, `SELECT "all_users"."user_id" FROM (SELECT "users"."id" FROM "users" UNION ALL SELECT "users"."id" FROM "users") AS "all_users"`, rendered.SQL())
 
 	insert, err := query.NewInsertSelect(users, []query.ColumnRef{users.Column("id")}, result)
 	require.NoError(t, err)
@@ -156,6 +156,50 @@ func TestRenderReusableRelationPagingAndCount(t *testing.T) {
 	counted, err := render.SelectFromRelation(dialect.PostgreSQL(), derived).Select("id").BuildCount()
 	require.NoError(t, err)
 	require.Equal(t, `SELECT COUNT(*) AS "count" FROM (SELECT "users"."id" FROM "users") AS "r"`, counted.SQL())
+}
+
+func TestReusableResultMetadataAccessorIsolation(t *testing.T) {
+	users := query.MustTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	base, err := query.NewSelect(users, users.Column("id"))
+	require.NoError(t, err)
+	result, err := query.ResultOf(base, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	columns := result.Columns()
+	columns[0].Name = "changed"
+	require.Equal(t, "id", result.Columns()[0].Name)
+
+	derived, err := query.Derived(result, "r")
+	require.NoError(t, err)
+	derivedColumns := derived.Columns()
+	derivedColumns[0].Name = "changed"
+	require.Equal(t, "id", derived.Columns()[0].Name)
+
+	cte, err := query.CommonTable("local", result)
+	require.NoError(t, err)
+	cteColumns := cte.Query().Columns()
+	cteColumns[0].Name = "changed"
+	require.Equal(t, "id", cte.Query().Columns()[0].Name)
+	ref, err := cte.Ref("")
+	require.NoError(t, err)
+	refColumns := ref.Columns()
+	refColumns[0].Name = "changed"
+	require.Equal(t, "id", ref.Columns()[0].Name)
+
+	compound, err := query.CompoundQuery(result, query.UnionAll, result)
+	require.NoError(t, err)
+	leftColumns := compound.Left().Columns()
+	leftColumns[0].Name = "changed"
+	require.Equal(t, "id", compound.Left().Columns()[0].Name)
+
+	insert, err := query.NewInsertSelect(users, []query.ColumnRef{users.Column("id")}, result)
+	require.NoError(t, err)
+	insertResult, ok := insert.SelectSource()
+	require.True(t, ok)
+	insertColumns := insertResult.Columns()
+	insertColumns[0].Name = "changed"
+	storedResult, ok := insert.SelectSource()
+	require.True(t, ok)
+	require.Equal(t, "id", storedResult.Columns()[0].Name)
 }
 
 func TestReusableRelationValidationBoundaries(t *testing.T) {

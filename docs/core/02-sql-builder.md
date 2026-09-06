@@ -86,6 +86,59 @@ turns it into an aliased `FROM` or `JOIN` source, and `query.CommonTable` plus `
 `query.CompoundQuery` supports `UNION`, `UNION ALL`, `INTERSECT`, and `EXCEPT`; result arguments keep their left-to-right
 order. Relation columns carry the declared result metadata, so an outer statement can validate names before rendering.
 
+<!-- INCLUDE(examples/query_reusable_relation_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/schema"
+)
+
+func Example_queryReusableRelation() {
+	users := query.MustTableRef(schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "active", Type: schema.BooleanType{}},
+		},
+	})
+	filtered, err := query.NewSelect(users, users.Column("id"))
+	if err != nil {
+		return
+	}
+	filtered, err = filtered.WithWhere(query.Equal(users.Column("active"), true))
+	if err != nil {
+		return
+	}
+	result, err := query.ResultOf(filtered, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	if err != nil {
+		return
+	}
+	relation, err := query.Derived(result, "active_users")
+	if err != nil {
+		return
+	}
+	statement, err := query.NewSelect(relation, relation.Column("id"))
+	if err != nil {
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		return
+	}
+	fmt.Println(rendered.SQL())
+	// Output:
+	// SELECT "active_users"."id" FROM (SELECT "users"."id" FROM "users" WHERE ("users"."active" = $1)) AS "active_users"
+}
+```
+source: [examples/query_reusable_relation_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_reusable_relation_example_test.go)
+<!-- END INCLUDE -->
+
 Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithGroupBy`, `WithHaving`, `WithOrder`, `WithLimit`, `WithOffset`, and `WithDistinct` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](03-write-statements.md#reading-a-returning-clause) covers. `Update.AllowAll` and `Delete.AllowAll` return a new statement when a full-table mutation is intentional. Each method returns a new validated statement rather than changing the one it was called on.
 
 ### Where conditions

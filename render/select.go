@@ -255,11 +255,17 @@ func (r *renderer) writeQueryBody(body query.QueryBody) error {
 }
 
 func (r *renderer) writeCompound(compound query.Compound) error {
-	r.builder.WriteByte('(')
+	parenthesizeOperands := r.dialect.Name() != "sqlite"
+	if parenthesizeOperands {
+		r.builder.WriteByte('(')
+	}
 	if err := r.writeQueryBody(compound.Left().Body()); err != nil {
 		return err
 	}
-	r.builder.WriteString(") ")
+	if parenthesizeOperands {
+		r.builder.WriteByte(')')
+	}
+	r.builder.WriteByte(' ')
 	switch compound.Operator() {
 	case query.Union:
 		r.builder.WriteString("UNION")
@@ -272,11 +278,17 @@ func (r *renderer) writeCompound(compound query.Compound) error {
 	default:
 		return fmt.Errorf("unsupported compound operator %d", compound.Operator())
 	}
-	r.builder.WriteString(" (")
+	if parenthesizeOperands {
+		r.builder.WriteString(" (")
+	} else {
+		r.builder.WriteByte(' ')
+	}
 	if err := r.writeQueryBody(compound.Right().Body()); err != nil {
 		return err
 	}
-	r.builder.WriteByte(')')
+	if parenthesizeOperands {
+		r.builder.WriteByte(')')
+	}
 	return nil
 }
 
