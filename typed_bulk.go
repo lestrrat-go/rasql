@@ -111,18 +111,24 @@ func ExecBulkCreate[T any](ctx context.Context, db DB, bulk BulkPlan[T], options
 	if options.Atomic {
 		if transaction, ok := db.Handle().(*sql.Tx); ok && transaction != nil {
 			var outcome BulkOutcome
+			var callbackMarker *bulkCallbackError
 			callbackErr := db.Atomic(ctx, nil, func(callbackCtx context.Context, scoped DB) error {
 				var err error
 				outcome, err = executeBulkBatches(callbackCtx, scoped, groups, options.Classifier)
 				if err != nil {
-					return bulkCallbackError{err: err}
+					callbackMarker = &bulkCallbackError{err: err}
+					return callbackMarker
 				}
 				return nil
 			})
 			if callbackErr != nil {
 				if outcome.Failed == nil {
-					outcome.Failed = &FailedBatch{Indexes: bulkIndexes(bulk.plans), Certainty: OutcomeUnknown, Err: callbackErr}
+					outcome.Failed = &FailedBatch{Indexes: bulkAttemptedIndexes(outcome), Certainty: OutcomeUnknown, Err: callbackErr}
 				} else {
+					cleanupFailed := bulkHasCleanupError(callbackErr, callbackMarker)
+					if cleanupFailed {
+						outcome.Failed.Indexes = bulkAttemptedIndexes(outcome)
+					}
 					outcome.Failed.Certainty = OutcomeUnknown
 					outcome.Failed.Err = callbackErr
 				}
@@ -142,7 +148,7 @@ func ExecBulkCreate[T any](ctx context.Context, db DB, bulk BulkPlan[T], options
 			rollbackErr := transaction.Rollback()
 			outcome.Completed = nil
 			if rollbackErr != nil {
-				outcome.Failed = &FailedBatch{Indexes: bulkIndexes(bulk.plans), Certainty: OutcomeUnknown, Err: errors.Join(executionErr, rollbackErr)}
+				outcome.Failed = &FailedBatch{Indexes: bulkAttemptedIndexes(outcome), Certainty: OutcomeUnknown, Err: errors.Join(executionErr, rollbackErr)}
 				return outcome, outcome.Failed.Err
 			}
 			outcome.Durable = false
@@ -161,8 +167,8 @@ func ExecBulkCreate[T any](ctx context.Context, db DB, bulk BulkPlan[T], options
 
 type bulkCallbackError struct{ err error }
 
-func (e bulkCallbackError) Error() string { return e.err.Error() }
-func (e bulkCallbackError) Unwrap() error { return e.err }
+func (e *bulkCallbackError) Error() string { return e.err.Error() }
+func (e *bulkCallbackError) Unwrap() error { return e.err }
 
 func bulkIndexes[T any](plans []CreatePlan[T]) []int {
 	indexes := make([]int, len(plans))
@@ -170,6 +176,40 @@ func bulkIndexes[T any](plans []CreatePlan[T]) []int {
 		indexes[i] = i
 	}
 	return indexes
+}
+
+func bulkAttemptedIndexes(outcome BulkOutcome) []int {
+	indexes := make([]int, 0)
+	for _, completed := range outcome.Completed {
+		for index := completed.First; index <= completed.Last; index++ {
+			indexes = append(indexes, index)
+		}
+	}
+	if outcome.Failed != nil {
+		indexes = append(indexes, outcome.Failed.Indexes...)
+	}
+	return indexes
+}
+
+func bulkHasCleanupError(err error, marker *bulkCallbackError) bool {
+	if err == nil || marker == nil {
+		return false
+	}
+	if err == marker {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if bulkHasCleanupError(child, marker) {
+				return true
+			}
+		}
+		return false
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return bulkHasCleanupError(wrapped.Unwrap(), marker)
+	}
+	return true
 }
 
 func executeBulkBatches[T any](ctx context.Context, db DB, groups []bulkBatch[T], classifier BatchFailureClassifier) (BulkOutcome, error) {
