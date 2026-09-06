@@ -22,6 +22,7 @@ func TestGoRunSeparatesDiagnosticsFromOutput(t *testing.T) {
 		expected string
 	}{
 		{name: "codegen refused flag", args: []string{"codegen", "generate", "-unknown"}, expected: "flag provided but not defined: -unknown"},
+		{name: "codegen rejects positional dsn", args: []string{"codegen", "generate", "stray", "-dsn", "postgres://tester:auditSyntheticPassword572@localhost/test"}, expected: "unexpected 3 positional arguments; generate accepts flags only"},
 		{name: "migrate refused flag", args: []string{"migrate", "plan", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 		{name: "codegen help", args: []string{"codegen", "generate", "-h"}, succeeds: true, expected: "Usage of rasql codegen generate:"},
 		{name: "migrate help", args: []string{"migrate", "plan", "-h"}, succeeds: true, expected: "Usage of plan:"},
@@ -46,6 +47,10 @@ func TestGoRunSeparatesDiagnosticsFromOutput(t *testing.T) {
 				require.Error(t, err, "stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 				require.Empty(t, stdout.String())
 				require.Contains(t, stderr.String(), testCase.expected)
+				require.NotContains(t, stdout.String(), "auditSyntheticPassword572")
+				require.NotContains(t, stderr.String(), "auditSyntheticPassword572")
+				require.NotContains(t, stdout.String(), "postgres://tester:auditSyntheticPassword572@localhost/test")
+				require.NotContains(t, stderr.String(), "postgres://tester:auditSyntheticPassword572@localhost/test")
 				return
 			}
 			require.NoError(t, err, "stderr:\n%s", stderr.String())
