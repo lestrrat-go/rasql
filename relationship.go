@@ -23,6 +23,7 @@ func LoadHasManyPlan[Parent, Child any, Key comparable](ctx context.Context, db 
 	}
 	grouped := make(map[Key][]Child, len(parents))
 	keys := make([]Key, 0, len(parents))
+	stored := make(map[Key][]any, len(parents))
 	seen := make(map[Key]struct{}, len(parents))
 	for _, parent := range parents {
 		key := parentKey(parent)
@@ -38,12 +39,13 @@ func LoadHasManyPlan[Parent, Child any, Key comparable](ctx context.Context, db 
 		}
 		seen[key] = struct{}{}
 		keys = append(keys, key)
+		stored[key] = relationshipQueryValues(values)
 		grouped[key] = nil
 	}
 	if len(keys) == 0 {
 		return grouped, nil
 	}
-	err := executeRelationshipBatches(ctx, db, childTable, childKeyColumns, keys, keyValues, options, func(rows []Child) error {
+	err := executeRelationshipBatches(ctx, db, childTable, childKeyColumns, keys, stored, options, func(rows []Child) error {
 		for _, row := range rows {
 			key := childKey(row)
 			if _, ok := grouped[key]; !ok {
@@ -66,6 +68,7 @@ func LoadBelongsToPlan[Child, Parent any, Key comparable](ctx context.Context, d
 	}
 	loaded := make(map[Key]Parent, len(children))
 	keys := make([]Key, 0, len(children))
+	stored := make(map[Key][]any, len(children))
 	seen := make(map[Key]struct{}, len(children))
 	for _, child := range children {
 		key := childKey(child)
@@ -81,11 +84,12 @@ func LoadBelongsToPlan[Child, Parent any, Key comparable](ctx context.Context, d
 		}
 		seen[key] = struct{}{}
 		keys = append(keys, key)
+		stored[key] = relationshipQueryValues(values)
 	}
 	if len(keys) == 0 {
 		return loaded, nil
 	}
-	err := executeRelationshipBatches(ctx, db, parentTable, parentKeyColumns, keys, keyValues, options, func(rows []Parent) error {
+	err := executeRelationshipBatches(ctx, db, parentTable, parentKeyColumns, keys, stored, options, func(rows []Parent) error {
 		for _, row := range rows {
 			key := parentKey(row)
 			if _, exists := loaded[key]; exists {
@@ -126,7 +130,7 @@ func validateRelationshipPlan[T any](table Table[T], columns []query.ColumnRef, 
 	return nil
 }
 
-func executeRelationshipBatches[Row, Key any](ctx context.Context, db DB, table Table[Row], columns []query.ColumnRef, keys []Key, keyValues func(Key) ([]any, bool), options RelationshipLoadOptions, consume func([]Row) error) error {
+func executeRelationshipBatches[Row any, Key comparable](ctx context.Context, db DB, table Table[Row], columns []query.ColumnRef, keys []Key, stored map[Key][]any, options RelationshipLoadOptions, consume func([]Row) error) error {
 	budget := options.BindLimit
 	if budget == 0 {
 		budget = db.RelationshipBindLimit()
@@ -135,7 +139,7 @@ func executeRelationshipBatches[Row, Key any](ctx context.Context, db DB, table 
 		budget = relationshipDefaultBindLimit(db)
 	}
 	width := len(columns)
-	probeValues, _ := keyValues(keys[0])
+	probeValues := stored[keys[0]]
 	probe := SelectFrom(table).Where(relationshipMembership(columns, [][]any{probeValues}))
 	if len(options.OrderBy) > 0 {
 		for _, column := range columns {
@@ -164,10 +168,7 @@ func executeRelationshipBatches[Row, Key any](ctx context.Context, db DB, table 
 		}
 		values := make([][]any, 0, end-start)
 		for _, key := range keys[start:end] {
-			keyValuesFor, present := keyValues(key)
-			if present {
-				values = append(values, keyValuesFor)
-			}
+			values = append(values, stored[key])
 		}
 		builder := SelectFrom(table).Where(relationshipMembership(columns, values))
 		if len(options.OrderBy) > 0 {
@@ -190,6 +191,14 @@ func executeRelationshipBatches[Row, Key any](ctx context.Context, db DB, table 
 		}
 	}
 	return nil
+}
+
+func relationshipQueryValues(values []any) []any {
+	result := make([]any, len(values))
+	for index, value := range values {
+		result[index] = relationshipQueryKey(value)
+	}
+	return result
 }
 
 func relationshipMembership(columns []query.ColumnRef, values [][]any) query.Expression {

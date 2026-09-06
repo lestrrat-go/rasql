@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // ProjectsRow is one row of the "projects" table.
@@ -106,5 +107,10 @@ func (r ProjectsTableTasksRelation) Join() rasql.Join {
 
 // Load fetches all children for parents in one query and groups them by parent key.
 func (r ProjectsTableTasksRelation) Load(ctx context.Context, db rasql.DB, parents []ProjectsRow) (map[int64][]TasksRow, error) {
-	return rasql.LoadHasMany[ProjectsRow, TasksRow, int64](ctx, db, r.Child, r.ChildKey, parents, func(row ProjectsRow) int64 { return row.ID }, func(row TasksRow) int64 { return row.ProjectID })
+	return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{})
+}
+
+// LoadWith fetches children with filtering, ordering, caps, and bind batching.
+func (r ProjectsTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, parents []ProjectsRow, options rasql.RelationshipLoadOptions) (map[int64][]TasksRow, error) {
+	return rasql.LoadHasManyPlan(ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row ProjectsRow) int64 { return row.ID }, func(row TasksRow) int64 { return row.ProjectID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
 }

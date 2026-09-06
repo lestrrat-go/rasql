@@ -359,6 +359,29 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 			usage = usage.merge(valueUsage)
 		}
 		return usage, nil
+	case TupleMembership:
+		if len(expression.Columns) == 0 || len(expression.Values) == 0 {
+			return expressionUsage{}, validationError(path, "requires columns and values")
+		}
+		for index, column := range expression.Columns {
+			if _, err := validateExpression(column, ctx, fmt.Sprintf("%s.columns[%d]", path, index)); err != nil {
+				return expressionUsage{}, err
+			}
+		}
+		var usage expressionUsage
+		for rowIndex, values := range expression.Values {
+			if len(values) != len(expression.Columns) {
+				return expressionUsage{}, validationError(path, "values[%d] has %d values, want %d", rowIndex, len(values), len(expression.Columns))
+			}
+			for valueIndex, value := range values {
+				itemUsage, err := validateExpression(Bind(value), ctx, fmt.Sprintf("%s.values[%d][%d]", path, rowIndex, valueIndex))
+				if err != nil {
+					return expressionUsage{}, err
+				}
+				usage = usage.merge(itemUsage)
+			}
+		}
+		return usage, nil
 	case Function:
 		return validateFunction(expression, ctx, path)
 	case Subquery:
