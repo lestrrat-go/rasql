@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,9 @@ func TestGeneratedMigrationArtifactRoundTripsLiveEngines(t *testing.T) {
 			database := dbtest.PostgreSQLDB(t)
 			_, err := database.ExecContext(t.Context(), "CREATE TABLE artifact_users (id INTEGER PRIMARY KEY)")
 			require.NoError(t, err)
-			return config.ConnString()
+			connectionString := stdlib.RegisterConnConfig(config)
+			t.Cleanup(func() { stdlib.UnregisterConnConfig(connectionString) })
+			return connectionString
 		}},
 		{name: "mysql", dsn: func(t *testing.T) string {
 			config := dbtest.MySQLConfig(t)
