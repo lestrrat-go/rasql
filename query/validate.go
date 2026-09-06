@@ -371,12 +371,13 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		}
 		return expressionUsage{aggregate: true, bareColumn: aggregateUsage.bareColumn}, nil
 	case Over:
+		_, filteredAggregate := expression.expr.(Filter)
 		switch expression.expr.(type) {
 		case Function, Filter:
 		default:
 			return expressionUsage{}, validationError(path+".expression", "must be a window-capable function or aggregate expression")
 		}
-		_, err := validateExpression(expression.expr, ctx, path+".expression")
+		usage, err := validateExpression(expression.expr, ctx, path+".expression")
 		if err != nil {
 			return expressionUsage{}, err
 		}
@@ -387,7 +388,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if err != nil {
 			return expressionUsage{}, err
 		}
-		return expressionUsage{aggregate: true}, nil
+		return expressionUsage{aggregate: true, bareColumn: filteredAggregate && usage.bareColumn}, nil
 	case TrustedFragment:
 		if strings.Count(expression.sql, "{}") != len(expression.parts) {
 			return expressionUsage{}, validationError(path, "contains %d fragment markers for %d parts", strings.Count(expression.sql, "{}"), len(expression.parts))

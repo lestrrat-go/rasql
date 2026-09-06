@@ -20,6 +20,9 @@ func TestComposableExpressionsValidatePlacement(t *testing.T) {
 	window, err := query.NewSelect(users, query.Project(query.OverWindow(query.Func("row_number"), query.Window(nil, query.Asc(id)))))
 	require.NoError(t, err)
 	require.NoError(t, window.Validate())
+	filteredWindow := query.OverWindow(query.FilterWhere(query.CountAll(), query.GreaterThan(balance, 0)), query.Window(nil, query.Asc(id)))
+	_, err = query.NewSelect(users, query.Project(filteredWindow))
+	require.NoError(t, err)
 
 	_, err = query.NewSelect(users, query.Project(query.OverWindow(id, query.Window(nil, query.Asc(id)))))
 	require.ErrorContains(t, err, "window-capable")
@@ -46,6 +49,11 @@ func TestComposableExpressionsValidatePlacement(t *testing.T) {
 
 	_, err = query.NewSelect(users, query.Project(query.FilterWhere(query.CountAll(), query.GreaterThan(query.Count(balance), 1))))
 	require.ErrorContains(t, err, "aggregate function")
+	_, err = query.NewSelect(users, query.Project(query.OverWindow(
+		query.FilterWhere(query.Add(query.CountAll(), balance), query.GreaterThan(balance, 0)),
+		query.Window(nil, query.Asc(id)),
+	)))
+	require.ErrorContains(t, err, "requires a GROUP BY clause")
 
 	// Result aliases are rejected inside windows, not at statement level.
 	projection := query.Project(query.Func("row_number"))
