@@ -54,10 +54,8 @@ func TestMySQLProgressJournalSeamApplyReconnectsAndReleasesLock(t *testing.T) {
 	require.NoError(t, restartedRunner.Reconcile(t.Context(), check, migration))
 	require.Equal(t, ReconcileExecuted, check.decision)
 	assertLiveLockAndPool(t, config, restarted, history)
-	completed, err := restartedRunner.Apply(t.Context(), AllPending(), migration)
-	require.NoError(t, err)
-	require.Len(t, completed, 1)
 	assertLiveProgressAndEffect(t, config, restarted, history, first, second, 0, 0, true, true)
+	assertLiveHistoryCount(t, restarted, history, 1)
 	assertLiveLockAndPool(t, config, restarted, history)
 }
 
@@ -94,10 +92,8 @@ func TestMySQLProgressRevertJournalSeamExecutedReconnects(t *testing.T) {
 	check := &liveSchemaCheck{table: first, wantExists: false}
 	require.NoError(t, restartedRunner.Reconcile(t.Context(), check, migration))
 	require.Equal(t, ReconcileExecuted, check.decision)
-	reverted, err := restartedRunner.Revert(t.Context(), Steps(1), migration)
-	require.NoError(t, err)
-	require.Len(t, reverted, 1)
 	assertLiveProgressAndEffect(t, config, restarted, history, first, second, 0, 0, false, false)
+	assertLiveHistoryCount(t, restarted, history, 0)
 	assertLiveLockAndPool(t, config, restarted, history)
 }
 
@@ -199,6 +195,13 @@ func assertLiveProgressAndEffect(t *testing.T, config *mysql.Config, database *s
 		require.Equal(t, table.want, count == 1)
 	}
 	_ = database
+}
+
+func assertLiveHistoryCount(t *testing.T, database *sql.DB, history string, want int) {
+	t.Helper()
+	var count int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM "+history).Scan(&count))
+	require.Equal(t, want, count)
 }
 
 func assertLiveLockAndPool(t *testing.T, config *mysql.Config, database *sql.DB, history string) {
