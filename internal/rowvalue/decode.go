@@ -110,6 +110,14 @@ func snakeCase(value string) string {
 }
 
 func assign(destination reflect.Value, value any) error {
+	if destination.CanAddr() {
+		if scanner, ok := destination.Addr().Interface().(sql.Scanner); ok {
+			if err := scanner.Scan(value); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
 	if value == nil {
 		switch destination.Kind() {
 		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
@@ -126,14 +134,6 @@ func assign(destination reflect.Value, value any) error {
 		}
 		destination.Set(decoded)
 		return nil
-	}
-	if destination.CanAddr() {
-		if scanner, ok := destination.Addr().Interface().(sql.Scanner); ok {
-			if err := scanner.Scan(value); err != nil {
-				return err
-			}
-			return nil
-		}
 	}
 	if destination.Type() == timeType {
 		decoded, err := decodeTime(value)

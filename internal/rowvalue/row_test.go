@@ -1,6 +1,7 @@
 package rowvalue_test
 
 import (
+	"database/sql"
 	"sync"
 	"testing"
 	"time"
@@ -8,6 +9,15 @@ import (
 	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/stretchr/testify/require"
 )
+
+type nullScanRecorder struct {
+	value any
+}
+
+func (r *nullScanRecorder) Scan(value any) error {
+	r.value = value
+	return nil
+}
 
 func TestGetDecodesDriverValues(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
@@ -145,6 +155,46 @@ func TestAssignDecodesIntoDestination(t *testing.T) {
 		err := rowvalue.Assign(result, "email", &wrong)
 		require.ErrorContains(t, err, `row: decode column "email"`)
 	})
+}
+
+func TestAssignDispatchesNULLToScanners(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"value"}, []any{nil})
+	require.NoError(t, err)
+
+	t.Run("stdlib scanner", func(t *testing.T) {
+		destination := sql.NullString{String: "stale", Valid: true}
+		require.NoError(t, rowvalue.Assign(result, "value", &destination))
+		require.False(t, destination.Valid)
+		require.Empty(t, destination.String)
+	})
+
+	t.Run("custom scanner", func(t *testing.T) {
+		destination := nullScanRecorder{value: "stale"}
+		require.NoError(t, rowvalue.Assign(result, "value", &destination))
+		require.Nil(t, destination.value)
+	})
+
+	t.Run("nil pointer keeps nil semantics", func(t *testing.T) {
+		destination := new(string)
+		require.NoError(t, rowvalue.Assign(result, "value", &destination))
+		require.Nil(t, destination)
+	})
+}
+
+func TestDecodeAndGetDispatchNULLToScanners(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"value"}, []any{nil})
+	require.NoError(t, err)
+
+	got, err := rowvalue.Get[sql.NullString](result, "value")
+	require.NoError(t, err)
+	require.False(t, got.Valid)
+
+	type decodedRow struct {
+		Value sql.NullString
+	}
+	decoded, err := rowvalue.Decode[decodedRow](result)
+	require.NoError(t, err)
+	require.False(t, decoded.Value.Valid)
 }
 
 // TestAssignDecodesBoolFromAnyNonzeroInteger pins MySQL's documented boolean
