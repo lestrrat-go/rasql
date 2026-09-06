@@ -2432,6 +2432,10 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 				column.Type = columnType
 			}
 		}
+		if postgresqlNative && strings.EqualFold(databaseType, "numeric") && !numericPrecision.Valid {
+			columnType = schema.OpaqueType{}
+			column.Type = columnType
+		}
 		if decimalType, ok := columnType.(schema.DecimalType); ok {
 			if !numericPrecision.Valid {
 				return nil, fmt.Errorf("inspect: column %q: unconstrained NUMERIC has no precision to record: declare it as NUMERIC(precision, scale)", name)
