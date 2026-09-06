@@ -48,6 +48,58 @@ func TestGeneratedMutationPlansRunAgainstSQLite(t *testing.T) {
 	require.NoErrorf(t, err, "generated SQLite consumer output:\n%s", output)
 }
 
+func TestGeneratedMutationPlansRejectForbiddenCompileCallers(t *testing.T) {
+	table := schema.TableDef{
+		Name:       "items",
+		PrimaryKey: []string{"id"},
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+			{Name: "required", Type: schema.TextType{}},
+			{Name: "optional", Type: schema.TextType{}, Nullable: true},
+			{Name: "computed", Type: schema.TextType{}, GeneratedExpression: "lower(required)", GeneratedStorage: schema.GeneratedVirtual},
+		},
+	}
+	generated, err := generate.PackageSource("generated", table)
+	require.NoError(t, err)
+	typeChanged := table.Clone()
+	typeChanged.Columns[1].Type = schema.IntegerType{}
+	typeChangedSource, err := generate.PackageSource("generated", typeChanged)
+	require.NoError(t, err)
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	cases := []struct {
+		name   string
+		call   string
+		want   string
+		source []byte
+	}{
+		{"wrong setter type", `generated.NewItemsCreate().Required(42)`, "cannot use", generated},
+		{"nonnull clear", `generated.NewItemsCreate().ClearRequired()`, "ClearRequired", generated},
+		{"identity setter", `generated.NewItemsCreate().ID(1)`, "ID", generated},
+		{"generated setter", `generated.NewItemsCreate().Computed("x")`, "Computed", generated},
+		{"primary key patch setter", `generated.NewItemsPatch().ID(1)`, "ID", generated},
+		{"stale renamed caller", `generated.NewItemsCreate().Name("x")`, "Name", generated},
+		{"stale type caller", `generated.NewItemsCreate().Required("x")`, "cannot use", typeChangedSource},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			module := "module example.com/invalidmutation\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
+			require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+			packageDir := filepath.Join(directory, "generated")
+			require.NoError(t, os.MkdirAll(packageDir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(packageDir, "generated.go"), test.source, 0o600))
+			consumer := "package invalidmutation_test\n\nimport (\n\t\"testing\"\n\t\"example.com/invalidmutation/generated\"\n)\n\nfunc TestInvalid(t *testing.T) { _ = " + test.call + " }\n"
+			require.NoError(t, os.WriteFile(filepath.Join(directory, "invalid_test.go"), []byte(consumer), 0o600))
+			command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
+			command.Dir = directory
+			output, err := command.CombinedOutput()
+			require.Error(t, err, "%s unexpectedly compiled:\n%s", test.name, output)
+			require.Contains(t, string(output), test.want)
+		})
+	}
+}
+
 const nullableStringSource = `package generated
 
 import (
