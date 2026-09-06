@@ -100,7 +100,7 @@ func newTableDefFixture() schema.TableDef {
 			{Name: "payload", Type: schema.BytesType{}},
 			{Name: "created_at", Type: schema.TimeType{}},
 			{Name: "meta", Type: schema.JSONType{}},
-			{Name: "uid", Type: schema.UUIDType{}},
+			{Name: "uid", Type: schema.UUIDType{}, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "public", Name: "uuid_array", Kind: schema.NativeArray, Arguments: []string{"uuid"}, Element: &schema.NativeTypeDef{Dialect: "postgresql", Name: "uuid", Kind: schema.NativeBuiltin}}},
 			{
 				Name:     "external_id",
 				Type:     schema.IntegerType{},

@@ -186,3 +186,8 @@ A generated column changes nothing about code generation: `rasqlgen` still emits
 [Schemas](01-schema.md) covers the descriptor an application writes itself.
 [Migrations](07-migrations.md) covers the `diff-live` command that compares a
 live table with a desired schema.
+# Native type facts
+
+Inspection keeps native ENUM and SET labels and opaque SQLite declarations in `ColumnDef.NativeType`. Portable type
+classification remains available separately, so catalog consumers can choose faithful same-engine DDL or reject a
+cross-dialect operation explicitly.

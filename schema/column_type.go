@@ -19,6 +19,7 @@ const (
 	KindJSON    TypeKind = "json"
 	KindUUID    TypeKind = "uuid"
 	KindDecimal TypeKind = "decimal"
+	KindNative  TypeKind = "native"
 )
 
 // ColumnType describes the type-specific part of a column. The unexported
@@ -169,7 +170,7 @@ func cloneColumnType(columnType ColumnType) ColumnType {
 
 func validColumnType(columnType ColumnType) bool {
 	switch columnType.(type) {
-	case BooleanType, IntegerType, FloatType, TextType, BytesType, TimeType, JSONType, UUIDType, DecimalType:
+	case BooleanType, IntegerType, FloatType, TextType, BytesType, TimeType, JSONType, UUIDType, DecimalType, OpaqueType:
 		return true
 	default:
 		return false
@@ -183,6 +184,8 @@ func marshalColumnType(columnType ColumnType) ([]byte, error) {
 
 	fields := map[string]any{"Kind": columnType.Kind()}
 	switch typed := columnType.(type) {
+	case OpaqueType:
+		return json.Marshal(fields)
 	case IntegerType:
 		fields["Unsigned"] = typed.Unsigned
 		width, stated := typed.DisplayWidth.Value()
@@ -342,6 +345,11 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 			}
 		}
 		return DecimalType{Precision: precision, Scale: scale, Unsigned: unsigned, ZeroFill: zeroFill}, nil
+	case KindNative:
+		if err := allow(); err != nil {
+			return nil, err
+		}
+		return OpaqueType{}, nil
 	default:
 		return nil, fmt.Errorf("schema: decode column type: unsupported kind %q", kind)
 	}

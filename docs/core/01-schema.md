@@ -744,3 +744,8 @@ For PostgreSQL and SQLite, `Table` never returns a descriptor silently missing c
 ## Next
 
 [Querying](../02-querying.md) reads rows through these descriptors, or [Writing rows](../orm/04-writing.md) puts rows into them.
+# Native column identities
+
+Schema descriptors can preserve a server-native type in `ColumnDef.NativeType` while retaining a portable
+`ColumnDef.Type` when one is known. An `OpaqueType` keeps a complete native identity when no portable family is safe.
+Native identities render only on a matching dialect; cross-dialect DDL returns `render.ErrUnsupportedNativeType`.

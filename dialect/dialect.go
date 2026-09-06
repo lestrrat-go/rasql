@@ -3,6 +3,7 @@ package dialect
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -94,6 +95,11 @@ type Dialect interface {
 
 	UpsertStyle() UpsertStyle
 	Supports(Capability) bool
+}
+
+// NativeTypeNamer optionally reconstructs a stored native type identity.
+type NativeTypeNamer interface {
+	NativeTypeName(schema.NativeTypeDef) (name string, supported bool, err error)
 }
 
 // PostgreSQL returns the PostgreSQL dialect.
@@ -252,6 +258,70 @@ func (d builtin) TypeName(column schema.ColumnDef) (string, error) {
 		return "", fmt.Errorf("dialect %s: unsupported column type %q", d.name, column.Type.Kind())
 	}
 	return typeName, nil
+}
+
+func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, error) {
+	if native.Dialect != d.name {
+		return "", false, nil
+	}
+	if native.Name == "" {
+		return "", false, fmt.Errorf("dialect %s: native type name must not be empty", d.name)
+	}
+	quote := func(value string) (string, error) { return d.QuoteIdentifier(value) }
+	qualified := func() (string, error) {
+		if native.Schema == "" {
+			return quote(native.Name)
+		}
+		schemaName, err := quote(native.Schema)
+		if err != nil {
+			return "", err
+		}
+		name, err := quote(native.Name)
+		if err != nil {
+			return "", err
+		}
+		return schemaName + "." + name, nil
+	}
+	switch native.Kind {
+	case schema.NativeOther, schema.NativeBuiltin:
+		if d.name == "sqlite" {
+			return native.Name, true, nil
+		}
+		name, err := qualified()
+		return name, err == nil, err
+	case schema.NativeArray:
+		if native.Element == nil {
+			return "", false, fmt.Errorf("dialect %s: native array lacks an element type", d.name)
+		}
+		if d.name != "postgresql" {
+			return "", false, nil
+		}
+		element, supported, err := d.NativeTypeName(*native.Element)
+		if err != nil || !supported {
+			return "", supported, err
+		}
+		return element + "[]", true, nil
+	case schema.NativeEnum, schema.NativeSet:
+		if d.name != "mysql" {
+			if native.Kind == schema.NativeEnum && d.name == "postgresql" {
+				name, err := qualified()
+				return name, err == nil, err
+			}
+			return "", false, nil
+		}
+		name := "ENUM"
+		if native.Kind == schema.NativeSet {
+			name = "SET"
+		}
+		literals := make([]string, len(native.Arguments))
+		for i, value := range native.Arguments {
+			literals[i] = "'" + strings.ReplaceAll(value, "'", "''") + "'"
+		}
+		return name + "(" + strings.Join(literals, ", ") + ")", true, nil
+	default:
+		name, err := qualified()
+		return name, err == nil, err
+	}
 }
 
 // unsignedTypeName renders the DDL type for a column that states no negative

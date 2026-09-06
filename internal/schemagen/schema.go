@@ -1815,7 +1815,40 @@ func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
 	if column.Hidden {
 		source.WriteString(", Hidden: true")
 	}
+	if column.NativeType != nil {
+		source.WriteString(", NativeType: ")
+		writeNativeTypeLiteral(source, column.NativeType)
+	}
 	source.WriteString("},\n")
+}
+
+func writeNativeTypeLiteral(source *bytes.Buffer, native *schema.NativeTypeDef) {
+	source.WriteString("&schema.NativeTypeDef{Dialect: ")
+	source.WriteString(quote(native.Dialect))
+	if native.Schema != "" {
+		source.WriteString(", Schema: ")
+		source.WriteString(quote(native.Schema))
+	}
+	source.WriteString(", Name: ")
+	source.WriteString(quote(native.Name))
+	source.WriteString(", Kind: schema.NativeTypeKind(")
+	source.WriteString(quote(string(native.Kind)))
+	source.WriteString(")")
+	if native.Arguments != nil {
+		source.WriteString(", Arguments: []string{")
+		for index, argument := range native.Arguments {
+			if index > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString(quote(argument))
+		}
+		source.WriteString("}")
+	}
+	if native.Element != nil {
+		source.WriteString(", Element: ")
+		writeNativeTypeLiteral(source, native.Element)
+	}
+	source.WriteString("}")
 }
 
 func generatedStorageConstant(storage schema.GeneratedStorage) string {
@@ -1847,6 +1880,8 @@ func identityGenerationConstant(generation schema.IdentityGeneration) string {
 // apart from an unstated one; every other type is a plain literal.
 func writeColumnTypeLiteral(source *bytes.Buffer, columnType schema.ColumnType) {
 	switch typed := columnType.(type) {
+	case schema.OpaqueType:
+		source.WriteString("schema.OpaqueType{}")
 	case schema.IntegerType:
 		width, stated := typed.DisplayWidth.Value()
 		if !typed.Unsigned && !stated && !typed.ZeroFill {

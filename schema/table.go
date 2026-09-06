@@ -214,6 +214,8 @@ type ColumnDef struct {
 	// never comes from a PostgreSQL or MySQL descriptor, or from an
 	// ordinary SQLite table.
 	Hidden bool `json:",omitempty"`
+
+	NativeType *NativeTypeDef `json:"NativeType,omitempty"`
 }
 
 // MarshalJSON encodes a column type as a tagged object so type-specific
@@ -228,6 +230,7 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		GeneratedStorage    GeneratedStorage   `json:"GeneratedStorage,omitempty"`
 		Identity            IdentityGeneration `json:"Identity,omitempty"`
 		Hidden              bool               `json:"Hidden,omitempty"`
+		NativeType          *NativeTypeDef     `json:"NativeType,omitempty"`
 	}
 	typeData, err := marshalColumnType(c.Type)
 	if err != nil {
@@ -242,6 +245,7 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		GeneratedStorage:    c.GeneratedStorage,
 		Identity:            c.Identity,
 		Hidden:              c.Hidden,
+		NativeType:          c.NativeType,
 	})
 }
 
@@ -256,6 +260,7 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		GeneratedStorage    GeneratedStorage   `json:"GeneratedStorage,omitempty"`
 		Identity            IdentityGeneration `json:"Identity,omitempty"`
 		Hidden              bool               `json:"Hidden,omitempty"`
+		NativeType          *NativeTypeDef     `json:"NativeType,omitempty"`
 	}
 	var wire wireColumn
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -274,6 +279,7 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		GeneratedStorage:    wire.GeneratedStorage,
 		Identity:            wire.Identity,
 		Hidden:              wire.Hidden,
+		NativeType:          wire.NativeType,
 	}
 	return nil
 }
@@ -1114,6 +1120,7 @@ func cloneColumns(source []ColumnDef) []ColumnDef {
 	clone := slices.Clone(source)
 	for i := range clone {
 		clone[i].Type = cloneColumnType(clone[i].Type)
+		clone[i].NativeType = clone[i].NativeType.clone()
 	}
 	return clone
 }
@@ -1189,6 +1196,9 @@ func (t TableDef) Validate() error {
 		}
 		if !validColumnType(column.Type) {
 			return validationError(path+".type", "unsupported column type %T", column.Type)
+		}
+		if err := validateNativeColumn(column, path); err != nil {
+			return err
 		}
 		switch typed := column.Type.(type) {
 		case DecimalType:

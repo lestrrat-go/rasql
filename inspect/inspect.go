@@ -786,6 +786,9 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 			Default:  text(column.defaultValue),
 			Hidden:   column.hidden == sqliteHiddenModule,
 		}
+		if _, opaque := column.columnType.(schema.OpaqueType); opaque {
+			columnDef.NativeType = &schema.NativeTypeDef{Dialect: "sqlite", Name: strings.TrimSpace(column.databaseType), Kind: schema.NativeOther}
+		}
 		if column.hidden == sqliteHiddenGeneratedVirtual || column.hidden == sqliteHiddenGeneratedStored {
 			expression, err := sqliteGeneratedExpression(definition, column.name)
 			if err != nil {
@@ -2389,6 +2392,9 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			Nullable: strings.EqualFold(nullable, "YES"),
 			Default:  text(defaultValue),
 		}
+		if native, ok := mysqlNativeType(databaseType); ok {
+			column.NativeType = native
+		}
 		if decimalType, ok := columnType.(schema.DecimalType); ok {
 			if !numericPrecision.Valid {
 				return nil, fmt.Errorf("inspect: column %q: unconstrained NUMERIC has no precision to record: declare it as NUMERIC(precision, scale)", name)
@@ -2440,6 +2446,30 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 		return nil, fmt.Errorf("inspect: iterate columns: %w", err)
 	}
 	return columns, nil
+}
+
+func mysqlNativeType(declaration string) (*schema.NativeTypeDef, bool) {
+	value := strings.TrimSpace(declaration)
+	upper := strings.ToUpper(value)
+	kind := schema.NativeTypeKind("")
+	switch {
+	case strings.HasPrefix(upper, "ENUM("):
+		kind = schema.NativeEnum
+	case strings.HasPrefix(upper, "SET("):
+		kind = schema.NativeSet
+	default:
+		return nil, false
+	}
+	start := strings.IndexByte(value, '(')
+	end := strings.LastIndexByte(value, ')')
+	if start < 0 || end <= start {
+		return nil, false
+	}
+	arguments := strings.Split(value[start+1:end], ",")
+	for index := range arguments {
+		arguments[index] = strings.Trim(arguments[index], " `'\"")
+	}
+	return &schema.NativeTypeDef{Dialect: "mysql", Name: strings.ToLower(value[:start]), Kind: kind, Arguments: arguments}, true
 }
 
 // postgreSQLGeneratedStorage maps pg_catalog.pg_attribute.attgenerated,
@@ -3262,6 +3292,9 @@ func normalizeType(dialectName string, databaseType string, characterMaximumLeng
 		case strings.Contains(typeName, "UUID"):
 			return schema.UUIDType{}, nil
 		}
+	}
+	if dialectName == "sqlite" && strings.TrimSpace(databaseType) != "" {
+		return schema.OpaqueType{}, nil
 	}
 	return nil, fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -2017,7 +2018,14 @@ func TestMySQLInspectorNormalizesTextWidth(t *testing.T) {
 
 			table, err := inspector.Table(t.Context(), "events")
 			require.NoError(t, err)
-			require.Equal(t, []schema.ColumnDef{{Name: "value", Type: test.want}}, table.Columns)
+			want := schema.ColumnDef{Name: "value", Type: test.want}
+			if strings.HasPrefix(test.columnType, "enum") {
+				want.NativeType = &schema.NativeTypeDef{Dialect: "mysql", Name: "enum", Kind: schema.NativeEnum, Arguments: []string{"a", "b"}}
+			}
+			if strings.HasPrefix(test.columnType, "set") {
+				want.NativeType = &schema.NativeTypeDef{Dialect: "mysql", Name: "set", Kind: schema.NativeSet, Arguments: []string{"a", "b"}}
+			}
+			require.Equal(t, []schema.ColumnDef{want}, table.Columns)
 		})
 	}
 }
