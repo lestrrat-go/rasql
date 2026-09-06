@@ -36,6 +36,8 @@ func TestSQLiteConditionalUpsertPreservesNewerRows(t *testing.T) {
 		require.NoError(t, buildErr)
 		statement, buildErr = statement.WithUpdateWhere(query.LessThan(version, query.Excluded(version)))
 		require.NoError(t, buildErr)
+		statement, buildErr = statement.WithConflictWhere(query.GreaterThan(version, 0))
+		require.NoError(t, buildErr)
 		_, execErr := rasql.Exec(t.Context(), db, statement)
 		require.NoError(t, execErr)
 	}

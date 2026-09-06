@@ -56,6 +56,9 @@ func (s Upsert) WithReturning(projections ...Projection) (Upsert, error) {
 
 // WithConflictWhere returns a copy with the partial conflict-target predicate replaced.
 func (s Upsert) WithConflictWhere(predicate Expression) (Upsert, error) {
+	if nilcheck.Is(predicate) {
+		return Upsert{}, validationError("conflict_where", "must not be nil")
+	}
 	copy := s.clone()
 	copy.conflictWhere = predicate
 	if err := copy.Validate(); err != nil {
@@ -69,6 +72,9 @@ func (s Upsert) ConflictWhere() Expression { return s.conflictWhere }
 
 // WithUpdateWhere returns a copy with the conflict-update predicate replaced.
 func (s Upsert) WithUpdateWhere(predicate Expression) (Upsert, error) {
+	if nilcheck.Is(predicate) {
+		return Upsert{}, validationError("update_where", "must not be nil")
+	}
 	copy := s.clone()
 	copy.updateWhere = predicate
 	if err := copy.Validate(); err != nil {
@@ -111,6 +117,12 @@ func (s Upsert) Validate() error {
 	if len(s.conflict) == 0 && len(s.assignments) == 0 {
 		return validationError("upsert", "requires conflict columns or assignments")
 	}
+	if s.conflictWhere != nil && nilcheck.Is(s.conflictWhere) {
+		return validationError("conflict_where", "must not be nil")
+	}
+	if s.updateWhere != nil && nilcheck.Is(s.updateWhere) {
+		return validationError("update_where", "must not be nil")
+	}
 	if s.conflictWhere != nil && len(s.conflict) == 0 {
 		return validationError("conflict_where", "requires conflict columns")
 	}
@@ -142,17 +154,19 @@ func (s Upsert) Validate() error {
 			return validationError(path+".column", "duplicates column %q", assignment.column.Name())
 		}
 		assigned[assignment.column.Name()] = struct{}{}
-		if err := validateClauseExpression(assignment.value, sources, "a conflict-update assignment", path+".value"); err != nil {
+		if err := validateExcludedClauseExpression(assignment.value, sources, "a conflict-update assignment", path+".value"); err != nil {
 			return err
 		}
 	}
 	if s.conflictWhere != nil {
-		if err := validateClauseExpression(s.conflictWhere, sources, "a conflict target predicate", "conflict_where"); err != nil {
+		ctx := clauseContext(sources, "a conflict target predicate")
+		ctx.rejectsExcluded = true
+		if _, err := validateExpression(s.conflictWhere, ctx, "conflict_where"); err != nil {
 			return err
 		}
 	}
 	if s.updateWhere != nil {
-		if err := validateClauseExpression(s.updateWhere, sources, "a conflict-update predicate", "update_where"); err != nil {
+		if err := validateExcludedClauseExpression(s.updateWhere, sources, "a conflict-update predicate", "update_where"); err != nil {
 			return err
 		}
 	}

@@ -183,6 +183,13 @@ type expressionContext struct {
 	// reference outright, and MySQL accepts it but resolves it to whatever row
 	// already exists, silently writing the wrong data.
 	rowValue bool
+	// allowsExcluded reports whether an upsert conflict-update expression may
+	// read the incoming row through EXCLUDED.
+	allowsExcluded bool
+	// rejectsExcluded reports the conflict-target predicate context, where
+	// EXCLUDED has no SQL meaning even though other write clauses defer that
+	// check to rendering.
+	rejectsExcluded bool
 }
 
 // clauseContext returns a context for a clause that must not call an aggregate.
@@ -263,6 +270,13 @@ func validateClauseExpression(expression Expression, sources sourceScope, clause
 	return err
 }
 
+func validateExcludedClauseExpression(expression Expression, sources sourceScope, clause string, path string) error {
+	ctx := clauseContext(sources, clause)
+	ctx.allowsExcluded = true
+	_, err := validateExpression(expression, ctx, path)
+	return err
+}
+
 // validateSubqueryClauseExpression validates an expression that belongs to a
 // clause which must not call an aggregate function but may run a subquery. See
 // subqueryClauseContext for which clauses those are.
@@ -302,6 +316,9 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
 	case ExcludedColumn:
+		if ctx.rejectsExcluded {
+			return expressionUsage{}, validationError(path, "EXCLUDED is only valid in an upsert conflict-update expression")
+		}
 		if err := expression.column.source.validate(); err != nil {
 			return expressionUsage{}, validationError(path, "%s", err)
 		}

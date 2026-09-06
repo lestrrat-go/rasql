@@ -71,6 +71,48 @@ func TestLiveSelectLockSkipLockedClaimsDifferentRows(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, firstTx.Commit())
 			require.NoError(t, secondTx.Commit())
+			var claimed int
+			require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM "+tableName+" WHERE claimed = 1").Scan(&claimed))
+			require.Equal(t, 2, claimed)
+		})
+	}
+}
+
+func TestLiveSelectLockCapabilities(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		open     func(*testing.T) *sql.DB
+		dialect  dialect.Dialect
+		strength []query.LockStrength
+	}{
+		{"postgresql", dbtest.PostgreSQLDB, dialect.PostgreSQL(), []query.LockStrength{query.LockUpdate, query.LockNoKeyUpdate, query.LockShare, query.LockKeyShare}},
+		{"mysql", dbtest.MySQLDB, dialect.MySQL(), []query.LockStrength{query.LockUpdate, query.LockShare}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database := test.open(t)
+			tableName := dbtest.UniqueName(t, "q5_locks")
+			_, err := database.ExecContext(t.Context(), "CREATE TABLE "+tableName+" (id INTEGER PRIMARY KEY)")
+			require.NoError(t, err)
+			t.Cleanup(func() { _, _ = database.ExecContext(t.Context(), "DROP TABLE "+tableName) })
+			_, err = database.ExecContext(t.Context(), "INSERT INTO "+tableName+" (id) VALUES (1)")
+			require.NoError(t, err)
+			table := query.MustTableRef(schema.MustTableDef(tableName, schema.Integer("id")))
+			for _, strength := range test.strength {
+				for _, wait := range []query.LockWait{query.LockWaitDefault, query.LockWaitNoWait, query.LockWaitSkipLocked} {
+					statement, buildErr := query.NewSelect(table, table.Column("id"))
+					require.NoError(t, buildErr)
+					statement, buildErr = statement.WithLock(query.RowLock(strength).Of(table).Wait(wait))
+					require.NoError(t, buildErr)
+					rendered, renderErr := render.Select(test.dialect, statement)
+					require.NoError(t, renderErr)
+					tx, beginErr := database.BeginTx(t.Context(), nil)
+					require.NoError(t, beginErr)
+					var id int
+					require.NoError(t, tx.QueryRowContext(t.Context(), rendered.SQL(), rendered.Args()...).Scan(&id))
+					require.Equal(t, 1, id)
+					require.NoError(t, tx.Rollback())
+				}
+			}
 		})
 	}
 }
@@ -95,6 +137,8 @@ func TestLiveConditionalUpsertPreservesNewerPostgreSQLRow(t *testing.T) {
 		statement, buildErr := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(version, query.Excluded(version)), query.Set(payload, query.Excluded(payload))})
 		require.NoError(t, buildErr)
 		statement, buildErr = statement.WithUpdateWhere(query.LessThan(version, query.Excluded(version)))
+		require.NoError(t, buildErr)
+		statement, buildErr = statement.WithConflictWhere(query.GreaterThan(version, 0))
 		require.NoError(t, buildErr)
 		_, execErr := rasql.Exec(t.Context(), db, statement)
 		require.NoError(t, execErr)

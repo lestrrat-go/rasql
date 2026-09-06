@@ -42,6 +42,35 @@ func TestSelectLocksRenderAndGate(t *testing.T) {
 	require.True(t, errors.Is(err, render.ErrUnsupportedSelectLock))
 }
 
+func TestSelectLockStrengthsAndWaitModes(t *testing.T) {
+	table := query.MustTableRef(schema.MustTableDef("queue", schema.Integer("id")))
+	base, err := query.NewSelect(table, table.Column("id"))
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name string
+		lock query.Lock
+		pg   string
+	}{
+		{"update", query.RowLock(query.LockUpdate), "FOR UPDATE"},
+		{"no-key-update", query.RowLock(query.LockNoKeyUpdate), "FOR NO KEY UPDATE"},
+		{"share", query.RowLock(query.LockShare), "FOR SHARE"},
+		{"key-share", query.RowLock(query.LockKeyShare), "FOR KEY SHARE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			statement, buildErr := base.WithLock(test.lock.Of(table).Wait(query.LockWaitNoWait))
+			require.NoError(t, buildErr)
+			rendered, renderErr := render.Select(dialect.PostgreSQL(), statement)
+			require.NoError(t, renderErr)
+			require.Contains(t, rendered.SQL(), test.pg+" OF \"queue\" NOWAIT")
+			if test.lock.Strength() == query.LockNoKeyUpdate || test.lock.Strength() == query.LockKeyShare {
+				_, renderErr = render.Select(dialect.MySQL(), statement)
+				var unsupported *render.UnsupportedSelectLockError
+				require.ErrorAs(t, renderErr, &unsupported)
+			}
+		})
+	}
+}
+
 func TestConditionalUpsertRendersAndGates(t *testing.T) {
 	table := query.MustTableRef(schema.MustTableDef("items", schema.Integer("id"), schema.Integer("version"), schema.Text("payload")))
 	id, version, payload := table.Column("id"), table.Column("version"), table.Column("payload")

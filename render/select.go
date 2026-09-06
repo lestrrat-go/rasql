@@ -240,11 +240,17 @@ func (r *renderer) writeLock(lock query.Lock) error {
 	clause := "FOR UPDATE"
 	switch strength {
 	case query.LockNoKeyUpdate:
+		if r.dialect.Name() != "postgresql" {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR NO KEY UPDATE"}
+		}
 		clause = "FOR NO KEY UPDATE"
 	case query.LockShare:
 		baseCapability = dialect.CapabilitySelectForShare
 		clause = "FOR SHARE"
 	case query.LockKeyShare:
+		if r.dialect.Name() != "postgresql" {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR KEY SHARE"}
+		}
 		baseCapability = dialect.CapabilitySelectForShare
 		clause = "FOR KEY SHARE"
 	}
