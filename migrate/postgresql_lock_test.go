@@ -34,14 +34,16 @@ func TestWithPostgreSQLLockJoinsCanceledOperationAndCleanup(t *testing.T) {
 	connection, err := database.Conn(t.Context())
 	require.NoError(t, err)
 	defer func() { _ = connection.Close() }()
-	operationErr := context.Canceled
 	releaseErr := errors.New("unlock query failed")
 	mock.ExpectExec("SELECT pg_advisory_lock(hashtextextended($1, 0))").WithArgs(postgreSQLLockHistory).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT pg_advisory_unlock(hashtextextended($1, 0))").WithArgs(postgreSQLLockHistory).WillReturnError(releaseErr)
-	_, err = runner.withPostgreSQLLock(t.Context(), connection, func() ([]Migration, error) {
-		return []Migration{{ID: "001"}}, operationErr
+	operationContext, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, err = runner.withPostgreSQLLock(operationContext, connection, func() ([]Migration, error) {
+		cancel()
+		return []Migration{{ID: "001"}}, context.Canceled
 	})
-	require.ErrorIs(t, err, operationErr)
+	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorIs(t, err, releaseErr)
 	require.ErrorIs(t, err, driver.ErrBadConn)
 	require.NoError(t, mock.ExpectationsWereMet())
