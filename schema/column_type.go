@@ -29,6 +29,9 @@ type ColumnType interface {
 	columnType()
 }
 
+// Type is the public shorthand used by expression APIs for a column type.
+type Type = ColumnType
+
 // BooleanType describes a boolean column.
 type BooleanType struct{}
 

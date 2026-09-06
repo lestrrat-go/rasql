@@ -57,6 +57,42 @@ source: [examples/query_render_select_example_test.go](https://github.com/lestrr
 
 `query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` builds the reference, and `query.NewSelect` reports a name the table does not hold.
 
+<!-- INCLUDE(examples/query_expression_example_test.go#expressions) -->
+```go
+func Example_query_expressions() {
+	accounts := query.MustTableRef(schema.MustTableDef("accounts",
+		schema.Integer("id"), schema.Integer("balance"), schema.Text("email")))
+	id, balance := accounts.Column("id"), accounts.Column("balance")
+	label := query.SearchedCase(
+		query.When(query.GreaterThan(balance, 100), "large"),
+	).Else("small")
+	statement, err := query.NewSelect(accounts, query.Project(query.CastAs(query.Add(balance, 1), schema.IntegerType{})).As("next"), query.Project(label).As("size"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithWhere(query.Equal(id, 1))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT CAST(("accounts"."balance" + $1) AS BIGINT) AS "next", (CASE WHEN ("accounts"."balance" > $2) THEN $3 ELSE $4 END) AS "size" FROM "accounts" WHERE ("accounts"."id" = $5)
+	// 1 100 large small 1
+}
+```
+source: [examples/query_expression_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_expression_example_test.go)
+<!-- END INCLUDE -->
+
+`query.Add`, `query.SearchedCase`, and `query.CastAs` compose computed projections while keeping values as bound arguments.
+
 ## Run a rendered statement
 
 A `stmt.Statement` carries the SQL text and the arguments, so `database/sql` runs it directly through `QueryContext` or `ExecContext`. [The database handle](04-database.md#run-a-rendered-statement) covers running one through a `rasql.DB` instead, which adds hooks and row decoding.

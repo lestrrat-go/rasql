@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/schema"
@@ -302,6 +303,108 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 			return expressionUsage{}, err
 		}
 		return left.merge(right), nil
+	case Case:
+		if len(expression.branches) == 0 {
+			return expressionUsage{}, validationError(path, "requires at least one branch")
+		}
+		var usage expressionUsage
+		if expression.operand != nil {
+			var err error
+			usage, err = validateExpression(expression.operand, ctx, path+".operand")
+			if err != nil {
+				return expressionUsage{}, err
+			}
+		}
+		for i, branch := range expression.branches {
+			if branch.predicate == nil || (reflect.ValueOf(branch.predicate).Kind() == reflect.Pointer && reflect.ValueOf(branch.predicate).IsNil()) {
+				return expressionUsage{}, validationError(fmt.Sprintf("%s.branches[%d].predicate", path, i), "must not be nil")
+			}
+			if branch.result == nil || (reflect.ValueOf(branch.result).Kind() == reflect.Pointer && reflect.ValueOf(branch.result).IsNil()) {
+				return expressionUsage{}, validationError(fmt.Sprintf("%s.branches[%d].result", path, i), "must not be nil")
+			}
+			branchContext := ctx
+			if expression.operand == nil && !predicateExpression(branch.predicate) {
+				return expressionUsage{}, validationError(fmt.Sprintf("%s.branches[%d].predicate", path, i), "must be a predicate expression")
+			}
+			var err error
+			if branchUsage, e := validateExpression(branch.predicate, branchContext, fmt.Sprintf("%s.branches[%d].predicate", path, i)); e != nil {
+				err = e
+			} else {
+				usage = usage.merge(branchUsage)
+			}
+			if err != nil {
+				return expressionUsage{}, err
+			}
+			resultUsage, err := validateExpression(branch.result, ctx, fmt.Sprintf("%s.branches[%d].result", path, i))
+			if err != nil {
+				return expressionUsage{}, err
+			}
+			usage = usage.merge(resultUsage)
+		}
+		if expression.hasFallback {
+			fallbackUsage, err := validateExpression(expression.fallback, ctx, path+".fallback")
+			if err != nil {
+				return expressionUsage{}, err
+			}
+			usage = usage.merge(fallbackUsage)
+		}
+		return usage, nil
+	case Cast:
+		if !validCastType(expression.target) {
+			return expressionUsage{}, validationError(path+".target", "must be a valid schema type")
+		}
+		return validateExpression(expression.expr, ctx, path+".expression")
+	case Filter:
+		aggregateUsage, err := validateExpression(expression.aggregate, ctx, path+".aggregate")
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		if !aggregateUsage.aggregate {
+			return expressionUsage{}, validationError(path+".aggregate", "must contain an aggregate expression")
+		}
+		predicateContext := ctx
+		predicateContext.allowsAggregate = false
+		predicateContext.aggregateDepth = 0
+		predicateUsage, err := validateExpression(expression.predicate, predicateContext, path+".predicate")
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		return expressionUsage{aggregate: true, bareColumn: predicateUsage.bareColumn}, nil
+	case Over:
+		usage, err := validateExpression(expression.expr, ctx, path+".expression")
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		windowContext := ctx
+		windowContext.allowsAggregate = false
+		windowContext.aggregateDepth = 0
+		windowUsage, err := validateWindow(expression.window, windowContext, path+".window")
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		return expressionUsage{aggregate: true, bareColumn: usage.bareColumn || windowUsage.bareColumn}, nil
+	case TrustedFragment:
+		if strings.Count(expression.sql, "{}") != len(expression.parts) {
+			return expressionUsage{}, validationError(path, "contains %d fragment markers for %d parts", strings.Count(expression.sql, "{}"), len(expression.parts))
+		}
+		var usage expressionUsage
+		for i, part := range expression.parts {
+			switch part := part.(type) {
+			case fragmentHole:
+				partUsage, err := validateExpression(part.value, ctx, fmt.Sprintf("%s.parts[%d]", path, i))
+				if err != nil {
+					return expressionUsage{}, err
+				}
+				usage = usage.merge(partUsage)
+			case identifierHole:
+				if err := schema.ValidateIdentifier(part.identifier.name); err != nil {
+					return expressionUsage{}, validationError(fmt.Sprintf("%s.parts[%d]", path, i), "%s", err)
+				}
+			default:
+				return expressionUsage{}, validationError(fmt.Sprintf("%s.parts[%d]", path, i), "unsupported fragment part %T", part)
+			}
+		}
+		return usage, nil
 	case Logical:
 		if expression.operator != LogicalAnd && expression.operator != LogicalOr {
 			return expressionUsage{}, validationError(path+".operator", "unsupported operator %q", expression.operator)
@@ -646,9 +749,49 @@ func validateFunctionArity(name FunctionName, count int, spec functionSpec, path
 
 func validBinaryOperator(operator BinaryOperator) bool {
 	switch operator {
-	case OperatorEqual, OperatorNotEqual, OperatorGreaterThan, OperatorGreaterThanOrEqual, OperatorLessThan, OperatorLessThanOrEqual, OperatorLike, OperatorMatch:
+	case OperatorEqual, OperatorNotEqual, OperatorGreaterThan, OperatorGreaterThanOrEqual, OperatorLessThan, OperatorLessThanOrEqual, OperatorLike, OperatorMatch, OperatorAdd, OperatorSubtract, OperatorMultiply, OperatorDivide, OperatorModulo:
 		return true
 	default:
 		return false
 	}
+}
+
+func predicateExpression(expression Expression) bool {
+	switch expression.(type) {
+	case Binary, Logical, Not, NullTest, Membership, Existence:
+		return true
+	default:
+		return false
+	}
+}
+
+func validCastType(target schema.ColumnType) bool {
+	switch target.(type) {
+	case schema.BooleanType, schema.IntegerType, schema.FloatType, schema.TextType, schema.BytesType, schema.TimeType, schema.JSONType, schema.UUIDType, schema.DecimalType:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateWindow(window WindowSpec, ctx expressionContext, path string) (expressionUsage, error) {
+	var usage expressionUsage
+	for i, expression := range window.partition {
+		partUsage, err := validateExpression(expression, ctx, fmt.Sprintf("%s.partition[%d]", path, i))
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		usage = usage.merge(partUsage)
+	}
+	for i, order := range window.order {
+		if _, ok := order.ResultProjection(); ok {
+			return expressionUsage{}, validationError(fmt.Sprintf("%s.order[%d]", path, i), "cannot order by a result alias inside a window")
+		}
+		orderUsage, err := validateExpression(order.Expression(), ctx, fmt.Sprintf("%s.order[%d]", path, i))
+		if err != nil {
+			return expressionUsage{}, err
+		}
+		usage = usage.merge(orderUsage)
+	}
+	return usage, nil
 }
