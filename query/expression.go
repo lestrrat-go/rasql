@@ -6,9 +6,18 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// Expression is a dialect-neutral SQL expression.
+// Expression is a dialect-neutral SQL expression. External expressions may
+// implement this exported marker and be supplied to a dialect.Compiler.
 type Expression interface {
-	expression()
+	ExpressionNode()
+}
+
+// CustomExpression identifies an external expression with a descriptive name.
+// The renderer does not require this marker when a dialect compiler recognizes
+// an Expression directly.
+type CustomExpression interface {
+	Expression
+	CustomExpressionName() string
 }
 
 // ColumnRef is a typed reference to a table column.
@@ -17,7 +26,7 @@ type ColumnRef struct {
 	name   string
 }
 
-func (ColumnRef) expression() {}
+func (ColumnRef) ExpressionNode() {}
 
 // Validate reports whether c names a column its source table holds.
 //
@@ -72,7 +81,7 @@ type ExcludedColumn struct {
 	column ColumnRef
 }
 
-func (ExcludedColumn) expression() {}
+func (ExcludedColumn) ExpressionNode() {}
 
 // Excluded references the incoming value for column in an upsert assignment.
 func Excluded(column ColumnRef) ExcludedColumn {
@@ -97,7 +106,7 @@ type TableIdentifier struct {
 	table RelationRef
 }
 
-func (TableIdentifier) expression() {}
+func (TableIdentifier) ExpressionNode() {}
 
 // Table returns the table whose bare name is rendered.
 func (t TableIdentifier) Table() TableRef {
@@ -110,7 +119,7 @@ type Value struct {
 	value any
 }
 
-func (Value) expression() {}
+func (Value) ExpressionNode() {}
 
 // Bind creates a bound SQL argument expression. A comparison, a membership
 // test, Call, Func, and Coalesce bind a plain Go value automatically, so most
@@ -184,7 +193,7 @@ type Binary struct {
 	right    Expression
 }
 
-func (Binary) expression() {}
+func (Binary) ExpressionNode() {}
 
 // Compare combines left and right with operator. Either operand may be a
 // plain Go value, which is bound the way Bind would bind it; an operand that
@@ -286,8 +295,6 @@ type CaseWhen struct {
 	result    Expression
 }
 
-func (CaseWhen) expression() {}
-
 func When(predicate Expression, result any) CaseWhen {
 	return CaseWhen{predicate: predicate, result: operand(result)}
 }
@@ -303,7 +310,7 @@ type Case struct {
 	hasFallback bool
 }
 
-func (Case) expression() {}
+func (Case) ExpressionNode() {}
 
 func SearchedCase(branches ...CaseWhen) Case {
 	return Case{branches: append([]CaseWhen(nil), branches...)}
@@ -329,7 +336,7 @@ type Cast struct {
 	target schema.ColumnType
 }
 
-func (Cast) expression() {}
+func (Cast) ExpressionNode() {}
 
 func CastAs(expressionValue any, target schema.ColumnType) Cast {
 	return Cast{expr: operand(expressionValue), target: target}
@@ -344,7 +351,7 @@ type Filter struct {
 	predicate Expression
 }
 
-func (Filter) expression() {}
+func (Filter) ExpressionNode() {}
 
 func FilterWhere(aggregate Expression, predicate Expression) Filter {
 	return Filter{aggregate: aggregate, predicate: predicate}
@@ -374,7 +381,7 @@ type Over struct {
 	window WindowSpec
 }
 
-func (Over) expression() {}
+func (Over) ExpressionNode() {}
 
 func OverWindow(expression Expression, window WindowSpec) Over {
 	return Over{expr: expression, window: window}
@@ -411,7 +418,7 @@ type TrustedFragment struct {
 	parts []FragmentPart
 }
 
-func (TrustedFragment) expression() {}
+func (TrustedFragment) ExpressionNode() {}
 
 func TrustedSQL(sql string, parts ...FragmentPart) TrustedFragment {
 	return TrustedFragment{sql: sql, parts: append([]FragmentPart(nil), parts...)}
@@ -434,7 +441,7 @@ type Logical struct {
 	expressions []Expression
 }
 
-func (Logical) expression() {}
+func (Logical) ExpressionNode() {}
 
 // And combines expressions with AND.
 func And(expressions ...Expression) Logical {
@@ -461,7 +468,7 @@ type Not struct {
 	expr Expression
 }
 
-func (Not) expression() {}
+func (Not) ExpressionNode() {}
 
 // Negate creates a NOT expression.
 func Negate(expression Expression) Not {
@@ -479,7 +486,7 @@ type NullTest struct {
 	not  bool
 }
 
-func (NullTest) expression() {}
+func (NullTest) ExpressionNode() {}
 
 // IsNull tests whether expression is NULL.
 func IsNull(expression Expression) NullTest {
@@ -510,7 +517,7 @@ type Membership struct {
 	hasSubquery bool
 }
 
-func (Membership) expression() {}
+func (Membership) ExpressionNode() {}
 
 // In tests whether expression equals one of values.
 // It renders as expression IN (…). Each argument that is not itself an
@@ -609,7 +616,7 @@ type Subquery struct {
 	statement Select
 }
 
-func (Subquery) expression() {}
+func (Subquery) ExpressionNode() {}
 
 // Scalar uses statement as a single value. The statement must project exactly
 // one expression, which statement validation checks; that it returns at most one
@@ -640,7 +647,7 @@ type Existence struct {
 	not      bool
 }
 
-func (Existence) expression() {}
+func (Existence) ExpressionNode() {}
 
 // Exists tests whether statement returns at least one row. It renders as
 // EXISTS (SELECT …).
@@ -741,7 +748,7 @@ type Function struct {
 	unchecked bool
 }
 
-func (Function) expression() {}
+func (Function) ExpressionNode() {}
 
 // Call applies name to arguments. An argument that is not itself an
 // Expression is bound the way Bind would bind it. Validation rejects a name

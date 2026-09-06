@@ -696,6 +696,52 @@ func (s Select) Validate() error {
 	return nil
 }
 
+// ValidateCompilerExpression validates a child expression emitted by a
+// dialect compiler in the named SELECT clause. It preserves the statement's
+// source scope and clause rules while allowing the compiler's outer node to be
+// unknown to query validation.
+func (s Select) ValidateCompilerExpression(expression Expression, clause string, position int) error {
+	copy := s.clone()
+	switch clause {
+	case "projection":
+		if position < 0 || position >= len(copy.projections) {
+			return fmt.Errorf("query: compiler expression %s position %d is out of range", clause, position)
+		}
+		alias := copy.projections[position].ResultAlias()
+		projection := Project(expression)
+		if alias != "" {
+			projection = projection.As(alias)
+		}
+		copy.projections[position] = projection
+	case "join":
+		if position < 0 || position >= len(copy.joins) {
+			return fmt.Errorf("query: compiler expression %s position %d is out of range", clause, position)
+		}
+		copy.joins[position].on = expression
+	case "where":
+		copy.where = expression
+	case "group":
+		if position < 0 || position >= len(copy.groupBy) {
+			return fmt.Errorf("query: compiler expression %s position %d is out of range", clause, position)
+		}
+		copy.groupBy[position] = expression
+	case "having":
+		copy.having = expression
+	case "order":
+		if position < 0 || position >= len(copy.orderBy) {
+			return fmt.Errorf("query: compiler expression %s position %d is out of range", clause, position)
+		}
+		if copy.orderBy[position].Descending() {
+			copy.orderBy[position] = Desc(expression)
+		} else {
+			copy.orderBy[position] = Asc(expression)
+		}
+	default:
+		return fmt.Errorf("query: unknown compiler expression clause %q", clause)
+	}
+	return copy.Validate()
+}
+
 // isCorrelatedSource reports whether source is one of the enclosing tables
 // correlations declares. It exists so a join can tell a table this statement
 // already selects from, which is a plain duplicate, from one it declared a

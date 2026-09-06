@@ -128,12 +128,64 @@ type renderer struct {
 	// — not only at the value's own top level. EXCLUDED means nothing outside
 	// a conflict-update assignment, so writeExcludedColumn refuses one
 	// reached anywhere else.
-	excludedStyle dialect.UpsertStyle
-	inExcluded    bool
-	cteScope      []query.CTE
+	excludedStyle           dialect.UpsertStyle
+	inExcluded              bool
+	cteScope                []query.CTE
+	expressionValidator     func(query.Expression) error
+	compilerExpressionDepth int
+}
+
+type compilerEmitter struct {
+	renderer *renderer
+}
+
+func (e compilerEmitter) WriteSQL(sql string) {
+	e.renderer.builder.WriteString(sql)
+}
+
+func (e compilerEmitter) Identifier(parts ...string) error {
+	var quoted []string
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		value, err := e.renderer.quoteIdentifier(part)
+		if err != nil {
+			return err
+		}
+		quoted = append(quoted, value)
+	}
+	if len(quoted) == 0 {
+		return fmt.Errorf("identifier must contain a non-empty component")
+	}
+	e.renderer.builder.WriteString(strings.Join(quoted, "."))
+	return nil
+}
+
+func (e compilerEmitter) Argument(value any) error {
+	return e.renderer.writeArgument(value)
+}
+
+func (e compilerEmitter) Expression(expression query.Expression) error {
+	if e.renderer.expressionValidator != nil {
+		if err := e.renderer.expressionValidator(expression); err != nil {
+			return err
+		}
+	}
+	return e.renderer.writeExpression(expression)
+}
+
+func (r *renderer) compiler() dialect.Compiler {
+	provider, ok := r.dialect.(dialect.CompilerProvider)
+	if !ok {
+		return nil
+	}
+	return provider.Compiler()
 }
 
 func (r *renderer) writeSelect(s query.Select) error {
+	previousValidator := r.expressionValidator
+	defer func() { r.expressionValidator = previousValidator }()
 	previous := r.cteScope
 	owned := append([]query.CTE(nil), previous...)
 	owned = append(owned, s.CTEs()...)
@@ -169,16 +221,20 @@ func (r *renderer) writeSelect(s query.Select) error {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "projection", i)
+		}
 		if err := r.writeProjection(projection); err != nil {
 			return err
 		}
 	}
+	r.expressionValidator = nil
 
 	r.builder.WriteString(" FROM ")
 	if err := r.writeTable(s.From()); err != nil {
 		return err
 	}
-	for _, join := range s.Joins() {
+	for i, join := range s.Joins() {
 		r.builder.WriteByte(' ')
 		r.builder.WriteString(string(join.Type()))
 		r.builder.WriteString(" JOIN ")
@@ -186,15 +242,23 @@ func (r *renderer) writeSelect(s query.Select) error {
 			return err
 		}
 		r.builder.WriteString(" ON ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "join", i)
+		}
 		if err := r.writeExpression(join.On()); err != nil {
 			return err
 		}
 	}
+	r.expressionValidator = nil
 	if where := s.Where(); where != nil {
 		r.builder.WriteString(" WHERE ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "where", -1)
+		}
 		if err := r.writeExpression(where); err != nil {
 			return err
 		}
+		r.expressionValidator = nil
 	}
 
 	groupBy := s.GroupBy()
@@ -204,16 +268,24 @@ func (r *renderer) writeSelect(s query.Select) error {
 			if i > 0 {
 				r.builder.WriteString(", ")
 			}
+			r.expressionValidator = func(expression query.Expression) error {
+				return s.ValidateCompilerExpression(expression, "group", i)
+			}
 			if err := r.writeExpression(expression); err != nil {
 				return err
 			}
 		}
+		r.expressionValidator = nil
 	}
 	if having := s.Having(); having != nil {
 		r.builder.WriteString(" HAVING ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "having", -1)
+		}
 		if err := r.writeExpression(having); err != nil {
 			return err
 		}
+		r.expressionValidator = nil
 	}
 
 	orders := s.OrderBy()
@@ -234,13 +306,26 @@ func (r *renderer) writeSelect(s query.Select) error {
 					return err
 				}
 				r.builder.WriteString(quoted)
-			} else if err := r.writeExpression(order.Expression()); err != nil {
-				return err
+			} else {
+				r.expressionValidator = func(expression query.Expression) error {
+					return s.ValidateCompilerExpression(expression, "order", i)
+				}
+				if err := r.writeExpression(order.Expression()); err != nil {
+					return err
+				}
+				r.expressionValidator = nil
 			}
 			if order.Descending() {
 				r.builder.WriteString(" DESC")
 			}
 		}
+	}
+	if compiler := r.compiler(); compiler != nil {
+		limit, hasLimit := s.Limit()
+		offset, hasOffset := s.Offset()
+		return compiler.CompilePagination(compilerEmitter{renderer: r}, dialect.Pagination{
+			Limit: limit, Offset: offset, HasLimit: hasLimit, HasOffset: hasOffset,
+		})
 	}
 	if limit, ok := s.Limit(); ok {
 		r.builder.WriteString(" LIMIT ")
@@ -529,6 +614,26 @@ func (r *renderer) writeProjection(projection query.Projection) error {
 }
 
 func (r *renderer) writeExpression(expression query.Expression) error {
+	if compiler := r.compiler(); compiler != nil {
+		if r.compilerExpressionDepth >= maxCompilerExpressionDepth {
+			return errors.New("compiler expression delegation exceeds 64 nested callbacks")
+		}
+		r.compilerExpressionDepth++
+		defer func() { r.compilerExpressionDepth-- }()
+		handled, err := compiler.CompileExpression(compilerEmitter{renderer: r}, expression)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
+	}
+	return r.writeExpressionBuiltin(expression)
+}
+
+const maxCompilerExpressionDepth = 64
+
+func (r *renderer) writeExpressionBuiltin(expression query.Expression) error {
 	switch expression := expression.(type) {
 	case query.ColumnRef:
 		qualifier, err := r.quoteQualified(expression.Source().QualifierSchema(), expression.Source().Qualifier())

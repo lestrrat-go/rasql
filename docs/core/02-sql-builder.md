@@ -55,6 +55,92 @@ func Example_query_render_select() {
 source: [examples/query_render_select_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_render_select_example_test.go)
 <!-- END INCLUDE -->
 
+## Extend rendering with a compiler
+
+An optional `dialect.CompilerProvider` extends rendering for a custom dialect. Its compiler can emit a complete pagination
+clause or handle an external `query.Expression` through the renderer's identifier, argument, and child-expression emitter.
+The built-in dialects keep their existing SQL when no compiler is installed.
+
+<!-- INCLUDE(examples/query_custom_compiler_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
+	"github.com/lestrrat-go/rasql/query"
+)
+
+type compilerExampleDialect struct {
+	dialect.Dialect
+}
+
+func (compilerExampleDialect) Compiler() dialect.Compiler { return compilerExample{} }
+
+type compilerExample struct{}
+
+type containsExample struct {
+	column query.Expression
+	value  any
+}
+
+func (containsExample) ExpressionNode()              {}
+func (containsExample) CustomExpressionName() string { return "contains" }
+
+func (compilerExample) CompileExpression(emitter dialect.Emitter, expression query.Expression) (bool, error) {
+	contains, ok := expression.(containsExample)
+	if !ok {
+		return false, nil
+	}
+	emitter.WriteSQL("CONTAINS(")
+	if err := emitter.Expression(contains.column); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(", ")
+	if err := emitter.Argument(contains.value); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(")")
+	return true, nil
+}
+
+func (compilerExample) CompilePagination(emitter dialect.Emitter, pagination dialect.Pagination) error {
+	if pagination.HasOffset {
+		return fmt.Errorf("offset is unsupported")
+	}
+	if pagination.HasLimit {
+		emitter.WriteSQL(" FETCH FIRST ")
+		if err := emitter.Argument(pagination.Limit); err != nil {
+			return err
+		}
+		emitter.WriteSQL(" ROWS ONLY")
+	}
+	return nil
+}
+
+func Example_customCompiler() {
+	users := store.Users()
+	builder := rasql.DecodeFromRef[struct{}](users.Ref()).
+		Project(query.Project(containsExample{column: users.Email(), value: "@example.com"})).
+		Limit(3)
+	statement, err := builder.Build(compilerExampleDialect{Dialect: dialect.SQLite()})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(statement.SQL())
+	fmt.Println(statement.Args())
+	// Output:
+	// SELECT CONTAINS("users"."email", ?) FROM "users" FETCH FIRST ? ROWS ONLY
+	// [@example.com 3]
+}
+```
+source: [examples/query_custom_compiler_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_custom_compiler_example_test.go)
+<!-- END INCLUDE -->
+
 `query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` builds the reference, and `query.NewSelect` reports a name the table does not hold.
 
 <!-- INCLUDE(examples/query_lock_upsert_example_test.go#row_lock) -->
