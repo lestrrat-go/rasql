@@ -152,13 +152,137 @@ func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
 // rows returned by table_xinfo. See the package doc for the MySQL limitation,
 // which this method cannot detect.
 func (i Inspector) Table(ctx context.Context, tableName string) (schema.TableDef, error) {
-	return i.table(ctx, "", tableName)
+	definition, err := i.table(ctx, "", tableName)
+	if err != nil {
+		return schema.TableDef{}, err
+	}
+	if definition.EffectiveKind() != schema.ObjectTable {
+		return schema.TableDef{}, fmt.Errorf("inspect: %q is a %s, not a table", tableName, definition.EffectiveKind())
+	}
+	return definition, nil
 }
 
 // TableIn reads a SQLite table from databaseName using a retained connection
 // or transaction. The returned descriptor preserves databaseName in Schema.
 func (i Inspector) TableIn(ctx context.Context, databaseName string, tableName string) (schema.TableDef, error) {
-	return i.table(ctx, databaseName, tableName)
+	definition, err := i.table(ctx, databaseName, tableName)
+	if err != nil {
+		return schema.TableDef{}, err
+	}
+	if definition.EffectiveKind() != schema.ObjectTable {
+		return schema.TableDef{}, fmt.Errorf("inspect: %q is a %s, not a table", tableName, definition.EffectiveKind())
+	}
+	return definition, nil
+}
+
+// ObjectName identifies an inspected table or view.
+type ObjectName struct {
+	Schema string
+	Name   string
+	Kind   schema.ObjectKind
+}
+
+// Object reads table or view metadata.
+func (i Inspector) Object(ctx context.Context, name string) (schema.TableDef, error) {
+	return i.object(ctx, "", name)
+}
+
+// ObjectIn reads a SQLite table or view from databaseName.
+func (i Inspector) ObjectIn(ctx context.Context, namespace, name string) (schema.TableDef, error) {
+	return i.object(ctx, namespace, name)
+}
+
+// ObjectNames lists tables and views in deterministic order.
+func (i Inspector) ObjectNames(ctx context.Context) ([]ObjectName, error) {
+	return i.objectNames(ctx, "")
+}
+
+// ObjectNamesIn lists SQLite tables and views in one database.
+func (i Inspector) ObjectNamesIn(ctx context.Context, namespace string) ([]ObjectName, error) {
+	return i.objectNames(ctx, namespace)
+}
+
+func (i Inspector) objectNames(ctx context.Context, namespace string) ([]ObjectName, error) {
+	if isNil(i.queryer) || isNil(i.dialect) {
+		return nil, fmt.Errorf("inspect: invalid inspector")
+	}
+	if i.dialect.Name() == "sqlite" {
+		if namespace != "" {
+			if err := schema.ValidateIdentifier(namespace); err != nil {
+				return nil, fmt.Errorf("inspect: invalid SQLite database name: %w", err)
+			}
+		}
+		return i.sqliteObjectNames(ctx, namespace)
+	}
+	if namespace != "" {
+		return nil, fmt.Errorf("inspect: scoped object enumeration is only supported for SQLite")
+	}
+	query := "SELECT table_name, CASE WHEN table_type = 'VIEW' THEN 'view' ELSE 'table' END FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name"
+	if i.dialect.Name() == "postgresql" {
+		query = "SELECT c.relname, CASE WHEN c.relkind IN ('v', 'm') THEN 'view' ELSE 'table' END FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p', 'v', 'm') ORDER BY c.relname"
+	}
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read object names: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var objects []ObjectName
+	for rows.Next() {
+		var name, kind string
+		if err := rows.Scan(&name, &kind); err != nil {
+			return nil, fmt.Errorf("inspect: scan object name: %w", err)
+		}
+		objectKind := schema.ObjectTable
+		if kind == string(schema.ObjectView) {
+			objectKind = schema.ObjectView
+		}
+		objects = append(objects, ObjectName{Name: name, Kind: objectKind})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate object names: %w", err)
+	}
+	return objects, nil
+}
+
+func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) ([]ObjectName, error) {
+	query := "PRAGMA table_list"
+	if databaseName != "" {
+		query = `PRAGMA "` + sqlitePragmaIdentifier(databaseName) + `".table_list`
+	}
+	rows, err := i.queryer.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: read SQLite object names: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var objects []ObjectName
+	for rows.Next() {
+		var database, name, kind string
+		var columns, withoutRowID, strict int64
+		if err := rows.Scan(&database, &name, &kind, &columns, &withoutRowID, &strict); err != nil {
+			return nil, fmt.Errorf("inspect: scan SQLite object name: %w", err)
+		}
+		if sqliteIsInternalTableName(name) || (databaseName != "" && database != databaseName) {
+			continue
+		}
+		objectKind := schema.ObjectTable
+		if strings.EqualFold(kind, "view") {
+			objectKind = schema.ObjectView
+		}
+		if kind != "table" && kind != "view" {
+			continue
+		}
+		objects = append(objects, ObjectName{Schema: database, Name: name, Kind: objectKind})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect: iterate SQLite object names: %w", err)
+	}
+	sort.Slice(objects, func(left, right int) bool {
+		if objects[left].Schema != objects[right].Schema {
+			return objects[left].Schema < objects[right].Schema
+		}
+		return objects[left].Name < objects[right].Name
+	})
+	return objects, nil
 }
 
 // TableName names one base table TableNames or TableNamesIn reported. Schema
@@ -248,6 +372,27 @@ func (i Inspector) table(ctx context.Context, databaseName string, tableName str
 	return i.informationSchemaTable(ctx, tableName)
 }
 
+func (i Inspector) object(ctx context.Context, databaseName string, tableName string) (schema.TableDef, error) {
+	if err := schema.ValidateIdentifier(tableName); err != nil {
+		return schema.TableDef{}, fmt.Errorf("inspect: invalid table name: %w", err)
+	}
+	if databaseName != "" {
+		if err := schema.ValidateIdentifier(databaseName); err != nil {
+			return schema.TableDef{}, fmt.Errorf("inspect: invalid SQLite database name: %w", err)
+		}
+	}
+	if isNil(i.queryer) || isNil(i.dialect) {
+		return schema.TableDef{}, fmt.Errorf("inspect: invalid inspector")
+	}
+	if i.dialect.Name() == "sqlite" {
+		return i.sqliteTable(ctx, databaseName, tableName)
+	}
+	if databaseName != "" {
+		return schema.TableDef{}, fmt.Errorf("inspect: scoped table inspection is only supported for SQLite")
+	}
+	return i.informationSchemaObject(ctx, tableName)
+}
+
 func (i Inspector) informationSchemaTable(ctx context.Context, tableName string) (schema.TableDef, error) {
 	queries, err := i.informationSchemaQueries(ctx)
 	if err != nil {
@@ -276,7 +421,7 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 	if err != nil {
 		return schema.TableDef{}, err
 	}
-	table := schema.TableDef{Name: tableName, Columns: columns, PrimaryKey: primaryKey}
+	table := schema.TableDef{Name: tableName, Kind: schema.ObjectTable, Columns: columns, PrimaryKey: primaryKey}
 	if queries.uniqueConstraints != "" {
 		table.UniqueConstraints, err = i.readUniqueConstraints(ctx, queries.uniqueConstraints, queries.argument(tableName))
 		if err != nil {
@@ -323,6 +468,53 @@ func (i Inspector) informationSchemaTable(ctx context.Context, tableName string)
 		return schema.TableDef{}, fmt.Errorf("inspect: normalize table %q: %w", tableName, err)
 	}
 	return table, nil
+}
+
+func (i Inspector) informationSchemaObject(ctx context.Context, tableName string) (schema.TableDef, error) {
+	table, err := i.informationSchemaTable(ctx, tableName)
+	if err != nil {
+		return schema.TableDef{}, err
+	}
+	kind, err := i.informationSchemaObjectKind(ctx, tableName)
+	if err != nil {
+		return schema.TableDef{}, err
+	}
+	table.Kind = kind
+	if kind == schema.ObjectView {
+		table.Operations = schema.OperationRead
+	}
+	return table, nil
+}
+
+func (i Inspector) informationSchemaObjectKind(ctx context.Context, name string) (schema.ObjectKind, error) {
+	query := ""
+	switch i.dialect.Name() {
+	case "postgresql":
+		query = "SELECT CASE WHEN c.relkind IN ('v', 'm') THEN 'view' ELSE 'table' END FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relname = $1 AND c.relkind IN ('r', 'p', 'v', 'm')"
+	case "mysql":
+		query = "SELECT CASE WHEN table_type = 'VIEW' THEN 'view' ELSE 'table' END FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
+	default:
+		return schema.ObjectTable, nil
+	}
+	rows, err := i.queryer.QueryContext(ctx, query, name)
+	if err != nil {
+		return "", fmt.Errorf("inspect: read object kind for %q: %w", name, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var kind string
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", fmt.Errorf("inspect: read object kind for %q: %w", name, err)
+		}
+		return "", &TableNotFoundError{Table: name, Scope: "the current database"}
+	}
+	if err := rows.Scan(&kind); err != nil {
+		return "", fmt.Errorf("inspect: scan object kind for %q: %w", name, err)
+	}
+	if kind == string(schema.ObjectView) {
+		return schema.ObjectView, nil
+	}
+	return schema.ObjectTable, nil
 }
 
 func (i Inspector) informationSchemaQueries(ctx context.Context) (informationQueries, error) {
@@ -730,6 +922,13 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 	if len(metadata) == 0 {
 		return schema.TableDef{}, &TableNotFoundError{Table: tableName, Scope: "the connection's attached databases"}
 	}
+	if strings.EqualFold(options.kind, "view") {
+		columns := make([]schema.ColumnDef, len(metadata))
+		for index, column := range metadata {
+			columns[index] = schema.ColumnDef{Name: column.name, Type: column.columnType, Nullable: column.notNull == 0}
+		}
+		return schema.TableDef{Schema: options.database, Name: tableName, Kind: schema.ObjectView, Operations: schema.OperationRead, Columns: columns}, nil
+	}
 	definitionText, err := i.sqliteTableDefinitionText(ctx, options.database, tableName)
 	if err != nil {
 		return schema.TableDef{}, err
@@ -993,7 +1192,7 @@ func resolveSQLiteTableOptions(databaseName string, tableName string, matches []
 	// table is virtual. "view" and anything else stay unsupported: a
 	// view has no independent column, constraint, or index structure of
 	// its own for a TableDef to hold.
-	if !strings.EqualFold(matches[0].kind, "table") && !strings.EqualFold(matches[0].kind, "shadow") && !strings.EqualFold(matches[0].kind, "virtual") {
+	if !strings.EqualFold(matches[0].kind, "table") && !strings.EqualFold(matches[0].kind, "shadow") && !strings.EqualFold(matches[0].kind, "virtual") && !strings.EqualFold(matches[0].kind, "view") {
 		return sqliteTableOptions{}, fmt.Errorf("inspect: SQLite table %q cannot be represented: table kind %q is unsupported", tableName, matches[0].kind)
 	}
 	if err := schema.ValidateIdentifier(matches[0].database); err != nil {

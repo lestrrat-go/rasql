@@ -744,3 +744,13 @@ For PostgreSQL and SQLite, `Table` never returns a descriptor silently missing c
 ## Next
 
 [Querying](../02-querying.md) reads rows through these descriptors, or [Writing rows](../orm/04-writing.md) puts rows into them.
+# Typed read surfaces for views
+
+Inspected views expose `schema.ObjectView` and read-only operations. Generated
+view wrappers embed `rasql.ReadTable[T]`, so typed selects and relationship
+loads compile while insert, update, delete, and table DDL require
+`rasql.Table[T]` and fail at compile time.
+
+Use `rasql.ReadTableOf[T]` for a hand-built queryable descriptor. Use
+`catalog.Options{IncludeViews: true}` when generating a store that includes
+inspected views.

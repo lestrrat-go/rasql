@@ -343,7 +343,11 @@ func writeTableDescriptor(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString(descriptorName(table.Name))
 	source.WriteString(" = ")
 	source.WriteString(tableTypeName(table.Name))
-	source.WriteString("{rasql.TableFrom[")
+	if table.EffectiveKind() == schema.ObjectView {
+		source.WriteString("{rasql.ReadTableFrom[")
+	} else {
+		source.WriteString("{rasql.TableFrom[")
+	}
 	source.WriteString(rowTypeName(table))
 	source.WriteString("](")
 	source.WriteString(definitionName(table.Name))
@@ -868,7 +872,12 @@ func writeTableType(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString(" table.\n")
 	source.WriteString("type ")
 	source.WriteString(typeName)
-	source.WriteString(" struct {\n\trasql.Table[")
+	source.WriteString(" struct {\n\trasql.")
+	if table.EffectiveKind() == schema.ObjectView {
+		source.WriteString("ReadTable[")
+	} else {
+		source.WriteString("Table[")
+	}
 	source.WriteString(rowTypeName(table))
 	source.WriteString("]\n}\n")
 }
@@ -888,7 +897,12 @@ func writeTableColumns(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString(typeName)
 		source.WriteString(") ")
 		source.WriteString(method)
-		source.WriteString("() rasql.ColumnRef { return rasql.ColumnOf(t.Table, ")
+		source.WriteString("() rasql.ColumnRef { return ")
+		if table.EffectiveKind() == schema.ObjectView {
+			source.WriteString("t.Column(")
+		} else {
+			source.WriteString("rasql.ColumnOf(t.Table, ")
+		}
 		source.WriteString(quote(column.Name))
 		source.WriteString(") }\n")
 	}
@@ -921,12 +935,20 @@ func writeTableAs(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString(") As(alias string) (")
 	source.WriteString(typeName)
 	source.WriteString(", error) {\n")
-	source.WriteString("\taliased, err := rasql.As(t.Table, alias)\n")
+	if table.EffectiveKind() == schema.ObjectView {
+		source.WriteString("\taliased, err := rasql.AsRead(t.ReadTable, alias)\n")
+	} else {
+		source.WriteString("\taliased, err := rasql.As(t.Table, alias)\n")
+	}
 	source.WriteString("\tif err != nil {\n\t\treturn ")
 	source.WriteString(typeName)
 	source.WriteString("{}, err\n\t}\n\treturn ")
 	source.WriteString(typeName)
-	source.WriteString("{Table: aliased}, nil\n}\n")
+	if table.EffectiveKind() == schema.ObjectView {
+		source.WriteString("{ReadTable: aliased}, nil\n}\n")
+	} else {
+		source.WriteString("{Table: aliased}, nil\n}\n")
+	}
 }
 
 // writeRowType writes the exported row type: one field per column, in the
@@ -1470,6 +1492,16 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("Schema: ")
 		source.WriteString(quote(table.Schema))
 		source.WriteString(",\n")
+	}
+	if table.Kind != "" {
+		source.WriteString("Kind: schema.ObjectKind(")
+		source.WriteString(quote(string(table.Kind)))
+		source.WriteString("),\n")
+	}
+	if table.Operations != 0 {
+		source.WriteString("Operations: schema.Operation(")
+		source.WriteString(strconv.Itoa(int(table.Operations)))
+		source.WriteString("),\n")
 	}
 	source.WriteString("Name: ")
 	source.WriteString(quote(table.Name))

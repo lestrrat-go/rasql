@@ -186,3 +186,10 @@ A generated column changes nothing about code generation: `rasqlgen` still emits
 [Schemas](01-schema.md) covers the descriptor an application writes itself.
 [Migrations](07-migrations.md) covers the `diff-live` command that compares a
 live table with a desired schema.
+# Tables and views
+
+`Inspector.TableNames` continues to enumerate base tables. Use
+`Inspector.ObjectNames` and `Inspector.Object` to enumerate and inspect tables
+and views. Catalog sweeps exclude views unless `catalog.Options.IncludeViews`
+is true. Inspected views default to `schema.OperationRead`; writable view
+operations require explicit authoritative metadata.

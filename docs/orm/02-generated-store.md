@@ -450,3 +450,9 @@ source is stale.
 
 [Typed queries](03-typed-queries.md) reads rows through the generated table, and
 [Writing rows](04-writing.md) inserts, updates, and deletes them.
+# Generated view reads
+
+Store generation can include inspected views with
+`catalog.Options{IncludeViews: true}`. Generated view types provide row fields,
+column accessors, typed selects, aliases, and relationship reads. They do not
+implement mutation or table DDL capabilities.
