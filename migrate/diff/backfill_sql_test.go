@@ -10,6 +10,9 @@ func TestValidateNativeSQLUsesDialectParsers(t *testing.T) {
 		{"postgresql", "/* note; */ SELECT 'value;';"},
 		{"mysql", "-- note\nSELECT 'value;';"},
 		{"sqlite", "SELECT 'value;'; -- note"},
+		{"sqlite", "UPDATE tasks SET owner_label = 'owner-' || owner_id;"},
+		{"sqlite", "-- leading note\nUPDATE \"tasks\" SET \"owner_label\" = 'semi;colon';"},
+		{"sqlite", "UPDATE [tasks] SET [owner_label] = ('x' || owner_id) /* trailing */;"},
 	} {
 		if err := validateNativeSQL(test.dialect, test.source); err != nil {
 			t.Errorf("%s: valid source rejected: %v", test.dialect, err)
@@ -28,6 +31,11 @@ func TestValidateNativeSQLUsesDialectParsers(t *testing.T) {
 		{"postgresql", "this is not SQL"},
 		{"mysql", "this is not SQL"},
 		{"sqlite", "this is not SQL"},
+		{"sqlite", "UPDATE tasks SET owner_label = 'x'; DELETE FROM tasks;"},
+		{"sqlite", "UPDATE tasks SET owner_label = 'unterminated;"},
+		{"sqlite", "UPDATE tasks SET owner_label = (owner_id;"},
+		{"sqlite", "UPDATE tasks owner_label = 'x';"},
+		{"sqlite", "UPDATE;"},
 	} {
 		if err := validateNativeSQL(test.dialect, test.source); err == nil {
 			t.Errorf("%s: invalid source accepted: %q", test.dialect, test.source)

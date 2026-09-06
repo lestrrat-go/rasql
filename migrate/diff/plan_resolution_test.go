@@ -55,6 +55,28 @@ func TestNewPlanRejectsMalformedLowering(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate operation ID")
 }
 
+func TestLoweringResultIrreversibleReasonCopiesAcrossConstructionAndResolve(t *testing.T) {
+	operation := diff.ProposedOperation{ID: "create_table_sqlite_members", Table: "members", Kind: diff.OperationCreateTable, Forward: []diff.PlannedStatement{{Source: "create.sql", SQL: "CREATE TABLE members (id integer);"}}}
+	plan, err := diff.NewPlan("sqlite", []diff.ProposedOperation{operation}, nil, func(map[string]diff.Resolution) (diff.LoweringResult, error) {
+		return diff.LoweringResult{Operations: []diff.ProposedOperation{operation}, Statements: operation.Forward, IrreversibleReason: "custom lowering reason"}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "custom lowering reason", plan.IrreversibleReason)
+
+	decision := diff.RequiredDecision{ID: "backfill_sqlite_members_email", Table: "members", Column: "email", Kind: diff.DecisionBackfill}
+	resolvedPlan, err := diff.NewPlan("sqlite", []diff.ProposedOperation{operation}, []diff.RequiredDecision{decision}, func(map[string]diff.Resolution) (diff.LoweringResult, error) {
+		return diff.LoweringResult{Operations: []diff.ProposedOperation{operation}, Statements: operation.Forward, IrreversibleReason: "resolved lowering reason"}, nil
+	})
+	require.NoError(t, err)
+	first, err := resolvedPlan.Resolve(diff.Resolution{DecisionID: decision.ID, BackfillSQL: "SELECT 1;"})
+	require.NoError(t, err)
+	second, err := resolvedPlan.Resolve(diff.Resolution{DecisionID: decision.ID, BackfillSQL: "SELECT 2;"})
+	require.NoError(t, err)
+	require.Equal(t, "resolved lowering reason", first.IrreversibleReason)
+	require.Equal(t, first.IrreversibleReason, second.IrreversibleReason)
+	require.Empty(t, resolvedPlan.IrreversibleReason)
+}
+
 func TestPlanResolutionRejectsUnknownDuplicateAndEmptyAnswers(t *testing.T) {
 	plan := diff.Plan{Dialect: "sqlite", Decisions: []diff.RequiredDecision{{ID: "rename_sqlite_members_name", Table: "members", Column: "display_name", Kind: diff.DecisionRename}}}
 	_, err := plan.Resolve(diff.Resolution{DecisionID: "unknown", RenameFrom: "name"})

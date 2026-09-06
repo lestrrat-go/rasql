@@ -9,9 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
-	pgquery "github.com/lestrrat-go/rasql-pg/query"
-	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 )
@@ -195,8 +192,9 @@ func DecisionID(kind DecisionKind, dialect, table, column string) string {
 // LoweringResult is the immutable result of lowering a plan after all
 // required decisions have been supplied.
 type LoweringResult struct {
-	Operations []ProposedOperation
-	Statements []PlannedStatement
+	Operations         []ProposedOperation
+	Statements         []PlannedStatement
+	IrreversibleReason string
 }
 
 // Lowerer supplies dialect-native lowering for a plan. The map is keyed by
@@ -220,6 +218,7 @@ func NewPlan(dialect string, operations []ProposedOperation, decisions []Require
 		}
 		plan.Operations = cloneOperations(lowered.Operations)
 		plan.Statements = cloneStatements(lowered.Statements)
+		plan.IrreversibleReason = lowered.IrreversibleReason
 		if err := plan.Validate(); err != nil {
 			return Plan{}, fmt.Errorf("migrate diff: lowered plan: %w", err)
 		}
@@ -291,6 +290,7 @@ func (p Plan) Resolve(resolutions ...Resolution) (Plan, error) {
 		}
 		copyPlan.Operations = cloneOperations(lowered.Operations)
 		copyPlan.Statements = cloneStatements(lowered.Statements)
+		copyPlan.IrreversibleReason = lowered.IrreversibleReason
 	} else {
 		for _, decision := range p.Decisions {
 			if decision.Kind == DecisionRename {
@@ -339,37 +339,7 @@ func answersFor(resolutions []Resolution, id string) Resolution {
 }
 
 func validateNativeSQL(dialect, source string) error {
-	trimmed := strings.TrimSpace(source)
-	if trimmed == "" {
-		return fmt.Errorf("source is empty")
-	}
-	var count int
-	switch dialect {
-	case "postgresql":
-		parsed, err := pgquery.Parse(trimmed)
-		if err != nil {
-			return fmt.Errorf("invalid PostgreSQL SQL: %w", err)
-		}
-		count = len(parsed.Statements)
-	case "mysql":
-		parsed, err := mysqlquery.Parse(trimmed)
-		if err != nil {
-			return fmt.Errorf("invalid MySQL SQL: %w", err)
-		}
-		count = len(parsed.Statements)
-	case "sqlite":
-		parsed, err := sqlitequery.Parse(trimmed)
-		if err != nil {
-			return fmt.Errorf("invalid SQLite SQL: %w", err)
-		}
-		count = len(parsed.Statements)
-	default:
-		return fmt.Errorf("unsupported SQL dialect %q", dialect)
-	}
-	if count != 1 {
-		return fmt.Errorf("source must contain exactly one statement, got %d", count)
-	}
-	return nil
+	return validateNativeSQLSource(dialect, source)
 }
 
 func (p Plan) clone() Plan {
