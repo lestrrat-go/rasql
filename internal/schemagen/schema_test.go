@@ -541,7 +541,7 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 	descriptorSource, err := schemagen.DescriptorSource("generated", users, orders)
 	require.NoError(t, err)
 	require.Contains(t, string(descriptorSource), `Relationships: []schema.RelationshipDef{`)
-	require.Contains(t, string(descriptorSource), `{Name: "User", Kind: schema.RelationshipBelongsTo, Columns: []string{"user_id"}, ReferencedSchema: "tenant", ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)
+	require.Contains(t, string(descriptorSource), `{Name: "User", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("required"), Columns: []string{"user_id"}, ReferencedSchema: "tenant", ReferencedTable: "users", ReferencedColumns: []string{"id"}}`)
 
 	directory := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "users_gen.go"), usersSource, 0o600))
@@ -565,6 +565,214 @@ func TestSchemaGeneratesTypedRelationships(t *testing.T) {
 	output, err = command.CombinedOutput()
 	require.NoErrorf(t, err, "go test output:\n%s", output)
 }
+
+func TestSchemaGeneratedRelationshipShapesExecuteSQLite(t *testing.T) {
+	users := schema.TableDef{
+		Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"},
+		Relationships: []schema.RelationshipDef{{Name: "Roles", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "roles", ReferencedColumns: []string{"id"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "user_roles"}, SourceColumns: []string{"user_id"}, TargetColumns: []string{"role_id"}}}},
+	}
+	orders := schema.TableDef{
+		Name:        "orders",
+		Columns:     []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}, Nullable: true}},
+		PrimaryKey:  []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}},
+	}
+	profiles := schema.TableDef{
+		Name:              "profiles",
+		Columns:           []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}},
+		PrimaryKey:        []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{Columns: []string{"user_id"}}},
+		ForeignKeys:       []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}},
+	}
+	accounts := schema.TableDef{
+		Name: "accounts", Columns: []schema.ColumnDef{{Name: "tenant_id", Type: schema.IntegerType{}}, {Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"tenant_id", "id"},
+	}
+	memberships := schema.TableDef{
+		Name:        "memberships",
+		Columns:     []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant_id", Type: schema.IntegerType{}}, {Name: "account_id", Type: schema.IntegerType{}}},
+		PrimaryKey:  []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"tenant_id", "account_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"tenant_id", "id"}}},
+	}
+	roles := schema.TableDef{Name: "roles", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}, Relationships: []schema.RelationshipDef{{Name: "Permissions", Kind: schema.RelationshipManyToMany, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "permissions", ReferencedColumns: []string{"id"}, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "role_permissions"}, SourceColumns: []string{"role_id"}, TargetColumns: []string{"permission_id"}}}}}
+	userRoles := schema.TableDef{Name: "user_roles", Columns: []schema.ColumnDef{{Name: "user_id", Type: schema.IntegerType{}}, {Name: "role_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"user_id", "role_id"}}
+	permissions := schema.TableDef{Name: "permissions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}}
+	rolePermissions := schema.TableDef{Name: "role_permissions", Columns: []schema.ColumnDef{{Name: "role_id", Type: schema.IntegerType{}}, {Name: "permission_id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"role_id", "permission_id"}}
+	allTables := []schema.TableDef{users, orders, profiles, accounts, memberships, roles, userRoles, permissions, rolePermissions}
+	descriptor, err := schemagen.DescriptorSource("generated", allTables...)
+	require.NoError(t, err)
+	files := make(map[string][]byte)
+	for _, table := range allTables {
+		files[table.Name+"_gen.go"], err = schemagen.TableSurfaceSource("generated", table, allTables...)
+		require.NoError(t, err)
+	}
+	require.Contains(t, string(files["accounts_gen.go"]), "type AccountsTableMembershipsKey struct")
+	require.Contains(t, string(files["accounts_gen.go"]), "ParentKey []rasql.ColumnRef")
+	require.Contains(t, string(files["accounts_gen.go"]), "LoadHasManyPlan")
+
+	directory := t.TempDir()
+	for name, source := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(directory, name), source, 0o600))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_gen.go"), descriptor, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema_usage_test.go"), []byte(generatedRelationshipShapesSQLiteTest), 0o600))
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
+
+func TestPackageSourceRejectsInvalidRelationshipContracts(t *testing.T) {
+	users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	orders := schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}, Relationships: []schema.RelationshipDef{{Name: "User", Kind: schema.RelationshipBelongsTo, Columns: []string{"id"}, ReferencedTable: "missing", ReferencedColumns: []string{"id"}, Optionality: schema.RelationshipRequired}}}
+	_, err := schemagen.PackageSource("generated", users, orders)
+	require.ErrorContains(t, err, "targets missing table")
+
+	orders.Relationships[0].ReferencedTable = "users"
+	orders.Relationships[0].Optionality = schema.RelationshipOptionalityInferred
+	_, err = schemagen.PackageSource("generated", users, orders)
+	require.ErrorContains(t, err, "must state optionality")
+
+	through := schema.TableDef{Name: "links", Columns: []schema.ColumnDef{{Name: "order_id", Type: schema.TextType{}}}}
+	orders.Relationships[0] = schema.RelationshipDef{Name: "Roles", Kind: schema.RelationshipManyToMany, Columns: []string{"id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}, Optionality: schema.RelationshipRequired, Through: &schema.RelationshipThrough{Table: schema.ObjectName{Name: "links"}, SourceColumns: []string{"order_id"}, TargetColumns: []string{"order_id"}}}
+	_, err = schemagen.PackageSource("generated", users, orders, through)
+	require.ErrorContains(t, err, "invalid through source key")
+}
+
+func TestSchemaGeneratedNullableCompositeLoadsSQLite(t *testing.T) {
+	parents := schema.TableDef{Name: "parents", Columns: []schema.ColumnDef{{Name: "tenant_id", Type: schema.IntegerType{}}, {Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"tenant_id", "id"}}
+	children := schema.TableDef{Name: "children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant_id", Type: schema.IntegerType{}, Nullable: true}, {Name: "parent_id", Type: schema.IntegerType{}, Nullable: true}}, PrimaryKey: []string{"id"}, ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"tenant_id", "parent_id"}, ReferencedTable: "parents", ReferencedColumns: []string{"tenant_id", "id"}}}, Relationships: []schema.RelationshipDef{{Name: "Parents", Kind: schema.RelationshipBelongsTo, Columns: []string{"tenant_id", "parent_id"}, ReferencedTable: "parents", ReferencedColumns: []string{"tenant_id", "id"}, Optionality: schema.RelationshipOptional}}}
+	source, err := schemagen.PackageSource("generated", parents, children)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "generated.go"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "usage_test.go"), []byte(generatedNullableCompositeSQLiteTest), 0o600))
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
+
+const generatedNullableCompositeSQLiteTest = `package generated_test
+
+import (
+ "database/sql"
+ "testing"
+ "example.com/generated"
+ "github.com/lestrrat-go/rasql"
+ "github.com/lestrrat-go/rasql/dialect"
+ "github.com/stretchr/testify/require"
+ _ "modernc.org/sqlite"
+)
+
+func TestNullableComposite(t *testing.T) {
+ raw, err := sql.Open("sqlite", ":memory:"); require.NoError(t, err); t.Cleanup(func() { require.NoError(t, raw.Close()) })
+ db, err := rasql.New(raw, dialect.SQLite()); require.NoError(t, err)
+ for _, statement := range []string{"CREATE TABLE parents (tenant_id INTEGER NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (tenant_id,id))", "CREATE TABLE children (id INTEGER PRIMARY KEY, tenant_id INTEGER, parent_id INTEGER)", "INSERT INTO parents VALUES (7,1),(8,1)", "INSERT INTO children VALUES (10,7,1),(11,8,1),(12,NULL,1)"} { _, err = raw.ExecContext(t.Context(), statement); require.NoError(t, err) }
+ seven, one := int64(7), int64(1); eight := int64(8)
+ loaded, err := generated.Children().Parents().Load(t.Context(), db, []generated.ChildrenRow{{ID:10, TenantID:&seven, ParentID:&one}, {ID:11, TenantID:&eight, ParentID:&one}, {ID:12, TenantID:nil, ParentID:&one}})
+ require.NoError(t, err); require.Len(t, loaded, 2)
+ require.Len(t, loaded, 2)
+ seen := make(map[int64]bool)
+ for _, row := range loaded { seen[row.TenantID] = true }
+ require.True(t, seen[7]); require.True(t, seen[8])
+}
+`
+
+const generatedRelationshipShapesSQLiteTest = `package generated_test
+
+import (
+	"database/sql"
+	"testing"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
+)
+
+func TestRelationshipShapesSQLite(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	db, err := rasql.New(sqlDB, dialect.SQLite())
+	require.NoError(t, err)
+	for _, statement := range []string{
+		"CREATE TABLE users (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER)",
+		"CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER)",
+		"CREATE TABLE accounts (tenant_id INTEGER NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (tenant_id, id))",
+		"CREATE TABLE memberships (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, account_id INTEGER NOT NULL)",
+		"CREATE TABLE roles (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+		"CREATE TABLE user_roles (user_id INTEGER NOT NULL, role_id INTEGER NOT NULL)",
+		"CREATE TABLE permissions (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+		"CREATE TABLE role_permissions (role_id INTEGER NOT NULL, permission_id INTEGER NOT NULL)",
+		"INSERT INTO users VALUES (1), (2)",
+		"INSERT INTO orders VALUES (10, NULL), (11, 1)",
+		"INSERT INTO profiles VALUES (30, 1), (31, 1)",
+		"INSERT INTO accounts VALUES (7, 1), (8, 1)",
+		"INSERT INTO memberships VALUES (40, 7, 1), (41, 8, 1)",
+		"INSERT INTO roles VALUES (5, 'admin'), (6, 'reader')",
+		"INSERT INTO user_roles VALUES (1, 5), (1, 6)",
+		"INSERT INTO permissions VALUES (50, 'read'), (51, 'write')",
+		"INSERT INTO role_permissions VALUES (5, 50), (6, 51)",
+	} {
+		_, err = sqlDB.ExecContext(t.Context(), statement)
+		require.NoError(t, err)
+	}
+	parents, err := generated.Orders().User().Load(t.Context(), db, []generated.OrdersRow{{ID: 10, UserID: nil}, {ID: 11, UserID: ptr(int64(1))}})
+	require.NoError(t, err)
+	require.Len(t, parents, 1)
+	var loaded generated.UsersRow
+	for key, row := range parents {
+		require.NotNil(t, key)
+		loaded = row
+	}
+	require.Equal(t, int64(1), loaded.ID)
+
+	accounts, err := generated.Accounts().Memberships().Load(t.Context(), db, []generated.AccountsRow{{TenantID: 7, ID: 1}, {TenantID: 8, ID: 1}})
+	require.NoError(t, err)
+	require.Len(t, accounts, 2)
+	require.Equal(t, int64(40), accounts[generated.AccountsTableMembershipsKey{TenantID: 7, ID: 1}][0].ID)
+	require.Equal(t, int64(41), accounts[generated.AccountsTableMembershipsKey{TenantID: 8, ID: 1}][0].ID)
+	compositeParents, err := generated.Memberships().Tenant().Load(t.Context(), db, []generated.MembershipsRow{{ID: 40, TenantID: 7, AccountID: 1}, {ID: 41, TenantID: 8, AccountID: 1}})
+	require.NoError(t, err)
+	require.Len(t, compositeParents, 2)
+
+	_, err = generated.Users().Profiles().Load(t.Context(), db, []generated.UsersRow{{ID: 1}})
+	require.ErrorContains(t, err, "duplicate child")
+	called := false
+	roles, err := generated.Users().Roles().LoadThen(t.Context(), db, []generated.UsersRow{{ID: 1}, {ID: 2}}, rasql.RelationshipLoadOptions{}, func(rows []generated.RolesRow) error {
+		called = true
+		require.Len(t, rows, 2)
+		permissions, err := generated.Roles().Permissions().Load(t.Context(), db, rows)
+		require.NoError(t, err)
+		require.Len(t, permissions, 2)
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Len(t, roles[1], 2)
+	require.Empty(t, roles[2])
+}
+
+func ptr(value int64) *int64 { return &value }
+`
 
 func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 	users := schema.TableDef{

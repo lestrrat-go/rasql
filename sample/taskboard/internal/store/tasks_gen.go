@@ -164,6 +164,68 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 	return TasksTable{Table: aliased}, nil
 }
 
+// TasksTableAssigneeRelation describes the Assignee relationship from TasksTable.
+type TasksTableAssigneeRelation struct {
+	Parent    MembersTable
+	Child     TasksTable
+	ParentKey rasql.ColumnRef
+	ChildKey  rasql.ColumnRef
+}
+
+// Assignee returns the generated relationship descriptor.
+func (t TasksTable) Assignee() TasksTableAssigneeRelation {
+	child := t
+	parent := Members()
+	return TasksTableAssigneeRelation{Parent: parent, Child: child, ParentKey: parent.ID(), ChildKey: child.AssigneeID()}
+}
+
+// Join returns an INNER JOIN for the relationship.
+func (r TasksTableAssigneeRelation) Join() rasql.Join {
+	return rasql.InnerJoin(r.Parent, rasql.Equal(r.ParentKey, r.ChildKey))
+}
+
+// LoadThen loads a scalar relationship and invokes next once.
+func (r TasksTableAssigneeRelation) LoadThen(ctx context.Context, db rasql.DB, sources []TasksRow, options rasql.RelationshipLoadOptions, next func([]MembersRow) error) (map[*int64]MembersRow, error) {
+	loaded, err := r.LoadWith(ctx, db, sources, options)
+	if err != nil || next == nil {
+		return loaded, err
+	}
+	rows := make([]MembersRow, 0)
+	for _, source := range sources {
+		key := r.SourceKey(source)
+		if row, ok := loaded[key]; ok {
+			rows = append(rows, row)
+		}
+	}
+	if err := next(rows); err != nil {
+		return loaded, err
+	}
+	return loaded, nil
+}
+
+// LoadWith fetches related parents with filtering, ordering, and bind batching.
+func (r TasksTableAssigneeRelation) LoadWith(ctx context.Context, db rasql.DB, children []TasksRow, options rasql.RelationshipLoadOptions) (map[*int64]MembersRow, error) {
+	return rasql.LoadBelongsToPlan[TasksRow, MembersRow, *int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) *int64 { return row.AssigneeID }, func(row MembersRow) *int64 { value := row.ID; return &value }, func(key *int64) ([]any, bool) {
+		if key == nil {
+			return nil, false
+		}
+		return []any{*key}, true
+	}, options)
+}
+
+// Load fetches all related parents for children in one query.
+func (r TasksTableAssigneeRelation) Load(ctx context.Context, db rasql.DB, children []TasksRow) (map[*int64]MembersRow, error) {
+	return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{})
+}
+
+// SourceKey returns the ordered source relationship key.
+func (r TasksTableAssigneeRelation) SourceKey(row TasksRow) *int64 { return row.AssigneeID }
+
+// TargetKey returns the ordered target relationship key.
+func (r TasksTableAssigneeRelation) TargetKey(row MembersRow) *int64 {
+	return func() *int64 { value := row.ID; return &value }()
+}
+
 // TasksTableProjectRelation describes the Project relationship from TasksTable.
 type TasksTableProjectRelation struct {
 	Parent    ProjectsTable
@@ -184,6 +246,25 @@ func (r TasksTableProjectRelation) Join() rasql.Join {
 	return rasql.InnerJoin(r.Parent, rasql.Equal(r.ParentKey, r.ChildKey))
 }
 
+// LoadThen loads a scalar relationship and invokes next once.
+func (r TasksTableProjectRelation) LoadThen(ctx context.Context, db rasql.DB, sources []TasksRow, options rasql.RelationshipLoadOptions, next func([]ProjectsRow) error) (map[int64]ProjectsRow, error) {
+	loaded, err := r.LoadWith(ctx, db, sources, options)
+	if err != nil || next == nil {
+		return loaded, err
+	}
+	rows := make([]ProjectsRow, 0)
+	for _, source := range sources {
+		key := r.SourceKey(source)
+		if row, ok := loaded[key]; ok {
+			rows = append(rows, row)
+		}
+	}
+	if err := next(rows); err != nil {
+		return loaded, err
+	}
+	return loaded, nil
+}
+
 // LoadWith fetches related parents with filtering, ordering, and bind batching.
 func (r TasksTableProjectRelation) LoadWith(ctx context.Context, db rasql.DB, children []TasksRow, options rasql.RelationshipLoadOptions) (map[int64]ProjectsRow, error) {
 	return rasql.LoadBelongsToPlan[TasksRow, ProjectsRow, int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) int64 { return row.ProjectID }, func(row ProjectsRow) int64 { return row.ID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
@@ -193,3 +274,9 @@ func (r TasksTableProjectRelation) LoadWith(ctx context.Context, db rasql.DB, ch
 func (r TasksTableProjectRelation) Load(ctx context.Context, db rasql.DB, children []TasksRow) (map[int64]ProjectsRow, error) {
 	return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{})
 }
+
+// SourceKey returns the ordered source relationship key.
+func (r TasksTableProjectRelation) SourceKey(row TasksRow) int64 { return row.ProjectID }
+
+// TargetKey returns the ordered target relationship key.
+func (r TasksTableProjectRelation) TargetKey(row ProjectsRow) int64 { return row.ID }

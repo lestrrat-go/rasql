@@ -1058,6 +1058,9 @@ type TableDef struct {
 	Relationships []RelationshipDef
 }
 
+// ObjectName returns the table's canonical physical identity.
+func (t TableDef) ObjectName() ObjectName { return ObjectName{Schema: t.Schema, Name: t.Name} }
+
 // Qualified reports whether t names a schema.
 func (t TableDef) Qualified() bool {
 	return t.Schema != ""
@@ -1311,7 +1314,7 @@ func (t TableDef) Validate() error {
 	return validateRelationships(t.Relationships, t.ForeignKeys, columns)
 }
 
-func validateRelationships(relationships []RelationshipDef, foreignKeys []ForeignKeyDef, columns map[string]struct{}) error {
+func validateRelationships(relationships []RelationshipDef, _ []ForeignKeyDef, columns map[string]struct{}) error {
 	for i, relationship := range relationships {
 		path := fmt.Sprintf("relationships[%d]", i)
 		if relationship.Name == "" {
@@ -1325,7 +1328,9 @@ func validateRelationships(relationships []RelationshipDef, foreignKeys []Foreig
 				return validationError(path+".inverse_name", "%s", err)
 			}
 		}
-		if relationship.Kind != RelationshipBelongsTo {
+		switch relationship.Kind {
+		case RelationshipBelongsTo, RelationshipHasOne, RelationshipHasMany, RelationshipManyToMany:
+		default:
 			return validationError(path+".kind", "unsupported relationship kind %q", relationship.Kind)
 		}
 		if err := validateColumnList(path+".columns", relationship.Columns, columns, true); err != nil {
@@ -1350,18 +1355,47 @@ func validateRelationships(relationships []RelationshipDef, foreignKeys []Foreig
 		if len(relationship.Columns) != len(relationship.ReferencedColumns) {
 			return validationError(path, "has %d local columns and %d referenced columns", len(relationship.Columns), len(relationship.ReferencedColumns))
 		}
-		matched := false
-		for _, foreignKey := range foreignKeys {
-			if foreignKey.ReferencedSchema == relationship.ReferencedSchema &&
-				foreignKey.ReferencedTable == relationship.ReferencedTable &&
-				slices.Equal(foreignKey.Columns, relationship.Columns) &&
-				slices.Equal(foreignKey.ReferencedColumns, relationship.ReferencedColumns) {
-				matched = true
-				break
-			}
+		switch relationship.Optionality {
+		case RelationshipOptionalityInferred, RelationshipRequired, RelationshipOptional:
+		default:
+			return validationError(path+".optionality", "unsupported relationship optionality %q", relationship.Optionality)
 		}
-		if !matched {
-			return validationError(path, "does not match a declared foreign key")
+		if relationship.Kind == RelationshipManyToMany && relationship.Through == nil {
+			return validationError(path+".through", "must be present for many-to-many relationships")
+		}
+		if relationship.Kind != RelationshipManyToMany && relationship.Through != nil {
+			return validationError(path+".through", "is only valid for many-to-many relationships")
+		}
+		if through := relationship.Through; through != nil {
+			if through.Table.Name == "" {
+				return validationError(path+".through.table.name", "must not be empty")
+			}
+			if err := ValidateIdentifier(through.Table.Name); err != nil {
+				return validationError(path+".through.table.name", "%s", err)
+			}
+			if through.Table.Schema != "" {
+				if err := ValidateIdentifier(through.Table.Schema); err != nil {
+					return validationError(path+".through.table.schema", "%s", err)
+				}
+			}
+			if len(relationship.Columns) != len(through.SourceColumns) || len(through.TargetColumns) != len(relationship.ReferencedColumns) {
+				return validationError(path+".through", "column widths must match relationship columns")
+			}
+			if err := validateIdentifierList(path+".through.source_columns", through.SourceColumns, true); err != nil {
+				return err
+			}
+			if err := validateIdentifierList(path+".through.target_columns", through.TargetColumns, true); err != nil {
+				return err
+			}
+			for _, list := range [][]string{relationship.Columns, relationship.ReferencedColumns, through.SourceColumns, through.TargetColumns} {
+				seen := make(map[string]struct{}, len(list))
+				for _, column := range list {
+					if _, ok := seen[column]; ok {
+						return validationError(path+".through", "contains duplicate column %q", column)
+					}
+					seen[column] = struct{}{}
+				}
+			}
 		}
 	}
 	return nil
