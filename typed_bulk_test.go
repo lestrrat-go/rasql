@@ -263,6 +263,74 @@ func TestBulkCallerTransactionIsNotDurable(t *testing.T) {
 	require.Zero(t, count)
 }
 
+func TestBulkCallerTransactionCommitRemainsNonDurable(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+	sqlDB.SetMaxOpenConns(1)
+	_, err = sqlDB.Exec(`CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT NOT NULL)`)
+	require.NoError(t, err)
+	table := rasql.MustTableOf[bulkTestRow](schema.TableDef{
+		Name: "items", PrimaryKey: []string{"id"},
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways}, {Name: "a", Type: schema.TextType{}}},
+	})
+	a := query.TypedColumnOf[bulkTestRow, string](table.Column("a"))
+	plan, err := rasql.NewCreatePlan(table, rasql.SetField(a, "caller-commit"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(plan)
+	require.NoError(t, err)
+	tx, err := sqlDB.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	db, err := rasql.New(tx, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{})
+	require.NoError(t, err)
+	require.False(t, outcome.Durable)
+	require.NoError(t, tx.Commit())
+	var count int
+	require.NoError(t, sqlDB.QueryRow(`SELECT count(*) FROM items WHERE a = 'caller-commit'`).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
+func TestBulkCallerSavepointPreservesOuterSentinel(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+	sqlDB.SetMaxOpenConns(1)
+	_, err = sqlDB.Exec(`CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT NOT NULL UNIQUE)`)
+	require.NoError(t, err)
+	table := rasql.MustTableOf[bulkTestRow](schema.TableDef{
+		Name: "items", PrimaryKey: []string{"id"},
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways}, {Name: "a", Type: schema.TextType{}}},
+	})
+	a := query.TypedColumnOf[bulkTestRow, string](table.Column("a"))
+	first, err := rasql.NewCreatePlan(table, rasql.SetField(a, "nested"))
+	require.NoError(t, err)
+	second, err := rasql.NewCreatePlan(table, rasql.SetField(a, "sentinel"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(first, second)
+	require.NoError(t, err)
+	tx, err := sqlDB.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = tx.Exec(`INSERT INTO items (a) VALUES ('sentinel')`)
+	require.NoError(t, err)
+	db, err := rasql.New(tx, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{
+		Atomic: true, Classifier: fixedBulkClassifier{certainty: rasql.OutcomeRejected},
+	})
+	require.Error(t, err)
+	require.False(t, outcome.Durable)
+	var nested, sentinel int
+	require.NoError(t, tx.QueryRow(`SELECT count(*) FROM items WHERE a = 'nested'`).Scan(&nested))
+	require.NoError(t, tx.QueryRow(`SELECT count(*) FROM items WHERE a = 'sentinel'`).Scan(&sentinel))
+	require.Equal(t, 0, nested)
+	require.Equal(t, 1, sentinel)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, sqlDB.QueryRow(`SELECT count(*) FROM items WHERE a = 'sentinel'`).Scan(&sentinel))
+	require.Equal(t, 0, sentinel)
+}
+
 func TestGeneratedCreateBuildersRunThroughBulkSQLite(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
