@@ -354,6 +354,9 @@ func (b TypedSelectBuilder[T]) countStatement(d dialect.Dialect, keepPaging bool
 	if err != nil {
 		return stmt.Statement{}, err
 	}
+	if _, err := query.ResultOf(statement, metadata...); err != nil {
+		return stmt.Statement{}, err
+	}
 	if !keepPaging && !b.hasLimit && !b.hasOffset && !statement.Distinct() && len(statement.GroupBy()) == 0 && statement.Having() == nil {
 		return b.builder.WithDialect(d).BuildCount()
 	}
