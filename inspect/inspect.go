@@ -23,6 +23,7 @@ import (
 
 	sqlitequery "github.com/lestrrat-go/rasql-sqlite/query"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/dbtype"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 )
@@ -3242,26 +3243,7 @@ func normalizeType(dialectName string, databaseType string, characterMaximumLeng
 	case "mysql":
 		return normalizeMySQLType(typeName, databaseType)
 	case "sqlite":
-		switch {
-		case strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC"):
-			return nil, fmt.Errorf("exact decimal type %q is not exact in SQLite: a NUMERIC-affinity column stores REAL, so declare the column TEXT", databaseType)
-		case strings.Contains(typeName, "BOOL"):
-			return schema.BooleanType{}, nil
-		case strings.Contains(typeName, "INT"):
-			return schema.IntegerType{}, nil
-		case strings.Contains(typeName, "CHAR") || strings.Contains(typeName, "CLOB") || strings.Contains(typeName, "TEXT"):
-			return schema.TextType{}, nil
-		case strings.Contains(typeName, "BLOB") || typeName == "":
-			return schema.BytesType{}, nil
-		case strings.Contains(typeName, "REAL") || strings.Contains(typeName, "FLOA") || strings.Contains(typeName, "DOUB"):
-			return schema.FloatType{}, nil
-		case strings.Contains(typeName, "JSON"):
-			return schema.JSONType{}, nil
-		case strings.Contains(typeName, "DATE") || strings.Contains(typeName, "TIME"):
-			return schema.TimeType{}, nil
-		case strings.Contains(typeName, "UUID"):
-			return schema.UUIDType{}, nil
-		}
+		return dbtype.SQLite(databaseType)
 	}
 	return nil, fmt.Errorf("unsupported %s type %q", dialectName, databaseType)
 }

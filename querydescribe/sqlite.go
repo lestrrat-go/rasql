@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lestrrat-go/rasql/internal/dbtype"
 	"github.com/lestrrat-go/rasql/internal/schemagen"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -58,10 +59,10 @@ func (d sqliteDescriber) Describe(ctx context.Context, request Request) (Descrip
 			if !countProjection(request.SQL, name, i, len(types)) {
 				return Description{}, fmt.Errorf("%w: %s column %d (%s) has no database type", ErrIncomplete, request.Name, i, name)
 			}
-			binding = schema.GoBinding{Type: "int"}
+			binding = schema.GoBinding{Type: "int64"}
 			nullable = false
 		} else {
-			columnType, err := sqliteType(databaseType)
+			columnType, err := dbtype.SQLite(databaseType)
 			if err != nil {
 				return Description{}, fmt.Errorf("%w: %s column %d (%s): %v", ErrIncomplete, request.Name, i, name, err)
 			}
