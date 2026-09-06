@@ -233,6 +233,21 @@ func TestGoSourceExplicitBindingRejectsMalformedType(t *testing.T) {
 	require.ErrorContains(t, err, "does not parse")
 }
 
+func TestGoSourceExplicitBindingsTypeLimitAndOffset(t *testing.T) {
+	parsed, err := namedsql.Parse("users", `SELECT id FROM users LIMIT {{bind "limit"}} OFFSET {{bind "offset"}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"limit":  {Go: schema.GoBinding{Type: "int"}},
+		"offset": {Go: schema.GoBinding{Type: "int"}},
+	})
+	require.NoError(t, err)
+	source, err := querygen.GoSource(definition, "generated", "Users")
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func Users(limit int, offset int)")
+}
+
 // TestGoSourceTypedBindGoldenBytes pins the exact emitted bytes of the case
 // that exercises the most emitter branches: a time.Time bind in a package
 // named "time", which forces both the grouped import block and the "time1"

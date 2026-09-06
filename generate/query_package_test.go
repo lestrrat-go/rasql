@@ -693,6 +693,30 @@ func TestQueryPackageAppliesExplicitParameterBindings(t *testing.T) {
 	require.Contains(t, string(generated), "func Users(limit int)")
 }
 
+func TestQueryPackagePlanCopiesBindingMapAndImports(t *testing.T) {
+	root := t.TempDir()
+	bindings := map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "url.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "url"}}}}}
+	queries := generate.QueryPackage{Package: "store", Root: root, Dir: "store", Dialect: dialect.PostgreSQL(), Queries: []generate.Query{{
+		SQL: `SELECT id FROM users LIMIT {{bind "limit"}}`, Function: "Limited", Output: "limited_gen.go", Bindings: bindings,
+	}}}
+	plan, err := queries.Plan()
+	require.NoError(t, err)
+	input := bindings["limit"]
+	input.Go.Imports[0].Name = "changed-input"
+	bindings["limit"] = input
+	queries.Queries[0].Bindings["limit"] = namedsql.ParameterBinding{Go: schema.GoBinding{Type: "changed.Type"}}
+	require.Contains(t, string(plan.Files()[0].Source), `url "net/url"`)
+}
+
+func TestQueryPackageRejectsUnknownExplicitBinding(t *testing.T) {
+	root := t.TempDir()
+	queries := generate.QueryPackage{Package: "store", Root: root, Dir: "store", Dialect: dialect.PostgreSQL(), Queries: []generate.Query{{
+		SQL: `SELECT id FROM users LIMIT {{bind "limit"}}`, Function: "Limited", Output: "limited_gen.go", Bindings: map[string]namedsql.ParameterBinding{"other": {Go: schema.GoBinding{Type: "int"}}},
+	}}}
+	_, err := queries.Plan()
+	require.ErrorContains(t, err, `binding "other" does not name a query parameter`)
+}
+
 // TestQueryPackageRejectsTypedBindWithoutTables pins the "error, never a
 // silent any" decision on the standalone path: a QueryPackage with no
 // Tables cannot resolve a bind that names a column, and Plan fails naming

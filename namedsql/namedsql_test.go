@@ -36,14 +36,20 @@ func TestQueryDefWithBindingsClonesAndValidates(t *testing.T) {
 	require.NoError(t, err)
 	compiled, err := template.Compile(dialect.SQLite())
 	require.NoError(t, err)
-	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
-		"limit": {Go: schema.GoBinding{Type: "int"}},
-	})
+	bindings := map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "url.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "url"}}}}}
+	definition, err := compiled.QueryDef().WithBindings(bindings)
 	require.NoError(t, err)
+	inputBinding := bindings["limit"]
+	inputBinding.Go.Imports[0].Name = "mutated-input"
+	bindings["limit"] = inputBinding
+	require.Equal(t, "url", definition.Binds[1].Binding.Go.Imports[0].Name)
 	definition.Binds[1].Binding.Go.Imports = []schema.GoImport{{Path: "changed"}}
 	require.Nil(t, compiled.QueryDef().Binds[1].Binding)
+	require.Equal(t, "mutated-input", bindings["limit"].Go.Imports[0].Name)
 	_, err = compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{"missing": {Go: schema.GoBinding{Type: "int"}}})
 	require.ErrorContains(t, err, "does not name a query parameter")
+	_, err = (namedsql.QueryDef{Name: "duplicate", Binds: []namedsql.BindDef{{Name: "id"}, {Name: "id"}}}).WithBindings(map[string]namedsql.ParameterBinding{"id": {Go: schema.GoBinding{Type: "int"}}})
+	require.ErrorContains(t, err, "multiple query parameters")
 }
 
 func TestTemplateCompilePreservesCompleteLiteralMarker(t *testing.T) {

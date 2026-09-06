@@ -72,6 +72,10 @@ func TestBindingsRoundTrip(t *testing.T) {
  namedRows,err:=rasql.QueryRenderedAll[generated.UsersRow](ctx,db,generated.UserByNickname(&nickname)); if err!=nil { t.Fatal(err) }; if len(namedRows)!=1 || namedRows[0].Nickname==nil || *namedRows[0].Nickname!=nickname { t.Fatalf("named rows %#v",namedRows) }
  namedRows,err=rasql.QueryRenderedAll[generated.UsersRow](ctx,db,generated.UserByNickname(nil)); if err!=nil { t.Fatal(err) }; if len(namedRows)!=1 || namedRows[0].Nickname!=nil { t.Fatalf("NULL named rows %#v",namedRows) }
  limitedRows,err:=rasql.QueryRenderedAll[generated.UsersRow](ctx,db,generated.LimitedUsers(1)); if err!=nil { t.Fatal(err) }; if len(limitedRows)!=1 { t.Fatalf("limited rows %#v",limitedRows) }
+ amountRows,err:=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByAmount(want.Amount)); if err!=nil { t.Fatal(err) }; if len(amountRows)!=1 || amountRows[0].Amount!=want.Amount { t.Fatalf("amount rows %#v",amountRows) }
+ amountRows,err=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByAmount(types.NullableDecimal{})); if err!=nil { t.Fatal(err) }; if len(amountRows)!=1 || amountRows[0].Amount.Valid { t.Fatalf("NULL amount rows %#v",amountRows) }
+ payloadRows,err:=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByPayload(want.Payload)); if err!=nil { t.Fatal(err) }; if len(payloadRows)!=1 || payloadRows[0].Payload!=want.Payload { t.Fatalf("payload rows %#v",payloadRows) }
+ payloadRows,err=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByPayload(types.NullableJSON{})); if err!=nil { t.Fatal(err) }; if len(payloadRows)!=1 || payloadRows[0].Payload.Valid { t.Fatalf("NULL payload rows %#v",payloadRows) }
  if err=rasql.CreateTable(ctx,db,generated.BadValues()); err!=nil { t.Fatal(err) }; if _,err=dbsql.ExecContext(ctx,"INSERT INTO bad_values (id,value) VALUES (?,?)",1,"bad"); err!=nil { t.Fatal(err) }; _,err=rasql.SelectFrom(generated.BadValues()).One(ctx,db); if err==nil || !strings.Contains(err.Error(), "NoScan") { t.Fatalf("want NoScan scan error, got %v",err) }
 }
 `
@@ -122,14 +126,49 @@ func TestGeneratedGoBindingsRunInSQLiteConsumer(t *testing.T) {
 	require.Contains(t, string(querySource), "func OrderByUser(id types.UserID)")
 	require.Contains(t, string(nicknameSource), "func UserByNickname(nickname *string)")
 	require.Contains(t, string(limitSource), "func LimitedUsers(limit int)")
+	amountQuery, err := namedsql.Parse("order_by_amount", `SELECT id, user_id, other_id, amount, payload FROM orders WHERE amount IS {{bind "amount" orders.amount}}`)
+	require.NoError(t, err)
+	amountCompiled, err := amountQuery.Compile(dialect.SQLite())
+	require.NoError(t, err)
+	amountDefinition, err := amountCompiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{"amount": {Go: schema.GoBinding{Type: "stmt.NullableDecimal", NullableType: "stmt.NullableDecimal", Imports: []schema.GoImport{{Path: "example.com/types/v2", Name: "stmt"}}}, Nullable: true}})
+	require.NoError(t, err)
+	amountSource, err := querygen.GoSourceInDir(dir, amountDefinition, "generated", "OrderByAmount", orders)
+	require.NoError(t, err)
+	require.Contains(t, string(amountSource), `stmt2 "example.com/types/v2"`)
+	payloadQuery, err := namedsql.Parse("order_by_payload", `SELECT id, user_id, other_id, amount, payload FROM orders WHERE payload IS {{bind "payload" orders.payload}}`)
+	require.NoError(t, err)
+	payloadCompiled, err := payloadQuery.Compile(dialect.SQLite())
+	require.NoError(t, err)
+	payloadSource, err := querygen.GoSourceInDir(dir, payloadCompiled.QueryDef(), "generated", "OrderByPayload", orders)
+	require.NoError(t, err)
+	require.Contains(t, string(payloadSource), "func OrderByPayload(payload types.NullableJSON)")
 	packageDir := filepath.Join(dir, "generated")
 	require.NoError(t, os.Mkdir(packageDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "store_gen.go"), storeSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "query_gen.go"), querySource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "nickname_gen.go"), nicknameSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "limit_gen.go"), limitSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "amount_gen.go"), amountSource, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "payload_gen.go"), payloadSource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "types.go"), []byte(bindingConsumerTypes), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "consumer_test.go"), []byte(bindingConsumerTest), 0o600))
+	invalidConsumer := `package generated_test
+import (
+ "testing"
+ "example.com/bindings/generated"
+)
+func TestInvalidGeneratedCalls(t *testing.T) {
+ _ = generated.UserByNickname("wrong")
+ _ = generated.LimitedUsers("wrong")
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "invalid_consumer_test.go"), []byte(invalidConsumer), 0o600))
+	invalidCommand := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
+	invalidCommand.Dir = dir
+	invalidOutput, invalidErr := invalidCommand.CombinedOutput()
+	require.Error(t, invalidErr, "invalid consumer unexpectedly compiled:\n%s", invalidOutput)
+	require.Contains(t, string(invalidOutput), "cannot use")
+	require.NoError(t, os.Remove(filepath.Join(dir, "invalid_consumer_test.go")))
 	command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "./...")
 	command.Dir = dir
 	output, err := command.CombinedOutput()
