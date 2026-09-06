@@ -351,7 +351,7 @@ func sweepNamespaces(ctx context.Context, inspector inspect.Inspector, options O
 		if historyTable == "" {
 			historyTable = defaultHistoryTable
 		}
-		if isDefaultHistoryIdentity(name, historyTable) || containsName(options.Exclude, name.Name) {
+		if isDefaultHistoryIdentity(name, historyTable, options.Dialect.Name()) || containsName(options.Exclude, name.Name) {
 			continue
 		}
 		table, err := inspector.TableIn(ctx, name.Schema, name.Name)
@@ -382,8 +382,14 @@ func rejectAmbiguousLegacyExcludes(names []inspect.TableName, excludes []string)
 	return nil
 }
 
-func isDefaultHistoryIdentity(name inspect.TableName, history string) bool {
-	return name.Name == history && (name.Schema == "" || name.Schema == "main")
+func isDefaultHistoryIdentity(name inspect.TableName, history, dialectName string) bool {
+	if name.Name != history {
+		return false
+	}
+	if dialectName == "sqlite" {
+		return name.Schema == "" || name.Schema == "main"
+	}
+	return name.Schema == ""
 }
 
 func containsName(values []string, target string) bool {
@@ -447,7 +453,7 @@ func sweepTables(ctx context.Context, inspector inspect.Inspector, options Optio
 
 	tables := make([]schema.TableDef, 0, len(names))
 	for _, name := range names {
-		if isDefaultHistoryIdentity(name, historyTable) || containsName(options.Exclude, name.Name) {
+		if isDefaultHistoryIdentity(name, historyTable, options.Dialect.Name()) || containsName(options.Exclude, name.Name) {
 			continue
 		}
 		table, err := describeSweptTable(ctx, inspector, name)
