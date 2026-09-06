@@ -86,6 +86,9 @@ turns it into an aliased `FROM` or `JOIN` source, and `query.CommonTable` plus `
 `query.CompoundQuery` supports `UNION`, `UNION ALL`, `INTERSECT`, and `EXCEPT`; result arguments keep their left-to-right
 order. Relation columns carry the declared result metadata, so an outer statement can validate names before rendering.
 
+`render.SelectBuilder.Query` finishes a builder without choosing a dialect. `ReplaceProject` keeps its joins, predicates,
+grouping, ordering, and paging while replacing only the projection list; `Project` remains append-only.
+
 <!-- INCLUDE(examples/query_reusable_relation_example_test.go) -->
 ```go
 package examples_test
