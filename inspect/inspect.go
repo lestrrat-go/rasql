@@ -2427,6 +2427,10 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			}
 			column.Type = columnType
 			column.NativeType = native
+			if strings.EqualFold(databaseType, "numeric") && !numericPrecision.Valid {
+				columnType = schema.OpaqueType{}
+				column.Type = columnType
+			}
 		}
 		if decimalType, ok := columnType.(schema.DecimalType); ok {
 			if !numericPrecision.Valid {
