@@ -2,57 +2,88 @@
 
 `rasql` builds a statement in one of two ways. The ORM binds a table to a Go row type, so a query returns decoded rows, the compiler checks each column, and the call that executes needs a `rasql.DB`. [Typed queries](../orm/03-typed-queries.md) covers that layer. The raw SQL builder, which this page covers, stops at the SQL text and its arguments and leaves the running to the caller.
 
-The `query` package builds the statement and validates it, and the `render` package turns that statement into SQL text with its arguments in placeholder order. Both packages import `schema` and `dialect` and nothing else of `rasql`, so a statement is built and rendered with no database handle and no Go row type in sight.
+An optional `dialect.CompilerProvider` extends rendering for a custom dialect. Its compiler can emit a complete pagination
+clause or handle an external `query.Expression` through the renderer's identifier, argument, and child-expression emitter.
+The built-in dialects keep their existing SQL when no compiler is installed. The executable example below shows both hooks.
 
-A statement is dialect-neutral until it renders. The same `query.Select` becomes PostgreSQL, MySQL, or SQLite text depending on the `dialect.Dialect` passed to `render`, and a plain Go value stays an argument in every one of them.
-
-## Build and render a statement
-
-<!-- INCLUDE(examples/query_render_select_example_test.go#render_select) -->
+<!-- INCLUDE(examples/query_custom_compiler_example_test.go) -->
 ```go
-func Example_query_render_select() {
-	// The query and render packages need no database handle and no Go row
-	// type. A table description is the only input.
-	accounts := query.MustTableRef(schema.MustTableDef("accounts",
-		schema.Integer("id"),
-		schema.Text("email"),
-		schema.PrimaryKey("id"),
-	))
-	id := accounts.Column("id")
-	email := accounts.Column("email")
+package examples_test
 
-	// query.NewSelect validates the statement as it builds it.
-	statement, err := query.NewSelect(accounts, id, email)
-	if err != nil {
-		fmt.Printf("failed to build the select: %s\n", err)
-		return
-	}
-	statement, err = statement.WithWhere(query.Equal(email, "ada@example.com"))
-	if err != nil {
-		fmt.Printf("failed to add the predicate: %s\n", err)
-		return
-	}
+import (
+	"fmt"
 
-	// One statement renders for whichever dialect it is given. The value
-	// stays an argument in both, so it never becomes SQL text.
-	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL()} {
-		rendered, err := render.Select(d, statement)
-		if err != nil {
-			fmt.Printf("failed to render the select: %s\n", err)
-			return
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
+	"github.com/lestrrat-go/rasql/query"
+)
+
+type compilerExampleDialect struct {
+	dialect.Dialect
+}
+
+func (compilerExampleDialect) Compiler() dialect.Compiler { return compilerExample{} }
+
+type compilerExample struct{}
+
+type containsExample struct {
+	column query.Expression
+	value  any
+}
+
+func (containsExample) ExpressionNode()              {}
+func (containsExample) CustomExpressionName() string { return "contains" }
+
+func (compilerExample) CompileExpression(emitter dialect.Emitter, expression query.Expression) (bool, error) {
+	contains, ok := expression.(containsExample)
+	if !ok {
+		return false, nil
+	}
+	emitter.WriteSQL("CONTAINS(")
+	if err := emitter.Expression(contains.column); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(", ")
+	if err := emitter.Argument(contains.value); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(")")
+	return true, nil
+}
+
+func (compilerExample) CompilePagination(emitter dialect.Emitter, pagination dialect.Pagination) error {
+	if pagination.HasOffset {
+		return fmt.Errorf("offset is unsupported")
+	}
+	if pagination.HasLimit {
+		emitter.WriteSQL(" FETCH FIRST ")
+		if err := emitter.Argument(pagination.Limit); err != nil {
+			return err
 		}
-		fmt.Println(rendered.SQL())
-		fmt.Println(rendered.Args()...)
+		emitter.WriteSQL(" ROWS ONLY")
 	}
+	return nil
+}
 
+func Example_customCompiler() {
+	users := store.Users()
+	builder := rasql.DecodeFromRef[struct{}](users.Ref()).
+		Project(query.Project(containsExample{column: users.Email(), value: "@example.com"})).
+		Limit(3)
+	statement, err := builder.Build(compilerExampleDialect{Dialect: dialect.SQLite()})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(statement.SQL())
+	fmt.Println(statement.Args())
 	// Output:
-	// SELECT "accounts"."id", "accounts"."email" FROM "accounts" WHERE ("accounts"."email" = $1)
-	// ada@example.com
-	// SELECT `accounts`.`id`, `accounts`.`email` FROM `accounts` WHERE (`accounts`.`email` = ?)
-	// ada@example.com
+	// SELECT CONTAINS("users"."email", ?) FROM "users" FETCH FIRST ? ROWS ONLY
+	// [@example.com 3]
 }
 ```
-source: [examples/query_render_select_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_render_select_example_test.go)
+source: [examples/query_custom_compiler_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_custom_compiler_example_test.go)
 <!-- END INCLUDE -->
 
 `query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` builds the reference, and `query.NewSelect` reports a name the table does not hold.

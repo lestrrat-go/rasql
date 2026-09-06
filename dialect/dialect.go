@@ -1,4 +1,6 @@
-// Package dialect defines SQL rendering rules for supported databases.
+// Package dialect defines SQL rendering rules for supported databases. A
+// dialect may optionally implement CompilerProvider to extend pagination and
+// expression rendering through the common renderer emitter.
 package dialect
 
 import (

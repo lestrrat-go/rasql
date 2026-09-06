@@ -108,6 +108,53 @@ type renderer struct {
 	inExcluded    bool
 }
 
+type compilerEmitter struct {
+	renderer *renderer
+	skip     query.Expression
+}
+
+func (e compilerEmitter) WriteSQL(sql string) {
+	e.renderer.builder.WriteString(sql)
+}
+
+func (e compilerEmitter) Identifier(parts ...string) error {
+	var quoted []string
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		value, err := e.renderer.quoteIdentifier(part)
+		if err != nil {
+			return err
+		}
+		quoted = append(quoted, value)
+	}
+	if len(quoted) == 0 {
+		return fmt.Errorf("identifier must contain a non-empty component")
+	}
+	e.renderer.builder.WriteString(strings.Join(quoted, "."))
+	return nil
+}
+
+func (e compilerEmitter) Argument(value any) error {
+	return e.renderer.writeArgument(value)
+}
+
+func (e compilerEmitter) Expression(expression query.Expression) error {
+	if sameExpression(e.skip, expression) {
+		return e.renderer.writeExpressionWithCompiler(expression, true)
+	}
+	return e.renderer.writeExpression(expression)
+}
+
+func (r *renderer) compiler() dialect.Compiler {
+	provider, ok := r.dialect.(dialect.CompilerProvider)
+	if !ok {
+		return nil
+	}
+	return provider.Compiler()
+}
+
 func (r *renderer) writeSelect(s query.Select) error {
 	r.builder.WriteString("SELECT ")
 	if s.Distinct() {
@@ -190,6 +237,13 @@ func (r *renderer) writeSelect(s query.Select) error {
 			}
 		}
 	}
+	if compiler := r.compiler(); compiler != nil {
+		limit, hasLimit := s.Limit()
+		offset, hasOffset := s.Offset()
+		return compiler.CompilePagination(compilerEmitter{renderer: r}, dialect.Pagination{
+			Limit: limit, Offset: offset, HasLimit: hasLimit, HasOffset: hasOffset,
+		})
+	}
 	if limit, ok := s.Limit(); ok {
 		r.builder.WriteString(" LIMIT ")
 		if err := r.writeArgument(limit); err != nil {
@@ -240,6 +294,21 @@ func (r *renderer) writeProjection(projection query.Projection) error {
 }
 
 func (r *renderer) writeExpression(expression query.Expression) error {
+	return r.writeExpressionWithCompiler(expression, false)
+}
+
+func (r *renderer) writeExpressionWithCompiler(expression query.Expression, skipCompiler bool) error {
+	if !skipCompiler {
+		if compiler := r.compiler(); compiler != nil {
+			handled, err := compiler.CompileExpression(compilerEmitter{renderer: r, skip: expression}, expression)
+			if err != nil {
+				return err
+			}
+			if handled {
+				return nil
+			}
+		}
+	}
 	switch expression := expression.(type) {
 	case query.ColumnRef:
 		qualifier, err := r.quoteQualified(expression.Source().QualifierSchema(), expression.Source().Qualifier())
@@ -484,4 +553,15 @@ func isNilDialect(d dialect.Dialect) bool {
 	}
 	value := reflect.ValueOf(d)
 	return value.Kind() == reflect.Pointer && value.IsNil()
+}
+
+func sameExpression(left, right query.Expression) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	leftType := reflect.TypeOf(left)
+	if leftType != reflect.TypeOf(right) || !leftType.Comparable() {
+		return false
+	}
+	return reflect.ValueOf(left).Interface() == reflect.ValueOf(right).Interface()
 }

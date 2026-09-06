@@ -380,7 +380,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		}
 		return subqueryUsage(), nil
 	default:
-		return expressionUsage{}, validationError(path, "uses unsupported expression %T", expression)
+		return expressionUsage{}, nil
 	}
 }
 
