@@ -54,11 +54,17 @@ func TestQueryPackageRegeneratedTypeCompilesAndRejectsStaleCaller(t *testing.T) 
 	root, err := filepath.Abs("..")
 	require.NoError(t, err)
 	dir := t.TempDir()
-	makeDescription := func(typ string) querydescribe.Description {
-		return querydescribe.Description{Columns: []querydescribe.Column{{Name: "id", Binding: schema.GoBinding{Type: typ}}}}
-	}
 	build := func(typ string) []byte {
-		plan, planErr := (generate.QueryPackage{Package: "queries", Root: root, Dir: dir, Dialect: dialect.SQLite(), Queries: []generate.Query{{Function: "Report", Output: "report_gen.go", SQL: "SELECT 1", Describer: fixedDescriber{description: makeDescription(typ)}}}}).PlanContext(t.Context())
+		db, dbErr := sql.Open("sqlite", ":memory:")
+		require.NoError(t, dbErr)
+		t.Cleanup(func() { _ = db.Close() })
+		declared := "INTEGER"
+		if typ == "string" {
+			declared = "TEXT"
+		}
+		_, dbErr = db.ExecContext(t.Context(), "CREATE TABLE source(id "+declared+")")
+		require.NoError(t, dbErr)
+		plan, planErr := (generate.QueryPackage{Package: "queries", Root: root, Dir: dir, Dialect: dialect.SQLite(), Queries: []generate.Query{{Function: "Report", Output: "report_gen.go", SQL: "SELECT id FROM source", Describer: querydescribe.NewSQLite(db)}}}).PlanContext(t.Context())
 		require.NoError(t, planErr)
 		require.Len(t, plan.Files(), 1)
 		return plan.Files()[0].Source
@@ -77,7 +83,7 @@ func TestQueryPackageRegeneratedTypeCompilesAndRejectsStaleCaller(t *testing.T) 
 	cmd.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, ".tmp", "gocache"))
 	output, err := cmd.CombinedOutput()
 	require.Error(t, err, string(output))
-	require.NoError(t, os.WriteFile(filepath.Join(module, "queries", "caller_test.go"), []byte("package queries\n\nvar _ string = ReportRow{}.ID\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(module, "queries", "caller_test.go"), []byte("package queries\n\nvar _ *string = ReportRow{}.ID\n"), 0o644))
 	cmd = exec.Command("go", "test", "-mod=mod", "./...")
 	cmd.Dir = module
 	cmd.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, ".tmp", "gocache"))

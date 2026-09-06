@@ -1121,6 +1121,9 @@ Static SQL packages can describe a query against SQLite before publishing genera
 ordered result row type and a typed execution helper. The helper follows the configured cardinality: `Many` returns an
 iterator, `ZeroOrOne` reports whether a row was found, and `ExactlyOne` returns `ErrNoRows` when the query is empty.
 The describer validates selected columns and observes nullability from the database before source generation.
+SQLite is the implemented describer. It rejects incomplete driver metadata and derives a type only for an explicitly
+aliased `COUNT(*)` or `COUNT(simple_column)` projection when SQLite omits that expression's declared type. Other
+expressions require a future engine-specific describer; expected metadata never supplies an observation.
 
 
 ## Next
