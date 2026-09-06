@@ -232,13 +232,14 @@ func newTableDefFixture() schema.TableDef {
 		},
 		Relationships: []schema.RelationshipDef{
 			{
-				Name:              "owner",
-				InverseName:       "Owners",
-				Kind:              schema.RelationshipBelongsTo,
-				Columns:           []string{"uid"},
-				ReferencedSchema:  "public",
-				ReferencedTable:   "owners",
-				ReferencedColumns: []string{"id"},
+				Name:                     "owner",
+				InverseName:              "Owners",
+				ResolvedReferencedSchema: "public",
+				Kind:                     schema.RelationshipBelongsTo,
+				Columns:                  []string{"uid"},
+				ReferencedSchema:         "public",
+				ReferencedTable:          "owners",
+				ReferencedColumns:        []string{"id"},
 			},
 		},
 	}

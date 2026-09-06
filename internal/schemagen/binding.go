@@ -309,7 +309,7 @@ func newGeneratedBindings(dir, packageName string, tables, allTables []schema.Ta
 	}
 	for _, table := range tables {
 		for _, relationship := range table.Relationships {
-			parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
+			parent, ok := relationshipTable(allTables, relationshipTargetSchema(relationship), relationship.ReferencedTable)
 			if !ok {
 				continue
 			}
@@ -322,7 +322,7 @@ func newGeneratedBindings(dir, packageName string, tables, allTables []schema.Ta
 		}
 		for _, child := range allTables {
 			for _, relationship := range child.Relationships {
-				if relationship.ReferencedSchema != table.Schema || relationship.ReferencedTable != table.Name {
+				if relationshipTargetSchema(relationship) != table.Schema || relationship.ReferencedTable != table.Name {
 					continue
 				}
 				if column, ok := table.Column(firstName(relationship.ReferencedColumns)); ok {

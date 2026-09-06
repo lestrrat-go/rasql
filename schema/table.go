@@ -1411,6 +1411,11 @@ func validateRelationships(relationships []RelationshipDef, foreignKeys []Foreig
 				return validationError(path+".referenced_schema", "%s", err)
 			}
 		}
+		if relationship.ResolvedReferencedSchema != "" {
+			if err := ValidateIdentifier(relationship.ResolvedReferencedSchema); err != nil {
+				return validationError(path+".resolved_referenced_schema", "%s", err)
+			}
+		}
 		if err := ValidateIdentifier(relationship.ReferencedTable); err != nil {
 			return validationError(path+".referenced_table", "%s", err)
 		}
