@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/querydescribe"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -30,4 +31,25 @@ func TestSQLiteDescriberRejectsSecondStatement(t *testing.T) {
 	d := querydescribe.NewSQLite(nil)
 	_, err := d.Describe(context.Background(), querydescribe.Request{Name: "x", SQL: "SELECT 1; SELECT 2"})
 	require.ErrorIs(t, err, querydescribe.ErrInvalidRequest)
+}
+
+func TestSQLiteDescriberPreservesCanceledContext(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = querydescribe.NewSQLite(db).Describe(ctx, querydescribe.Request{Name: "canceled", SQL: "SELECT 1 AS id"})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSQLiteDescriberChecksObservedExpectedType(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), "CREATE TABLE typed_source(id INTEGER)")
+	require.NoError(t, err)
+	want := &querydescribe.Description{Columns: []querydescribe.Column{{Name: "id", Binding: schema.GoBinding{Type: "string"}}}}
+	_, err = querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "typed", SQL: "SELECT id FROM typed_source", Expected: want})
+	require.ErrorIs(t, err, querydescribe.ErrExpected)
 }

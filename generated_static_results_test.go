@@ -74,6 +74,9 @@ func TestGeneratedStaticLeftJoinAndCardinality(t *testing.T) {
 	require.ErrorIs(t, err, rasql.ErrMultipleRows)
 	_, err = rasql.QueryRenderedOne[userReportRow](t.Context(), db, statement("SELECT id AS user_id, NULL AS nickname, 0 AS profile_count FROM users WHERE id = 99"))
 	require.ErrorIs(t, err, rasql.ErrNoRows)
+	oneExact, err := rasql.QueryRenderedOne[userReportRow](t.Context(), db, statement("SELECT id AS user_id, NULL AS nickname, 0 AS profile_count FROM users WHERE id = 1"))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), oneExact.UserID)
 	_, err = rasql.QueryRenderedOne[userReportRow](t.Context(), db, statement("SELECT id AS user_id, NULL AS nickname, 0 AS profile_count FROM users"))
 	require.ErrorIs(t, err, rasql.ErrMultipleRows)
 }
