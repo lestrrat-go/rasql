@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // OrdersRow is one row of the "orders" table.
@@ -73,13 +74,22 @@ type OrdersTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t OrdersTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t OrdersTable) ID() query.TypedColumn[OrdersRow, int64] {
+	return query.TypedColumnOf[OrdersRow, int64](rasql.ColumnOf(t.Table, "id"))
+}
+func (t OrdersTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // UserID returns a reference to the "user_id" column.
-func (t OrdersTable) UserID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "user_id") }
+func (t OrdersTable) UserID() query.TypedColumn[OrdersRow, int64] {
+	return query.TypedColumnOf[OrdersRow, int64](rasql.ColumnOf(t.Table, "user_id"))
+}
+func (t OrdersTable) UserIDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "user_id") }
 
 // Total returns a reference to the "total" column.
-func (t OrdersTable) Total() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "total") }
+func (t OrdersTable) Total() query.TypedColumn[OrdersRow, int64] {
+	return query.TypedColumnOf[OrdersRow, int64](rasql.ColumnOf(t.Table, "total"))
+}
+func (t OrdersTable) TotalRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "total") }
 
 // Orders returns the descriptor for the "orders" table.
 func Orders() OrdersTable {

@@ -113,7 +113,7 @@ func Example_rasql_sqlite_query() {
 	// SelectFrom knows the row type from the generated table, so One returns a
 	// decoded store.UsersRow.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 42)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).One(ctx, db)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 42).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

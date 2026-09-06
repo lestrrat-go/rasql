@@ -19,8 +19,8 @@ const (
 
 import "github.com/lestrrat-go/rasql/query"
 
-var _ query.ColumnRef = Users().ID()
-var _ query.ColumnRef = Orders().ID()
+var _ query.ColumnRef = Users().ID().Ref()
+var _ query.ColumnRef = Orders().ID().Ref()
 var _ = UsersDef()
 var _ = Orders().User()
 `
@@ -28,7 +28,7 @@ var _ = Orders().User()
 
 import "github.com/lestrrat-go/rasql/query"
 
-var _ query.ColumnRef = Users().Email()
+var _ query.ColumnRef = Users().Email().Ref()
 var _ = UsersDef()
 `
 )

@@ -227,6 +227,7 @@ func schemaSource(dir, packageName string, tables, allTables []schema.TableDef, 
 		}
 		source.WriteString("\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
+		source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
 		// The descriptor literal is the only thing here that names the
 		// schema package, so leaving it out leaves the import out too.
 		if descriptors == withDescriptors {
@@ -260,7 +261,9 @@ func schemaSource(dir, packageName string, tables, allTables []schema.TableDef, 
 		source.WriteString("\n")
 		writeTableType(&source, table)
 		source.WriteString("\n")
-		writeTableColumns(&source, table)
+		if err := writeTableColumns(&source, table, bindings); err != nil {
+			return nil, err
+		}
 		source.WriteString("\n")
 		if descriptors == withDescriptors {
 			writeTableDescriptor(&source, table)
@@ -940,9 +943,13 @@ func writeTableType(source *bytes.Buffer, table schema.TableDef) {
 
 // writeTableColumns writes one accessor method per column, returning a
 // reference to that column on t.
-func writeTableColumns(source *bytes.Buffer, table schema.TableDef) {
+func writeTableColumns(source *bytes.Buffer, table schema.TableDef, bindings generatedBindings) error {
 	typeName := tableTypeName(table.Name)
 	for _, column := range table.Columns {
+		fieldType, err := bindings.typeFor(table, column, column.Nullable)
+		if err != nil {
+			return err
+		}
 		method := goName(column.Name)
 		source.WriteString("// ")
 		source.WriteString(method)
@@ -953,10 +960,36 @@ func writeTableColumns(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString(typeName)
 		source.WriteString(") ")
 		source.WriteString(method)
-		source.WriteString("() rasql.ColumnRef { return rasql.ColumnOf(t.Table, ")
+		if column.Nullable {
+			source.WriteString("() query.NullableColumn[")
+		} else {
+			source.WriteString("() query.TypedColumn[")
+		}
+		source.WriteString(rowTypeName(table))
+		source.WriteString(", ")
+		source.WriteString(fieldType)
+		source.WriteString("] { return query.")
+		if column.Nullable {
+			source.WriteString("NullableColumnOf")
+		} else {
+			source.WriteString("TypedColumnOf")
+		}
+		source.WriteString("[")
+		source.WriteString(rowTypeName(table))
+		source.WriteString(", ")
+		source.WriteString(fieldType)
+		source.WriteString("](rasql.ColumnOf(t.Table, ")
+		source.WriteString(quote(column.Name))
+		source.WriteString(")) }\n")
+		source.WriteString("func (t ")
+		source.WriteString(typeName)
+		source.WriteString(") ")
+		source.WriteString(method)
+		source.WriteString("Ref() rasql.ColumnRef { return rasql.ColumnOf(t.Table, ")
 		source.WriteString(quote(column.Name))
 		source.WriteString(") }\n")
 	}
+	return nil
 }
 
 func writeTableAccessor(source *bytes.Buffer, table schema.TableDef) {
@@ -1279,9 +1312,9 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 		source.WriteString(relationship.typeName)
 		source.WriteString("{Parent: parent, Child: child, ParentKey: parent.")
 		source.WriteString(relationship.parentField)
-		source.WriteString("(), ChildKey: child.")
+		source.WriteString("().Ref(), ChildKey: child.")
 		source.WriteString(relationship.childField)
-		source.WriteString("()}\n}\n\n")
+		source.WriteString("().Ref()}\n}\n\n")
 
 		source.WriteString("// Join returns an INNER JOIN for the relationship.\n")
 		source.WriteString("func (r ")

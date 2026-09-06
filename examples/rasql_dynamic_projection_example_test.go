@@ -68,10 +68,10 @@ func Example_rasql_dynamic_projection() {
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
-		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orders.UserID()))).
-		Project(users.ID().As("user_id"), users.Email()).
-		Where(query.GreaterThan(orders.Total(), 20)).
-		Order(query.Desc(orders.Total())).
+		Join(rasql.InnerJoin(orders, query.Equal(users.ID().Ref(), orders.UserID().Ref()))).
+		Project(users.ID().Ref().As("user_id"), users.Email().Ref()).
+		Where(query.GreaterThan(orders.Total().Ref(), 20)).
+		Order(query.Desc(orders.Total().Ref())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to build order totals query: %s\n", err)

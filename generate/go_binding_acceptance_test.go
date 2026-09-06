@@ -66,8 +66,8 @@ func TestBindingsRoundTrip(t *testing.T) {
  if _,err=rasql.Insert(ctx,db,generated.Orders(),want); err!=nil { t.Fatal(err) }
  nulls:=generated.OrdersRow{ID:2,UserID:types.UserID("u1"),OtherID:other.OtherID("o2"),Amount:types.NullableDecimal{},Payload:types.NullableJSON{}}
  if _,err=rasql.Insert(ctx,db,generated.Orders(),nulls); err!=nil { t.Fatal(err) }
- got,err:=rasql.SelectFrom(generated.Orders()).WhereEqual(generated.Orders().ID(),int64(1)).One(ctx,db); if err!=nil { t.Fatal(err) }; if got.UserID!=want.UserID || got.Amount!=want.Amount || got.Payload!=want.Payload { t.Fatalf("got %#v want %#v",got,want) }
- got,err=rasql.SelectFrom(generated.Orders()).WhereEqual(generated.Orders().ID(),int64(2)).One(ctx,db); if err!=nil { t.Fatal(err) }; if got.Amount.Valid || got.Payload.Valid { t.Fatalf("NULL wrappers %#v",got) }
+ got,err:=rasql.SelectFrom(generated.Orders()).WhereEqual(generated.Orders().ID().Ref(),int64(1)).One(ctx,db); if err!=nil { t.Fatal(err) }; if got.UserID!=want.UserID || got.Amount!=want.Amount || got.Payload!=want.Payload { t.Fatalf("got %#v want %#v",got,want) }
+ got,err=rasql.SelectFrom(generated.Orders()).WhereEqual(generated.Orders().ID().Ref(),int64(2)).One(ctx,db); if err!=nil { t.Fatal(err) }; if got.Amount.Valid || got.Payload.Valid { t.Fatalf("NULL wrappers %#v",got) }
  rows,err:=generated.Orders().User().Load(ctx,db,[]generated.OrdersRow{got}); if err!=nil { t.Fatal(err) }; if rows[types.UserID("u1")].ID!=types.UserID("u1") { t.Fatalf("relationship %#v",rows) }
  staticRows,err:=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByUser(types.UserID("u1"))); if err!=nil { t.Fatal(err) }; if len(staticRows)!=2 || staticRows[0].UserID!=types.UserID("u1") { t.Fatalf("static rows %#v",staticRows) }
  namedRows,err:=rasql.QueryRenderedAll[generated.UsersRow](ctx,db,generated.UserByNickname(&nickname)); if err!=nil { t.Fatal(err) }; if len(namedRows)!=1 || namedRows[0].Nickname==nil || *namedRows[0].Nickname!=nickname { t.Fatalf("named rows %#v",namedRows) }

@@ -275,7 +275,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	// A nullable column is a pointer field, and the generated scan methods
 	// assign through it.
 	require.Contains(t, string(source), "\tEmail     *string\n")
-	require.NotContains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
 	require.NotContains(t, string(source), "github.com/lestrrat-go/rasql/row")
 	// PackageSource returns a whole package, descriptors included, so it
 	// names the schema package its descriptor literals are written in.
@@ -284,7 +284,8 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	require.Contains(t, string(source), "var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}")
 	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql\"")
 	require.Contains(t, string(source), "type UsersTable struct {\n\trasql.Table[UsersRow]\n}\n")
-	require.Contains(t, string(source), `func (t UsersTable) CreatedAt() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "created_at") }`)
+	require.Contains(t, string(source), `func (t UsersTable) CreatedAt() query.TypedColumn[UsersRow, time.Time]`)
+	require.Contains(t, string(source), `func (t UsersTable) CreatedAtRef() rasql.ColumnRef`)
 	require.NotContains(t, string(source), "newUsersTable")
 	require.Contains(t, string(source), "func Orders() OrdersTable {")
 	require.Contains(t, string(source), "func Users() UsersTable {")

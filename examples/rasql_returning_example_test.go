@@ -40,9 +40,9 @@ func Example_rasql_returning() {
 	// database and status to its column default, which is what this example
 	// reads back.
 	statement, err := query.NewInsert(users.Ref(),
-		query.Set(users.Email(), "ada@example.com"),
-		query.Set(users.FirstName(), "Ada"),
-		query.Set(users.LastName(), "Lovelace"))
+		query.Set(users.Email().Ref(), "ada@example.com"),
+		query.Set(users.FirstName().Ref(), "Ada"),
+		query.Set(users.LastName().Ref(), "Lovelace"))
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -53,8 +53,8 @@ func Example_rasql_returning() {
 	// the whole users table, and it refuses a clause that omits a column of
 	// that table: an omitted column would decode as a zero value with nothing
 	// to say the database never sent it.
-	statement, err = statement.WithReturning(users.ID(), users.Email(), users.Nickname(),
-		users.Status(), users.FirstName(), users.LastName())
+	statement, err = statement.WithReturning(users.ID().Ref(), users.Email().Ref(), users.Nickname().Ref(),
+		users.Status().Ref(), users.FirstName().Ref(), users.LastName().Ref())
 	if err != nil {
 		fmt.Printf("failed to add RETURNING clause: %s\n", err)
 		return

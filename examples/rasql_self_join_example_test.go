@@ -59,8 +59,8 @@ func Example_rasql_self_join() {
 		return
 	}
 	rows, err := rasql.SelectFrom(employees).
-		Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID(), manager.ID()))).
-		OrderAsc(employees.ID()).
+		Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID().Ref(), manager.ID()))).
+		OrderAsc(employees.ID().Ref()).
 		Query(ctx, db)
 	// END(self_join)
 	if err != nil {

@@ -15,7 +15,7 @@ import (
 // Generate the store, and name columns through the accessor methods it emits.
 // That is what every other example here does, and what application code should
 // do. rasqlgen writes one accessor method per column from the same descriptor
-// the table is created from, so `users.ID()` is a column reference the
+// the table is created from, so `users.ID().Ref()` is a column reference the
 // compiler checks: renaming or dropping a column turns the call sites into
 // build failures, instead of leaving queries that assemble happily and fail
 // when they run.
@@ -64,7 +64,7 @@ func Example_rasqlgen_column_fields() {
 	// users.Emial() is not a method and the package does not build.
 	// BEGIN(typed_column)
 	users := store.Users()
-	built, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).Build(dialect.PostgreSQL())
+	built, err := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 42).Build(dialect.PostgreSQL())
 	// END(typed_column)
 	if err != nil {
 		fmt.Printf("failed to build the typed select: %s\n", err)
@@ -75,7 +75,7 @@ func Example_rasqlgen_column_fields() {
 	// Column is the escape hatch, shown here with a name a caller would have
 	// received as data. It is worth reaching for only when the name is not
 	// known as the code is written; a hard-coded "emial" like this one is a
-	// bug that users.Email() would never have compiled. Validate reports the
+	// bug that users.Email().Ref() would never have compiled. Validate reports the
 	// bad name at the lookup, so the caller does not have to assemble a
 	// statement to find out.
 	// BEGIN(column_lookup)

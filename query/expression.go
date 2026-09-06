@@ -129,11 +129,15 @@ func (v Value) Argument() any {
 // Equal(column, Bind("ada@example.com")). A value that is already an
 // Expression is never wrapped a second time.
 func operand(value any) Expression {
+	if ref, ok := value.(interface{ Ref() ColumnRef }); ok {
+		return ref.Ref()
+	}
 	if expression, ok := value.(Expression); ok {
 		return expression
 	}
 	return Bind(value)
 }
+
 
 // operands is operand over a variadic or slice argument. It always returns a
 // new slice, so a caller's later write to values cannot reach inside a built
@@ -328,11 +332,17 @@ func (NullTest) expression() {}
 
 // IsNull tests whether expression is NULL.
 func IsNull(expression Expression) NullTest {
+	if ref, ok := expression.(interface{ Ref() ColumnRef }); ok {
+		expression = ref.Ref()
+	}
 	return NullTest{expr: expression}
 }
 
 // IsNotNull tests whether expression is not NULL.
 func IsNotNull(expression Expression) NullTest {
+	if ref, ok := expression.(interface{ Ref() ColumnRef }); ok {
+		expression = ref.Ref()
+	}
 	return NullTest{expr: expression, not: true}
 }
 
@@ -648,8 +658,8 @@ func Max(expression Expression) Function {
 }
 
 // Avg averages the values of expression.
-func Avg(expression Expression) Function {
-	return Call(FunctionAvg, expression)
+func Avg(expression any) Function {
+	return Call(FunctionAvg, operand(expression))
 }
 
 // BM25 scores how well table's row matches the query an enclosing MATCH
@@ -703,8 +713,8 @@ func Coalesce(expressions ...any) Function {
 // ASCII letters only, while PostgreSQL and MySQL fold according to the
 // server's collation, so a case-insensitive match on non-ASCII text is not
 // portable across dialects. MySQL leaves a binary-typed argument unchanged.
-func Lower(expression Expression) Function {
-	return Call(FunctionLower, expression)
+func Lower(expression any) Function {
+	return Call(FunctionLower, operand(expression))
 }
 
 // Upper returns expression with its letters folded to upper case. The same

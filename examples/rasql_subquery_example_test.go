@@ -77,12 +77,12 @@ func Example_rasql_subquery() {
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
 	// renders as its own SELECT.
-	domainUsers, err := query.NewSelect(users.Ref(), users.ID())
+	domainUsers, err := query.NewSelect(users.Ref(), users.ID().Ref())
 	if err != nil {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
 	}
-	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email(), "%@example.com"))
+	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email().Ref(), "%@example.com"))
 	if err != nil {
 		fmt.Printf("failed to filter domain-users subquery: %s\n", err)
 		return
@@ -107,10 +107,10 @@ func Example_rasql_subquery() {
 	// average of every order.
 	// SQL: SELECT orders.user_id, orders.total FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.total >= (SELECT AVG(all_orders.total) FROM orders AS all_orders) ORDER BY orders.total ASC (argument: "%@example.com")
 	rows, err := rasql.DecodeFrom[orderSummary](orders).
-		Project(orders.UserID().As("user_id"), orders.Total()).
-		Where(query.InSelect(orders.UserID(), domainUsers)).
-		Where(query.GreaterThanOrEqual(orders.Total(), query.Scalar(average))).
-		Order(query.Asc(orders.Total())).
+		Project(orders.UserID().Ref().As("user_id"), orders.Total().Ref()).
+		Where(query.InSelect(orders.UserID().Ref(), domainUsers)).
+		Where(query.GreaterThanOrEqual(orders.Total().Ref(), query.Scalar(average))).
+		Order(query.Asc(orders.Total().Ref())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)

@@ -61,8 +61,8 @@ func Example_rasql_scalar_function() {
 	// caller would type, regardless of how the stored value was cased.
 	// SQL: SELECT users.id, COALESCE(users.nickname, users.email) AS name FROM users WHERE LOWER(users.email) = ? (argument: "ada@example.com")
 	byEmail, err := rasql.DecodeFrom[userName](users).
-		Project(users.ID(), query.Coalesce(users.Nickname(), users.Email()).As("name")).
-		Where(query.Equal(query.Lower(users.Email()), "ada@example.com")).
+		Project(users.ID().Ref(), query.Coalesce(users.Nickname().Ref(), users.Email().Ref()).As("name")).
+		Where(query.Equal(query.Lower(users.Email().Ref()), "ada@example.com")).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user by email: %s\n", err)
@@ -80,8 +80,8 @@ func Example_rasql_scalar_function() {
 	// back to the email once nickname is NULL.
 	// SQL: SELECT users.id, COALESCE(users.nickname, users.email) AS name FROM users ORDER BY users.id ASC
 	names, err := rasql.DecodeFrom[userName](users).
-		Project(users.ID(), query.Coalesce(users.Nickname(), users.Email()).As("name")).
-		OrderAsc(users.ID()).
+		Project(users.ID().Ref(), query.Coalesce(users.Nickname().Ref(), users.Email().Ref()).As("name")).
+		OrderAsc(users.ID().Ref()).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user names: %s\n", err)

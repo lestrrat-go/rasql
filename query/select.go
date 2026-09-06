@@ -43,8 +43,8 @@ type ExpressionProjection struct {
 // is already a Projection and is passed on its own. Project takes an
 // Expression, unlike a comparison or a membership test, so a plain Go value
 // projected on its own has to be wrapped with Bind here.
-func Project(expression Expression) ExpressionProjection {
-	return ExpressionProjection{expression: expression}
+func Project(expression any) ExpressionProjection {
+	return ExpressionProjection{expression: operand(expression)}
 }
 
 // As returns a copy of p reported under alias.
@@ -116,13 +116,13 @@ type Order struct {
 }
 
 // Asc orders expression in ascending order.
-func Asc(expression Expression) Order {
-	return Order{expression: expression}
+func Asc(expression any) Order {
+	return Order{expression: operand(expression)}
 }
 
 // Desc orders expression in descending order.
-func Desc(expression Expression) Order {
-	return Order{expression: expression, descending: true}
+func Desc(expression any) Order {
+	return Order{expression: operand(expression), descending: true}
 }
 
 // AscResult orders by projection's already-computed result, in ascending
