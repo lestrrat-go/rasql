@@ -142,10 +142,80 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			WithArgs(42).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		_, err = db.ExecRendered(t.Context(), s)
+		result, err := db.ExecRendered(t.Context(), s)
+		require.NotNil(t, result)
 		require.ErrorIs(t, err, expected)
 		require.ErrorContains(t, err, "hook after exec")
+		var extensionErr *exec.ExtensionError
+		require.ErrorAs(t, err, &extensionErr)
+		require.True(t, extensionErr.ExecutionSucceeded())
+		rows, rowsErr := result.RowsAffected()
+		require.NoError(t, rowsErr)
+		require.Equal(t, int64(1), rows)
 	})
+}
+
+func TestObserversReportFailuresWithoutChangingResult(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	var reports []exec.ExtensionError
+	var order []string
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	db, err = db.WithObservers(exec.ExtensionErrorHandlerFunc(func(_ context.Context, report exec.ExtensionError) {
+		reports = append(reports, report)
+	}), exec.ObserverFunc(func(_ context.Context, operation exec.Operation, driverErr error) error {
+		order = append(order, operation.Kind().String())
+		require.NoError(t, driverErr)
+		return errors.New("first observer failed")
+	}), exec.ObserverFunc(func(_ context.Context, _ exec.Operation, driverErr error) error {
+		order = append(order, "second")
+		require.NoError(t, driverErr)
+		return errors.New("second observer failed")
+	}))
+	require.NoError(t, err)
+	s := stmt.New("DELETE FROM users WHERE id = ?", 42)
+	mock.ExpectExec("DELETE FROM users WHERE id = ?").WithArgs(42).WillReturnResult(sqlmock.NewResult(0, 1))
+	result, err := db.ExecRendered(t.Context(), s)
+	require.NoError(t, err)
+	require.Equal(t, []string{"exec", "second"}, order)
+	require.Len(t, reports, 2)
+	rows, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rows)
+}
+
+func TestWithObserversInheritsThroughBegin(t *testing.T) {
+	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	var observed int
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	db, err = db.WithObservers(exec.ExtensionErrorHandlerFunc(func(context.Context, exec.ExtensionError) {
+		observed++
+	}), exec.ObserverFunc(func(context.Context, exec.Operation, error) error {
+		return errors.New("observer failed")
+	}))
+	require.NoError(t, err)
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM users").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+	tx, err := db.Begin(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = tx.ExecRendered(t.Context(), stmt.New("DELETE FROM users"))
+	require.NoError(t, err)
+	require.Equal(t, 1, observed)
+	require.NoError(t, tx.Rollback())
 }
 
 func TestHooksRunInsideExplicitTransaction(t *testing.T) {

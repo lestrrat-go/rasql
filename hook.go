@@ -29,3 +29,18 @@ type Hook = exec.Hook
 
 // HookFunc adapts functions into a Hook. Either function may be nil.
 type HookFunc = exec.HookFunc
+
+// ExtensionError reports a failure in a hook or observer after the database operation.
+type ExtensionError = exec.ExtensionError
+
+// ExtensionErrorHandler receives extension failures independently from the operation result.
+type ExtensionErrorHandler = exec.ExtensionErrorHandler
+
+// ExtensionErrorHandlerFunc adapts a function into an ExtensionErrorHandler.
+type ExtensionErrorHandlerFunc = exec.ExtensionErrorHandlerFunc
+
+// Observer receives the driver error after an operation.
+type Observer = exec.Observer
+
+// ObserverFunc adapts a function into an Observer.
+type ObserverFunc = exec.ObserverFunc

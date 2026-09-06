@@ -40,15 +40,18 @@ type beginner interface {
 // takes a DB takes either one, so moving work into a transaction changes which
 // DB is passed and nothing else.
 //
-// A DB is a value. Copying it shares the handle, and WithHooks and Begin
+// A DB is a value. Copying it shares the handle, and WithHooks, WithObservers,
+// and Begin
 // return new values rather than changing the one they are called on. Its
 // methods are safe for concurrent use when its Handle is, which for a
 // transaction means one goroutine at a time, because *sql.Tx is bound to a
 // single connection.
 type DB struct {
-	handle  Handle
-	dialect dialect.Dialect
-	hooks   []Hook
+	handle                Handle
+	dialect               dialect.Dialect
+	hooks                 []Hook
+	observers             []Observer
+	extensionErrorHandler ExtensionErrorHandler
 	// tx is the transaction this DB runs in, and is nil when it runs directly
 	// on handle. When it is set it is the same value as handle.
 	tx *sql.Tx
@@ -64,9 +67,9 @@ type DB struct {
 // is how an application already holding a *sql.Tx hands it to this package
 // without a second type.
 //
-// Optional hooks observe every statement run through the returned DB and,
-// unless narrowed or extended by WithHooks or by Begin's own hooks parameter,
-// every transaction Begin starts from it.
+// Optional hooks and observers observe every statement run through the returned
+// DB and, unless narrowed or extended by WithHooks, WithObservers, or by Begin's
+// own hooks parameter, every transaction Begin starts from it.
 func New(handle Handle, d dialect.Dialect, hooks ...Hook) (DB, error) {
 	if nilcheck.Is(handle) {
 		return DB{}, fmt.Errorf("rasql: handle must not be nil")
@@ -95,6 +98,24 @@ func (db DB) WithHooks(hooks ...Hook) (DB, error) {
 		return DB{}, err
 	}
 	db.hooks = configured
+	return db, nil
+}
+
+// WithObservers returns a copy of db that reports observer and legacy hook
+// failures to handler. Observers are appended in registration order.
+func (db DB) WithObservers(handler ExtensionErrorHandler, observers ...Observer) (DB, error) {
+	if err := db.valid(); err != nil {
+		return DB{}, err
+	}
+	if len(db.observers)+len(observers) > 0 && nilcheck.Is(handler) {
+		return DB{}, fmt.Errorf("rasql: extension error handler must not be nil when observers are supplied")
+	}
+	configured, err := appendObservers(db.observers, observers)
+	if err != nil {
+		return DB{}, err
+	}
+	db.observers = configured
+	db.extensionErrorHandler = handler
 	return db, nil
 }
 
@@ -214,19 +235,26 @@ func (db DB) QueryRendered(ctx context.Context, s stmt.Statement) (*sql.Rows, er
 	operation := Operation{kind: QueryOperation, stmt: s}
 	entered, err := db.beforeHooks(ctx, operation)
 	if err != nil {
-		return nil, afterHooks(ctx, operation, entered, err)
+		if extensionErr := db.afterHooks(ctx, operation, entered, err); extensionErr != nil {
+			return nil, errors.Join(err, extensionErr)
+		}
+		return nil, err
 	}
 	rows, err := db.handle.QueryContext(ctx, s.SQL(), s.BoundArgs()...)
 	if err != nil {
 		err = fmt.Errorf("rasql: execute query: %w", err)
 	}
-	if hookErr := afterHooks(ctx, operation, entered, err); hookErr != nil {
+	db.observe(ctx, operation, err)
+	if extensionErr := db.afterHooks(ctx, operation, entered, err); extensionErr != nil {
 		if rows != nil {
 			if closeErr := rows.Close(); closeErr != nil {
-				hookErr = errors.Join(hookErr, fmt.Errorf("rasql: close query rows: %w", closeErr))
+				extensionErr.Errors = append(extensionErr.Errors, fmt.Errorf("rasql: close query rows: %w", closeErr))
 			}
 		}
-		return nil, hookErr
+		return nil, errors.Join(err, extensionErr)
+	}
+	if err != nil {
+		return nil, err
 	}
 	return rows, nil
 }
@@ -239,16 +267,20 @@ func (db DB) ExecRendered(ctx context.Context, s stmt.Statement) (sql.Result, er
 	operation := Operation{kind: ExecOperation, stmt: s}
 	entered, err := db.beforeHooks(ctx, operation)
 	if err != nil {
-		return nil, afterHooks(ctx, operation, entered, err)
+		if extensionErr := db.afterHooks(ctx, operation, entered, err); extensionErr != nil {
+			return nil, errors.Join(err, extensionErr)
+		}
+		return nil, err
 	}
-	result, err := db.handle.ExecContext(ctx, s.SQL(), s.BoundArgs()...)
-	if err != nil {
-		err = fmt.Errorf("rasql: execute statement: %w", err)
+	result, driverErr := db.handle.ExecContext(ctx, s.SQL(), s.BoundArgs()...)
+	if driverErr != nil {
+		err = fmt.Errorf("rasql: execute statement: %w", driverErr)
 	}
-	if hookErr := afterHooks(ctx, operation, entered, err); hookErr != nil {
-		return nil, hookErr
+	db.observe(ctx, operation, driverErr)
+	if extensionErr := db.afterHooks(ctx, operation, entered, err); extensionErr != nil {
+		return result, errors.Join(err, extensionErr)
 	}
-	return result, nil
+	return result, err
 }
 
 // Validate reports whether db came from New rather than being a zero DB. The

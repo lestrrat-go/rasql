@@ -210,6 +210,22 @@ func TestCommitAndRollbackRejectADBThatIsNotATransaction(t *testing.T) {
 	require.ErrorContains(t, db.Rollback(), "rasql: this DB is not a transaction")
 }
 
+func TestWithObserversValidatesHandlerAndObserver(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mock.ExpectClose()
+		require.NoError(t, database.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	db, err := exec.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = db.WithObservers(nil, exec.ObserverFunc(func(context.Context, exec.Operation, error) error { return nil }))
+	require.ErrorContains(t, err, "extension error handler must not be nil")
+	_, err = db.WithObservers(exec.ExtensionErrorHandlerFunc(func(context.Context, exec.ExtensionError) {}), nil)
+	require.ErrorContains(t, err, "observer must not be nil")
+}
+
 // TestNewFromTransactionAdoptsIt covers the other half of one type for both:
 // an application already holding a *sql.Tx hands it to New and gets a DB that
 // commits that transaction, with no second type between them.
