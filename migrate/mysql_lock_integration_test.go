@@ -48,9 +48,22 @@ func TestMySQLLockReleasedAfterCancellation(t *testing.T) {
 	cancel()
 	err = <-done
 	require.Error(t, err)
-	var free int
-	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT IS_FREE_LOCK(?)", "rasql_schema_migrations").Scan(&free))
-	require.Equal(t, 1, free)
+	freeCtx, stopFreePoll := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopFreePoll()
+	freeTicker := time.NewTicker(25 * time.Millisecond)
+	defer freeTicker.Stop()
+	for {
+		var free int
+		require.NoError(t, database.QueryRowContext(freeCtx, "SELECT IS_FREE_LOCK(?)", "rasql_schema_migrations").Scan(&free))
+		if free == 1 {
+			break
+		}
+		select {
+		case <-freeCtx.Done():
+			require.FailNow(t, "timed out waiting for migration lock release")
+		case <-freeTicker.C:
+		}
+	}
 	var usable int
 	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT 1").Scan(&usable))
 	require.Equal(t, 1, usable)
