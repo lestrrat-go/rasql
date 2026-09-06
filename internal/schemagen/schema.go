@@ -138,9 +138,6 @@ func PackageSource(packageName string, tables ...schema.TableDef) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	if err := validateRelationshipPackage(clones); err != nil {
-		return nil, err
-	}
 	return schemaSource(packageName, clones, clones, withDescriptors)
 }
 
@@ -472,6 +469,9 @@ func prepareSchema(packageName string, tables []schema.TableDef) ([]schema.Table
 		return clones[left].Name < clones[right].Name
 	})
 	if err := validateVariableNames(clones); err != nil {
+		return nil, err
+	}
+	if err := validateRelationshipPackage(clones); err != nil {
 		return nil, err
 	}
 	return clones, nil
@@ -809,7 +809,7 @@ func relationshipSupported(child, parent schema.TableDef, relationship schema.Re
 }
 
 func relationshipColumnsSupported(child, parent schema.TableDef, relationship schema.RelationshipDef) ([]schema.ColumnDef, []schema.ColumnDef, string, bool) {
-	if (relationship.Kind != schema.RelationshipBelongsTo && relationship.Kind != schema.RelationshipHasOne) || len(relationship.Columns) == 0 || len(relationship.Columns) != len(relationship.ReferencedColumns) {
+	if (relationship.Kind != schema.RelationshipBelongsTo && relationship.Kind != schema.RelationshipHasOne && relationship.Kind != schema.RelationshipHasMany) || len(relationship.Columns) == 0 || len(relationship.Columns) != len(relationship.ReferencedColumns) {
 		return nil, nil, "", false
 	}
 	children := make([]schema.ColumnDef, len(relationship.Columns))
@@ -827,6 +827,16 @@ func relationshipColumnsSupported(child, parent schema.TableDef, relationship sc
 			return nil, nil, "", false
 		}
 		children[index], parents[index] = childColumn, parentColumn
+	}
+	if relationship.Kind == schema.RelationshipHasMany {
+		if len(children) == 1 {
+			keyType, ok := relationKeyType(children[0])
+			if !ok {
+				return nil, nil, "", false
+			}
+			return children, parents, keyType, true
+		}
+		return children, parents, "", true
 	}
 	if len(parents) == 1 {
 		if !columnsAreUnique(parent, relationship.ReferencedColumns) {
@@ -849,7 +859,11 @@ func relationshipSupportedForTable(table schema.TableDef, relationship schema.Re
 	if !ok {
 		return false
 	}
-	_, _, _, ok = relationshipSupported(table, parent, relationship)
+	if relationship.Kind == schema.RelationshipManyToMany {
+		_, _, _, ok = manyToManyColumnsSupported(table, parent, relationship, allTables)
+		return ok
+	}
+	_, _, _, ok = relationshipColumnsSupported(table, parent, relationship)
 	return ok
 }
 
@@ -1160,6 +1174,37 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef) []rel
 		}
 		childColumns, parentColumns, keyType, ok := relationshipColumnsSupported(table, parent, relationship)
 		if !ok {
+			continue
+		}
+		if relationship.Kind == schema.RelationshipHasMany {
+			method := goName(relationship.Name)
+			if !token.IsIdentifier(method) || reservedRelationshipMethod(method) {
+				continue
+			}
+			if _, exists := usedMethods[method]; exists {
+				continue
+			}
+			usedMethods[method] = struct{}{}
+			result = append(result, relationshipSpec{
+				kind:          relationship.Kind,
+				method:        method,
+				identity:      relationshipIdentity(table, relationship),
+				typeName:      tableTypeName(table.Name) + method + "Relation",
+				parent:        table,
+				child:         parent,
+				parentColumn:  childColumns[0],
+				childColumn:   parentColumns[0],
+				parentField:   goName(childColumns[0].Name),
+				childField:    goName(parentColumns[0].Name),
+				parentKeyType: keyType,
+				parentColumns: childColumns,
+				childColumns:  parentColumns,
+				parentFields:  columnFields(childColumns),
+				childFields:   columnFields(parentColumns),
+				keyName:       tableTypeName(table.Name) + method + "Key",
+				keyFields:     columnFields(childColumns),
+				keyColumns:    childColumns,
+			})
 			continue
 		}
 		parentColumn, childColumn := parentColumns[0], childColumns[0]
@@ -1785,7 +1830,11 @@ func writeScalarLoadThen(source *bytes.Buffer, relationship relationshipSpec) {
 	}
 	source.WriteString("if err != nil || next == nil { return loaded, err }; rows := make([]")
 	source.WriteString(targetType)
-	source.WriteString(", 0)\nfor _, source := range sources { key := r.SourceKey(source); if row, ok := loaded[key]; ok { rows = append(rows, row) } }; if err := next(rows); err != nil { return loaded, err }; return loaded, nil\n}\n\n")
+	source.WriteString(", 0)\n")
+	writeTargetSeenDeclaration(source, relationship)
+	source.WriteString("for _, source := range sources { key := r.SourceKey(source); if row, ok := loaded[key]; ok {")
+	writeTargetSeenCheck(source, relationship, "row")
+	source.WriteString(" rows = append(rows, row) } }; if err := next(rows); err != nil { return loaded, err }; return loaded, nil\n}\n\n")
 }
 
 func writeManyToManyRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) {
@@ -1874,36 +1923,85 @@ func writeLoadThen(source *bytes.Buffer, relationship relationshipSpec, key, par
 	source.WriteString(", error) {\n\tloaded, err := r.LoadWith(ctx, db, parents, options)\n\tif err != nil || next == nil { return loaded, err }\n\trows := make([]")
 	source.WriteString(child)
 	source.WriteString(", 0)\n")
-	if len(relationship.child.PrimaryKey) == 1 {
-		column, _ := relationship.child.Column(relationship.child.PrimaryKey[0])
-		source.WriteString("\tseen := make(map[")
-		source.WriteString(ColumnGoType(column))
-		source.WriteString("]struct{})\n")
-	} else if len(relationship.child.PrimaryKey) > 1 {
-		source.WriteString("\tseen := make(map[string]struct{})\n")
-	}
+	writeTargetSeenDeclaration(source, relationship)
 	source.WriteString("\tfor _, parent := range parents {\n\t\tkey := r.SourceKey(parent)")
 	source.WriteString("\n\t\tfor _, row := range loaded[key] {\n")
-	if len(relationship.child.PrimaryKey) == 1 {
-		source.WriteString("\t\t\tvalue := row.")
-		source.WriteString(goName(relationship.child.PrimaryKey[0]))
-		source.WriteString("\n\t\t\tif _, ok := seen[value]; ok { continue }\n\t\t\tseen[value] = struct{}{}\n")
-	} else if len(relationship.child.PrimaryKey) > 1 {
-		source.WriteString("\t\t\tvalue := fmt.Sprintf(\"")
-		for index := range relationship.child.PrimaryKey {
-			if index > 0 {
-				source.WriteString("|")
-			}
-			source.WriteString("%v")
-		}
-		source.WriteString("\"")
-		for _, columnName := range relationship.child.PrimaryKey {
-			source.WriteString(", row.")
-			source.WriteString(goName(columnName))
-		}
-		source.WriteString(")\n\t\t\tif _, ok := seen[value]; ok { continue }\n\t\t\tseen[value] = struct{}{}\n")
-	}
+	source.WriteString("\t\t\t")
+	writeTargetSeenCheck(source, relationship, "row")
+	source.WriteByte('\n')
 	source.WriteString("\t\t\trows = append(rows, row)\n\t\t}\n\t}\n\tif err := next(rows); err != nil { return loaded, err }\n\treturn loaded, nil\n}\n\n")
+}
+
+func writeTargetSeenDeclaration(source *bytes.Buffer, relationship relationshipSpec) {
+	if len(relationship.child.PrimaryKey) == 0 {
+		return
+	}
+	source.WriteString("seen := make(map[")
+	writeTargetPrimaryKeyType(source, relationship.child)
+	source.WriteString("]struct{})\n")
+}
+
+func writeTargetSeenCheck(source *bytes.Buffer, relationship relationshipSpec, row string) {
+	if len(relationship.child.PrimaryKey) == 0 {
+		return
+	}
+	source.WriteString("if _, ok := seen[")
+	writeTargetPrimaryKeyValue(source, relationship.child, row)
+	source.WriteString("]; ok { continue }; seen[")
+	writeTargetPrimaryKeyValue(source, relationship.child, row)
+	source.WriteString("] = struct{}{};")
+}
+
+func writeTargetPrimaryKeyType(source *bytes.Buffer, table schema.TableDef) {
+	if len(table.PrimaryKey) == 1 {
+		column, _ := table.Column(table.PrimaryKey[0])
+		source.WriteString(ColumnGoType(column))
+		return
+	}
+	source.WriteString("struct { ")
+	for index, name := range table.PrimaryKey {
+		if index > 0 {
+			source.WriteByte(' ')
+		}
+		column, _ := table.Column(name)
+		source.WriteString(goName(name))
+		source.WriteByte(' ')
+		source.WriteString(ColumnGoType(column))
+		source.WriteByte(';')
+	}
+	source.WriteString(" }")
+}
+
+func writeTargetPrimaryKeyValue(source *bytes.Buffer, table schema.TableDef, row string) {
+	if len(table.PrimaryKey) == 1 {
+		source.WriteString(row)
+		source.WriteByte('.')
+		source.WriteString(goName(table.PrimaryKey[0]))
+		return
+	}
+	source.WriteString("struct { ")
+	for index, name := range table.PrimaryKey {
+		if index > 0 {
+			source.WriteByte(' ')
+		}
+		column, _ := table.Column(name)
+		source.WriteString(goName(name))
+		source.WriteByte(' ')
+		source.WriteString(ColumnGoType(column))
+		source.WriteByte(';')
+	}
+	source.WriteString(" }{")
+	for index, name := range table.PrimaryKey {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(goName(name))
+		source.WriteString(": ")
+		source.WriteString(row)
+		source.WriteByte('.')
+		source.WriteString(goName(name))
+	}
+	source.WriteString("}")
 }
 
 func writeColumnRefs(source *bytes.Buffer, table schema.TableDef, columns []schema.ColumnDef) {
