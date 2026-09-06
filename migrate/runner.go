@@ -187,6 +187,9 @@ func (r Runner) applied(ctx context.Context, queries queryer) (map[string]string
 }
 
 func (r Runner) record(ctx context.Context, executions executor, migration preparedMigration) error {
+	if err := journalWriteHook("history"); err != nil {
+		return err
+	}
 	firstPlaceholder, err := r.dialect.Placeholder(1)
 	if err != nil {
 		return fmt.Errorf("migrate: render migration history insert: %w", err)

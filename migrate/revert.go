@@ -363,6 +363,9 @@ func revertCount(appliedInOrder []preparedMigration, target RevertTarget) (int, 
 
 // forget deletes one migration's history record.
 func (r Runner) forget(ctx context.Context, executions executor, id string) error {
+	if err := journalWriteHook("history"); err != nil {
+		return err
+	}
 	placeholder, err := r.dialect.Placeholder(1)
 	if err != nil {
 		return fmt.Errorf("migrate: render migration history delete: %w", err)

@@ -16,6 +16,11 @@ type progressEntry struct {
 	nextIndex   int
 }
 
+// journalWriteHook is a test seam for failures at journal boundaries. It is
+// deliberately limited to intent, checkpoint, history, and cleanup writes;
+// migration SQL always goes directly to the configured database.
+var journalWriteHook = func(string) error { return nil }
+
 func (r Runner) progressColumn(name string) string {
 	quoted, _ := r.dialect.QuoteIdentifier(name)
 	return quoted
@@ -157,6 +162,9 @@ func prioritizeProgress(selected, migrations []preparedMigration, id string) []p
 }
 
 func (r Runner) upsertProgress(ctx context.Context, connection executor, migration preparedMigration, direction Direction, index int) error {
+	if err := journalWriteHook("intent"); err != nil {
+		return err
+	}
 	first, err := r.dialect.Placeholder(1)
 	if err != nil {
 		return err
@@ -210,6 +218,9 @@ func progressStatements(migration preparedMigration, direction Direction) ([]Sta
 }
 
 func (r Runner) checkpointProgress(ctx context.Context, connection executor, migration preparedMigration, direction Direction, index int) error {
+	if err := journalWriteHook("checkpoint"); err != nil {
+		return err
+	}
 	entrySource := migrationSource(migration, direction, index)
 	first, err := r.dialect.Placeholder(1)
 	if err != nil {
@@ -231,6 +242,9 @@ func (r Runner) checkpointProgress(ctx context.Context, connection executor, mig
 }
 
 func (r Runner) deleteProgress(ctx context.Context, connection executor, id string) error {
+	if err := journalWriteHook("cleanup"); err != nil {
+		return err
+	}
 	placeholder, err := r.dialect.Placeholder(1)
 	if err != nil {
 		return err
