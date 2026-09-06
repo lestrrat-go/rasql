@@ -52,6 +52,7 @@ import (
  "testing"
  "github.com/lestrrat-go/rasql"
  "github.com/lestrrat-go/rasql/dialect"
+ "github.com/lestrrat-go/rasql/query"
  "example.com/types/v2"
  other "example.com/other/v2"
  "example.com/bindings/generated"
@@ -77,6 +78,9 @@ func TestBindingsRoundTrip(t *testing.T) {
  amountRows,err=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByAmount(types.NullableDecimal{})); if err!=nil { t.Fatal(err) }; if len(amountRows)!=1 || amountRows[0].Amount.Valid { t.Fatalf("NULL amount rows %#v",amountRows) }
  payloadRows,err:=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByPayload(want.Payload)); if err!=nil { t.Fatal(err) }; if len(payloadRows)!=1 || payloadRows[0].Payload!=want.Payload { t.Fatalf("payload rows %#v",payloadRows) }
  payloadRows,err=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByPayload(types.NullableJSON{})); if err!=nil { t.Fatal(err) }; if len(payloadRows)!=1 || payloadRows[0].Payload.Valid { t.Fatalf("NULL payload rows %#v",payloadRows) }
+ typedRows,err:=rasql.TypedSelectFrom(generated.Orders()).Where(query.EqualNullableValue(generated.Orders().Amount(),want.Amount)).All(ctx,db); if err!=nil { t.Fatal(err) }; if len(typedRows)!=1 || typedRows[0].Amount!=want.Amount { t.Fatalf("typed amount rows %#v",typedRows) }
+ typedNullRows,err:=rasql.TypedSelectFrom(generated.Orders()).Where(query.TypedIsNull(generated.Orders().Amount())).All(ctx,db); if err!=nil { t.Fatal(err) }; if len(typedNullRows)!=1 || typedNullRows[0].Amount.Valid { t.Fatalf("typed NULL amount rows %#v",typedNullRows) }
+ joined,err:=rasql.TypedSelectFrom(generated.Orders()).Join(query.TypedInnerJoin(generated.Users().Ref(),query.EqualColumns(generated.Orders().UserID(),generated.Users().ID()))).Where(query.EqualValue(generated.Orders().UserID(),types.UserID("u1"))).All(ctx,db); if err!=nil { t.Fatal(err) }; if len(joined)!=2 { t.Fatalf("typed join rows %#v",joined) }
  bytesRows,err:=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByBytes([]byte{1,2,3})); if err!=nil { t.Fatal(err) }; if len(bytesRows)!=1 || !bytes.Equal(bytesRows[0].RawBytes,want.RawBytes) { t.Fatalf("bytes rows %#v",bytesRows) }
  bytesRows,err=rasql.QueryRenderedAll[generated.OrdersRow](ctx,db,generated.OrderByBytes(nil)); if err!=nil { t.Fatal(err) }; if len(bytesRows)!=1 || bytesRows[0].RawBytes!=nil { t.Fatalf("NULL bytes rows %#v",bytesRows) }
  if err=rasql.CreateTable(ctx,db,generated.BadValues()); err!=nil { t.Fatal(err) }; if _,err=dbsql.ExecContext(ctx,"INSERT INTO bad_values (id,value) VALUES (?,?)",1,"bad"); err!=nil { t.Fatal(err) }; _,err=rasql.SelectFrom(generated.BadValues()).One(ctx,db); if err==nil || !strings.Contains(err.Error(), "NoScan") { t.Fatalf("want NoScan scan error, got %v",err) }
