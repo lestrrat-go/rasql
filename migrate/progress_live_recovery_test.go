@@ -20,7 +20,7 @@ func TestMySQLProgressJournalSeamApplyReconnectsAndReleasesLock(t *testing.T) {
 	history := dbtest.UniqueName(t, "p7_apply_seam_history")
 	first := dbtest.UniqueName(t, "p7_apply_seam_first")
 	second := dbtest.UniqueName(t, "p7_apply_seam_second")
-	migration := Migration{ID: "001_apply_seam", Statements: []Statement{
+	migration := Migration{ID: "001_apply_seam", Mode: ExecutionModeNonTransactional, Statements: []Statement{
 		{Source: "001_first.sql", SQL: sqltext.Text("CREATE TABLE " + first + " (id INT PRIMARY KEY)")},
 		{Source: "002_second.sql", SQL: sqltext.Text("CREATE TABLE " + second + " (id INT PRIMARY KEY)")},
 	}, Down: []Statement{
@@ -156,7 +156,7 @@ func liveTwoTableMigration(id, first, second string, failSecondDown bool) Migrat
 	if failSecondDown {
 		firstDown = "DROP TABLE " + first + "_absent"
 	}
-	return Migration{ID: id, Statements: []Statement{
+	return Migration{ID: id, Mode: ExecutionModeNonTransactional, Statements: []Statement{
 		{Source: "001_first.sql", SQL: sqltext.Text("CREATE TABLE " + first + " (id INT PRIMARY KEY)")},
 		{Source: "002_second.sql", SQL: sqltext.Text("CREATE TABLE " + second + " (id INT PRIMARY KEY)")},
 	}, Down: []Statement{

@@ -23,6 +23,7 @@ func TestMySQLCLIReconcileReadOnlyRejectsWritesAndExtraStatements(t *testing.T) 
 	require.NoError(t, os.WriteFile(filepath.Join(migrationDir, "002_failure.up.sql"), []byte("THIS IS INVALID SQL"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(migrationDir, "001_effect.down.sql"), []byte("DROP TABLE "+effect), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(migrationDir, "002_failure.down.sql"), []byte("DROP TABLE "+effect), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(migrationDir, ".rasql-mode"), []byte("nontransactional\n"), 0o644))
 	dsn := config.FormatDSN()
 	var output bytes.Buffer
 	require.Error(t, Run([]string{"apply", "-dir", migrationsRoot, "-dialect", "mysql", "-dsn", dsn}, &output, &output))

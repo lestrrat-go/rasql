@@ -107,7 +107,7 @@ func testMySQLApplyImplicitCommitDDL(t *testing.T) {
 	require.NoError(t, retryErr)
 	require.Len(t, completed, 1)
 	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_apply_ddl_object"))
-	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
+	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
 }
 
 func testMySQLRevertImplicitCommitDDL(t *testing.T) {
