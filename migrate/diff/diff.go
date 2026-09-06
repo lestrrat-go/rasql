@@ -498,6 +498,9 @@ func WriteMigration(directory string, p Plan) error {
 		sort.Strings(ids)
 		return fmt.Errorf("migrate diff: unresolved decisions: %s", strings.Join(ids, ", "))
 	}
+	if !p.Executable() {
+		return fmt.Errorf("migrate diff: plan is not executable")
+	}
 	parent := filepath.Dir(directory)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("migrate diff: create migration parent directory: %w", err)

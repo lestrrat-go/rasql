@@ -208,18 +208,8 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 }
 
 func sameTableDefinition(left, right tableDefinition) bool {
-	if !ast.Equal(left.statement, right.statement) || len(left.identities) != len(right.identities) || len(left.foreignKeys) != len(right.foreignKeys) {
+	if !ast.Equal(left.statement, right.statement) || !equalIdentityFacts(left.identities, right.identities) || !equalForeignKeyActions(left.foreignKeys, right.foreignKeys) {
 		return false
-	}
-	for key, mode := range left.identities {
-		if right.identities[key] != mode {
-			return false
-		}
-	}
-	for key, actions := range left.foreignKeys {
-		if right.foreignKeys[key] != actions {
-			return false
-		}
 	}
 	return true
 }
@@ -307,7 +297,7 @@ func (s *schemaSnapshot) addTable(source string, statement *pgquery.CreateTableS
 		}
 		columns[column.Name.Name] = struct{}{}
 	}
-	s.tables[key] = tableDefinition{source: source, statement: statement, identities: cloneIdentityModes(identities), foreignKeys: cloneForeignKeyActions(foreignKeys)}
+	s.tables[key] = cloneTableDefinition(tableDefinition{source: source, statement: statement, identities: identities, foreignKeys: foreignKeys})
 	return nil
 }
 
@@ -364,33 +354,17 @@ type generatedStatement struct {
 }
 
 func createTableStatement(table tableDefinition) (generatedStatement, error) {
-	copy := *table.statement
-	copy.IfNotExists = false
-	sql, err := serializeTable(table)
+	copy := cloneTableDefinition(table)
+	sql, err := renderCreateTable(copy)
 	if err != nil {
 		return generatedStatement{}, err
 	}
-	name := displayName(copy.Name)
+	name := displayName(copy.statement.Name)
 	return generatedStatement{
 		name: "create_table_" + filenamePart(name), sql: sql,
-		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
+		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.statement.Name)), summary: "create table " + name,
 		kind: diff.OperationCreateTable, table: name,
 	}, nil
-}
-
-func serializeTable(table tableDefinition) (string, error) {
-	copy := *table.statement
-	copy.IfNotExists = false
-	sql, err := serialize(&copy)
-	if err != nil {
-		return "", err
-	}
-	for column, mode := range table.identities {
-		name := strings.TrimPrefix(strings.SplitN(column, ":", 2)[1], "\"")
-		clause := " " + string(mode)
-		sql = strings.Replace(sql, name+" ", name+clause+" ", 1)
-	}
-	return sql, nil
 }
 
 func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStatement, error) {
