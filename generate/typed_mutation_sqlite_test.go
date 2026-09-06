@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
@@ -55,7 +56,8 @@ func TestGeneratedMutationPlansRejectForbiddenCompileCallers(t *testing.T) {
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
 			{Name: "required", Type: schema.TextType{}},
-			{Name: "optional", Type: schema.TextType{}, Nullable: true},
+			{Name: "label", Type: schema.TextType{}, Nullable: true, GoBinding: &schema.GoBinding{Type: "NullableString", NullableType: "NullableString"}},
+			{Name: "note", Type: schema.TextType{}, Nullable: true},
 			{Name: "computed", Type: schema.TextType{}, GeneratedExpression: "lower(required)", GeneratedStorage: schema.GeneratedVirtual},
 		},
 	}
@@ -74,6 +76,8 @@ func TestGeneratedMutationPlansRejectForbiddenCompileCallers(t *testing.T) {
 		source []byte
 	}{
 		{"wrong setter type", `generated.NewItemsCreate().Required(42)`, "cannot use", generated},
+		{"wrong nullable wrapper setter type", `generated.NewItemsCreate().Label("wrong")`, "cannot use", generated},
+		{"wrong nullable pointer setter type", `generated.NewItemsCreate().Note("wrong")`, "cannot use", generated},
 		{"nonnull clear", `generated.NewItemsCreate().ClearRequired()`, "ClearRequired", generated},
 		{"identity setter", `generated.NewItemsCreate().ID(1)`, "ID", generated},
 		{"generated setter", `generated.NewItemsCreate().Computed("x")`, "Computed", generated},
@@ -89,6 +93,7 @@ func TestGeneratedMutationPlansRejectForbiddenCompileCallers(t *testing.T) {
 			packageDir := filepath.Join(directory, "generated")
 			require.NoError(t, os.MkdirAll(packageDir, 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(packageDir, "generated.go"), test.source, 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(packageDir, "nullable.go"), []byte(nullableStringSource), 0o600))
 			consumer := "package invalidmutation_test\n\nimport (\n\t\"testing\"\n\t\"example.com/invalidmutation/generated\"\n)\n\nfunc TestInvalid(t *testing.T) { _ = " + test.call + " }\n"
 			require.NoError(t, os.WriteFile(filepath.Join(directory, "invalid_test.go"), []byte(consumer), 0o600))
 			command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
@@ -98,6 +103,46 @@ func TestGeneratedMutationPlansRejectForbiddenCompileCallers(t *testing.T) {
 			require.Contains(t, string(output), test.want)
 		})
 	}
+}
+
+func TestGeneratedMutationCallerBecomesStaleAfterColumnRename(t *testing.T) {
+	oldTable := schema.TableDef{
+		Name:       "items",
+		PrimaryKey: []string{"id"},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "required", Type: schema.TextType{}}},
+	}
+	newTable := oldTable.Clone()
+	newTable.Columns[1].Name = "renamed_required"
+	oldSource, err := generate.PackageSource("generated", oldTable)
+	require.NoError(t, err)
+	newSource, err := generate.PackageSource("generated", newTable)
+	require.NoError(t, err)
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	directory := t.TempDir()
+	module := "module example.com/renamedmutation\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+	packageDir := filepath.Join(directory, "generated")
+	require.NoError(t, os.MkdirAll(packageDir, 0o700))
+	caller := "package renamedmutation_test\n\nimport (\n\t\"testing\"\n\t\"example.com/renamedmutation/generated\"\n)\n\nfunc TestOldCaller(t *testing.T) { _ = generated.NewItemsCreate().Required(\"old\") }\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller_test.go"), []byte(caller), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "generated.go"), oldSource, 0o600))
+	command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "old generated caller output:\n%s", output)
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "generated.go"), newSource, 0o600))
+	command = exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.Error(t, err)
+	require.Contains(t, string(output), "Required")
+	corrected := strings.Replace(caller, ".Required(\"old\")", ".RenamedRequired(\"new\")", 1)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller_test.go"), []byte(corrected), 0o600))
+	command = exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "renamed generated caller output:\n%s", output)
 }
 
 const nullableStringSource = `package generated
@@ -193,6 +238,15 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	rightRow, err := rasql.QueryCreate(ctx, db, right.Plan())
 	if err != nil || rightRow.Count != 2 { t.Fatalf("right variant: %#v, %v", rightRow, err) }
 	if _, err := rasql.ExecCreate(ctx, db, generated.NewItemsCreate().Required("duplicate").Required("again").Plan()); err == nil { t.Fatal("duplicate setter unexpectedly succeeded") }
+
+	patchBase := generated.NewItemsPatch().Required("patch-base")
+	patchLeft, patchRight := patchBase.Count(1), patchBase.Count(2)
+	patchBaseRow, err := rasql.QueryPatchOne(ctx, db, patchPlan(t, patchBase, query.EqualValue(generated.Items().ID(), baseRow.ID)))
+	if err != nil || patchBaseRow.Count != 7 { t.Fatalf("patch base changed: %#v, %v", patchBaseRow, err) }
+	patchLeftRow, err := rasql.QueryPatchOne(ctx, db, patchPlan(t, patchLeft, query.EqualValue(generated.Items().ID(), leftRow.ID)))
+	if err != nil || patchLeftRow.Count != 1 { t.Fatalf("patch left variant: %#v, %v", patchLeftRow, err) }
+	patchRightRow, err := rasql.QueryPatchOne(ctx, db, patchPlan(t, patchRight, query.EqualValue(generated.Items().ID(), rightRow.ID)))
+	if err != nil || patchRightRow.Count != 2 { t.Fatalf("patch right variant: %#v, %v", patchRightRow, err) }
 
 	rows, err := rasql.QueryPatchAll(ctx, db, patchPlan(t, generated.NewItemsPatch().Enabled(true), query.GreaterValue(generated.Items().ID(), int64(0))))
 	if err != nil || len(rows) < 6 { t.Fatalf("patch all = %d rows, %v", len(rows), err) }
