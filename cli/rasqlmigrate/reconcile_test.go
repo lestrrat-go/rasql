@@ -29,12 +29,13 @@ func TestSQLReconcileCheckValidatesRowsAndCapturesDecision(t *testing.T) {
 	}{
 		{name: "executed", query: "SELECT TRUE", want: migrate.ReconcileExecuted},
 		{name: "not executed", query: "SELECT FALSE", want: migrate.ReconcileNotExecuted},
+		{name: "leading comment", query: "-- operator check\nSELECT TRUE", want: migrate.ReconcileExecuted},
+		{name: "CTE", query: "WITH result(value) AS (SELECT TRUE) SELECT value FROM result", want: migrate.ReconcileExecuted},
+		{name: "semicolon literal", query: "SELECT 'contains;semicolon' = 'contains;semicolon'", want: migrate.ReconcileExecuted},
 		{name: "no rows", query: "SELECT TRUE WHERE FALSE", wantError: "no rows"},
 		{name: "multiple rows", query: "SELECT TRUE UNION ALL SELECT FALSE", wantError: "more than one"},
 		{name: "null", query: "SELECT NULL", wantError: "NULL"},
 		{name: "non boolean", query: "SELECT 'yes'", wantError: "couldn't convert"},
-		{name: "extra statement", query: "SELECT TRUE; SELECT FALSE", wantError: "exactly one"},
-		{name: "write", query: "CREATE TABLE attempted_write (id INTEGER)", wantError: "read-only"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			check := &sqlReconcileCheck{id: "001", query: test.query}

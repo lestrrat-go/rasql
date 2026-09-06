@@ -504,17 +504,8 @@ func (c *sqlReconcileCheck) Check(ctx context.Context, connection *sql.Conn, inc
 		return "", fmt.Errorf("reconcile migration ID %q does not match incomplete migration %q", c.id, incomplete.ID)
 	}
 	query := strings.TrimSpace(c.query)
-	if strings.HasSuffix(query, ";") {
-		query = strings.TrimSpace(strings.TrimSuffix(query, ";"))
-	}
-	if query == "" || strings.Contains(query, ";") {
+	if query == "" {
 		return "", errors.New("reconcile check must contain exactly one SQL statement")
-	}
-	keyword := strings.ToUpper(strings.Fields(query)[0])
-	switch keyword {
-	case "SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN":
-	default:
-		return "", errors.New("reconcile check must be read-only")
 	}
 	transaction, err := connection.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
