@@ -191,3 +191,12 @@ live table with a desired schema.
 Inspection keeps native ENUM and SET labels and opaque SQLite declarations in `ColumnDef.NativeType`. Portable type
 classification remains available separately, so catalog consumers can choose faithful same-engine DDL or reject a
 cross-dialect operation explicitly.
+
+Native metadata is also carried into generated descriptors and remains available
+to runtime scanners and column valuers. Opaque columns generate `any` fields;
+applications bind concrete enum, set, domain, or array values through explicit
+`sql.Scanner` and `driver.Valuer` implementations. Same-dialect DDL preserves
+the inspected native identity, while a different dialect returns a typed
+unsupported-native error before it emits SQL. SQLite declarations are retained
+only after validation, so incomplete or unsafe declarations are never published
+as descriptors.

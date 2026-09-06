@@ -41,7 +41,8 @@ func (n NativeTypeDef) MarshalJSON() ([]byte, error) {
 	}
 	var arguments *[]string
 	if n.Arguments != nil {
-		copyOfArguments := append([]string(nil), n.Arguments...)
+		copyOfArguments := make([]string, len(n.Arguments))
+		copy(copyOfArguments, n.Arguments)
 		arguments = &copyOfArguments
 	}
 	return json.Marshal(nativeWire{Dialect: n.Dialect, Schema: n.Schema, Name: n.Name, Kind: n.Kind, Arguments: arguments, Element: n.Element})
@@ -108,7 +109,8 @@ func (n *NativeTypeDef) clone() *NativeTypeDef {
 	}
 	clone := *n
 	if n.Arguments != nil {
-		clone.Arguments = append([]string(nil), n.Arguments...)
+		clone.Arguments = make([]string, len(n.Arguments))
+		copy(clone.Arguments, n.Arguments)
 	}
 	clone.Element = n.Element.clone()
 	return &clone

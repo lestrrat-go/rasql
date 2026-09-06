@@ -33,3 +33,35 @@ func TestCreateTableRendersNativeTypesOnlyOnTheirDialect(t *testing.T) {
 	_, err = render.CreateTable(dialect.SQLite(), mySQLTable)
 	require.True(t, errors.As(err, &unsupported))
 }
+
+func TestCreateTableNativeRendererMatrix(t *testing.T) {
+	tests := []struct {
+		name    string
+		dialect dialect.Dialect
+		native  *schema.NativeTypeDef
+		want    string
+	}{
+		{"postgres domain", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "amount_domain", Kind: schema.NativeDomain}, `CREATE TABLE "events" ("value" "app"."amount_domain" NOT NULL)`},
+		{"postgres array", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum}}, `CREATE TABLE "events" ("value" "app"."mood"[] NOT NULL)`},
+		{"mysql escaping", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "mysql", Name: "choice", Kind: schema.NativeEnum, Arguments: []string{"a\\b", "quote's"}}, "CREATE TABLE `events` (`value` ENUM('a\\\\b', 'quote''s') NOT NULL)"},
+		{"sqlite declaration", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR(12)", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" VARCHAR(12) NOT NULL)`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statement, err := render.CreateTable(test.dialect, schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: test.native}}})
+			require.NoError(t, err)
+			require.Equal(t, test.want, statement.SQL())
+		})
+	}
+}
+
+func TestCreateTableRejectsInvalidNativeIdentityBeforeSQL(t *testing.T) {
+	native := &schema.NativeTypeDef{Dialect: "sqlite", Name: "TEXT; DROP TABLE users", Kind: schema.NativeOther}
+	_, err := render.CreateTable(dialect.SQLite(), schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: native}}})
+	var unsupported *render.ErrUnsupportedNativeType
+	require.ErrorAs(t, err, &unsupported)
+	require.Equal(t, "sqlite", unsupported.Dialect)
+	require.Equal(t, "events", unsupported.Table)
+	require.Equal(t, "value", unsupported.Column)
+	require.Equal(t, *native, unsupported.Native)
+}

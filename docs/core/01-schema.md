@@ -743,6 +743,12 @@ For PostgreSQL and SQLite, `Table` never returns a descriptor silently missing c
 
 ## Next
 
+`NativeType` carries complete server identity when portable `Type` loses information. PostgreSQL domains, enums, arrays,
+JSON versus JSONB, numeric variants, and time variants retain their catalog names. MySQL ENUM and SET retain ordered
+labels, including escaped values. SQLite retains validated declarations when affinity mapping would lose their spelling.
+`OpaqueType` generates `any`; callers provide explicit `sql.Scanner` and `driver.Valuer` wrappers for concrete values.
+Generated descriptors preserve nested native metadata, including a distinction between nil and empty `Arguments`.
+
 [Querying](../02-querying.md) reads rows through these descriptors, or [Writing rows](../orm/04-writing.md) puts rows into them.
 # Native column identities
 

@@ -5,12 +5,26 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	pgdiff "github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/migrate/diff/sqlite"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+func TestLiveSourcesPreservesSQLiteNativeTypeAndRejectsForeignType(t *testing.T) {
+	native := &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR(12)", Kind: schema.NativeOther}
+	desired := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.TextType{}, NativeType: native}}}
+	sources, err := sqlite.New().LiveSources(desired)
+	require.NoError(t, err)
+	require.Contains(t, string(sources[0].SQL), "VARCHAR(12)")
+	_, err = pgdiff.New().LiveSources(desired)
+	var unsupported *render.ErrUnsupportedNativeType
+	require.ErrorAs(t, err, &unsupported)
+	require.Equal(t, *native, unsupported.Native)
+}
 
 // TestLiveSourcesRejectsStrictTable proves that an inspected table carrying
 // Strict does not reach diff-live's generated desired-schema sources as a

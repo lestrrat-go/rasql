@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
+	mysqldiff "github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/stretchr/testify/require"
@@ -24,6 +26,18 @@ func TestDiffLiveMatchesInlinePrimaryKey(t *testing.T) {
 	plan, err := analyzer.Diff(baseline, live)
 	require.NoError(t, err)
 	require.Empty(t, plan.Statements)
+}
+
+func TestLiveSourcesPreservesNativeTypeAndRejectsCrossDialect(t *testing.T) {
+	native := &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum}
+	desired := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "mood", Type: schema.OpaqueType{}, NativeType: native}}}
+	sources, err := postgresql.New().LiveSources(desired)
+	require.NoError(t, err)
+	require.Contains(t, string(sources[0].SQL), `"app"."mood"`)
+	_, err = mysqldiff.New().LiveSources(desired)
+	var unsupported *render.ErrUnsupportedNativeType
+	require.ErrorAs(t, err, &unsupported)
+	require.Equal(t, *native, unsupported.Native)
 }
 
 // TestLiveSourcesRejectsGeneratedColumn proves that an inspected
