@@ -1205,12 +1205,19 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 		usedMethods[method] = struct{}{}
 		parentType, childType := tableTypeName(table.Name), tableTypeName(candidate.child.Name)
 		parentRow, childRow := rowTypeName(table), rowTypeName(candidate.child)
+		parentField, childField := goName(candidate.parentColumn.Name), goName(candidate.childColumn.Name)
 		if len(names) > 0 {
 			if resolved, ok := names[0].Object(table); ok {
 				parentType, parentRow = resolved.TableType, resolved.RowType
 			}
 			if resolved, ok := names[0].Object(candidate.child); ok {
 				childType, childRow = resolved.TableType, resolved.RowType
+			}
+			if resolved, ok := names[0].Column(table, candidate.parentColumn.Name); ok {
+				parentField = resolved.Accessor
+			}
+			if resolved, ok := names[0].Column(candidate.child, candidate.childColumn.Name); ok {
+				childField = resolved.Accessor
 			}
 		}
 		result = append(result, relationshipSpec{
@@ -1221,8 +1228,8 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 			child:         candidate.child,
 			parentColumn:  candidate.parentColumn,
 			childColumn:   candidate.childColumn,
-			parentField:   goName(candidate.parentColumn.Name),
-			childField:    goName(candidate.childColumn.Name),
+			parentField:   parentField,
+			childField:    childField,
 			parentKeyType: candidate.keyType,
 			parentType:    parentType, childType: childType, parentRow: parentRow, childRow: childRow,
 		})
