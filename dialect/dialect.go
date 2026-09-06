@@ -68,6 +68,13 @@ const (
 	CapabilityMatchOperator
 	// CapabilityAggregateFilter reports support for aggregate FILTER (WHERE ...).
 	CapabilityAggregateFilter
+	CapabilitySelectForUpdate
+	CapabilitySelectForShare
+	CapabilitySelectLockOf
+	CapabilitySelectLockNoWait
+	CapabilitySelectLockSkipLocked
+	CapabilityUpsertConflictWhere
+	CapabilityUpsertUpdateWhere
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -121,7 +128,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex | CapabilityAggregateFilter,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex | CapabilityAggregateFilter | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere,
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
@@ -151,7 +158,7 @@ func MySQL() Dialect {
 		quote:        '`',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertDuplicateKey,
-		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget,
+		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked,
 		decimalName:  "DECIMAL",
 		maxPrecision: 65,
 		maxScale:     30,
@@ -185,7 +192,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator | CapabilityAggregateFilter,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator | CapabilityAggregateFilter | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere,
 		decimalName:  "TEXT",
 		// varcharText is left false: SQLite already drops schema.DecimalType's
 		// Precision and Scale for the same reason (see decimalTypeName below),

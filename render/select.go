@@ -20,6 +20,19 @@ type Error struct {
 	Err     error
 }
 
+var ErrUnsupportedSelectLock = errors.New("render: unsupported SELECT row lock")
+
+type UnsupportedSelectLockError struct {
+	Dialect string
+	Clause  string
+}
+
+func (e *UnsupportedSelectLockError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express SELECT %s", e.Dialect, e.Clause)
+}
+
+func (e *UnsupportedSelectLockError) Unwrap() error { return ErrUnsupportedSelectLock }
+
 func (e *Error) Error() string {
 	if e.Dialect == "" {
 		return fmt.Sprintf("render: %s", e.Err)
@@ -215,6 +228,71 @@ func (r *renderer) writeSelect(s query.Select) error {
 		if err := r.writeArgument(offset); err != nil {
 			return err
 		}
+	}
+	if lock, ok := s.Lock(); ok {
+		if err := r.writeLock(lock); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *renderer) writeLock(lock query.Lock) error {
+	strength := lock.Strength()
+	baseCapability := dialect.CapabilitySelectForUpdate
+	clause := "FOR UPDATE"
+	switch strength {
+	case query.LockNoKeyUpdate:
+		if r.dialect.Name() != "postgresql" {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR NO KEY UPDATE"}
+		}
+		clause = "FOR NO KEY UPDATE"
+	case query.LockShare:
+		baseCapability = dialect.CapabilitySelectForShare
+		clause = "FOR SHARE"
+	case query.LockKeyShare:
+		if r.dialect.Name() != "postgresql" {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR KEY SHARE"}
+		}
+		baseCapability = dialect.CapabilitySelectForShare
+		clause = "FOR KEY SHARE"
+	}
+	if !r.dialect.Supports(baseCapability) {
+		return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: clause}
+	}
+	if len(lock.Tables()) > 0 && !r.dialect.Supports(dialect.CapabilitySelectLockOf) {
+		return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... OF"}
+	}
+	switch lock.WaitMode() {
+	case query.LockWaitNoWait:
+		if !r.dialect.Supports(dialect.CapabilitySelectLockNoWait) {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... NOWAIT"}
+		}
+	case query.LockWaitSkipLocked:
+		if !r.dialect.Supports(dialect.CapabilitySelectLockSkipLocked) {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... SKIP LOCKED"}
+		}
+	}
+	r.builder.WriteByte(' ')
+	r.builder.WriteString(clause)
+	if tables := lock.Tables(); len(tables) > 0 {
+		r.builder.WriteString(" OF ")
+		for i, table := range tables {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			name, err := r.quoteIdentifier(table.Qualifier())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(name)
+		}
+	}
+	switch lock.WaitMode() {
+	case query.LockWaitNoWait:
+		r.builder.WriteString(" NOWAIT")
+	case query.LockWaitSkipLocked:
+		r.builder.WriteString(" SKIP LOCKED")
 	}
 	return nil
 }

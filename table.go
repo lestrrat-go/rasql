@@ -166,14 +166,24 @@ type Over = query.Over
 type Identifier = query.Identifier
 type FragmentPart = query.FragmentPart
 type TrustedFragment = query.TrustedFragment
+type LockStrength = query.LockStrength
+type LockWait = query.LockWait
+type Lock = query.Lock
 
 const (
-	OperatorAdd      = query.OperatorAdd
-	OperatorSubtract = query.OperatorSubtract
-	OperatorMultiply = query.OperatorMultiply
-	OperatorDivide   = query.OperatorDivide
-	OperatorModulo   = query.OperatorModulo
-	WindowRows       = query.WindowRows
+	OperatorAdd        = query.OperatorAdd
+	OperatorSubtract   = query.OperatorSubtract
+	OperatorMultiply   = query.OperatorMultiply
+	OperatorDivide     = query.OperatorDivide
+	OperatorModulo     = query.OperatorModulo
+	WindowRows         = query.WindowRows
+	LockUpdate         = query.LockUpdate
+	LockNoKeyUpdate    = query.LockNoKeyUpdate
+	LockShare          = query.LockShare
+	LockKeyShare       = query.LockKeyShare
+	LockWaitDefault    = query.LockWaitDefault
+	LockWaitNoWait     = query.LockWaitNoWait
+	LockWaitSkipLocked = query.LockWaitSkipLocked
 )
 
 // Equal compares left and right for equality. It is query.Equal under a name
@@ -212,6 +222,7 @@ func IdentifierHole(identifier query.Identifier) query.FragmentPart {
 func TrustedSQL(sql string, parts ...query.FragmentPart) query.TrustedFragment {
 	return query.TrustedSQL(sql, parts...)
 }
+func RowLock(strength query.LockStrength) query.Lock { return query.RowLock(strength) }
 
 // ColumnOf returns the named column of table. It returns the zero ColumnRef only
 // when table has no typed table behind it, so a wrapper that never reached a
