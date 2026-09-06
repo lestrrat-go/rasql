@@ -60,7 +60,7 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		indexes: make(map[string]indexDefinition),
 	}
 	for _, source := range sources {
-		normalizedSource, err := stripIdentityClauses(string(source.SQL))
+		normalizedSource, facts, err := scanPostgreSQLClauses(string(source.SQL))
 		if err != nil {
 			return nil, fmt.Errorf("postgresql schema source %q: %w", source.Path, err)
 		}
@@ -71,7 +71,11 @@ func (Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		for index, statement := range parsed.Statements {
 			switch statement := statement.(type) {
 			case *pgquery.CreateTableStatement:
-				if err := snapshot.addTable(source.Path, statement); err != nil {
+				identities := make(map[string]identityMode)
+				for key, mode := range facts.identities {
+					identities[key.column] = mode
+				}
+				if err := snapshot.addTable(source.Path, statement, identities, facts.foreignKeys); err != nil {
 					return nil, err
 				}
 			case *pgquery.CreateIndexStatement:
@@ -109,14 +113,14 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	comparison := diff.CompareSchemas(
 		diff.Schema[tableDefinition, indexDefinition]{Tables: baseline.tables, Indexes: baseline.indexes},
 		diff.Schema[tableDefinition, indexDefinition]{Tables: target.tables, Indexes: target.indexes},
-		func(left, right tableDefinition) bool { return ast.Equal(left.statement, right.statement) },
+		func(left, right tableDefinition) bool { return sameTableDefinition(left, right) },
 		func(left, right indexDefinition) bool { return sameIndex(left.statement, right.statement) },
 	)
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
 	decisions := make([]diff.RequiredDecision, 0)
 	for _, entry := range comparison.Tables.Added {
-		statement, err := createTableStatement(entry.Value.statement)
+		statement, err := createTableStatement(entry.Value)
 		if err != nil {
 			return diff.Plan{}, err
 		}
@@ -187,6 +191,23 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	return plan, nil
 }
 
+func sameTableDefinition(left, right tableDefinition) bool {
+	if !ast.Equal(left.statement, right.statement) || len(left.identities) != len(right.identities) || len(left.foreignKeys) != len(right.foreignKeys) {
+		return false
+	}
+	for key, mode := range left.identities {
+		if right.identities[key] != mode {
+			return false
+		}
+	}
+	for key, actions := range left.foreignKeys {
+		if right.foreignKeys[key] != actions {
+			return false
+		}
+	}
+	return true
+}
+
 func operationsFromGenerated(dialect string, generated []generatedStatement) []diff.ProposedOperation {
 	operations := make([]diff.ProposedOperation, 0, len(generated))
 	for _, statement := range generated {
@@ -208,11 +229,13 @@ func (*schemaSnapshot) Dialect() string {
 }
 
 type tableDefinition struct {
-	source    string
-	statement *pgquery.CreateTableStatement
+	source      string
+	statement   *pgquery.CreateTableStatement
+	identities  map[string]identityMode
+	foreignKeys map[foreignKeyKey]foreignKeyActions
 }
 
-func (s *schemaSnapshot) addTable(source string, statement *pgquery.CreateTableStatement) error {
+func (s *schemaSnapshot) addTable(source string, statement *pgquery.CreateTableStatement, identities map[string]identityMode, foreignKeys map[foreignKeyKey]foreignKeyActions) error {
 	key := qualifiedNameKey(statement.Name)
 	if previous, exists := s.tables[key]; exists {
 		return fmt.Errorf("postgresql schema source %q defines table %s already defined by %q", source, displayName(statement.Name), previous.source)
@@ -224,8 +247,23 @@ func (s *schemaSnapshot) addTable(source string, statement *pgquery.CreateTableS
 		}
 		columns[column.Name.Name] = struct{}{}
 	}
-	s.tables[key] = tableDefinition{source: source, statement: statement}
+	s.tables[key] = tableDefinition{source: source, statement: statement, identities: cloneIdentityModes(identities), foreignKeys: cloneForeignKeyActions(foreignKeys)}
 	return nil
+}
+
+func cloneIdentityModes(in map[string]identityMode) map[string]identityMode {
+	out := make(map[string]identityMode, len(in))
+	for key, mode := range in {
+		out[key] = mode
+	}
+	return out
+}
+func cloneForeignKeyActions(in map[foreignKeyKey]foreignKeyActions) map[foreignKeyKey]foreignKeyActions {
+	out := make(map[foreignKeyKey]foreignKeyActions, len(in))
+	for key, actions := range in {
+		out[key] = actions
+	}
+	return out
 }
 
 type indexDefinition struct {
@@ -265,10 +303,10 @@ type generatedStatement struct {
 	constraint string
 }
 
-func createTableStatement(table *pgquery.CreateTableStatement) (generatedStatement, error) {
-	copy := *table
+func createTableStatement(table tableDefinition) (generatedStatement, error) {
+	copy := *table.statement
 	copy.IfNotExists = false
-	sql, err := serialize(&copy)
+	sql, err := serializeTable(table)
 	if err != nil {
 		return generatedStatement{}, err
 	}
@@ -278,6 +316,21 @@ func createTableStatement(table *pgquery.CreateTableStatement) (generatedStateme
 		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
 		kind: diff.OperationCreateTable, table: name,
 	}, nil
+}
+
+func serializeTable(table tableDefinition) (string, error) {
+	copy := *table.statement
+	copy.IfNotExists = false
+	sql, err := serialize(&copy)
+	if err != nil {
+		return "", err
+	}
+	for column, mode := range table.identities {
+		name := strings.TrimPrefix(strings.SplitN(column, ":", 2)[1], "\"")
+		clause := " " + string(mode)
+		sql = strings.Replace(sql, name+" ", name+clause+" ", 1)
+	}
+	return sql, nil
 }
 
 func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStatement, error) {
