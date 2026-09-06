@@ -15,7 +15,7 @@ import (
 )
 
 func TestLiveSourcesPreservesSQLiteNativeTypeAndRejectsForeignType(t *testing.T) {
-	native := &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR(12)", Kind: schema.NativeOther}
+	native := &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}
 	desired := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.TextType{}, NativeType: native}}}
 	sources, err := sqlite.New().LiveSources(desired)
 	require.NoError(t, err)
