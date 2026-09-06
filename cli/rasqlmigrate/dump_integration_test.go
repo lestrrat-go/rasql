@@ -17,9 +17,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	gomysql "github.com/go-sql-driver/mysql"
@@ -37,12 +37,13 @@ import (
 func runPostgreSQLDumpCommand(t *testing.T, outputDirectory string) error {
 	t.Helper()
 	config := dbtest.PostgreSQLConfig(t).Copy()
-	dsn := config.ConnString()
-	separator := "?"
-	if strings.Contains(dsn, "?") {
-		separator = "&"
-	}
-	dsn += separator + "options=-c%20search_path%3Dpublic"
+	parsed, err := url.Parse(config.ConnString())
+	require.NoError(t, err)
+	parsed.Path = "/" + config.Database
+	query := parsed.Query()
+	query.Set("options", "-c search_path=public")
+	parsed.RawQuery = query.Encode()
+	dsn := parsed.String()
 	return runDump([]string{"-dialect", "postgresql", "-dsn", dsn, "-table", "sequence_cases", "-format", "schema", "-output", outputDirectory})
 }
 
