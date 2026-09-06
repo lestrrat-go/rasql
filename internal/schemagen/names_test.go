@@ -29,6 +29,16 @@ func TestResolveNamesUsesPhysicalIdentityAndClonesOverrides(t *testing.T) {
 	require.Equal(t, "AuditCustomer", audit.Accessor)
 	_, ok = names.Object(schema.TableDef{Name: "customer-id"})
 	require.False(t, ok)
+	dot := schema.MustTableDef("literal.dot", schema.Text("Case"), schema.Text("case"))
+	dot.Schema = "Main"
+	resolved, err := ResolveNames("generated", []schema.TableDef{dot}, NameOverrides{Objects: map[schema.ObjectName]ObjectNameOverrides{{Schema: "Main", Name: "literal.dot"}: {Accessor: "LiteralDot", Columns: map[string]ColumnNameOverrides{"Case": {Field: "UpperCase", Accessor: "UpperCaseColumn"}, "case": {Field: "LowerCase", Accessor: "LowerCaseColumn"}}}}})
+	require.NoError(t, err)
+	_, ok = resolved.Object(schema.TableDef{Schema: "main", Name: "literal.dot"})
+	require.False(t, ok)
+	_, ok = resolved.Column(dot, "Case")
+	require.True(t, ok)
+	_, ok = resolved.Column(dot, "case")
+	require.True(t, ok)
 }
 
 func TestResolveNamesRejectsUnknownPhysicalColumn(t *testing.T) {

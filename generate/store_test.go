@@ -1,6 +1,8 @@
 package generate_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +14,22 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStoreDefaultOutputCompatibilityGolden(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{Package: "store", Root: root, Dir: "generated", Tables: []schema.TableDef{usersTableDef(), ordersTableDef()}}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	want := map[string]string{"orders_gen.go": "f51b929fb4f986432e3b0e84d389bb576bda95db6ce801421161a13d453047e7", "schema_gen.go": "6c87d0702fc3583b0824cb24cead2ced5dc3a6d1332a0487f5e8a3667f25976e", "schema_gen_test.go": "4acabb011ee498d48d018933c3c54fde7c9009c626bdd5ead9fedc75c1f1d353", "users_gen.go": "cf120251c1666ce303f62aa385dbd995bffc0d0a76272fd16796b161b4a578ba"}
+	for _, file := range plan.Files() {
+		name := filepath.Base(file.Path)
+		require.Equal(t, filepath.Join(root, "generated", name), file.Path)
+		hash := sha256.Sum256(file.Source)
+		got := hex.EncodeToString(hash[:])
+		require.Contains(t, want, name)
+		require.Equal(t, want[name], got, name)
+	}
+}
 
 // snapshotDir reads every regular file directly in dir into a name->content
 // map, for a before/after comparison that proves a call touched nothing.
