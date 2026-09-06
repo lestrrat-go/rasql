@@ -120,6 +120,30 @@ flags take comma-separated names.
 
 ## Next
 
+Applications that generate from a `schema.TableDef` can set a column's
+`GoBinding` to choose a named Go type, its nullable form, and the imports used
+by those expressions. The same binding is emitted into descriptor, row, and
+column-typed static query code. Custom types keep database/sql behavior by
+implementing `sql.Scanner` for reads and `driver.Valuer` for writes.
+
+<!-- INCLUDE(examples/rasqlgen_binding_example_test.go#binding) -->
+```go
+users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{
+	Name: "id", Type: schema.TextType{}, GoBinding: &schema.GoBinding{
+		Type: "UserID", NullableType: "NullableUserID",
+	}, Nullable: true,
+}}}
+source, err := generate.PackageSource("store", users)
+if err != nil {
+	fmt.Println(err)
+	return
+}
+fmt.Println(strings.Contains(string(source), "ID NullableUserID"))
+fmt.Println(strings.Contains(string(source), "NullableUserID"))
+```
+source: [examples/rasqlgen_binding_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_binding_example_test.go)
+<!-- END INCLUDE -->
+
 [The generated store](02-generated-store.md) says what the command writes and
 what each generated member is for. [Typed queries](03-typed-queries.md) reads
 rows through the generated table.

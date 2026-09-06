@@ -15,6 +15,19 @@ import (
 // check can use errors.Is instead of errors.As.
 var ErrSubqueryReadsWriteTarget = errors.New("render: a write statement's subquery reads the target table")
 
+var ErrUnsupportedUpsertPredicate = errors.New("render: unsupported upsert predicate")
+
+type UnsupportedUpsertPredicateError struct {
+	Dialect   string
+	Predicate string
+}
+
+func (e *UnsupportedUpsertPredicateError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express an upsert %s predicate", e.Dialect, e.Predicate)
+}
+
+func (e *UnsupportedUpsertPredicateError) Unwrap() error { return ErrUnsupportedUpsertPredicate }
+
 // SubqueryReadsWriteTargetError reports that a subquery in a DELETE or an
 // UPDATE reads the table the statement writes to, on a dialect that has not
 // been granted [dialect.CapabilityWriteSubqueryTarget].
@@ -82,18 +95,42 @@ func Write(d dialect.Dialect, s query.WriteStatement) (stmt.Statement, error) {
 	switch s := s.(type) {
 	case query.Insert:
 		return Insert(d, s)
+	case *query.Insert:
+		if s == nil {
+			return nilWriteStatementError()
+		}
+		return Insert(d, *s)
 	case query.Update:
 		return Update(d, s)
+	case *query.Update:
+		if s == nil {
+			return nilWriteStatementError()
+		}
+		return Update(d, *s)
 	case query.Delete:
 		return Delete(d, s)
+	case *query.Delete:
+		if s == nil {
+			return nilWriteStatementError()
+		}
+		return Delete(d, *s)
 	case query.Upsert:
 		return Upsert(d, s)
+	case *query.Upsert:
+		if s == nil {
+			return nilWriteStatementError()
+		}
+		return Upsert(d, *s)
 	default:
 		if s == nil {
-			return stmt.Statement{}, &Error{Err: fmt.Errorf("write statement must not be nil")}
+			return nilWriteStatementError()
 		}
 		return stmt.Statement{}, &Error{Err: fmt.Errorf("unsupported write statement %T", s)}
 	}
+}
+
+func nilWriteStatementError() (stmt.Statement, error) {
+	return stmt.Statement{}, &Error{Err: errors.New("write statement must not be nil")}
 }
 
 func (r *renderer) writeInsert(s query.Insert) error {
@@ -175,6 +212,12 @@ func (r *renderer) writeUpsert(s query.Upsert) error {
 		return fmt.Errorf("upsert is not supported")
 	}
 	defaultValuesRejected := s.Insert().UsesDefaultValues() && !r.dialect.Supports(dialect.CapabilityDefaultValuesUpsert)
+	if s.ConflictWhere() != nil && !r.dialect.Supports(dialect.CapabilityUpsertConflictWhere) {
+		return &UnsupportedUpsertPredicateError{Dialect: r.dialect.Name(), Predicate: "conflict-target"}
+	}
+	if s.UpdateWhere() != nil && !r.dialect.Supports(dialect.CapabilityUpsertUpdateWhere) {
+		return &UnsupportedUpsertPredicateError{Dialect: r.dialect.Name(), Predicate: "update"}
+	}
 	if len(s.ConflictColumns()) > 0 && !r.dialect.Supports(dialect.CapabilityConflictTarget) {
 		// This check runs before the default-values check and the style switch on
 		// purpose: an explicit conflict target is unusable on this dialect for any
@@ -220,6 +263,12 @@ func (r *renderer) writeUpsert(s query.Upsert) error {
 				r.builder.WriteString(name)
 			}
 			r.builder.WriteByte(')')
+			if predicate := s.ConflictWhere(); predicate != nil {
+				r.builder.WriteString(" WHERE ")
+				if err := r.writeExpression(predicate); err != nil {
+					return err
+				}
+			}
 		}
 		if len(assignments) == 0 {
 			r.builder.WriteString(" DO NOTHING")
@@ -227,6 +276,16 @@ func (r *renderer) writeUpsert(s query.Upsert) error {
 			r.builder.WriteString(" DO UPDATE SET ")
 			if err := r.writeUpsertAssignments(assignments, style); err != nil {
 				return err
+			}
+			if predicate := s.UpdateWhere(); predicate != nil {
+				r.builder.WriteString(" WHERE ")
+				r.inExcluded = true
+				r.excludedStyle = style
+				if err := r.writeExpression(predicate); err != nil {
+					r.inExcluded = false
+					return err
+				}
+				r.inExcluded = false
 			}
 		}
 	case dialect.UpsertDuplicateKey:

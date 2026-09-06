@@ -282,7 +282,10 @@ const (
 // The first relationship slice supports belongs-to relationships. The column
 // lists are copied by Table.Relationships, so callers may inspect them safely.
 type RelationshipDef struct {
-	Name              string
+	Name string
+	// InverseName overrides the generated method name on the referenced table.
+	// Empty lets the generator derive an unambiguous name. It does not affect DDL.
+	InverseName       string `json:",omitempty"`
 	Kind              RelationshipKind
 	Columns           []string
 	ReferencedSchema  string

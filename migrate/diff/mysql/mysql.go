@@ -13,6 +13,7 @@ import (
 	mysqlquery "github.com/lestrrat-go/rasql-mysql/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
+	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -130,15 +131,28 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	added := make([]diff.SchemaEntry[tableDefinition], 0, len(target.tables))
+	for _, key := range sortedTableKeys(target.tables) {
+		if _, exists := baseline.tables[key]; !exists {
+			added = append(added, diff.SchemaEntry[tableDefinition]{Key: key, Value: target.tables[key]})
+		}
+	}
+	addedOrder, err := orderAddedTables(added, a.lowerCaseTableNames)
+	if err != nil {
+		return diff.Plan{}, fmt.Errorf("mysql schema diff requires manual migration: %w", err)
+	}
+	for _, key := range addedOrder {
+		targetTable := target.tables[key]
+		statement, err := createTableStatement(targetTable.statement)
+		if err != nil {
+			return diff.Plan{}, err
+		}
+		generated = append(generated, statement)
+	}
 	for _, key := range sortedTableKeys(target.tables) {
 		targetTable := target.tables[key]
 		baselineTable, exists := baseline.tables[key]
 		if !exists {
-			statement, err := createTableStatement(targetTable.statement)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
 			continue
 		}
 		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement, a.lowerCaseTableNames)
@@ -181,20 +195,40 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 	plan := diff.Plan{Dialect: "mysql", Statements: make([]diff.PlannedStatement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
-			Source:  statement.name + ".sql",
-			SQL:     statement.sql,
-			Summary: statement.summary,
+			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
 		}
 	}
 	if len(plan.Statements) > 0 {
 		if err := plan.Validate(); err != nil {
 			return diff.Plan{}, err
 		}
-		for index := range plan.Statements {
-			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
+		diff.NumberSources(plan.Statements)
+		if err := plan.Validate(); err != nil {
+			return diff.Plan{}, err
 		}
 	}
 	return plan, nil
+}
+
+func orderAddedTables(entries []diff.SchemaEntry[tableDefinition], tableNames LowerCaseTableNames) ([]string, error) {
+	dependencies := make([]migrationorder.TableDependency, len(entries))
+	for index, entry := range entries {
+		statement := entry.Value.statement
+		dependencies[index] = migrationorder.TableDependency{Key: entry.Key, Display: displayName(statement.Name)}
+		for _, constraint := range statement.Constraints {
+			if constraint.References != nil {
+				dependencies[index].DependsOn = append(dependencies[index].DependsOn, tableNameKey(constraint.References.Table, tableNames))
+			}
+		}
+		for _, column := range statement.Columns {
+			for _, constraint := range column.Constraints {
+				if constraint.References != nil {
+					dependencies[index].DependsOn = append(dependencies[index].DependsOn, tableNameKey(constraint.References.Table, tableNames))
+				}
+			}
+		}
+	}
+	return migrationorder.OrderTables(dependencies)
 }
 
 type schemaSnapshot struct {
@@ -253,9 +287,10 @@ func (s *schemaSnapshot) addIndex(source string, statement *mysqlquery.CreateInd
 }
 
 type generatedStatement struct {
-	name    string
-	sql     string
-	summary string
+	name       string
+	sql        string
+	reverseSQL string
+	summary    string
 }
 
 const (
@@ -274,9 +309,8 @@ func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStat
 	// WriteMigration prefixes each generated statement with its sequence position, so equal normalized
 	// components remain distinct in the public migration output; this is covered by its ordered plan.
 	return generatedStatement{
-		name:    "create_table_" + filenamePart(name),
-		sql:     sql,
-		summary: "create table " + name,
+		name: "create_table_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
 	}, nil
 }
 
@@ -289,9 +323,8 @@ func createIndexStatement(index *mysqlquery.CreateIndexStatement) (generatedStat
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name),
-		sql:     sql,
-		summary: "create index " + name,
+		name: "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP INDEX %s ON %s;\n", reverseName(copy.Name), reverseName(copy.Table)), summary: "create index " + name,
 	}, nil
 }
 
@@ -336,9 +369,9 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 			}
 			name := displayName(target.Name)
 			generated = append(generated, generatedStatement{
-				name:    "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name),
-				sql:     sql,
-				summary: "add column " + name + "." + column.Name.Name,
+				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
+				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.Name), reverseIdentifier(column.Name)),
+				summary:    "add column " + name + "." + column.Name.Name,
 			})
 			continue
 		}
@@ -657,6 +690,21 @@ func qualifiedNameKey(name mysqlquery.QualifiedName, caseInsensitive bool) strin
 
 func displayName(name mysqlquery.QualifiedName) string {
 	return name.String()
+}
+
+func reverseName(name mysqlquery.QualifiedName) string {
+	parts := make([]string, len(name))
+	for index, part := range name {
+		parts[index] = reverseIdentifier(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func reverseIdentifier(identifier mysqlquery.Identifier) string {
+	if !identifier.Quoted {
+		return identifier.Name
+	}
+	return "`" + strings.ReplaceAll(identifier.Name, "`", "``") + "`"
 }
 
 func filenamePart(value string) string {

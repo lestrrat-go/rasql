@@ -346,6 +346,11 @@ func sqliteTokenWordPart(value byte) bool {
 // into the same representation regardless of whether the source used inline
 // or table-level syntax. SQLite inspection renders this normalized form.
 func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
+	originalColumns := make([]sqlitequery.ColumnDefinition, len(statement.Columns))
+	for index, column := range statement.Columns {
+		originalColumns[index] = column
+		originalColumns[index].Constraints = append([]sqlitequery.ColumnConstraint(nil), column.Constraints...)
+	}
 	var primaryKey sqlitequery.TableConstraint
 	var hasPrimaryKey bool
 	var inlineAutoincrement bool
@@ -431,7 +436,7 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 		primaryKey.Name = nil
 		for index := range statement.Columns {
 			column := &statement.Columns[index]
-			if !primaryKeyContainsColumn(primaryKey, column.Name.Name) || hasColumnConstraint(*column, sqlitequery.ConstraintNotNull) {
+			if !primaryKeyColumnImplicitlyNotNull(statement, primaryKey, originalColumns[index]) || hasColumnConstraint(*column, sqlitequery.ConstraintNotNull) {
 				continue
 			}
 			column.Constraints = append(column.Constraints, sqlitequery.ColumnConstraint{Kind: sqlitequery.ConstraintNotNull})
@@ -441,6 +446,37 @@ func normalizeCreateTable(statement *sqlitequery.CreateTableStatement) {
 		}
 	}
 	statement.Constraints = constraints
+}
+
+// primaryKeyColumnImplicitlyNotNull reports whether SQLite makes column
+// non-null solely because it is a member of this table's primary key.
+func primaryKeyColumnImplicitlyNotNull(table *sqlitequery.CreateTableStatement, primaryKey sqlitequery.TableConstraint, column sqlitequery.ColumnDefinition) bool {
+	if table == nil || primaryKey.Kind != sqlitequery.ConstraintPrimaryKey || !primaryKeyContainsColumn(primaryKey, column.Name.Name) {
+		return false
+	}
+	if table.Options.Strict || table.Options.WithoutRowID {
+		return true
+	}
+	if len(primaryKey.Columns) != 1 {
+		return false
+	}
+	indexed := primaryKey.Columns[0]
+	expression, ok := indexed.Expression.(*sqlitequery.IdentifierExpression)
+	if !ok || len(expression.Name) != 1 || indexed.Collation != nil ||
+		sqliteIdentifierKey(expression.Name[0].Name) != sqliteIdentifierKey(column.Name.Name) {
+		return false
+	}
+	if len(column.Type.Words) != 1 || !strings.EqualFold(column.Type.Words[0], "INTEGER") || len(column.Type.Modifiers) != 0 {
+		return false
+	}
+	// SQLite's inline INTEGER PRIMARY KEY DESC exception does not make the
+	// column a rowid alias. A table-level PRIMARY KEY(id DESC) remains one.
+	for _, constraint := range column.Constraints {
+		if constraint.Kind == sqlitequery.ConstraintPrimaryKey && constraint.Direction == sqlitequery.SortDescending {
+			return false
+		}
+	}
+	return true
 }
 
 func primaryKeyContainsColumn(constraint sqlitequery.TableConstraint, name string) bool {
@@ -524,17 +560,16 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	plan := diff.Plan{Dialect: "sqlite", Statements: make([]diff.PlannedStatement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
-			Source:  statement.name + ".sql",
-			SQL:     statement.sql,
-			Summary: statement.summary,
+			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
 		}
 	}
 	if len(plan.Statements) > 0 {
 		if err := plan.Validate(); err != nil {
 			return diff.Plan{}, err
 		}
-		for index := range plan.Statements {
-			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
+		diff.NumberSources(plan.Statements)
+		if err := plan.Validate(); err != nil {
+			return diff.Plan{}, err
 		}
 	}
 	return plan, nil
@@ -613,9 +648,10 @@ func sortedIndexKeys(indexes map[string]indexDefinition) []string {
 }
 
 type generatedStatement struct {
-	name    string
-	sql     string
-	summary string
+	name       string
+	sql        string
+	reverseSQL string
+	summary    string
 }
 
 func createTableStatement(table tableDefinition) (generatedStatement, error) {
@@ -627,9 +663,8 @@ func createTableStatement(table tableDefinition) (generatedStatement, error) {
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_table_" + filenamePart(name),
-		sql:     sql,
-		summary: "create table " + name,
+		name: "create_table_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
 	}, nil
 }
 
@@ -642,9 +677,8 @@ func createIndexStatement(index *sqlitequery.CreateIndexStatement) (generatedSta
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(name),
-		sql:     sql,
-		summary: "create index " + name,
+		name: "create_index_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(copy.Name)), summary: "create index " + name,
 	}, nil
 }
 
@@ -697,9 +731,9 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 			}
 			name := displayName(target.normalized.Name)
 			generated = append(generated, generatedStatement{
-				name:    "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name),
-				sql:     sql,
-				summary: "add column " + name + "." + column.Name.Name,
+				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
+				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.normalized.Name), reverseIdentifier(column.Name)),
+				summary:    "add column " + name + "." + column.Name.Name,
 			})
 			continue
 		}
@@ -1225,6 +1259,21 @@ func displayName(name sqlitequery.QualifiedName) string {
 		name = name[1:]
 	}
 	return name.String()
+}
+
+func reverseName(name sqlitequery.QualifiedName) string {
+	parts := make([]string, len(name))
+	for index, part := range name {
+		parts[index] = reverseIdentifier(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func reverseIdentifier(identifier sqlitequery.Identifier) string {
+	if !identifier.Quoted {
+		return identifier.Name
+	}
+	return `"` + strings.ReplaceAll(identifier.Name, `"`, `""`) + `"`
 }
 
 func filenamePart(value string) string {

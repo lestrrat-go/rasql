@@ -3,11 +3,54 @@ package diff_test
 import (
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNumberSourcesUsesPlanWidth(t *testing.T) {
+	for _, test := range []struct {
+		count int
+		first string
+		last  string
+	}{
+		{count: 0},
+		{count: 1, first: "001_step.sql", last: "001_step.sql"},
+		{count: 999, first: "001_step.sql", last: "999_step.sql"},
+		{count: 1000, first: "0001_step.sql", last: "1000_step.sql"},
+		{count: 10000, first: "00001_step.sql", last: "10000_step.sql"},
+	} {
+		t.Run(strconv.Itoa(test.count), func(t *testing.T) {
+			statements := make([]diff.PlannedStatement, test.count)
+			for index := range statements {
+				statements[index] = diff.PlannedStatement{Source: "step.sql"}
+			}
+			diff.NumberSources(statements)
+			if test.count == 0 {
+				require.Empty(t, statements)
+				return
+			}
+			require.Equal(t, test.first, statements[0].Source)
+			require.Equal(t, test.last, statements[len(statements)-1].Source)
+			ordered := append([]diff.PlannedStatement(nil), statements...)
+			sort.Slice(ordered, func(left, right int) bool { return ordered[left].Source < ordered[right].Source })
+			require.Equal(t, statements, ordered)
+			reverse := make([]string, len(statements))
+			for index, statement := range statements {
+				reverse[index] = strings.TrimSuffix(statement.Source, ".sql") + ".down.sql"
+			}
+			sort.Sort(sort.Reverse(sort.StringSlice(reverse)))
+			for index, name := range reverse {
+				want := strings.TrimSuffix(statements[len(statements)-1-index].Source, ".sql") + ".down.sql"
+				require.Equal(t, want, name)
+			}
+		})
+	}
+}
 
 func TestLoadSourcesOrdersNestedSQLFiles(t *testing.T) {
 	directory := t.TempDir()
@@ -37,12 +80,12 @@ func TestWriteMigrationCreatesNewDirectory(t *testing.T) {
 	plan := diff.Plan{
 		Dialect: "postgresql",
 		Statements: []diff.PlannedStatement{
-			{Source: "001_create_users.sql", SQL: "CREATE TABLE users (id bigint);\n", Summary: "create table users"},
-			{Source: "002_users_email_index.sql", SQL: "CREATE INDEX users_email_idx ON users (email);\n", Summary: "create index users_email_idx"},
+			{Source: "001_create_users.sql", SQL: "CREATE TABLE users (id bigint);\n", ReverseSQL: "DROP TABLE users;\n", Summary: "create table users"},
+			{Source: "002_users_email_index.sql", SQL: "CREATE INDEX users_email_idx ON users (email);\n", ReverseSQL: "DROP INDEX users_email_idx;\n", Summary: "create index users_email_idx"},
 		},
 	}
 	require.NoError(t, diff.WriteMigration(directory, plan))
-	contents, err := os.ReadFile(filepath.Join(directory, "001_create_users.sql"))
+	contents, err := os.ReadFile(filepath.Join(directory, "001_create_users.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "CREATE TABLE users (id bigint);\n", string(contents))
 	require.Error(t, diff.WriteMigration(directory, plan))
@@ -52,10 +95,30 @@ func TestPlanValidateReportsBothConflictingObjects(t *testing.T) {
 	plan := diff.Plan{
 		Dialect: "sqlite",
 		Statements: []diff.PlannedStatement{
-			{Source: "001_create_table_foo_bar.sql", SQL: "CREATE TABLE foo-bar;", Summary: "create table foo-bar"},
-			{Source: "001_create_table_foo_bar.sql", SQL: "CREATE TABLE foo_bar;", Summary: "create table foo_bar"},
+			{Source: "001_create_table_foo_bar.sql", SQL: "CREATE TABLE foo-bar;", ReverseSQL: "DROP TABLE foo-bar;\n", Summary: "create table foo-bar"},
+			{Source: "001_create_table_foo_bar.sql", SQL: "CREATE TABLE foo_bar;", ReverseSQL: "DROP TABLE foo_bar;\n", Summary: "create table foo_bar"},
 		},
 	}
 
 	require.EqualError(t, plan.Validate(), `migrate diff: duplicate generated SQL source "001_create_table_foo_bar.sql" for "create table foo-bar" and "create table foo_bar"`)
+}
+
+func TestWriteMigrationWritesIrreversibleMarker(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "migrations", "001_data_change")
+	plan := diff.Plan{
+		Dialect:            "sqlite",
+		IrreversibleReason: "data transformation cannot be reversed",
+		Statements: []diff.PlannedStatement{{
+			Source: "001_transform.sql", SQL: "UPDATE users SET name = upper(name);\n", Summary: "transform users",
+		}},
+	}
+	require.NoError(t, diff.WriteMigration(directory, plan))
+	_, err := os.Stat(filepath.Join(directory, "001_transform.down.sql"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	contents, err := os.ReadFile(filepath.Join(directory, ".rasql-irreversible"))
+	require.NoError(t, err)
+	require.Equal(t, "data transformation cannot be reversed\n", string(contents))
+	contents, err = os.ReadFile(filepath.Join(directory, "001_transform.up.sql"))
+	require.NoError(t, err)
+	require.Equal(t, "UPDATE users SET name = upper(name);\n", string(contents))
 }

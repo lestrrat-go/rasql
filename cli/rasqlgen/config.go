@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -23,8 +24,8 @@ const defaultConfigName = "rasql.json"
 
 // maxConfigBytes bounds the configuration file a run will read. A
 // configuration file is a hand-written page of settings; anything past this
-// is a wrong path pointed at a data file, and reading it whole first would
-// be the only way to find that out.
+// is a wrong path pointed at a data file, and the actual read is bounded so it
+// cannot consume the whole file before finding that out.
 const maxConfigBytes = 1 << 20
 
 // config is the project's generation settings, read from JSON.
@@ -68,6 +69,7 @@ type config struct {
 // configTables is the table selection and the Go-side names no database can
 // state.
 type configTables struct {
+	IncludeViews bool `json:"include_views"`
 	// Include names the only tables to generate. Empty sweeps every base
 	// table. It is not accepted together with Exclude.
 	Include []string `json:"include"`
@@ -145,9 +147,20 @@ func loadConfig(path string) (config, error) {
 		return config{}, fmt.Errorf("generate: config %s is %d bytes, past the %d-byte limit; -config expects a settings file", path, info.Size(), maxConfigBytes)
 	}
 
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return config{}, fmt.Errorf("generate: read config %s: %w", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxConfigBytes)+1))
+	if err != nil {
+		return config{}, fmt.Errorf("generate: read config %s: %w", path, err)
+	}
+	if len(data) > maxConfigBytes {
+		return config{}, fmt.Errorf(
+			"generate: config %s exceeds the %d-byte limit; -config expects a settings file",
+			path, maxConfigBytes,
+		)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	// A misspelled key is a setting that silently does nothing, which is

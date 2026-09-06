@@ -1,6 +1,10 @@
 package rowvalue_test
 
 import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -8,6 +12,22 @@ import (
 	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/stretchr/testify/require"
 )
+
+type nullScanRecorder struct {
+	value any
+	err   error
+}
+
+type stringerValue string
+
+func (v stringerValue) String() string {
+	return string(v)
+}
+
+func (r *nullScanRecorder) Scan(value any) error {
+	r.value = value
+	return r.err
+}
 
 func TestGetDecodesDriverValues(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
@@ -63,6 +83,133 @@ func TestGetRejectsWrongType(t *testing.T) {
 
 	_, err = rowvalue.Get[int64](result, "id")
 	require.Error(t, err)
+}
+
+func TestInterfaceDecodingReturnsConversionErrors(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"value"}, []any{"text"})
+	require.NoError(t, err)
+
+	_, err = rowvalue.Get[fmt.Stringer](result, "value")
+	require.ErrorContains(t, err, "expected fmt.Stringer, got string")
+
+	type row struct {
+		Value fmt.Stringer
+	}
+	_, err = rowvalue.Decode[row](result)
+	require.ErrorContains(t, err, `row: decode column "value": expected fmt.Stringer, got string`)
+}
+
+func TestInterfaceDecodingAcceptsImplementedValuesAndAny(t *testing.T) {
+	value := stringerValue("implemented")
+	result, err := rowvalue.NewRow([]string{"value", "payload", "missing"}, []any{value, []byte("payload"), nil})
+	require.NoError(t, err)
+
+	got, err := rowvalue.Get[fmt.Stringer](result, "value")
+	require.NoError(t, err)
+	require.Equal(t, "implemented", got.String())
+
+	gotAny, err := rowvalue.Get[any](result, "value")
+	require.NoError(t, err)
+	require.Equal(t, value, gotAny)
+
+	gotBytes, err := rowvalue.Get[any](result, "payload")
+	require.NoError(t, err)
+	require.Equal(t, []byte("payload"), gotBytes)
+
+	gotNil, err := rowvalue.Get[any](result, "missing")
+	require.NoError(t, err)
+	require.Nil(t, gotNil)
+}
+
+func TestAssignFloat32RejectsFiniteOverflow(t *testing.T) {
+	tooLarge := math.Nextafter(float64(math.MaxFloat32), math.Inf(1))
+	for _, test := range []struct {
+		name  string
+		value float64
+	}{
+		{name: "positive", value: tooLarge},
+		{name: "negative", value: -tooLarge},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := rowvalue.NewRow([]string{"ratio"}, []any{test.value})
+			require.NoError(t, err)
+
+			_, err = rowvalue.Get[float32](result, "ratio")
+			require.ErrorContains(t, err, `row: decode column "ratio"`)
+			require.ErrorContains(t, err, "overflows float32")
+
+			type row struct {
+				Ratio float32
+			}
+			_, err = rowvalue.Decode[row](result)
+			require.ErrorContains(t, err, `row: decode column "ratio"`)
+			require.ErrorContains(t, err, "overflows float32")
+		})
+	}
+}
+
+func TestAssignFloat32PreservesRangeAndSpecialValues(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value float64
+		check func(*testing.T, float32)
+	}{
+		{name: "ordinary", value: 1.5, check: func(t *testing.T, got float32) {
+			require.Equal(t, float32(1.5), got)
+		}},
+		{name: "maximum", value: math.MaxFloat32, check: func(t *testing.T, got float32) {
+			require.Equal(t, float32(math.MaxFloat32), got)
+		}},
+		{name: "positive infinity", value: math.Inf(1), check: func(t *testing.T, got float32) {
+			require.True(t, math.IsInf(float64(got), 1))
+		}},
+		{name: "negative infinity", value: math.Inf(-1), check: func(t *testing.T, got float32) {
+			require.True(t, math.IsInf(float64(got), -1))
+		}},
+		{name: "NaN", value: math.NaN(), check: func(t *testing.T, got float32) {
+			require.True(t, math.IsNaN(float64(got)))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := rowvalue.NewRow([]string{"ratio"}, []any{test.value})
+			require.NoError(t, err)
+			got, err := rowvalue.Get[float32](result, "ratio")
+			require.NoError(t, err)
+			test.check(t, got)
+		})
+	}
+}
+
+func TestAssignFloat64AcceptsLargeAndSpecialValues(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value float64
+		check func(*testing.T, float64)
+	}{
+		{name: "positive large", value: 1e100, check: func(t *testing.T, got float64) {
+			require.Equal(t, 1e100, got)
+		}},
+		{name: "negative large", value: -1e100, check: func(t *testing.T, got float64) {
+			require.Equal(t, -1e100, got)
+		}},
+		{name: "positive infinity", value: math.Inf(1), check: func(t *testing.T, got float64) {
+			require.True(t, math.IsInf(got, 1))
+		}},
+		{name: "negative infinity", value: math.Inf(-1), check: func(t *testing.T, got float64) {
+			require.True(t, math.IsInf(got, -1))
+		}},
+		{name: "NaN", value: math.NaN(), check: func(t *testing.T, got float64) {
+			require.True(t, math.IsNaN(got))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := rowvalue.NewRow([]string{"ratio"}, []any{test.value})
+			require.NoError(t, err)
+			got, err := rowvalue.Get[float64](result, "ratio")
+			require.NoError(t, err)
+			test.check(t, got)
+		})
+	}
 }
 
 func TestGetAndDecodePopulateTypedValues(t *testing.T) {
@@ -145,6 +292,93 @@ func TestAssignDecodesIntoDestination(t *testing.T) {
 		err := rowvalue.Assign(result, "email", &wrong)
 		require.ErrorContains(t, err, `row: decode column "email"`)
 	})
+}
+
+func TestAssignDispatchesNULLToScanners(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"value"}, []any{nil})
+	require.NoError(t, err)
+
+	t.Run("stdlib NullString clears stale value", func(t *testing.T) {
+		destination := sql.NullString{String: "stale", Valid: true}
+		require.NoError(t, rowvalue.Assign(result, "value", &destination))
+		require.False(t, destination.Valid)
+		require.Empty(t, destination.String)
+	})
+
+	t.Run("stdlib NullInt64 clears stale value", func(t *testing.T) {
+		destination := sql.NullInt64{Int64: 42, Valid: true}
+		require.NoError(t, rowvalue.Assign(result, "value", &destination))
+		require.False(t, destination.Valid)
+		require.Zero(t, destination.Int64)
+	})
+
+	t.Run("custom scanner receives NULL", func(t *testing.T) {
+		destination := nullScanRecorder{value: "stale"}
+		require.NoError(t, rowvalue.Assign(result, "value", &destination))
+		require.Nil(t, destination.value)
+	})
+
+	t.Run("ordinary values still reject NULL", func(t *testing.T) {
+		var destination string
+		err := rowvalue.Assign(result, "value", &destination)
+		require.ErrorContains(t, err, "expected string, got NULL")
+	})
+
+	t.Run("nil pointer keeps nil semantics", func(t *testing.T) {
+		value := "stale"
+		destination := &value
+		require.NoError(t, rowvalue.Assign(result, "value", &destination))
+		require.Nil(t, destination)
+	})
+}
+
+func TestAssignScannersReceiveNonNULLValuesAndErrors(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"text", "number"}, []any{"fresh", int64(7)})
+	require.NoError(t, err)
+
+	var text sql.NullString
+	require.NoError(t, rowvalue.Assign(result, "text", &text))
+	require.True(t, text.Valid)
+	require.Equal(t, "fresh", text.String)
+
+	var number sql.NullInt64
+	require.NoError(t, rowvalue.Assign(result, "number", &number))
+	require.True(t, number.Valid)
+	require.Equal(t, int64(7), number.Int64)
+
+	sentinel := errors.New("scanner failed")
+	destination := nullScanRecorder{err: sentinel}
+	err = rowvalue.Assign(result, "text", &destination)
+	require.ErrorIs(t, err, sentinel)
+	require.ErrorContains(t, err, `row: decode column "text"`)
+}
+
+func TestAssignNULLPointerDoesNotInvokeScanner(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"value"}, []any{nil})
+	require.NoError(t, err)
+
+	destination := &nullScanRecorder{value: "untouched"}
+	pointer := destination
+	require.NoError(t, rowvalue.Assign(result, "value", &pointer))
+	require.Nil(t, pointer)
+	// The scanner behind a pointer field is not reached for SQL NULL.
+	require.Equal(t, "untouched", destination.value)
+}
+
+func TestDecodeAndGetDispatchNULLToScanners(t *testing.T) {
+	result, err := rowvalue.NewRow([]string{"value"}, []any{nil})
+	require.NoError(t, err)
+
+	got, err := rowvalue.Get[sql.NullString](result, "value")
+	require.NoError(t, err)
+	require.False(t, got.Valid)
+
+	type decodedRow struct {
+		Value sql.NullString `rasql:"value"`
+	}
+	decoded, err := rowvalue.Decode[decodedRow](result)
+	require.NoError(t, err)
+	require.False(t, decoded.Value.Valid)
 }
 
 // TestAssignDecodesBoolFromAnyNonzeroInteger pins MySQL's documented boolean
