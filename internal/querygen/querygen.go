@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go/format"
 	"go/token"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -52,6 +53,7 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 
 	parameterTypes := make([]string, len(def.Binds))
 	needsTime := false
+	bindingImports := make(map[string]schema.GoImport)
 	for index, bind := range def.Binds {
 		if bind.Column == "" {
 			parameterTypes[index] = defaultParameterType
@@ -61,7 +63,14 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		if err != nil {
 			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
 		}
-		goType := schemagen.ColumnGoType(column)
+		resolved, err := schemagen.ResolveGoBinding(column)
+		if err != nil {
+			return nil, fmt.Errorf("namedsql %q: %w", def.Name, err)
+		}
+		goType := resolved.For(column.Nullable)
+		for _, imported := range resolved.Imports {
+			bindingImports[imported.Path] = imported
+		}
 		if goType == "time.Time" {
 			needsTime = true
 		}
@@ -97,7 +106,15 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 			source.WriteString(timeName)
 			source.WriteByte(' ')
 		}
-		source.WriteString("\"time\"\n\n\t")
+		source.WriteString("\"time\"\n")
+		writeBindingImports(&source, bindingImports)
+		source.WriteString("\n\t")
+		source.WriteString(stmtImport)
+		source.WriteString("\n)\n\n")
+	} else if len(bindingImports) > 0 {
+		source.WriteString("import (\n")
+		writeBindingImports(&source, bindingImports)
+		source.WriteString("\n\t")
 		source.WriteString(stmtImport)
 		source.WriteString("\n)\n\n")
 	} else {
@@ -132,6 +149,24 @@ func GoSource(def namedsql.QueryDef, packageName string, functionName string, ta
 		return nil, fmt.Errorf("namedsql %q: format source: %w", def.Name, err)
 	}
 	return formatted, nil
+}
+
+func writeBindingImports(source *bytes.Buffer, imports map[string]schema.GoImport) {
+	paths := make([]string, 0, len(imports))
+	for path := range imports {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		imported := imports[path]
+		source.WriteString("\t")
+		if imported.Name != "" {
+			source.WriteString(imported.Name)
+			source.WriteByte(' ')
+		}
+		source.WriteString(strconv.Quote(imported.Path))
+		source.WriteByte('\n')
+	}
 }
 
 // resolveColumn looks bind up among tables and returns the column it names.

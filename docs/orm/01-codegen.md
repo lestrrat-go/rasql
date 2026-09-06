@@ -120,6 +120,12 @@ flags take comma-separated names.
 
 ## Next
 
+Applications that generate from a `schema.TableDef` can set a column's
+`GoBinding` to choose a named Go type, its nullable form, and the imports used
+by those expressions. The same binding is emitted into descriptor, row, and
+column-typed static query code. Custom types keep database/sql behavior by
+implementing `sql.Scanner` for reads and `driver.Valuer` for writes.
+
 [The generated store](02-generated-store.md) says what the command writes and
 what each generated member is for. [Typed queries](03-typed-queries.md) reads
 rows through the generated table.
