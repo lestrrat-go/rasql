@@ -114,6 +114,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	)
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	decisions := make([]diff.RequiredDecision, 0)
 	for _, entry := range comparison.Tables.Added {
 		statement, err := createTableStatement(entry.Value.statement)
 		if err != nil {
@@ -122,12 +123,13 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		generated = append(generated, statement)
 	}
 	for _, pair := range comparison.Tables.Matched {
-		statements, tableDiagnostics, err := diffTable(pair.Baseline, pair.Target)
+		statements, tableDiagnostics, tableDecisions, err := diffTable(pair.Baseline, pair.Target)
 		if err != nil {
 			return diff.Plan{}, err
 		}
 		generated = append(generated, statements...)
 		diagnostics = append(diagnostics, tableDiagnostics...)
+		decisions = append(decisions, tableDecisions...)
 	}
 	for _, entry := range comparison.Tables.Removed {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(entry.Value.statement.Name)))
@@ -166,23 +168,33 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
 		}
 	}
-	var decisions []diff.RequiredDecision
 	remaining := make([]string, 0, len(diagnostics))
 	for _, diagnostic := range diagnostics {
-		if decision, ok := diff.BackfillDecision("postgresql", diagnostic); ok {
-			decisions = append(decisions, decision)
-			continue
-		}
 		remaining = append(remaining, diagnostic)
 	}
 	if len(remaining) > 0 {
 		return diff.Plan{}, manualMigrationError(remaining)
 	}
 	plan.Decisions = decisions
+	if len(plan.Decisions) == 0 {
+		plan.Decisions = nil
+	} else {
+		plan.Statements = nil
+	}
 	if len(plan.Decisions) > 0 {
-		plan.Operations = diff.OperationsFromStatements("postgresql", plan.Statements)
+		plan.Operations = operationsFromGenerated("postgresql", generated)
 	}
 	return plan, nil
+}
+
+func operationsFromGenerated(dialect string, generated []generatedStatement) []diff.ProposedOperation {
+	operations := make([]diff.ProposedOperation, 0, len(generated))
+	for _, statement := range generated {
+		forward := diff.PlannedStatement{Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
+		reverse := diff.PlannedStatement{Source: forward.Source, SQL: statement.reverseSQL, ReverseSQL: statement.sql, Summary: statement.summary}
+		operations = append(operations, diff.ProposedOperation{ID: diff.OperationID(statement.kind, dialect, statement.table, statement.column, statement.constraint), Table: statement.table, Column: statement.column, Constraint: statement.constraint, Summary: statement.summary, Kind: statement.kind, Forward: []diff.PlannedStatement{forward}, Reverse: []diff.PlannedStatement{reverse}})
+	}
+	return operations
 }
 
 type schemaSnapshot struct {
@@ -247,6 +259,10 @@ type generatedStatement struct {
 	sql        string
 	reverseSQL string
 	summary    string
+	kind       diff.OperationKind
+	table      string
+	column     string
+	constraint string
 }
 
 func createTableStatement(table *pgquery.CreateTableStatement) (generatedStatement, error) {
@@ -260,6 +276,7 @@ func createTableStatement(table *pgquery.CreateTableStatement) (generatedStateme
 	return generatedStatement{
 		name: "create_table_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
+		kind: diff.OperationCreateTable, table: name,
 	}, nil
 }
 
@@ -274,14 +291,24 @@ func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStateme
 	return generatedStatement{
 		name: "create_index_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(*copy.Name)), summary: "create index " + name,
+		kind: diff.OperationReplaceConstraint, table: displayName(copy.Table), constraint: name,
 	}, nil
 }
 
-func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string, error) {
+func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string, []diff.RequiredDecision, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	decisions := make([]diff.RequiredDecision, 0)
 	normalizedBaseline := normalizedTable(baseline.statement, false)
 	normalizedTarget := normalizedTable(target.statement, false)
+	for index, column := range baseline.statement.Columns {
+		if index >= len(target.statement.Columns) || column.Name.Name != target.statement.Columns[index].Name.Name {
+			continue
+		}
+		if column.Name.Quoted != target.statement.Columns[index].Name.Quoted && strings.ToLower(column.Name.Name) != column.Name.Name {
+			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.statement.Name), column.Name.Name))
+		}
+	}
 	if baseline.statement.Persistence != target.statement.Persistence {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s persistence changed", displayName(target.statement.Name)))
 	}
@@ -297,12 +324,35 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 	for _, column := range normalizedTarget.Columns {
 		targetColumns[column.Name.Name] = column
 	}
+	removed, added := make([]pgquery.ColumnDefinition, 0, 1), make([]pgquery.ColumnDefinition, 0, 1)
+	for _, column := range normalizedBaseline.Columns {
+		if _, exists := targetColumns[column.Name.Name]; !exists {
+			removed = append(removed, column)
+		}
+	}
+	for _, column := range normalizedTarget.Columns {
+		if _, exists := baselineColumns[column.Name.Name]; !exists {
+			added = append(added, column)
+		}
+	}
+	rename := len(removed) == 1 && len(added) == 1 && removed[0].Name.Name != added[0].Name.Name && removed[0].Name.Quoted == added[0].Name.Quoted
+	if rename {
+		left, right := removed[0], added[0]
+		left.Name.Name, right.Name.Name = "", ""
+		rename = ast.Equal(left, right)
+		if rename {
+			decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionRename, "postgresql", displayName(target.statement.Name), added[0].Name.Name), Kind: diff.DecisionRename, Table: displayName(target.statement.Name), Column: added[0].Name.Name, Baseline: removed[0].Name.Name, Target: added[0].Name.Name, Reason: "column rename requires caller confirmation"})
+		}
+	}
 	for index, column := range target.statement.Columns {
 		normalizedColumn := normalizedTarget.Columns[index]
 		previous, exists := baselineColumns[normalizedColumn.Name.Name]
 		if !exists {
+			if rename && normalizedColumn.Name.Name == added[0].Name.Name {
+				continue
+			}
 			if columnRequiresBackfill(column) {
-				diagnostics = append(diagnostics, fmt.Sprintf("new required column %s.%s needs an application-specific backfill", displayName(target.statement.Name), column.Name.Name))
+				decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionBackfill, "postgresql", displayName(target.statement.Name), column.Name.Name), Kind: diff.DecisionBackfill, Table: displayName(target.statement.Name), Column: column.Name.Name, Target: column.Name.Name, Reason: "required column needs an application-specific backfill"})
 				continue
 			}
 			statement := &pgquery.AlterTableStatement{
@@ -314,13 +364,14 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 			}
 			sql, err := serialize(statement)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			name := displayName(target.statement.Name)
 			generated = append(generated, generatedStatement{
 				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
 				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.statement.Name), reverseIdentifier(column.Name)),
 				summary:    "add column " + name + "." + column.Name.Name,
+				kind:       diff.OperationAddColumn, table: name, column: column.Name.Name,
 			})
 			continue
 		}
@@ -331,10 +382,13 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 	for index, column := range baseline.statement.Columns {
 		normalizedColumn := normalizedBaseline.Columns[index]
 		if _, exists := targetColumns[normalizedColumn.Name.Name]; !exists {
+			if rename && normalizedColumn.Name.Name == removed[0].Name.Name {
+				continue
+			}
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.statement.Name), column.Name.Name))
 		}
 	}
-	return generated, diagnostics, nil
+	return generated, diagnostics, decisions, nil
 }
 
 // normalizedTable converts syntax variants that describe the same PostgreSQL

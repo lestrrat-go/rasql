@@ -130,6 +130,7 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	decisions := make([]diff.RequiredDecision, 0)
 	for _, key := range sortedTableKeys(target.tables) {
 		targetTable := target.tables[key]
 		baselineTable, exists := baseline.tables[key]
@@ -141,12 +142,13 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 			generated = append(generated, statement)
 			continue
 		}
-		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement, a.lowerCaseTableNames)
+		statements, tableDiagnostics, tableDecisions, err := diffTable(baselineTable.statement, targetTable.statement, a.lowerCaseTableNames)
 		if err != nil {
 			return diff.Plan{}, err
 		}
 		generated = append(generated, statements...)
 		diagnostics = append(diagnostics, tableDiagnostics...)
+		decisions = append(decisions, tableDecisions...)
 	}
 	for _, key := range sortedTableKeys(baseline.tables) {
 		if _, exists := target.tables[key]; !exists {
@@ -188,23 +190,33 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
 		}
 	}
-	var decisions []diff.RequiredDecision
 	remaining := make([]string, 0, len(diagnostics))
 	for _, diagnostic := range diagnostics {
-		if decision, ok := diff.BackfillDecision("mysql", diagnostic); ok {
-			decisions = append(decisions, decision)
-			continue
-		}
 		remaining = append(remaining, diagnostic)
 	}
 	if len(remaining) > 0 {
 		return diff.Plan{}, manualMigrationError(remaining)
 	}
 	plan.Decisions = decisions
+	if len(plan.Decisions) == 0 {
+		plan.Decisions = nil
+	} else {
+		plan.Statements = nil
+	}
 	if len(plan.Decisions) > 0 {
-		plan.Operations = diff.OperationsFromStatements("mysql", plan.Statements)
+		plan.Operations = operationsFromGenerated("mysql", generated)
 	}
 	return plan, nil
+}
+
+func operationsFromGenerated(dialect string, generated []generatedStatement) []diff.ProposedOperation {
+	operations := make([]diff.ProposedOperation, 0, len(generated))
+	for _, statement := range generated {
+		forward := diff.PlannedStatement{Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
+		reverse := diff.PlannedStatement{Source: forward.Source, SQL: statement.reverseSQL, ReverseSQL: statement.sql, Summary: statement.summary}
+		operations = append(operations, diff.ProposedOperation{ID: diff.OperationID(statement.kind, dialect, statement.table, statement.column, statement.constraint), Table: statement.table, Column: statement.column, Constraint: statement.constraint, Summary: statement.summary, Kind: statement.kind, Forward: []diff.PlannedStatement{forward}, Reverse: []diff.PlannedStatement{reverse}})
+	}
+	return operations
 }
 
 type schemaSnapshot struct {
@@ -267,6 +279,10 @@ type generatedStatement struct {
 	sql        string
 	reverseSQL string
 	summary    string
+	kind       diff.OperationKind
+	table      string
+	column     string
+	constraint string
 }
 
 const (
@@ -287,6 +303,7 @@ func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStat
 	return generatedStatement{
 		name: "create_table_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
+		kind: diff.OperationCreateTable, table: name,
 	}, nil
 }
 
@@ -301,12 +318,14 @@ func createIndexStatement(index *mysqlquery.CreateIndexStatement) (generatedStat
 	return generatedStatement{
 		name: "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP INDEX %s ON %s;\n", reverseName(copy.Name), reverseName(copy.Table)), summary: "create index " + name,
+		kind: diff.OperationReplaceConstraint, table: displayName(copy.Table), constraint: name,
 	}, nil
 }
 
-func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.CreateTableStatement, tableNames LowerCaseTableNames) ([]generatedStatement, []string, error) {
+func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.CreateTableStatement, tableNames LowerCaseTableNames) ([]generatedStatement, []string, []diff.RequiredDecision, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	decisions := make([]diff.RequiredDecision, 0)
 	normalizedBaseline := normalizedTable(baseline, tableNames)
 	normalizedTarget := normalizedTable(target, tableNames)
 	if baseline.Persistence != target.Persistence {
@@ -324,12 +343,35 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 	for _, column := range normalizedTarget.Columns {
 		targetColumns[columnNameKey(column.Name.Name)] = column
 	}
+	removed, added := make([]mysqlquery.ColumnDefinition, 0, 1), make([]mysqlquery.ColumnDefinition, 0, 1)
+	for _, column := range normalizedBaseline.Columns {
+		if _, exists := targetColumns[columnNameKey(column.Name.Name)]; !exists {
+			removed = append(removed, column)
+		}
+	}
+	for _, column := range normalizedTarget.Columns {
+		if _, exists := baselineColumns[columnNameKey(column.Name.Name)]; !exists {
+			added = append(added, column)
+		}
+	}
+	rename := len(removed) == 1 && len(added) == 1 && removed[0].Name.Name != added[0].Name.Name
+	if rename {
+		left, right := removed[0], added[0]
+		left.Name.Name, right.Name.Name = "", ""
+		rename = reflect.DeepEqual(left, right)
+		if rename {
+			decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionRename, "mysql", displayName(target.Name), added[0].Name.Name), Kind: diff.DecisionRename, Table: displayName(target.Name), Column: added[0].Name.Name, Baseline: removed[0].Name.Name, Target: added[0].Name.Name, Reason: "column rename requires caller confirmation"})
+		}
+	}
 	for index, column := range target.Columns {
 		normalizedColumn := normalizedTarget.Columns[index]
 		previous, exists := baselineColumns[columnNameKey(normalizedColumn.Name.Name)]
 		if !exists {
+			if rename && normalizedColumn.Name.Name == added[0].Name.Name {
+				continue
+			}
 			if columnRequiresBackfill(column) {
-				diagnostics = append(diagnostics, fmt.Sprintf("new required column %s.%s needs an application-specific backfill", displayName(target.Name), column.Name.Name))
+				decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionBackfill, "mysql", displayName(target.Name), column.Name.Name), Kind: diff.DecisionBackfill, Table: displayName(target.Name), Column: column.Name.Name, Target: column.Name.Name, Reason: "required column needs an application-specific backfill"})
 				continue
 			}
 			statement := &mysqlquery.AlterTableStatement{
@@ -341,13 +383,14 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 			}
 			sql, err := serialize(statement)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			name := displayName(target.Name)
 			generated = append(generated, generatedStatement{
 				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
 				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.Name), reverseIdentifier(column.Name)),
 				summary:    "add column " + name + "." + column.Name.Name,
+				kind:       diff.OperationAddColumn, table: name, column: column.Name.Name,
 			})
 			continue
 		}
@@ -358,10 +401,13 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 	for index, column := range baseline.Columns {
 		normalizedColumn := normalizedBaseline.Columns[index]
 		if _, exists := targetColumns[columnNameKey(normalizedColumn.Name.Name)]; !exists {
+			if rename && normalizedColumn.Name.Name == removed[0].Name.Name {
+				continue
+			}
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.Name), column.Name.Name))
 		}
 	}
-	return generated, diagnostics, nil
+	return generated, diagnostics, decisions, nil
 }
 
 // normalizedTable converts syntax variants that describe the same MySQL table

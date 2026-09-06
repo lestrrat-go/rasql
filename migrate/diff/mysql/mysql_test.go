@@ -249,6 +249,37 @@ func TestValidateLivePlanUsesLowerCaseTableNames(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDiffProposesConfirmedCompatibleRename(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (name text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (display_name text);")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Len(t, plan.Decisions, 1)
+	require.Equal(t, diff.DecisionRename, plan.Decisions[0].Kind)
+	require.Equal(t, "name", plan.Decisions[0].Baseline)
+	resolved, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, RenameFrom: "name"})
+	require.NoError(t, err)
+	require.Contains(t, resolved.Statements[0].SQL, "name TO display_name")
+	require.Contains(t, resolved.Statements[0].ReverseSQL, "display_name TO name")
+}
+
+func TestDiffRefusesIncompatibleRenameCandidate(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (name text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (display_name integer);")
+	_, err := analyzer.Diff(baseline, target)
+	require.Error(t, err)
+}
+
+func TestDiffRefusesAmbiguousRenameCandidates(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (first text, second text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (given text, family text);")
+	_, err := analyzer.Diff(baseline, target)
+	require.Error(t, err)
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, `
