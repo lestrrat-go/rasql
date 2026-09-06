@@ -732,10 +732,19 @@ func relationshipSupported(child, parent schema.TableDef, relationship schema.Re
 	if !ok || parentColumn.Nullable || len(parent.PrimaryKey) != 1 || parent.PrimaryKey[0] != parentColumn.Name {
 		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
 	}
-	keyType, ok := relationKeyType(parentColumn)
-	childBinding, childErr := ResolveGoBinding(childColumn)
-	if childErr != nil || !ok || keyType != childBinding.For(false) {
+	_, ok = relationKeyType(parentColumn)
+	if !ok {
 		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
+	}
+	keyType, compatible := sameColumnBindingType(parentColumn, childColumn)
+	if !compatible {
+		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
+	}
+	if childColumn.GoBinding == nil && parentColumn.GoBinding == nil {
+		childBinding, childErr := ResolveGoBinding(childColumn)
+		if childErr != nil || keyType != childBinding.For(false) {
+			return schema.ColumnDef{}, schema.ColumnDef{}, "", false
+		}
 	}
 	return parentColumn, childColumn, keyType, true
 }
