@@ -19,13 +19,15 @@ const (
 	// StatusOutOfOrder identifies a recorded migration after a pending migration.
 	StatusOutOfOrder StatusState = "out_of_order"
 	// StatusUnknown identifies a recorded migration absent from the supplied set.
-	StatusUnknown StatusState = "unknown"
+	StatusUnknown    StatusState = "unknown"
+	StatusIncomplete StatusState = "incomplete"
 )
 
 // StatusEntry reports the database state of one migration ID.
 type StatusEntry struct {
-	ID    string
-	State StatusState
+	ID         string
+	State      StatusState
+	Incomplete *IncompleteMigration
 }
 
 // Status reads migration history and reports every supplied and recorded migration.
@@ -46,14 +48,26 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 	if err := r.ensureHistory(ctx, connection); err != nil {
 		return nil, err
 	}
+	if err := r.ensureProgress(ctx, connection); err != nil {
+		return nil, err
+	}
+	progress, err := r.progress(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+	if progress != nil {
+		if err := r.validateProgress(progress, prepared); err != nil {
+			return nil, err
+		}
+	}
 	applied, err := r.applied(ctx, connection)
 	if err != nil {
 		return nil, err
 	}
-	return statusEntries(applied, prepared), nil
+	return statusEntries(applied, prepared, progress), nil
 }
 
-func statusEntries(applied map[string]string, migrations []preparedMigration) []StatusEntry {
+func statusEntries(applied map[string]string, migrations []preparedMigration, progress *progressEntry) []StatusEntry {
 	expected := make(map[string]struct{}, len(migrations))
 	entries := make([]StatusEntry, 0, len(applied)+len(migrations))
 	for _, migration := range migrations {
@@ -73,6 +87,11 @@ func statusEntries(applied map[string]string, migrations []preparedMigration) []
 	pending := false
 	for _, migration := range migrations {
 		recordedChecksum, exists := applied[migration.id]
+		if progress != nil && progress.id == migration.id {
+			value := IncompleteMigration{ID: progress.id, Checksum: progress.checksum, Source: progress.source, Direction: progress.direction, SourceIndex: progress.sourceIndex}
+			entries = append(entries, StatusEntry{ID: migration.id, State: StatusIncomplete, Incomplete: &value})
+			continue
+		}
 		if !exists {
 			pending = true
 			entries = append(entries, StatusEntry{ID: migration.id, State: StatusPending})

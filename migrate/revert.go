@@ -54,28 +54,36 @@ func Steps(n int) RevertTarget {
 // place and the migration still recorded; resolve that state before running
 // Revert again.
 func (r Runner) Revert(ctx context.Context, target RevertTarget, migrations ...Migration) ([]Migration, error) {
+	result, err := r.RevertResult(ctx, target, migrations...)
+	return result.Completed, err
+}
+
+func (r Runner) RevertResult(ctx context.Context, target RevertTarget, migrations ...Migration) (ExecutionResult, error) {
 	if err := r.validate(); err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 	prepared, err := prepareMigrations(migrations)
 	if err != nil {
-		return nil, err
+		return ExecutionResult{}, err
 	}
 	connection, err := r.database.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("migrate: open database connection: %w", err)
+		return ExecutionResult{}, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
 
 	switch r.dialect.Name() {
 	case "postgresql":
-		return r.revertPostgreSQL(ctx, connection, target, prepared)
+		completed, err := r.revertPostgreSQL(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	case "mysql":
-		return r.revertMySQL(ctx, connection, target, prepared)
+		completed, err := r.revertMySQL(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	case "sqlite":
-		return r.revertSQLite(ctx, connection, target, prepared)
+		completed, err := r.revertSQLite(ctx, connection, target, prepared)
+		return executionResult(completed, err)
 	default:
-		return nil, fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
+		return ExecutionResult{}, fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
 	}
 }
 
@@ -152,10 +160,13 @@ func (r Runner) revertPostgreSQL(ctx context.Context, connection *sql.Conn, targ
 
 func (r Runner) revertMySQL(ctx context.Context, connection *sql.Conn, target RevertTarget, migrations []preparedMigration) ([]Migration, error) {
 	return r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
+		if err := r.ensureProgress(ctx, connection); err != nil {
+			return nil, err
+		}
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return nil, err
 		}
-		return r.revertPrepared(ctx, connection, connection, target, migrations)
+		return r.revertPreparedMySQL(ctx, connection, target, migrations)
 	})
 }
 
