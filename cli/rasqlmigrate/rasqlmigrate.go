@@ -510,6 +510,12 @@ func (c *sqlReconcileCheck) Check(ctx context.Context, connection *sql.Conn, inc
 	if query == "" || strings.Contains(query, ";") {
 		return "", errors.New("reconcile check must contain exactly one SQL statement")
 	}
+	keyword := strings.ToUpper(strings.Fields(query)[0])
+	switch keyword {
+	case "SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN":
+	default:
+		return "", errors.New("reconcile check must be read-only")
+	}
 	transaction, err := connection.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return "", err
