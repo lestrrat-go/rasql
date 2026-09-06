@@ -72,7 +72,7 @@ func TestFailedRevertAgainstLiveDatabases(t *testing.T) {
 		firstReverseSurvives bool
 		dialect              dialect.Dialect
 	}{
-		{name: "postgresql", open: dbtest.PostgreSQLDB, dialect: dialect.PostgreSQL(), firstReverseSurvives: false},
+		{name: "postgresql", open: dbtest.PostgreSQLDB, dialect: dialect.PostgreSQL(), firstReverseSurvives: true},
 		{name: "mysql", open: dbtest.MySQLDB, dialect: dialect.MySQL(), firstReverseSurvives: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

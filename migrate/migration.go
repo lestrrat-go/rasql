@@ -2,8 +2,11 @@
 package migrate
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -11,12 +14,74 @@ import (
 	"github.com/lestrrat-go/rasql/sqltext"
 )
 
+type Direction string
+
+const (
+	DirectionUp   Direction = "up"
+	DirectionDown Direction = "down"
+)
+
+// ExecutionMode selects the execution policy for a migration. The zero value
+// preserves the historical transactional behavior.
+type ExecutionMode string
+
+const (
+	ExecutionModeAtomic           ExecutionMode = ""
+	ExecutionModeNonTransactional ExecutionMode = "nontransactional"
+)
+
+type IncompleteMigration struct {
+	ID          string
+	Checksum    string
+	Source      string
+	Direction   Direction
+	SourceIndex int
+}
+
+type ExecutionResult struct {
+	Completed  []Migration
+	Incomplete *IncompleteMigration
+}
+
+type IncompleteMigrationError struct {
+	Incomplete IncompleteMigration
+	Cause      error
+}
+
+func (e *IncompleteMigrationError) Error() string {
+	return fmt.Sprintf("migrate: incomplete %s migration %q at source %q (index %d): %v", e.Incomplete.Direction, e.Incomplete.ID, e.Incomplete.Source, e.Incomplete.SourceIndex, e.Cause)
+}
+
+func (e *IncompleteMigrationError) Unwrap() error { return e.Cause }
+
+type ReconcileDecision string
+
+const (
+	ReconcileExecuted    ReconcileDecision = "executed"
+	ReconcileNotExecuted ReconcileDecision = "not_executed"
+)
+
+type ReconcileCheck interface {
+	Check(context.Context, *sql.Conn, IncompleteMigration) (ReconcileDecision, error)
+}
+
+func executionResult(completed []Migration, err error) (ExecutionResult, error) {
+	result := ExecutionResult{Completed: append([]Migration(nil), completed...)}
+	var incomplete *IncompleteMigrationError
+	if errors.As(err, &incomplete) {
+		value := incomplete.Incomplete
+		result.Incomplete = &value
+	}
+	return result, err
+}
+
 // Migration is one ordered database change and the sources that undo it.
 //
 // Every Statement contains native SQL. The runner sends the source unchanged
 // to the database driver and does not parse, split, or render it.
 type Migration struct {
-	ID string
+	ID   string
+	Mode ExecutionMode
 
 	// Statements are the forward sources, in the order they are applied.
 	// They alone form the recorded checksum.
@@ -27,9 +92,9 @@ type Migration struct {
 	// reverse script can be added or corrected for a migration that is
 	// already applied without invalidating its history record.
 	//
-	// Every migration read from disk has them, because a migration with no
-	// reverse source fails to load. A Migration built in Go may leave them
-	// empty, and Revert then refuses to select it.
+	// A migration read from disk may have no reverse sources when it carries
+	// an explicit irreversibility marker. A Migration built in Go may also
+	// leave them empty, and Revert then refuses to select it.
 	Down []Statement
 }
 
@@ -47,6 +112,9 @@ func (m Migration) Validate() error {
 }
 
 func (m Migration) validate() error {
+	if m.Mode != ExecutionModeAtomic && m.Mode != ExecutionModeNonTransactional {
+		return fmt.Errorf("migrate: migration %q has invalid execution mode %q", m.ID, m.Mode)
+	}
 	if err := validateMigrationID(m.ID); err != nil {
 		return err
 	}
@@ -93,7 +161,14 @@ func validateMigrationID(id string) error {
 }
 
 func checksum(statements []Statement) string {
+	return checksumMode(ExecutionModeAtomic, statements)
+}
+
+func checksumMode(mode ExecutionMode, statements []Statement) string {
 	hash := sha256.New()
+	if mode == ExecutionModeNonTransactional {
+		hash.Write([]byte("rasql-execution-mode\x00nontransactional\x00"))
+	}
 	for _, statement := range statements {
 		hash.Write([]byte(statement.Source))
 		hash.Write([]byte{0})

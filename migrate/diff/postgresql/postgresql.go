@@ -10,6 +10,7 @@ import (
 	pgquery "github.com/lestrrat-go/rasql-pg/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -129,16 +130,14 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(entry.Value.statement.Name)))
 	}
 
+	nontransactional := false
 	for _, entry := range comparison.Indexes.Added {
-		if entry.Value.statement.Concurrently {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s uses CONCURRENTLY, which needs non-transactional migration support", displayName(*entry.Value.statement.Name)))
-			continue
-		}
 		statement, err := createIndexStatement(entry.Value.statement)
 		if err != nil {
 			return diff.Plan{}, err
 		}
 		generated = append(generated, statement)
+		nontransactional = nontransactional || statement.nontransactional
 	}
 	for _, pair := range comparison.Indexes.Matched {
 		if !sameIndex(pair.Baseline.statement, pair.Target.statement) {
@@ -153,11 +152,12 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	}
 
 	plan := diff.Plan{Dialect: "postgresql", Statements: make([]diff.PlannedStatement, len(generated))}
+	if nontransactional {
+		plan.Mode = migrate.ExecutionModeNonTransactional
+	}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
-			Source:  statement.name + ".sql",
-			SQL:     statement.sql,
-			Summary: statement.summary,
+			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
 		}
 	}
 	if len(plan.Statements) > 0 {
@@ -229,9 +229,11 @@ func sortedIndexKeys(indexes map[string]indexDefinition) []string {
 }
 
 type generatedStatement struct {
-	name    string
-	sql     string
-	summary string
+	name             string
+	sql              string
+	reverseSQL       string
+	summary          string
+	nontransactional bool
 }
 
 func createTableStatement(table *pgquery.CreateTableStatement) (generatedStatement, error) {
@@ -243,9 +245,8 @@ func createTableStatement(table *pgquery.CreateTableStatement) (generatedStateme
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_table_" + filenamePart(name),
-		sql:     sql,
-		summary: "create table " + name,
+		name: "create_table_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
 	}, nil
 }
 
@@ -257,10 +258,14 @@ func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStateme
 		return generatedStatement{}, err
 	}
 	name := displayName(*copy.Name)
+	reverse := "DROP INDEX " + reverseName(*copy.Name) + ";\n"
+	if copy.Concurrently {
+		reverse = "DROP INDEX CONCURRENTLY " + reverseName(*copy.Name) + ";\n"
+	}
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(name),
-		sql:     sql,
-		summary: "create index " + name,
+		name: "create_index_" + filenamePart(name), sql: sql,
+		reverseSQL: reverse, summary: "create index " + name,
+		nontransactional: copy.Concurrently,
 	}, nil
 }
 
@@ -305,9 +310,9 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 			}
 			name := displayName(target.statement.Name)
 			generated = append(generated, generatedStatement{
-				name:    "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name),
-				sql:     sql,
-				summary: "add column " + name + "." + column.Name.Name,
+				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
+				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.statement.Name), reverseIdentifier(column.Name)),
+				summary:    "add column " + name + "." + column.Name.Name,
 			})
 			continue
 		}
@@ -571,6 +576,21 @@ func qualifiedNameKey(name pgquery.QualifiedName) string {
 
 func displayName(name pgquery.QualifiedName) string {
 	return name.String()
+}
+
+func reverseName(name pgquery.QualifiedName) string {
+	parts := make([]string, len(name))
+	for index, part := range name {
+		parts[index] = reverseIdentifier(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func reverseIdentifier(identifier pgquery.Identifier) string {
+	if !identifier.Quoted {
+		return identifier.Name
+	}
+	return `"` + strings.ReplaceAll(identifier.Name, `"`, `""`) + `"`
 }
 
 func filenamePart(value string) string {

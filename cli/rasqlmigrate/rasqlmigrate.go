@@ -73,7 +73,7 @@ func run(args []string) error {
 
 func runNamed(args []string, program string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: %s <diff|diff-live|dump|plan|apply|revert|status|verify> [flags]", program)
+		return fmt.Errorf("usage: %s <diff|diff-live|dump|plan|apply|revert|status|verify|reconcile> [flags]", program)
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
@@ -95,6 +95,8 @@ func runNamed(args []string, program string) error {
 		return runStatus(args[1:])
 	case "verify":
 		return runVerify(args[1:])
+	case "reconcile":
+		return runReconcile(args[1:])
 	default:
 		return fmt.Errorf("unknown %s command %q", program, args[0])
 	}
@@ -110,12 +112,13 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
 	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations, oldest first")
 	_, _ = fmt.Fprintln(output, "  revert   Revert applied migrations, newest first")
-	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, and unknown migrations")
+	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, unknown, and incomplete migrations")
 	_, _ = fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
+	_, _ = fmt.Fprintln(output, "  reconcile Resolve an interrupted migration with a database check")
 	_, _ = fmt.Fprintln(output)
 	_, _ = fmt.Fprintln(output, "-dir holds one directory per migration, named for its ID, which you create yourself.")
-	_, _ = fmt.Fprintln(output, "Each holds a .up.sql source for every step forward with the .down.sql that undoes it")
-	_, _ = fmt.Fprintln(output, "beside it, one native SQL statement per file. Migrations run in directory-name order,")
+	_, _ = fmt.Fprintln(output, "Each holds .up.sql sources with matching .down.sql files, or .rasql-irreversible with a reason,")
+	_, _ = fmt.Fprintln(output, "and one native SQL statement per file. Migrations run in directory-name order,")
 	_, _ = fmt.Fprintln(output, "forward sources in ascending filename order and reverse sources in descending order,")
 	_, _ = fmt.Fprintln(output, "so pad the numbers you name them with. The forward sources of an applied migration")
 	_, _ = fmt.Fprintln(output, "must never change; revert it with revert, or add a new migration.")
@@ -130,6 +133,9 @@ func runDiff(args []string) error {
 	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if len(flags.Args()) != 0 {
+		return fmt.Errorf("reconcile accepts no positional arguments")
 	}
 	if *dialectName == "" || *fromDirectory == "" || *toDirectory == "" {
 		return errors.New("diff requires -dialect, -from, and -to")
@@ -434,6 +440,13 @@ func revertTarget(through string, steps int) (migrate.RevertTarget, error) {
 func writeRevertPlan(output io.Writer, plan []migrate.Migration) {
 	first := true
 	for _, migration := range plan {
+		if migration.Mode == migrate.ExecutionModeNonTransactional {
+			if !first {
+				_, _ = fmt.Fprintln(output)
+			}
+			first = false
+			_, _ = fmt.Fprintf(output, "-- %s mode: nontransactional\n", migration.ID)
+		}
 		for _, statement := range migration.Down {
 			if !first {
 				_, _ = fmt.Fprintln(output)
@@ -446,6 +459,96 @@ func writeRevertPlan(output io.Writer, plan []migrate.Migration) {
 			}
 		}
 	}
+}
+
+func runReconcile(args []string) error {
+	flags := newFlagSet("reconcile")
+	directory := flags.String("dir", "", "directory that holds migration directories")
+	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
+	dsn := flags.String("dsn", "", "database connection string")
+	historyTable := flags.String("history-table", "", "migration history table name")
+	id := flags.String("id", "", "incomplete migration ID")
+	query := flags.String("check", "", "query returning exactly one non-NULL boolean")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if len(flags.Args()) != 0 {
+		return errors.New("reconcile accepts no positional arguments")
+	}
+	if *id == "" || *query == "" {
+		return errors.New("reconcile requires -id and -check")
+	}
+	runner, migrations, closeDatabase, err := openRunner(context.Background(), *directory, *dialectName, *dsn, *historyTable)
+	if err != nil {
+		return err
+	}
+	defer closeDatabase()
+	check := &sqlReconcileCheck{id: *id, query: *query}
+	if err := runner.Reconcile(context.Background(), check, migrations...); err != nil {
+		return dsnredact.Error(err, *dsn)
+	}
+	entries, err := runner.Status(context.Background(), migrations...)
+	if err != nil {
+		return dsnredact.Error(err, *dsn)
+	}
+	for _, entry := range entries {
+		if entry.ID == *id {
+			_, _ = fmt.Fprintf(commandOutput, "reconciled\t%s\t%s\t%s\n", *id, check.observed, entry.State)
+			return nil
+		}
+	}
+	return fmt.Errorf("reconcile migration %q is absent after reconciliation", *id)
+}
+
+type sqlReconcileCheck struct {
+	id       string
+	query    string
+	observed migrate.ReconcileDecision
+}
+
+func (c *sqlReconcileCheck) Check(ctx context.Context, connection *sql.Conn, incomplete migrate.IncompleteMigration) (migrate.ReconcileDecision, error) {
+	if incomplete.ID != c.id {
+		return "", fmt.Errorf("reconcile migration ID %q does not match incomplete migration %q", c.id, incomplete.ID)
+	}
+	query := strings.TrimSpace(c.query)
+	if query == "" {
+		return "", errors.New("reconcile check must contain exactly one SQL statement")
+	}
+	transaction, err := connection.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = transaction.Rollback() }()
+	rows, err := transaction.QueryContext(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
+		return "", errors.New("reconcile check returned no rows")
+	}
+	var executed sql.NullBool
+	if err := rows.Scan(&executed); err != nil {
+		return "", err
+	}
+	if !executed.Valid {
+		return "", errors.New("reconcile check returned NULL")
+	}
+	if rows.Next() {
+		return "", errors.New("reconcile check returned more than one row")
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if executed.Bool {
+		c.observed = migrate.ReconcileExecuted
+		return migrate.ReconcileExecuted, nil
+	}
+	c.observed = migrate.ReconcileNotExecuted
+	return migrate.ReconcileNotExecuted, nil
 }
 
 func runStatus(args []string) error {
@@ -468,6 +571,9 @@ func runStatus(args []string) error {
 	}
 	for _, entry := range entries {
 		_, _ = fmt.Fprintf(commandOutput, "%s\t%s\n", entry.State, entry.ID)
+		if entry.Incomplete != nil {
+			_, _ = fmt.Fprintf(commandOutput, "  source=%s direction=%s index=%d\n", entry.Incomplete.Source, entry.Incomplete.Direction, entry.Incomplete.SourceIndex)
+		}
 	}
 	return nil
 }
@@ -492,6 +598,9 @@ func runVerify(args []string) error {
 	}
 	for _, entry := range entries {
 		if entry.State != migrate.StatusApplied {
+			if entry.Incomplete != nil {
+				return fmt.Errorf("verify migrations: migration %q is incomplete at %s (%s source %d)", entry.ID, entry.Incomplete.Source, entry.Incomplete.Direction, entry.Incomplete.SourceIndex)
+			}
 			return fmt.Errorf("verify migrations: migration %q is %s", entry.ID, entry.State)
 		}
 	}
@@ -624,6 +733,9 @@ func driverForDialect(name string) (string, error) {
 func writePlan(output io.Writer, migrations []migrate.Migration) {
 	first := true
 	for _, migration := range migrations {
+		if migration.Mode == migrate.ExecutionModeNonTransactional {
+			_, _ = fmt.Fprintf(output, "-- %s mode: nontransactional\n", migration.ID)
+		}
 		for _, statement := range migration.Statements {
 			if !first {
 				_, _ = fmt.Fprintln(output)
@@ -639,6 +751,9 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 }
 
 func writeDiffPlan(output io.Writer, plan diff.Plan) {
+	if plan.Mode == migrate.ExecutionModeNonTransactional {
+		_, _ = fmt.Fprintln(output, "-- mode: nontransactional")
+	}
 	for index, statement := range plan.Statements {
 		if index > 0 {
 			_, _ = fmt.Fprintln(output)
@@ -648,5 +763,15 @@ func writeDiffPlan(output io.Writer, plan diff.Plan) {
 		if !strings.HasSuffix(statement.SQL, "\n") {
 			_, _ = fmt.Fprintln(output)
 		}
+		if statement.ReverseSQL != "" {
+			_, _ = fmt.Fprintf(output, "-- reverse %s\n", strings.TrimSuffix(statement.Source, ".sql")+".down.sql")
+			_, _ = fmt.Fprint(output, statement.ReverseSQL)
+			if !strings.HasSuffix(statement.ReverseSQL, "\n") {
+				_, _ = fmt.Fprintln(output)
+			}
+		}
+	}
+	if plan.IrreversibleReason != "" {
+		_, _ = fmt.Fprintf(output, "irreversible: %s\n", plan.IrreversibleReason)
 	}
 }
