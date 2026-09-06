@@ -31,6 +31,13 @@ func TestAddedTableDependencyPostgreSQL(t *testing.T) {
 	var exists sql.NullString
 	require.NoError(t, database.QueryRowContext(ctx, "SELECT to_regclass('aaa_child')").Scan(&exists))
 	require.True(t, exists.Valid)
+	for index := len(plan.Statements) - 1; index >= 0; index-- {
+		postgresExec(t, ctx, database, string(plan.Statements[index].ReverseSQL))
+	}
+	require.NoError(t, database.QueryRowContext(ctx, "SELECT to_regclass('aaa_child')").Scan(&exists))
+	require.False(t, exists.Valid)
+	require.NoError(t, database.QueryRowContext(ctx, "SELECT to_regclass('zzz_owner')").Scan(&exists))
+	require.False(t, exists.Valid)
 }
 
 func TestAddedTableDependencyPostgreSQLSelfReference(t *testing.T) {

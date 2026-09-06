@@ -31,6 +31,11 @@ func TestAddedTableDependencyMySQL(t *testing.T) {
 	var childExists int
 	require.NoError(t, database.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'aaa_child'").Scan(&childExists))
 	require.Equal(t, 1, childExists)
+	for index := len(plan.Statements) - 1; index >= 0; index-- {
+		mysqlExec(t, ctx, database, string(plan.Statements[index].ReverseSQL))
+	}
+	require.NoError(t, database.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('aaa_child', 'zzz_owner')").Scan(&childExists))
+	require.Equal(t, 0, childExists)
 }
 
 func TestAddedTableDependencyMySQLSelfReference(t *testing.T) {
