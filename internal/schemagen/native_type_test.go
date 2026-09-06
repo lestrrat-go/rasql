@@ -31,6 +31,8 @@ func TestNativeConsumerCompilesAndExercisesGeneratedRuntime(t *testing.T) {
 	table := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{
 		{Name: "mood", Type: schema.OpaqueType{}, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "public", Name: "mood", Kind: schema.NativeEnum, Arguments: []string{"sad", "happy"}}},
 		{Name: "moods", Type: schema.OpaqueType{}, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "public", Name: "mood", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "public", Name: "mood", Kind: schema.NativeEnum}}},
+		{Name: "amount", Type: schema.OpaqueType{}, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "public", Name: "amount_domain", Kind: schema.NativeDomain}},
+		{Name: "choice", Type: schema.OpaqueType{}, NativeType: &schema.NativeTypeDef{Dialect: "mysql", Name: "enum", Kind: schema.NativeEnum, Arguments: []string{"one", "two"}}},
 		{Name: "role", Type: schema.OpaqueType{}, NativeType: &schema.NativeTypeDef{Dialect: "mysql", Name: "set", Kind: schema.NativeSet, Arguments: []string{"admin", "reader"}}},
 	}}
 	source, err := schemagen.PackageSource("generated", table)
@@ -49,11 +51,13 @@ import (
  "github.com/stretchr/testify/require"
 )
 type source struct{}
-func (source) Scan(destinations ...any) error { *destinations[0].(*any) = "happy"; *destinations[1].(*any) = []string{"sad"}; *destinations[2].(*any) = "admin"; return nil }
+func (source) Scan(destinations ...any) error { *destinations[0].(*any) = "happy"; *destinations[1].(*any) = []string{"sad"}; *destinations[2].(*any) = "amount"; *destinations[3].(*any) = "one"; *destinations[4].(*any) = "admin"; return nil }
 func TestNativeRuntime(t *testing.T) {
  row := &generated.EventsRow{}
  require.NoError(t, row.ScanRow(source{}))
  require.Equal(t, "happy", row.Mood)
+ require.Equal(t, "amount", row.Amount)
+ require.Equal(t, "one", row.Choice)
  destinations, err := row.ScanDestinations([]string{"role", "mood"}); require.NoError(t, err)
  *destinations[0].(*any) = "reader"; *destinations[1].(*any) = nil
  require.Nil(t, row.Mood)
@@ -74,7 +78,8 @@ func TestNativeRuntime(t *testing.T) {
 
 func TestNativeTypeGenerationKeepsOpaqueRuntimeBindingAndNestedValues(t *testing.T) {
 	native := &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum, Arguments: []string{}}
-	table := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "mood", Type: schema.OpaqueType{}, NativeType: native}}}
+	nested := &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "app", Name: "mood", Kind: schema.NativeEnum, Arguments: nil}}
+	table := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "mood", Type: schema.OpaqueType{}, NativeType: native}, {Name: "moods", Type: schema.OpaqueType{}, NativeType: nested}}}
 	require.Equal(t, "any", schemagen.ColumnGoType(table.Columns[0]))
 	packageSource, err := schemagen.PackageSource("generated", table)
 	require.NoError(t, err)
@@ -86,6 +91,8 @@ func TestNativeTypeGenerationKeepsOpaqueRuntimeBindingAndNestedValues(t *testing
 		require.Contains(t, string(source), `Arguments: []string{}`)
 		require.Contains(t, string(source), `Name: "mood"`)
 	}
+	require.Contains(t, string(packageSource), `Element: &schema.NativeTypeDef`)
+	require.Equal(t, 1, strings.Count(string(packageSource), `Arguments: []string{}`))
 	require.Contains(t, string(tableSource), "func (r *EventsRow) ScanRow(src rasql.ScanSource) error")
 	require.Contains(t, string(tableSource), "func (r *EventsRow) ScanDestinations(columns []string) ([]any, error)")
 	require.Contains(t, string(tableSource), "func (r EventsRow) ColumnValue(name string) (any, bool)")
@@ -95,6 +102,11 @@ func TestNativeTypeGenerationKeepsOpaqueRuntimeBindingAndNestedValues(t *testing
 	require.NoError(t, json.Unmarshal(encoded, &decoded))
 	require.NotNil(t, decoded.Arguments)
 	require.Empty(t, decoded.Arguments)
-	_, err = schemagen.PackageSource("generated", schema.TableDef{Name: "broken", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}}}})
+	broken := schema.TableDef{Name: "broken", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}}}}
+	_, err = schemagen.PackageSource("generated", broken)
+	require.Error(t, err)
+	_, err = schemagen.TableSource("generated", broken)
+	require.Error(t, err)
+	_, err = schemagen.DescriptorSource("generated", broken)
 	require.Error(t, err)
 }
