@@ -17,9 +17,12 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -597,6 +600,64 @@ func TestRunDiffGeneratedSQLiteMigrationRoundTrip(t *testing.T) {
 	err = database.QueryRowContext(t.Context(), "SELECT name FROM pragma_table_info('members') WHERE name = 'email'").Scan(&column)
 	require.ErrorIs(t, err, sql.ErrNoRows)
 	require.NoError(t, database.Close())
+}
+
+func TestIrreversibleDiskArtifactAppliesAndRefusesRevert(t *testing.T) {
+	root := t.TempDir()
+	plan := diff.Plan{
+		Dialect:            "sqlite",
+		IrreversibleReason: "data transformation cannot be reversed",
+		Statements: []diff.PlannedStatement{{
+			Source: "001_create_users.sql",
+			SQL:    "CREATE TABLE users (id INTEGER PRIMARY KEY);\n",
+		}},
+	}
+	require.NoError(t, diff.WriteMigration(filepath.Join(root, "001_irreversible"), plan))
+	migrations, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	database, err := sql.Open("sqlite", filepath.Join(root, "application.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	runner, err := migrate.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = runner.Apply(t.Context(), migrate.AllPending(), migrations...)
+	require.NoError(t, err)
+	_, err = runner.RevertPlan(t.Context(), migrate.Steps(1), migrations...)
+	require.ErrorContains(t, err, "has no reverse SQL source")
+	var table string
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'").Scan(&table))
+	require.Equal(t, "users", table)
+	var history int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM rasql_schema_migrations").Scan(&history))
+	require.Equal(t, 1, history)
+}
+
+func TestRunSQLiteGeneratedMultiSourceArtifactRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	migrationRoot := filepath.Join(root, "migrations")
+	directory := filepath.Join(migrationRoot, "001_projects")
+	files, err := buildMigrationFormatFiles(dialect.SQLite(), []schema.TableDef{{
+		Name:       "projects",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		Indexes:    []schema.IndexDef{{Name: "projects_name_idx", Columns: []string{"name"}}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, files, 4)
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	for _, file := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(directory, file.Name), []byte(file.SQL), 0o600))
+	}
+	dsn := filepath.Join(root, "application.db")
+	setCommandOutput(t)
+	require.NoError(t, run([]string{"apply", "-dir", migrationRoot, "-dialect", "sqlite", "-dsn", dsn}))
+	require.NoError(t, run([]string{"revert", "-dir", migrationRoot, "-dialect", "sqlite", "-dsn", dsn, "-steps", "1"}))
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	var count int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM sqlite_master WHERE name = 'projects'").Scan(&count))
+	require.Zero(t, count)
 }
 
 // TestRunApplyToStopsAtTheNamedMigration pins what -to means on apply: the

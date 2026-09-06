@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -970,9 +971,9 @@ func writeDumpPreview(output io.Writer, files []dumpFile) {
 // with its parents, empty is used, and anything else already there --
 // including a dotfile -- refuses the run before anything is written, since a
 // dump must never overwrite checked-in DDL and there is no -force flag. The
-// actual write goes through diff.WriteMigration, which writes through a
-// sibling temporary directory and one os.Rename so a failure partway leaves
-// outputDirectory untouched.
+// migration-format writes go through diff.WriteMigration, and schema-format
+// writes use the same sibling temporary-directory and one os.Rename pattern
+// so a failure partway leaves outputDirectory untouched.
 func writeDumpOutput(outputDirectory, dialectName string, files []dumpFile) error {
 	info, err := os.Stat(outputDirectory)
 	switch {
@@ -1002,10 +1003,17 @@ func writeDumpOutput(outputDirectory, dialectName string, files []dumpFile) erro
 	}
 
 	byName := make(map[string]string)
+	hasMigrationSuffix := false
 	for _, file := range files {
+		if strings.HasSuffix(file.Name, ".up.sql") || strings.HasSuffix(file.Name, ".down.sql") {
+			hasMigrationSuffix = true
+		}
 		if strings.HasSuffix(file.Name, ".down.sql") {
 			byName[strings.TrimSuffix(file.Name, ".down.sql")] = file.SQL
 		}
+	}
+	if !hasMigrationSuffix {
+		return writeSchemaDumpOutput(outputDirectory, files)
 	}
 	statements := make([]diff.PlannedStatement, 0, len(files))
 	for _, file := range files {
@@ -1019,4 +1027,28 @@ func writeDumpOutput(outputDirectory, dialectName string, files []dumpFile) erro
 	}
 	plan := diff.Plan{Dialect: dialectName, Statements: statements}
 	return diff.WriteMigration(outputDirectory, plan)
+}
+
+func writeSchemaDumpOutput(outputDirectory string, files []dumpFile) error {
+	parent := filepath.Dir(outputDirectory)
+	temporary, err := os.MkdirTemp(parent, "."+filepath.Base(outputDirectory)+".tmp-")
+	if err != nil {
+		return fmt.Errorf("dump: create temporary output directory: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(temporary)
+		}
+	}()
+	for _, file := range files {
+		if err := os.WriteFile(filepath.Join(temporary, file.Name), []byte(file.SQL), 0o600); err != nil {
+			return fmt.Errorf("dump: write schema source %q: %w", file.Name, err)
+		}
+	}
+	if err := os.Rename(temporary, outputDirectory); err != nil {
+		return fmt.Errorf("dump: create output directory %q: %w", outputDirectory, err)
+	}
+	committed = true
+	return nil
 }

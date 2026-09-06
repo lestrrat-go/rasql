@@ -176,6 +176,15 @@ func TestBuildSchemaFormatFilesLayout(t *testing.T) {
 	require.Equal(t, "audit__events.sql", files[1].Name, "a schema-qualified table is named <schema>__<table>")
 }
 
+func TestWriteDumpOutputWritesSchemaSources(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "schema")
+	files := []dumpFile{{Name: "members.sql", SQL: "CREATE TABLE members (id INTEGER);\n"}}
+	require.NoError(t, writeDumpOutput(output, "sqlite", files))
+	contents, err := os.ReadFile(filepath.Join(output, "members.sql"))
+	require.NoError(t, err)
+	require.Equal(t, files[0].SQL, string(contents))
+}
+
 func TestBuildMigrationFormatFilesLayout(t *testing.T) {
 	teams := schema.TableDef{Name: "teams", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
 	members := schema.TableDef{
@@ -237,6 +246,23 @@ func TestRunDumpPreviewWritesNothingToDisk(t *testing.T) {
 	// so the dumped file is named "main__members.sql", not "members.sql".
 	require.Contains(t, outputBuffer.String(), "-- main__members.sql\n")
 	require.Contains(t, outputBuffer.String(), `CREATE TABLE "main"."members"`)
+}
+
+func TestRunDumpSchemaOutputWritesPlainSources(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	output := filepath.Join(t.TempDir(), "schema")
+	setCommandOutput(t)
+	require.NoError(t, run([]string{"dump", "-dialect", "sqlite", "-dsn", dsn, "-output", output}))
+	entries, err := os.ReadDir(output)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "main__members.sql", entries[0].Name())
 }
 
 func TestWriteDumpOutputDirectoryHandling(t *testing.T) {
