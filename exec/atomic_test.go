@@ -207,6 +207,11 @@ func TestAtomicReleaseAndOuterRollbackErrorsRemainReachable(t *testing.T) {
 	err = db.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { return callbackErr })
 	require.ErrorIs(t, err, callbackErr)
 	require.ErrorIs(t, err, rollbackErr)
+	mock.ExpectBegin()
+	commitErr := errors.New("outer commit failed")
+	mock.ExpectCommit().WillReturnError(commitErr)
+	err = db.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { return nil })
+	require.ErrorIs(t, err, commitErr)
 }
 
 func TestAtomicOuterPanicCleanupWrapsRollbackFailure(t *testing.T) {
