@@ -5,14 +5,18 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
 	_ "modernc.org/sqlite"
@@ -201,6 +205,87 @@ func TestFromQueryerReadsThroughTheCallersTransaction(t *testing.T) {
 	got, err := catalog.FromQueryer(context.Background(), tx, catalog.Options{Dialect: dialect.SQLite()})
 	require.NoError(t, err)
 	require.Equal(t, expected, got)
+}
+
+func TestSQLiteRelationshipsKeepDeclaredAndResolvedSchemas(t *testing.T) {
+	database := mustCreateSQLiteDB(t,
+		"CREATE TABLE users (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users (id))",
+	)
+	tables, err := catalog.FromDatabase(t.Context(), database, catalog.Options{Dialect: dialect.SQLite()})
+	require.NoError(t, err)
+	var orders schema.TableDef
+	for _, table := range tables {
+		if table.Name == "orders" {
+			orders = table
+		}
+	}
+	require.Equal(t, "main", orders.Schema)
+	require.Len(t, orders.ForeignKeys, 1)
+	require.Empty(t, orders.ForeignKeys[0].ReferencedSchema)
+	require.Len(t, orders.Relationships, 1)
+	require.Empty(t, orders.Relationships[0].ReferencedSchema)
+	require.Equal(t, "main", orders.Relationships[0].ResolvedReferencedSchema)
+}
+
+func TestSQLiteCatalogDescriptorsCompileAndLoad(t *testing.T) {
+	database := mustCreateSQLiteDB(t,
+		"CREATE TABLE users (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users (id))",
+		"INSERT INTO users VALUES (1)", "INSERT INTO orders VALUES (10, 1)",
+	)
+	tables, err := catalog.FromDatabase(t.Context(), database, catalog.Options{Dialect: dialect.SQLite()})
+	require.NoError(t, err)
+	consumer := `package store_test
+import ("context"; "database/sql"; "testing"; "github.com/lestrrat-go/rasql"; "github.com/lestrrat-go/rasql/dialect"; "example.com/consumer/store"; _ "modernc.org/sqlite")
+func TestLoad(t *testing.T) { db0, _ := sql.Open("sqlite", ":memory:"); defer db0.Close(); db0.SetMaxOpenConns(1); db, _ := rasql.New(db0, dialect.SQLite()); ctx := context.Background(); db0.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY)"); db0.Exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL)"); db0.Exec("INSERT INTO users VALUES (1)"); db0.Exec("INSERT INTO orders VALUES (10, 1)"); one, err := store.Orders().User().Load(ctx, db, []store.OrdersRow{{ID:10, UserID:1}}); if err != nil || one[1].ID != 1 { t.Fatalf("forward = %#v, %v", one, err) }; many, err := store.Users().Orders().Load(ctx, db, []store.UsersRow{{ID:1}}); if err != nil || len(many[1]) != 1 || many[1][0].ID != 10 { t.Fatalf("inverse = %#v, %v", many, err) } }
+`
+	runGeneratedSQLiteConsumer(t, tables, consumer)
+}
+
+func TestSQLiteAttachedRelationshipsResolveConnectionScope(t *testing.T) {
+	database := mustCreateSQLiteDB(t)
+	conn, err := database.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS aux")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), "CREATE TABLE aux.customers (id INTEGER PRIMARY KEY); CREATE TABLE aux.purchases (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id))")
+	require.NoError(t, err)
+	tables, err := catalog.FromQueryer(t.Context(), conn, catalog.Options{Dialect: dialect.SQLite()})
+	require.NoError(t, err)
+	for _, table := range tables {
+		if table.Name != "purchases" {
+			continue
+		}
+		require.Equal(t, "aux", table.Schema)
+		require.Empty(t, table.ForeignKeys[0].ReferencedSchema)
+		require.Equal(t, "aux", table.Relationships[0].ResolvedReferencedSchema)
+	}
+}
+
+func runGeneratedSQLiteConsumer(t *testing.T, tables []schema.TableDef, consumer string) {
+	t.Helper()
+	dir := t.TempDir()
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	repoGoMod, err := os.ReadFile(filepath.Join("..", "go.mod"))
+	require.NoError(t, err)
+	goMod := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/consumer\n", 1)
+	goMod += "\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o600))
+	repoGoSum, err := os.ReadFile(filepath.Join("..", "go.sum"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.sum"), repoGoSum, 0o600))
+	output := filepath.Join(dir, "store")
+	store := generate.Store{Package: "store", Dir: output, Tables: tables, Dialect: dialect.SQLite()}
+	require.NoError(t, store.Write())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "consumer_test.go"), []byte(consumer), 0o600))
+	command := exec.CommandContext(t.Context(), "go", "test", "./...")
+	command.Dir = dir
+	command.Env = append(os.Environ(), "GOPROXY=off")
+	outputBytes, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "generated consumer output:\n%s", outputBytes)
 }
 
 // TestFromDatabaseReportsACommitFailure pins the commit-error path
