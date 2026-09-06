@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dberror"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -259,6 +260,108 @@ func TestBulkCallerTransactionIsNotDurable(t *testing.T) {
 	var count int
 	require.NoError(t, sqlDB.QueryRow(`SELECT count(*) FROM items WHERE a = 'caller'`).Scan(&count))
 	require.Zero(t, count)
+}
+
+func TestBulkOwnedRollbackFailureMarksAttemptedIndexesUnknown(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = database.Close() }()
+	table, a, _, _ := bulkTestTable()
+	first, err := rasql.NewCreatePlan(table, rasql.SetField(a, "first"))
+	require.NoError(t, err)
+	second, err := rasql.NewCreatePlan(table, rasql.SetField(a, "second"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(first, second)
+	require.NoError(t, err)
+	statementErr := fmt.Errorf("statement failed")
+	rollbackErr := fmt.Errorf("rollback failed")
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO").WillReturnError(statementErr)
+	mock.ExpectRollback().WillReturnError(rollbackErr)
+	db, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{MaxRows: 1, Atomic: true})
+	require.ErrorIs(t, err, statementErr)
+	require.ErrorIs(t, err, rollbackErr)
+	require.Equal(t, []int{0, 1}, outcome.Failed.Indexes)
+	require.Equal(t, rasql.OutcomeUnknown, outcome.Failed.Certainty)
+	require.False(t, outcome.Durable)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBulkOwnedCommitFailureMarksAllIndexesUnknown(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = database.Close() }()
+	table, a, _, _ := bulkTestTable()
+	plan, err := rasql.NewCreatePlan(table, rasql.SetField(a, "one"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(plan)
+	require.NoError(t, err)
+	commitErr := fmt.Errorf("commit failed")
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit().WillReturnError(commitErr)
+	db, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{Atomic: true})
+	require.ErrorIs(t, err, commitErr)
+	require.Equal(t, []int{0}, outcome.Failed.Indexes)
+	require.Equal(t, rasql.OutcomeUnknown, outcome.Failed.Certainty)
+	require.False(t, outcome.Durable)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBulkBeginFailureAttemptsNoInput(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = database.Close() }()
+	table, a, _, _ := bulkTestTable()
+	plan, err := rasql.NewCreatePlan(table, rasql.SetField(a, "one"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(plan)
+	require.NoError(t, err)
+	beginErr := fmt.Errorf("begin failed")
+	mock.ExpectBegin().WillReturnError(beginErr)
+	db, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{Atomic: true})
+	require.ErrorIs(t, err, beginErr)
+	require.Empty(t, outcome.Completed)
+	require.Nil(t, outcome.Failed)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBulkCallerSavepointCleanupFailureMarksAttemptedIndexesUnknown(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = database.Close() }()
+	mock.ExpectBegin()
+	tx, err := database.Begin()
+	require.NoError(t, err)
+	table, a, _, _ := bulkTestTable()
+	plan, err := rasql.NewCreatePlan(table, rasql.SetField(a, "one"))
+	require.NoError(t, err)
+	bulk, err := rasql.NewBulkPlan(plan)
+	require.NoError(t, err)
+	statementErr := fmt.Errorf("statement failed")
+	rollbackErr := fmt.Errorf("savepoint rollback failed")
+	releaseErr := fmt.Errorf("savepoint release failed")
+	mock.ExpectExec("SAVEPOINT").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO").WillReturnError(statementErr)
+	mock.ExpectExec("ROLLBACK TO SAVEPOINT").WillReturnError(rollbackErr)
+	mock.ExpectExec("RELEASE SAVEPOINT").WillReturnError(releaseErr)
+	db, err := rasql.New(tx, dialect.SQLite())
+	require.NoError(t, err)
+	outcome, err := rasql.ExecBulkCreate(t.Context(), db, bulk, rasql.BulkOptions{Atomic: true})
+	require.ErrorIs(t, err, statementErr)
+	require.ErrorIs(t, err, rollbackErr)
+	require.ErrorIs(t, err, releaseErr)
+	require.Equal(t, []int{0}, outcome.Failed.Indexes)
+	require.Equal(t, rasql.OutcomeUnknown, outcome.Failed.Certainty)
+	require.False(t, outcome.Durable)
+	_ = tx.Rollback()
 }
 
 func pointer(value string) *string { return &value }

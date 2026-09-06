@@ -146,9 +146,10 @@ func ExecBulkCreate[T any](ctx context.Context, db DB, bulk BulkPlan[T], options
 		outcome, executionErr := executeBulkBatches(ctx, transaction, groups, options.Classifier)
 		if executionErr != nil {
 			rollbackErr := transaction.Rollback()
+			attempted := bulkAttemptedIndexes(outcome)
 			outcome.Completed = nil
 			if rollbackErr != nil {
-				outcome.Failed = &FailedBatch{Indexes: bulkAttemptedIndexes(outcome), Certainty: OutcomeUnknown, Err: errors.Join(executionErr, rollbackErr)}
+				outcome.Failed = &FailedBatch{Indexes: attempted, Certainty: OutcomeUnknown, Err: errors.Join(executionErr, rollbackErr)}
 				return outcome, outcome.Failed.Err
 			}
 			outcome.Durable = false
