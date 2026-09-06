@@ -181,6 +181,15 @@ On PostgreSQL and MySQL, `GeneratedExpression` is the server's own re-serialized
 
 A generated column changes nothing about code generation: `rasqlgen` still emits an ordinary row field for it, since a generated column reads back like any other column, and the field's Go type follows the same rules as any other column of its logical type. It is only the write path that treats it differently, and automatically: `rasql.Insert`, `rasql.InsertMany`, `rasql.Update`, and `rasql.UpdateMany` all leave a `GeneratedExpression` column out of the column list they build by default, the same way `rasql.UpdateWithOptions` already leaves the primary key out of a plain `Update`'s assignment list, because a database rejects a statement that targets a generated column explicitly. A caller does not need `rasql.DefaultColumns` or `rasql.UpdateColumns` to get this: those options still work for their existing purpose (a database-default or auto-increment column an ordinary, non-generated column happens to have), but naming a generated column through `rasql.UpdateColumns` is refused up front rather than silently accepted or left to fail against the database.
 
+## Namespaces
+
+`Inspector.TableIn(ctx, namespace, table)` and `TableNamesIn(ctx, namespace)`
+use a PostgreSQL schema, MySQL database, or SQLite attached database as the
+requested namespace. The returned descriptor or table name preserves that
+namespace in `Schema`; the unscoped methods keep their existing default
+behavior. `catalog.Options.Namespaces` sweeps selected namespaces, while
+`IncludeObjects` and `ExcludeObjects` select exact `{Schema, Name}` identities.
+
 ## Next
 
 [Schemas](01-schema.md) covers the descriptor an application writes itself.

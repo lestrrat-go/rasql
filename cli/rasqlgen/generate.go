@@ -14,6 +14,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
+	"github.com/lestrrat-go/rasql/schema"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -69,6 +70,9 @@ func (c command) runGenerate(args []string) error {
 	root := flags.String("root", "", "directory -output resolves against (default: the module root above the working directory)")
 	include := flags.String("include", "", "comma-separated tables to generate, instead of every base table")
 	exclude := flags.String("exclude", "", "comma-separated tables to skip; not accepted with -include")
+	namespaces := flags.String("namespaces", "", "comma-separated schemas, databases, or attached SQLite names to inspect")
+	includeObjects := flags.String("include-objects", "", "comma-separated exact objects as namespace.table")
+	excludeObjects := flags.String("exclude-objects", "", "comma-separated exact objects as namespace.table")
 	historyTable := flags.String("history-table", "", "migration history table to skip (default: rasql_schema_migrations)")
 	prune := flags.Bool("prune", true, "delete a generated file this run no longer writes, instead of refusing the run")
 	check := flags.Bool("check", false, "report whether the generated package is current instead of writing it")
@@ -134,6 +138,27 @@ func (c command) runGenerate(args []string) error {
 	if !typed.has("exclude") && len(settings.Tables.Exclude) > 0 {
 		excludeTables = settings.Tables.Exclude
 	}
+	namespaceList, err := splitTableNames("namespaces", *namespaces)
+	if err != nil {
+		return err
+	}
+	if !typed.has("namespaces") && len(settings.Tables.Namespaces) > 0 {
+		namespaceList = settings.Tables.Namespaces
+	}
+	includeObjectList, err := splitObjectNames("include-objects", *includeObjects)
+	if err != nil {
+		return err
+	}
+	if !typed.has("include-objects") && len(settings.Tables.IncludeObjects) > 0 {
+		includeObjectList = settings.Tables.IncludeObjects
+	}
+	excludeObjectList, err := splitObjectNames("exclude-objects", *excludeObjects)
+	if err != nil {
+		return err
+	}
+	if !typed.has("exclude-objects") && len(settings.Tables.ExcludeObjects) > 0 {
+		excludeObjectList = settings.Tables.ExcludeObjects
+	}
 	hints, err := settings.hints()
 	if err != nil {
 		return err
@@ -157,6 +182,7 @@ func (c command) runGenerate(args []string) error {
 		Include:      includeTables,
 		Exclude:      excludeTables,
 		HistoryTable: *historyTable,
+		Namespaces:   namespaceList, IncludeObjects: includeObjectList, ExcludeObjects: excludeObjectList,
 	})
 	if err != nil {
 		return fmt.Errorf("generate: %w", dsnredact.Error(err, *dsn))
@@ -184,6 +210,30 @@ func (c command) runGenerate(args []string) error {
 	}
 	_, _ = fmt.Fprintf(c.output, "wrote %s from %d %s\n", *output, len(tables), pluralTables(len(tables)))
 	return nil
+}
+
+func splitObjectNames(flagName, value string) ([]schema.ObjectName, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	objects := make([]schema.ObjectName, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("generate: -%s %q holds an empty object name", flagName, value)
+		}
+		pieces := strings.Split(part, ".")
+		if len(pieces) > 2 || pieces[0] == "" || (len(pieces) == 2 && pieces[1] == "") {
+			return nil, fmt.Errorf("generate: -%s object %q must be table or namespace.table", flagName, part)
+		}
+		object := schema.ObjectName{Name: pieces[0]}
+		if len(pieces) == 2 {
+			object = schema.ObjectName{Schema: pieces[0], Name: pieces[1]}
+		}
+		objects = append(objects, object)
+	}
+	return objects, nil
 }
 
 // splitTableNames parses one comma-separated table selection flag. An empty

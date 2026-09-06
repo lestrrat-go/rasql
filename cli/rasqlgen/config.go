@@ -13,6 +13,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/modroot"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // defaultConfigName is the file a run reads when -config names none. It sits
@@ -68,6 +69,12 @@ type config struct {
 // configTables is the table selection and the Go-side names no database can
 // state.
 type configTables struct {
+	Namespaces []string `json:"namespaces"`
+
+	IncludeObjects []schema.ObjectName `json:"include_objects"`
+
+	ExcludeObjects []schema.ObjectName `json:"exclude_objects"`
+
 	// Include names the only tables to generate. Empty sweeps every base
 	// table. It is not accepted together with Exclude.
 	Include []string `json:"include"`

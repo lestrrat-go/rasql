@@ -44,6 +44,8 @@ module root. Write it once and check it in:
   "dialect": "sqlite",
   "prune": true,
   "tables": {
+    "namespaces": ["billing", "audit"],
+    "include_objects": [{"schema": "billing", "name": "events"}, {"schema": "audit", "name": "events"}],
     "exclude": ["audit_log"],
     "history_table": "schema_migrations",
     "row_names": {"users": "User"}
@@ -59,8 +61,14 @@ module root. Write it once and check it in:
 resolved against the module root unless `root` names a different base.
 `dialect` is `postgresql` (or `postgres`), `mysql`, or `sqlite`.
 
-`tables.include` names the only tables to generate, and `tables.exclude` names
-tables to skip. A sweep otherwise covers every visible base table.
+`tables.namespaces` selects PostgreSQL schemas, MySQL databases, or attached
+SQLite databases. `tables.include_objects` and `tables.exclude_objects` use
+exact `{schema, name}` identities, which lets one package include same-named
+tables from multiple namespaces. The command-line equivalents are
+`-namespaces`, `-include-objects`, and `-exclude-objects`; object flags accept
+`namespace.table` or an unqualified table. `tables.include` names the only
+tables to generate, and `tables.exclude` names tables to skip. A sweep
+otherwise covers every visible base table.
 `tables.history_table` names the migration history table to skip when it is
 not `rasql_schema_migrations`. `tables.row_names` overrides a generated row
 type: the generator derives `UsersRow` from a `users` table on its own, and
