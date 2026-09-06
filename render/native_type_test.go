@@ -48,7 +48,7 @@ func TestCreateTableNativeRendererMatrix(t *testing.T) {
 		{"postgres time precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Name: "time", Kind: schema.NativeBuiltin, Arguments: []string{"3"}}, `CREATE TABLE "events" ("value" "time"(3) NOT NULL)`},
 		{"postgres timetz precision", dialect.PostgreSQL(), &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timetz", Kind: schema.NativeBuiltin, Arguments: []string{"0"}}, `CREATE TABLE "events" ("value" "pg_catalog"."timetz"(0) NOT NULL)`},
 		{"mysql escaping", dialect.MySQL(), &schema.NativeTypeDef{Dialect: "mysql", Name: "choice", Kind: schema.NativeEnum, Arguments: []string{"a\\b", "quote's"}}, "CREATE TABLE `events` (`value` ENUM('a\\\\b', 'quote''s') NOT NULL)"},
-		{"sqlite declaration", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR(12)", Kind: schema.NativeOther}, `CREATE TABLE "events" ("value" VARCHAR(12) NOT NULL)`},
+		{"sqlite declaration", dialect.SQLite(), &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}, `CREATE TABLE "events" ("value" VARCHAR(12) NOT NULL)`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -68,4 +68,17 @@ func TestCreateTableRejectsInvalidNativeIdentityBeforeSQL(t *testing.T) {
 	require.Equal(t, "events", unsupported.Table)
 	require.Equal(t, "value", unsupported.Column)
 	require.Equal(t, *native, unsupported.Native)
+}
+
+func TestCreateTableRejectsMalformedSQLiteNativeArguments(t *testing.T) {
+	for _, native := range []*schema.NativeTypeDef{
+		{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12x"}},
+		{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{""}},
+		{Dialect: "sqlite", Name: "VARCHAR;DROP", Kind: schema.NativeOther},
+	} {
+		_, err := render.CreateTable(dialect.SQLite(), schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}, NativeType: native}}})
+		var unsupported *render.ErrUnsupportedNativeType
+		require.ErrorAs(t, err, &unsupported)
+		require.Equal(t, "events", unsupported.Table)
+	}
 }

@@ -4,10 +4,14 @@ package inspect_test
 
 import (
 	"database/sql"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/render"
@@ -22,12 +26,24 @@ func TestNativeTypeMySQL(t *testing.T) {
 	statement := "CREATE TABLE `" + tableName + "` (`mood` ENUM('needs,comma','quote''s','  spaced  ','back\\\\slash',''), `flags` SET('one','two'))"
 	_, err := database.ExecContext(t.Context(), statement)
 	require.NoError(t, err)
+	var columnType, setType string
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT column_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'mood'", tableName).Scan(&columnType))
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT column_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'flags'", tableName).Scan(&setType))
+	require.Equal(t, "enum('needs,comma','quote''s','  spaced','back\\\\slash','')", columnType)
+	require.Equal(t, "set('one','two')", setType)
 	inspector, err := inspect.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), tableName)
 	require.NoError(t, err)
 	require.Equal(t, []string{"needs,comma", "quote's", "  spaced", "back\\slash", ""}, table.Columns[0].NativeType.Arguments)
 	require.Equal(t, []string{"one", "two"}, table.Columns[1].NativeType.Arguments)
+	catalogTables, err := catalog.FromQueryer(t.Context(), database, catalog.Options{Dialect: dialect.MySQL(), Include: []string{tableName}})
+	require.NoError(t, err)
+	require.Equal(t, table, catalogTables[0])
+	descriptor, err := generate.DescriptorSource("nativefixture", table)
+	require.NoError(t, err)
+	_, err = parser.ParseFile(token.NewFileSet(), "descriptor.go", descriptor, parser.AllErrors)
+	require.NoError(t, err)
 	table.Name = dbtest.UniqueName(t, "rasql_native_copy")
 	rendered, err := render.CreateTable(dialect.MySQL(), table)
 	require.NoError(t, err)
@@ -48,7 +64,7 @@ func TestNativeTypeSQLiteRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	table, err := inspector.Table(t.Context(), "source")
 	require.NoError(t, err)
-	require.Equal(t, &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR(12)", Kind: schema.NativeOther}, table.Columns[0].NativeType)
+	require.Equal(t, &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeOther, Arguments: []string{"12"}}, table.Columns[0].NativeType)
 	require.Equal(t, &schema.NativeTypeDef{Dialect: "sqlite", Name: "INT", Kind: schema.NativeOther}, table.Columns[1].NativeType)
 	require.Equal(t, schema.OpaqueType{}, table.Columns[2].Type)
 	rendered, err := render.CreateTable(dialect.SQLite(), table)

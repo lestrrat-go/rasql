@@ -788,7 +788,11 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 			Hidden:   column.hidden == sqliteHiddenModule,
 		}
 		if _, opaque := column.columnType.(schema.OpaqueType); opaque || sqliteDeclarationNeedsNative(column.databaseType) {
-			columnDef.NativeType = &schema.NativeTypeDef{Dialect: "sqlite", Name: strings.TrimSpace(column.databaseType), Kind: schema.NativeOther}
+			native, err := sqliteNativeType(column.databaseType)
+			if err != nil {
+				return schema.TableDef{}, fmt.Errorf("inspect: SQLite table %q column %q has invalid declared type: %w", tableName, column.name, err)
+			}
+			columnDef.NativeType = native
 		}
 		if column.hidden == sqliteHiddenGeneratedVirtual || column.hidden == sqliteHiddenGeneratedStored {
 			expression, err := sqliteGeneratedExpression(definition, column.name)
@@ -863,10 +867,67 @@ func (i Inspector) sqliteTableOnConnection(ctx context.Context, databaseName str
 
 func sqliteDeclarationNeedsNative(declaration string) bool {
 	value := strings.ToUpper(strings.TrimSpace(declaration))
-	if value == "" || value == "BLOB" || value == "INTEGER" || value == "TEXT" || value == "REAL" || value == "BOOLEAN" || value == "JSON" || value == "DATE" || value == "TIME" {
+	if value == "" || value == "BLOB" || value == "INTEGER" || value == "TEXT" || value == "REAL" {
 		return false
 	}
 	return strings.ContainsAny(value, "()") || strings.Contains(value, "UNSIGNED") || value == "INT" || value == "INT2" || value == "INT8" || value == "FLOAT" || value == "DOUBLE" || value == "DOUBLE PRECISION" || value == "CHAR" || value == "CLOB"
+}
+
+func sqliteNativeType(declaration string) (*schema.NativeTypeDef, error) {
+	value := strings.TrimSpace(declaration)
+	if value == "" {
+		return nil, fmt.Errorf("declared type is empty")
+	}
+	if strings.HasPrefix(value, `"`) {
+		if !strings.HasSuffix(value, `"`) || len(value) < 2 {
+			return nil, fmt.Errorf("quoted declared type is unterminated")
+		}
+		name := strings.ReplaceAll(value[1:len(value)-1], `""`, `"`)
+		if name == "" || strings.ContainsAny(name, "\r\n") {
+			return nil, fmt.Errorf("quoted declared type is empty or multiline")
+		}
+		return &schema.NativeTypeDef{Dialect: "sqlite", Name: name, Kind: schema.NativeOther}, nil
+	}
+	open := strings.IndexByte(value, '(')
+	name := value
+	arguments := []string(nil)
+	if open >= 0 {
+		if !strings.HasSuffix(value, ")") {
+			return nil, fmt.Errorf("parameter list is not closed")
+		}
+		name = strings.TrimSpace(value[:open])
+		body := strings.TrimSpace(value[open+1 : len(value)-1])
+		if body == "" {
+			return nil, fmt.Errorf("parameter list is empty")
+		}
+		for _, item := range strings.Split(body, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				return nil, fmt.Errorf("parameter list contains an empty value")
+			}
+			for _, char := range item {
+				if char < '0' || char > '9' {
+					return nil, fmt.Errorf("parameter %q is not numeric", item)
+				}
+			}
+			value, err := strconv.ParseUint(item, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("parameter %q is out of range", item)
+			}
+			arguments = append(arguments, strconv.FormatUint(value, 10))
+		}
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || strings.ContainsAny(name, "();'\\\r\n\t") {
+		return nil, fmt.Errorf("declared type name %q is invalid", name)
+	}
+	for _, char := range name {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ' ' {
+			continue
+		}
+		return nil, fmt.Errorf("declared type name %q is invalid", name)
+	}
+	return &schema.NativeTypeDef{Dialect: "sqlite", Name: strings.ToUpper(name), Kind: schema.NativeOther, Arguments: arguments}, nil
 }
 
 type sqliteTableOptions struct {

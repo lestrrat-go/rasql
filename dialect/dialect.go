@@ -285,10 +285,13 @@ func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, erro
 	switch native.Kind {
 	case schema.NativeOther, schema.NativeBuiltin:
 		if d.name == "sqlite" {
-			if !sqliteNativeDeclarationSupported(native.Name) {
+			if !sqliteNativeDeclarationSupported(native.Name, native.Arguments) {
 				return "", false, nil
 			}
-			return native.Name, true, nil
+			if len(native.Arguments) == 0 {
+				return native.Name, true, nil
+			}
+			return native.Name + "(" + strings.Join(native.Arguments, ", ") + ")", true, nil
 		}
 		if d.name == "postgresql" && native.Kind == schema.NativeBuiltin && len(native.Arguments) > 0 {
 			if len(native.Arguments) != 1 || native.Arguments[0] == "" {
@@ -346,16 +349,26 @@ func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, erro
 	}
 }
 
-func sqliteNativeDeclarationSupported(value string) bool {
+func sqliteNativeDeclarationSupported(value string, arguments []string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return false
 	}
 	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || strings.ContainsRune(" _(),\"'", char) {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ' ' {
 			continue
 		}
 		return false
+	}
+	for _, argument := range arguments {
+		if argument == "" {
+			return false
+		}
+		for _, char := range argument {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
 	}
 	return true
 }
