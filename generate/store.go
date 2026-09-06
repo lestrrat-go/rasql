@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"go/token"
@@ -294,7 +295,7 @@ func (s Store) Plan() (Plan, error) {
 
 	files := make([]File, 0, len(sorted)+2+len(s.Queries))
 	for _, table := range sorted {
-		source, err := schemagen.TableSurfaceSource(s.Package, table, sorted...)
+		source, err := schemagen.TableSurfaceSourceInDir(dir, s.Package, table, sorted...)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -313,8 +314,9 @@ func (s Store) Plan() (Plan, error) {
 	}
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorTestFilename), Source: descriptorTestSource})
 
+	inputs := make(map[string]queryInputData, len(s.Queries))
 	for index, q := range s.Queries {
-		file, err := s.planQuery(root, dir, q, sorted, filenames, identifiers)
+		file, err := s.planQuery(root, dir, q, sorted, filenames, identifiers, inputs)
 		if err != nil {
 			return Plan{}, fmt.Errorf("generate: query[%d]: %w", index, err)
 		}
@@ -322,6 +324,11 @@ func (s Store) Plan() (Plan, error) {
 	}
 
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	inputSnapshots := make([]queryInputSnapshot, 0, len(inputs))
+	for _, input := range inputs {
+		inputSnapshots = append(inputSnapshots, input.snapshot)
+	}
+	sort.Slice(inputSnapshots, func(left, right int) bool { return inputSnapshots[left].path < inputSnapshots[right].path })
 
 	// The resolved destination is kept rather than discarded: it is the
 	// file a commit's bytes actually land in, and it differs from the
@@ -391,7 +398,7 @@ func (s Store) Plan() (Plan, error) {
 		}
 	}
 
-	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
+	return Plan{files: files, orphans: orphans, inputs: inputSnapshots, dir: dir, prune: s.Prune, packageName: s.Package, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans the store and commits the plan: it is Plan followed by
@@ -409,8 +416,10 @@ func (s Store) Write() error {
 // Check plans the store and compares the plan with what is on disk, without
 // writing anything. It returns nil when a Write would change nothing at
 // all, an error wrapping ErrStale when the generated package differs from
-// what these inputs produce, and the error Commit itself would return when
-// Commit would refuse the run instead of writing anything. See Plan.Check.
+// what the current inputs produce, and the error Commit itself would return
+// when Commit would refuse the run instead of writing anything. A held Plan
+// guards file-backed query inputs by their captured bytes; a fresh Store.Check
+// evaluates the current inputs. See Plan.Check.
 func (s Store) Check() error {
 	plan, err := s.Plan()
 	if err != nil {
@@ -426,7 +435,7 @@ func (s Store) Check() error {
 // both once they pass, so a later query is checked against them too. tables
 // is the hint-applied, validated, name-sorted set the generated package
 // declares; a bind that names a column resolves against it.
-func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string) (File, error) {
+func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string, inputs map[string]queryInputData) (File, error) {
 	if q.Input == "" && q.SQL == "" {
 		return File{}, errors.New("input or sql is required")
 	}
@@ -468,11 +477,19 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 		if err != nil {
 			return File{}, fmt.Errorf("resolve Input: %w", err)
 		}
-		data, err := readQueryInput(inputPath)
-		if err != nil {
-			return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
+		input, exists := inputs[inputPath]
+		if !exists {
+			data, err := readQueryInput(inputPath)
+			if err != nil {
+				return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
+			}
+			input = queryInputData{
+				snapshot: queryInputSnapshot{path: inputPath, digest: sha256.Sum256(data)},
+				data:     data,
+			}
+			inputs[inputPath] = input
 		}
-		text = string(data)
+		text = string(input.data)
 	}
 	parsed, err := namedsql.Parse(q.Function, text)
 	if err != nil {
@@ -482,7 +499,7 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 	if err != nil {
 		return File{}, err
 	}
-	source, err := querygen.GoSource(compiled.QueryDef(), s.Package, q.Function, tables...)
+	source, err := querygen.GoSourceInDir(dir, compiled.QueryDef(), s.Package, q.Function, tables...)
 	if err != nil {
 		return File{}, err
 	}

@@ -3,6 +3,7 @@ package rasql_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"iter"
 	"testing"
 
@@ -14,7 +15,28 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
+
+type preflightUser struct {
+	ID    int64  `rasql:"id"`
+	Email string `rasql:"email"`
+}
+
+func preflightTable() schema.TableDef {
+	return schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "email", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Indexes: []schema.IndexDef{
+			{Name: "users_email_idx", Columns: []string{"email"}},
+			{Name: "users_id_idx", Columns: []string{"id"}},
+		},
+	}
+}
 
 func testTypedSelectBuilderRunsSubqueryPredicate(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -387,6 +409,87 @@ func TestExecution(t *testing.T) {
 	t.Run("accepts a statement without RETURNING", testDBExecStillAcceptsStatementWithoutReturning)
 	t.Run("rejects unconditional mutations", testExecRejectsUnconditionalMutations)
 	t.Run("runs targeted and explicitly allowed mutations", testExecRunsTargetedAndExplicitlyAllowedMutations)
+}
+
+func TestCreateTablePreflight(t *testing.T) {
+	t.Run("unsupported index renders before execution", func(t *testing.T) {
+		database, err := sql.Open("sqlite", ":memory:")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
+		db, err := rasql.New(database, dialect.SQLite())
+		require.NoError(t, err)
+		table := preflightTable()
+		table.Indexes[0].Method = "gin"
+		users, err := rasql.TableOf[preflightUser](table)
+		require.NoError(t, err)
+
+		err = rasql.CreateTable(t.Context(), db, users)
+		require.ErrorContains(t, err, "rasql: render CREATE INDEX")
+		var count int
+		require.NoError(t, database.QueryRowContext(t.Context(),
+			`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'users'`).Scan(&count))
+		require.Zero(t, count)
+	})
+
+	t.Run("renders all indexes before executing in order", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+		db, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users, err := rasql.TableOf[preflightUser](preflightTable())
+		require.NoError(t, err)
+		mock.ExpectExec(`CREATE TABLE "users" ("id" BIGINT NOT NULL, "email" TEXT NOT NULL, PRIMARY KEY ("id"))`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(`CREATE INDEX "users_email_idx" ON "users" ("email")`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(`CREATE INDEX "users_id_idx" ON "users" ("id")`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+	})
+
+	t.Run("table execution failure prevents indexes", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+		db, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users, err := rasql.TableOf[preflightUser](preflightTable())
+		require.NoError(t, err)
+		mock.ExpectExec(`CREATE TABLE "users" ("id" BIGINT NOT NULL, "email" TEXT NOT NULL, PRIMARY KEY ("id"))`).
+			WillReturnError(errors.New("table failed"))
+
+		require.ErrorContains(t, rasql.CreateTable(t.Context(), db, users), "execute CREATE TABLE")
+	})
+
+	t.Run("index execution failure stops later indexes", func(t *testing.T) {
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+		db, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err)
+		users, err := rasql.TableOf[preflightUser](preflightTable())
+		require.NoError(t, err)
+		mock.ExpectExec(`CREATE TABLE "users" ("id" BIGINT NOT NULL, "email" TEXT NOT NULL, PRIMARY KEY ("id"))`).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(`CREATE INDEX "users_email_idx" ON "users" ("email")`).
+			WillReturnError(errors.New("index failed"))
+
+		require.ErrorContains(t, rasql.CreateTable(t.Context(), db, users), "execute CREATE INDEX")
+	})
 }
 
 func testDBExecExecutesParameterizedInsert(t *testing.T) {

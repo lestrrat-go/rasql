@@ -10,7 +10,7 @@ Predicates, aggregates, and statement constructors are the same ones [the SQL bu
 
 | Operation | Entry point | Result |
 | --- | --- | --- |
-| `SELECT` without decoding | `dynamic.SelectFrom(table.Ref())` | `dynamic.SelectBuilder`, yielding `dynamic.Row` |
+| `SELECT` without decoding | `dynamic.SelectFrom(table.Ref())` or `dynamic.SelectFromRelation(source)` | `dynamic.SelectBuilder`, yielding `dynamic.Row` |
 | `SELECT` from a hand-built statement | `dynamic.Query(ctx, db, statement)` | `iter.Seq2[dynamic.Row, error]` |
 | `DELETE` with no Go row type | `dynamic.DeleteFrom(table.Ref())` | `dynamic.DeleteBuilder` |
 | `DELETE` with `RETURNING`, undecoded | `dynamic.DeleteFrom(table.Ref()).Returning(...)` | `dynamic.DeleteReturningBuilder`, yielding `dynamic.Row` |
@@ -18,7 +18,9 @@ Predicates, aggregates, and statement constructors are the same ones [the SQL bu
 
 ## Select builder methods
 
-`dynamic.SelectFrom` takes a `query.TableRef`, so a generated table joins in as `table.Ref()` and a hand-built `query.MustTableRef` works just as well. The builder has exactly one table and no generated column accessors, so it names its columns as plain strings.
+`dynamic.SelectFrom` takes a `query.TableRef`, while `dynamic.SelectFromRelation` accepts a reusable relation such as a derived
+query or CTE reference. A generated table joins in as `table.Ref()` and a hand-built `query.MustTableRef` works just as well.
+The builder has no generated column accessors, so it names its columns as plain strings.
 
 | Method | Effect |
 | --- | --- |

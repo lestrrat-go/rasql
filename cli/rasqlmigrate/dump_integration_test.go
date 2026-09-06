@@ -8,23 +8,17 @@ package rasqlmigrate
 // width work: sqlmock and other fixture tests assert rasql's own output
 // back to itself, never against a real engine.
 //
-// Every test here drives dumpFilesFromDatabase directly against a *sql.DB
-// internal/dbtest already opened, rather than through runDump's -dsn flag.
-// internal/dbtest deliberately never hands back a DSN string (see
-// internal/dbtest/postgresql.go's comment on PostgreSQLConfig, about a
-// net/url round-trip once corrupting a keyword/value DSN into a connection
-// string that parsed but pointed somewhere else): rebuilding one from the
-// parsed pgx.ConnConfig or mysql.Config here would reintroduce exactly the
-// class of bug that comment exists to prevent, for no coverage gain --
-// dumpFilesFromDatabase already exercises the sweep, the fidelity guards,
-// the dependency ordering, and the rendering runDump itself calls, and
-// -dsn's own parsing and error redaction are already covered by the fixture
-// tests in dump_test.go.
+// Most tests here drive dumpFilesFromDatabase directly against a *sql.DB.
+// Refusal tests that claim atomic disk behavior invoke runDump with the
+// parsed dbtest connection configuration, so they exercise the real output
+// command without reconstructing a DSN by hand.
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -39,6 +33,196 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+func runPostgreSQLDumpCommand(t *testing.T, outputDirectory string) error {
+	t.Helper()
+	config := dbtest.PostgreSQLConfig(t).Copy()
+	parsed, err := url.Parse(config.ConnString())
+	require.NoError(t, err)
+	parsed.Path = "/" + config.Database
+	query := parsed.Query()
+	query.Set("options", "-c search_path=public")
+	parsed.RawQuery = query.Encode()
+	dsn := parsed.String()
+	return runDump([]string{"-dialect", "postgresql", "-dsn", dsn, "-table", "sequence_cases", "-format", "schema", "-output", outputDirectory})
+}
+
+func TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE ambiguous_first`)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE ambiguous_second`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (id BIGINT NOT NULL DEFAULT (nextval('ambiguous_first') + nextval('ambiguous_second')))`)
+
+	outputDirectory := filepath.Join(t.TempDir(), "schema")
+	err := runPostgreSQLDumpCommand(t, outputDirectory)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sequence_cases")
+	require.Contains(t, err.Error(), "ambiguous_first")
+	_, statErr := os.Stat(outputDirectory)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestDumpPostgreSQLSequenceExportRefusesSharedSequence(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE shared_sequence`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (
+		shared_first BIGINT NOT NULL DEFAULT nextval('shared_sequence'),
+		shared_second BIGINT NOT NULL DEFAULT nextval('shared_sequence')
+	)`)
+	outputDirectory := filepath.Join(t.TempDir(), "schema")
+	err := runPostgreSQLDumpCommand(t, outputDirectory)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `table "sequence_cases" column "shared_first"`)
+	require.Contains(t, err.Error(), "shared_sequence")
+	_, statErr := os.Stat(outputDirectory)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestDumpPostgreSQLSequenceExportRefusesOwnedCustomSequence(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE custom_sequence START WITH 10 INCREMENT BY 5`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (custom_value BIGINT NOT NULL DEFAULT nextval('custom_sequence'))`)
+	dumpMustExec(t, ctx, source, `ALTER SEQUENCE custom_sequence OWNED BY sequence_cases.custom_value`)
+	outputDirectory := filepath.Join(t.TempDir(), "schema")
+	err := runPostgreSQLDumpCommand(t, outputDirectory)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `table "sequence_cases" column "custom_value"`)
+	require.Contains(t, err.Error(), "custom_sequence")
+	_, statErr := os.Stat(outputDirectory)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestDumpPostgreSQLSequenceExportRefusesRenamedOwnedSequence(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE renamed_sequence`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (id BIGINT NOT NULL DEFAULT nextval('renamed_sequence'))`)
+	dumpMustExec(t, ctx, source, `ALTER SEQUENCE renamed_sequence OWNED BY sequence_cases.id`)
+	outputDirectory := filepath.Join(t.TempDir(), "schema")
+	err := runPostgreSQLDumpCommand(t, outputDirectory)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sequence_cases")
+	require.Contains(t, err.Error(), "renamed_sequence")
+	_, statErr := os.Stat(outputDirectory)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestDumpPostgreSQLSequenceExportRefusesUnownedExclusiveSequence(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE sequence_cases_id_seq`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (id BIGINT NOT NULL DEFAULT nextval('sequence_cases_id_seq'))`)
+	outputDirectory := filepath.Join(t.TempDir(), "schema")
+	err := runPostgreSQLDumpCommand(t, outputDirectory)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sequence_cases")
+	require.Contains(t, err.Error(), "sequence_cases_id_seq")
+	_, statErr := os.Stat(outputDirectory)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+type postgresSequenceState struct {
+	OID                 int64
+	Schema              string
+	Name                string
+	ReferencingDefaults int64
+	Start               int64
+	Increment           int64
+	Minimum             int64
+	Maximum             int64
+	Cache               int64
+	Cycle               bool
+	Owned               bool
+}
+
+func postgresSequenceStateFor(t *testing.T, ctx context.Context, database *sql.DB, tableName, columnName string) postgresSequenceState {
+	t.Helper()
+	var state postgresSequenceState
+	err := database.QueryRowContext(ctx, `
+		SELECT seq.oid, seqns.nspname, seq.relname,
+			(SELECT count(DISTINCT ad2.oid) FROM pg_attrdef ad2
+			 JOIN pg_depend dep2 ON dep2.classid = 'pg_attrdef'::regclass AND dep2.objid = ad2.oid
+			  AND dep2.refclassid = 'pg_class'::regclass AND dep2.deptype = 'n'
+			 WHERE dep2.refobjid = seq.oid),
+			ps.seqstart, ps.seqincrement, ps.seqmin, ps.seqmax, ps.seqcache, ps.seqcycle,
+			EXISTS (
+				SELECT 1 FROM pg_depend own
+				WHERE own.classid = 'pg_class'::regclass AND own.objid = seq.oid
+				  AND own.refclassid = 'pg_class'::regclass AND own.refobjid = rel.oid
+				  AND own.refobjsubid = att.attnum AND own.deptype = 'a'
+			) AS owned
+		FROM pg_class rel
+		JOIN pg_namespace ns ON ns.oid = rel.relnamespace AND ns.nspname = current_schema()
+		JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attname = $2 AND NOT att.attisdropped
+		JOIN pg_attrdef ad ON ad.adrelid = att.attrelid AND ad.adnum = att.attnum
+		JOIN pg_depend dep ON dep.classid = 'pg_attrdef'::regclass AND dep.objid = ad.oid
+		JOIN pg_class seq ON seq.oid = dep.refobjid AND seq.relkind = 'S'
+		JOIN pg_namespace seqns ON seqns.oid = seq.relnamespace
+		JOIN pg_sequence ps ON ps.seqrelid = seq.oid
+		WHERE rel.relname = $1`, tableName, columnName).Scan(&state.OID, &state.Schema, &state.Name, &state.ReferencingDefaults, &state.Start, &state.Increment, &state.Minimum, &state.Maximum, &state.Cache, &state.Cycle, &state.Owned)
+	require.NoError(t, err)
+	return state
+}
+
+func TestDumpPostgreSQLSequenceExportReplayProof(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE shared_sequence START WITH 10 INCREMENT BY 1`)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE custom_sequence START WITH 10 INCREMENT BY 5`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (
+		shared_first BIGINT NOT NULL DEFAULT nextval('shared_sequence'),
+		shared_second BIGINT NOT NULL DEFAULT nextval('shared_sequence'),
+		custom_value BIGINT NOT NULL DEFAULT nextval('custom_sequence'),
+		control BIGSERIAL NOT NULL
+	)`)
+	dumpMustExec(t, ctx, source, `ALTER SEQUENCE custom_sequence OWNED BY sequence_cases.custom_value`)
+
+	sourceTables, err := catalog.FromDatabase(ctx, source, catalog.Options{Dialect: dialect.PostgreSQL()})
+	require.NoError(t, err)
+	require.Len(t, sourceTables, 1)
+	statement, err := renderPostgreSQLCreateTable(dialect.PostgreSQL(), sourceTables[0])
+	require.NoError(t, err)
+
+	sharedFirst := postgresSequenceStateFor(t, ctx, source, "sequence_cases", "shared_first")
+	sharedSecond := postgresSequenceStateFor(t, ctx, source, "sequence_cases", "shared_second")
+	custom := postgresSequenceStateFor(t, ctx, source, "sequence_cases", "custom_value")
+	require.Equal(t, sharedFirst.OID, sharedSecond.OID)
+	require.Equal(t, int64(1), sharedFirst.Increment)
+	require.Equal(t, int64(5), custom.Increment)
+	require.False(t, sharedFirst.Owned)
+	require.True(t, custom.Owned)
+
+	var sourceFirst, sourceSecond, sourceCustom int64
+	dumpMustExec(t, ctx, source, `INSERT INTO sequence_cases DEFAULT VALUES`)
+	require.NoError(t, source.QueryRowContext(ctx, `SELECT shared_first, shared_second, custom_value FROM sequence_cases`).Scan(&sourceFirst, &sourceSecond, &sourceCustom))
+	require.Equal(t, int64(10), sourceFirst)
+	require.Equal(t, int64(11), sourceSecond)
+	require.Equal(t, int64(10), sourceCustom)
+
+	dumpMustExec(t, ctx, source, `DROP TABLE sequence_cases CASCADE`)
+	dumpMustExec(t, ctx, source, `DROP SEQUENCE shared_sequence`)
+	target := dbtest.PostgreSQLDB(t)
+	_, err = target.ExecContext(ctx, statement+";")
+	require.NoError(t, err)
+	targetFirst := postgresSequenceStateFor(t, ctx, target, "sequence_cases", "shared_first")
+	targetSecond := postgresSequenceStateFor(t, ctx, target, "sequence_cases", "shared_second")
+	targetCustom := postgresSequenceStateFor(t, ctx, target, "sequence_cases", "custom_value")
+	require.NotEqual(t, targetFirst.OID, targetSecond.OID)
+	require.Equal(t, int64(1), targetFirst.Increment)
+	require.Equal(t, int64(1), targetCustom.Increment)
+	require.True(t, targetFirst.Owned)
+	require.True(t, targetCustom.Owned)
+
+	var targetFirstValue, targetSecondValue, targetCustomValue int64
+	dumpMustExec(t, ctx, target, `INSERT INTO sequence_cases DEFAULT VALUES`)
+	require.NoError(t, target.QueryRowContext(ctx, `SELECT shared_first, shared_second, custom_value FROM sequence_cases`).Scan(&targetFirstValue, &targetSecondValue, &targetCustomValue))
+	require.Equal(t, int64(1), targetFirstValue)
+	require.Equal(t, int64(1), targetSecondValue)
+	require.Equal(t, int64(1), targetCustomValue)
+}
 
 // dumpMustExec runs statement against database and fails the test on error.
 func dumpMustExec(t *testing.T, ctx context.Context, database *sql.DB, statement string) {
@@ -116,10 +300,23 @@ func TestDumpPostgreSQLSerialColumnReplaysAsBigserial(t *testing.T) {
 	t.Run("rewritten replays and keeps its sequence", func(t *testing.T) {
 		target := dbtest.PostgreSQLDB(t)
 		dumpApplySQLFiles(t, ctx, target, files)
-		var sequenceName sql.NullString
-		require.NoError(t, target.QueryRowContext(ctx, `SELECT pg_get_serial_sequence('teams', 'id')`).Scan(&sequenceName))
-		require.True(t, sequenceName.Valid, "the replayed column must be backed by a sequence")
-		require.NotEmpty(t, sequenceName.String)
+		sourceState := postgresSequenceStateFor(t, ctx, source, "teams", "id")
+		targetState := postgresSequenceStateFor(t, ctx, target, "teams", "id")
+		require.NotEqual(t, sourceState.OID, targetState.OID)
+		sourceState.OID = 0
+		targetState.OID = 0
+		require.Equal(t, sourceState, targetState)
+		require.Equal(t, "public", targetState.Schema)
+		require.Equal(t, "teams_id_seq", targetState.Name)
+		require.Equal(t, int64(1), targetState.ReferencingDefaults)
+		require.True(t, targetState.Owned)
+		var sourceValue, targetValue int64
+		dumpMustExec(t, ctx, source, `INSERT INTO teams (name) VALUES ('source')`)
+		dumpMustExec(t, ctx, target, `INSERT INTO teams (name) VALUES ('source')`)
+		require.NoError(t, source.QueryRowContext(ctx, `SELECT id FROM teams`).Scan(&sourceValue))
+		require.NoError(t, target.QueryRowContext(ctx, `SELECT id FROM teams`).Scan(&targetValue))
+		require.Equal(t, sourceValue, targetValue)
+		require.Equal(t, int64(1), targetValue)
 	})
 
 	t.Run("unrewritten fails with SQLSTATE 42P01", func(t *testing.T) {

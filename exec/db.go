@@ -40,7 +40,8 @@ type beginner interface {
 // takes a DB takes either one, so moving work into a transaction changes which
 // DB is passed and nothing else.
 //
-// A DB is a value. Copying it shares the handle, and WithHooks and Begin
+// A DB is a value. Copying it shares the handle, and WithHooks, WithObservers,
+// and Begin
 // return new values rather than changing the one they are called on. Its
 // methods are safe for concurrent use when its Handle is, which for a
 // transaction means one goroutine at a time, because *sql.Tx is bound to a
@@ -50,6 +51,9 @@ type DB struct {
 	dialect               dialect.Dialect
 	hooks                 []Hook
 	relationshipBindLimit int
+	observers             []Observer
+	extensionErrorHandler ExtensionErrorHandler
+	invocationObservers   []InvocationObserver
 	// tx is the transaction this DB runs in, and is nil when it runs directly
 	// on handle. When it is set it is the same value as handle.
 	tx *sql.Tx
@@ -65,10 +69,10 @@ type DB struct {
 // is how an application already holding a *sql.Tx hands it to this package
 // without a second type.
 //
-// Optional hooks observe every statement run through the returned DB and,
-// unless narrowed or extended by WithHooks or by Begin's own hooks parameter,
-// every transaction Begin starts from it.
+// Optional hooks and observers configure the returned DB and observe every statement run through it and, unless narrowed or extended by WithHooks, WithObservers, or by Begin's
+// own hooks parameter, every transaction Begin starts from it.
 type Option interface{ apply(*DB) error }
+
 type relationshipBindLimitOption int
 
 func (o relationshipBindLimitOption) apply(db *DB) error {
@@ -78,6 +82,7 @@ func (o relationshipBindLimitOption) apply(db *DB) error {
 	db.relationshipBindLimit = int(o)
 	return nil
 }
+
 func WithRelationshipBindLimit(limit int) Option { return relationshipBindLimitOption(limit) }
 
 func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
@@ -130,6 +135,42 @@ func (db DB) WithHooks(hooks ...Hook) (DB, error) {
 	return db, nil
 }
 
+// WithObservers returns a copy of db that reports observer and legacy hook
+// failures to handler. Observers are appended in registration order.
+func (db DB) WithObservers(handler ExtensionErrorHandler, observers ...Observer) (DB, error) {
+	if err := db.valid(); err != nil {
+		return DB{}, err
+	}
+	if len(db.observers)+len(observers) > 0 && nilcheck.Is(handler) {
+		return DB{}, fmt.Errorf("rasql: extension error handler must not be nil when observers are supplied")
+	}
+	configured, err := appendObservers(db.observers, observers)
+	if err != nil {
+		return DB{}, err
+	}
+	db.observers = configured
+	db.extensionErrorHandler = handler
+	return db, nil
+}
+
+// WithInvocationObservers returns a copy of db that reports complete
+// execution, consumption, and transaction lifecycles.
+func (db DB) WithInvocationObservers(handler ExtensionErrorHandler, observers ...InvocationObserver) (DB, error) {
+	if err := db.valid(); err != nil {
+		return DB{}, err
+	}
+	if len(db.invocationObservers)+len(observers) > 0 && nilcheck.Is(handler) {
+		return DB{}, fmt.Errorf("rasql: extension error handler must not be nil when invocation observers are supplied")
+	}
+	configured, err := appendInvocationObservers(db.invocationObservers, observers)
+	if err != nil {
+		return DB{}, err
+	}
+	db.invocationObservers = configured
+	db.extensionErrorHandler = handler
+	return db, nil
+}
+
 // Dialect returns the dialect this DB renders SQL for.
 // It returns nil for a zero DB.
 func (db DB) Dialect() dialect.Dialect {
@@ -172,16 +213,23 @@ func (db DB) Begin(ctx context.Context, opts *sql.TxOptions, hooks ...Hook) (DB,
 	if !ok {
 		return DB{}, fmt.Errorf("rasql: handle of type %T cannot start a transaction", db.handle)
 	}
-	transaction, err := starter.BeginTx(ctx, opts)
+	operation := Operation{kind: BeginOperation}
+	callContext, invocation := db.startInvocation(ctx, operation)
+	transaction, err := starter.BeginTx(callContext, opts)
 	if err != nil {
-		return DB{}, fmt.Errorf("rasql: begin transaction: %w", err)
+		err = fmt.Errorf("rasql: begin transaction: %w", err)
+		db.completeInvocation(invocation, operation, TransactionPhase, callContext, err, 0, false)
+		return DB{}, err
 	}
 	if transaction == nil {
 		// *sql.DB and *sql.Conn never do this: their BeginTx returns a
 		// transaction or an error. A hand-written handle can, and the nil
 		// would otherwise reach Rollback below as a nil receiver.
-		return DB{}, fmt.Errorf("rasql: handle returned a nil transaction without an error")
+		err := fmt.Errorf("rasql: handle returned a nil transaction without an error")
+		db.completeInvocation(invocation, operation, TransactionPhase, callContext, err, 0, false)
+		return DB{}, err
 	}
+	db.completeInvocation(invocation, operation, TransactionPhase, callContext, nil, 0, false)
 	db.handle = transaction
 	db.tx = transaction
 	db, err = db.WithHooks(hooks...)
@@ -208,9 +256,14 @@ func (db DB) Commit() error {
 	if db.tx == nil {
 		return fmt.Errorf("rasql: this DB is not a transaction: Commit needs one from Begin")
 	}
+	operation := Operation{kind: CommitOperation}
+	callContext, invocation := db.startInvocation(context.Background(), operation)
 	if err := db.tx.Commit(); err != nil {
-		return fmt.Errorf("rasql: commit transaction: %w", err)
+		err = fmt.Errorf("rasql: commit transaction: %w", err)
+		db.completeInvocation(invocation, operation, TransactionPhase, callContext, err, 0, false)
+		return err
 	}
+	db.completeInvocation(invocation, operation, TransactionPhase, callContext, nil, 0, false)
 	return nil
 }
 
@@ -226,16 +279,23 @@ func (db DB) Rollback() error {
 	if db.tx == nil {
 		return fmt.Errorf("rasql: this DB is not a transaction: Rollback needs one from Begin")
 	}
+	operation := Operation{kind: RollbackOperation}
+	callContext, invocation := db.startInvocation(context.Background(), operation)
 	if err := db.tx.Rollback(); err != nil {
 		if errors.Is(err, sql.ErrTxDone) {
+			db.completeInvocation(invocation, operation, TransactionPhase, callContext, nil, 0, false)
 			return nil
 		}
-		return fmt.Errorf("rasql: roll back transaction: %w", err)
+		err = fmt.Errorf("rasql: roll back transaction: %w", err)
+		db.completeInvocation(invocation, operation, TransactionPhase, callContext, err, 0, false)
+		return err
 	}
+	db.completeInvocation(invocation, operation, TransactionPhase, callContext, nil, 0, false)
 	return nil
 }
 
-// QueryRendered executes statement and returns its result rows.
+// QueryRendered executes statement and returns its result rows. It reports the
+// driver execution lifecycle only; use QueryOwned for consumption observation.
 // The caller owns the returned rows: hand them to dynamic.Scan, which closes
 // them, or close them directly. A debug Handle that logs the statement instead
 // of running it may return nil rows, which dynamic.Scan reads as no result rows.
@@ -244,23 +304,70 @@ func (db DB) QueryRendered(ctx context.Context, s stmt.Statement) (*sql.Rows, er
 		return nil, err
 	}
 	operation := Operation{kind: QueryOperation, stmt: s}
-	entered, err := db.beforeHooks(ctx, operation)
+	callContext, invocation := db.startInvocation(ctx, operation)
+	entered, err := db.beforeHooks(callContext, operation)
 	if err != nil {
-		return nil, afterHooks(ctx, operation, entered, err)
+		if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+			err = errors.Join(err, extensionErr)
+		}
+		db.completeInvocation(invocation, operation, ExecutionPhase, callContext, err, 0, false)
+		return nil, err
 	}
-	rows, err := db.handle.QueryContext(ctx, s.SQL(), s.BoundArgs()...)
-	if err != nil {
-		err = fmt.Errorf("rasql: execute query: %w", err)
+	rows, driverErr := db.handle.QueryContext(callContext, s.SQL(), s.BoundArgs()...)
+	if driverErr != nil {
+		err = fmt.Errorf("rasql: execute query: %w", driverErr)
 	}
-	if hookErr := afterHooks(ctx, operation, entered, err); hookErr != nil {
+	db.observe(callContext, operation, driverErr)
+	db.completeInvocation(invocation, operation, ExecutionPhase, callContext, err, 0, false)
+	if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
 		if rows != nil {
 			if closeErr := rows.Close(); closeErr != nil {
-				hookErr = errors.Join(hookErr, fmt.Errorf("rasql: close query rows: %w", closeErr))
+				extensionErr.Errors = append(extensionErr.Errors, fmt.Errorf("rasql: close query rows: %w", closeErr))
 			}
 		}
-		return nil, hookErr
+		return nil, errors.Join(err, extensionErr)
+	}
+	if err != nil {
+		return nil, err
 	}
 	return rows, nil
+}
+
+// QueryOwned executes a statement and returns rows whose consumption can be
+// observed through the invocation lifecycle API.
+func (db DB) QueryOwned(ctx context.Context, s stmt.Statement) (*Rows, error) {
+	if err := db.validStatement(s); err != nil {
+		return nil, err
+	}
+	operation := Operation{kind: QueryOperation, stmt: s}
+	callContext, execution := db.startInvocation(ctx, operation)
+	entered, err := db.beforeHooks(callContext, operation)
+	if err != nil {
+		if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+			err = errors.Join(err, extensionErr)
+		}
+		db.completeInvocation(execution, operation, ExecutionPhase, callContext, err, 0, false)
+		return nil, err
+	}
+	rows, driverErr := db.handle.QueryContext(callContext, s.SQL(), s.BoundArgs()...)
+	if driverErr != nil {
+		err = fmt.Errorf("rasql: execute query: %w", driverErr)
+	}
+	db.observe(callContext, operation, driverErr)
+	db.completeInvocation(execution, operation, ExecutionPhase, callContext, err, 0, false)
+	if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+		if rows != nil {
+			if closeErr := rows.Close(); closeErr != nil {
+				extensionErr.Errors = append(extensionErr.Errors, fmt.Errorf("rasql: close query rows: %w", closeErr))
+			}
+		}
+		return nil, errors.Join(err, extensionErr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	_, consumption := db.startInvocation(callContext, operation)
+	return &Rows{rows: rows, db: db, operation: operation, invocation: consumption}, nil
 }
 
 // ExecRendered executes a pre-rendered parameterized statement.
@@ -269,18 +376,25 @@ func (db DB) ExecRendered(ctx context.Context, s stmt.Statement) (sql.Result, er
 		return nil, err
 	}
 	operation := Operation{kind: ExecOperation, stmt: s}
-	entered, err := db.beforeHooks(ctx, operation)
+	callContext, invocation := db.startInvocation(ctx, operation)
+	entered, err := db.beforeHooks(callContext, operation)
 	if err != nil {
-		return nil, afterHooks(ctx, operation, entered, err)
+		if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+			err = errors.Join(err, extensionErr)
+		}
+		db.completeInvocation(invocation, operation, ExecutionPhase, callContext, err, 0, false)
+		return nil, err
 	}
-	result, err := db.handle.ExecContext(ctx, s.SQL(), s.BoundArgs()...)
-	if err != nil {
-		err = fmt.Errorf("rasql: execute statement: %w", err)
+	result, driverErr := db.handle.ExecContext(callContext, s.SQL(), s.BoundArgs()...)
+	if driverErr != nil {
+		err = fmt.Errorf("rasql: execute statement: %w", driverErr)
 	}
-	if hookErr := afterHooks(ctx, operation, entered, err); hookErr != nil {
-		return nil, hookErr
+	db.observe(callContext, operation, driverErr)
+	db.completeInvocation(invocation, operation, ExecutionPhase, callContext, err, 0, false)
+	if extensionErr := db.afterHooks(callContext, operation, entered, err); extensionErr != nil {
+		return result, errors.Join(err, extensionErr)
 	}
-	return result, nil
+	return result, err
 }
 
 // Validate reports whether db came from New rather than being a zero DB. The

@@ -10,6 +10,7 @@ import (
 	pgquery "github.com/lestrrat-go/rasql-pg/query"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
+	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -110,8 +111,16 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	)
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	addedOrder, err := orderAddedTables(comparison.Tables.Added)
+	if err != nil {
+		return diff.Plan{}, fmt.Errorf("postgresql schema diff requires manual migration: %w", err)
+	}
+	addedByKey := make(map[string]diff.SchemaEntry[tableDefinition], len(comparison.Tables.Added))
 	for _, entry := range comparison.Tables.Added {
-		statement, err := createTableStatement(entry.Value.statement)
+		addedByKey[entry.Key] = entry
+	}
+	for _, key := range addedOrder {
+		statement, err := createTableStatement(addedByKey[key].Value.statement)
 		if err != nil {
 			return diff.Plan{}, err
 		}
@@ -155,20 +164,40 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	plan := diff.Plan{Dialect: "postgresql", Statements: make([]diff.PlannedStatement, len(generated))}
 	for index, statement := range generated {
 		plan.Statements[index] = diff.PlannedStatement{
-			Source:  statement.name + ".sql",
-			SQL:     statement.sql,
-			Summary: statement.summary,
+			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
 		}
 	}
 	if len(plan.Statements) > 0 {
 		if err := plan.Validate(); err != nil {
 			return diff.Plan{}, err
 		}
-		for index := range plan.Statements {
-			plan.Statements[index].Source = fmt.Sprintf("%03d_%s", index+1, plan.Statements[index].Source)
+		diff.NumberSources(plan.Statements)
+		if err := plan.Validate(); err != nil {
+			return diff.Plan{}, err
 		}
 	}
 	return plan, nil
+}
+
+func orderAddedTables(entries []diff.SchemaEntry[tableDefinition]) ([]string, error) {
+	dependencies := make([]migrationorder.TableDependency, len(entries))
+	for index, entry := range entries {
+		statement := entry.Value.statement
+		dependencies[index] = migrationorder.TableDependency{Key: entry.Key, Display: displayName(statement.Name)}
+		for _, constraint := range statement.Constraints {
+			if constraint.References != nil {
+				dependencies[index].DependsOn = append(dependencies[index].DependsOn, qualifiedNameKey(constraint.References.Table))
+			}
+		}
+		for _, column := range statement.Columns {
+			for _, constraint := range column.Constraints {
+				if constraint.References != nil {
+					dependencies[index].DependsOn = append(dependencies[index].DependsOn, qualifiedNameKey(constraint.References.Table))
+				}
+			}
+		}
+	}
+	return migrationorder.OrderTables(dependencies)
 }
 
 type schemaSnapshot struct {
@@ -229,9 +258,10 @@ func sortedIndexKeys(indexes map[string]indexDefinition) []string {
 }
 
 type generatedStatement struct {
-	name    string
-	sql     string
-	summary string
+	name       string
+	sql        string
+	reverseSQL string
+	summary    string
 }
 
 func createTableStatement(table *pgquery.CreateTableStatement) (generatedStatement, error) {
@@ -243,9 +273,8 @@ func createTableStatement(table *pgquery.CreateTableStatement) (generatedStateme
 	}
 	name := displayName(copy.Name)
 	return generatedStatement{
-		name:    "create_table_" + filenamePart(name),
-		sql:     sql,
-		summary: "create table " + name,
+		name: "create_table_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
 	}, nil
 }
 
@@ -258,9 +287,8 @@ func createIndexStatement(index *pgquery.CreateIndexStatement) (generatedStateme
 	}
 	name := displayName(*copy.Name)
 	return generatedStatement{
-		name:    "create_index_" + filenamePart(name),
-		sql:     sql,
-		summary: "create index " + name,
+		name: "create_index_" + filenamePart(name), sql: sql,
+		reverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(*copy.Name)), summary: "create index " + name,
 	}, nil
 }
 
@@ -305,9 +333,9 @@ func diffTable(baseline, target tableDefinition) ([]generatedStatement, []string
 			}
 			name := displayName(target.statement.Name)
 			generated = append(generated, generatedStatement{
-				name:    "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name),
-				sql:     sql,
-				summary: "add column " + name + "." + column.Name.Name,
+				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
+				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.statement.Name), reverseIdentifier(column.Name)),
+				summary:    "add column " + name + "." + column.Name.Name,
 			})
 			continue
 		}
@@ -571,6 +599,21 @@ func qualifiedNameKey(name pgquery.QualifiedName) string {
 
 func displayName(name pgquery.QualifiedName) string {
 	return name.String()
+}
+
+func reverseName(name pgquery.QualifiedName) string {
+	parts := make([]string, len(name))
+	for index, part := range name {
+		parts[index] = reverseIdentifier(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func reverseIdentifier(identifier pgquery.Identifier) string {
+	if !identifier.Quoted {
+		return identifier.Name
+	}
+	return `"` + strings.ReplaceAll(identifier.Name, `"`, `""`) + `"`
 }
 
 func filenamePart(value string) string {

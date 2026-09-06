@@ -3,9 +3,10 @@ package rasql
 import (
 	"context"
 	"fmt"
-	"github.com/lestrrat-go/rasql/query"
 	"reflect"
 	"strconv"
+
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // RelationshipLoadOptions controls filtering, ordering, result caps, and bind batching.
@@ -17,7 +18,7 @@ type RelationshipLoadOptions struct {
 }
 
 // LoadHasManyPlan loads children for parents in bounded key batches.
-func LoadHasManyPlan[Parent, Child any, Key comparable](ctx context.Context, db DB, childTable Table[Child], childKeyColumns []query.ColumnRef, parents []Parent, parentKey func(Parent) Key, childKey func(Child) Key, keyValues func(Key) ([]any, bool), options RelationshipLoadOptions) (map[Key][]Child, error) {
+func LoadHasManyPlan[Parent, Child any, Key comparable](ctx context.Context, db DB, childTable ReadTable[Child], childKeyColumns []query.ColumnRef, parents []Parent, parentKey func(Parent) Key, childKey func(Child) Key, keyValues func(Key) ([]any, bool), options RelationshipLoadOptions) (map[Key][]Child, error) {
 	if err := validateRelationshipPlan(childTable, childKeyColumns, options); err != nil {
 		return nil, err
 	}
@@ -62,7 +63,7 @@ func LoadHasManyPlan[Parent, Child any, Key comparable](ctx context.Context, db 
 }
 
 // LoadBelongsToPlan loads scalar parents for children in bounded key batches.
-func LoadBelongsToPlan[Child, Parent any, Key comparable](ctx context.Context, db DB, parentTable Table[Parent], parentKeyColumns []query.ColumnRef, children []Child, childKey func(Child) Key, parentKey func(Parent) Key, keyValues func(Key) ([]any, bool), options RelationshipLoadOptions) (map[Key]Parent, error) {
+func LoadBelongsToPlan[Child, Parent any, Key comparable](ctx context.Context, db DB, parentTable ReadTable[Parent], parentKeyColumns []query.ColumnRef, children []Child, childKey func(Child) Key, parentKey func(Parent) Key, keyValues func(Key) ([]any, bool), options RelationshipLoadOptions) (map[Key]Parent, error) {
 	if err := validateRelationshipPlan(parentTable, parentKeyColumns, options); err != nil {
 		return nil, err
 	}
@@ -103,16 +104,16 @@ func LoadBelongsToPlan[Child, Parent any, Key comparable](ctx context.Context, d
 }
 
 // LoadHasMany is the compatibility scalar adapter.
-func LoadHasMany[Parent, Child any, Key comparable](ctx context.Context, db DB, childTable Table[Child], childKeyColumn query.ColumnRef, parents []Parent, parentKey func(Parent) Key, childKey func(Child) Key) (map[Key][]Child, error) {
+func LoadHasMany[Parent, Child any, Key comparable](ctx context.Context, db DB, childTable ReadTable[Child], childKeyColumn query.ColumnRef, parents []Parent, parentKey func(Parent) Key, childKey func(Child) Key) (map[Key][]Child, error) {
 	return LoadHasManyPlan(ctx, db, childTable, []query.ColumnRef{childKeyColumn}, parents, parentKey, childKey, func(key Key) ([]any, bool) { return []any{relationshipQueryKey(key)}, true }, RelationshipLoadOptions{})
 }
 
 // LoadBelongsTo is the compatibility scalar adapter.
-func LoadBelongsTo[Child, Parent any, Key comparable](ctx context.Context, db DB, parentTable Table[Parent], parentKeyColumn query.ColumnRef, children []Child, childKey func(Child) Key, parentKey func(Parent) Key) (map[Key]Parent, error) {
+func LoadBelongsTo[Child, Parent any, Key comparable](ctx context.Context, db DB, parentTable ReadTable[Parent], parentKeyColumn query.ColumnRef, children []Child, childKey func(Child) Key, parentKey func(Parent) Key) (map[Key]Parent, error) {
 	return LoadBelongsToPlan(ctx, db, parentTable, []query.ColumnRef{parentKeyColumn}, children, childKey, parentKey, func(key Key) ([]any, bool) { return []any{relationshipQueryKey(key)}, true }, RelationshipLoadOptions{})
 }
 
-func validateRelationshipPlan[T any](table Table[T], columns []query.ColumnRef, options RelationshipLoadOptions) error {
+func validateRelationshipPlan[T any](table ReadTable[T], columns []query.ColumnRef, options RelationshipLoadOptions) error {
 	if len(columns) == 0 {
 		return fmt.Errorf("relationship key columns must not be empty")
 	}
@@ -130,7 +131,7 @@ func validateRelationshipPlan[T any](table Table[T], columns []query.ColumnRef, 
 	return nil
 }
 
-func executeRelationshipBatches[Row any, Key comparable](ctx context.Context, db DB, table Table[Row], columns []query.ColumnRef, keys []Key, stored map[Key][]any, options RelationshipLoadOptions, consume func([]Row) error) error {
+func executeRelationshipBatches[Row any, Key comparable](ctx context.Context, db DB, table ReadTable[Row], columns []query.ColumnRef, keys []Key, stored map[Key][]any, options RelationshipLoadOptions, consume func([]Row) error) error {
 	budget := options.BindLimit
 	if budget == 0 {
 		budget = db.RelationshipBindLimit()
