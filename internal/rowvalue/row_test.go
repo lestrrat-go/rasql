@@ -222,7 +222,7 @@ func TestAssignNULLPointerDoesNotInvokeScanner(t *testing.T) {
 	require.NoError(t, err)
 
 	destination := &nullScanRecorder{value: "untouched"}
-	var pointer *nullScanRecorder = destination
+	pointer := destination
 	require.NoError(t, rowvalue.Assign(result, "value", &pointer))
 	require.Nil(t, pointer)
 	// The scanner behind a pointer field is not reached for SQL NULL.
