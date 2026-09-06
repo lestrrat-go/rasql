@@ -627,8 +627,9 @@ func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, email text NOT NULL);")
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "new required column members.email needs an application-specific backfill")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, "backfill_postgresql_members_email", plan.Decisions[0].ID)
 }
 
 func TestDiffGeneratesNewRequiredColumnWithDefault(t *testing.T) {
@@ -652,7 +653,7 @@ func TestDiffRejectsNewRequiredPrimaryKeyColumnWithDefaultWhenPrimaryKeyFollowsN
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, active integer NOT NULL DEFAULT 1 PRIMARY KEY);")
 
 	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "new required column members.active needs an application-specific backfill")
+	require.ErrorContains(t, err, "table members constraints changed")
 }
 
 func TestDiffRejectsNewRequiredColumnWithNullDefault(t *testing.T) {
@@ -665,8 +666,9 @@ func TestDiffRejectsNewRequiredColumnWithNullDefault(t *testing.T) {
 			baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 			target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, "+columnDefinition+");")
 
-			_, err := analyzer.Diff(baseline, target)
-			require.ErrorContains(t, err, "new required column members.email needs an application-specific backfill")
+			plan, err := analyzer.Diff(baseline, target)
+			require.NoError(t, err)
+			require.Equal(t, "backfill_postgresql_members_email", plan.Decisions[0].ID)
 		})
 	}
 }

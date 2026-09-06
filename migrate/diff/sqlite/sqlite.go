@@ -35,6 +35,12 @@ func (Analyzer) LiveSources(table schema.TableDef) ([]diff.Source, error) {
 // ValidateLivePlan ensures generated SQLite statements stay within the selected table.
 func (Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
 	for _, statement := range plan.Statements {
+		if strings.HasPrefix(statement.Summary, "rebuild table ") {
+			if !strings.EqualFold(strings.TrimPrefix(statement.Summary, "rebuild table "), tableName) {
+				return fmt.Errorf("diff-live target rebuilds a different table")
+			}
+			continue
+		}
 		parsed, err := sqlitequery.ParseStatement(statement.SQL)
 		if err != nil {
 			return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
@@ -495,8 +501,26 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		if err != nil {
 			return diff.Plan{}, err
 		}
+		if len(tableDiagnostics) > 0 {
+			backfillOnly := true
+			for _, diagnostic := range tableDiagnostics {
+				if _, ok := diff.BackfillDecision("sqlite", diagnostic); !ok {
+					backfillOnly = false
+					break
+				}
+			}
+			if backfillOnly {
+				diagnostics = append(diagnostics, tableDiagnostics...)
+				continue
+			}
+			rebuild, rebuildErr := rebuildTableStatement(pair.Baseline, pair.Target)
+			if rebuildErr != nil {
+				return diff.Plan{}, rebuildErr
+			}
+			generated = append(generated, rebuild)
+			continue
+		}
 		generated = append(generated, statements...)
-		diagnostics = append(diagnostics, tableDiagnostics...)
 	}
 	for _, entry := range comparison.Tables.Removed {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(entry.Value.statement.Name)))
@@ -544,10 +568,19 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		return diff.Plan{}, manualMigrationError(remaining)
 	}
 	plan.Decisions = decisions
-	if len(plan.Decisions) > 0 {
+	if len(plan.Decisions) > 0 || hasRebuild(plan.Statements) {
 		plan.Operations = diff.OperationsFromStatements("sqlite", plan.Statements)
 	}
 	return plan, nil
+}
+
+func hasRebuild(statements []diff.PlannedStatement) bool {
+	for _, statement := range statements {
+		if strings.Contains(statement.Summary, "rebuild table") {
+			return true
+		}
+	}
+	return false
 }
 
 type schemaSnapshot struct {
@@ -655,6 +688,37 @@ func createIndexStatement(index *sqlitequery.CreateIndexStatement) (generatedSta
 		name: "create_index_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(copy.Name)), summary: "create index " + name,
 	}, nil
+}
+
+func rebuildTableStatement(baseline, target tableDefinition) (generatedStatement, error) {
+	table := displayName(target.statement.Name)
+	temporary := table + "__rasql_rebuild"
+	temporaryName := sqlitequery.QualifiedName{{Name: temporary}}
+	targetSQL, err := serializeWithReferenceActions(target.statement, target.foreignKeys)
+	if err != nil {
+		return generatedStatement{}, err
+	}
+	baseSQL, err := serializeWithReferenceActions(baseline.statement, baseline.foreignKeys)
+	if err != nil {
+		return generatedStatement{}, err
+	}
+	shared := make(map[string]struct{}, len(baseline.statement.Columns))
+	for _, column := range baseline.statement.Columns {
+		shared[sqliteIdentifierKey(column.Name.Name)] = struct{}{}
+	}
+	columns := make([]string, 0)
+	for _, column := range target.statement.Columns {
+		if _, ok := shared[sqliteIdentifierKey(column.Name.Name)]; ok {
+			columns = append(columns, reverseIdentifier(column.Name))
+		}
+	}
+	if len(columns) == 0 {
+		return generatedStatement{}, fmt.Errorf("sqlite schema diff: rebuild table %s has no shared columns", table)
+	}
+	copySQL := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s;\n", reverseName(temporaryName), strings.Join(columns, ", "), strings.Join(columns, ", "), reverseName(target.statement.Name))
+	forward := fmt.Sprintf("BEGIN;\n%sALTER TABLE %s RENAME TO %s;\n%sDROP TABLE %s;\nALTER TABLE %s RENAME TO %s;\nCOMMIT;\n", strings.Replace(targetSQL, "CREATE TABLE "+table, "CREATE TABLE "+temporary, 1), reverseName(target.statement.Name), reverseName(temporaryName), copySQL, reverseName(temporaryName), reverseName(temporaryName), reverseName(target.statement.Name))
+	reverse := fmt.Sprintf("BEGIN;\n%sALTER TABLE %s RENAME TO %s;\n%sDROP TABLE %s;\nALTER TABLE %s RENAME TO %s;\nCOMMIT;\n", strings.Replace(baseSQL, "CREATE TABLE "+table, "CREATE TABLE "+temporary, 1), reverseName(target.statement.Name), reverseName(temporaryName), strings.Replace(copySQL, table, temporary, 1), reverseName(temporaryName), reverseName(temporaryName), reverseName(target.statement.Name))
+	return generatedStatement{name: "rebuild_table_" + filenamePart(table), sql: forward, reverseSQL: reverse, summary: "rebuild table " + table}, nil
 }
 
 func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedStatement, []string, error) {

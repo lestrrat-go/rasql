@@ -190,11 +190,15 @@ func DecisionID(kind DecisionKind, dialect, table, column string) string {
 }
 
 var backfillDiagnostic = regexp.MustCompile(`^new required column ([^.]+)\.([^ ]+) needs an application-specific backfill$`)
+var sqliteBackfillDiagnostic = regexp.MustCompile(`^new column ([^.]+)\.([^ ]+) needs an application-specific backfill$`)
 
 // BackfillDecision converts the stable diagnostic emitted by an analyzer into
 // a caller-owned decision while keeping dialect-specific parsing private.
 func BackfillDecision(dialect, diagnostic string) (RequiredDecision, bool) {
 	match := backfillDiagnostic.FindStringSubmatch(diagnostic)
+	if match == nil {
+		match = sqliteBackfillDiagnostic.FindStringSubmatch(diagnostic)
+	}
 	if match == nil {
 		return RequiredDecision{}, false
 	}
@@ -217,6 +221,8 @@ func OperationsFromStatements(dialect string, statements []PlannedStatement) []P
 			kind = OperationCreateTable
 		case strings.HasPrefix(name, "create_index_"):
 			kind = OperationReplaceConstraint
+		case strings.HasPrefix(name, "rebuild_table_"):
+			kind = OperationRebuildTable
 		}
 		operations = append(operations, ProposedOperation{
 			ID: OperationID(kind, dialect, table, column, ""), Table: table, Column: column,

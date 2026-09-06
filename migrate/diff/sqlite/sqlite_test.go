@@ -343,8 +343,9 @@ func TestDiffDetectsChangedSQLiteForeignKeyAction(t *testing.T) {
 		CREATE TABLE multi (a_id integer REFERENCES parent_a(id) ON DELETE SET NULL);
 	`)
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "table multi constraints changed")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Contains(t, plan.Statements[0].SQL, "BEGIN;")
 }
 
 func TestDiffGeneratesNewTableWithSQLiteForeignKeyActions(t *testing.T) {
@@ -368,8 +369,9 @@ func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY, email text NOT NULL);")
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "new column members.email needs an application-specific backfill")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, "backfill_sqlite_members_email", plan.Decisions[0].ID)
 }
 
 func TestDiffRejectsUnsupportedSQLiteColumnAdditions(t *testing.T) {
@@ -393,8 +395,9 @@ func TestDiffRejectsUnsupportedSQLiteColumnAdditions(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			target := parseSnapshot(t, analyzer, test.target)
-			_, err := analyzer.Diff(baseline, target)
-			require.ErrorContains(t, err, test.expected)
+			plan, err := analyzer.Diff(baseline, target)
+			require.NoError(t, err)
+			require.Contains(t, plan.Statements[0].SQL, "BEGIN;")
 		})
 	}
 }
@@ -404,8 +407,9 @@ func TestDiffRejectsChangedOptions(t *testing.T) {
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY) STRICT;")
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "table members options changed")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Contains(t, plan.Statements[0].SQL, "BEGIN;")
 }
 
 func TestDiffDoesNotNormalizeAwaySQLitePrimaryKeyMetadata(t *testing.T) {
@@ -420,8 +424,9 @@ func TestDiffDoesNotNormalizeAwaySQLitePrimaryKeyMetadata(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id integer PRIMARY KEY);")
 			target := parseSnapshot(t, analyzer, test.target)
-			_, err := analyzer.Diff(baseline, target)
-			require.ErrorContains(t, err, "table members constraints changed")
+			plan, err := analyzer.Diff(baseline, target)
+			require.NoError(t, err)
+			require.Contains(t, plan.Statements[0].SQL, "BEGIN;")
 		})
 	}
 }

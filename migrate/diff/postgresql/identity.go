@@ -3,7 +3,6 @@ package postgresql
 import (
 	"fmt"
 	"regexp"
-	"strings"
 )
 
 var identityClause = regexp.MustCompile(`(?is)\bGENERATED\s+(?:ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY\b`)
@@ -52,11 +51,4 @@ func stripIdentityClauses(source string) (string, error) {
 		}
 	}
 	return string(result), nil
-}
-
-func identityDiagnostic(source string) string {
-	if strings.Contains(strings.ToUpper(source), "GENERATED") {
-		return "postgresql schema: identity clause was normalized"
-	}
-	return ""
 }

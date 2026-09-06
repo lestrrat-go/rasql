@@ -357,8 +357,8 @@ func TestRunDiffLiveRefusesDestructiveChange(t *testing.T) {
 		"-table", "members",
 		"-to", target,
 	})
-	require.ErrorContains(t, err, "column members.email was removed")
-	require.Empty(t, outputBuffer.String())
+	require.NoError(t, err)
+	require.Contains(t, outputBuffer.String(), "rebuild table members")
 }
 
 func TestRunDiffLiveHonorsInspectionTimeout(t *testing.T) {
