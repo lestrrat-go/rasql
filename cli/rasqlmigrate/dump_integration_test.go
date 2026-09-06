@@ -63,6 +63,38 @@ func TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults(t *testing.T) {
 	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
+func TestDumpPostgreSQLSequenceExportRefusesSharedSequence(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE shared_sequence`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (
+		shared_first BIGINT NOT NULL DEFAULT nextval('shared_sequence'),
+		shared_second BIGINT NOT NULL DEFAULT nextval('shared_sequence')
+	)`)
+	outputDirectory := filepath.Join(t.TempDir(), "schema")
+	err := runPostgreSQLDumpCommand(t, outputDirectory)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `table "sequence_cases" column "shared_first"`)
+	require.Contains(t, err.Error(), "shared_sequence")
+	_, statErr := os.Stat(outputDirectory)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestDumpPostgreSQLSequenceExportRefusesOwnedCustomSequence(t *testing.T) {
+	ctx := t.Context()
+	source := dbtest.PostgreSQLDB(t)
+	dumpMustExec(t, ctx, source, `CREATE SEQUENCE custom_sequence START WITH 10 INCREMENT BY 5`)
+	dumpMustExec(t, ctx, source, `CREATE TABLE sequence_cases (custom_value BIGINT NOT NULL DEFAULT nextval('custom_sequence'))`)
+	dumpMustExec(t, ctx, source, `ALTER SEQUENCE custom_sequence OWNED BY sequence_cases.custom_value`)
+	outputDirectory := filepath.Join(t.TempDir(), "schema")
+	err := runPostgreSQLDumpCommand(t, outputDirectory)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `table "sequence_cases" column "custom_value"`)
+	require.Contains(t, err.Error(), "custom_sequence")
+	_, statErr := os.Stat(outputDirectory)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 func TestDumpPostgreSQLSequenceExportRefusesRenamedOwnedSequence(t *testing.T) {
 	ctx := t.Context()
 	source := dbtest.PostgreSQLDB(t)
