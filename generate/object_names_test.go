@@ -71,6 +71,32 @@ func TestStoreObjectNamesRejectInvalidConfiguration(t *testing.T) {
 	require.ErrorContains(t, err, "conflicts with legacy RowName")
 }
 
+func TestStoreObjectNamesPlanIsHeldSnapshot(t *testing.T) {
+	table := schema.MustTableDef("customer-id", schema.Integer("id"), schema.Text("name"))
+	store := generate.Store{
+		Package: "generated", Dir: t.TempDir(), Root: filepath.Dir(mustGetwd(t)),
+		Tables: []schema.TableDef{table},
+		Names: map[schema.ObjectName]generate.ObjectNames{{Name: "customer-id"}: {
+			Accessor: "Customer", Columns: map[string]generate.ColumnNames{"name": {Field: "CustomerName"}},
+		}},
+		Hints: map[string]generate.TableHint{"customer-id": {RowName: "CustomerRow"}},
+	}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	want := plan.Files()
+	store.Names[schema.ObjectName{Name: "customer-id"}] = generate.ObjectNames{Accessor: "Changed"}
+	changed := store.Names[schema.ObjectName{Name: "customer-id"}]
+	changed.Columns = map[string]generate.ColumnNames{"name": {Field: "ChangedName"}}
+	store.Names[schema.ObjectName{Name: "customer-id"}] = changed
+	store.Tables[0].Name, store.Tables[0].Schema = "changed", "other"
+	store.Tables[0].Columns[0].Name = "changed-id"
+	store.Hints["customer-id"] = generate.TableHint{RowName: "ChangedRow"}
+	got := plan.Files()
+	require.Equal(t, want, got)
+	got[0].Source[0] ^= 0xff
+	require.Equal(t, want, plan.Files())
+}
+
 func mustGetwd(t *testing.T) string {
 	t.Helper()
 	directory, err := os.Getwd()

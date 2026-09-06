@@ -1094,6 +1094,10 @@ type relationshipSpec struct {
 	parentField   string
 	childField    string
 	parentKeyType string
+	parentType    string
+	childType     string
+	parentRow     string
+	childRow      string
 }
 
 type inverseRelationshipCandidate struct {
@@ -1134,10 +1138,18 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 		}
 		usedMethods[method] = struct{}{}
 		childType := tableTypeName(table.Name)
+		parentType := tableTypeName(parent.Name)
+		childRow := rowTypeName(table)
+		parentRow := rowTypeName(parent)
 		parentField, childField := goName(parentColumn.Name), goName(childColumn.Name)
 		if len(names) > 0 {
 			if resolved, ok := names[0].Object(table); ok {
 				childType = resolved.TableType
+				childRow = resolved.RowType
+			}
+			if resolved, ok := names[0].Object(parent); ok {
+				parentType = resolved.TableType
+				parentRow = resolved.RowType
 			}
 			if resolved, ok := names[0].Column(parent, parentColumn.Name); ok {
 				parentField = resolved.Accessor
@@ -1157,6 +1169,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 			parentField:   parentField,
 			childField:    childField,
 			parentKeyType: keyType,
+			parentType:    parentType, childType: childType, parentRow: parentRow, childRow: childRow,
 		})
 	}
 
@@ -1190,10 +1203,20 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 			continue
 		}
 		usedMethods[method] = struct{}{}
+		parentType, childType := tableTypeName(table.Name), tableTypeName(candidate.child.Name)
+		parentRow, childRow := rowTypeName(table), rowTypeName(candidate.child)
+		if len(names) > 0 {
+			if resolved, ok := names[0].Object(table); ok {
+				parentType, parentRow = resolved.TableType, resolved.RowType
+			}
+			if resolved, ok := names[0].Object(candidate.child); ok {
+				childType, childRow = resolved.TableType, resolved.RowType
+			}
+		}
 		result = append(result, relationshipSpec{
 			kind:          schema.RelationshipHasMany,
 			method:        method,
-			typeName:      tableTypeName(table.Name) + method + "Relation",
+			typeName:      parentType + method + "Relation",
 			parent:        table,
 			child:         candidate.child,
 			parentColumn:  candidate.parentColumn,
@@ -1201,6 +1224,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 			parentField:   goName(candidate.parentColumn.Name),
 			childField:    goName(candidate.childColumn.Name),
 			parentKeyType: candidate.keyType,
+			parentType:    parentType, childType: childType, parentRow: parentRow, childRow: childRow,
 		})
 	}
 	return result
@@ -1294,16 +1318,16 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 		source.WriteString(relationship.typeName)
 		source.WriteString(" struct {\n")
 		source.WriteString("\tParent ")
-		source.WriteString(tableTypeName(relationship.parent.Name))
+		source.WriteString(relationship.parentType)
 		source.WriteString("\n\tChild ")
-		source.WriteString(tableTypeName(relationship.child.Name))
+		source.WriteString(relationship.childType)
 		source.WriteString("\n\tParentKey rasql.ColumnRef\n\tChildKey rasql.ColumnRef\n}\n\n")
 
 		source.WriteString("// ")
 		source.WriteString(relationship.method)
 		source.WriteString(" returns the generated relationship descriptor.\n")
 		source.WriteString("func (t ")
-		source.WriteString(tableTypeName(table.Name))
+		source.WriteString(tableObject.TableType)
 		source.WriteString(") ")
 		source.WriteString(relationship.method)
 		source.WriteString("() ")
@@ -1311,11 +1335,13 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 		source.WriteString(" {\n")
 		if relationship.kind == schema.RelationshipHasMany {
 			source.WriteString("\tchild := ")
-			source.WriteString(variableName(relationship.child.Name))
+			childObject, _ := names.Object(relationship.child)
+			source.WriteString(childObject.Accessor)
 			source.WriteString("()\n\tparent := t\n")
 		} else {
 			source.WriteString("\tchild := t\n\tparent := ")
-			source.WriteString(variableName(relationship.parent.Name))
+			parentObject, _ := names.Object(relationship.parent)
+			source.WriteString(parentObject.Accessor)
 			source.WriteString("()\n")
 		}
 		if relationship.parent.Schema == relationship.child.Schema && relationship.parent.Name == relationship.child.Name {
@@ -1359,25 +1385,25 @@ func writeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) 
 		source.WriteString("func (r ")
 		source.WriteString(relationship.typeName)
 		source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
-		source.WriteString(rowTypeName(relationship.parent))
+		source.WriteString(relationship.parentRow)
 		source.WriteString(") (map[")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString("][]")
-		source.WriteString(rowTypeName(relationship.child))
+		source.WriteString(relationship.childRow)
 		source.WriteString(", error) {\n\treturn rasql.LoadHasMany[")
-		source.WriteString(rowTypeName(relationship.parent))
+		source.WriteString(relationship.parentRow)
 		source.WriteString(", ")
-		source.WriteString(rowTypeName(relationship.child))
+		source.WriteString(relationship.childRow)
 		source.WriteString(", ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString("](ctx, db, r.Child, r.ChildKey, parents, func(row ")
-		source.WriteString(rowTypeName(relationship.parent))
+		source.WriteString(relationship.parentRow)
 		source.WriteString(") ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString(" { return row.")
 		source.WriteString(relationship.parentField)
 		source.WriteString(" }, func(row ")
-		source.WriteString(rowTypeName(relationship.child))
+		source.WriteString(relationship.childRow)
 		source.WriteString(") ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString(" { return row.")
@@ -1390,25 +1416,25 @@ func writeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) 
 	source.WriteString("func (r ")
 	source.WriteString(relationship.typeName)
 	source.WriteString(") Load(ctx context.Context, db rasql.DB, children []")
-	source.WriteString(rowTypeName(relationship.child))
+	source.WriteString(relationship.childRow)
 	source.WriteString(") (map[")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString("]")
-	source.WriteString(rowTypeName(relationship.parent))
+	source.WriteString(relationship.parentRow)
 	source.WriteString(", error) {\n\treturn rasql.LoadBelongsTo[")
-	source.WriteString(rowTypeName(relationship.child))
+	source.WriteString(relationship.childRow)
 	source.WriteString(", ")
-	source.WriteString(rowTypeName(relationship.parent))
+	source.WriteString(relationship.parentRow)
 	source.WriteString(", ")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString("](ctx, db, r.Parent, r.ParentKey, children, func(row ")
-	source.WriteString(rowTypeName(relationship.child))
+	source.WriteString(relationship.childRow)
 	source.WriteString(") ")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString(" { return row.")
 	source.WriteString(relationship.childField)
 	source.WriteString(" }, func(row ")
-	source.WriteString(rowTypeName(relationship.parent))
+	source.WriteString(relationship.parentRow)
 	source.WriteString(") ")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString(" { return row.")

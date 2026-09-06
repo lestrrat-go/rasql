@@ -2,6 +2,8 @@ package examples_test
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -17,7 +19,22 @@ func ExampleStore_objectNames() {
 			Columns: map[string]generate.ColumnNames{"display-name": {Field: "DisplayName", Accessor: "DisplayNameColumn"}},
 		}},
 	}
-	_, err := store.Plan()
-	fmt.Println(err == nil)
-	// Output: true
+	plan, err := store.Plan()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	var source string
+	for _, file := range plan.Files() {
+		if strings.HasSuffix(file.Path, "customer_gen.go") {
+			source = string(file.Source)
+		}
+	}
+	fmt.Println(strings.Contains(source, "CustomerTable"))
+	fmt.Println(strings.Contains(source, "DisplayNameColumn"))
+	fmt.Println(strings.Contains(source, "\"display-name\""))
+	// Output:
+	// true
+	// true
+	// true
 }
