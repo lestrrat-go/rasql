@@ -765,6 +765,44 @@ func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
 	}
 }
 
+func TestSchemaCountsExplicitInversePeersWhenDerivingNames(t *testing.T) {
+	users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	memberships := schema.TableDef{
+		Name:       "memberships",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "billing_user_id", Type: schema.IntegerType{}}, {Name: "shipping_user_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+		Relationships: []schema.RelationshipDef{{Name: "ShippingUser", InverseName: "Memberships", Kind: schema.RelationshipBelongsTo, Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}},
+	}
+	source, err := schemagen.PackageSource("generated", users, memberships)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+	require.Contains(t, text, "func (t UsersTable) BillingUserMemberships() UsersTableBillingUserMembershipsRelation")
+}
+
+func TestSchemaRejectsDuplicateExplicitInverseNames(t *testing.T) {
+	users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	memberships := schema.TableDef{
+		Name:       "memberships",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "billing_user_id", Type: schema.IntegerType{}}, {Name: "shipping_user_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+		Relationships: []schema.RelationshipDef{
+			{Name: "BillingUser", InverseName: "Memberships", Kind: schema.RelationshipBelongsTo, Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Name: "ShippingUser", InverseName: "Memberships", Kind: schema.RelationshipBelongsTo, Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+	}
+	_, err := schemagen.PackageSource("generated", users, memberships)
+	require.ErrorContains(t, err, "collide on generated method")
+}
+
 // TestColumnGoType is the direct test of schemagen.ColumnGoType, the one
 // mapping from a schema column type to a Go type shared by generated row
 // fields and generated query parameters. Nullable is never consulted: the
