@@ -13,6 +13,96 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGeneratedInverseRelationshipKeepsConsumerStable(t *testing.T) {
+	users := schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id"))
+	shipping := schema.ForeignKeyDef{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}
+	billing := schema.ForeignKeyDef{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}
+	memberships := func(keys []schema.ForeignKeyDef, inverse string) schema.TableDef {
+		relationship := schema.RelationshipDef{
+			Name: "ShippingUser", Kind: schema.RelationshipBelongsTo,
+			Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"},
+			InverseName: inverse,
+		}
+		return schema.TableDef{Name: "memberships", Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}}, {Name: "shipping_user_id", Type: schema.IntegerType{}},
+			{Name: "billing_user_id", Type: schema.IntegerType{}},
+		}, PrimaryKey: []string{"id"}, ForeignKeys: keys, Relationships: []schema.RelationshipDef{relationship}}
+	}
+	before := []schema.TableDef{users, memberships([]schema.ForeignKeyDef{shipping}, "")}
+	after := []schema.TableDef{users, memberships([]schema.ForeignKeyDef{shipping, billing}, "")}
+	overrideBefore := []schema.TableDef{users, memberships([]schema.ForeignKeyDef{shipping}, "Memberships")}
+	overrideAfter := []schema.TableDef{users, memberships([]schema.ForeignKeyDef{shipping, billing}, "Memberships")}
+
+	caller := `package store_test
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"example.com/consumer/store"
+	_ "modernc.org/sqlite"
+)
+
+func TestShippingMemberships(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:"); if err != nil { t.Fatal(err) }; defer database.Close()
+	database.SetMaxOpenConns(1)
+	db, err := rasql.New(database, dialect.SQLite()); if err != nil { t.Fatal(err) }
+	ctx := context.Background()
+	if _, err = database.ExecContext(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY); CREATE TABLE memberships (id INTEGER PRIMARY KEY, shipping_user_id INTEGER, billing_user_id INTEGER);"); err != nil { t.Fatal(err) }
+	if _, err = database.ExecContext(ctx, "INSERT INTO users VALUES (1), (2); INSERT INTO memberships VALUES (10, 1, 2), (20, 2, 1);"); err != nil { t.Fatal(err) }
+	rows, err := store.Users().Memberships().Load(ctx, db, []store.UsersRow{{ID: 1}}); if err != nil { t.Fatal(err) }
+	if len(rows[1]) != 1 || rows[1][0].ID != 10 { t.Fatalf("shipping rows = %#v, want membership 10", rows[1]) }
+}
+`
+	beforeDir := t.TempDir()
+	writeGeneratedConsumer(t, beforeDir, before, caller)
+	runGeneratedConsumer(t, beforeDir, true)
+	afterDir := t.TempDir()
+	writeGeneratedConsumer(t, afterDir, after, caller)
+	runGeneratedConsumer(t, afterDir, false)
+	overrideBeforeDir := t.TempDir()
+	writeGeneratedConsumer(t, overrideBeforeDir, overrideBefore, caller)
+	runGeneratedConsumer(t, overrideBeforeDir, true)
+	overrideAfterDir := t.TempDir()
+	writeGeneratedConsumer(t, overrideAfterDir, overrideAfter, caller)
+	runGeneratedConsumer(t, overrideAfterDir, true)
+}
+
+func writeGeneratedConsumer(t *testing.T, dir string, tables []schema.TableDef, caller string) {
+	t.Helper()
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	repoGoMod, err := os.ReadFile(filepath.Join("..", "go.mod"))
+	require.NoError(t, err)
+	goMod := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/consumer\n", 1)
+	goMod += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o600))
+	repoGoSum, err := os.ReadFile(filepath.Join("..", "go.sum"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.sum"), repoGoSum, 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "store"), 0o700))
+	source, err := generate.PackageSource("store", tables...)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "store", "schema.go"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "consumer_test.go"), []byte(caller), 0o600))
+}
+
+func runGeneratedConsumer(t *testing.T, dir string, wantSuccess bool) {
+	t.Helper()
+	command := exec.CommandContext(t.Context(), "go", "test", "./...")
+	command.Dir = dir
+	command.Env = append(os.Environ(), "GOPROXY=off")
+	output, err := command.CombinedOutput()
+	if wantSuccess {
+		require.NoErrorf(t, err, "consumer output:\n%s", output)
+		return
+	}
+	require.Error(t, err)
+	require.Contains(t, string(output), "Memberships")
+}
+
 // TestStoreWriteProducesAWorkingPackage is TestGeneratedStorePackageCompilesAndRuns's
 // counterpart for the new API: the same scratch-consumer-module setup, the
 // same three tables and the same storeAcceptanceTestSource -- both defined

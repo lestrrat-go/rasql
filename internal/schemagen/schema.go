@@ -644,13 +644,21 @@ func validateVariableNames(tables []schema.TableDef) error {
 			}
 		}
 		for _, relationship := range relationshipSpecs(table, tables) {
+			if relationship.method == "" || reservedRelationshipMethod(relationship.method) {
+				return fmt.Errorf("generate: inverse relationship on table %q uses invalid or reserved generated method %q", table.Name, relationship.method)
+			}
 			if _, exists := methods[relationship.method]; exists {
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated method %q", relationship.method, table.Name, relationship.method)
 			}
 		}
 	}
 	for _, table := range tables {
+		seenMethods := make(map[string]string)
 		for _, relationship := range relationshipSpecs(table, tables) {
+			if previous, exists := seenMethods[relationship.method]; exists {
+				return fmt.Errorf("generate: relationships %q and %q on table %q collide on generated method %q", previous, relationship.identity, table.Name, relationship.method)
+			}
+			seenMethods[relationship.method] = relationship.identity
 			if _, exists := names[relationship.typeName]; exists {
 				return fmt.Errorf("generate: relationship %q on table %q duplicates generated name %q", relationship.method, table.Name, relationship.typeName)
 			}
@@ -957,6 +965,7 @@ func writeRowType(source *bytes.Buffer, table schema.TableDef) {
 type relationshipSpec struct {
 	kind          schema.RelationshipKind
 	method        string
+	identity      string
 	typeName      string
 	parent        schema.TableDef
 	child         schema.TableDef
@@ -1007,6 +1016,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef) []rel
 		result = append(result, relationshipSpec{
 			kind:          schema.RelationshipBelongsTo,
 			method:        method,
+			identity:      relationshipIdentity(table, relationship),
 			typeName:      tableTypeName(table.Name) + method + "Relation",
 			parent:        parent,
 			child:         table,
@@ -1042,15 +1052,18 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef) []rel
 		rightKey := inverseRelationshipSortKey(candidates[right])
 		return leftKey < rightKey
 	})
+	groups := make(map[string]int)
 	for _, candidate := range candidates {
-		method := inverseRelationshipMethodName(candidate.child, candidate.relationship, usedMethods)
-		if method == "" {
-			continue
-		}
-		usedMethods[method] = struct{}{}
+		key := candidate.child.Schema + "\x00" + candidate.child.Name + "\x00" + table.Schema + "\x00" + table.Name
+		groups[key]++
+	}
+	for _, candidate := range candidates {
+		key := candidate.child.Schema + "\x00" + candidate.child.Name + "\x00" + table.Schema + "\x00" + table.Name
+		method := inverseRelationshipMethodName(candidate.child, candidate.relationship, groups[key])
 		result = append(result, relationshipSpec{
 			kind:          schema.RelationshipHasMany,
 			method:        method,
+			identity:      relationshipIdentity(candidate.child, candidate.relationship),
 			typeName:      tableTypeName(table.Name) + method + "Relation",
 			parent:        table,
 			child:         candidate.child,
@@ -1065,43 +1078,32 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef) []rel
 }
 
 func inverseRelationshipSortKey(candidate inverseRelationshipCandidate) string {
+	return relationshipIdentity(candidate.child, candidate.relationship)
+}
+
+func relationshipIdentity(child schema.TableDef, relationship schema.RelationshipDef) string {
 	return strings.Join([]string{
-		candidate.child.Schema,
-		candidate.child.Name,
-		candidate.relationship.Name,
-		strings.Join(candidate.relationship.Columns, "\x00"),
-		strings.Join(candidate.relationship.ReferencedColumns, "\x00"),
-		candidate.parentColumn.Name,
-		candidate.childColumn.Name,
+		child.Schema,
+		child.Name,
+		relationship.Name,
+		strings.Join(relationship.Columns, "\x00"),
+		relationship.ReferencedSchema,
+		relationship.ReferencedTable,
+		strings.Join(relationship.ReferencedColumns, "\x00"),
 	}, "\x00")
 }
 
 // Inverse methods use the child table name when it is available. A collision
 // or reserved name gets the relationship name as a stable prefix, followed by
 // a numeric suffix only when that name is also occupied.
-func inverseRelationshipMethodName(child schema.TableDef, relationship schema.RelationshipDef, usedMethods map[string]struct{}) string {
-	base := variableName(child.Name)
-	if base == "" {
-		return ""
+func inverseRelationshipMethodName(child schema.TableDef, relationship schema.RelationshipDef, groupSize int) string {
+	if relationship.InverseName != "" {
+		return goName(relationship.InverseName)
 	}
-	if _, exists := usedMethods[base]; !exists && !reservedRelationshipMethod(base) {
-		return base
+	if groupSize == 1 {
+		return variableName(child.Name)
 	}
-
-	prefix := goName(relationship.Name)
-	if prefix == "" {
-		return ""
-	}
-	base = prefix + base
-	if _, exists := usedMethods[base]; !exists && !reservedRelationshipMethod(base) {
-		return base
-	}
-	for suffix := 2; ; suffix++ {
-		candidate := base + strconv.Itoa(suffix)
-		if _, exists := usedMethods[candidate]; !exists && !reservedRelationshipMethod(candidate) {
-			return candidate
-		}
-	}
+	return goName(relationship.Name) + variableName(child.Name)
 }
 
 func relationshipTable(tables []schema.TableDef, referencedSchema, referencedName string) (schema.TableDef, bool) {
@@ -1976,6 +1978,10 @@ func writeForeignKeyDefLiteral(source *bytes.Buffer, key schema.ForeignKeyDef) {
 func writeRelationshipDefLiteral(source *bytes.Buffer, relationship schema.RelationshipDef) {
 	source.WriteString("{Name: ")
 	source.WriteString(quote(relationship.Name))
+	if relationship.InverseName != "" {
+		source.WriteString(", InverseName: ")
+		source.WriteString(quote(relationship.InverseName))
+	}
 	source.WriteString(", Kind: ")
 	source.WriteString(relationshipKindConstant(relationship.Kind))
 	source.WriteString(", Columns: ")
