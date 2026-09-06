@@ -128,9 +128,9 @@ func runDiff(args []string) error {
 	fromDirectory := flags.String("from", "", "baseline desired-schema directory")
 	toDirectory := flags.String("to", "", "target desired-schema directory")
 	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
-	var backfills, renames repeatableFlag
-	flags.Var(&backfills, "backfill", "resolve a backfill decision as decision-id=sql-file")
-	flags.Var(&renames, "rename", "resolve a rename decision as decision-id=baseline-column")
+	var resolutions resolutionFlags
+	flags.Var(resolutions.forKind("backfill"), "backfill", "resolve a backfill decision as decision-id=sql-file")
+	flags.Var(resolutions.forKind("rename"), "rename", "resolve a rename decision as decision-id=baseline-column")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -165,27 +165,12 @@ func runDiff(args []string) error {
 		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
 		return nil
 	}
-	if len(backfills.values)+len(renames.values) > 0 {
-		resolutions := make([]diff.Resolution, 0, len(backfills.values)+len(renames.values))
-		for _, value := range backfills.values {
-			parts := strings.SplitN(value, "=", 2)
-			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-				return errors.New("diff -backfill requires decision-id=sql-file")
-			}
-			source, readErr := os.ReadFile(parts[1])
-			if readErr != nil {
-				return fmt.Errorf("read backfill SQL: %w", readErr)
-			}
-			resolutions = append(resolutions, diff.Resolution{DecisionID: parts[0], BackfillSQL: string(source)})
+	if len(resolutions.values) > 0 {
+		parsed, parseErr := parseResolutions(resolutions.values)
+		if parseErr != nil {
+			return parseErr
 		}
-		for _, value := range renames.values {
-			parts := strings.SplitN(value, "=", 2)
-			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-				return errors.New("diff -rename requires decision-id=baseline-column")
-			}
-			resolutions = append(resolutions, diff.Resolution{DecisionID: parts[0], RenameFrom: parts[1]})
-		}
-		plan, err = plan.Resolve(resolutions...)
+		plan, err = plan.Resolve(parsed...)
 		if err != nil {
 			return err
 		}
@@ -208,6 +193,9 @@ func runDiffLive(args []string) error {
 	tableName := flags.String("table", "", "one live table to inspect")
 	targetDirectory := flags.String("to", "", "desired-schema directory for the inspected table")
 	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
+	var resolutions resolutionFlags
+	flags.Var(resolutions.forKind("backfill"), "backfill", "resolve a backfill decision as decision-id=sql-file")
+	flags.Var(resolutions.forKind("rename"), "rename", "resolve a rename decision as decision-id=baseline-column")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -266,6 +254,16 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return fmt.Errorf("parse inspected table %q: %w", *tableName, err)
 	}
+	if sqliteAnalyzer, ok := analyzer.(sqlite.Analyzer); ok {
+		facts, inspectErr := sqlite.InspectLiveCatalog(ctx, transaction, *tableName)
+		if inspectErr != nil {
+			return fmt.Errorf("inspect SQLite catalog: %w", inspectErr)
+		}
+		baseline, inspectErr = sqliteAnalyzer.AttachLiveCatalog(baseline, facts)
+		if inspectErr != nil {
+			return inspectErr
+		}
+	}
 	targetSources, err := diff.LoadSources(*targetDirectory)
 	if err != nil {
 		return err
@@ -280,6 +278,16 @@ func runDiffLive(args []string) error {
 	}
 	if err := liveAnalyzer.ValidateLivePlan(plan, *tableName); err != nil {
 		return err
+	}
+	if len(resolutions.values) > 0 {
+		parsed, parseErr := parseResolutions(resolutions.values)
+		if parseErr != nil {
+			return parseErr
+		}
+		plan, err = plan.Resolve(parsed...)
+		if err != nil {
+			return err
+		}
 	}
 	if plan.Empty() {
 		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
@@ -548,10 +556,51 @@ func newFlagSet(name string) *flag.FlagSet {
 	return flags
 }
 
-type repeatableFlag struct{ values []string }
+type resolutionFlagValue struct {
+	kind   string
+	values *[]resolutionFlag
+}
 
-func (f *repeatableFlag) String() string         { return strings.Join(f.values, ",") }
-func (f *repeatableFlag) Set(value string) error { f.values = append(f.values, value); return nil }
+type resolutionFlag struct {
+	kind, value string
+}
+
+type resolutionFlags struct{ values []resolutionFlag }
+
+func (f *resolutionFlags) forKind(kind string) *resolutionFlagValue {
+	return &resolutionFlagValue{kind: kind, values: &f.values}
+}
+
+func (f *resolutionFlagValue) String() string { return "" }
+func (f *resolutionFlagValue) Set(value string) error {
+	*f.values = append(*f.values, resolutionFlag{kind: f.kind, value: value})
+	return nil
+}
+
+func parseResolutions(flags []resolutionFlag) ([]diff.Resolution, error) {
+	resolutions := make([]diff.Resolution, 0, len(flags))
+	for _, flag := range flags {
+		parts := strings.SplitN(flag.value, "=", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, fmt.Errorf("diff -%s requires decision-id=value", flag.kind)
+		}
+		resolution := diff.Resolution{DecisionID: parts[0]}
+		switch flag.kind {
+		case "backfill":
+			source, err := os.ReadFile(parts[1])
+			if err != nil {
+				return nil, fmt.Errorf("read -backfill %q for decision %q: %w", parts[1], parts[0], err)
+			}
+			resolution.BackfillSQL = string(source)
+		case "rename":
+			resolution.RenameFrom = parts[1]
+		default:
+			return nil, fmt.Errorf("unsupported resolution flag %q", flag.kind)
+		}
+		resolutions = append(resolutions, resolution)
+	}
+	return resolutions, nil
+}
 
 func openRunner(ctx context.Context, directory string, dialectName string, dsn string, historyTable string) (migrate.Runner, []migrate.Migration, func(), error) {
 	if directory == "" || dialectName == "" || dsn == "" {
@@ -672,13 +721,14 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 }
 
 func writeDiffPlan(output io.Writer, plan diff.Plan) {
+	for _, operation := range plan.Operations {
+		_, _ = fmt.Fprintf(output, "-- operation %s (%s): %s\n", operation.ID, operation.Kind, operation.Summary)
+	}
+	for _, decision := range plan.Decisions {
+		_, _ = fmt.Fprintf(output, "-- decision %s (%s): %s\n", decision.ID, decision.Kind, decision.Reason)
+	}
 	if len(plan.Decisions) > 0 {
-		for _, operation := range plan.Operations {
-			_, _ = fmt.Fprintf(output, "-- operation %s (%s): %s\n", operation.ID, operation.Kind, operation.Summary)
-		}
-		for _, decision := range plan.Decisions {
-			_, _ = fmt.Fprintf(output, "-- decision %s (%s): %s\n", decision.ID, decision.Kind, decision.Reason)
-		}
+		return
 	}
 	for index, statement := range plan.Statements {
 		if index > 0 {
