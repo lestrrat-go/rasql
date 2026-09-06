@@ -109,35 +109,63 @@ func (r Runner) ApplyPlan(ctx context.Context, target ApplyTarget, migrations ..
 		return nil, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
-	if err := r.ensureHistory(ctx, connection); err != nil {
-		return nil, err
+	var result []Migration
+	plan := func() error {
+		var progress *progressEntry
+		if err := r.ensureHistory(ctx, connection); err != nil {
+			return err
+		}
+		if r.dialect.Name() == "mysql" {
+			if err := r.ensureProgress(ctx, connection); err != nil {
+				return err
+			}
+			var err error
+			progress, err = r.progress(ctx, connection)
+			if err != nil {
+				return err
+			}
+			if progress != nil {
+				if err := r.validateProgress(progress, prepared); err != nil {
+					return err
+				}
+				if progress.direction != DirectionUp {
+					return fmt.Errorf("migrate: apply plan cannot inspect %s progress", progress.direction)
+				}
+				if progress.nextIndex <= progress.sourceIndex {
+					return incompleteError(*progress, errors.New("source outcome is uncertain; reconcile it before retrying"))
+				}
+				migration := findProgressMigration(prepared, progress.id)
+				statements, _ := progressStatements(migration, progress.direction)
+				if progress.nextIndex == len(statements) {
+					if err := r.finalizeProgress(ctx, connection, *progress, migration); err != nil {
+						return incompleteError(*progress, err)
+					}
+					progress = nil
+				}
+			}
+		}
+		applied, err := r.applied(ctx, connection)
+		if err != nil {
+			return err
+		}
+		selected, err := selectApplies(applied, prepared, target)
+		if err != nil {
+			return err
+		}
+		if progress != nil {
+			selected = []preparedMigration{findProgressMigration(prepared, progress.id)}
+		}
+		result = exportMigrations(selected)
+		return nil
 	}
 	if r.dialect.Name() == "mysql" {
-		if err := r.ensureProgress(ctx, connection); err != nil {
+		if err := r.withMySQLReadLock(ctx, connection, plan); err != nil {
 			return nil, err
 		}
-		entry, err := r.progress(ctx, connection)
-		if err != nil {
-			return nil, err
-		}
-		if entry != nil {
-			if err := r.validateProgress(entry, prepared); err != nil {
-				return nil, err
-			}
-			if entry.nextIndex <= entry.sourceIndex {
-				return nil, incompleteError(*entry, errors.New("source outcome is uncertain; reconcile it before retrying"))
-			}
-		}
-	}
-	applied, err := r.applied(ctx, connection)
-	if err != nil {
+	} else if err := plan(); err != nil {
 		return nil, err
 	}
-	selected, err := selectApplies(applied, prepared, target)
-	if err != nil {
-		return nil, err
-	}
-	return exportMigrations(selected), nil
+	return result, nil
 }
 
 func (r Runner) applyPostgreSQL(ctx context.Context, connection *sql.Conn, target ApplyTarget, migrations []preparedMigration) ([]Migration, error) {
@@ -185,6 +213,13 @@ func (r Runner) withMySQLLock(ctx context.Context, connection *sql.Conn, run fun
 	migrationsApplied, operationErr := run()
 	cleanupErr := r.releaseMySQLLock(connection)
 	return migrationsApplied, errors.Join(operationErr, cleanupErr)
+}
+
+func (r Runner) withMySQLReadLock(ctx context.Context, connection *sql.Conn, run func() error) error {
+	_, err := r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
+		return nil, run()
+	})
+	return err
 }
 
 func (r Runner) releaseMySQLLock(connection *sql.Conn) error {

@@ -45,29 +45,53 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 		return nil, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
-	if err := r.ensureHistory(ctx, connection); err != nil {
-		return nil, err
-	}
-	var progress *progressEntry
-	if r.dialect.Name() == "mysql" {
-		if err := r.ensureProgress(ctx, connection); err != nil {
-			return nil, err
+	var result []StatusEntry
+	observe := func() error {
+		if err := r.ensureHistory(ctx, connection); err != nil {
+			return err
 		}
-		progress, err = r.progress(ctx, connection)
-		if err != nil {
-			return nil, err
-		}
-		if progress != nil {
-			if err := r.validateProgress(progress, prepared); err != nil {
-				return nil, err
+		var progress *progressEntry
+		if r.dialect.Name() == "mysql" {
+			if err := r.ensureProgress(ctx, connection); err != nil {
+				return err
+			}
+			var err error
+			progress, err = r.progress(ctx, connection)
+			if err != nil {
+				return err
+			}
+			if progress != nil {
+				if err := r.validateProgress(progress, prepared); err != nil {
+					return err
+				}
+				if progress.direction != DirectionUp && progress.direction != DirectionDown {
+					return fmt.Errorf("migrate: invalid progress direction %q", progress.direction)
+				}
+				migration := findProgressMigration(prepared, progress.id)
+				statements, _ := progressStatements(migration, progress.direction)
+				if progress.nextIndex == len(statements) && progress.nextIndex == progress.sourceIndex+1 {
+					if err := r.finalizeProgress(ctx, connection, *progress, migration); err != nil {
+						return incompleteError(*progress, err)
+					}
+					progress = nil
+				}
 			}
 		}
+		applied, err := r.applied(ctx, connection)
+		if err != nil {
+			return err
+		}
+		result = statusEntries(applied, prepared, progress)
+		return nil
 	}
-	applied, err := r.applied(ctx, connection)
-	if err != nil {
+	if r.dialect.Name() == "mysql" {
+		if err := r.withMySQLReadLock(ctx, connection, observe); err != nil {
+			return nil, err
+		}
+	} else if err := observe(); err != nil {
 		return nil, err
 	}
-	return statusEntries(applied, prepared, progress), nil
+	return result, nil
 }
 
 func statusEntries(applied map[string]string, migrations []preparedMigration, progress *progressEntry) []StatusEntry {

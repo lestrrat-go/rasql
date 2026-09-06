@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 )
@@ -108,18 +109,63 @@ func (r Runner) RevertPlan(ctx context.Context, target RevertTarget, migrations 
 		return nil, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
-	if err := r.ensureHistory(ctx, connection); err != nil {
+	var result []Migration
+	plan := func() error {
+		var progress *progressEntry
+		if err := r.ensureHistory(ctx, connection); err != nil {
+			return err
+		}
+		if r.dialect.Name() == "mysql" {
+			if err := r.ensureProgress(ctx, connection); err != nil {
+				return err
+			}
+			var err error
+			progress, err = r.progress(ctx, connection)
+			if err != nil {
+				return err
+			}
+			if progress != nil {
+				if err := r.validateProgress(progress, prepared); err != nil {
+					return err
+				}
+				if progress.direction != DirectionDown {
+					return fmt.Errorf("migrate: revert plan cannot inspect %s progress", progress.direction)
+				}
+				if progress.nextIndex <= progress.sourceIndex {
+					return incompleteError(*progress, errors.New("source outcome is uncertain; reconcile it before retrying"))
+				}
+				migration := findProgressMigration(prepared, progress.id)
+				statements, _ := progressStatements(migration, progress.direction)
+				if progress.nextIndex == len(statements) {
+					if err := r.finalizeProgress(ctx, connection, *progress, migration); err != nil {
+						return incompleteError(*progress, err)
+					}
+					progress = nil
+				}
+			}
+		}
+		applied, err := r.applied(ctx, connection)
+		if err != nil {
+			return err
+		}
+		selected, err := selectReverts(applied, prepared, target)
+		if err != nil {
+			return err
+		}
+		if progress != nil {
+			selected = []preparedMigration{findProgressMigration(prepared, progress.id)}
+		}
+		result = exportMigrations(selected)
+		return nil
+	}
+	if r.dialect.Name() == "mysql" {
+		if err := r.withMySQLReadLock(ctx, connection, plan); err != nil {
+			return nil, err
+		}
+	} else if err := plan(); err != nil {
 		return nil, err
 	}
-	applied, err := r.applied(ctx, connection)
-	if err != nil {
-		return nil, err
-	}
-	selected, err := selectReverts(applied, prepared, target)
-	if err != nil {
-		return nil, err
-	}
-	return exportMigrations(selected), nil
+	return result, nil
 }
 
 // exportMigrations copies prepared migrations back into the public type,

@@ -476,23 +476,46 @@ func runReconcile(args []string) error {
 		return err
 	}
 	defer closeDatabase()
-	if err := runner.Reconcile(context.Background(), sqlReconcileCheck{id: *id, query: *query}, migrations...); err != nil {
+	check := &sqlReconcileCheck{id: *id, query: *query}
+	if err := runner.Reconcile(context.Background(), check, migrations...); err != nil {
 		return dsnredact.Error(err, *dsn)
 	}
-	_, _ = fmt.Fprintf(commandOutput, "reconciled\t%s\n", *id)
-	return nil
+	entries, err := runner.Status(context.Background(), migrations...)
+	if err != nil {
+		return dsnredact.Error(err, *dsn)
+	}
+	for _, entry := range entries {
+		if entry.ID == *id {
+			_, _ = fmt.Fprintf(commandOutput, "reconciled\t%s\t%s\t%s\n", *id, check.observed, entry.State)
+			return nil
+		}
+	}
+	return fmt.Errorf("reconcile migration %q is absent after reconciliation", *id)
 }
 
 type sqlReconcileCheck struct {
-	id    string
-	query string
+	id       string
+	query    string
+	observed migrate.ReconcileDecision
 }
 
-func (c sqlReconcileCheck) Check(ctx context.Context, connection *sql.Conn, incomplete migrate.IncompleteMigration) (migrate.ReconcileDecision, error) {
+func (c *sqlReconcileCheck) Check(ctx context.Context, connection *sql.Conn, incomplete migrate.IncompleteMigration) (migrate.ReconcileDecision, error) {
 	if incomplete.ID != c.id {
 		return "", fmt.Errorf("reconcile migration ID %q does not match incomplete migration %q", c.id, incomplete.ID)
 	}
-	rows, err := connection.QueryContext(ctx, c.query)
+	query := strings.TrimSpace(c.query)
+	if strings.HasSuffix(query, ";") {
+		query = strings.TrimSpace(strings.TrimSuffix(query, ";"))
+	}
+	if query == "" || strings.Contains(query, ";") {
+		return "", errors.New("reconcile check must contain exactly one SQL statement")
+	}
+	transaction, err := connection.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = transaction.Rollback() }()
+	rows, err := transaction.QueryContext(ctx, query)
 	if err != nil {
 		return "", err
 	}
@@ -517,8 +540,10 @@ func (c sqlReconcileCheck) Check(ctx context.Context, connection *sql.Conn, inco
 		return "", err
 	}
 	if executed.Bool {
+		c.observed = migrate.ReconcileExecuted
 		return migrate.ReconcileExecuted, nil
 	}
+	c.observed = migrate.ReconcileNotExecuted
 	return migrate.ReconcileNotExecuted, nil
 }
 
@@ -569,6 +594,9 @@ func runVerify(args []string) error {
 	}
 	for _, entry := range entries {
 		if entry.State != migrate.StatusApplied {
+			if entry.Incomplete != nil {
+				return fmt.Errorf("verify migrations: migration %q is incomplete at %s (%s source %d)", entry.ID, entry.Incomplete.Source, entry.Incomplete.Direction, entry.Incomplete.SourceIndex)
+			}
 			return fmt.Errorf("verify migrations: migration %q is %s", entry.ID, entry.State)
 		}
 	}
