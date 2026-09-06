@@ -150,6 +150,9 @@ func stripSQLCommentsAndStrings(s string) string {
 var countRE = regexp.MustCompile(`(?is)^\s*count\s*\(\s*(\*|(?:[a-z_][a-z0-9_]*|"(?:[^"]|"")*"|` + "`(?:[^`]|``)*`" + `|\[(?:[^\]]|\]\])*\])(?:\s*\.\s*(?:[a-z_][a-z0-9_]*|"(?:[^"]|"")*"|` + "`(?:[^`]|``)*`" + `|\[(?:[^\]]|\]\])*\]))?)\s*\)\s+as\s+([a-z_][a-z0-9_]*|"(?:[^"]|"")*"|` + "`(?:[^`]|``)*`" + `|\[(?:[^\]]|\]\])*\])\s*$`)
 
 func countProjection(sqlText, name string, index, total int) bool {
+	if !validCountQueryShape(sqlText) {
+		return false
+	}
 	start, from := topLevelSelectFrom(sqlText)
 	if start < 0 || from < 0 {
 		return false
@@ -161,6 +164,92 @@ func countProjection(sqlText, name string, index, total int) bool {
 	}
 	match := countRE.FindStringSubmatch(stripSQLCommentsAndStringsPreservingQuotes(parts[index]))
 	return len(match) == 3 && unquoteIdentifier(match[2]) == name
+}
+
+func validCountQueryShape(s string) bool {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "with") {
+		return false
+	}
+	depth, selects, froms := 0, 0, 0
+	quote, line, block := byte(0), false, false
+	for i := 0; i < len(s); {
+		if line {
+			if s[i] == '\n' {
+				line = false
+			}
+			i++
+			continue
+		}
+		if block {
+			if i+1 < len(s) && s[i:i+2] == "*/" {
+				block = false
+				i += 2
+			} else {
+				i++
+			}
+			continue
+		}
+		if quote != 0 {
+			if s[i] == quote {
+				if i+1 < len(s) && s[i+1] == quote {
+					i += 2
+					continue
+				}
+				quote = 0
+			}
+			i++
+			continue
+		}
+		if i+1 < len(s) && s[i:i+2] == "--" {
+			line = true
+			i += 2
+			continue
+		}
+		if i+1 < len(s) && s[i:i+2] == "/*" {
+			block = true
+			i += 2
+			continue
+		}
+		if strings.ContainsRune("'\"`", rune(s[i])) {
+			quote = s[i]
+			i++
+			continue
+		}
+		if s[i] == '[' {
+			quote = ']'
+			i++
+			continue
+		}
+		if s[i] == '(' {
+			depth++
+			i++
+			continue
+		}
+		if s[i] == ')' {
+			depth--
+			if depth < 0 {
+				return false
+			}
+			i++
+			continue
+		}
+		if depth == 0 {
+			switch {
+			case isWordAt(s, i, "select"):
+				selects++
+				i += 6
+				continue
+			case isWordAt(s, i, "from"):
+				froms++
+				i += 4
+				continue
+			case isWordAt(s, i, "union"), isWordAt(s, i, "intersect"), isWordAt(s, i, "except"), isWordAt(s, i, "values"):
+				return false
+			}
+		}
+		i++
+	}
+	return quote == 0 && !line && !block && depth == 0 && selects == 1 && froms == 1
 }
 
 func splitProjection(s string) []string {

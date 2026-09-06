@@ -3,6 +3,7 @@ package querydescribe_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/querydescribe"
@@ -28,8 +29,11 @@ func TestSQLiteDescribesAggregateResult(t *testing.T) {
 }
 
 func TestSQLiteDescriberRejectsSecondStatement(t *testing.T) {
-	d := querydescribe.NewSQLite(nil)
-	_, err := d.Describe(context.Background(), querydescribe.Request{Name: "x", SQL: "SELECT 1; SELECT 2"})
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	d := querydescribe.NewSQLite(db)
+	_, err = d.Describe(context.Background(), querydescribe.Request{Name: "x", SQL: "SELECT 1; SELECT 2"})
 	require.ErrorIs(t, err, querydescribe.ErrInvalidRequest)
 }
 
@@ -62,4 +66,59 @@ func TestSQLiteDescriberRejectsNormalizedFieldCollision(t *testing.T) {
 	require.NoError(t, err)
 	_, err = querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "collision", SQL: "SELECT user_id, userID FROM collision"})
 	require.ErrorIs(t, err, querydescribe.ErrIncomplete)
+}
+
+func TestSQLiteCountParserAcceptsQuotedReferencesAndRejectsCompound(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), "CREATE TABLE counted(id INTEGER)")
+	require.NoError(t, err)
+	accepted := []string{
+		`SELECT count("id") AS "total" FROM counted`,
+		"SELECT /* count(*) */ count(`id`) AS `total` FROM counted",
+	}
+	for _, sqlText := range accepted {
+		got, describeErr := querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "count", SQL: sqlText})
+		require.NoError(t, describeErr)
+		require.Equal(t, "int64", got.Columns[0].Binding.Type)
+	}
+	_, err = querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "compound", SQL: "SELECT count(*) AS total FROM counted UNION SELECT count(*) AS total FROM counted"})
+	require.ErrorIs(t, err, querydescribe.ErrIncomplete)
+}
+
+func TestSQLiteExpectedMismatchFields(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), "CREATE TABLE expected_one(id INTEGER, name TEXT)")
+	require.NoError(t, err)
+	base, err := querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "expected", SQL: "SELECT id AS id, name AS name FROM expected_one"})
+	require.NoError(t, err)
+	cases := []struct {
+		name, field string
+		mutate      func(*querydescribe.Description)
+	}{
+		{"count", "column count", func(d *querydescribe.Description) { d.Columns = d.Columns[:1] }},
+		{"order", "name", func(d *querydescribe.Description) { d.Columns[0], d.Columns[1] = d.Columns[1], d.Columns[0] }},
+		{"name", "name", func(d *querydescribe.Description) { d.Columns[0].Name = "other" }},
+		{"type", "binding", func(d *querydescribe.Description) { d.Columns[0].Binding.Type = "string" }},
+		{"nullable type", "binding", func(d *querydescribe.Description) { d.Columns[0].Binding.NullableType = "string" }},
+		{"imports", "binding", func(d *querydescribe.Description) { d.Columns[0].Binding.Imports = []schema.GoImport{{Path: "fmt"}} }},
+		{"nullability", "nullability", func(d *querydescribe.Description) { d.Columns[0].Nullable = !d.Columns[0].Nullable }},
+		{"cardinality", "cardinality", func(d *querydescribe.Description) { d.Cardinality = querydescribe.ExactlyOne }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want := base
+			want.Columns = append([]querydescribe.Column(nil), base.Columns...)
+			for i := range want.Columns {
+				want.Columns[i].Binding.Imports = append([]schema.GoImport(nil), base.Columns[i].Binding.Imports...)
+			}
+			tc.mutate(&want)
+			_, mismatch := querydescribe.NewSQLite(db).Describe(t.Context(), querydescribe.Request{Name: "expected", SQL: "SELECT id AS id, name AS name FROM expected_one", Expected: &want})
+			require.ErrorIs(t, mismatch, querydescribe.ErrExpected)
+			require.True(t, strings.Contains(mismatch.Error(), tc.field), mismatch.Error())
+		})
+	}
 }
