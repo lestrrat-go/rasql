@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gomysql "github.com/go-sql-driver/mysql"
@@ -36,8 +37,13 @@ import (
 func runPostgreSQLDumpCommand(t *testing.T, outputDirectory string) error {
 	t.Helper()
 	config := dbtest.PostgreSQLConfig(t).Copy()
-	config.RuntimeParams["search_path"] = "public"
-	return runDump([]string{"-dialect", "postgresql", "-dsn", config.ConnString(), "-table", "sequence_cases", "-format", "schema", "-output", outputDirectory})
+	dsn := config.ConnString()
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	dsn += separator + "options=-c%20search_path%3Dpublic"
+	return runDump([]string{"-dialect", "postgresql", "-dsn", dsn, "-table", "sequence_cases", "-format", "schema", "-output", outputDirectory})
 }
 
 func TestDumpPostgreSQLSequenceExportRefusesAmbiguousDefaults(t *testing.T) {
