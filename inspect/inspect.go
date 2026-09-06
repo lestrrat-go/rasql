@@ -2430,7 +2430,7 @@ func (i Inspector) readColumns(ctx context.Context, query string, argument any) 
 			if column.NativeType == nil && pgUDTName.Valid && pgUDTName.String != "" {
 				column.NativeType = &schema.NativeTypeDef{Dialect: "postgresql", Schema: pgUDTSchema.String, Name: pgUDTName.String, Kind: schema.NativeOther}
 			}
-			if strings.EqualFold(databaseType, "ARRAY") && column.NativeType != nil {
+			if strings.EqualFold(databaseType, "ARRAY") && column.NativeType != nil && column.NativeType.Kind != schema.NativeArray {
 				elementName := strings.TrimPrefix(pgUDTName.String, "_")
 				column.NativeType = &schema.NativeTypeDef{Dialect: "postgresql", Schema: pgUDTSchema.String, Name: elementName, Kind: schema.NativeArray, Element: &schema.NativeTypeDef{Dialect: "postgresql", Schema: pgUDTSchema.String, Name: elementName, Kind: schema.NativeOther}}
 			}
