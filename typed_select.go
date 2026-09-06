@@ -28,9 +28,10 @@ func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 		columns[index] = column.Name
 	}
 	return TypedSelectBuilder[T]{
-		builder:       render.SelectFrom(nil, reference).Select(columns...),
-		staticScan:    true,
-		resultColumns: tableResultColumns(definition.Columns),
+		builder:           render.SelectFrom(nil, reference).Select(columns...),
+		staticScan:        true,
+		resultColumns:     tableResultColumns(definition.Columns),
+		resultMetadataSet: true,
 	}
 }
 
@@ -80,8 +81,9 @@ func LeftJoin[T any](table Table[T], on query.Expression) query.Join {
 // handle and no dialect, so one builder can be assembled once and run against a
 // DB and a transaction started from it alike.
 type TypedSelectBuilder[T any] struct {
-	builder       render.SelectBuilder
-	resultColumns []query.ResultColumn
+	builder           render.SelectBuilder
+	resultColumns     []query.ResultColumn
+	resultMetadataSet bool
 	// limit and hasLimit shadow the same state inside builder, which render
 	// keeps unexported with no getter. All reads them for a collection
 	// capacity. Limit is the only method that sets a limit; a second one would
@@ -106,6 +108,7 @@ func (b TypedSelectBuilder[T]) Project(projections ...query.Projection) TypedSel
 	if len(projections) > 0 {
 		b.staticScan = false
 		b.resultColumns = nil
+		b.resultMetadataSet = false
 	}
 	return b
 }
@@ -232,7 +235,7 @@ func (b TypedSelectBuilder[T]) Build(d dialect.Dialect) (stmt.Statement, error) 
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	if len(b.resultColumns) > 0 {
+	if b.resultMetadataSet {
 		if _, err := query.ResultOf(statement, b.resultColumns...); err != nil {
 			return stmt.Statement{}, err
 		}
@@ -252,7 +255,7 @@ func (b TypedSelectBuilder[T]) Result(columns ...query.ResultColumn) (query.Resu
 	if err != nil {
 		return query.ResultQuery{}, err
 	}
-	if len(columns) == 0 {
+	if len(columns) == 0 && b.resultMetadataSet {
 		columns = b.resultColumns
 	}
 	return query.ResultOf(statement, columns...)
@@ -261,9 +264,10 @@ func (b TypedSelectBuilder[T]) Result(columns ...query.ResultColumn) (query.Resu
 func RebindResult[R any, T any](b TypedSelectBuilder[T], columns []query.ResultColumn, projections ...query.Projection) TypedSelectBuilder[R] {
 	copy := b.clone()
 	copy.builder = copy.builder.ReplaceProject(projections...)
-	copy.resultColumns = append([]query.ResultColumn(nil), columns...)
+	copy.resultColumns = cloneResultColumns(columns)
+	copy.resultMetadataSet = true
 	copy.staticScan = false
-	return TypedSelectBuilder[R]{builder: copy.builder, resultColumns: copy.resultColumns, limit: copy.limit, hasLimit: copy.hasLimit, hasOffset: copy.hasOffset, err: copy.err, staticScan: false}
+	return TypedSelectBuilder[R]{builder: copy.builder, resultColumns: copy.resultColumns, resultMetadataSet: true, limit: copy.limit, hasLimit: copy.hasLimit, hasOffset: copy.hasOffset, err: copy.err, staticScan: false}
 }
 
 // Query returns a rangeable sequence that decodes each result row as T.
@@ -346,12 +350,12 @@ func (b TypedSelectBuilder[T]) countStatement(d dialect.Dialect, keepPaging bool
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	if !keepPaging && !b.hasLimit && !b.hasOffset && !statement.Distinct() && len(statement.GroupBy()) == 0 && statement.Having() == nil {
-		return b.builder.WithDialect(d).BuildCount()
-	}
-	metadata, err := resultMetadata(statement, b.resultColumns)
+	metadata, err := resultMetadata(statement, b.resultColumns, b.resultMetadataSet)
 	if err != nil {
 		return stmt.Statement{}, err
+	}
+	if !keepPaging && !b.hasLimit && !b.hasOffset && !statement.Distinct() && len(statement.GroupBy()) == 0 && statement.Having() == nil {
+		return b.builder.WithDialect(d).BuildCount()
 	}
 	result, err := query.ResultOf(statement, metadata...)
 	if err != nil {
@@ -368,9 +372,9 @@ func (b TypedSelectBuilder[T]) countStatement(d dialect.Dialect, keepPaging bool
 	return render.Select(d, outer)
 }
 
-func resultMetadata(statement query.Select, supplied []query.ResultColumn) ([]query.ResultColumn, error) {
-	if len(supplied) > 0 {
-		return append([]query.ResultColumn(nil), supplied...), nil
+func resultMetadata(statement query.Select, supplied []query.ResultColumn, suppliedSet bool) ([]query.ResultColumn, error) {
+	if suppliedSet {
+		return cloneResultColumns(supplied), nil
 	}
 	projections := statement.Projections()
 	metadata := make([]query.ResultColumn, len(projections))
@@ -412,14 +416,23 @@ func (b TypedSelectBuilder[T]) withError(err error) TypedSelectBuilder[T] {
 }
 
 func (b TypedSelectBuilder[T]) clone() TypedSelectBuilder[T] {
-	b.resultColumns = append([]query.ResultColumn(nil), b.resultColumns...)
+	b.resultColumns = cloneResultColumns(b.resultColumns)
 	return b
+}
+
+func cloneResultColumns(columns []query.ResultColumn) []query.ResultColumn {
+	result := make([]query.ResultColumn, len(columns))
+	for i, column := range columns {
+		result[i] = column
+		result[i].Type = schema.CloneColumnType(column.Type)
+	}
+	return result
 }
 
 func tableResultColumns(columns []schema.ColumnDef) []query.ResultColumn {
 	result := make([]query.ResultColumn, len(columns))
 	for i, column := range columns {
-		result[i] = query.ResultColumn{Name: column.Name, Type: column.Type, Nullable: column.Nullable}
+		result[i] = query.ResultColumn{Name: column.Name, Type: schema.CloneColumnType(column.Type), Nullable: column.Nullable}
 	}
 	return result
 }

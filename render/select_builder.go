@@ -296,7 +296,9 @@ func (b SelectBuilder) Query() (query.Select, error) {
 // ordering and pagination because they do not affect the complete count.
 func (b SelectBuilder) QueryForCount(keepPaging bool) (query.Select, error) {
 	copy := b.clone()
-	copy.orders = nil
+	if !keepPaging || (!copy.hasLimit && !copy.hasOffset) {
+		copy.orders = nil
+	}
 	if !keepPaging {
 		copy.hasLimit = false
 		copy.hasOffset = false

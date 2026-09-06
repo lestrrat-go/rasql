@@ -106,6 +106,8 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 | Method | Effect |
 | --- | --- |
 | `Project(projections…)` | Adds columns and function calls directly, and other expressions through `query.Project`. |
+| `Select()` | Returns the dialect-free `query.Select` for composition and inspection. |
+| `Result(columns…)` | Returns a reusable `query.ResultQuery`, using table metadata or the supplied result metadata. |
 | `Distinct()` | De-duplicates result rows. |
 | `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. |
 | `Where(expression)` | Adds a predicate from a `query` expression. |
@@ -120,7 +122,8 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 | `Query(ctx, db)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. |
 | `All(ctx, db)` | Executes and collects `[]T`; use it when the whole result fits in memory. |
 | `One(ctx, db)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. |
-| `Count(ctx, db)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. |
+| `Count(ctx, db)` | Executes `COUNT(*)` over the complete reusable result, preserving joins, predicates, grouping, HAVING, and DISTINCT while dropping paging. |
+| `CountPage(ctx, db)` | Executes `COUNT(*)` over the rows retained by the current LIMIT and OFFSET, preserving ordering needed to select that page. |
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
 `AND` in the order they were made, which is what a conditionally built filter

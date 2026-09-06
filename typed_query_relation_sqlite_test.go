@@ -18,6 +18,10 @@ type countUser struct {
 	Category string `rasql:"category"`
 }
 
+type countEmail struct {
+	Email string `rasql:"email"`
+}
+
 func TestSQLiteTypedReusableCounts(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -32,6 +36,17 @@ func TestSQLiteTypedReusableCounts(t *testing.T) {
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 	_, err = database.ExecContext(t.Context(), `INSERT INTO users VALUES (1, 1, 'a'), (2, 1, NULL), (3, 1, NULL), (4, 2, 'b')`)
 	require.NoError(t, err)
+
+	expression := rasql.DecodeFromRef[countEmail](users.Ref()).Project(query.Lower(users.Column("category")).As("email"))
+	_, err = expression.Count(t.Context(), db)
+	require.ErrorContains(t, err, "result metadata")
+
+	dtoBase := rasql.SelectFrom(users).WhereEqual(users.Column("tenant"), 2)
+	dto := rasql.RebindResult[countEmail](dtoBase,
+		[]query.ResultColumn{{Name: "email", Type: schema.TextType{}}}, users.Column("category").As("email"))
+	dtoRows, err := dto.All(t.Context(), db)
+	require.NoError(t, err)
+	require.Equal(t, []countEmail{{Email: "b"}}, dtoRows)
 
 	base := rasql.SelectFrom(users).WhereEqual(users.Column("tenant"), 1).OrderAsc(users.Column("id")).Limit(2).Offset(1)
 	count, err := base.Count(t.Context(), db)
