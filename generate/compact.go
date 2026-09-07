@@ -70,10 +70,6 @@ func RenderCompact(in EmitterInput) (Store, error) {
 	for _, config := range copy.Generation.Objects {
 		configs[config.ID] = config
 	}
-	defs := make(map[string]struct{ schemaName string })
-	for _, table := range tables {
-		defs[table.Schema+"\x00"+table.Name] = struct{ schemaName string }{schemaName: table.Name}
-	}
 	files := make([]compactFile, 0, len(copy.Catalog.Objects)+2)
 	seenFiles := make(map[string]string)
 	seenDecls := make(map[string]string)
