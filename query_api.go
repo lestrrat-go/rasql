@@ -104,13 +104,14 @@ type RowDecoder[R any] interface {
 type ProjectionItem struct {
 	expression query.Expression
 	column     ResultColumn
+	source     string
 }
 
 func Item[T any](name string, value Expr[T], logical schema.ColumnType, codec string) ProjectionItem {
-	return ProjectionItem{expression: value.node, column: ResultColumn{Name: name, Type: logical, Codec: codec}}
+	return ProjectionItem{expression: value.node, source: value.source, column: ResultColumn{Name: name, Type: logical, Codec: codec}}
 }
 func NullItem[T any](name string, value NullExpr[T], logical schema.ColumnType, codec string) ProjectionItem {
-	return ProjectionItem{expression: value.node, column: ResultColumn{Name: name, Type: logical, Nullable: true, Codec: codec}}
+	return ProjectionItem{expression: value.node, source: value.source, column: ResultColumn{Name: name, Type: logical, Nullable: true, Codec: codec}}
 }
 
 type Projection[R any] struct {
@@ -158,6 +159,9 @@ func NewProjection[R any](items []ProjectionItem, decoder RowDecoder[R]) (Projec
 			found := false
 			for _, column := range schemaValue.columns {
 				if column.Name == name {
+					if !column.Nullable {
+						return Projection[R]{}, planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "presence column must be nullable")
+					}
 					found = true
 					break
 				}
@@ -232,9 +236,53 @@ func (p QueryPlan) Validate() error {
 		}
 		seen[name] = struct{}{}
 	}
+	allowed := seen
+	for i, item := range p.projection {
+		if item.expression == nil {
+			return planError("invalid_projection", fmt.Sprintf("plan.projection[%d]", i), "expression is zero")
+		}
+		if item.source != "" {
+			if _, ok := allowed[item.source]; !ok {
+				return planError("invalid_source", fmt.Sprintf("plan.projection[%d]", i), "expression source is outside plan")
+			}
+		}
+	}
+	for i, join := range p.joins {
+		if join.On() == nil {
+			return planError("invalid_source", fmt.Sprintf("plan.joins[%d].on", i), "condition is zero")
+		}
+		if join.Source().QualifiedName() == "" {
+			return planError("invalid_source", fmt.Sprintf("plan.joins[%d].source", i), "source is zero")
+		}
+	}
 	for i, predicate := range append(append([]Predicate(nil), p.where...), p.having...) {
 		if predicate.node == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.predicates[%d]", i), "predicate is zero")
+		}
+		if predicate.source != "" {
+			if _, ok := allowed[predicate.source]; !ok {
+				return planError("invalid_source", fmt.Sprintf("plan.predicates[%d]", i), "expression source is outside plan")
+			}
+		}
+	}
+	for i, key := range p.group {
+		if key.node == nil {
+			return planError("invalid_projection", fmt.Sprintf("plan.group[%d]", i), "group key is zero")
+		}
+		if key.source != "" {
+			if _, ok := allowed[key.source]; !ok {
+				return planError("invalid_source", fmt.Sprintf("plan.group[%d]", i), "expression source is outside plan")
+			}
+		}
+	}
+	for i, term := range p.order {
+		if term.node == nil {
+			return planError("invalid_projection", fmt.Sprintf("plan.order[%d]", i), "order term is zero")
+		}
+		if term.source != "" {
+			if _, ok := allowed[term.source]; !ok {
+				return planError("invalid_source", fmt.Sprintf("plan.order[%d]", i), "expression source is outside plan")
+			}
 		}
 	}
 	return nil

@@ -83,7 +83,9 @@ func TestProjectionValidationAndPresence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewProjection([]ProjectionItem{item}, queryAPIDecoder{resultSchema: resultSchema, presence: []Presence{presence}}); err != nil {
+	nullSchema, _ := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: true})
+	nullItem := NullItem("id", NullExpr[int64]{node: Value(int64(1)).node}, schema.IntegerType{}, "")
+	if _, err := NewProjection([]ProjectionItem{nullItem}, queryAPIDecoder{resultSchema: nullSchema, presence: []Presence{presence}}); err != nil {
 		t.Fatal(err)
 	}
 	unknown, _ := NewPresence("profile", "missing")

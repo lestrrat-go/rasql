@@ -1,6 +1,7 @@
 package rasql
 
 import (
+	"database/sql"
 	"reflect"
 	"sync/atomic"
 
@@ -9,14 +10,19 @@ import (
 )
 
 type Expr[T any] struct {
-	node  query.Expression
-	codec string
+	node   query.Expression
+	codec  string
+	source string
 }
 type NullExpr[T any] struct {
-	node  query.Expression
-	codec string
+	node   query.Expression
+	codec  string
+	source string
 }
-type Predicate struct{ node query.Expression }
+type Predicate struct {
+	node   query.Expression
+	source string
+}
 type Column[Row, T any] struct {
 	ref   query.ColumnRef
 	codec string
@@ -112,21 +118,23 @@ func ValueWithCodec[T any](value T, codec string) (Expr[T], error) {
 	return Expr[T]{node: query.Bind(bindToken{id: id, value: cloneBindValue(value), codec: codec}), codec: codec}, nil
 }
 func EqualExpr[T comparable](left, right Expr[T]) Predicate {
-	return Predicate{node: query.Equal(left.node, right.node)}
+	return Predicate{node: query.Equal(left.node, right.node), source: left.source}
 }
 func EqualValue[T comparable](left Expr[T], right T) Predicate {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
-	return Predicate{node: query.Equal(left.node, query.Bind(bindToken{id: id, value: cloneBindValue(right), codec: left.codec}))}
+	return Predicate{node: query.Equal(left.node, query.Bind(bindToken{id: id, value: cloneBindValue(right), codec: left.codec})), source: left.source}
 }
 func EqualNullable[T comparable](left, right NullExpr[T]) Predicate {
-	return Predicate{node: query.Equal(left.node, right.node)}
+	return Predicate{node: query.Equal(left.node, right.node), source: left.source}
 }
 func EqualOptional[T comparable](left Expr[T], right NullExpr[T]) Predicate {
-	return Predicate{node: query.Equal(left.node, right.node)}
+	return Predicate{node: query.Equal(left.node, right.node), source: left.source}
 }
-func IsNull[T any](value NullExpr[T]) Predicate { return Predicate{node: query.IsNull(value.node)} }
+func IsNull[T any](value NullExpr[T]) Predicate {
+	return Predicate{node: query.IsNull(value.node), source: value.source}
+}
 func IsNotNull[T any](value NullExpr[T]) Predicate {
-	return Predicate{node: query.IsNotNull(value.node)}
+	return Predicate{node: query.IsNotNull(value.node), source: value.source}
 }
 func And(predicates ...Predicate) Predicate {
 	nodes := make([]query.Expression, len(predicates))
@@ -144,14 +152,22 @@ func Or(predicates ...Predicate) Predicate {
 }
 func Not(predicate Predicate) Predicate { return Predicate{node: query.Negate(predicate.node)} }
 
-func (c Column[Row, T]) Expr() Expr[T]                          { return Expr[T]{node: c.ref, codec: c.codec} }
-func (c NullColumn[Row, T]) NullExpr() NullExpr[T]              { return NullExpr[T]{node: c.ref, codec: c.codec} }
-func NullColumnOf[Row, T any](ref ColumnRef) NullColumn[Row, T] { return NullColumn[Row, T]{ref: ref} }
+func (c Column[Row, T]) Expr() Expr[T] {
+	return Expr[T]{node: c.ref, codec: c.codec, source: c.ref.Source().QualifiedName()}
+}
+func (c NullColumn[Row, T]) NullExpr() NullExpr[T] {
+	return NullExpr[T]{node: c.ref, codec: c.codec, source: c.ref.Source().QualifiedName()}
+}
 
-type GroupKey struct{ node query.Expression }
+type GroupKey struct {
+	node   query.Expression
+	source string
+}
 
-func Group[T any](value Expr[T]) GroupKey         { return GroupKey{node: value.node} }
-func GroupNull[T any](value NullExpr[T]) GroupKey { return GroupKey{node: value.node} }
+func Group[T any](value Expr[T]) GroupKey { return GroupKey{node: value.node, source: value.source} }
+func GroupNull[T any](value NullExpr[T]) GroupKey {
+	return GroupKey{node: value.node, source: value.source}
+}
 
 type NullOrder uint8
 
@@ -163,17 +179,22 @@ const (
 
 type OrderTerm struct {
 	node       query.Expression
+	source     string
 	descending bool
 	nulls      NullOrder
 }
 
-func AscExpr[T any](value Expr[T]) OrderTerm  { return OrderTerm{node: value.node} }
-func DescExpr[T any](value Expr[T]) OrderTerm { return OrderTerm{node: value.node, descending: true} }
+func AscExpr[T any](value Expr[T]) OrderTerm {
+	return OrderTerm{node: value.node, source: value.source}
+}
+func DescExpr[T any](value Expr[T]) OrderTerm {
+	return OrderTerm{node: value.node, source: value.source, descending: true}
+}
 func AscNull[T any](value NullExpr[T], nulls NullOrder) OrderTerm {
-	return OrderTerm{node: value.node, nulls: nulls}
+	return OrderTerm{node: value.node, source: value.source, nulls: nulls}
 }
 func DescNull[T any](value NullExpr[T], nulls NullOrder) OrderTerm {
-	return OrderTerm{node: value.node, descending: true, nulls: nulls}
+	return OrderTerm{node: value.node, source: value.source, descending: true, nulls: nulls}
 }
 
 func CountRows() Expr[int64]                     { return Expr[int64]{node: query.CountAll()} }
@@ -181,9 +202,11 @@ func CountExpr[T any](value Expr[T]) Expr[int64] { return Expr[int64]{node: quer
 func CountNullExpr[T any](value NullExpr[T]) Expr[int64] {
 	return Expr[int64]{node: query.Count(value.node)}
 }
-func MinExpr[T any](value Expr[T]) NullExpr[T] { return NullExpr[T]{node: query.Min(value.node)} }
+func MinExpr[T any](value Expr[T]) NullExpr[T] {
+	return NullExpr[T]{node: query.Min(value.node), codec: value.codec, source: value.source}
+}
 func MinNullExpr[T any](value NullExpr[T]) NullExpr[T] {
-	return NullExpr[T]{node: query.Min(value.node)}
+	return NullExpr[T]{node: query.Min(value.node), codec: value.codec, source: value.source}
 }
 
 func cloneBindValue[T any](value T) any {
@@ -230,6 +253,27 @@ func cloneReflectValue(value reflect.Value) reflect.Value {
 		iter := value.MapRange()
 		for iter.Next() {
 			copy.SetMapIndex(cloneReflectValue(iter.Key()), cloneReflectValue(iter.Value()))
+		}
+		return copy
+	case reflect.Array:
+		copy := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			copy.Index(i).Set(cloneReflectValue(value.Index(i)))
+		}
+		return copy
+	case reflect.Struct:
+		if value.Type() == reflect.TypeOf(sql.NamedArg{}) {
+			argument := value.Interface().(sql.NamedArg)
+			argument.Value = cloneBindValue(argument.Value)
+			return reflect.ValueOf(argument)
+		}
+		copy := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.NumField(); i++ {
+			if copy.Field(i).CanSet() && value.Field(i).CanInterface() {
+				copy.Field(i).Set(cloneReflectValue(value.Field(i)))
+				continue
+			}
+			copy.Field(i).Set(value.Field(i))
 		}
 		return copy
 	default:
