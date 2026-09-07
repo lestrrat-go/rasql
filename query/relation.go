@@ -45,7 +45,7 @@ func NativeResultOf(engine string, sql sqltext.Text, args []any) (NativeResult, 
 	if strings.TrimSpace(string(sql)) == "" {
 		return NativeResult{}, fmt.Errorf("native result SQL must not be empty")
 	}
-	if err := sqlscan.ValidateSelect(string(sql)); err != nil {
+	if err := sqlscan.ValidateSelect(string(sql), engine); err != nil {
 		return NativeResult{}, err
 	}
 	return NativeResult{engine: engine, sql: sql, args: append([]any(nil), args...)}, nil
@@ -62,7 +62,7 @@ func (n NativeResult) Validate() error {
 	if strings.TrimSpace(string(n.sql)) == "" {
 		return fmt.Errorf("native result SQL must not be empty")
 	}
-	return sqlscan.ValidateSelect(string(n.sql))
+	return sqlscan.ValidateSelect(string(n.sql), n.engine)
 }
 
 // ResultQuery pairs a query body with the result metadata callers supplied.

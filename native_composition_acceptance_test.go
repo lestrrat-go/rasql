@@ -294,6 +294,65 @@ func TestNativeCompositionEngineMismatchPrecedesCodecLookupAndHandleUse(t *testi
 	require.Equal(t, int64(0), spy.calls.Load())
 }
 
+func TestNativeCompositionMissingArgumentCodecPrecedesHandleUse(t *testing.T) {
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	projection, err := rasql.NativeProjection(nativeCompositionIntDecoder{schema: resultSchema})
+	require.NoError(t, err)
+	base, err := rasql.Native(rasql.NativeStatement{
+		Engine: "sqlite",
+		SQL:    "SELECT ? AS value",
+		Args:   []rasql.NativeArgument{{Value: int64(1), Codec: "missing"}},
+	}, projection, rasql.Many)
+	require.NoError(t, err)
+	source, err := rasql.Derive(base, "native_values")
+	require.NoError(t, err)
+	value, err := rasql.BindResultColumn[int64, int64](source, "value")
+	require.NoError(t, err)
+	outerProjection, err := rasql.Scalar("value", value.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+	query := rasql.Select(source.Source(), outerProjection)
+	spy := &nativeCompositionSpyExecutor{dialect: dialect.SQLite()}
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.WithEngineProfile(spy, profile)
+	require.NoError(t, err)
+	registry := &nativeCompositionSpyRegistry{}
+	executor, err = rasql.WithCodecs(executor, registry)
+	require.NoError(t, err)
+	_, err = rasql.All(t.Context(), executor, query)
+	var planErr *rasql.PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "codec_unavailable", planErr.Code)
+	require.Greater(t, registry.calls.Load(), int64(0))
+	require.Equal(t, int64(0), spy.calls.Load())
+}
+
+func TestNativeCompositionPreservesNullableResultMetadataAndDecode(t *testing.T) {
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{
+		Name: "value", Type: schema.IntegerType{}, Nullable: true,
+	})
+	require.NoError(t, err)
+	projection, err := rasql.NativeProjection(nativeCompositionNullableDecoder{schema: resultSchema})
+	require.NoError(t, err)
+	base, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: "SELECT NULL AS value"}, projection, rasql.Many)
+	require.NoError(t, err)
+	source, err := rasql.Derive(base, "native_values")
+	require.NoError(t, err)
+	value, err := rasql.BindNullResultColumn[nativeCompositionNullableRow, int64](source, "value")
+	require.NoError(t, err)
+	outerSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}, Nullable: true})
+	require.NoError(t, err)
+	outerProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.NullItem("value", value.NullExpr(), schema.IntegerType{}, ""),
+	}, nativeCompositionNullableDecoder{schema: outerSchema})
+	require.NoError(t, err)
+	executor := nativeCompositionSQLiteExecutor(t, "unused", &nativeCompositionCodec{})
+	rows, err := rasql.All(t.Context(), executor, rasql.Select(source.Source(), outerProjection))
+	require.NoError(t, err)
+	require.Equal(t, []nativeCompositionNullableRow{{}}, rows)
+}
+
 func TestNativeDerivedAndCTEPostgreSQLExecutionRelocatesRepeatedPlaceholders(t *testing.T) {
 	database := dbtest.PostgreSQLDB(t)
 	db, err := rasql.New(database, dialect.PostgreSQL())
@@ -350,6 +409,26 @@ func TestNativeDerivedAndCTEPostgreSQLExecutionRelocatesRepeatedPlaceholders(t *
 type nativeCompositionPGOuter struct {
 	First  int64
 	Marker string
+}
+
+type nativeCompositionIntDecoder struct{ schema rasql.ResultSchema }
+
+func (d nativeCompositionIntDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (nativeCompositionIntDecoder) Presence() []rasql.Presence         { return nil }
+func (d nativeCompositionIntDecoder) DecodeRow(source rasql.ScanSource, value *int64) error {
+	return source.Scan(value)
+}
+
+type nativeCompositionNullableRow struct {
+	Value rasql.Nullable[int64]
+}
+
+type nativeCompositionNullableDecoder struct{ schema rasql.ResultSchema }
+
+func (d nativeCompositionNullableDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (nativeCompositionNullableDecoder) Presence() []rasql.Presence         { return nil }
+func (d nativeCompositionNullableDecoder) DecodeRow(source rasql.ScanSource, value *nativeCompositionNullableRow) error {
+	return source.Scan(&value.Value)
 }
 
 type nativeCompositionPGOuterDecoder struct{ schema rasql.ResultSchema }

@@ -10,6 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/internal/sqlscan"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -498,6 +499,9 @@ func mapCompileError(err error) error {
 	}
 	if errors.Is(err, sqlscan.ErrInvalidPlaceholder) {
 		return &PlanError{Code: "invalid_query", Path: "native.sql", Detail: err.Error(), cause: err}
+	}
+	if errors.Is(err, render.ErrNativeEngineMismatch) {
+		return &PlanError{Code: "engine_mismatch", Path: "native.engine", Detail: err.Error(), cause: err}
 	}
 	var validationErr *query.ValidationError
 	if errors.As(err, &validationErr) {

@@ -23,6 +23,19 @@ type Error struct {
 
 var ErrUnsupportedSelectLock = errors.New("render: unsupported SELECT row lock")
 
+var ErrNativeEngineMismatch = errors.New("render: native engine mismatch")
+
+type NativeEngineMismatchError struct {
+	Native  string
+	Dialect string
+}
+
+func (e *NativeEngineMismatchError) Error() string {
+	return fmt.Sprintf("native SQL uses %s but renderer uses %s", e.Native, e.Dialect)
+}
+
+func (e *NativeEngineMismatchError) Unwrap() error { return ErrNativeEngineMismatch }
+
 type UnsupportedSelectLockError struct {
 	Dialect string
 	Clause  string
@@ -552,8 +565,11 @@ func (r *renderer) writeQueryBody(body query.QueryBody) error {
 }
 
 func (r *renderer) writeNativeResult(native query.NativeResult) error {
+	if native.Engine() != r.dialect.Name() {
+		return &NativeEngineMismatchError{Native: native.Engine(), Dialect: r.dialect.Name()}
+	}
 	text := string(native.SQL())
-	scan, err := sqlscan.Scan(text)
+	scan, err := sqlscan.Scan(text, native.Engine())
 	if err != nil {
 		return err
 	}
@@ -562,16 +578,16 @@ func (r *renderer) writeNativeResult(native query.NativeResult) error {
 	}
 	args := native.Args()
 	postgres := native.Engine() == "postgresql"
+	wantKind := sqlscan.Question
+	if postgres {
+		wantKind = sqlscan.Dollar
+	}
 	used := make([]bool, len(args))
 	nextQuestion := 0
 	last := 0
 	for _, placeholder := range scan.Placeholders {
-		active := placeholder.Number != 0
-		if !postgres {
-			active = placeholder.Number == 0
-		}
-		if !active {
-			continue
+		if placeholder.Kind != wantKind || placeholder.Invalid {
+			return fmt.Errorf("%w: native placeholder syntax does not match %s", sqlscan.ErrInvalidPlaceholder, native.Engine())
 		}
 		if placeholder.Start < last {
 			return fmt.Errorf("%w: native placeholder scan is out of order", sqlscan.ErrInvalidPlaceholder)

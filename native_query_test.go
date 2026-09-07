@@ -6,6 +6,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,6 +73,30 @@ func TestNativeEngineMismatchMakesZeroQueryCalls(t *testing.T) {
 	var planErr *PlanError
 	require.ErrorAs(t, err, &planErr)
 	require.Equal(t, "engine_mismatch", planErr.Code)
+	require.Equal(t, int64(0), raw.calls.Load())
+}
+
+func TestNativeDerivedRejectsDollarZeroBeforeHandleUse(t *testing.T) {
+	projection := runtimeQuery(t).Projection()
+	base, err := Native(NativeStatement{Engine: "postgresql", SQL: "SELECT $0 AS value"}, projection, Many)
+	require.NoError(t, err)
+	source, err := Derive(base, "native_values")
+	require.NoError(t, err)
+	value, err := BindResultColumn[int64, int64](source, "value")
+	require.NoError(t, err)
+	outer, err := Scalar("value", value.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+	query := Select(source.Source(), outer)
+	raw := &runtimeFakeExecutor{dialect: dialect.PostgreSQL()}
+	profile, err := EngineProfileFromVersion("postgresql-17", 17, 6, 0)
+	require.NoError(t, err)
+	executor, err := WithEngineProfile(raw, profile)
+	require.NoError(t, err)
+	_, err = All(t.Context(), executor, query)
+	var planErr *PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "invalid_query", planErr.Code)
+	require.Equal(t, "native.sql", planErr.Path)
 	require.Equal(t, int64(0), raw.calls.Load())
 }
 

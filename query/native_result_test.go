@@ -28,3 +28,19 @@ func TestNativeResultRejectsDMLAndExecutableSemicolons(t *testing.T) {
 	_, err = query.NativeResultOf("sqlite", sqltext.Text("SELECT 1; SELECT 2"), nil)
 	require.Error(t, err)
 }
+
+func TestNativeResultRejectsValuesAndTableCTEBodies(t *testing.T) {
+	for _, sql := range []string{
+		"WITH values(v) AS (VALUES (1)) SELECT v FROM values",
+		"WITH users AS (TABLE users) SELECT * FROM users",
+	} {
+		_, err := query.NativeResultOf("sqlite", sqltext.Text(sql), nil)
+		require.Error(t, err, sql)
+	}
+}
+
+func TestNativeResultAcceptsSQLiteBackslashString(t *testing.T) {
+	body, err := query.NativeResultOf("sqlite", sqltext.Text(`SELECT '\' AS value`), nil)
+	require.NoError(t, err)
+	require.NoError(t, body.Validate())
+}
