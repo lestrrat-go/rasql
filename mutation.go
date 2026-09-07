@@ -143,7 +143,11 @@ func compileMutation(executor Executor, statement query.WriteStatement) (stmt.St
 	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
 		registry = cp.Codecs()
 	}
-	return encodeCompiled(compiledQuery, registry)
+	statementCopy, err := compiledQuery.statementCopy()
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return encodeStatement(statementCopy, compiledQuery.bindSlots, registry)
 }
 
 func executorDurability(executor Executor) Durability {
@@ -197,7 +201,11 @@ func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], er
 	if err != nil {
 		return Query[R]{}, err
 	}
-	return Query[R]{projection: projection, plan: QueryPlan{mutation: returning}}, nil
+	result := Query[R]{projection: projection, plan: QueryPlan{mutation: returning}}
+	if versioned, ok := plan.(interface{ mutationPrecondition() bool }); ok && versioned.mutationPrecondition() {
+		result.resultRequirement = queryResultRequirement{cardinality: ExactlyOne, emptyErr: ErrPrecondition}
+	}
+	return result, nil
 }
 
 func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {

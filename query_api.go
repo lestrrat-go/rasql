@@ -276,6 +276,9 @@ func (p QueryPlan) Validate() error {
 		}
 		return nil
 	}
+	if p.mutation != nil {
+		return p.mutation.Validate()
+	}
 	if p.body != nil {
 		return p.body.Validate()
 	} else if len(p.sources) == 0 {
