@@ -95,6 +95,20 @@ column's descriptor instead of `any`. The table must be one this run
 generates, so a `tables.include` or `tables.exclude` that leaves it out makes
 the reference an error rather than an untyped parameter.
 
+Query entries can set `bindings` by parameter name when a standalone bind
+needs an explicit Go type:
+
+```json
+"bindings": {
+  "limit": {"Go": {"Type": "int"}}
+}
+```
+
+An explicit binding overrides the generated application type while a stated
+column reference still has to resolve. Set `Nullable` to `true` to select the
+binding's `NullableType`; an unconfigured nullable column uses its nullable
+form automatically. Unconfigured standalone binds remain `any`.
+
 A template held in `input` is read again before the run writes anything, so an
 edit made while a run was in flight is caught rather than committed around. A
 template held in `sql` is already in hand, so nothing has to be re-read.

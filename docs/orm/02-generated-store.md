@@ -400,7 +400,7 @@ queries := generate.QueryPackage{
 	Dialect: dialect.PostgreSQL(),
 	Queries: []generate.Query{
 		{Input: template, Function: "UserByEmail", Output: "user_by_email_gen.go"},
-		{SQL: "SELECT count(*) FROM users", Function: "CountUsers", Output: "count_users_gen.go"},
+		{SQL: `SELECT count(*) FROM users LIMIT {{bind "limit"}}`, Function: "CountUsers", Output: "count_users_gen.go", Bindings: map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}}},
 	},
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/modroot"
+	"github.com/lestrrat-go/rasql/namedsql"
 )
 
 // defaultConfigName is the file a run reads when -config names none. It sits
@@ -97,6 +98,9 @@ type configTables struct {
 // here keeps a one-line query in one place, at the cost of escaping every
 // quote the {{bind "name"}} action needs.
 type configQuery struct {
+	// Bindings configures explicit Go types for static-query parameters.
+	Bindings map[string]namedsql.ParameterBinding `json:"bindings"`
+
 	// Input is the template file, resolved against Root when relative.
 	// State exactly one of Input and SQL.
 	Input string `json:"input"`
@@ -222,7 +226,12 @@ func (c config) queries() ([]generate.Query, error) {
 		default:
 			output = snakeCase(query.Function) + "_gen.go"
 		}
-		queries[index] = generate.Query{Input: query.Input, SQL: query.SQL, Function: query.Function, Output: output}
+		bindings := make(map[string]namedsql.ParameterBinding, len(query.Bindings))
+		for name, binding := range query.Bindings {
+			binding.Go = *binding.Go.Clone()
+			bindings[name] = binding
+		}
+		queries[index] = generate.Query{Input: query.Input, SQL: query.SQL, Function: query.Function, Output: output, Bindings: bindings}
 	}
 	return queries, nil
 }
