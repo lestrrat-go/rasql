@@ -15,6 +15,8 @@ type Nullable[T any] struct {
 	Valid bool
 }
 
+func (n *Nullable[T]) setNull() { n.Valid = false }
+
 // PlanError identifies an invalid immutable query plan.
 type PlanError struct {
 	Code, Path, Detail string
