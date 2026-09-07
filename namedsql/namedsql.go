@@ -136,7 +136,7 @@ func parseBindAction(action string) (string, columnRef, error) {
 	if err != nil {
 		return "", columnRef{}, fmt.Errorf("parameter name must be quoted")
 	}
-	if err := schema.ValidateIdentifier(name); err != nil {
+	if err := schema.ValidateSimpleIdentifier(name); err != nil {
 		return "", columnRef{}, fmt.Errorf("invalid parameter name: %w", err)
 	}
 	if len(fields) == 2 {
@@ -160,7 +160,7 @@ func parseColumnRef(text string) (columnRef, error) {
 		return columnRef{}, fmt.Errorf("invalid column reference %q: must be table.column or schema.table.column", text)
 	}
 	for _, part := range parts {
-		if err := schema.ValidateIdentifier(part); err != nil {
+		if err := schema.ValidateSimpleIdentifier(part); err != nil {
 			return columnRef{}, fmt.Errorf("invalid column reference %q: %w", text, err)
 		}
 	}

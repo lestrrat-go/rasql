@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // defaultConfigName is the file a run reads when -config names none. It sits
@@ -24,8 +26,8 @@ const defaultConfigName = "rasql.json"
 
 // maxConfigBytes bounds the configuration file a run will read. A
 // configuration file is a hand-written page of settings; anything past this
-// is a wrong path pointed at a data file, and reading it whole first would
-// be the only way to find that out.
+// is a wrong path pointed at a data file, and the actual read is bounded so it
+// cannot consume the whole file before finding that out.
 const maxConfigBytes = 1 << 20
 
 // config is the project's generation settings, read from JSON.
@@ -69,6 +71,13 @@ type config struct {
 // configTables is the table selection and the Go-side names no database can
 // state.
 type configTables struct {
+	Namespaces []string `json:"namespaces"`
+
+	IncludeObjects []schema.ObjectName `json:"include_objects"`
+
+	ExcludeObjects []schema.ObjectName `json:"exclude_objects"`
+
+	IncludeViews bool `json:"include_views"`
 	// Include names the only tables to generate. Empty sweeps every base
 	// table. It is not accepted together with Exclude.
 	Include []string `json:"include"`
@@ -85,6 +94,27 @@ type configTables struct {
 	// to read better, or to break a collision between one table's derived
 	// row name and another table's generated names, which refuses the run.
 	RowNames map[string]string `json:"row_names"`
+
+	Names map[string]generate.ObjectNames `json:"names"`
+}
+
+func (c config) names() (map[schema.ObjectName]generate.ObjectNames, error) {
+	if len(c.Tables.Names) == 0 {
+		return nil, nil
+	}
+	result := make(map[schema.ObjectName]generate.ObjectNames, len(c.Tables.Names))
+	for identity, names := range c.Tables.Names {
+		parts := strings.Split(identity, ".")
+		switch {
+		case len(parts) == 1 && parts[0] != "":
+			result[schema.ObjectName{Name: parts[0]}] = names
+		case len(parts) == 2 && parts[0] != "" && parts[1] != "":
+			result[schema.ObjectName{Schema: parts[0], Name: parts[1]}] = names
+		default:
+			return nil, fmt.Errorf("generate: config names key %q must be table or namespace.table", identity)
+		}
+	}
+	return result, nil
 }
 
 // configQuery is one static SQL template compiled into a generated function.
@@ -149,9 +179,20 @@ func loadConfig(path string) (config, error) {
 		return config{}, fmt.Errorf("generate: config %s is %d bytes, past the %d-byte limit; -config expects a settings file", path, info.Size(), maxConfigBytes)
 	}
 
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return config{}, fmt.Errorf("generate: read config %s: %w", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxConfigBytes)+1))
+	if err != nil {
+		return config{}, fmt.Errorf("generate: read config %s: %w", path, err)
+	}
+	if len(data) > maxConfigBytes {
+		return config{}, fmt.Errorf(
+			"generate: config %s exceeds the %d-byte limit; -config expects a settings file",
+			path, maxConfigBytes,
+		)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	// A misspelled key is a setting that silently does nothing, which is

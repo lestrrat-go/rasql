@@ -19,6 +19,7 @@ const (
 	KindJSON    TypeKind = "json"
 	KindUUID    TypeKind = "uuid"
 	KindDecimal TypeKind = "decimal"
+	KindNative  TypeKind = "native"
 )
 
 // ColumnType describes the type-specific part of a column. The unexported
@@ -28,6 +29,9 @@ type ColumnType interface {
 	Kind() TypeKind
 	columnType()
 }
+
+// Type is the public shorthand used by expression APIs for a column type.
+type Type = ColumnType
 
 // BooleanType describes a boolean column.
 type BooleanType struct{}
@@ -169,11 +173,62 @@ func cloneColumnType(columnType ColumnType) ColumnType {
 
 func validColumnType(columnType ColumnType) bool {
 	switch columnType.(type) {
-	case BooleanType, IntegerType, FloatType, TextType, BytesType, TimeType, JSONType, UUIDType, DecimalType:
+	case BooleanType, IntegerType, FloatType, TextType, BytesType, TimeType, JSONType, UUIDType, DecimalType, OpaqueType:
 		return true
 	default:
 		return false
 	}
+}
+
+// ValidateColumnType checks that columnType is a supported, well-formed
+// built-in type. It is exported for APIs that carry column metadata without a
+// full TableDef.
+func ValidateColumnType(columnType ColumnType) error {
+	if columnType == nil {
+		return fmt.Errorf("column type must not be nil")
+	}
+	value := reflect.ValueOf(columnType)
+	if value.Kind() == reflect.Pointer && value.IsNil() {
+		return fmt.Errorf("column type must not be a typed nil")
+	}
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	base := value.Interface().(ColumnType)
+	if !validColumnType(base) {
+		return fmt.Errorf("unsupported column type %T", columnType)
+	}
+	switch typed := base.(type) {
+	case DecimalType:
+		if typed.Precision < 1 {
+			return fmt.Errorf("decimal precision must be at least 1")
+		}
+		scale, stated := typed.Scale.Value()
+		if !stated {
+			return fmt.Errorf("decimal scale must be stated")
+		}
+		if scale < 0 || scale > typed.Precision {
+			return fmt.Errorf("decimal scale must be between 0 and precision")
+		}
+	case TextType:
+		width, stated := typed.Width.Value()
+		if stated && width < 0 {
+			return fmt.Errorf("text width must not be negative")
+		}
+		if typed.Fixed && !stated {
+			return fmt.Errorf("fixed-width text requires a width")
+		}
+	case IntegerType:
+		if width, stated := typed.DisplayWidth.Value(); stated && width < 0 {
+			return fmt.Errorf("integer display width must not be negative")
+		}
+	}
+	return nil
+}
+
+// CloneColumnType returns an independent copy of a built-in column type.
+func CloneColumnType(columnType ColumnType) ColumnType {
+	return cloneColumnType(columnType)
 }
 
 func marshalColumnType(columnType ColumnType) ([]byte, error) {
@@ -183,6 +238,8 @@ func marshalColumnType(columnType ColumnType) ([]byte, error) {
 
 	fields := map[string]any{"Kind": columnType.Kind()}
 	switch typed := columnType.(type) {
+	case OpaqueType:
+		return json.Marshal(fields)
 	case IntegerType:
 		fields["Unsigned"] = typed.Unsigned
 		width, stated := typed.DisplayWidth.Value()
@@ -342,6 +399,11 @@ func unmarshalColumnType(data []byte) (ColumnType, error) {
 			}
 		}
 		return DecimalType{Precision: precision, Scale: scale, Unsigned: unsigned, ZeroFill: zeroFill}, nil
+	case KindNative:
+		if err := allow(); err != nil {
+			return nil, err
+		}
+		return OpaqueType{}, nil
 	default:
 		return nil, fmt.Errorf("schema: decode column type: unsupported kind %q", kind)
 	}

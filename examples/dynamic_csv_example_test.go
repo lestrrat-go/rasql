@@ -1,0 +1,99 @@
+package examples_test
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/csv"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/dynamic"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
+	"github.com/lestrrat-go/rasql/stmt"
+	_ "modernc.org/sqlite"
+)
+
+func Example_dynamicCSV() {
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open database: %s\n", err)
+		return
+	}
+	defer func() { _ = database.Close() }()
+	database.SetMaxOpenConns(1)
+	db, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to create database: %s\n", err)
+		return
+	}
+	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("CREATE TABLE users (name TEXT, email TEXT)"))); err != nil {
+		fmt.Printf("failed to create table: %s\n", err)
+		return
+	}
+	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("INSERT INTO users VALUES ('Ada', 'ada@example.com')"))); err != nil {
+		fmt.Printf("failed to insert row: %s\n", err)
+		return
+	}
+	users, err := query.NewTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		{Name: "name", Type: schema.TextType{}},
+		{Name: "email", Type: schema.TextType{}},
+	}})
+	if err != nil {
+		fmt.Printf("failed to define table: %s\n", err)
+		return
+	}
+	statement, err := query.NewSelect(users, users.Column("name").As("display_name"), users.Column("email").As("contact"))
+	if err != nil {
+		fmt.Printf("failed to build query: %s\n", err)
+		return
+	}
+	result, err := dynamic.QueryResult(ctx, db, statement)
+	if err != nil {
+		fmt.Printf("failed to prepare query: %s\n", err)
+		return
+	}
+	defer func() { _ = result.Close() }()
+	header, err := result.Header()
+	if err != nil {
+		fmt.Printf("failed to read header: %s\n", err)
+		return
+	}
+	var output bytes.Buffer
+	writer := csv.NewWriter(&output)
+	if err := writer.Write(header.Names()); err != nil {
+		fmt.Printf("failed to write header: %s\n", err)
+		return
+	}
+	for row, err := range result.Rows() {
+		if err != nil {
+			fmt.Printf("failed to read row: %s\n", err)
+			return
+		}
+		values := make([]string, header.Len())
+		for index := range values {
+			value, ok := row.Value(index)
+			if ok && value != nil {
+				values[index] = fmt.Sprint(value)
+			}
+		}
+		if err := writer.Write(values); err != nil {
+			fmt.Printf("failed to write row: %s\n", err)
+			return
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		fmt.Printf("failed to flush CSV: %s\n", err)
+		return
+	}
+	fmt.Print(output.String())
+
+	// Output:
+	// display_name,contact
+	// Ada,ada@example.com
+}

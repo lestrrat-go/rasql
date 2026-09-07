@@ -29,6 +29,6 @@ func SQLite(databaseType string) (schema.ColumnType, error) {
 	case strings.Contains(t, "UUID"):
 		return schema.UUIDType{}, nil
 	default:
-		return nil, fmt.Errorf("unsupported sqlite type %q", databaseType)
+		return schema.OpaqueType{}, nil
 	}
 }

@@ -1,6 +1,7 @@
 package render_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -9,6 +10,14 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
+
+type caseInsensitiveDialect struct {
+	dialect.Dialect
+}
+
+func (caseInsensitiveDialect) IdentifiersEqual(left, right string) bool {
+	return strings.EqualFold(left, right)
+}
 
 // existsFixture is the users/orders pair the tests below render against.
 type existsFixture struct {
@@ -150,4 +159,55 @@ func TestSelectRefusesACorrelatedStatementOnItsOwn(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, `declares a correlation with table "users"`)
 	require.ErrorContains(t, err, "rendered on its own")
+}
+
+func TestSelectRejectsSQLiteCaseOnlyCorrelationAlias(t *testing.T) {
+	f := newExistsFixture(t)
+	aliased, err := f.orders.As("USERS")
+	require.NoError(t, err)
+	inner, err := query.NewSelect(aliased, query.Project(query.Bind(1)))
+	require.NoError(t, err)
+	inner, err = inner.WithCorrelation(f.users)
+	require.NoError(t, err)
+	inner, err = inner.WithWhere(query.Equal(aliased.Column("user_id"), f.usersID))
+	require.NoError(t, err)
+	outer, err := query.NewSelect(f.users, f.usersID)
+	require.NoError(t, err)
+	outer, err = outer.WithWhere(query.Exists(inner))
+	require.NoError(t, err)
+
+	_, err = render.Select(dialect.SQLite(), outer)
+	require.ErrorContains(t, err, "sqlite")
+	require.ErrorContains(t, err, "USERS")
+	require.ErrorContains(t, err, "users")
+	require.ErrorContains(t, err, "distinct alias")
+	_, err = render.Select(dialect.PostgreSQL(), outer)
+	require.NoError(t, err)
+	_, err = render.Select(dialect.MySQL(), outer)
+	require.NoError(t, err)
+	_, err = render.Select(caseInsensitiveDialect{Dialect: dialect.PostgreSQL()}, outer)
+	require.ErrorContains(t, err, "distinct alias")
+}
+
+func TestSelectAllowsDistinctSQLiteCorrelationAlias(t *testing.T) {
+	f := newExistsFixture(t)
+	aliased, err := f.orders.As("o")
+	require.NoError(t, err)
+	inner, err := query.NewSelect(aliased, query.Project(query.Bind(1)))
+	require.NoError(t, err)
+	inner, err = inner.WithCorrelation(f.users)
+	require.NoError(t, err)
+	inner, err = inner.WithWhere(query.Equal(aliased.Column("user_id"), f.usersID))
+	require.NoError(t, err)
+	outer, err := query.NewSelect(f.users, f.usersID)
+	require.NoError(t, err)
+	outer, err = outer.WithWhere(query.Exists(inner))
+	require.NoError(t, err)
+
+	_, err = render.Select(dialect.SQLite(), outer)
+	require.NoError(t, err)
+	_, err = render.Select(dialect.PostgreSQL(), outer)
+	require.NoError(t, err)
+	_, err = render.Select(dialect.MySQL(), outer)
+	require.NoError(t, err)
 }

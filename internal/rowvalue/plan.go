@@ -31,6 +31,59 @@ type decodePlan struct {
 	fields []plannedField
 }
 
+// Decoder prepares the cached reflective mapping for one result type and can
+// validate known result columns before any rows are read.
+type Decoder[T any] struct {
+	plan *decodePlan
+}
+
+// NewDecoder prepares the reflective decoder for T.
+func NewDecoder[T any]() (Decoder[T], error) {
+	var result T
+	plan := planFor(reflect.TypeFor[T]())
+	if plan.err != nil {
+		return Decoder[T]{}, plan.err
+	}
+	if !plan.isStruct {
+		return Decoder[T]{}, fmt.Errorf("row: decode destination %T must be a struct", result)
+	}
+	if len(plan.fields) == 0 {
+		return Decoder[T]{}, fmt.Errorf("row: decode destination %T has no exported fields", result)
+	}
+	return Decoder[T]{plan: plan}, nil
+}
+
+// ValidateColumns checks that every planned field has a known result column.
+// Extra, duplicate, and empty names are left to runtime row validation.
+func (d Decoder[T]) ValidateColumns(names []string) error {
+	columns := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		columns[name] = struct{}{}
+	}
+	for _, field := range d.plan.fields {
+		if _, ok := columns[field.column]; !ok {
+			return fmt.Errorf("row: column %q is not present", field.column)
+		}
+	}
+	return nil
+}
+
+// Decode applies the prepared mapping to one row.
+func (d Decoder[T]) Decode(r Row) (T, error) {
+	var result T
+	destination := reflect.ValueOf(&result).Elem()
+	for _, field := range d.plan.fields {
+		value, ok := r.lookup(field.column)
+		if !ok {
+			return result, fmt.Errorf("row: column %q is not present", field.column)
+		}
+		if err := assign(destination.Field(field.index), value); err != nil {
+			return result, fmt.Errorf("row: decode column %q: %w", field.column, err)
+		}
+	}
+	return result, nil
+}
+
 // decodePlans caches one *decodePlan per row type. The cache grows with the
 // number of distinct row types decoded, which normal use bounds: a program
 // decodes a fixed set of row types declared in its source. A program that

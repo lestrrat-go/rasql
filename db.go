@@ -29,19 +29,28 @@ type Handle = exec.Handle
 // single connection.
 type DB = exec.DB
 
+// AtomicFunc runs one operation inside an owned transaction or savepoint.
+type AtomicFunc = exec.AtomicFunc
+
+// AtomicPanic preserves a callback panic when atomic cleanup also fails.
+type AtomicPanic = exec.AtomicPanic
+
 // New pairs a database/sql handle with the dialect used to render SQL for it.
 // handle may be a *sql.DB for a connection pool, a *sql.Conn for one pinned
 // connection, a *sql.Tx for a transaction that is already open, or any other
 // Handle. New opens no connection and starts no transaction.
 //
 // A DB built from a *sql.Tx is a transaction: its Commit and Rollback finish
-// that transaction, and its Begin reports an error rather than nesting. That
-// is how an application already holding a *sql.Tx hands it to this package
-// without a second type.
+// that transaction, and its Begin reports an error rather than nesting. Use
+// Atomic when work must compose inside an existing transaction.
 //
 // Optional hooks observe every statement run through the returned DB and,
 // unless narrowed or extended by WithHooks or by Begin's own hooks parameter,
 // every transaction Begin starts from it.
-func New(handle Handle, d dialect.Dialect, hooks ...Hook) (DB, error) {
-	return exec.New(handle, d, hooks...)
+type Option = exec.Option
+
+func WithRelationshipBindLimit(limit int) Option { return exec.WithRelationshipBindLimit(limit) }
+
+func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
+	return exec.New(handle, d, options...)
 }
