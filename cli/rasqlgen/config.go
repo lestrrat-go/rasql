@@ -15,6 +15,7 @@ import (
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 // defaultConfigName is the file a run reads when -config names none. It sits
@@ -70,6 +71,12 @@ type config struct {
 // configTables is the table selection and the Go-side names no database can
 // state.
 type configTables struct {
+	Namespaces []string `json:"namespaces"`
+
+	IncludeObjects []schema.ObjectName `json:"include_objects"`
+
+	ExcludeObjects []schema.ObjectName `json:"exclude_objects"`
+
 	IncludeViews bool `json:"include_views"`
 	// Include names the only tables to generate. Empty sweeps every base
 	// table. It is not accepted together with Exclude.
@@ -87,6 +94,27 @@ type configTables struct {
 	// to read better, or to break a collision between one table's derived
 	// row name and another table's generated names, which refuses the run.
 	RowNames map[string]string `json:"row_names"`
+
+	Names map[string]generate.ObjectNames `json:"names"`
+}
+
+func (c config) names() (map[schema.ObjectName]generate.ObjectNames, error) {
+	if len(c.Tables.Names) == 0 {
+		return nil, nil
+	}
+	result := make(map[schema.ObjectName]generate.ObjectNames, len(c.Tables.Names))
+	for identity, names := range c.Tables.Names {
+		parts := strings.Split(identity, ".")
+		switch {
+		case len(parts) == 1 && parts[0] != "":
+			result[schema.ObjectName{Name: parts[0]}] = names
+		case len(parts) == 2 && parts[0] != "" && parts[1] != "":
+			result[schema.ObjectName{Schema: parts[0], Name: parts[1]}] = names
+		default:
+			return nil, fmt.Errorf("generate: config names key %q must be table or namespace.table", identity)
+		}
+	}
+	return result, nil
 }
 
 // configQuery is one static SQL template compiled into a generated function.
