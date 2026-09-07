@@ -50,9 +50,9 @@ func Steps(n int) RevertTarget {
 // A target that selects nothing, such as Through naming the newest applied
 // migration, is not an error and returns no migrations.
 //
-// Atomic PostgreSQL and SQLite migrations run in a transaction. A
-// nontransactional PostgreSQL migration and MySQL DDL may leave a source
-// outcome uncertain; reconcile that state before running Revert again.
+// Atomic PostgreSQL, MySQL, and SQLite migrations run in a transaction. A
+// nontransactional migration may leave a source outcome uncertain; reconcile
+// that state before running Revert again.
 func (r Runner) Revert(ctx context.Context, target RevertTarget, migrations ...Migration) ([]Migration, error) {
 	result, err := r.RevertResult(ctx, target, migrations...)
 	return result.Completed, err
@@ -263,14 +263,75 @@ func (r Runner) revertPostgreSQL(ctx context.Context, connection *sql.Conn, targ
 
 func (r Runner) revertMySQL(ctx context.Context, connection *sql.Conn, target RevertTarget, migrations []preparedMigration) ([]Migration, error) {
 	return r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
-		if err := r.ensureProgress(ctx, connection); err != nil {
-			return nil, err
-		}
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return nil, err
 		}
-		return r.revertPreparedMySQL(ctx, connection, target, migrations)
+		applied, err := r.applied(ctx, connection)
+		if err != nil {
+			return nil, err
+		}
+		selected, err := selectReverts(applied, migrations, target)
+		if err != nil {
+			return nil, err
+		}
+		completed := make([]Migration, 0, len(selected))
+		for _, migration := range selected {
+			if migration.mode == ExecutionModeNonTransactional {
+				if err := r.ensureProgress(ctx, connection); err != nil {
+					return completed, err
+				}
+				reverted, err := r.revertPreparedMySQL(ctx, connection, Steps(1), migrations)
+				completed = append(completed, reverted...)
+				if err != nil {
+					return completed, err
+				}
+				continue
+			}
+			reverted, err := r.revertAtomicMySQL(ctx, connection, migration)
+			completed = append(completed, reverted...)
+			if err != nil {
+				return completed, err
+			}
+		}
+		return completed, nil
 	})
+}
+
+func (r Runner) revertAtomicMySQL(ctx context.Context, connection *sql.Conn, migration preparedMigration) ([]Migration, error) {
+	transaction, err := connection.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("migrate: begin MySQL transaction: %w", err)
+	}
+	rollback := func() { _ = transaction.Rollback() }
+	applied, err := r.applied(ctx, transaction)
+	if err != nil {
+		rollback()
+		return nil, err
+	}
+	recorded, exists := applied[migration.id]
+	if !exists {
+		rollback()
+		return nil, fmt.Errorf("migrate: migration %q is not recorded", migration.id)
+	}
+	if recorded != migration.checksum {
+		rollback()
+		return nil, fmt.Errorf("migrate: migration %q checksum does not match recorded migration", migration.id)
+	}
+	for _, statement := range migration.down {
+		if _, err := transaction.ExecContext(ctx, string(statement.SQL)); err != nil {
+			rollback()
+			return nil, fmt.Errorf("migrate: execute migration %q reverse SQL source %q: %w", migration.id, statement.Source, err)
+		}
+	}
+	if err := r.forget(ctx, transaction, migration.id); err != nil {
+		rollback()
+		return nil, err
+	}
+	if err := transaction.Commit(); err != nil {
+		rollback()
+		return nil, fmt.Errorf("migrate: commit MySQL transaction: %w", err)
+	}
+	return exportMigrations([]preparedMigration{migration}), nil
 }
 
 func (r Runner) revertSQLite(ctx context.Context, connection *sql.Conn, target RevertTarget, migrations []preparedMigration) ([]Migration, error) {

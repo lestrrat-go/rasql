@@ -229,13 +229,16 @@ func TestRunnerUsesMySQLConnectionLock(t *testing.T) {
 	runner, err := migrate.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	migration := sqlMigration("001_create_users", "CREATE TABLE `users` (`id` BIGINT NOT NULL, PRIMARY KEY (`id`))")
+	migration.Mode = migrate.ExecutionModeNonTransactional
 
 	mock.ExpectQuery("SELECT GET_LOCK(?, ?)").
 		WithArgs("rasql_schema_migrations", 30).
 		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS `rasql_schema_migrations_progress` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `checksum` CHAR(64) NOT NULL, `direction` VARCHAR(16) NOT NULL, `source_index` INTEGER NOT NULL, `source` TEXT NOT NULL, `next_index` INTEGER NOT NULL, `started_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS `rasql_schema_migrations` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `checksum` CHAR(64) NOT NULL, `applied_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT `id`, `checksum` FROM `rasql_schema_migrations` ORDER BY `id`").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum"}))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS `rasql_schema_migrations_progress` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `checksum` CHAR(64) NOT NULL, `direction` VARCHAR(16) NOT NULL, `source_index` INTEGER NOT NULL, `source` TEXT NOT NULL, `next_index` INTEGER NOT NULL, `started_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT `id`, `checksum`, `direction`, `source_index`, `source`, `next_index` FROM `rasql_schema_migrations_progress` ORDER BY `id`").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "checksum", "direction", "source_index", "source", "next_index"}))

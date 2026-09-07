@@ -50,9 +50,9 @@ func ApplyThrough(id string) ApplyTarget {
 // Apply executes pending migrations in ID order, up to target, and returns
 // what it applied in the order it applied them.
 //
-// Atomic PostgreSQL and SQLite migrations run in a transaction. A
-// nontransactional PostgreSQL migration and MySQL DDL may leave a source
-// outcome uncertain; reconcile that state before running Apply again.
+// Atomic PostgreSQL, MySQL, and SQLite migrations run in a transaction. A
+// nontransactional migration may leave a source outcome uncertain; reconcile
+// that state before running Apply again.
 func (r Runner) Apply(ctx context.Context, target ApplyTarget, migrations ...Migration) ([]Migration, error) {
 	result, err := r.ApplyResult(ctx, target, migrations...)
 	return result.Completed, err
@@ -243,14 +243,74 @@ func (r Runner) applyPostgreSQL(ctx context.Context, connection *sql.Conn, targe
 
 func (r Runner) applyMySQL(ctx context.Context, connection *sql.Conn, target ApplyTarget, migrations []preparedMigration) ([]Migration, error) {
 	return r.withMySQLLock(ctx, connection, func() ([]Migration, error) {
-		if err := r.ensureProgress(ctx, connection); err != nil {
-			return nil, err
-		}
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return nil, err
 		}
-		return r.applyPreparedMySQL(ctx, connection, target, migrations)
+		applied, err := r.applied(ctx, connection)
+		if err != nil {
+			return nil, err
+		}
+		selected, err := selectApplies(applied, migrations, target)
+		if err != nil {
+			return nil, err
+		}
+		completed := make([]Migration, 0, len(selected))
+		for _, migration := range selected {
+			if migration.mode == ExecutionModeNonTransactional {
+				if err := r.ensureProgress(ctx, connection); err != nil {
+					return completed, err
+				}
+				applied, err := r.applyPreparedMySQL(ctx, connection, ApplyThrough(migration.id), migrations)
+				completed = append(completed, applied...)
+				if err != nil {
+					return completed, err
+				}
+				continue
+			}
+			applied, err := r.applyAtomicMySQL(ctx, connection, migration)
+			completed = append(completed, applied...)
+			if err != nil {
+				return completed, err
+			}
+		}
+		return completed, nil
 	})
+}
+
+func (r Runner) applyAtomicMySQL(ctx context.Context, connection *sql.Conn, migration preparedMigration) ([]Migration, error) {
+	transaction, err := connection.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("migrate: begin MySQL transaction: %w", err)
+	}
+	rollback := func() { _ = transaction.Rollback() }
+	applied, err := r.applied(ctx, transaction)
+	if err != nil {
+		rollback()
+		return nil, err
+	}
+	if recorded, exists := applied[migration.id]; exists {
+		if recorded != migration.checksum {
+			rollback()
+			return nil, fmt.Errorf("migrate: migration %q checksum does not match recorded migration", migration.id)
+		}
+		rollback()
+		return nil, nil
+	}
+	for _, statement := range migration.statements {
+		if _, err := transaction.ExecContext(ctx, string(statement.SQL)); err != nil {
+			rollback()
+			return nil, fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
+		}
+	}
+	if err := r.record(ctx, transaction, migration); err != nil {
+		rollback()
+		return nil, err
+	}
+	if err := transaction.Commit(); err != nil {
+		rollback()
+		return nil, fmt.Errorf("migrate: commit MySQL transaction: %w", err)
+	}
+	return exportMigrations([]preparedMigration{migration}), nil
 }
 
 func (r Runner) withMySQLLock(ctx context.Context, connection *sql.Conn, run func() ([]Migration, error)) ([]Migration, error) {

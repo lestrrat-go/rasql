@@ -96,6 +96,7 @@ func writeRecoveryMigrationDirectory(t *testing.T) string {
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(directory, file.name), []byte(file.contents), 0o644))
 	}
+	require.NoError(t, os.WriteFile(filepath.Join(directory, ".rasql-mode"), []byte("nontransactional\n"), 0o644))
 	return root
 }
 

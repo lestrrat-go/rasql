@@ -39,7 +39,7 @@ func TestMySQLProgressSurvivesRestartAndFinalizesWithoutReplay(t *testing.T) {
 	history := dbtest.UniqueName(t, "p7_history")
 	table := dbtest.UniqueName(t, "p7_effect")
 	migrations := []migrate.Migration{{
-		ID: "001_progress",
+		ID: "001_progress", Mode: migrate.ExecutionModeNonTransactional,
 		Statements: []migrate.Statement{
 			{Source: "001_create.sql", SQL: sqltext.Text("CREATE TABLE " + table + " (id INT PRIMARY KEY)")},
 			{Source: "002_fail.sql", SQL: sqltext.Text("CREATE TABLE " + table + " (id INT PRIMARY KEY)")},
@@ -84,7 +84,7 @@ func TestMySQLProgressRevertNotExecutedRecovery(t *testing.T) {
 	database := dbtest.MySQLDB(t)
 	history := dbtest.UniqueName(t, "p7_revert_history")
 	table := dbtest.UniqueName(t, "p7_revert_effect")
-	migration := migrate.Migration{ID: "001_revert_progress", Statements: []migrate.Statement{{Source: "001.sql", SQL: sqltext.Text("CREATE TABLE " + table + " (id INT PRIMARY KEY)")}}, Down: []migrate.Statement{{Source: "001_drop.sql", SQL: sqltext.Text("DROP TABLE " + table)}, {Source: "002_fail.sql", SQL: sqltext.Text("DROP TABLE " + table + "_absent")}}}
+	migration := migrate.Migration{ID: "001_revert_progress", Mode: migrate.ExecutionModeNonTransactional, Statements: []migrate.Statement{{Source: "001.sql", SQL: sqltext.Text("CREATE TABLE " + table + " (id INT PRIMARY KEY)")}}, Down: []migrate.Statement{{Source: "001_drop.sql", SQL: sqltext.Text("DROP TABLE " + table)}, {Source: "002_fail.sql", SQL: sqltext.Text("DROP TABLE " + table + "_absent")}}}
 	runner, err := migrate.NewWithHistoryTable(database, dialect.MySQL(), history)
 	require.NoError(t, err)
 	require.NoError(t, func() error { _, err := runner.Apply(t.Context(), migrate.AllPending(), migration); return err }())
