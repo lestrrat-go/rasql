@@ -28,6 +28,10 @@ type mtJunctionRow struct {
 }
 type mtParentGraph struct{ Children LoadedMany[mtChildGraph] }
 type mtChildGraph struct{ ID int64 }
+type mtDualGraph struct {
+	Active   LoadedMany[mtChildGraph]
+	Inactive LoadedMany[mtChildGraph]
+}
 
 type mtParentDecoder struct{ schema ResultSchema }
 
@@ -74,6 +78,67 @@ func (e *mtCountingExecutor) Query(ctx context.Context, s stmt.Statement) (Resul
 type mtCountingRows struct {
 	ResultRows
 	count *atomic.Int64
+}
+
+type mtRowsOverride struct {
+	*mtCountingExecutor
+	values [][]any
+}
+
+func (e *mtRowsOverride) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
+	if strings.Contains(statement.SQL(), "mt_children") {
+		return &runtimeFakeRows{values: e.values, columns: []string{"id", "active"}}, nil
+	}
+	return e.mtCountingExecutor.Query(ctx, statement)
+}
+
+func TestGraphSQLiteManyThroughRejectsDuplicateTargetRowsWithoutAttachment(t *testing.T) {
+	executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+	rows := &mtRowsOverride{mtCountingExecutor: executor, values: [][]any{{int64(10), int64(1)}, {int64(10), int64(1)}}}
+	var callbacks atomic.Int64
+	edge, err := ManyThrough("roles", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(*mtParentGraph, LoadedMany[mtChildGraph]) { callbacks.Add(1) })
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtParentGraph { return mtParentGraph{} }, edge)
+	require.NoError(t, err)
+	_, err = LoadGraph(t.Context(), rows, plan)
+	require.Error(t, err)
+	require.Zero(t, callbacks.Load())
+}
+
+func TestGraphSQLiteManyThroughRejectsForeignTargetRowsWithoutAttachment(t *testing.T) {
+	executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+	rows := &mtRowsOverride{mtCountingExecutor: executor, values: [][]any{{int64(999), int64(1)}}}
+	var callbacks atomic.Int64
+	edge, err := ManyThrough("roles", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(*mtParentGraph, LoadedMany[mtChildGraph]) { callbacks.Add(1) })
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtParentGraph { return mtParentGraph{} }, edge)
+	require.NoError(t, err)
+	_, err = LoadGraph(t.Context(), rows, plan)
+	require.Error(t, err)
+	require.Zero(t, callbacks.Load())
+}
+
+func TestGraphSQLiteManyThroughCacheIncludesFixedTargetFilter(t *testing.T) {
+	executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+	baseChild := childPlan.node.query.(graphQuery[mtChildRow, mtChildGraph]).value
+	childSource := baseChild.plan.sources[0]
+	active, err := BindColumn[mtChildRow, int64](TypedRelation[mtChildRow]{source: childSource}, "active", "")
+	require.NoError(t, err)
+	inactiveQuery := baseChild.Where(EqualValue(active.Expr(), int64(0)))
+	inactivePlan, err := NewGraphPlan(inactiveQuery, func(row mtChildRow) mtChildGraph { return mtChildGraph{ID: row.ID} })
+	require.NoError(t, err)
+	edgeActive, err := ManyThrough("active", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(parent *mtDualGraph, loaded LoadedMany[mtChildGraph]) { parent.Active = loaded })
+	require.NoError(t, err)
+	edgeInactive, err := ManyThrough("inactive", parentKey, junctionParent, junctionChild, childKey, junction, inactivePlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(parent *mtDualGraph, loaded LoadedMany[mtChildGraph]) { parent.Inactive = loaded })
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtDualGraph { return mtDualGraph{} }, edgeActive, edgeInactive)
+	require.NoError(t, err)
+	values, err := LoadGraph(t.Context(), executor, plan)
+	require.NoError(t, err)
+	require.Len(t, values, 2)
+	require.Len(t, values[0].Active.Values, 1)
+	require.Empty(t, values[0].Inactive.Values)
+	require.Equal(t, int64(2), executor.targetStatements.Load())
 }
 
 func (r *mtCountingRows) Next() bool {
