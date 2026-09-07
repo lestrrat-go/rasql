@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"context"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -98,6 +99,39 @@ func TestShowPagePassesCursorRequest(t *testing.T) {
 	}
 	if repository.pageRequest.After != rasql.Cursor("next-token") || repository.pageRequest.Limit != 5 {
 		t.Fatalf("OpenProjects got %#v, want cursor and limit", repository.pageRequest)
+	}
+}
+
+func TestShowPageNextLinkPreservesAcceptedLimit(t *testing.T) {
+	repository := &fakeRepository{projects: store.OpenProjectsPage{HasMore: true, Next: "next-token"}}
+	first := httptest.NewRecorder()
+	newTestHandler(repository).ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/?limit=5", nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first GET / returned %d, want 200", first.Code)
+	}
+	const prefix = `href="`
+	start := strings.Index(first.Body.String(), prefix)
+	if start < 0 {
+		t.Fatalf("first page does not contain a next link: %s", first.Body.String())
+	}
+	start += len(prefix)
+	end := strings.Index(first.Body.String()[start:], `"`)
+	if end < 0 {
+		t.Fatalf("first page has an unterminated next link: %s", first.Body.String())
+	}
+	next := first.Body.String()[start : start+end]
+	if next != "/?after=next-token&amp;limit=5" {
+		t.Fatalf("next link = %q, want accepted limit", next)
+	}
+	nextURL := html.UnescapeString(next)
+
+	second := httptest.NewRecorder()
+	newTestHandler(repository).ServeHTTP(second, httptest.NewRequest(http.MethodGet, nextURL, nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("second GET / returned %d, want 200", second.Code)
+	}
+	if repository.pageRequest.After != rasql.Cursor("next-token") || repository.pageRequest.Limit != 5 {
+		t.Fatalf("followed next link sent %#v, want cursor and limit 5", repository.pageRequest)
 	}
 }
 

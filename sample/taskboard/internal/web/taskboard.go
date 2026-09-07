@@ -110,6 +110,7 @@ func (h Handler) showPage(w http.ResponseWriter, r *http.Request) {
 		Overdue:  overdue,
 		Projects: taskboard.ProjectChoices(projects),
 		Members:  taskboard.MemberChoices(members),
+		Limit:    request.Limit,
 		Next:     string(projectsPage.Next),
 		HasMore:  projectsPage.HasMore,
 	}

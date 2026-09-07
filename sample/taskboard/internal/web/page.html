@@ -21,7 +21,7 @@
 {{else}}
 <p>No open tasks.</p>
 {{end}}
-{{if .HasMore}}<p><a href="/?after={{.Next}}">Next page</a></p>{{end}}
+{{if .HasMore}}<p><a href="/?after={{.Next}}{{if .Limit}}&amp;limit={{.Limit}}{{end}}">Next page</a></p>{{end}}
 
 <h2>Add a task</h2>
 <form method="post" action="/tasks">

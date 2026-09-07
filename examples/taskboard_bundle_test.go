@@ -48,6 +48,14 @@ func TestWalkthroughBundleMatchesSample(t *testing.T) {
 	clone := t.TempDir()
 	output, err := exec.Command("git", "clone", "--quiet", bundlePath, clone).CombinedOutput()
 	require.NoError(t, err, "clone %s: %s", bundlePath, output)
+	goMod, err := os.ReadFile(filepath.Join(clone, "go.mod"))
+	require.NoError(t, err)
+	require.Contains(t, string(goMod), "replace github.com/lestrrat-go/rasql => ../rasql\n")
+	rasqlScript, err := os.ReadFile(filepath.Join(clone, "scripts", "rasql.sh"))
+	require.NoError(t, err)
+	require.Contains(t, string(rasqlScript), "exec rasql \"$@\"")
+	require.NotContains(t, string(rasqlScript), "go build")
+	require.NotContains(t, string(rasqlScript), "../..")
 
 	compared := 0
 	err = filepath.WalkDir(clone, func(path string, entry os.DirEntry, err error) error {
