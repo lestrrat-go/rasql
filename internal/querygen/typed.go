@@ -30,7 +30,7 @@ func (b *sourceBuilder) WriteString(value string) *sourceBuilder {
 	_, _ = b.Buffer.WriteString(value)
 	return b
 }
-func (b *sourceBuilder) Byte(value byte) *sourceBuilder { _ = b.Buffer.WriteByte(value); return b }
+func (b *sourceBuilder) Byte(value byte) *sourceBuilder { _ = b.WriteByte(value); return b }
 
 // TypedGoSource emits a lock-backed constructor. It deliberately emits only
 // plan construction; callers choose All, Maybe, One, Rows, or ExecMutation.
@@ -182,26 +182,6 @@ func exported(value string) string {
 		}
 	}
 	return result
-}
-func nullableBase(value string) string {
-	if strings.HasPrefix(value, "rasql.Nullable[") {
-		return strings.TrimSuffix(strings.TrimPrefix(value, "rasql.Nullable["), "]")
-	}
-	return value
-}
-func zeroValue(value string) string {
-	switch value {
-	case "string":
-		return `""`
-	case "bool":
-		return "false"
-	case "int64", "uint64", "float64":
-		return "0"
-	case "[]byte":
-		return "nil"
-	default:
-		return value + "{}"
-	}
 }
 func writeImports(b *sourceBuilder, imports []compilerir.GoImport, result bool, values []TypedValue) {
 	b.Byte('\n')

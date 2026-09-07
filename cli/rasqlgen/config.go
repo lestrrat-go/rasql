@@ -252,9 +252,6 @@ func loadConfig(path string) (config, error) {
 	if _, err := loaded.mappings(); err != nil {
 		return config{}, fmt.Errorf("generate: parse config %s mappings: %w", path, err)
 	}
-	if loaded.Schema != nil {
-		// Schema-backed generation may include lock-backed typed SQL queries.
-	}
 	return loaded, nil
 }
 

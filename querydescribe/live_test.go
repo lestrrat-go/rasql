@@ -33,7 +33,7 @@ func TestMySQLDescribePrepareOnlyLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := querydescribe.NewMySQL(db).Describe(t.Context(), compilerquery.DescribeRequest{DB: db, SQL: "SELECT 1"}); err != nil {
 		t.Fatal(err)
 	}

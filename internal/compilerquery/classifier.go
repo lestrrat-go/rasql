@@ -141,10 +141,12 @@ func sqlTokens(source string) ([]string, error) {
 
 func validDollarTag(tag string) bool {
 	for i, r := range tag {
-		if i == 0 && r != '_' && !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		digit := r >= '0' && r <= '9'
+		if i == 0 && r != '_' && !letter {
 			return false
 		}
-		if i > 0 && r != '_' && !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') {
+		if i > 0 && r != '_' && !letter && !digit {
 			return false
 		}
 	}

@@ -13,7 +13,7 @@ func TestDeclaredUsesRequestDBPrepareAndCloseOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectPrepare("SELECT 1").WillBeClosed()
 	d := querydescribe.NewDeclared(nil)
 	if _, err := d.Describe(t.Context(), compilerquery.DescribeRequest{DB: db, SQL: "SELECT 1"}); err != nil {

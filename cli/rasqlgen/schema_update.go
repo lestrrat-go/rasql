@@ -261,13 +261,6 @@ func queryConfigFor(cfg config, id compilerir.QueryID) configQuery {
 	return configQuery{}
 }
 
-func resultName(query compilerir.GoQuery) string {
-	if query.Result == nil {
-		return ""
-	}
-	return query.Result.Name
-}
-
 func schemaObjectName(namespace, name string) schema.ObjectName {
 	return schema.ObjectName{Schema: namespace, Name: name}
 }
