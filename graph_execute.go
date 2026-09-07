@@ -1,8 +1,10 @@
 package rasql
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/lestrrat-go/rasql/query"
 )
@@ -25,80 +27,147 @@ func graphValidate(node *graphPlanNode, executor Executor) error {
 	}
 	active := make(map[*graphPlanIdentity]struct{})
 	done := make(map[*graphPlanIdentity]struct{})
-	var visit func(*graphPlanNode, string) error
-	visit = func(current *graphPlanNode, path string) error {
-		if current == nil {
-			return planError("invalid_graph_plan", path, "node is zero")
+	type frame struct {
+		node *graphPlanNode
+		path string
+		next int
+	}
+	stack := []frame{{node: node, path: "graph"}}
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		current := &stack[last]
+		if current.node == nil {
+			return planError("invalid_graph_plan", current.path, "node is zero")
 		}
-		if _, ok := active[current.id]; ok {
+		if current.next == 0 {
+			if _, ok := active[current.node.id]; ok {
+				return planError("graph_cycle", current.path, "graph plan identity is active")
+			}
+			if _, ok := done[current.node.id]; ok {
+				stack = stack[:last]
+				continue
+			}
+			if err := current.node.query.validate(); err != nil {
+				return err
+			}
+			if _, err := current.node.query.compile(executor); err != nil {
+				return err
+			}
+			if err := validateGraphKeys(current.node, executor); err != nil {
+				return err
+			}
+			active[current.node.id] = struct{}{}
+		}
+		if current.next >= len(current.node.edges) {
+			delete(active, current.node.id)
+			done[current.node.id] = struct{}{}
+			stack = stack[:last]
+			continue
+		}
+		index := current.next
+		current.next++
+		edge := current.node.edges[index]
+		path := fmt.Sprintf("%s.edges[%d]", current.path, index)
+		if err := validateGraphEdge(edge, executor, path); err != nil {
+			return err
+		}
+		if _, ok := done[edge.child.id]; ok {
+			continue
+		}
+		if _, ok := active[edge.child.id]; ok {
 			return planError("graph_cycle", path, "graph plan identity is active")
 		}
-		if _, ok := done[current.id]; ok {
-			return nil
-		}
-		if err := current.query.validate(); err != nil {
-			return err
-		}
-		if _, err := current.query.compile(executor); err != nil {
-			return err
-		}
-		active[current.id] = struct{}{}
-		for i, edge := range current.edges {
-			if edge == nil || edge.child == nil {
-				return planError("invalid_graph_plan", fmt.Sprintf("%s.edges[%d]", path, i), "edge is incomplete")
-			}
-			if edge.options.PerParentLimit > 0 {
-				profile := executorCompilerProfile(executor)
-				if profile.Capabilities.PerParentLimit != EnginePerParentLimitWindow || !profile.Capabilities.WindowFunctions {
-					return planError("per_parent_limit_unsupported", path, "engine does not support SQL partition limits")
-				}
-			}
-			profile := executorCompilerProfile(executor)
-			if len(edge.childKey.parts) == 0 {
-				return planError("invalid_graph_plan", path, "child key is empty")
-			}
-			dummy := graphDummyTuple(edge.childKey)
-			membership, err := buildGraphMembership(edge.childKey, []keyTuple{dummy})
-			if err != nil {
-				return err
-			}
-			probeLimit := edge.options.PerParentLimit
-			if edge.kind == graphHasOne {
-				probeLimit = 2
-			}
-			probe, err := edge.child.query.with(membership, edge.childKey, edge.options, probeLimit)
-			if err != nil {
-				return err
-			}
-			compiled, err := probe.compile(executor)
-			if err != nil {
-				return err
-			}
-			fixed := len(compiled.bindSlots) - len(edge.childKey.parts)
-			budget := edge.options.BindLimit
-			if budget == 0 || budget > profile.MaxBind {
-				budget = profile.MaxBind
-			}
-			if budget <= 0 || budget-fixed < len(edge.childKey.parts) {
-				return planError("bind_limit", path+"."+edge.name, "bind budget cannot fit one key")
-			}
-			if err := visit(edge.child, path+"."+edge.name); err != nil {
-				return err
-			}
-		}
-		delete(active, current.id)
-		done[current.id] = struct{}{}
-		return nil
+		stack = append(stack, frame{node: edge.child, path: current.path + "." + edge.name})
 	}
-	return visit(node, "graph")
+	return nil
 }
 
-func graphDummyTuple(key *graphKeySpec) keyTuple {
-	result := keyTuple{components: make([]keyComponent, len(key.parts))}
-	for i, part := range key.parts {
-		result.components[i] = keyComponent{value: int64(0), codec: part.codec}
+func validateGraphEdge(edge *graphEdgeSpec, executor Executor, path string) error {
+	if edge == nil || edge.child == nil {
+		return planError("invalid_graph_plan", path, "edge is incomplete")
 	}
-	return result
+	if edge.options.PerParentLimit > 0 {
+		profile := executorCompilerProfile(executor)
+		if profile.Capabilities.PerParentLimit != EnginePerParentLimitWindow || !profile.Capabilities.WindowFunctions {
+			return planError("per_parent_limit_unsupported", path, "engine does not support SQL partition limits")
+		}
+	}
+	if edge.childKey == nil || len(edge.childKey.parts) == 0 {
+		return planError("invalid_graph_plan", path, "child key is empty")
+	}
+	limit := edge.options.PerParentLimit
+	if edge.kind == graphHasOne {
+		limit = 2
+	}
+	probe, err := edge.child.query.withOptions(edge.options, edge.childKey, limit)
+	if err != nil {
+		return err
+	}
+	compiled, err := probe.compile(executor)
+	if err != nil {
+		return err
+	}
+	profile := executorCompilerProfile(executor)
+	budget := edge.options.BindLimit
+	if budget == 0 || budget > profile.MaxBind {
+		budget = profile.MaxBind
+	}
+	if budget <= 0 || budget-len(compiled.bindSlots) < len(edge.childKey.parts) {
+		return planError("bind_limit", path, "bind budget cannot fit one key")
+	}
+	if edge.kind != graphManyThrough {
+		return nil
+	}
+	junctionQ, err := graphJunctionQuery(edge.junction, edge.junctionParent, edge.junctionChild)
+	if err != nil {
+		return err
+	}
+	junction := graphQueryOps(graphQuery[graphJunctionRow, graphJunctionRow]{value: junctionQ, mapFn: func(row graphJunctionRow) graphJunctionRow { return row }})
+	junction, err = junction.withOptions(edge.options, edge.junctionParent, edge.options.PerParentLimit)
+	if err != nil {
+		return err
+	}
+	junctionCompiled, err := junction.compile(executor)
+	if err != nil {
+		return err
+	}
+	if budget-len(junctionCompiled.bindSlots) < len(edge.junctionParent.parts) {
+		return planError("bind_limit", path, "bind budget cannot fit one junction key")
+	}
+	target, err := edge.child.query.withOptions(EdgeOptions{}, edge.childKey, 0)
+	if err != nil {
+		return err
+	}
+	targetCompiled, err := target.compile(executor)
+	if err != nil {
+		return err
+	}
+	if budget-len(targetCompiled.bindSlots) < len(edge.childKey.parts) {
+		return planError("bind_limit", path, "bind budget cannot fit one target key")
+	}
+	return nil
+}
+
+func validateGraphKeys(node *graphPlanNode, executor Executor) error {
+	codecs := graphCodecs(executor)
+	for _, edge := range node.edges {
+		if edge == nil {
+			continue
+		}
+		for _, key := range []*graphKeySpec{edge.parentKey, edge.childKey, edge.junctionParent, edge.junctionChild} {
+			if key == nil {
+				continue
+			}
+			for _, part := range key.parts {
+				if part.codec != "" {
+					if _, ok := codecs.Lookup(CodecID(part.codec)); !ok {
+						return planError("codec_unavailable", "graph.key", part.codec)
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func executorCompilerProfile(executor Executor) engineProfileSnapshot {
@@ -122,6 +191,10 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 	if err := graphValidate(plan.node, executor); err != nil {
 		return nil, err
 	}
+	rootPrepared, err := plan.node.query.prepare(executor)
+	if err != nil {
+		return nil, err
+	}
 	provider, ok := executor.(compilerProvider)
 	if !ok || provider.queryCompiler() == nil {
 		return nil, planError("engine_profile_unavailable", "executor", "compiler unavailable")
@@ -131,13 +204,14 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 	var early bool
 	observedRows := int64(0)
 	defer func() { completion.completeLogicalInvocation(finalErr, observedRows, early) }()
-	rootRows, err := plan.node.query.run(callCtx, observed, func() (int64, error) { observedRows++; return observedRows, nil })
+	rootRows, err := rootPrepared.run(callCtx, observed, func() (int64, error) { observedRows++; return observedRows, nil })
 	if err != nil {
 		finalErr = err
 		return nil, err
 	}
 	graphs := make([]G, len(rootRows))
 	queue := make([]graphWork, len(rootRows))
+	deferred := make([]graphDeferred, 0)
 	for i, row := range rootRows {
 		graphs[i] = row.graph.(G)
 		queue[i] = graphWork{node: plan.node, parent: &graphs[i], row: row.row}
@@ -146,13 +220,25 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 		current := queue
 		queue = nil
 		for _, edge := range planEdges(current) {
-			next, err := executeGraphEdge(callCtx, observed, edge.edge, edge.parents, &observedRows)
+			next, err := executeGraphEdge(callCtx, observed, edge.edge, edge.parents, &observedRows, &deferred)
 			if err != nil {
 				finalErr = err
 				return nil, err
 			}
 			queue = append(queue, next...)
 		}
+	}
+	slices.SortStableFunc(deferred, func(a, b graphDeferred) int {
+		if a.depth > b.depth {
+			return -1
+		}
+		if a.depth < b.depth {
+			return 1
+		}
+		return 0
+	})
+	for _, callback := range deferred {
+		callback.fn()
 	}
 	return graphs, nil
 }
@@ -161,10 +247,15 @@ type graphWork struct {
 	node   *graphPlanNode
 	parent any
 	row    any
+	depth  int
 }
 type graphEdgeWork struct {
 	edge    *graphEdgeSpec
 	parents []graphWork
+}
+type graphDeferred struct {
+	depth int
+	fn    func()
 }
 
 type graphJunctionRow struct{ values []any }
@@ -222,6 +313,8 @@ func graphTupleValues(parts []*graphKeyPartSpec, values []any, codecs CodecRegis
 		return keyTuple{}, false, planError("internal_plan", "graph.key", "tuple width mismatch")
 	}
 	result := keyTuple{components: make([]keyComponent, len(parts))}
+	var identity bytes.Buffer
+	identity.WriteByte(byte(len(parts)))
 	for i, part := range parts {
 		normalized, err := normalizeGraphValue(values[i])
 		if err != nil {
@@ -245,8 +338,9 @@ func graphTupleValues(parts []*graphKeyPartSpec, values []any, codecs CodecRegis
 			return keyTuple{}, false, err
 		}
 		result.components[i] = keyComponent{value: normalized, encoded: frame, codec: part.codec}
-		result.identity += string(frame)
+		identity.Write(frame)
 	}
+	result.identity = identity.String()
 	return result, true, nil
 }
 
@@ -293,9 +387,9 @@ func buildGraphMembership(key *graphKeySpec, tuples []keyTuple) (Predicate, erro
 	return Predicate{node: query.Or(branches...)}, nil
 }
 
-func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64) ([]graphWork, error) {
+func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred) ([]graphWork, error) {
 	if edge.kind == graphManyThrough {
-		return executeManyThrough(ctx, executor, edge, parents, rowCount)
+		return executeManyThrough(ctx, executor, edge, parents, rowCount, deferred)
 	}
 	codecs := graphCodecs(executor)
 	tuples := make([]keyTuple, 0, len(parents))
@@ -324,18 +418,32 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	if len(tuples) == 0 {
 		for i := range parents {
 			if edge.kind == graphHasMany {
-				if _, err := edge.attach.attach(parents[i].parent, []any{}, true, false); err != nil {
+				_, callback, err := edge.attach.attach(parents[i].parent, []any{}, true, false)
+				if err != nil {
 					return nil, err
 				}
-			} else if _, err := edge.attach.attach(parents[i].parent, nil, false, false); err != nil {
-				return nil, err
+				*deferred = append(*deferred, graphDeferred{depth: parents[i].depth, fn: callback})
+			} else {
+				_, callback, err := edge.attach.attach(parents[i].parent, nil, false, false)
+				if err != nil {
+					return nil, err
+				}
+				*deferred = append(*deferred, graphDeferred{depth: parents[i].depth, fn: callback})
 			}
 		}
 		return nil, nil
 	}
 	profile := executorCompilerProfile(executor)
+	probeLimit := edge.options.PerParentLimit
+	if edge.kind == graphHasOne {
+		probeLimit = 2
+	}
+	probe, err := edge.child.query.withOptions(edge.options, edge.childKey, probeLimit)
+	if err != nil {
+		return nil, err
+	}
 	fixed := 0
-	if compiled, err := edge.child.query.compile(executor); err == nil {
+	if compiled, err := probe.compile(executor); err == nil {
 		fixed = len(compiled.bindSlots)
 	} else {
 		return nil, err
@@ -358,13 +466,15 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		if err != nil {
 			return nil, err
 		}
-		limit := edge.options.PerParentLimit
-		if edge.kind == graphHasOne {
-			limit = 2
-		}
+		limit := probeLimit
 		childQuery, err := edge.child.query.with(membership, edge.childKey, edge.options, limit)
 		if err != nil {
 			return nil, err
+		}
+		if compiled, err := childQuery.compile(executor); err != nil {
+			return nil, err
+		} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
+			return nil, planError("bind_limit", "graph."+edge.name, "compiled query exceeds bind budget")
 		}
 		rows, err := childQuery.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
 		if err != nil {
@@ -399,33 +509,37 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 				return nil, planError("cardinality", "graph."+edge.name, "has-one returned multiple rows")
 			}
 			if len(values) == 0 {
-				if _, err := edge.attach.attach(parent.parent, nil, false, false); err != nil {
-					return nil, err
-				}
-			} else {
-				attached, err := edge.attach.attach(parent.parent, values[0], false, true)
+				_, callback, err := edge.attach.attach(parent.parent, nil, false, false)
 				if err != nil {
 					return nil, err
 				}
-				next = append(next, graphWork{node: edge.child, parent: attached[0], row: children[0].row})
+				*deferred = append(*deferred, graphDeferred{depth: parent.depth, fn: callback})
+			} else {
+				attached, callback, err := edge.attach.attach(parent.parent, values[0], false, true)
+				if err != nil {
+					return nil, err
+				}
+				*deferred = append(*deferred, graphDeferred{depth: parent.depth, fn: callback})
+				next = append(next, graphWork{node: edge.child, parent: attached[0], row: children[0].row, depth: parent.depth + 1})
 			}
 		} else {
 			if values == nil {
 				values = []any{}
 			}
-			attached, err := edge.attach.attach(parent.parent, values, true, true)
+			attached, callback, err := edge.attach.attach(parent.parent, values, true, true)
 			if err != nil {
 				return nil, err
 			}
+			*deferred = append(*deferred, graphDeferred{depth: parent.depth, fn: callback})
 			for j, value := range children {
-				next = append(next, graphWork{node: edge.child, parent: attached[j], row: value.row})
+				next = append(next, graphWork{node: edge.child, parent: attached[j], row: value.row, depth: parent.depth + 1})
 			}
 		}
 	}
 	return next, nil
 }
 
-func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64) ([]graphWork, error) {
+func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred) ([]graphWork, error) {
 	codecs := graphCodecs(executor)
 	parentTuples := make([]keyTuple, 0, len(parents))
 	parentIndex := make(map[string][]int)
@@ -444,9 +558,11 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	}
 	if len(parentTuples) == 0 {
 		for _, parent := range parents {
-			if _, err := edge.attach.attach(parent.parent, []any{}, true, false); err != nil {
+			_, callback, err := edge.attach.attach(parent.parent, []any{}, true, false)
+			if err != nil {
 				return nil, err
 			}
+			*deferred = append(*deferred, graphDeferred{depth: parent.depth, fn: callback})
 		}
 		return nil, nil
 	}
@@ -457,7 +573,11 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	junctionPlan := graphQuery[graphJunctionRow, graphJunctionRow]{value: junctionQ, mapFn: func(row graphJunctionRow) graphJunctionRow { return row }}
 	profile := executorCompilerProfile(executor)
 	fixed := 0
-	compiled, err := junctionPlan.compile(executor)
+	junctionBase, err := junctionPlan.withOptions(edge.options, edge.junctionParent, edge.options.PerParentLimit)
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := junctionBase.compile(executor)
 	if err != nil {
 		return nil, err
 	}
@@ -491,6 +611,11 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		if err != nil {
 			return nil, err
 		}
+		if compiled, err := limited.compile(executor); err != nil {
+			return nil, err
+		} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
+			return nil, planError("bind_limit", "graph."+edge.name, "compiled junction query exceeds bind budget")
+		}
 		rows, err := limited.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
 		if err != nil {
 			return nil, err
@@ -501,12 +626,21 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				return nil, planError("internal_plan", "graph."+edge.name, "junction row type mismatch")
 			}
 			parentTuple, present, err := graphTupleValues(edge.junctionParent.parts, junctionRow.values[:len(edge.junctionParent.parts)], codecs)
-			if err != nil || !present {
+			if err != nil {
 				return nil, err
 			}
+			if !present {
+				return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent is absent")
+			}
+			if _, requested := parentIndex[parentTuple.identity]; !requested {
+				return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent was not requested")
+			}
 			targetTuple, present, err := graphTupleValues(edge.junctionChild.parts, junctionRow.values[len(edge.junctionParent.parts):], codecs)
-			if err != nil || !present {
+			if err != nil {
 				return nil, err
+			}
+			if !present {
+				return nil, planError("foreign_key_result", "graph."+edge.name, "junction target is absent")
 			}
 			exists := false
 			for _, prior := range byParent[parentTuple.identity] {
@@ -516,7 +650,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				}
 			}
 			if exists {
-				continue
+				return nil, planError("cardinality", "graph."+edge.name, "junction returned duplicate target")
 			}
 			byParent[parentTuple.identity] = append(byParent[parentTuple.identity], targetTuple)
 			if _, ok := targetSeen[targetTuple.identity]; !ok {
@@ -528,7 +662,11 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	targets := make(map[string]graphRow)
 	if len(targetOrder) > 0 {
 		fixed = 0
-		compiled, err = edge.child.query.compile(executor)
+		targetBase, err := edge.child.query.withOptions(EdgeOptions{}, edge.childKey, 0)
+		if err != nil {
+			return nil, err
+		}
+		compiled, err = targetBase.compile(executor)
 		if err != nil {
 			return nil, err
 		}
@@ -547,9 +685,14 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			if err != nil {
 				return nil, err
 			}
-			childQuery, err := edge.child.query.with(membership, edge.childKey, edge.options, 0)
+			childQuery, err := edge.child.query.with(membership, edge.childKey, EdgeOptions{}, 0)
 			if err != nil {
 				return nil, err
+			}
+			if compiled, err := childQuery.compile(executor); err != nil {
+				return nil, err
+			} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
+				return nil, planError("bind_limit", "graph."+edge.name, "compiled target query exceeds bind budget")
 			}
 			rows, err := childQuery.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
 			if err != nil {
@@ -577,9 +720,11 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			return nil, err
 		}
 		if !present {
-			if _, err := edge.attach.attach(parent.parent, []any{}, true, false); err != nil {
+			_, callback, err := edge.attach.attach(parent.parent, []any{}, true, false)
+			if err != nil {
 				return nil, err
 			}
+			*deferred = append(*deferred, graphDeferred{depth: parent.depth, fn: callback})
 			continue
 		}
 		junctionTargets := byParent[parentTuple.identity]
@@ -592,13 +737,14 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			values = append(values, row.graph)
 			// The attachment below copies values into the parent's relation slice.
 		}
-		attached, err := edge.attach.attach(parent.parent, values, true, true)
+		attached, callback, err := edge.attach.attach(parent.parent, values, true, true)
 		if err != nil {
 			return nil, err
 		}
+		*deferred = append(*deferred, graphDeferred{depth: parent.depth, fn: callback})
 		for j, target := range junctionTargets {
 			row := targets[target.identity]
-			next = append(next, graphWork{node: edge.child, parent: attached[j], row: row.row})
+			next = append(next, graphWork{node: edge.child, parent: attached[j], row: row.row, depth: parent.depth + 1})
 		}
 		_ = i
 	}

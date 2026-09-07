@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 type LoadedMany[T any] struct {
@@ -35,7 +38,7 @@ const (
 )
 
 type graphAttachOps interface {
-	attach(parent any, value any, many bool, present bool) ([]any, error)
+	attach(parent any, value any, many bool, present bool) ([]any, func(), error)
 }
 type graphEdgeSpec struct {
 	kind                          graphEdgeKind
@@ -57,13 +60,19 @@ type graphPlanIdentity struct{ marker byte }
 type graphQueryOps interface {
 	validate() error
 	compile(Executor) (compiledQuery, error)
+	prepare(Executor) (graphPreparedQuery, error)
 	run(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
 	mapRow(any) any
+	sourceName() string
 	with(edge Predicate, key *graphKeySpec, options EdgeOptions, limit int) (graphQueryOps, error)
+	withOptions(options EdgeOptions, key *graphKeySpec, limit int) (graphQueryOps, error)
 }
 type graphRow struct {
 	row   any
 	graph any
+}
+type graphPreparedQuery struct {
+	run func(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
 }
 
 type graphQuery[R, G any] struct {
@@ -79,13 +88,56 @@ func (q graphQuery[R, G]) compile(executor Executor) (compiledQuery, error) {
 	}
 	return compileQuery(provider.queryCompiler(), q.value)
 }
+func (q graphQuery[R, G]) prepare(executor Executor) (graphPreparedQuery, error) {
+	compiled, err := q.compile(executor)
+	if err != nil {
+		return graphPreparedQuery{}, err
+	}
+	prepared, err := prepareRows(executor, q.value, compiled)
+	if err != nil {
+		return graphPreparedQuery{}, err
+	}
+	return graphPreparedQuery{run: func(ctx context.Context, executor Executor, count func() (int64, error)) ([]graphRow, error) {
+		seq, err := rowsPrepared(ctx, executor, prepared)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]graphRow, 0)
+		var sequenceErr error
+		seq(func(row R, err error) bool {
+			if err != nil {
+				sequenceErr = err
+				return false
+			}
+			result = append(result, graphRow{row: row, graph: q.mapFn(row)})
+			_, sequenceErr = count()
+			return sequenceErr == nil
+		})
+		return result, sequenceErr
+	}}, nil
+}
 func (q graphQuery[R, G]) mapRow(row any) any {
 	value := row.(R)
 	mapped := q.mapFn(value)
 	return mapped
 }
+func (q graphQuery[R, G]) sourceName() string {
+	if len(q.value.plan.sources) == 0 {
+		return ""
+	}
+	return q.value.plan.sources[0].ref.QualifiedName()
+}
 func (q graphQuery[R, G]) with(edge Predicate, key *graphKeySpec, options EdgeOptions, limit int) (graphQueryOps, error) {
 	child := q.value.Where(edge)
+	result, err := (graphQuery[R, G]{value: child, mapFn: q.mapFn}).withOptions(options, key, limit)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (q graphQuery[R, G]) withOptions(options EdgeOptions, key *graphKeySpec, limit int) (graphQueryOps, error) {
+	child := q.value
 	if options.Where.node != nil {
 		child = child.Where(options.Where)
 	}
@@ -93,15 +145,20 @@ func (q graphQuery[R, G]) with(edge Predicate, key *graphKeySpec, options EdgeOp
 	if len(order) == 0 {
 		order = append(order, child.plan.order...)
 	}
-	if len(order) == 0 {
-		for _, part := range key.parts {
-			order = append(order, OrderTerm{node: part.column, source: part.column.Source().QualifiedName()})
+	if limit > 0 {
+		final, ok := graphUniqueOrder(child, order)
+		if !ok {
+			return nil, planError("order_not_unique", "order", "per-parent limit requires a declared unique key")
 		}
+		order = final
 	}
 	if len(order) > 0 {
 		child = child.OrderBy(order...)
 	}
 	if limit > 0 {
+		if key == nil || len(key.parts) == 0 {
+			return nil, planError("invalid_graph_key", "partition", "must not be empty")
+		}
 		partition := make([]GroupKey, len(key.parts))
 		for i, part := range key.parts {
 			partition[i] = GroupKey{node: part.column, source: part.column.Source().QualifiedName()}
@@ -114,31 +171,76 @@ func (q graphQuery[R, G]) with(edge Predicate, key *graphKeySpec, options EdgeOp
 	}
 	return graphQuery[R, G]{value: child, mapFn: q.mapFn}, nil
 }
-func (q graphQuery[R, G]) run(ctx context.Context, executor Executor, count func() (int64, error)) ([]graphRow, error) {
-	compiled, err := q.compile(executor)
-	if err != nil {
-		return nil, err
+
+func graphUniqueOrder[R any](q Query[R], order []OrderTerm) ([]OrderTerm, bool) {
+	if len(order) == 0 {
+		return nil, false
 	}
-	prepared, err := prepareRows(executor, q.value, compiled)
-	if err != nil {
-		return nil, err
+	if len(q.plan.sources) == 0 {
+		return nil, false
 	}
-	seq, err := rowsPrepared(ctx, executor, prepared)
-	if err != nil {
-		return nil, err
+	table, ok := q.plan.sources[0].ref.Table()
+	if !ok {
+		return order, len(order) > 0
 	}
-	result := make([]graphRow, 0)
-	var sequenceErr error
-	seq(func(row R, err error) bool {
-		if err != nil {
-			sequenceErr = err
-			return false
+	definition := table.Definition()
+	candidate := append([]string(nil), definition.PrimaryKey...)
+	if len(candidate) == 0 {
+		for _, unique := range definition.UniqueConstraints {
+			if unique.Deferrable != "" || len(unique.Columns) == 0 {
+				continue
+			}
+			if !unique.NullsNotDistinct && graphAnyNullable(definition.Columns, unique.Columns) {
+				continue
+			}
+			candidate = append([]string(nil), unique.Columns...)
+			break
 		}
-		result = append(result, graphRow{row: row, graph: q.mapFn(row)})
-		_, sequenceErr = count()
-		return sequenceErr == nil
-	})
-	return result, sequenceErr
+	}
+	if len(candidate) == 0 {
+		for _, index := range definition.Indexes {
+			if index.Unique && len(index.Expressions) == 0 && len(index.Columns) > 0 {
+				if graphAnyNullable(definition.Columns, index.Columns) {
+					continue
+				}
+				candidate = append([]string(nil), index.Columns...)
+				break
+			}
+		}
+	}
+	if len(candidate) == 0 {
+		return order, len(order) > 0
+	}
+	seen := make(map[string]struct{}, len(order))
+	for _, term := range order {
+		if column, ok := term.node.(query.ColumnRef); ok {
+			seen[column.Name()] = struct{}{}
+		}
+	}
+	for _, name := range candidate {
+		if _, ok := seen[name]; !ok {
+			return nil, false
+		}
+	}
+	return order, true
+}
+
+func graphAnyNullable(columns []schema.ColumnDef, names []string) bool {
+	for _, name := range names {
+		for _, column := range columns {
+			if column.Name == name && column.Nullable {
+				return true
+			}
+		}
+	}
+	return false
+}
+func (q graphQuery[R, G]) run(ctx context.Context, executor Executor, count func() (int64, error)) ([]graphRow, error) {
+	prepared, err := q.prepare(executor)
+	if err != nil {
+		return nil, err
+	}
+	return prepared.run(ctx, executor, count)
 }
 
 func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, G]) (GraphPlan[R, G], error) {
@@ -175,6 +277,21 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 		if len(spec.parentKey.parts) != len(spec.childKey.parts) {
 			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edges", "key widths differ")
 		}
+		for partIndex := range spec.parentKey.parts {
+			if spec.parentKey.parts[partIndex].typ != spec.childKey.parts[partIndex].typ {
+				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "edges", "key component types differ")
+			}
+		}
+		if spec.options.Where.source != "" {
+			if childSource := spec.child.query.sourceName(); childSource != "" && spec.options.Where.source != childSource {
+				return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edge.where", "predicate source differs from child source")
+			}
+		}
+		for _, term := range spec.options.Order {
+			if term.source != "" && spec.child.query.sourceName() != "" && term.source != spec.child.query.sourceName() {
+				return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edge.order", "order source differs from child source")
+			}
+		}
 		if spec.kind == graphManyThrough && (spec.junction == (Source{}) || spec.junctionParent == nil || spec.junctionChild == nil) {
 			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edges", "through metadata is incomplete")
 		}
@@ -185,49 +302,46 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 
 type graphAttachMany[G, CG any] struct{ fn func(*G, LoadedMany[CG]) }
 
-func (a graphAttachMany[G, CG]) attach(parent any, value any, _ bool, _ bool) ([]any, error) {
+func (a graphAttachMany[G, CG]) attach(parent any, value any, _ bool, _ bool) ([]any, func(), error) {
 	p, ok := parent.(*G)
 	if !ok {
-		return nil, planError("internal_plan", "attach", "parent type mismatch")
+		return nil, nil, planError("internal_plan", "attach", "parent type mismatch")
 	}
 	rawValues, ok := value.([]any)
 	if !ok {
-		return nil, planError("internal_plan", "attach", "child type mismatch")
+		return nil, nil, planError("internal_plan", "attach", "child type mismatch")
 	}
 	copied := make([]CG, len(rawValues))
 	for i, raw := range rawValues {
 		child, ok := raw.(CG)
 		if !ok {
-			return nil, planError("internal_plan", "attach", "child type mismatch")
+			return nil, nil, planError("internal_plan", "attach", "child type mismatch")
 		}
 		copied[i] = child
 	}
-	a.fn(p, LoadedMany[CG]{Loaded: true, Values: copied})
 	result := make([]any, len(copied))
 	for i := range copied {
 		result[i] = &copied[i]
 	}
-	return result, nil
+	return result, func() { a.fn(p, LoadedMany[CG]{Loaded: true, Values: copied}) }, nil
 }
 
 type graphAttachOne[G, CG any] struct{ fn func(*G, LoadedOne[CG]) }
 
-func (a graphAttachOne[G, CG]) attach(parent any, value any, _ bool, present bool) ([]any, error) {
+func (a graphAttachOne[G, CG]) attach(parent any, value any, _ bool, present bool) ([]any, func(), error) {
 	p, ok := parent.(*G)
 	if !ok {
-		return nil, planError("internal_plan", "attach", "parent type mismatch")
+		return nil, nil, planError("internal_plan", "attach", "parent type mismatch")
 	}
 	if !present {
-		a.fn(p, LoadedOne[CG]{Loaded: true})
-		return nil, nil
+		return nil, func() { a.fn(p, LoadedOne[CG]{Loaded: true}) }, nil
 	}
 	child, ok := value.(CG)
 	if !ok {
-		return nil, planError("internal_plan", "attach", "child type mismatch")
+		return nil, nil, planError("internal_plan", "attach", "child type mismatch")
 	}
 	copy := child
-	a.fn(p, LoadedOne[CG]{Loaded: true, Present: true, Value: &copy})
-	return []any{&copy}, nil
+	return []any{&copy}, func() { a.fn(p, LoadedOne[CG]{Loaded: true, Present: true, Value: &copy}) }, nil
 }
 
 type graphEdgeValue[P, G, C, CG any] struct{ spec *graphEdgeSpec }
