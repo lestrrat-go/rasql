@@ -14,6 +14,7 @@ type fakePGConn struct {
 	prepareErr, deallocateErr, closeErr error
 	description                         *pgconn.StatementDescription
 	prepares, deallocates, closes       int
+	typemap                             *pgtype.Map
 }
 
 func (f *fakePGConn) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
@@ -25,7 +26,12 @@ func (f *fakePGConn) Deallocate(context.Context, string) error {
 	return f.deallocateErr
 }
 func (f *fakePGConn) Close(context.Context) error { f.closes++; return f.closeErr }
-func (f *fakePGConn) TypeMap() *pgtype.Map        { return pgtype.NewMap() }
+func (f *fakePGConn) TypeMap() *pgtype.Map {
+	if f.typemap != nil {
+		return f.typemap
+	}
+	return pgtype.NewMap()
+}
 
 func TestPostgreSQLDescribeCleanupLifecycle(t *testing.T) {
 	tests := []struct {
@@ -57,5 +63,26 @@ func TestPostgreSQLDescribeRejectsBlankDSNBeforeConnect(t *testing.T) {
 	d := PostgreSQLDescriber{connector: func(context.Context, string) (postgresDescribeConn, error) { t.Fatal("connected"); return nil, nil }}
 	if _, err := d.Describe(t.Context(), queryevidence.DescribeRequest{}); err == nil {
 		t.Fatal("expected blank DSN error")
+	}
+}
+
+func TestPostgreSQLDescribeConnectFailure(t *testing.T) {
+	d := PostgreSQLDescriber{connector: func(context.Context, string) (postgresDescribeConn, error) { return nil, errors.New("connect") }}
+	if _, err := d.Describe(t.Context(), queryevidence.DescribeRequest{DSN: "owned"}); err == nil {
+		t.Fatal("expected connect error")
+	}
+}
+
+func TestPostgreSQLDescribeMapsKnownAndUnknownOID(t *testing.T) {
+	typemap := pgtype.NewMap()
+	typemap.RegisterType(&pgtype.Type{Name: "int4", OID: 23, Codec: pgtype.Int4Codec{}})
+	conn := &fakePGConn{typemap: typemap, description: &pgconn.StatementDescription{ParamOIDs: []uint32{23, 999999}, Fields: []pgconn.FieldDescription{{Name: "value", DataTypeOID: 23}}}}
+	d := PostgreSQLDescriber{connector: func(context.Context, string) (postgresDescribeConn, error) { return conn, nil }}
+	got, err := d.Describe(t.Context(), queryevidence.DescribeRequest{DSN: "owned", Name: "q", SQL: "SELECT 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Parameters[0].Type.LogicalKind != "integer" || got.Parameters[1].Type.Certainty != "unknown" || got.Results[0].Type.LogicalKind != "integer" {
+		t.Fatalf("description=%#v", got)
 	}
 }
