@@ -1746,6 +1746,10 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 			if !ok {
 				continue
 			}
+			kind := inverseKind(child, relationship)
+			if hasStructuralInverse(table, child, relationship, kind) {
+				continue
+			}
 			parentColumn, childColumn := parentColumns[0], childColumns[0]
 			candidates = append(candidates, inverseRelationshipCandidate{
 				child:         child,
@@ -1754,7 +1758,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 				childColumn:   childColumn,
 				keyType:       keyType,
 				parentColumns: parentColumns, childColumns: childColumns,
-				kind:   inverseKind(child, relationship),
+				kind:   kind,
 				keyRef: keyRef,
 			})
 		}
@@ -1902,6 +1906,24 @@ func inverseKind(child schema.TableDef, relationship schema.RelationshipDef) sch
 		return schema.RelationshipHasOne
 	}
 	return schema.RelationshipHasMany
+}
+
+// hasStructuralInverse reports whether the canonical schema already carries
+// the inverse relation for a child-side foreign key. The semantic compiler
+// supplies both sides; legacy descriptors supply only the child side, so the
+// auto-derived path remains necessary when no matching relation is present.
+// Matching the complete key shape keeps unrelated same-named relations as
+// real collisions instead of hiding them behind this compatibility path.
+func hasStructuralInverse(table, child schema.TableDef, relationship schema.RelationshipDef, kind schema.RelationshipKind) bool {
+	for _, inverse := range table.Relationships {
+		if inverse.Kind != kind || relationshipTargetSchema(inverse) != child.Schema || inverse.ReferencedTable != child.Name {
+			continue
+		}
+		if stringSlicesEqual(inverse.Columns, relationship.ReferencedColumns) && stringSlicesEqual(inverse.ReferencedColumns, relationship.Columns) {
+			return true
+		}
+	}
+	return false
 }
 
 func columnsAreUnique(table schema.TableDef, columns []string) bool {

@@ -190,8 +190,18 @@ func TestEmitterInputRequiresCanonicalRelationMappings(t *testing.T) {
 	require.ErrorContains(t, fabricated.Validate(), "semantic model disagrees")
 
 	changedGo := in.Clone()
-	changedGo.Go.Objects[0].Relations[0].Through.TargetFrom[0] = "user_id"
-	require.ErrorContains(t, changedGo.Validate(), "relation 0 path disagrees")
+	var found bool
+	for index := range changedGo.Go.Objects[0].Relations {
+		relation := &changedGo.Go.Objects[0].Relations[index]
+		if relation.Name != "Roles" || relation.Through == nil {
+			continue
+		}
+		relation.Through.TargetFrom[0] = "user_id"
+		found = true
+		break
+	}
+	require.True(t, found, "canonical many-through relation Roles was not found")
+	require.ErrorContains(t, changedGo.Validate(), "path disagrees")
 }
 
 func manyThroughEmitterFixture(t *testing.T) generate.EmitterInput {
