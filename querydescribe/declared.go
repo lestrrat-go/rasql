@@ -24,5 +24,5 @@ func (d declaredDescriber) Describe(ctx context.Context, request queryevidence.D
 	if err := stmt.Close(); err != nil {
 		return queryevidence.Description{}, err
 	}
-	return queryevidence.Description{}, nil
+	return queryevidence.Description{DeclaredOnly: true}, nil
 }

@@ -89,13 +89,28 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 		if err := compareParameterNames(query.Parameters, parameterNames); err != nil {
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
 		}
-		parameters, err := mergeValues(query.Parameters, description.Parameters, parameterNames, a.config.Mappings)
-		if err != nil {
-			return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
-		}
-		results, err := mergeValues(query.Results, description.Results, nil, a.config.Mappings)
-		if err != nil {
-			return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
+		var parameters, results []compilerir.SemanticValue
+		if description.DeclaredOnly {
+			if len(description.Parameters) != 0 || len(description.Results) != 0 {
+				return schemasource.AnalysisResult{}, fmt.Errorf("query %q: declared-only description includes observations", query.ID)
+			}
+			parameters, err = declaredValues(query.Parameters, a.config.Mappings)
+			if err != nil {
+				return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
+			}
+			results, err = declaredValues(query.Results, a.config.Mappings)
+			if err != nil {
+				return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
+			}
+		} else {
+			parameters, err = mergeValues(query.Parameters, description.Parameters, parameterNames, a.config.Mappings)
+			if err != nil {
+				return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
+			}
+			results, err = mergeValues(query.Results, description.Results, nil, a.config.Mappings)
+			if err != nil {
+				return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
+			}
 		}
 		if request.Profile.Engine == engineprofile.PostgreSQL {
 			for i, value := range query.Parameters {
@@ -113,6 +128,24 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 		queries = append(queries, compilerir.QueryAnalysis{ID: query.ID, Name: query.Function, SQLPath: snapshot.Path(), SQLSHA256: hex.EncodeToString(digest[:]), Engine: engine, Operation: classification.Operation, Parameters: parameters, Results: results, Cardinality: query.Cardinality})
 	}
 	return schemasource.AnalysisResult{Queries: queries, Snapshots: snapshots}, nil
+}
+
+func declaredValues(declarations []ValueDeclaration, mappings compilerir.MappingConfig) ([]compilerir.SemanticValue, error) {
+	values := make([]compilerir.SemanticValue, len(declarations))
+	for i, declaration := range declarations {
+		if declaration.Name == "" || declaration.Scalar == "" || declaration.Nullable == nil {
+			return nil, fmt.Errorf("value %q requires name, scalar, and nullable declaration", declaration.Name)
+		}
+		logicalKind, ok, err := compilerir.DeclaredQueryLogicalKind(declaration.Scalar, mappings)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("value %q scalar %q has no declared logical kind", declaration.Name, declaration.Scalar)
+		}
+		values[i] = compilerir.SemanticValue{Name: declaration.Name, Scalar: declaration.Scalar, Nullable: *declaration.Nullable, TypeCertainty: compilerir.CertaintyDeclared, NullabilityCertainty: compilerir.CertaintyDeclared, LogicalKind: logicalKind}
+	}
+	return values, nil
 }
 
 func Analyze(ctx context.Context, request schemasource.AnalysisRequest, config Config, describers Describers) (schemasource.AnalysisResult, error) {

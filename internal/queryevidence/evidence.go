@@ -31,8 +31,9 @@ type ValueEvidence struct {
 }
 
 type Description struct {
-	Parameters []ValueEvidence
-	Results    []ValueEvidence
+	DeclaredOnly bool
+	Parameters   []ValueEvidence
+	Results      []ValueEvidence
 }
 
 type Describer interface {

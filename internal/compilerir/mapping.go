@@ -24,6 +24,34 @@ func DefaultScalarMapping(scalar string) (ScalarMapping, bool) {
 	return ScalarMapping{Name: scalar, GoType: typeName}, true
 }
 
+// DeclaredQueryLogicalKind resolves only logical kinds that are explicit in a query declaration or mapping.
+func DeclaredQueryLogicalKind(scalar string, mappings MappingConfig) (string, bool, error) {
+	if scalar == "unsigned_integer" {
+		return "integer", true, nil
+	}
+	if _, ok := DefaultScalarMapping(scalar); ok {
+		return scalar, true, nil
+	}
+	var found *ScalarMapping
+	for i := range mappings.Scalars {
+		if mappings.Scalars[i].Name == scalar {
+			if found != nil {
+				return "", false, fmt.Errorf("duplicate scalar mapping %q", scalar)
+			}
+			found = &mappings.Scalars[i]
+		}
+	}
+	if found == nil {
+		return "", false, nil
+	}
+	switch found.Match.LogicalKind {
+	case "boolean", "integer", "float", "text", "bytes", "time", "json", "uuid", "decimal":
+		return found.Match.LogicalKind, true, nil
+	default:
+		return "", false, nil
+	}
+}
+
 // ValidateMappingConfig checks mapping names, match selectors, Go expressions,
 // imports, and codec references. Runtime codec availability is checked by the
 // configured registry at execution time; the stable name is validated here.
