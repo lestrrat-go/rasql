@@ -25,7 +25,19 @@ package schema
 import (
 	"fmt"
 	"slices"
+	"strings"
+	"unicode/utf8"
 )
+
+// ObjectName identifies a database object by its exact physical components.
+// Schema is empty for an unqualified object.
+type ObjectName struct {
+	Schema string `json:"schema,omitempty"`
+	Name   string `json:"name"`
+}
+
+// ObjectName returns the physical identity of t.
+func (t TableDef) ObjectName() ObjectName { return ObjectName{Schema: t.Schema, Name: t.Name} }
 
 // ReferenceAction defines the action to take when a referenced row changes.
 type ReferenceAction string
@@ -325,6 +337,21 @@ func validationError(path string, format string, args ...any) error {
 // ValidateIdentifier reports whether name is a simple SQL identifier.
 // Dialects quote validated identifiers when rendering SQL.
 func ValidateIdentifier(name string) error {
+	if name == "" {
+		return validationError("identifier", "must not be empty")
+	}
+	if strings.IndexByte(name, 0) >= 0 {
+		return validationError("identifier", "must not contain NUL")
+	}
+	if !utf8.ValidString(name) {
+		return validationError("identifier", "must contain valid UTF-8")
+	}
+	return nil
+}
+
+// ValidateSimpleIdentifier validates an unquoted identifier used where a
+// caller cannot supply a quoted physical object name.
+func ValidateSimpleIdentifier(name string) error {
 	if name == "" {
 		return validationError("identifier", "must not be empty")
 	}

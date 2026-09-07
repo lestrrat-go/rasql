@@ -71,6 +71,9 @@ type Store struct {
 	// that store; it does for a run generated from a database.
 	Hints map[string]TableHint
 
+	// Names assigns stable generated Go names by exact physical table identity.
+	Names map[schema.ObjectName]ObjectNames
+
 	// Dialect selects the placeholder style for a Query that does not
 	// name its own. Required when any Query leaves Dialect nil, ignored
 	// otherwise. It is not used to render the tables, which are
@@ -254,12 +257,22 @@ func (s Store) Plan() (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	sorted := append([]schema.TableDef(nil), tables...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-
-	if err := Validate(s.Package, sorted...); err != nil {
+	names := cloneObjectNames(s.Names)
+	if err := validateObjectNames(tables, names); err != nil {
 		return Plan{}, err
 	}
+	overrides := toNameOverrides(names)
+	resolved, err := schemagen.ResolveNames(s.Package, tables, overrides)
+	if err != nil {
+		return Plan{}, err
+	}
+	sorted := append([]schema.TableDef(nil), tables...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Schema != sorted[j].Schema {
+			return sorted[i].Schema < sorted[j].Schema
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
 
 	// filenames tracks every destination file name (not path) that a
 	// table or the descriptor file already claims, so a query can be
@@ -271,7 +284,7 @@ func (s Store) Plan() (Plan, error) {
 	filenames := make(map[string]string, len(sorted)+1+len(s.Queries))
 	filenames[filenameKey(schemaDescriptorFilename)] = "the schema descriptor file " + schemaDescriptorFilename
 	for _, table := range sorted {
-		filename := schemaOutputFilename(table.Name)
+		filename := resolved.Filename(table)
 		if owner, exists := filenames[filenameKey(filename)]; exists {
 			return Plan{}, fmt.Errorf("generate: table %q generates %q, which collides with %s", table.Name, filename, owner)
 		}
@@ -284,10 +297,7 @@ func (s Store) Plan() (Plan, error) {
 	// query is the only declaration a Store adds that the descriptors do not
 	// explain, which is why this set is built once here and handed to
 	// planQuery rather than derived per query.
-	declared, err := schemagen.PackageLevelNames(s.Package, sorted...)
-	if err != nil {
-		return Plan{}, err
-	}
+	declared := resolved.PackageLevelNames()
 	identifiers := make(map[string]string, len(declared)+len(s.Queries))
 	for _, name := range declared {
 		identifiers[name] = "an identifier the generated store already declares"
@@ -295,20 +305,20 @@ func (s Store) Plan() (Plan, error) {
 
 	files := make([]File, 0, len(sorted)+2+len(s.Queries))
 	for _, table := range sorted {
-		source, err := schemagen.TableSurfaceSourceInDir(dir, s.Package, table, sorted...)
+		source, err := schemagen.TableSurfaceSourceWithOptions(s.Package, table, schemagen.SourceOptions{Dir: dir, Names: resolved}, sorted...)
 		if err != nil {
 			return Plan{}, err
 		}
-		files = append(files, File{Path: filepath.Join(dir, schemaOutputFilename(table.Name)), Source: source})
+		files = append(files, File{Path: filepath.Join(dir, resolved.Filename(table)), Source: source})
 	}
 
-	descriptorSource, err := DescriptorSource(s.Package, sorted...)
+	descriptorSource, err := schemagen.DescriptorSourceWithOptions(s.Package, schemagen.SourceOptions{Names: resolved}, sorted...)
 	if err != nil {
 		return Plan{}, err
 	}
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorFilename), Source: descriptorSource})
 
-	descriptorTestSource, err := DescriptorTestSource(s.Package, sorted...)
+	descriptorTestSource, err := schemagen.DescriptorTestSourceWithOptions(s.Package, schemagen.SourceOptions{Names: resolved}, sorted...)
 	if err != nil {
 		return Plan{}, err
 	}

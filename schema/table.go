@@ -1392,11 +1392,11 @@ func validateRelationships(relationships []RelationshipDef, foreignKeys []Foreig
 		if relationship.Name == "" {
 			return validationError(path+".name", "must not be empty")
 		}
-		if err := ValidateIdentifier(relationship.Name); err != nil {
+		if err := ValidateSimpleIdentifier(relationship.Name); err != nil {
 			return validationError(path+".name", "%s", err)
 		}
 		if relationship.InverseName != "" {
-			if err := ValidateIdentifier(relationship.InverseName); err != nil {
+			if err := ValidateSimpleIdentifier(relationship.InverseName); err != nil {
 				return validationError(path+".inverse_name", "%s", err)
 			}
 		}

@@ -40,7 +40,7 @@ func NewWithHistoryTable(database *sql.DB, d dialect.Dialect, historyTable strin
 	if d == nil {
 		return Runner{}, fmt.Errorf("migrate: dialect must not be nil")
 	}
-	if err := schema.ValidateIdentifier(historyTable); err != nil {
+	if err := schema.ValidateSimpleIdentifier(historyTable); err != nil {
 		return Runner{}, fmt.Errorf("migrate: history table: %w", err)
 	}
 	switch d.Name() {
