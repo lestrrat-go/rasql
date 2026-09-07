@@ -177,7 +177,7 @@ func validEnvKey(s string) bool {
 		return false
 	}
 	for i, c := range s {
-		if !(c == '_' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9') {
+		if c != '_' && (c < 'A' || c > 'Z') && (i == 0 || c < '0' || c > '9') {
 			return false
 		}
 	}
@@ -362,7 +362,8 @@ func (e *redactedError) Error() string { return e.message }
 func (e *redactedError) Unwrap() error { return e.cause }
 func sourceSnapshots(r Request) ([]string, []compilerlock.SourceFileSnapshot, error) {
 	var paths []string
-	if r.Source.Kind == "migrations" {
+	switch r.Source.Kind {
+	case "migrations":
 		for _, pattern := range r.Source.Paths {
 			matches, err := filepath.Glob(filepath.Join(r.ModuleRoot, filepath.FromSlash(pattern)))
 			if err != nil || len(matches) == 0 {
@@ -376,7 +377,7 @@ func sourceSnapshots(r Request) ([]string, []compilerlock.SourceFileSnapshot, er
 				paths = append(paths, filepath.ToSlash(rel))
 			}
 		}
-	} else if r.Source.Kind == "external" {
+	case "external":
 		paths = append(paths, r.Source.Inputs...)
 	}
 	sort.Strings(paths)

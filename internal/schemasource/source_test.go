@@ -119,7 +119,7 @@ func TestMaterializeExternalClonesInputsAndJoinsCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	p, err := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 40})
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestMaterializeJoinsCleanupError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	p, _ := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 40})
 	cleanupErr := errors.New("cleanup")
 	path := filepath.Join(root, "schema.sql")
@@ -182,7 +182,7 @@ func TestMaterializeJoinsPrimaryAndDetachedCleanupErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	p, _ := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 40})
 	primaryErr := errors.New("primary")
 	cleanupErr := errors.New("cleanup")
@@ -212,7 +212,7 @@ func TestMaterializeRejectsIncompleteDisposableAndCleansAvailableHandle(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	for name, factory := range map[string]*fakeFactory{
 		"missing database": {db: nil, dsn: "owned"},
 		"missing dsn":      {db: db, dsn: ""},

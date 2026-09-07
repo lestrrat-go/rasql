@@ -14,7 +14,7 @@ func TestDefaultFactoryJoinsDerivedDSNAndCleanupErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer base.Close()
+	defer func() { _ = base.Close() }()
 	createErr := errors.New("derived dsn")
 	dropErr := errors.New("drop database")
 	mock.ExpectExec(`CREATE DATABASE .*`).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -37,7 +37,7 @@ func TestDefaultFactoryJoinsOwnedOpenAndCleanupErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer base.Close()
+	defer func() { _ = base.Close() }()
 	openErr := errors.New("owned open")
 	dropErr := errors.New("drop database")
 	mock.ExpectExec(`CREATE DATABASE .*`).WillReturnResult(sqlmock.NewResult(0, 1))

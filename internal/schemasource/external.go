@@ -73,12 +73,6 @@ func sanitizedEnvironment() []string {
 	}
 	return out
 }
-func bounded(b []byte) []byte {
-	if len(b) > maxCommandOutput {
-		return append([]byte(nil), b[:maxCommandOutput]...)
-	}
-	return append([]byte(nil), b...)
-}
 func redactMany(s string, secrets ...string) string {
 	for _, secret := range secrets {
 		if secret != "" {

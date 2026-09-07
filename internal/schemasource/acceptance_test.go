@@ -27,7 +27,7 @@ func TestMigrationOverlappingGlobsSnapshotEachPathOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	r := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: "sqlite", Profile: "sqlite-3.35"}, Source: schemasource.SchemaSourceConfig{Kind: "migrations", Identity: "overlap-v1", Paths: []string{"migrations/*.sql", "migrations/00?.sql"}}, TempRoot: root}
 	f := &fakeFactory{db: db, dsn: "owned"}
 	m := &fakeMigration{}
@@ -52,7 +52,7 @@ func TestExternalCommandIdentityContributesToSourceEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	base := liveRequest(root, "external")
 	base.Source.Command = []string{"tool", "--one"}
 	deps := func() schemasource.Dependencies {

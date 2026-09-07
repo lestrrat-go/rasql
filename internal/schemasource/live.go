@@ -93,7 +93,7 @@ func (f defaultFactory) Create(ctx context.Context, r FactoryRequest) (Disposabl
 	if err != nil {
 		return DisposableDatabase{}, err
 	}
-	defer base.Close()
+	defer func() { _ = base.Close() }()
 	quoted := quoteDB(r.Dialect, name)
 	if _, err = base.ExecContext(ctx, "CREATE DATABASE "+quoted); err != nil {
 		return DisposableDatabase{}, err
@@ -112,7 +112,7 @@ func (f defaultFactory) Create(ctx context.Context, r FactoryRequest) (Disposabl
 		if oe != nil {
 			return errorsJoin(cerr, oe)
 		}
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 		return errorsJoin(cerr, dropDatabase(c, d, r.Dialect, name))
 	}}, nil
 }

@@ -210,7 +210,7 @@ func TestAnalyzerSeesOpenDatabaseAndClonedCatalogBeforeCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	analyzer := &liveAnalyzer{queries: []compilerir.QueryAnalysis{{ID: "q", Name: "users"}}}
 	factory := &fakeFactory{db: db, dsn: "owned-dsn"}
 	req := liveRequest(root, "external")
@@ -261,7 +261,7 @@ func TestVerifyReturnsSortedUniqueEvidenceDifferencesAndDoesNotWrite(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	req := liveRequest(root, "external")
 	deps := schemasource.Dependencies{Factory: &fakeFactory{db: db, dsn: "owned"}, Profiles: &fakeProfile{p: liveProfile(t)}, Catalogs: &fakeCatalog{}, Processes: &fakeProcess{}}
 	expected := compilerlock.File{Source: compilerlock.SourceRecord{Kind: "migrations", Identity: "different"}, Engine: compilerlock.EngineRecord{Dialect: "mysql", Profile: "other", Version: "0.0.0"}}

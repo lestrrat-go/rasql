@@ -221,9 +221,7 @@ func (n *ResolvedNames) MutationTypeNames(table schema.TableDef) (string, string
 		return "", ""
 	}
 	prefix := object.RowType
-	if strings.HasSuffix(prefix, "Row") {
-		prefix = strings.TrimSuffix(prefix, "Row")
-	}
+	prefix = strings.TrimSuffix(prefix, "Row")
 	return prefix + "Create", prefix + "Patch"
 }
 
