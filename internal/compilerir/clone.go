@@ -92,7 +92,21 @@ func (m SemanticModel) Clone() SemanticModel {
 	}
 	for i := range out.Queries {
 		out.Queries[i].Parameters = slices.Clone(m.Queries[i].Parameters)
+		for j := range out.Queries[i].Parameters {
+			out.Queries[i].Parameters[j].Native = cloneNative(m.Queries[i].Parameters[j].Native)
+			if m.Queries[i].Parameters[j].Integer != nil {
+				integer := *m.Queries[i].Parameters[j].Integer
+				out.Queries[i].Parameters[j].Integer = &integer
+			}
+		}
 		out.Queries[i].Results = slices.Clone(m.Queries[i].Results)
+		for j := range out.Queries[i].Results {
+			out.Queries[i].Results[j].Native = cloneNative(m.Queries[i].Results[j].Native)
+			if m.Queries[i].Results[j].Integer != nil {
+				integer := *m.Queries[i].Results[j].Integer
+				out.Queries[i].Results[j].Integer = &integer
+			}
+		}
 	}
 	return out
 }

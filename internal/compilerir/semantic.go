@@ -172,7 +172,15 @@ func certaintyFor(c PhysicalColumn) Certainty {
 	return CertaintyKnown
 }
 func cloneValues(values []SemanticValue) []SemanticValue {
-	return slices.Clone(values)
+	out := slices.Clone(values)
+	for i := range out {
+		out[i].Native = cloneNative(out[i].Native)
+		if values[i].Integer != nil {
+			integer := *values[i].Integer
+			out[i].Integer = &integer
+		}
+	}
+	return out
 }
 
 func (m SemanticModel) Validate() error { return ValidateSemantic(m) }

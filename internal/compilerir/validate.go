@@ -333,12 +333,10 @@ func ValidateSemantic(m SemanticModel) error {
 			return invalid(fmt.Sprintf("queries[%d].id", i), "duplicate query ID")
 		}
 		queryIDs[q.ID] = struct{}{}
-		for j, value := range append(append([]SemanticValue{}, q.Parameters...), q.Results...) {
-			if value.Name == "" || value.Scalar == "" {
-				return invalid(fmt.Sprintf("queries[%d].values[%d]", i, j), "name and scalar are required")
-			}
-			if !validCertainty(value.TypeCertainty) || !validCertainty(value.NullabilityCertainty) {
-				return invalid(fmt.Sprintf("queries[%d].values[%d]", i, j), "unknown certainty")
+		values := append(append([]SemanticValue{}, q.Parameters...), q.Results...)
+		for j, value := range values {
+			if err := validateSemanticValue(value, fmt.Sprintf("queries[%d].values[%d]", i, j)); err != nil {
+				return err
 			}
 		}
 	}
@@ -346,6 +344,32 @@ func ValidateSemantic(m SemanticModel) error {
 		if diagnostic.Level != DiagnosticError && diagnostic.Level != DiagnosticWarning {
 			return invalid(fmt.Sprintf("diagnostics[%d].level", i), "unknown diagnostic level")
 		}
+	}
+	return nil
+}
+
+func validateSemanticValue(value SemanticValue, path string) error {
+	if value.Name == "" || value.Scalar == "" {
+		return invalid(path, "name and scalar are required")
+	}
+	if !validCertainty(value.TypeCertainty) || !validCertainty(value.NullabilityCertainty) {
+		return invalid(path, "unknown certainty")
+	}
+	if value.Integer != nil {
+		if value.LogicalKind != "integer" {
+			return invalid(path+".integer", "facts do not match logical kind")
+		}
+		if value.Integer.DisplayWidth.Set && value.Integer.DisplayWidth.Value < 0 {
+			return invalid(path+".integer.display_width", "must not be negative")
+		}
+	}
+	if value.Native != nil {
+		if err := validateNative(value.Native, path+".native"); err != nil {
+			return err
+		}
+	}
+	if value.TypeCertainty == CertaintyKnown && value.Scalar == "" && value.LogicalKind == "" && value.Native == nil {
+		return invalid(path+".type_certainty", "known type requires logical kind or native descriptor")
 	}
 	return nil
 }

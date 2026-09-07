@@ -400,6 +400,9 @@ func validateValues(v []ValueRecord) error {
 		if x.Integer != nil && x.LogicalKind != "integer" {
 			return fmt.Errorf("compilerlock: query value %q has integer facts for %q", x.Name, x.LogicalKind)
 		}
+		if x.Integer != nil && x.Integer.DisplayWidth.Set && x.Integer.DisplayWidth.Value < 0 {
+			return fmt.Errorf("compilerlock: query value %q integer display width must not be negative", x.Name)
+		}
 	}
 	return nil
 }

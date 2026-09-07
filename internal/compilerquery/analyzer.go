@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -97,12 +98,14 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
 		}
 		if request.Profile.Engine == engineprofile.PostgreSQL {
-			for i, value := range append(append([]ValueDeclaration(nil), query.Parameters...), query.Results...) {
-				if value.Scalar == "" && i < len(append(append([]ValueEvidence(nil), description.Parameters...), description.Results...)) {
-					fact := append(append([]ValueEvidence(nil), description.Parameters...), description.Results...)[i]
-					if fact.Type.Certainty == compilerir.CertaintyUnknown || fact.Type.LogicalKind == "" {
-						return schemasource.AnalysisResult{}, fmt.Errorf("query %q value %q has unresolved type", query.ID, value.Name)
-					}
+			for i, value := range query.Parameters {
+				if value.Scalar == "" && (i >= len(parameters) || parameters[i].LogicalKind == "" || parameters[i].TypeCertainty == compilerir.CertaintyUnknown) {
+					return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameter %q has unresolved type", query.ID, value.Name)
+				}
+			}
+			for i, value := range query.Results {
+				if value.Scalar == "" && (i >= len(results) || results[i].LogicalKind == "" || results[i].TypeCertainty == compilerir.CertaintyUnknown) {
+					return schemasource.AnalysisResult{}, fmt.Errorf("query %q result %q has unresolved type", query.ID, value.Name)
 				}
 			}
 		}
@@ -181,6 +184,9 @@ func validateCardinality(q QueryConfig, c Classification, p engineprofile.Profil
 
 func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, names []string, mappings compilerir.MappingConfig) ([]compilerir.SemanticValue, error) {
 	if len(names) != 0 {
+		if len(observed) != len(names) {
+			return nil, fmt.Errorf("observed occurrence count %d differs from lowered count %d", len(observed), len(names))
+		}
 		collapsed := make([]ValueEvidence, 0, len(declarations))
 		seen := map[string]struct{}{}
 		for i, name := range names {
@@ -191,7 +197,7 @@ func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, name
 			fact.Name = name
 			if _, ok := seen[name]; ok {
 				for _, prior := range collapsed {
-					if prior.Name == name && (prior.Type.LogicalKind != fact.Type.LogicalKind || prior.Type.Certainty != fact.Type.Certainty || !sameNullable(prior.Nullable, fact.Nullable)) {
+					if prior.Name == name && (!sameTypeEvidence(prior.Type, fact.Type) || !sameNullable(prior.Nullable, fact.Nullable)) {
 						return nil, fmt.Errorf("repeated parameter %q has conflicting evidence", name)
 					}
 				}
@@ -202,7 +208,7 @@ func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, name
 		}
 		observed = collapsed
 	}
-	if len(declarations) != len(observed) && len(observed) != 0 {
+	if len(declarations) != len(observed) {
 		return nil, fmt.Errorf("declaration count %d differs from observed count %d", len(declarations), len(observed))
 	}
 	if len(declarations) == 0 && len(observed) == 0 {
@@ -238,9 +244,21 @@ func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, name
 		if scalar == "" {
 			return nil, fmt.Errorf("value %q has no scalar", declaration.Name)
 		}
-		values[i] = compilerir.SemanticValue{Name: declaration.Name, Scalar: scalar, Nullable: nullable, TypeCertainty: fact.Type.Certainty, NullabilityCertainty: compilerir.CertaintyDeclared, LogicalKind: fact.Type.LogicalKind, Native: cloneNative(fact.Type.Native), Integer: cloneInteger(fact.Type.Integer)}
+		typeCertainty := fact.Type.Certainty
+		if typeCertainty == compilerir.CertaintyUnknown && scalar != "" {
+			typeCertainty = compilerir.CertaintyDeclared
+		}
+		nullabilityCertainty := compilerir.CertaintyDeclared
+		if fact.Nullable != nil {
+			nullabilityCertainty = compilerir.CertaintyKnown
+		}
+		values[i] = compilerir.SemanticValue{Name: declaration.Name, Scalar: scalar, Nullable: nullable, TypeCertainty: typeCertainty, NullabilityCertainty: nullabilityCertainty, LogicalKind: fact.Type.LogicalKind, Native: cloneNative(fact.Type.Native), Integer: cloneInteger(fact.Type.Integer)}
 	}
 	return values, nil
+}
+
+func sameTypeEvidence(a, b TypeEvidence) bool {
+	return a.LogicalKind == b.LogicalKind && a.Certainty == b.Certainty && reflect.DeepEqual(a.Native, b.Native) && reflect.DeepEqual(a.Integer, b.Integer)
 }
 
 func sameNullable(a, b *bool) bool {
