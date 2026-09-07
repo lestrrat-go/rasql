@@ -183,9 +183,6 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 	needRasql, needTime := false, false
 	for _, object := range out.Objects {
 		for _, column := range object.Columns {
-			if column.Scalar == "time" {
-				needTime = true
-			}
 			if strings.HasPrefix(column.GoType, "rasql.Nullable[") {
 				needRasql = true
 			}
@@ -265,7 +262,7 @@ func scalarBinding(scalar string, nullable bool, mappings []ScalarMapping) (scal
 				typeName = "rasql.Nullable[" + mapping.GoType + "]"
 			}
 		}
-		return scalarBindingResult{Type: typeName, Codec: mapping.Codec, Imports: mapping.Imports}, true
+		return scalarBindingResult{Type: typeName, Codec: mapping.Codec, Imports: importsForType(typeName, mapping.Imports)}, true
 	}
 	typeName := goType(scalar, nullable)
 	return scalarBindingResult{Type: typeName}, typeName != ""

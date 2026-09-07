@@ -18,19 +18,21 @@ func TestMappingCompilePassFixture(t *testing.T) {
 		Objects: []compilerir.SemanticObject{{ID: "accounts", Kind: "table", PhysicalName: compilerir.QualifiedName{Name: "Accounts"}, Columns: []compilerir.SemanticColumn{
 			{Name: "id", Scalar: "domain.AccountID", Readable: true, InsertState: "required", PatchState: "settable", Certainty: compilerir.CertaintyKnown},
 			{Name: "status", Scalar: "domain.Status", Nullable: true, Readable: true, InsertState: "optional", PatchState: "settable", Certainty: compilerir.CertaintyKnown},
+			{Name: "created", Scalar: "domain.Time", Nullable: true, Readable: true, InsertState: "optional", PatchState: "settable", Certainty: compilerir.CertaintyKnown},
 		}}},
 		Queries: []compilerir.SemanticQuery{{ID: "find", Name: "Find", Cardinality: "many", Parameters: []compilerir.SemanticValue{{Name: "status", Scalar: "domain.Status", Nullable: true, TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown}}, Results: []compilerir.SemanticValue{{Name: "id", Scalar: "domain.AccountID", TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown}, {Name: "status", Scalar: "domain.Status", Nullable: true, TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown}}}},
 	}
 	mappings := []compilerir.ScalarMapping{
 		{Name: "domain.AccountID", Match: compilerir.NativeMatch{LogicalKind: "uuid"}, GoType: "domain.AccountID", Codec: "account-id", Imports: []compilerir.GoImport{{Path: "mappingfixture/domain", Alias: "domain"}}},
-		{Name: "domain.Status", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: "domain.Status", NullableGoType: "domain.NullableStatus", Codec: "status", Imports: []compilerir.GoImport{{Path: "mappingfixture/domain", Alias: "domain"}}},
+		{Name: "domain.Status", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: "domain.Status", NullableGoType: "nullable.Status", Codec: "status", Imports: []compilerir.GoImport{{Path: "mappingfixture/domain", Alias: "domain"}, {Path: "mappingfixture/nullable", Alias: "nullable"}}},
+		{Name: "domain.Time", Match: compilerir.NativeMatch{LogicalKind: "time"}, GoType: "domain.Time", NullableGoType: "nullable.Time", Codec: "time", Imports: []compilerir.GoImport{{Path: "mappingfixture/domain", Alias: "domain"}, {Path: "mappingfixture/nullable", Alias: "nullable"}}},
 	}
 	goModel, diagnostics := compilerir.BuildGo(model, compilerir.GoConfig{Package: "generated", Scalars: mappings})
 	if len(diagnostics) != 0 {
 		t.Fatalf("mapping output rejected: %#v", diagnostics)
 	}
 	dir := t.TempDir()
-	writeCompileModule(t, dir, renderCompileModel(goModel), []string{"domain"})
+	writeCompileModule(t, dir, renderCompileModel(goModel), []string{"domain", "nullable"})
 	cmd := exec.Command("go", "test", "./...")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
@@ -41,13 +43,39 @@ func TestMappingCompilePassFixture(t *testing.T) {
 
 func TestMappingCompileFailFixture(t *testing.T) {
 	dir := t.TempDir()
-	writeCompileModule(t, dir, "package generated\ntype Nullable[T any] struct{}\ntype Required string\nvar _ Required = Nullable[string]{}\n", nil)
+	model := compilerir.SemanticModel{Objects: []compilerir.SemanticObject{{ID: "accounts", Kind: "table", PhysicalName: compilerir.QualifiedName{Name: "Accounts"}, Columns: []compilerir.SemanticColumn{{Name: "status", Scalar: "domain.Status", Nullable: true, Readable: true, InsertState: "optional", PatchState: "settable", Certainty: compilerir.CertaintyKnown}}}}}
+	mapping := compilerir.ScalarMapping{Name: "domain.Status", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: "domain.Status", NullableGoType: "nullable.Status", Codec: "status", Imports: []compilerir.GoImport{{Path: "mappingfixture/domain", Alias: "domain"}, {Path: "mappingfixture/nullable", Alias: "nullable"}}}
+	goModel, diagnostics := compilerir.BuildGo(model, compilerir.GoConfig{Package: "generated", Scalars: []compilerir.ScalarMapping{mapping}})
+	if len(diagnostics) != 0 {
+		t.Fatalf("mapping output rejected: %#v", diagnostics)
+	}
+	source := renderCompileModel(goModel) + "\nvar _ domain.Status = AccountsRow{}.status\n"
+	writeCompileModule(t, dir, renderCompileModel(goModel), []string{"domain", "nullable"})
+	if err := os.WriteFile(filepath.Join(dir, "consumer.go"), []byte("package generated\n\nimport \"mappingfixture/domain\"\n\n"+source[strings.Index(source, "var _"):]+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("go", "test", "./...")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
 	output, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "cannot use") {
 		t.Fatalf("compile-fail fixture did not fail for intended type mismatch: %v\n%s", err, output)
+	}
+}
+
+func TestMappingCompileCanonicalNullableFixture(t *testing.T) {
+	model := compilerir.SemanticModel{Objects: []compilerir.SemanticObject{{ID: "events", Kind: "table", PhysicalName: compilerir.QualifiedName{Name: "Events"}, Columns: []compilerir.SemanticColumn{{Name: "note", Scalar: "text", Nullable: true, Readable: true, InsertState: "optional", PatchState: "settable", Certainty: compilerir.CertaintyKnown}}}}}
+	goModel, diagnostics := compilerir.BuildGo(model, compilerir.GoConfig{Package: "generated"})
+	if len(diagnostics) != 0 || goModel.Objects[0].Row.Fields[0].Type != "rasql.Nullable[string]" {
+		t.Fatalf("canonical nullable output failed: %#v %#v", goModel, diagnostics)
+	}
+	dir := t.TempDir()
+	writeCompileModule(t, dir, renderCompileModel(goModel), nil)
+	cmd := exec.Command("go", "test", "-mod=mod", "./...")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("canonical nullable fixture failed to compile: %v\n%s", err, output)
 	}
 }
 
@@ -68,7 +96,8 @@ func TestBuildGoOmitsImportsFromUnusedMappings(t *testing.T) {
 func writeCompileModule(t *testing.T, dir, source string, packages []string) {
 	t.Helper()
 	_, root, _, _ := runtime.Caller(0)
-	module := "module mappingfixture\n\ngo 1.26\n"
+	repo := filepath.Clean(filepath.Join(filepath.Dir(root), "../.."))
+	module := "module mappingfixture\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + repo + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o600); err != nil {
 		t.Fatal(err)
 	}

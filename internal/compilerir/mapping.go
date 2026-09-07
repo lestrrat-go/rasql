@@ -2,7 +2,10 @@ package compilerir
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
 	"regexp"
+	"strings"
 )
 
 var mappingCodecPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
@@ -69,6 +72,36 @@ type mappingSelection struct {
 	mapping   ScalarMapping
 	found     bool
 	ambiguous bool
+}
+
+func importsForType(expression string, imports []GoImport) []GoImport {
+	expr, err := parser.ParseExpr(expression)
+	if err != nil {
+		return nil
+	}
+	used := map[string]struct{}{}
+	ast.Inspect(expr, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := selector.X.(*ast.Ident); ok {
+			used[ident.Name] = struct{}{}
+		}
+		return true
+	})
+	result := make([]GoImport, 0, len(imports))
+	for _, imp := range imports {
+		name := imp.Alias
+		if name == "" {
+			parts := strings.Split(imp.Path, "/")
+			name = parts[len(parts)-1]
+		}
+		if _, ok := used[name]; ok {
+			result = append(result, imp)
+		}
+	}
+	return result
 }
 
 func selectMapping(column PhysicalColumn, config MappingConfig) mappingSelection {
