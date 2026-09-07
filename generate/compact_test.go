@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -376,20 +377,33 @@ type buildSample struct {
 
 func pairedBuildSamples(t *testing.T, root string, env []string) ([]buildSample, []buildSample) {
 	t.Helper()
-	warmStandalonePrograms(t, root, env)
+	buildEnv := fixedBuildEnvironment(env)
+	warmStandalonePrograms(t, root, buildEnv)
 	const samples = 7
+	const buildsPerSample = 5
 	compact := make([]buildSample, 0, samples)
 	legacy := make([]buildSample, 0, samples)
 	for index := 0; index < samples; index++ {
 		if index%2 == 0 {
-			compact = append(compact, buildSampleAt(t, root, env, "compact", "./compactcmd", index))
-			legacy = append(legacy, buildSampleAt(t, root, env, "legacy", "./legacycmd", index))
+			compact = append(compact, buildSampleGroupAt(t, root, buildEnv, "compact", "./compactcmd", index, buildsPerSample))
+			legacy = append(legacy, buildSampleGroupAt(t, root, buildEnv, "legacy", "./legacycmd", index, buildsPerSample))
 		} else {
-			legacy = append(legacy, buildSampleAt(t, root, env, "legacy", "./legacycmd", index))
-			compact = append(compact, buildSampleAt(t, root, env, "compact", "./compactcmd", index))
+			legacy = append(legacy, buildSampleGroupAt(t, root, buildEnv, "legacy", "./legacycmd", index, buildsPerSample))
+			compact = append(compact, buildSampleGroupAt(t, root, buildEnv, "compact", "./compactcmd", index, buildsPerSample))
 		}
 	}
 	return compact, legacy
+}
+
+func fixedBuildEnvironment(env []string) []string {
+	result := make([]string, 0, len(env)+1)
+	for _, value := range env {
+		if strings.HasPrefix(value, "GOMAXPROCS=") {
+			continue
+		}
+		result = append(result, value)
+	}
+	return append(result, "GOMAXPROCS=1")
 }
 
 func warmStandalonePrograms(t *testing.T, root string, env []string) {
@@ -402,7 +416,7 @@ func warmStandalonePrograms(t *testing.T, root string, env []string) {
 		{label: "legacy", path: "./legacycmd"},
 	} {
 		output := filepath.Join(root, "warm-"+program.label)
-		command := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-o", output, program.path)
+		command := exec.Command("go", "build", "-p", "1", "-buildvcs=false", "-trimpath", "-o", output, program.path)
 		command.Dir = root
 		command.Env = env
 		buildOutput, err := command.CombinedOutput()
@@ -411,36 +425,82 @@ func warmStandalonePrograms(t *testing.T, root string, env []string) {
 	}
 }
 
+func buildSampleGroupAt(t *testing.T, root string, env []string, label, packagePath string, index, count int) buildSample {
+	t.Helper()
+	runs := make([]buildSample, 0, count)
+	for repeat := 0; repeat < count; repeat++ {
+		runs = append(runs, buildSampleAt(t, root, env, label, packagePath, index*count+repeat))
+	}
+	normalized := normalizedBuildSample(runs)
+	t.Logf("%s build group=%d normalized over %d runs: %s", label, index+1, count, formatBuildMetric(normalized))
+	return normalized
+}
+
+// normalizedBuildSample averages time metrics across a fixed group of equal
+// builds. RSS and binary size use their independent group medians. Individual
+// samples remain logged by buildSampleAt so the raw evidence is preserved.
+func normalizedBuildSample(values []buildSample) buildSample {
+	return buildSample{
+		wall:   time.Duration(sumBuildMetric(values, func(sample buildSample) float64 { return float64(sample.wall) }) / float64(len(values))),
+		user:   time.Duration(sumBuildMetric(values, func(sample buildSample) float64 { return float64(sample.user) }) / float64(len(values))),
+		system: time.Duration(sumBuildMetric(values, func(sample buildSample) float64 { return float64(sample.system) }) / float64(len(values))),
+		cpu:    time.Duration(sumBuildMetric(values, func(sample buildSample) float64 { return float64(sample.cpu) }) / float64(len(values))),
+		rssKB:  int64(medianMetric(values, func(value buildSample) float64 { return float64(value.rssKB) })),
+		binary: int64(medianMetric(values, func(value buildSample) float64 { return float64(value.binary) })),
+	}
+}
+
+func sumBuildMetric(values []buildSample, metric func(buildSample) float64) float64 {
+	var total float64
+	for _, value := range values {
+		total += metric(value)
+	}
+	return total
+}
+
 func buildSampleAt(t *testing.T, root string, env []string, label, packagePath string, index int) buildSample {
 	t.Helper()
 	output := filepath.Join(root, fmt.Sprintf("%s-%d.test", label, index))
-	stats := filepath.Join(root, fmt.Sprintf("%s-%d.time", label, index))
-	command := exec.Command("/usr/bin/time", "-f", "%e %U %S %M", "-o", stats, "go", "build", "-buildvcs=false", "-trimpath", "-o", output, packagePath)
+	command := exec.Command("go", "build", "-p", "1", "-buildvcs=false", "-trimpath", "-o", output, packagePath)
 	command.Dir = root
 	command.Env = env
+	started := time.Now()
 	buildOutput, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", buildOutput)
-	measurement, err := os.ReadFile(stats)
-	require.NoError(t, err)
-	fields := strings.Fields(string(measurement))
-	require.Len(t, fields, 4)
-	wallSeconds, err := strconv.ParseFloat(fields[0], 64)
-	require.NoError(t, err)
-	userSeconds, err := strconv.ParseFloat(fields[1], 64)
-	require.NoError(t, err)
-	systemSeconds, err := strconv.ParseFloat(fields[2], 64)
-	require.NoError(t, err)
-	rssKB, err := strconv.ParseInt(fields[3], 10, 64)
-	require.NoError(t, err)
+	wall := time.Since(started)
+	user := command.ProcessState.UserTime()
+	system := command.ProcessState.SystemTime()
+	rssKB := processMaxRSS(command.ProcessState)
+	require.Greater(t, wall, time.Duration(0))
+	require.Greater(t, user+system, time.Duration(0))
+	require.Greater(t, rssKB, int64(0))
 	binary, err := os.Stat(output)
 	require.NoError(t, err)
-	user := time.Duration(userSeconds * float64(time.Second))
-	system := time.Duration(systemSeconds * float64(time.Second))
-	sample := buildSample{wall: time.Duration(wallSeconds * float64(time.Second)), user: user, system: system, cpu: user + system, rssKB: rssKB, binary: binary.Size()}
-	t.Logf("%s build sample=%d wall=%s user=%s system=%s cpu=%s rss=%dKB binary=%d bytes", label, index+1, sample.wall.Round(time.Millisecond), sample.user.Round(time.Millisecond), sample.system.Round(time.Millisecond), sample.cpu.Round(time.Millisecond), sample.rssKB, sample.binary)
+	sample := buildSample{wall: wall, user: user, system: system, cpu: user + system, rssKB: rssKB, binary: binary.Size()}
+	t.Logf("%s build sample=%d wall=%s user=%s system=%s cpu=%s rss=%dKB binary=%d bytes", label, index+1, sample.wall, sample.user, sample.system, sample.cpu, sample.rssKB, sample.binary)
 	require.NoError(t, os.Remove(output))
-	require.NoError(t, os.Remove(stats))
 	return sample
+}
+
+func processMaxRSS(state *os.ProcessState) int64 {
+	usage := reflect.ValueOf(state.SysUsage())
+	if !usage.IsValid() {
+		return 0
+	}
+	if usage.Kind() == reflect.Pointer {
+		if usage.IsNil() {
+			return 0
+		}
+		usage = usage.Elem()
+	}
+	if usage.Kind() != reflect.Struct {
+		return 0
+	}
+	maxRSS := usage.FieldByName("Maxrss")
+	if !maxRSS.IsValid() || !maxRSS.CanInt() {
+		return 0
+	}
+	return maxRSS.Int()
 }
 
 func medianMetric(values []buildSample, metric func(buildSample) float64) float64 {
@@ -464,7 +524,7 @@ func medianBuildMetrics(values []buildSample) buildSample {
 }
 
 func formatBuildMetric(sample buildSample) string {
-	return fmt.Sprintf("wall=%s user=%s system=%s cpu=%s rss=%dKB binary=%d", sample.wall.Round(time.Millisecond), sample.user.Round(time.Millisecond), sample.system.Round(time.Millisecond), sample.cpu.Round(time.Millisecond), sample.rssKB, sample.binary)
+	return fmt.Sprintf("wall=%s user=%s system=%s cpu=%s rss=%dKB binary=%d", sample.wall, sample.user, sample.system, sample.cpu, sample.rssKB, sample.binary)
 }
 
 func buildRatio(compact, legacy []buildSample, value func(buildSample) float64) (float64, error) {
