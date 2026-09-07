@@ -189,3 +189,15 @@ source: [examples/rasqlgen_binding_example_test.go](https://github.com/lestrrat-
 [The generated store](02-generated-store.md) says what the command writes and
 what each generated member is for. [Typed queries](03-typed-queries.md) reads
 rows through the generated table.
+
+## Offline generation
+
+Declare one engine and one schema source in `rasql.json`, then run
+`rasql schema update --dsn <bootstrap>` to materialize the source and write
+`rasql.lock.json` plus generated Go. The lock is derived evidence; migration
+files or the declared external or live source remains authoritative.
+
+After the lock is checked in, `rasql generate` and `rasql check` read the lock
+and config without opening a database or running a materializer. `check` reports
+drift without changing files. Use `rasql schema verify --dsn <dsn>` when live
+engine evidence must be checked again.
