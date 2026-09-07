@@ -275,6 +275,13 @@ func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled comp
 	key.WriteString(stage)
 	key.WriteByte(0)
 	fmt.Fprintf(&key, "%p:%s:%s:%d:%d", edge.child.id, edge.child.query.sourceName(), compiled.statement.SQL(), edge.options.PerParentLimit, edge.options.BindLimit)
+	keySpec := edge.childKey
+	if stage == "junction" {
+		keySpec = edge.junctionParent
+	}
+	for _, part := range keySpec.parts {
+		fmt.Fprintf(&key, ":%s:%s:%s", part.column.Source().QualifiedName(), part.column.Name(), part.codec)
+	}
 	for _, slot := range compiled.bindSlots {
 		fmt.Fprintf(&key, ":%s:%t", slot.codec, slot.preEncoded)
 	}
