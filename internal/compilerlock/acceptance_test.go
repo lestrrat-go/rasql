@@ -36,7 +36,7 @@ func TestEncodeDoesNotMutateInputAndPreservesNativeEmpty(t *testing.T) {
 		Engine: compilerir.EngineIdentity{Dialect: "sqlite", Profile: "sqlite-3"},
 		Objects: []compilerir.PhysicalObject{{
 			ID: "t", Kind: "table", Name: "t",
-			Columns: []compilerir.PhysicalColumn{{Name: "x", Ordinal: 0, LogicalKind: "native", Native: &compilerir.NativeType{Dialect: "sqlite", Name: "x", Kind: "custom", Arguments: empty}}},
+			Columns: []compilerir.PhysicalColumn{{Name: "x", Ordinal: 0, LogicalKind: "native", Native: &compilerir.NativeType{Dialect: "sqlite", Name: "x", Kind: "other", Arguments: empty}}},
 			Indexes: []compilerir.PhysicalIndex{{Name: "idx", KeyForm: "keys", Parts: []compilerir.IndexPart{{ExpressionSQL: "x"}}}},
 		}},
 	}

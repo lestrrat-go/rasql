@@ -39,7 +39,7 @@
               "kind": "builtin"
             },
             "nullable": false,
-            "identity": "always"
+            "identity": "ALWAYS"
           },
           {
             "name": "parent_id",
@@ -49,7 +49,7 @@
               "dialect": "postgresql",
               "schema": "app",
               "name": "user_id",
-              "kind": "domain",
+              "kind": "array",
               "element": {
                 "dialect": "postgresql",
                 "schema": "pg_catalog",
@@ -60,8 +60,20 @@
             "nullable": true
           },
           {
-            "name": "note",
+            "name": "tenant_id",
             "ordinal": 2,
+            "logical_kind": "uuid",
+            "native": {
+              "dialect": "postgresql",
+              "schema": "pg_catalog",
+              "name": "uuid",
+              "kind": "builtin"
+            },
+            "nullable": false
+          },
+          {
+            "name": "note",
+            "ordinal": 3,
             "logical_kind": "text",
             "native": {
               "dialect": "postgresql",
@@ -69,30 +81,39 @@
               "name": "text",
               "kind": "builtin"
             },
+            "text": {
+              "width": {
+                "value": 0,
+                "set": false
+              }
+            },
             "nullable": true
           }
         ],
         "constraints": [
           {
+            "name": "",
+            "kind": "primary_key",
+            "columns": [
+              "id",
+              "tenant_id"
+            ]
+          },
+          {
             "name": "users_parent_fk",
             "kind": "foreign_key",
             "columns": [
-              "parent_id"
+              "parent_id",
+              "tenant_id"
             ],
             "reference": {
               "schema": "public",
               "object": "users",
               "columns": [
-                "id"
+                "id",
+                "tenant_id"
               ]
             }
-          },
-          {
-            "name": "users_pkey",
-            "kind": "primary_key",
-            "columns": [
-              "id"
-            ]
           }
         ],
         "indexes": [
@@ -123,6 +144,12 @@
               "schema": "pg_catalog",
               "name": "text",
               "kind": "builtin"
+            },
+            "text": {
+              "width": {
+                "value": 0,
+                "set": false
+              }
             },
             "nullable": true
           }

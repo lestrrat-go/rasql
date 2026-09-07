@@ -42,6 +42,12 @@
                 "paid"
               ]
             },
+            "text": {
+              "width": {
+                "value": 0,
+                "set": false
+              }
+            },
             "nullable": false
           },
           {
@@ -87,7 +93,7 @@
             },
             "nullable": false,
             "generated_sql": "amount * 2",
-            "generated_storage": "stored"
+            "generated_storage": "STORED"
           }
         ],
         "constraints": [

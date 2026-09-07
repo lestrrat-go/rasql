@@ -37,6 +37,12 @@
               "name": "INTEGER",
               "kind": "builtin"
             },
+            "integer": {
+              "display_width": {
+                "value": 0,
+                "set": false
+              }
+            },
             "nullable": false
           },
           {
@@ -53,14 +59,15 @@
         ],
         "constraints": [
           {
-            "name": "events_pkey",
+            "name": "",
             "kind": "primary_key",
             "columns": [
               "id"
             ]
           }
         ],
-        "strict": true
+        "strict": true,
+        "without_row_id": true
       }
     ]
   },
