@@ -20,7 +20,7 @@ func TestQ1ScalarDecodersUseSQLiteRows(t *testing.T) {
 	require.Equal(t, rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}, Codec: "int.codec"}, scalar.Schema().Columns()[0])
 	rows, err := db.QueryContext(t.Context(), `SELECT 42 UNION ALL SELECT 7`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var got []int64
 	for rows.Next() {
 		var value int64
@@ -35,7 +35,7 @@ func TestQ1ScalarDecodersUseSQLiteRows(t *testing.T) {
 	require.Equal(t, rasql.ResultColumn{Name: "value", Type: schema.TextType{}, Nullable: true, Codec: "text.codec"}, nullable.Schema().Columns()[0])
 	rows, err = db.QueryContext(t.Context(), `SELECT NULL UNION ALL SELECT 'present'`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var values []rasql.Nullable[string]
 	for rows.Next() {
 		var value rasql.Nullable[string]
@@ -99,7 +99,7 @@ func TestQ1MultiColumnDTODecodesPresenceAndOwnsRows(t *testing.T) {
 
 	rows, err := db.QueryContext(t.Context(), `SELECT 'absent', x'616263', NULL, NULL UNION ALL SELECT 'present', x'646566', 9, NULL`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var got []q1DTO
 	for rows.Next() {
 		var value q1DTO

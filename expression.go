@@ -109,10 +109,6 @@ type bindToken struct {
 	codec string
 	err   error
 }
-type bindSlot struct {
-	id    bindID
-	codec string
-}
 
 func Value[T any](value T) Expr[T] {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))

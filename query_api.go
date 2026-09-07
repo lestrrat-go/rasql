@@ -256,11 +256,6 @@ func (p QueryPlan) Validate() error {
 		if item.expression == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.projection[%d]", i), "expression is zero")
 		}
-		if item.source != "" {
-			if _, ok := allowed[item.source]; !ok {
-				return planError("invalid_source", fmt.Sprintf("plan.projection[%d]", i), "expression source is outside plan")
-			}
-		}
 	}
 	joinAllowed := make(map[string]struct{})
 	if len(p.sources) > 0 {
@@ -273,10 +268,10 @@ func (p QueryPlan) Validate() error {
 		if join.Source().QualifiedName() == "" {
 			return planError("invalid_source", fmt.Sprintf("plan.joins[%d].source", i), "source is zero")
 		}
+		joinAllowed[q1SourceIdentity(join.Source())] = struct{}{}
 		if err := validateQ1Expression(join.On(), joinAllowed, fmt.Sprintf("plan.joins[%d].on", i)); err != nil {
 			return err
 		}
-		joinAllowed[q1SourceIdentity(join.Source())] = struct{}{}
 	}
 	for i, predicate := range append(append([]Predicate(nil), p.where...), p.having...) {
 		if predicate.node == nil {
@@ -288,16 +283,6 @@ func (p QueryPlan) Validate() error {
 		if err := validateQ1Expression(predicate.node, allowed, fmt.Sprintf("plan.predicates[%d]", i)); err != nil {
 			return err
 		}
-		if predicate.source != "" {
-			if _, ok := allowed[predicate.source]; !ok {
-				return planError("invalid_source", fmt.Sprintf("plan.predicates[%d]", i), "expression source is outside plan")
-			}
-		}
-		if predicate.source2 != "" {
-			if _, ok := allowed[predicate.source2]; !ok {
-				return planError("invalid_source", fmt.Sprintf("plan.predicates[%d]", i), "expression source is outside plan")
-			}
-		}
 	}
 	for i, key := range p.group {
 		if key.node == nil {
@@ -306,11 +291,6 @@ func (p QueryPlan) Validate() error {
 		if err := validateQ1Expression(key.node, allowed, fmt.Sprintf("plan.group[%d]", i)); err != nil {
 			return err
 		}
-		if key.source != "" {
-			if _, ok := allowed[key.source]; !ok {
-				return planError("invalid_source", fmt.Sprintf("plan.group[%d]", i), "expression source is outside plan")
-			}
-		}
 	}
 	for i, term := range p.order {
 		if term.node == nil {
@@ -318,11 +298,6 @@ func (p QueryPlan) Validate() error {
 		}
 		if err := validateQ1Expression(term.node, allowed, fmt.Sprintf("plan.order[%d]", i)); err != nil {
 			return err
-		}
-		if term.source != "" {
-			if _, ok := allowed[term.source]; !ok {
-				return planError("invalid_source", fmt.Sprintf("plan.order[%d]", i), "expression source is outside plan")
-			}
 		}
 	}
 	return nil
