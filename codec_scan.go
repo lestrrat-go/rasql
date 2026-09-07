@@ -29,25 +29,38 @@ func (s codecScanSource) Scan(destinations ...any) error {
 	for i, destination := range destinations {
 		value := rawValues[i]
 		if value == nil {
-			if nullableDestination(destination) {
-				destination.(interface{ setNull() }).setNull()
+			if nullable, ok := destination.(nullableScanDestination); ok {
+				nullable.nullableClear()
 				continue
 			}
 			if scanner, ok := destination.(sql.Scanner); ok {
 				if err := scanner.Scan(nil); err == nil {
 					continue
+				} else {
+					return &DecodeError{Column: s.columns[i].Name, Codec: CodecID(s.columns[i].Codec), Err: err}
 				}
 			}
 			return &DecodeError{Column: s.columns[i].Name, Codec: CodecID(s.columns[i].Codec), Err: ErrUnexpectedNull}
 		}
+		decodeDestination := destination
+		var nullable nullableScanDestination
+		if candidate, ok := destination.(nullableScanDestination); ok {
+			nullable, decodeDestination = candidate, candidate.nullableValue()
+		}
 		if s.codecs[i] != nil {
-			if err := s.codecs[i].Decode(value, destination); err != nil {
+			if err := s.codecs[i].Decode(value, decodeDestination); err != nil {
 				return &DecodeError{Column: s.columns[i].Name, Codec: CodecID(s.columns[i].Codec), Err: err}
+			}
+			if nullable != nil {
+				nullable.nullableValid()
 			}
 			continue
 		}
-		if err := scanValueAny(destination, value); err != nil {
+		if err := scanValueAny(decodeDestination, value); err != nil {
 			return fmt.Errorf("decode column %q: %w", s.columns[i].Name, err)
+		}
+		if nullable != nil {
+			nullable.nullableValid()
 		}
 	}
 	return nil
@@ -69,12 +82,4 @@ func scanValueReflect(destination reflect.Value, value any) error {
 		return err
 	}
 	return rowvalue.AssignReflect(row, scanValueColumn, destination.Elem())
-}
-func nullableDestination(destination any) bool {
-	v := reflect.ValueOf(destination)
-	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
-		return false
-	}
-	_, ok := destination.(interface{ setNull() })
-	return ok
 }

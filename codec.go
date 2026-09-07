@@ -98,13 +98,24 @@ func (e codecExec) queryCompiler() *querycompile.Compiler {
 	return provider.queryCompiler()
 }
 func WithCodecs(executor Executor, codecs CodecRegistry) (Executor, error) {
-	if executor == nil {
+	if isNilExecutor(executor) {
 		return nil, fmt.Errorf("executor must not be nil")
 	}
-	if codecs == nil {
+	if isNilRegistry(codecs) {
 		return nil, fmt.Errorf("codec registry must not be nil")
 	}
 	return codecExec{Executor: executor, codecs: codecs}, nil
+}
+func isNilRegistry(registry CodecRegistry) bool {
+	if registry == nil {
+		return true
+	}
+	v := reflect.ValueOf(registry)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
 }
 
 func codecFor(reg CodecRegistry, id string) (ValueCodec, error) {

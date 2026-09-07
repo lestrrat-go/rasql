@@ -15,7 +15,15 @@ type Nullable[T any] struct {
 	Valid bool
 }
 
-func (n *Nullable[T]) setNull() { n.Valid = false }
+type nullableScanDestination interface {
+	nullableValue() any
+	nullableClear()
+	nullableValid()
+}
+
+func (n *Nullable[T]) nullableValue() any { return &n.Value }
+func (n *Nullable[T]) nullableClear()     { var zero T; n.Value = zero; n.Valid = false }
+func (n *Nullable[T]) nullableValid()     { n.Valid = true }
 
 // PlanError identifies an invalid immutable query plan.
 type PlanError struct {
