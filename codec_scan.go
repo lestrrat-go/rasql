@@ -46,6 +46,7 @@ func (s codecScanSource) Scan(destinations ...any) error {
 		var nullable nullableScanDestination
 		if candidate, ok := destination.(nullableScanDestination); ok {
 			nullable, decodeDestination = candidate, candidate.nullableValue()
+			nullable.nullableClear()
 		}
 		if s.codecs[i] != nil {
 			if err := s.codecs[i].Decode(value, decodeDestination); err != nil {

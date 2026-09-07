@@ -86,7 +86,11 @@ func isNilExecutor(e Executor) bool {
 		return true
 	}
 	v := reflect.ValueOf(e)
-	return (v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface) && v.IsNil()
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
 }
 
 type preparedRows[R any] struct {
@@ -100,7 +104,7 @@ type rowTerminalKey struct{}
 
 func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (preparedRows[R], error) {
 	var result preparedRows[R]
-	if executor == nil {
+	if isNilExecutor(executor) {
 		return result, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
 	if err := q.Validate(); err != nil {
@@ -130,12 +134,18 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 	}
 	for i, column := range columns {
 		if _, err := codecFor(registry, column.Codec); err != nil {
+			if planErr, ok := err.(*PlanError); ok {
+				planErr.Path = fmt.Sprintf("result.columns[%d].codec", i)
+			}
 			return result, err
 		}
 		_ = i
 	}
 	for i, slot := range slots {
 		if _, err := codecFor(registry, slot.codec); err != nil {
+			if planErr, ok := err.(*PlanError); ok {
+				planErr.Path = fmt.Sprintf("binds[%d].codec", i)
+			}
 			return result, err
 		}
 		_ = i
@@ -149,7 +159,7 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 }
 
 func rowsPrepared[R any](ctx context.Context, executor Executor, prepared preparedRows[R]) (iter.Seq2[R, error], error) {
-	if executor == nil {
+	if isNilExecutor(executor) {
 		return nil, errors.New("executor must not be nil")
 	}
 	used := false

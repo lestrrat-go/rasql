@@ -59,3 +59,24 @@ func TestCodecScanPreservesScannerNullCause(t *testing.T) {
 	require.NoError(t, source.Scan(&sqlNull))
 	require.False(t, sqlNull.Valid)
 }
+
+type failingRuntimeCodec struct{ err error }
+
+func (c failingRuntimeCodec) Encode(any) (driver.Value, error) { return nil, nil }
+func (c failingRuntimeCodec) Decode(any, any) error            { return c.err }
+
+func TestCodecScanInvalidatesNullableBeforeFailedDecode(t *testing.T) {
+	failure := errors.New("decode failed")
+	source := codecScanSource{source: &runtimeFakeRows{values: [][]any{{"new"}}}, columns: []ResultColumn{{Name: "value", Codec: "text"}}, codecs: []ValueCodec{failingRuntimeCodec{err: failure}}}
+	destination := Nullable[string]{Value: "old", Valid: true}
+	err := source.Scan(&destination)
+	require.ErrorIs(t, err, failure)
+	require.False(t, destination.Valid)
+	require.Empty(t, destination.Value)
+	builtin := codecScanSource{source: &runtimeFakeRows{values: [][]any{{int64(1)}}}, columns: []ResultColumn{{Name: "value"}}, codecs: []ValueCodec{nil}}
+	destination = Nullable[string]{Value: "old", Valid: true}
+	err = builtin.Scan(&destination)
+	require.Error(t, err)
+	require.False(t, destination.Valid)
+	require.Empty(t, destination.Value)
+}

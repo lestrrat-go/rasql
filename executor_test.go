@@ -96,6 +96,15 @@ type runtimeFakeExecutor struct {
 	last    *runtimeFakeRows
 	mu      sync.Mutex
 }
+type nilMapExecutor map[string]string
+
+func (nilMapExecutor) Dialect() dialect.Dialect { panic("typed nil executor called Dialect") }
+func (nilMapExecutor) Query(context.Context, stmt.Statement) (ResultRows, error) {
+	panic("typed nil executor called Query")
+}
+func (nilMapExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) {
+	panic("typed nil executor called Exec")
+}
 
 func (e *runtimeFakeExecutor) Dialect() dialect.Dialect { return e.dialect }
 func (e *runtimeFakeExecutor) Query(context.Context, stmt.Statement) (ResultRows, error) {
@@ -238,6 +247,18 @@ func TestRowsConcurrentQueryReuse(t *testing.T) {
 	}
 	wg.Wait()
 	require.Equal(t, int64(100), raw.calls.Load())
+}
+
+func TestTypedNilExecutorRejectedBeforeCapabilities(t *testing.T) {
+	var executor nilMapExecutor
+	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"x": testCodec{}})
+	require.NoError(t, err)
+	_, err = WithCodecs(executor, registry)
+	require.ErrorContains(t, err, "executor must not be nil")
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	_, err = WithEngineProfile(executor, profile)
+	require.ErrorContains(t, err, "executor must not be nil")
 }
 
 func TestResultRowsDoNotAliasByteValues(t *testing.T) {
