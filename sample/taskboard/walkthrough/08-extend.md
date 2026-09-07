@@ -103,6 +103,7 @@ type Page struct {
 	Overdue  int64
 	Projects []Choice
 	Members  []Choice
+	Limit    int
 	Next     string
 	HasMore  bool
 }
