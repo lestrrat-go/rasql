@@ -266,7 +266,7 @@ func snapshotError(err error) error {
 	if errors.As(err, &planErr) && planErr.Code == "unsnapshotable_bind" {
 		return err
 	}
-	return planError("unsnapshotable_bind", "bind", err.Error())
+	return &PlanError{Code: "unsnapshotable_bind", Path: "bind", Detail: err.Error(), cause: err}
 }
 
 func adoptBind[T any](value T, allowSnapshotter bool) (any, bindValueCopy, error) {

@@ -132,12 +132,7 @@ func compatibleDynamicField(root reflect.Type, index []int, column ResultColumn)
 		base = base.Elem()
 	}
 	scanner := reflect.PointerTo(base).Implements(reflect.TypeFor[sql.Scanner]()) || base.Implements(reflect.TypeFor[sql.Scanner]())
-	nullableStruct := false
-	if base.Kind() == reflect.Struct {
-		_, hasValid := base.FieldByName("Valid")
-		_, hasValue := base.FieldByName("Value")
-		nullableStruct = hasValid && hasValue
-	}
+	nullableStruct := reflect.PointerTo(base).Implements(reflect.TypeFor[nullableScanDestination]())
 	if column.Nullable {
 		if typ.Kind() != reflect.Pointer && typ.Kind() != reflect.Interface && typ.Kind() != reflect.Slice && typ.Kind() != reflect.Map && !scanner && !nullableStruct {
 			return fmt.Errorf("nullable column %q requires nullable Go field", column.Name)

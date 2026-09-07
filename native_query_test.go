@@ -9,6 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var errNativeSnapshot = errors.New("native snapshot failed")
+
+type nativeFailingSnapshotter struct{}
+
+func (nativeFailingSnapshotter) SnapshotBind() (nativeFailingSnapshotter, error) {
+	return nativeFailingSnapshotter{}, errNativeSnapshot
+}
+
 func nativeRuntimeQuery(t *testing.T, card Cardinality) Query[int64] {
 	t.Helper()
 	q, err := Native(NativeStatement{Engine: "sqlite", SQL: "SELECT value"}, runtimeQuery(t).Projection(), card)
@@ -41,6 +49,17 @@ func TestNativeConstructorCopiesArgumentsAndValidatesInputs(t *testing.T) {
 			require.Equal(t, tc.code, planErr.Code)
 		})
 	}
+}
+
+func TestNativeConstructorPreservesBindSnapshotCause(t *testing.T) {
+	projection := runtimeQuery(t).Projection()
+	_, err := Native(NativeStatement{
+		Engine: "sqlite",
+		SQL:    "SELECT ?",
+		Args:   []NativeArgument{{Value: nativeFailingSnapshotter{}}},
+	}, projection, Many)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errNativeSnapshot)
 }
 
 func TestNativeEngineMismatchMakesZeroQueryCalls(t *testing.T) {
@@ -117,10 +136,10 @@ func TestNativeDeclaredAndConsumerCardinalityShareOneLifecycle(t *testing.T) {
 	}{
 		{"many zero", Many, Many, nil, nil, 0},
 		{"many two", Many, Many, [][]any{{int64(1)}, {int64(2)}}, nil, 2},
-		{"at most one two", AtMostOne, Many, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 1},
+		{"at most one two", AtMostOne, Many, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 2},
 		{"exactly one zero", ExactlyOne, Many, nil, ErrNoRows, 0},
-		{"one consumer two", Many, ExactlyOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 1},
-		{"maybe consumer two", Many, AtMostOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 1},
+		{"one consumer two", Many, ExactlyOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 2},
+		{"maybe consumer two", Many, AtMostOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := &runtimeFakeExecutor{rows: tc.rows, dialect: dialect.SQLite()}
@@ -149,6 +168,53 @@ func TestNativeDeclaredAndConsumerCardinalityShareOneLifecycle(t *testing.T) {
 			if tc.wantErr != nil {
 				require.True(t, errors.Is(raw.last.lastFinish, tc.wantErr))
 			}
+		})
+	}
+}
+
+func TestNativeRowsEarlyBreakChecksDeclaredCardinality(t *testing.T) {
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name     string
+		card     Cardinality
+		rows     [][]any
+		wantErr  error
+		wantRows int
+	}{
+		{"at most zero", AtMostOne, nil, nil, 0},
+		{"at most one", AtMostOne, [][]any{{int64(1)}}, nil, 1},
+		{"at most two", AtMostOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 0},
+		{"exactly zero", ExactlyOne, nil, ErrNoRows, 0},
+		{"exactly one", ExactlyOne, [][]any{{int64(1)}}, nil, 1},
+		{"exactly two", ExactlyOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := &runtimeFakeExecutor{rows: tc.rows, dialect: dialect.SQLite()}
+			executor, err := WithEngineProfile(raw, profile)
+			require.NoError(t, err)
+			sequence, err := Rows(t.Context(), executor, nativeRuntimeQuery(t, tc.card))
+			require.NoError(t, err)
+			var values []int64
+			var gotErr error
+			for value, rowErr := range sequence {
+				if rowErr != nil {
+					gotErr = rowErr
+					break
+				}
+				values = append(values, value)
+				break
+			}
+			if tc.wantErr == nil {
+				require.NoError(t, gotErr)
+			} else {
+				require.ErrorIs(t, gotErr, tc.wantErr)
+			}
+			require.Len(t, values, tc.wantRows)
+			require.NotNil(t, raw.last)
+			require.Equal(t, 1, raw.last.finished)
+			require.Equal(t, 1, raw.last.closed)
+			require.Equal(t, tc.wantErr, raw.last.lastFinish)
 		})
 	}
 }

@@ -59,7 +59,9 @@ func Native[R any](statement NativeStatement, projection Projection[R], cardinal
 		}
 		snapshot, copier, err := adoptBind(arg.Value, true)
 		if err != nil {
-			return Query[R]{}, planError("unsnapshotable_bind", fmt.Sprintf("native.args[%d]", i), err.Error())
+			result := planError("unsnapshotable_bind", fmt.Sprintf("native.args[%d]", i), err.Error())
+			result.cause = err
+			return Query[R]{}, result
 		}
 		args[i] = bindToken{id: bindID(atomic.AddUint64(&nextBindID, 1)), value: snapshot, codec: arg.Codec, copy: copier}
 	}

@@ -244,6 +244,59 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 		if consumer > policy {
 			policy = consumer
 		}
+		if policy != Many {
+			values := make([]R, 0, 2)
+			for len(values) < 2 && owned.Next() {
+				var value R
+				if err := decoder.DecodeRow(source, &value); err != nil {
+					finished := owned.Finish(err, true)
+					yield(zero, finished)
+					return
+				}
+				owned.RecordRow()
+				values = append(values, value)
+			}
+			if err := owned.Err(); err != nil {
+				finished := owned.Finish(err, false)
+				yield(zero, finished)
+				return
+			}
+			if len(values) > 1 {
+				finished := owned.Finish(ErrMultipleRows, true)
+				yield(zero, finished)
+				return
+			}
+			if policy == ExactlyOne && len(values) == 0 {
+				cause := prepared.emptyErr
+				if cause == nil {
+					cause = ErrNoRows
+				}
+				finished := owned.Finish(cause, false)
+				yield(zero, finished)
+				return
+			}
+			terminal, _ := ctx.Value(rowTerminalKey{}).(*rowTerminal)
+			for _, value := range values {
+				if terminal != nil {
+					terminal.cause = nil
+				}
+				if !yield(value, nil) {
+					cause := error(nil)
+					if terminal != nil {
+						cause = terminal.cause
+					}
+					_ = owned.Finish(cause, true)
+					return
+				}
+			}
+			if terminal != nil {
+				terminal.cause = nil
+			}
+			if err := owned.Finish(nil, false); err != nil {
+				yield(zero, err)
+			}
+			return
+		}
 		count := 0
 		for owned.Next() {
 			var value R
