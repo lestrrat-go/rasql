@@ -299,7 +299,8 @@ func catalogScope(cfg config) catalogread.Scope {
 func queryInputs(queries []compilerir.QueryAnalysis) []compilerlock.QueryDigestInput {
 	out := make([]compilerlock.QueryDigestInput, 0, len(queries))
 	for _, q := range queries {
-		out = append(out, compilerlock.QueryDigestInput{ID: string(q.ID), SQL: compilerlock.SourceFile{Path: q.SQLPath, SHA256: q.SQLSHA256}, Operation: q.Operation, Cardinality: q.Cardinality})
+		record := compilerlock.QueryFromAnalysis(q)
+		out = append(out, compilerlock.QueryDigestInput{ID: string(q.ID), SQL: record.SQL, Operation: q.Operation, Parameters: record.Parameters, Results: record.Results, Cardinality: q.Cardinality})
 	}
 	return out
 }

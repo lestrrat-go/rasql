@@ -248,8 +248,8 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 			}
 			current.Operation = configured.Operation
 			current.Cardinality = configured.Cardinality
-			current.Parameters = configValueRecords(configured.Parameters)
-			current.Results = configValueRecords(configured.Results)
+			current.Parameters = configValueRecords(configured.Parameters, mappings)
+			current.Results = configValueRecords(configured.Results, mappings)
 		}
 		queries = append(queries, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: input, Operation: current.Operation, Parameters: current.Parameters, Results: current.Results, Cardinality: current.Cardinality})
 	}
@@ -294,14 +294,15 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	return groups, nil
 }
 
-func configValueRecords(values []compilerquery.ValueDeclaration) []compilerlock.ValueRecord {
+func configValueRecords(values []compilerquery.ValueDeclaration, mappings compilerir.MappingConfig) []compilerlock.ValueRecord {
 	if values == nil {
 		return nil
 	}
 	out := make([]compilerlock.ValueRecord, len(values))
 	for i, value := range values {
 		nullable := value.Nullable != nil && *value.Nullable
-		out[i] = compilerlock.ValueRecord{Name: value.Name, Scalar: value.Scalar, Nullable: nullable}
+		logicalKind, _, _ := compilerir.DeclaredQueryLogicalKind(value.Scalar, mappings)
+		out[i] = compilerlock.ValueRecord{Name: value.Name, Scalar: value.Scalar, Nullable: nullable, TypeCertainty: compilerir.CertaintyDeclared, NullabilityCertainty: compilerir.CertaintyDeclared, LogicalKind: logicalKind}
 	}
 	return out
 }
