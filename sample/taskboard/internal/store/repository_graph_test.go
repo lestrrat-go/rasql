@@ -129,7 +129,7 @@ func openFixture(t *testing.T, cancelStatement int) (Repository, rasql.Executor,
 	if err != nil {
 		t.Fatalf("discover PostgreSQL engine profile: %s", err)
 	}
-	observer := new(statementObserver)
+	var observer statementObserver
 	db, err = db.WithInvocationObservers(
 		rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}),
 		rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
@@ -167,7 +167,7 @@ func openFixture(t *testing.T, cancelStatement int) (Repository, rasql.Executor,
 	if err != nil {
 		t.Fatalf("observe fixture executor: %s", err)
 	}
-	return New(observed), observed, observer
+	return New(observed), observed, &observer
 }
 
 func seedFixture(t *testing.T, tx *sql.Tx) {

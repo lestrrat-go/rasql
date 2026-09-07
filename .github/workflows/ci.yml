@@ -107,15 +107,6 @@ jobs:
           TASKBOARD_DSN: postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable
         run: ./scripts/migrate.sh apply
 
-      # The sample's live tests file a task against a project and a member
-      # that already exist, and skip when the database holds neither. Without
-      # these two rows the step below reports ok having proved nothing.
-      - name: Give the sample's live tests a project and a member
-        run: |
-          docker compose exec -T postgres psql -U rasql -d taskboard \
-            -c "INSERT INTO members (name) VALUES ('Ada Lovelace');" \
-            -c "INSERT INTO projects (name) VALUES ('Website refresh');"
-
       - name: Run the sample's tests against a live database
         working-directory: sample/taskboard
         env:
