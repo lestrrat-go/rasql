@@ -1647,7 +1647,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 		if !ok {
 			continue
 		}
-		if relationship.Kind == schema.RelationshipHasMany {
+		if relationship.Kind == schema.RelationshipHasMany || relationship.Kind == schema.RelationshipHasOne {
 			method := goName(relationship.Name)
 			if !token.IsIdentifier(method) || reservedRelationshipMethod(method) {
 				continue
@@ -2823,8 +2823,14 @@ func writeHasOneRelationshipLoad(source *bytes.Buffer, relationship relationship
 	source.WriteString(child)
 	source.WriteString(") ")
 	source.WriteString(key)
-	source.WriteString(" { return row.")
-	source.WriteString(relationship.childField)
+	source.WriteString(" { ")
+	if relationship.childColumn.Nullable {
+		source.WriteString("return ")
+		writeNullableRelationshipKeyValue(source, relationship.childColumnTypes[0], relationship.childField)
+	} else {
+		source.WriteString("return row.")
+		source.WriteString(relationship.childField)
+	}
 	source.WriteString(" }, func(key ")
 	source.WriteString(key)
 	source.WriteString(") ([]any, bool) { return []any{key}, true }, options) }\n\n")
