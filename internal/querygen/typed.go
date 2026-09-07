@@ -44,6 +44,9 @@ func TypedGoSource(in TypedInput) ([]byte, error) {
 	if len(in.Results) == 0 {
 		return nil, fmt.Errorf("querygen: typed query %q has no results", in.Function)
 	}
+	if err := validateTypedResultFields(in.Function, in.Results); err != nil {
+		return nil, err
+	}
 	if in.Result == "" {
 		in.Result = in.Function + "Result"
 	}
@@ -97,6 +100,18 @@ func TypedGoSource(in TypedInput) ([]byte, error) {
 	writeArgs(&b, in.Parameters, in.ArgumentNames)
 	b.WriteString("}, projection, rasql.").WriteString(cardinality(in.Cardinality)).WriteString(")\n}\n")
 	return format.Source(b.Bytes())
+}
+
+func validateTypedResultFields(function string, values []TypedValue) error {
+	seen := make(map[string]string, len(values))
+	for _, value := range values {
+		field := exported(value.Go.Name)
+		if previous, exists := seen[field]; exists {
+			return fmt.Errorf("querygen: typed query %q result fields %q and %q normalize to %q", function, previous, value.Go.Name, field)
+		}
+		seen[field] = value.Go.Name
+	}
+	return nil
 }
 
 func writeResultBindings(b *sourceBuilder, in TypedInput) {

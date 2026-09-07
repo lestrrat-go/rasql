@@ -184,17 +184,27 @@ func validateCompactSymbols(object CompactObject, accessor, row string) error {
 			return nil
 		}
 		methods := make(map[string]string, len(shape.Fields)+3)
+		addMethod := func(name, source string) error {
+			if previous, exists := methods[name]; exists {
+				return fmt.Errorf("compact %s: %s method %q from %s collides with %s", object.Catalog.ID, receiver, name, source, previous)
+			}
+			methods[name] = source
+			return nil
+		}
 		for _, field := range shape.Fields {
 			name := exportedCompact(field.Name)
-			if previous, exists := methods[name]; exists {
-				return fmt.Errorf("compact %s: %s method %q from %s collides with %s", object.Catalog.ID, receiver, name, field.Name, previous)
+			if err := addMethod(name, field.Name); err != nil {
+				return err
 			}
-			methods[name] = field.Name
 			if column, ok := goColumnByName(object.Go, field.Name); ok && column.Nullable {
-				methods["Clear"+name] = field.Name
+				if err := addMethod("Clear"+name, field.Name); err != nil {
+					return err
+				}
 			}
 			if columnHasDefault(object.Table, field.Name) {
-				methods["Default"+name] = field.Name
+				if err := addMethod("Default"+name, field.Name); err != nil {
+					return err
+				}
 			}
 		}
 		if previous, exists := methods[terminal]; exists {

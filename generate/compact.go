@@ -475,7 +475,12 @@ func (s Store) planCompactContext(ctx context.Context) (Plan, error) {
 			return Plan{}, fmt.Errorf("generate: compact typed query[%d]: parse declarations: %w", index, err)
 		}
 		owner := fmt.Sprintf("query %q", query.Function)
+		queryDeclarations := make(map[string]struct{}, len(declarations))
 		for _, declaration := range declarations {
+			if _, duplicate := queryDeclarations[declaration]; duplicate {
+				return Plan{}, fmt.Errorf("generate: compact typed query[%d] declaration %q is emitted more than once", index, declaration)
+			}
+			queryDeclarations[declaration] = struct{}{}
 			if existing, exists := identifiers[declaration]; exists {
 				if !strings.Contains(existing, owner) {
 					return Plan{}, fmt.Errorf("generate: compact typed query[%d] declaration %q collides with %s", index, declaration, existing)

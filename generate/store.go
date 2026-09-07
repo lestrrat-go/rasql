@@ -639,6 +639,16 @@ func (s Store) planTypedQuery(dir string, q TypedQuery, filenames, identifiers m
 	if result == "" && q.Operation != "exec" {
 		result = q.Function + "Result"
 	}
+	queryNames := map[string]string{q.Function: "function"}
+	for label, name := range map[string]string{"result": result, "projection": q.Projection, "decoder": q.Decoder} {
+		if name == "" {
+			continue
+		}
+		if previous, exists := queryNames[name]; exists {
+			return File{}, fmt.Errorf("query %q %s %q collides with its %s declaration", q.Function, label, name, previous)
+		}
+		queryNames[name] = label
+	}
 	for _, name := range []string{result, q.Projection, q.Decoder} {
 		if name == "" {
 			continue

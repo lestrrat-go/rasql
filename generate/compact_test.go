@@ -291,6 +291,41 @@ func TestCompactPlanIncludesTypedQueries(t *testing.T) {
 	require.Len(t, found, 4)
 }
 
+func TestCompactPlanRejectsTypedQueryDeclarationCollision(t *testing.T) {
+	in := plainEmitterFixture(t)
+	in.Generation.Emitter = "compact"
+	in.Generation.Objects[0].Source = "FindBindings"
+	in.Generation.Objects[0].Row = "FindBindingsRow"
+	model, diagnostics := compilerir.BuildGo(in.Semantic, in.Generation)
+	require.Empty(t, diagnostics)
+	in.Go = model
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	store.Root, store.Dir = t.TempDir(), "generated"
+	store.TypedQueries = []generate.TypedQuery{{
+		Function: "Find", Output: "find_gen.go", Engine: "sqlite", SQL: "SELECT id FROM users", Operation: "select", Cardinality: "many",
+		Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}},
+	}}
+	_, err = store.Plan()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "FindBindings")
+}
+
+func TestCompactPlanRejectsTypedQuerySelfCollision(t *testing.T) {
+	in := plainEmitterFixture(t)
+	in.Generation.Emitter = "compact"
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	store.Root, store.Dir = t.TempDir(), "generated"
+	store.TypedQueries = []generate.TypedQuery{{
+		Function: "Same", Output: "same_gen.go", Engine: "sqlite", SQL: "SELECT id FROM users", Operation: "select", Cardinality: "many", Result: "Same",
+		Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}},
+	}}
+	_, err = store.Plan()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "collides with its function declaration")
+}
+
 func TestCompactManifestMapsRenamedMutationSymbols(t *testing.T) {
 	in := plainEmitterFixture(t)
 	in.Generation.Emitter = "compact"
@@ -318,16 +353,20 @@ func TestCompactManifestMapsRenamedMutationSymbols(t *testing.T) {
 
 func TestCompactRejectsGeneratedSymbolCollisions(t *testing.T) {
 	cases := []struct {
-		name, column, want string
+		name, want string
+		columns    []compilerir.PhysicalColumn
 	}{
-		{name: "scan row", column: "scan_row", want: "ScanRow"},
-		{name: "create plan", column: "plan", want: "Plan"},
-		{name: "patch where", column: "where", want: "Where"},
+		{name: "scan row", columns: []compilerir.PhysicalColumn{{Name: "scan_row", Ordinal: 1, LogicalKind: "text"}}, want: "ScanRow"},
+		{name: "create plan", columns: []compilerir.PhysicalColumn{{Name: "plan", Ordinal: 1, LogicalKind: "text"}}, want: "Plan"},
+		{name: "patch where", columns: []compilerir.PhysicalColumn{{Name: "where", Ordinal: 1, LogicalKind: "text"}}, want: "Where"},
+		{name: "reverse clear", columns: []compilerir.PhysicalColumn{{Name: "clear_name", Ordinal: 1, LogicalKind: "text"}, {Name: "name", Ordinal: 2, LogicalKind: "text", Nullable: true}}, want: "ClearName"},
+		{name: "reverse default", columns: []compilerir.PhysicalColumn{{Name: "default_name", Ordinal: 1, LogicalKind: "text", DefaultSQL: "'default'"}, {Name: "name", Ordinal: 2, LogicalKind: "text", DefaultSQL: "'default'"}}, want: "DefaultName"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
+			columns := append([]compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, test.columns...)
 			catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{
-				ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: test.column, Ordinal: 1, LogicalKind: "text"}},
+				ID: "users", Kind: "table", Name: "users", Columns: columns,
 				Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}},
 			}}}
 			semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)

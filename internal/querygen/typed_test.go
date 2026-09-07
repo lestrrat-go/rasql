@@ -33,3 +33,16 @@ func TestTypedGoSourceRejectsUnresolvedSchemaType(t *testing.T) {
 		t.Fatalf("expected unresolved type error, got %v", err)
 	}
 }
+
+func TestTypedGoSourceRejectsNormalizedResultFieldCollision(t *testing.T) {
+	_, err := TypedGoSource(TypedInput{
+		Package: "queries", Function: "Find", Engine: "sqlite", SQL: "SELECT a, b", Operation: "select", Cardinality: "many",
+		Results: []TypedValue{
+			{Go: compilerir.GoField{Name: "user_id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "user_id", LogicalKind: "integer"}},
+			{Go: compilerir.GoField{Name: "user-id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "user-id", LogicalKind: "integer"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "normalize to") {
+		t.Fatalf("expected normalized result field collision, got %v", err)
+	}
+}
