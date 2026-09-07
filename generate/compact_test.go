@@ -243,10 +243,14 @@ func main() {
 	t.Logf("compact build samples=%s median=%s", formatDurations(compactBuilds), medianDuration(compactBuilds))
 	t.Logf("legacy build samples=%s median=%s", formatDurations(legacyBuilds), medianDuration(legacyBuilds))
 	t.Logf("build median metrics compact=%s legacy=%s", formatBuildMetric(medianBuildMetrics(compactBuilds)), formatBuildMetric(medianBuildMetrics(legacyBuilds)))
-	wallRatio := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.wall.Seconds() })
-	cpuRatio := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.cpu.Seconds() })
-	rssRatio := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.rssKB) })
-	binaryRatio := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.binary) })
+	wallRatio, err := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.wall.Seconds() })
+	require.NoError(t, err)
+	cpuRatio, err := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.cpu.Seconds() })
+	require.NoError(t, err)
+	rssRatio, err := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.rssKB) })
+	require.NoError(t, err)
+	binaryRatio, err := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.binary) })
+	require.NoError(t, err)
 	t.Logf("build median ratios compact/legacy wall=%.2fx cpu=%.2fx rss=%.2fx binary=%.2fx", wallRatio, cpuRatio, rssRatio, binaryRatio)
 	for name, ratio := range map[string]float64{"wall": wallRatio, "cpu": cpuRatio, "rss": rssRatio, "binary": binaryRatio} {
 		require.LessOrEqual(t, ratio, 1.10, "%s median compact/legacy ratio", name)
@@ -312,6 +316,7 @@ type buildSample struct {
 
 func pairedBuildSamples(t *testing.T, root string, env []string) ([]buildSample, []buildSample) {
 	t.Helper()
+	warmStandalonePrograms(t, root, env)
 	const samples = 7
 	compact := make([]buildSample, 0, samples)
 	legacy := make([]buildSample, 0, samples)
@@ -325,6 +330,25 @@ func pairedBuildSamples(t *testing.T, root string, env []string) ([]buildSample,
 		}
 	}
 	return compact, legacy
+}
+
+func warmStandalonePrograms(t *testing.T, root string, env []string) {
+	t.Helper()
+	for _, program := range []struct {
+		label string
+		path  string
+	}{
+		{label: "compact", path: "./compactcmd"},
+		{label: "legacy", path: "./legacycmd"},
+	} {
+		output := filepath.Join(root, "warm-"+program.label)
+		command := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-o", output, program.path)
+		command.Dir = root
+		command.Env = env
+		buildOutput, err := command.CombinedOutput()
+		require.NoError(t, err, "%s", buildOutput)
+		require.NoError(t, os.Remove(output))
+	}
 }
 
 func buildSampleAt(t *testing.T, root string, env []string, label, packagePath string, index int) buildSample {
@@ -383,12 +407,16 @@ func formatBuildMetric(sample buildSample) string {
 	return fmt.Sprintf("wall=%s user=%s system=%s cpu=%s rss=%dKB binary=%d", sample.wall.Round(time.Millisecond), sample.user.Round(time.Millisecond), sample.system.Round(time.Millisecond), sample.cpu.Round(time.Millisecond), sample.rssKB, sample.binary)
 }
 
-func buildRatio(compact, legacy []buildSample, value func(buildSample) float64) float64 {
+func buildRatio(compact, legacy []buildSample, value func(buildSample) float64) (float64, error) {
 	legacyValue := medianMetric(legacy, value)
-	if legacyValue == 0 {
-		return 0
+	if legacyValue <= 0 {
+		return 0, fmt.Errorf("legacy median metric is nonpositive: %g", legacyValue)
 	}
-	return medianMetric(compact, value) / legacyValue
+	compactValue := medianMetric(compact, value)
+	if compactValue <= 0 {
+		return 0, fmt.Errorf("compact median metric is nonpositive: %g", compactValue)
+	}
+	return compactValue / legacyValue, nil
 }
 
 func medianDuration(values []buildSample) time.Duration {
