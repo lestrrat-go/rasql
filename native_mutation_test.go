@@ -8,23 +8,41 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
 
 type nativeMutationExecutor struct {
-	dialect dialect.Dialect
-	calls   atomic.Int64
-	last    stmt.Statement
+	dialect      dialect.Dialect
+	calls        atomic.Int64
+	last         stmt.Statement
+	err          error
+	result       sql.Result
+	returnNil    bool
+	honorContext bool
 }
 
 func (e *nativeMutationExecutor) Dialect() dialect.Dialect { return e.dialect }
 func (*nativeMutationExecutor) Query(context.Context, stmt.Statement) (ResultRows, error) {
 	return nil, errors.New("unexpected query")
 }
-func (e *nativeMutationExecutor) Exec(_ context.Context, statement stmt.Statement) (sql.Result, error) {
+func (e *nativeMutationExecutor) Exec(ctx context.Context, statement stmt.Statement) (sql.Result, error) {
 	e.calls.Add(1)
 	e.last = statement
+	if e.honorContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if e.err != nil {
+		return nil, e.err
+	}
+	if e.returnNil {
+		return nil, nil
+	}
+	if e.result != nil {
+		return e.result, nil
+	}
 	return nativeMutationResult(3), nil
 }
 
@@ -134,7 +152,13 @@ func nativeBatchPlan(t *testing.T) MutationPlan {
 
 func ordinaryBatchPlan(t *testing.T) MutationPlan {
 	t.Helper()
-	plan, err := NewStatementPlan(nil)
-	require.Error(t, err)
+	table, err := query.NewTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "name", Type: schema.TextType{}}}})
+	require.NoError(t, err)
+	statement, err := query.NewUpdate(table, query.Set(table.Column("name"), query.Bind("ordinary")))
+	require.NoError(t, err)
+	statement, err = statement.AllowAll()
+	require.NoError(t, err)
+	plan, err := NewStatementPlan(statement)
+	require.NoError(t, err)
 	return plan
 }
