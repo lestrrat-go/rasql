@@ -2254,6 +2254,10 @@ func writeRelationshipKeyValue(source *bytes.Buffer, relationship relationshipSp
 			source.WriteString("; return &value }()")
 			return
 		}
+		if strings.HasPrefix(key, "*") && !target && relationship.kind == schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
+			writeNullableRelationshipPointerKeyValue(source, relationship.childColumnTypes[0], fields[0])
+			return
+		}
 		if target && relationship.kind != schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
 			writeNullableRelationshipKeyValue(source, relationship.childColumnTypes[0], fields[0])
 			return
@@ -2277,6 +2281,10 @@ func writeRelationshipKeyValue(source *bytes.Buffer, relationship relationshipSp
 			source.WriteString(" { value := row.")
 			source.WriteString(fields[0])
 			source.WriteString("; return &value }()")
+			return
+		}
+		if strings.HasPrefix(key, "*") && !target && relationship.kind == schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
+			writeNullableRelationshipPointerKeyValue(source, relationship.childColumnTypes[0], fields[0])
 			return
 		}
 		if target && relationship.kind != schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
@@ -2373,6 +2381,26 @@ func writeNullableRelationshipKeyValue(source *bytes.Buffer, valueType, field st
 	source.WriteString(").(")
 	source.WriteString(valueType)
 	source.WriteString("); ok { return value }; return zero }()")
+}
+
+func writeNullableRelationshipPointerKeyValue(source *bytes.Buffer, valueType, field string) {
+	source.WriteString("func() *")
+	source.WriteString(valueType)
+	source.WriteString(" { nullable, ok := any(row.")
+	source.WriteString(field)
+	source.WriteString(").(rasql.NullableBindValue); if !ok { nullable, ok = any(&row.")
+	source.WriteString(field)
+	source.WriteString(").(rasql.NullableBindValue) }; if ok { value, valid := nullable.NullableBind(); if !valid { return nil }; typed, ok := value.(")
+	source.WriteString(valueType)
+	source.WriteString("); if ok { return &typed }; return nil }; if value, ok := any(row.")
+	source.WriteString(field)
+	source.WriteString(").(*")
+	source.WriteString(valueType)
+	source.WriteString("); ok { return value }; if value, ok := any(row.")
+	source.WriteString(field)
+	source.WriteString(").(")
+	source.WriteString(valueType)
+	source.WriteString("); ok { return &value }; return nil }()")
 }
 
 func writeGeneratedKeyValue(source *bytes.Buffer, relationship relationshipSpec, index int, field string, dereference bool) {
@@ -2872,8 +2900,14 @@ func writeNullableRelationshipLoad(source *bytes.Buffer, relationship relationsh
 		source.WriteString(child)
 		source.WriteString(") ")
 		source.WriteString(key)
-		source.WriteString(" { return row.")
-		source.WriteString(relationship.childField)
+		source.WriteString(" { ")
+		if relationship.childColumn.Nullable {
+			source.WriteString("return ")
+			writeNullableRelationshipPointerKeyValue(source, relationship.childColumnTypes[0], relationship.childField)
+		} else {
+			source.WriteString("return row.")
+			source.WriteString(relationship.childField)
+		}
 		source.WriteString(" }, func(key ")
 		source.WriteString(key)
 		source.WriteString(") ([]any, bool) { if key == nil { return nil, false }; return []any{*key}, true }, options) }\n\n")
@@ -2906,8 +2940,9 @@ func writeNullableRelationshipLoad(source *bytes.Buffer, relationship relationsh
 	source.WriteString(child)
 	source.WriteString(") ")
 	source.WriteString(key)
-	source.WriteString(" { return row.")
-	source.WriteString(relationship.childField)
+	source.WriteString(" { ")
+	source.WriteString("return ")
+	writeNullableRelationshipPointerKeyValue(source, relationship.childColumnTypes[0], relationship.childField)
 	source.WriteString(" }, func(row ")
 	source.WriteString(parent)
 	source.WriteString(") ")
