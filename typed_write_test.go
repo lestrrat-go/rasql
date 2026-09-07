@@ -246,6 +246,9 @@ func testInsertManyWithOptionsUsesDefaultsForEveryColumnForAllDialects(t *testin
 			rows, err := result.RowsAffected()
 			require.NoError(t, err)
 			require.EqualValues(t, 2, rows)
+			lastID, err := result.LastInsertId()
+			require.NoError(t, err)
+			require.EqualValues(t, 2, lastID)
 		})
 	}
 }

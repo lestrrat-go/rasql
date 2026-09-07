@@ -573,6 +573,27 @@ predicate, omit primary-key setters, and can execute through `ExecPatch` or
 read saved rows with `QueryPatchOne` and `QueryPatchAll` when the dialect
 supports `RETURNING`.
 
+Multiple generated create plans can be submitted through `NewBulkPlan` and
+`ExecBulkCreate`. The executor groups only consecutive plans with the same
+inserted-column mask, respects row and actual bind limits, and reports
+completed input ranges separately from a failed batch. Use `Atomic: true` when
+the bulk operation must own rollback or savepoint cleanup.
+
+<!-- INCLUDE(examples/typed_bulk_example_test.go#typedBulk) -->
+```go
+first := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
+second := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
+bulk, _ := rasql.NewBulkPlan(first, second)
+outcome, err := rasql.ExecBulkCreate(context.Background(), db, bulk, rasql.BulkOptions{MaxRows: 100})
+if err != nil {
+	fmt.Println(err)
+	return
+}
+fmt.Println(outcome.Completed)
+```
+source: [examples/typed_bulk_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/typed_bulk_example_test.go)
+<!-- END INCLUDE -->
+
 ## Next
 
 Each column may carry a `schema.GoBinding`. Its `Type` is used for non-null
