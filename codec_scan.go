@@ -67,7 +67,7 @@ func (s codecScanSource) Scan(destinations ...any) error {
 			continue
 		}
 		if err := scanValueAny(decodeDestination, value); err != nil {
-			return fmt.Errorf("decode column %q: %w", s.columns[i].Name, err)
+			return &DecodeError{Column: s.columns[i].Name, Codec: CodecID(s.columns[i].Codec), Err: err}
 		}
 		if nullable != nil {
 			nullable.nullableValid()

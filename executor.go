@@ -253,7 +253,9 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 					yield(zero, finished)
 					return
 				}
-				owned.RecordRow()
+				if len(values) == 0 {
+					owned.RecordRow()
+				}
 				values = append(values, value)
 			}
 			if err := owned.Err(); err != nil {

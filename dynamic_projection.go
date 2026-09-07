@@ -83,6 +83,9 @@ func dynamicFields(typ reflect.Type) ([]dynamicField, error) {
 			if field.PkgPath != "" && field.Tag.Get("rasql") == "" && field.Tag.Get("json") == "" {
 				continue
 			}
+			if field.PkgPath != "" {
+				return fmt.Errorf("field %s is unexported", field.Name)
+			}
 			name := field.Tag.Get("rasql")
 			if name != "" {
 				name = strings.Split(name, ",")[0]

@@ -594,6 +594,9 @@ func (q Query[R]) Offset(n int) (Query[R], error) {
 }
 
 func (q Query[R]) withPartitionLimit(partition []GroupKey, order []OrderTerm, limit int) (Query[R], error) {
+	if q.plan.native != nil {
+		return q, planError("unsupported_feature", "native", "native plans cannot be composed")
+	}
 	if len(partition) == 0 {
 		return q, planError("invalid_partition_limit", "partition", "must not be empty")
 	}

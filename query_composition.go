@@ -18,6 +18,9 @@ import (
 type TypedSource[R any] struct{ source Source }
 
 func Derive[R any](q Query[R], alias string) (TypedSource[R], error) {
+	if err := rejectNativeComposition(q); err != nil {
+		return TypedSource[R]{}, err
+	}
 	if err := q.Validate(); err != nil {
 		return TypedSource[R]{}, err
 	}
@@ -46,6 +49,9 @@ type TypedCTE[R any] struct {
 type CTEPlan interface{ ctePlan() query.CTE }
 
 func CTEOf[R any](name string, q Query[R]) (TypedCTE[R], error) {
+	if err := rejectNativeComposition(q); err != nil {
+		return TypedCTE[R]{}, err
+	}
 	if err := schema.ValidateSimpleIdentifier(name); err != nil {
 		return TypedCTE[R]{}, planError("invalid_cte", "name", err.Error())
 	}
@@ -77,6 +83,12 @@ func (c TypedCTE[R]) Source(alias string) (TypedSource[R], error) {
 }
 
 func Combine[R any](left Query[R], op CompoundOperator, right Query[R]) (Query[R], error) {
+	if err := rejectNativeComposition(left); err != nil {
+		return Query[R]{}, err
+	}
+	if err := rejectNativeComposition(right); err != nil {
+		return Query[R]{}, err
+	}
 	if err := left.Validate(); err != nil {
 		return Query[R]{}, err
 	}
@@ -123,6 +135,9 @@ func compoundOperand[R any](q Query[R]) (query.ResultQuery, error) {
 }
 
 func With[R any](q Query[R], ctes ...CTEPlan) (Query[R], error) {
+	if err := rejectNativeComposition(q); err != nil {
+		return Query[R]{}, err
+	}
 	if err := q.Validate(); err != nil {
 		return Query[R]{}, err
 	}
@@ -159,6 +174,9 @@ func With[R any](q Query[R], ctes ...CTEPlan) (Query[R], error) {
 }
 
 func CountQuery[R any](q Query[R], includePaging bool) Query[int64] {
+	if err := rejectNativeComposition(q); err != nil {
+		return Query[int64]{plan: QueryPlan{err: err}, projection: Projection[int64]{}}
+	}
 	result, err := resultQuery(q)
 	if err != nil {
 		return Query[int64]{plan: QueryPlan{err: err}, projection: Projection[int64]{}}
@@ -189,6 +207,13 @@ func CountQuery[R any](q Query[R], includePaging bool) Query[int64] {
 		plan.sources[0] = Source{ref: ref}
 	}
 	return Query[int64]{plan: plan, projection: projection}
+}
+
+func rejectNativeComposition[R any](q Query[R]) error {
+	if q.plan.native != nil {
+		return planError("unsupported_feature", "native", "native plans cannot be composed")
+	}
+	return nil
 }
 
 func sameResultSchema(left, right ResultSchema) bool {

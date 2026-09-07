@@ -114,13 +114,35 @@ func TestNativeCompositionRefusesEveryModifier(t *testing.T) {
 			require.Equal(t, "native", planErr.Path)
 		})
 	}
-	_, err := Derive(q, "d")
-	require.Error(t, err)
-	_, err = CTEOf("c", q)
-	require.Error(t, err)
-	_, err = Combine(q, UnionAll, q)
-	require.Error(t, err)
-	require.Error(t, CountQuery(q, false).Validate())
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"derive", func() error { _, err := Derive(q, "d"); return err }},
+		{"cte", func() error { _, err := CTEOf("c", q); return err }},
+		{"combine", func() error { _, err := Combine(q, UnionAll, q); return err }},
+		{"with", func() error { _, err := With(q); return err }},
+		{"count", func() error { return CountQuery(q, false).Validate() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var planErr *PlanError
+			err := tc.call()
+			require.ErrorAs(t, err, &planErr)
+			require.Equal(t, "unsupported_feature", planErr.Code)
+			require.Equal(t, "native", planErr.Path)
+		})
+	}
+}
+
+func TestNativePartitionLimitRefusesBeforeAdoption(t *testing.T) {
+	q := nativeRuntimeQuery(t, Many)
+	changed, err := q.withPartitionLimit([]GroupKey{Group(Value(1))}, []OrderTerm{AscExpr(Value(1))}, 2)
+	var planErr *PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "unsupported_feature", planErr.Code)
+	require.Equal(t, "native", planErr.Path)
+	require.NoError(t, q.Validate())
+	require.NoError(t, changed.Validate())
 }
 
 func TestNativeDeclaredAndConsumerCardinalityShareOneLifecycle(t *testing.T) {
@@ -136,10 +158,10 @@ func TestNativeDeclaredAndConsumerCardinalityShareOneLifecycle(t *testing.T) {
 	}{
 		{"many zero", Many, Many, nil, nil, 0},
 		{"many two", Many, Many, [][]any{{int64(1)}, {int64(2)}}, nil, 2},
-		{"at most one two", AtMostOne, Many, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 2},
+		{"at most one two", AtMostOne, Many, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 1},
 		{"exactly one zero", ExactlyOne, Many, nil, ErrNoRows, 0},
-		{"one consumer two", Many, ExactlyOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 2},
-		{"maybe consumer two", Many, AtMostOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 2},
+		{"one consumer two", Many, ExactlyOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 1},
+		{"maybe consumer two", Many, AtMostOne, [][]any{{int64(1)}, {int64(2)}}, ErrMultipleRows, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := &runtimeFakeExecutor{rows: tc.rows, dialect: dialect.SQLite()}

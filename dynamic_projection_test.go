@@ -258,9 +258,24 @@ func TestDynamicProjectionNullScannerDomainAndIncompatibleValues(t *testing.T) {
 		require.NoError(t, err)
 		rows := &dynamicProjectionRows{columns: []string{"code"}, values: [][]any{{int64(9)}}}
 		_, err = All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, textProjection, "SELECT 1"))
-		require.Error(t, err)
+		var decodeErr *DecodeError
+		require.ErrorAs(t, err, &decodeErr)
+		require.Equal(t, "code", decodeErr.Column)
+		require.Equal(t, CodecID(""), decodeErr.Codec)
 		require.Equal(t, 1, rows.closeCalls)
 	})
+}
+
+func TestDynamicProjectionRejectsTaggedUnexportedFields(t *testing.T) {
+	schemaValue, err := NewResultSchema(ResultColumn{Name: "code", Type: schema.TextType{}})
+	require.NoError(t, err)
+	_, err = DynamicProjection[struct {
+		code string `rasql:"code"`
+	}](schemaValue)
+	var planErr *PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "invalid_projection", planErr.Code)
+	require.Equal(t, "decoder", planErr.Path)
 }
 
 func TestDynamicProjectionReorderedColumnsUseBoundCodecPositions(t *testing.T) {
