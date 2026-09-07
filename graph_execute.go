@@ -17,6 +17,17 @@ func graphCodecs(executor Executor) CodecRegistry {
 	return builtinCodecs
 }
 
+func prepareGraphPlan[R, G any](executor Executor, plan GraphPlan[R, G]) (compiledQuery, error) {
+	var rootCompiled compiledQuery
+	if isNilExecutor(executor) || plan.node == nil {
+		return rootCompiled, planError("invalid_graph_plan", "graph", "executor and plan are required")
+	}
+	if err := graphValidate(plan.node, executor, &rootCompiled); err != nil {
+		return compiledQuery{}, err
+	}
+	return rootCompiled, nil
+}
+
 func graphValidate(node *graphPlanNode, executor Executor, rootCompiled *compiledQuery) error {
 	if node == nil {
 		return planError("invalid_graph_plan", "graph", "must not be zero")
@@ -195,11 +206,8 @@ func validateGraphKeys(node *graphPlanNode, executor Executor) error {
 }
 
 func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[R, G]) ([]G, error) {
-	if executor == nil || plan.node == nil {
-		return nil, planError("invalid_graph_plan", "graph", "executor and plan are required")
-	}
-	var rootCompiled compiledQuery
-	if err := graphValidate(plan.node, executor, &rootCompiled); err != nil {
+	rootCompiled, err := prepareGraphPlan(executor, plan)
+	if err != nil {
 		return nil, err
 	}
 	rootPrepared, err := plan.node.query.prepareCompiled(executor, rootCompiled)
@@ -227,21 +235,29 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 		finalErr = err
 		return nil, err
 	}
+	graphs, err := expandGraphRoots[R, G](callCtx, observed, plan.node, rootRows, &observedRows)
+	if err != nil {
+		finalErr = err
+		return nil, err
+	}
+	return graphs, nil
+}
+
+func expandGraphRoots[R, G any](ctx context.Context, executor Executor, node *graphPlanNode, rootRows []graphRow, rowCount *int64) ([]G, error) {
 	graphs := make([]G, len(rootRows))
 	queue := make([]graphWork, len(rootRows))
 	deferred := make([]graphDeferred, 0)
 	cache := make(map[graphCacheKey]graphCacheEntry)
 	for i, row := range rootRows {
 		graphs[i] = row.graph.(G)
-		queue[i] = graphWork{node: plan.node, parent: &graphs[i], row: row.row}
+		queue[i] = graphWork{node: node, parent: &graphs[i], row: row.row}
 	}
 	for len(queue) > 0 {
 		current := queue
 		queue = nil
 		for _, edge := range planEdges(current) {
-			next, err := executeGraphEdge(callCtx, observed, edge.edge, edge.parents, &observedRows, &deferred, cache)
+			next, err := executeGraphEdge(ctx, executor, edge.edge, edge.parents, rowCount, &deferred, cache)
 			if err != nil {
-				finalErr = err
 				return nil, err
 			}
 			queue = append(queue, next...)

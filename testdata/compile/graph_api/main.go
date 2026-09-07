@@ -113,10 +113,15 @@ func main() {
 	tasksEdge, _ := rasql.HasMany("tasks", uk, tk, tasksPlan, rasql.EdgeOptions{}, func(g *userGraph, v rasql.LoadedMany[taskGraph]) { g.Tasks = v })
 	ownerEdge, _ := rasql.HasOne("owner", uk, tk, tasksPlan, rasql.EdgeOptions{}, func(g *userGraph, v rasql.LoadedOne[taskGraph]) { g.Owner = v })
 	labelsEdge, _ := rasql.ManyThrough("labels", uk, ju, jl, lk, jr.Source(), labelsPlan, rasql.EdgeOptions{}, func(g *userGraph, v rasql.LoadedMany[labelGraph]) { g.Labels = v })
-	_, _ = rasql.NewGraphPlan(up, func(r userRow) userGraph { return userGraph{} }, tasksEdge, ownerEdge, labelsEdge)
+	userPlan, _ := rasql.NewGraphPlan(up, func(r userRow) userGraph { return userGraph{} }, tasksEdge, ownerEdge, labelsEdge)
+	pageKey := rasql.AscKey(uid.Expr(), func(r userRow) int64 { return r.ID })
+	pageSpec, _ := rasql.NewPageSpec([]rasql.PageKey[userRow]{pageKey}, pageKey)
 	_, _ = rasql.HasMany("reports", mk, ek, employeesPlan, rasql.EdgeOptions{}, func(g *employeeGraph, v rasql.LoadedMany[employeeGraph]) { g.Reports = v })
 	var executor rasql.Executor
 	_, _ = rasql.LoadGraph(context.Background(), executor, employeesPlan)
+	var page rasql.Page[userGraph]
+	page, _ = rasql.PageGraphAfter(context.Background(), executor, userPlan, pageSpec, rasql.DefaultPagePolicy, rasql.PageRequest{})
+	_ = page
 	var _ rasql.Executor = compileExecutor{}
 }
 

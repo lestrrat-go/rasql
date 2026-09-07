@@ -3,11 +3,14 @@ package rasql
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
@@ -75,16 +78,134 @@ type pageCountingExecutor struct {
 	compiler   *querycompile.Compiler
 	statements atomic.Int64
 	rows       atomic.Int64
+	queries    []stmt.Statement
 }
 
 func (e *pageCountingExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
 func (e *pageCountingExecutor) Query(ctx context.Context, s stmt.Statement) (ResultRows, error) {
+	e.queries = append(e.queries, s)
 	rows, err := e.Executor.Query(ctx, s)
 	if err != nil {
 		return nil, err
 	}
 	e.statements.Add(1)
 	return &pageCountingRows{ResultRows: rows, rows: &e.rows}, nil
+}
+
+func TestPageGraphAfterSQLiteUsesOneRootReadAndRetainedRoots(t *testing.T) {
+	base, rootQuery, rootKey, taskKey, _, _, _, _, _, _, _, tasks, _, _ := pageFixture(t)
+	provider, ok := base.(compilerProvider)
+	require.True(t, ok)
+	executor := &pageCountingExecutor{Executor: base, compiler: provider.queryCompiler()}
+	rootExpr := Expr[int64]{node: rootQuery.plan.projection[0].expression, source: rootQuery.plan.projection[0].source}
+	rootQuery = rootQuery.Where(Predicate{node: query.LessThan(rootExpr.node, Value(int64(4)).node)})
+	rootGraphEdge, err := HasMany("tasks", rootKey, taskKey, tasks, EdgeOptions{BindLimit: 1000}, func(parent *pageRootGraph, loaded LoadedMany[pageTaskGraph]) {
+		parent.Tasks = loaded
+	})
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(rootQuery, func(row pageParentRow) pageRootGraph { return pageRootGraph{ID: row.ID} }, rootGraphEdge)
+	require.NoError(t, err)
+	rootPageKey := AscKey(rootExpr, func(row pageParentRow) int64 { return row.ID })
+	spec, err := NewPageSpec([]PageKey[pageParentRow]{rootPageKey}, rootPageKey)
+	require.NoError(t, err)
+
+	first, err := PageGraphAfter(t.Context(), executor, plan, spec, PagePolicy{DefaultLimit: 2, MaxLimit: 2}, PageRequest{Limit: 2})
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2}, []int64{first.Values[0].ID, first.Values[1].ID})
+	require.True(t, first.HasMore)
+	require.NotEmpty(t, first.Next)
+	require.Len(t, executor.queries, 2)
+	require.Equal(t, int64(3), executor.rows.Load()-int64(len(first.Values[0].Tasks.Values))-int64(len(first.Values[1].Tasks.Values)))
+	for _, graph := range first.Values {
+		require.NotEmpty(t, graph.Tasks.Values)
+		for _, task := range graph.Tasks.Values {
+			require.LessOrEqual(t, task.ID, int64(4))
+		}
+	}
+	childArgs := executor.queries[1].Args()
+	require.Contains(t, childArgs, int64(1))
+	require.Contains(t, childArgs, int64(2))
+	require.NotContains(t, childArgs, int64(3))
+
+	second, err := PageGraphAfter(t.Context(), executor, plan, spec, PagePolicy{DefaultLimit: 2, MaxLimit: 2}, PageRequest{Limit: 2, After: first.Next})
+	require.NoError(t, err)
+	require.Equal(t, []int64{3}, []int64{second.Values[0].ID})
+	require.False(t, second.HasMore)
+	require.Len(t, executor.queries, 4)
+	require.Contains(t, executor.queries[3].Args(), int64(3))
+
+	queryCount := len(executor.queries)
+	_, err = PageGraphAfter(t.Context(), executor, plan, spec, PagePolicy{DefaultLimit: 2, MaxLimit: 2}, PageRequest{Limit: 2, After: Cursor("invalid")})
+	require.ErrorIs(t, err, ErrInvalidCursor)
+	require.Len(t, executor.queries, queryCount)
+
+	extractErr := errors.New("page key extraction")
+	badKey := &pageKey[pageParentRow]{term: rootQuery.plan.order[0], direction: PageAscending, extract: func(pageParentRow) (bool, any, error) {
+		return false, nil, extractErr
+	}}
+	badSpec, err := NewPageSpec([]PageKey[pageParentRow]{badKey}, badKey)
+	require.NoError(t, err)
+	_, err = PageGraphAfter(t.Context(), executor, plan, badSpec, PagePolicy{DefaultLimit: 2, MaxLimit: 2}, PageRequest{Limit: 2})
+	require.ErrorIs(t, err, extractErr)
+	require.Len(t, executor.queries, queryCount+1)
+}
+
+func TestPageGraphAfterEmitsOneLogicalGraphEventWithLookaheadRows(t *testing.T) {
+	base, rootQuery, rootKey, taskKey, _, _, _, _, _, _, _, tasks, _, _ := pageFixture(t)
+	provider, ok := base.(compilerProvider)
+	require.True(t, ok)
+	counting := &pageCountingExecutor{Executor: base, compiler: provider.queryCompiler()}
+	var mapped atomic.Int64
+	rootGraphEdge, err := HasMany("tasks", rootKey, taskKey, tasks, EdgeOptions{BindLimit: 1000}, func(parent *pageRootGraph, loaded LoadedMany[pageTaskGraph]) {
+		parent.Tasks = loaded
+	})
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(rootQuery, func(row pageParentRow) pageRootGraph {
+		mapped.Add(1)
+		return pageRootGraph{ID: row.ID}
+	}, rootGraphEdge)
+	require.NoError(t, err)
+	rootExpr := Expr[int64]{node: rootQuery.plan.projection[0].expression, source: rootQuery.plan.projection[0].source}
+	pageKey := AscKey(rootExpr, func(row pageParentRow) int64 { return row.ID })
+	spec, err := NewPageSpec([]PageKey[pageParentRow]{pageKey}, pageKey)
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	var events []Event
+	observed, err := WithEventObservers(counting, ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) {}), EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+		return ctx, EventCompletionFunc(func(_ context.Context, terminal Event) error {
+			mu.Lock()
+			events = append(events, terminal)
+			mu.Unlock()
+			return nil
+		})
+	}))
+	require.NoError(t, err)
+	page, err := PageGraphAfter(t.Context(), observed, plan, spec, PagePolicy{DefaultLimit: 2, MaxLimit: 2}, PageRequest{Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, page.Values, 2)
+	require.Equal(t, int64(2), mapped.Load())
+
+	mu.Lock()
+	defer mu.Unlock()
+	var graphStarts, graphTerminals int
+	for _, event := range events {
+		if event.Kind != EventGraph {
+			continue
+		}
+		if event.Phase == EventStart {
+			graphStarts++
+		}
+		if event.Phase == EventTerminal {
+			graphTerminals++
+			require.Equal(t, int64(7), event.Rows)
+		}
+	}
+	require.Equal(t, 1, graphStarts)
+	require.Equal(t, 1, graphTerminals)
 }
 
 type pageCountingRows struct {
