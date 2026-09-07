@@ -62,7 +62,11 @@ type graphCacheChildRow struct {
 	ID      int64
 	Parent  int64
 	Rank    int64
-	Payload *[]byte
+	Payload []byte
+}
+type graphCacheJunctionRow struct {
+	Parent int64
+	Child  int64
 }
 
 type graphCacheParent struct {
@@ -92,12 +96,7 @@ type graphCacheChildDecoder struct {
 func (d graphCacheChildDecoder) ResultSchema() ResultSchema { return d.schema }
 func (graphCacheChildDecoder) Presence() []Presence         { return nil }
 func (d graphCacheChildDecoder) DecodeRow(source ScanSource, value *graphCacheChildRow) error {
-	var payload []byte
-	if err := source.Scan(&value.ID, &value.Parent, &value.Rank, &payload); err != nil {
-		return err
-	}
-	value.Payload = &payload
-	return nil
+	return source.Scan(&value.ID, &value.Parent, &value.Rank, &value.Payload)
 }
 
 type graphCacheExecutor struct {
@@ -131,10 +130,14 @@ type graphCacheFixture struct {
 	executor     *graphCacheExecutor
 	parentSource Source
 	childSource  Source
+	junction     Source
 	parentQuery  Query[graphCacheParentRow]
 	childQuery   Query[graphCacheChildRow]
 	parentKey    GraphKey[graphCacheParentRow]
 	childKey     GraphKey[graphCacheChildRow]
+	childIDKey   GraphKey[graphCacheChildRow]
+	junctionKey  GraphKey[graphCacheJunctionRow]
+	throughKey   GraphKey[graphCacheJunctionRow]
 	parentID     Expr[int64]
 	childID      Expr[int64]
 	childParent  Expr[int64]
@@ -150,8 +153,10 @@ func graphCacheFixtureFor(t *testing.T) graphCacheFixture {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	_, err = database.Exec(`CREATE TABLE graph_cache_parents (id INTEGER PRIMARY KEY);
 CREATE TABLE graph_cache_children (id INTEGER PRIMARY KEY, parent INTEGER NOT NULL, rank INTEGER NOT NULL, payload BLOB NOT NULL);
+CREATE TABLE graph_cache_junction (parent INTEGER NOT NULL, child INTEGER NOT NULL);
 INSERT INTO graph_cache_parents VALUES (1), (2);
-INSERT INTO graph_cache_children VALUES (11, 1, 0, X'61'), (12, 1, 1, X'62'), (21, 2, 0, X'63'), (22, 2, 1, X'64')`)
+INSERT INTO graph_cache_children VALUES (11, 1, 0, X'61'), (12, 1, 1, X'62'), (21, 2, 0, X'63'), (22, 2, 1, X'64');
+INSERT INTO graph_cache_junction VALUES (1, 11), (2, 11)`)
 	require.NoError(t, err)
 	db, err := New(database, dialect.SQLite())
 	require.NoError(t, err)
@@ -175,6 +180,11 @@ INSERT INTO graph_cache_children VALUES (11, 1, 0, X'61'), (12, 1, 1, X'62'), (2
 		},
 	}), "c")
 	require.NoError(t, err)
+	junction, err := SourceOf(MustReadTableOf[graphCacheJunctionRow](schema.TableDef{
+		Name:    "graph_cache_junction",
+		Columns: []schema.ColumnDef{{Name: "parent", Type: schema.IntegerType{}}, {Name: "child", Type: schema.IntegerType{}}},
+	}), "j")
+	require.NoError(t, err)
 	parentRelation := TypedRelation[graphCacheParentRow]{source: parents.Source()}
 	childRelation := TypedRelation[graphCacheChildRow]{source: children.Source()}
 	parentID, err := BindColumn[graphCacheParentRow, int64](parentRelation, "id", "")
@@ -186,6 +196,11 @@ INSERT INTO graph_cache_children VALUES (11, 1, 0, X'61'), (12, 1, 1, X'62'), (2
 	childRank, err := BindColumn[graphCacheChildRow, int64](childRelation, "rank", "")
 	require.NoError(t, err)
 	childPayload, err := BindColumn[graphCacheChildRow, []byte](childRelation, "payload", "")
+	require.NoError(t, err)
+	junctionRelation := TypedRelation[graphCacheJunctionRow]{source: junction.Source()}
+	junctionParent, err := BindColumn[graphCacheJunctionRow, int64](junctionRelation, "parent", "")
+	require.NoError(t, err)
+	junctionChild, err := BindColumn[graphCacheJunctionRow, int64](junctionRelation, "child", "")
 	require.NoError(t, err)
 	parentSchema, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	require.NoError(t, err)
@@ -209,9 +224,21 @@ INSERT INTO graph_cache_children VALUES (11, 1, 0, X'61'), (12, 1, 1, X'62'), (2
 	childQuery := Select(children.Source(), childProjection).OrderBy(AscExpr(childRank.Expr()), AscExpr(childID.Expr()))
 	parentKey, err := NewGraphKey(KeyPart(parentID, func(row graphCacheParentRow) int64 { return row.ID }))
 	require.NoError(t, err)
-	childKey, err := NewGraphKey(KeyPart(childParent, func(row graphCacheChildRow) int64 { return row.Parent }))
+	childKey := graphCacheDirectKey(childParent, func(row graphCacheChildRow) int64 { return row.Parent })
+	childIDKey := graphCacheDirectKey(childID, func(row graphCacheChildRow) int64 { return row.ID })
+	junctionKey, err := NewGraphKey(KeyPart(junctionParent, func(row graphCacheJunctionRow) int64 { return row.Parent }))
 	require.NoError(t, err)
-	return graphCacheFixture{executor: executor, parentSource: parents.Source(), childSource: children.Source(), parentQuery: parentQuery, childQuery: childQuery, parentKey: parentKey, childKey: childKey, parentID: parentID.Expr(), childID: childID.Expr(), childParent: childParent.Expr(), childRank: childRank.Expr(), childPayload: childPayload.Expr()}
+	throughKey, err := NewGraphKey(KeyPart(junctionChild, func(row graphCacheJunctionRow) int64 { return row.Child }))
+	require.NoError(t, err)
+	return graphCacheFixture{executor: executor, parentSource: parents.Source(), childSource: children.Source(), junction: junction.Source(), parentQuery: parentQuery, childQuery: childQuery, parentKey: parentKey, childKey: childKey, childIDKey: childIDKey, junctionKey: junctionKey, throughKey: throughKey, parentID: parentID.Expr(), childID: childID.Expr(), childParent: childParent.Expr(), childRank: childRank.Expr(), childPayload: childPayload.Expr()}
+}
+
+func graphCacheDirectKey[R any](column Column[R, int64], extract func(R) int64) GraphKey[R] {
+	return GraphKey[R]{key: &graphKeySpec{parts: []*graphKeyPartSpec{{
+		column: column.ref, codec: column.codec, typ: reflect.TypeOf(int64(0)),
+		extract:    func(row any) (any, bool) { return extract(row.(R)), true },
+		columnType: graphColumnType(column.ref), source: column.ref.Source().QualifiedName(),
+	}}}}
 }
 
 func graphCacheChildQuery(t *testing.T, fixture graphCacheFixture, rank *int64, mode string, codec string) Query[graphCacheChildRow] {
@@ -232,7 +259,7 @@ func graphCacheChildPlan(t *testing.T, query Query[graphCacheChildRow], marker s
 	t.Helper()
 	plan, err := NewGraphPlan(query, func(row graphCacheChildRow) graphCacheChild {
 		mapped.Add(1)
-		return graphCacheChild{ID: row.ID, Rank: row.Rank, Payload: *row.Payload, Marker: marker}
+		return graphCacheChild{ID: row.ID, Rank: row.Rank, Payload: row.Payload, Marker: marker}
 	})
 	require.NoError(t, err)
 	return plan
@@ -349,6 +376,34 @@ func TestGraphSQLiteCacheDoesNotReuseMappedValuesOrBytes(t *testing.T) {
 	require.Len(t, values[0].Second.Values, 2)
 	values[0].First.Values[0].Payload[0] = 'z'
 	require.Equal(t, byte('a'), values[0].Second.Values[0].Payload[0])
+}
+
+func TestGraphSQLiteManyThroughSharedTargetClonesDirectBytesPerAttachment(t *testing.T) {
+	fixture := graphCacheFixtureFor(t)
+	var mapped atomic.Int64
+	childPlan, err := NewGraphPlan(fixture.childQuery, func(row graphCacheChildRow) graphCacheChild {
+		mapped.Add(1)
+		return graphCacheChild{ID: row.ID, Rank: row.Rank, Payload: row.Payload}
+	})
+	require.NoError(t, err)
+	type graph struct{ Children LoadedMany[graphCacheChild] }
+	edge, err := ManyThrough("children", fixture.parentKey, fixture.junctionKey, fixture.throughKey, fixture.childIDKey, fixture.junction, childPlan, EdgeOptions{}, func(parent *graph, loaded LoadedMany[graphCacheChild]) {
+		parent.Children = loaded
+	})
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(fixture.parentQuery, func(graphCacheParentRow) graph { return graph{} }, edge)
+	require.NoError(t, err)
+	values, err := LoadGraph(t.Context(), fixture.executor, plan)
+	require.NoError(t, err)
+	require.Len(t, values, 2)
+	require.Equal(t, int64(1), fixture.executor.statements.Load())
+	require.Equal(t, int64(2), mapped.Load())
+	for _, value := range values {
+		require.Len(t, value.Children.Values, 1)
+		require.Equal(t, int64(11), value.Children.Values[0].ID)
+	}
+	values[0].Children.Values[0].Payload[0] = 'z'
+	require.Equal(t, byte('a'), values[1].Children.Values[0].Payload[0])
 }
 
 func TestGraphSQLiteLegacyZeroIDFixedBindRunsWithoutCacheReuse(t *testing.T) {
