@@ -30,7 +30,7 @@ The two are not exclusive. The typed builder takes `query` expressions in its `W
 
 ## Where rasql/dynamic sits
 
-`rasql/dynamic` opens a database and reads rows for a table that has no Go row type. It offers the same fluent shape as the typed builder, names its columns as strings, and yields `dynamic.Row` values instead of decoding. Use it when the column names arrive as data, and see [Dynamic rows](core/05-dynamic.md) for its methods. It belongs to the core layer, since a caller reaches it without generating anything.
+`rasql/dynamic` opens a database and reads rows for a table that has no Go row type. It offers the same fluent shape as the typed builder, names its columns as strings, and yields `dynamic.Row` values instead of decoding. `QueryResult` adds ordered headers and indexed values for exporters that do not know column names in advance. Use it when the column names arrive as data, and see [Dynamic rows](core/05-dynamic.md) for its methods. It belongs to the core layer, since a caller reaches it without generating anything.
 
 ## Next
 

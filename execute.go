@@ -36,11 +36,16 @@ func QueryRenderedAll[T any](ctx context.Context, db DB, s stmt.Statement) ([]T,
 // [ErrMultipleRows] when more than one row is returned.
 func QueryRenderedOne[T any](ctx context.Context, db DB, s stmt.Statement) (T, error) {
 	var zero T
-	rows, err := QueryRendered[T](ctx, db, s)
+	if err := db.ValidateStatement(s); err != nil {
+		return zero, err
+	}
+	rows, finish := scanTypedRenderedOwned(ctx, db, s, scanTypedRows[T], false)
+	value, err := exactlyOne(rows)
+	finish(err)
 	if err != nil {
 		return zero, err
 	}
-	return exactlyOne(rows)
+	return value, nil
 }
 
 // Exec renders and executes a write statement.

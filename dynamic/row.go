@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"iter"
 
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/internal/rowvalue"
 )
 
@@ -20,6 +21,15 @@ import (
 // costs one slice of values plus a lookup through the header's index, rather
 // than a map[string]any allocated fresh for every row.
 type Row = rowvalue.Row
+
+// Header describes the immutable ordered columns of one result.
+type Header = rowvalue.Header
+
+// Result owns one lazily opened dynamic result cursor.
+type Result = rowvalue.Result
+
+// ErrConcurrentUse reports overlapping use of one Result cursor operation.
+var ErrConcurrentUse = rowvalue.ErrConcurrentUse
 
 // NewRow validates column names and values and returns an independent row value.
 func NewRow(names []string, values []any) (Row, error) {
@@ -66,5 +76,43 @@ func Decode[T any](r Row) (T, error) {
 // The sequence is single-use. Ranging over it a second time yields nothing,
 // because the underlying rows are already closed.
 func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
-	return rowvalue.Scan(rows)
+	return ScanResult(rows).Rows()
+}
+
+// ScanResult takes ownership of rows and exposes its ordered metadata.
+func ScanResult(rows *sql.Rows) *Result {
+	return rowvalue.ScanResult(rows)
+}
+
+type rowAccounting interface {
+	RecordRow()
+	Finish(error, bool) error
+}
+
+func scanSource(source exec.RowSource, autoFinish bool) iter.Seq2[Row, error] {
+	return func(yield func(Row, error) bool) {
+		owner, _ := source.(rowAccounting)
+		if autoFinish {
+			defer func() {
+				if owner != nil {
+					_ = owner.Finish(nil, true)
+				}
+			}()
+		}
+		for value, err := range rowvalue.ScanSource(source, false) {
+			if err != nil {
+				if owner != nil {
+					_ = owner.Finish(err, false)
+				}
+				yield(Row{}, err)
+				return
+			}
+			if owner != nil {
+				owner.RecordRow()
+			}
+			if !yield(value, nil) {
+				return
+			}
+		}
+	}
 }

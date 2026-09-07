@@ -167,6 +167,12 @@ SQLite's own introspection cannot report `Match` or `Deferrable` through a PRAGM
 
 `TableDef.Validate` accepts an `ExclusionDef`, but `render.CreateTable` and the migrate diff-live path refuse to build DDL for one, returning a `*render.UnsupportedExclusionConstraintError` that names the constraint.
 
+## Column collations
+
+`ColumnDef.Collation` records a column's explicit collation name exactly as the parser or catalog reports it, without SQL quote delimiters. Its empty value means no explicit collation was declared. SQLite inspection preserves this field, and rendering places it immediately after the column type.
+
+SQLite dump publishes only the built-in `BINARY`, `NOCASE`, and `RTRIM` collations, compared case-insensitively. It refuses a table using any other explicit collation because the dump cannot carry the application's collation implementation.
+
 ## Generated columns
 
 `ColumnDef.GeneratedExpression` and `ColumnDef.GeneratedStorage` describe a generated column: one whose value the database computes from an expression over other columns, rather than one an `INSERT` or `UPDATE` can write to directly. `inspect.Table` records both on all three engines. A SQLite column that is genuinely hidden, the kind a virtual table module declares, is a different fact, `ColumnDef.Hidden`: see [SQLite virtual tables](#sqlite-virtual-tables).
@@ -186,3 +192,10 @@ A generated column changes nothing about code generation: `rasqlgen` still emits
 [Schemas](01-schema.md) covers the descriptor an application writes itself.
 [Migrations](07-migrations.md) covers the `diff-live` command that compares a
 live table with a desired schema.
+# Tables and views
+
+`Inspector.TableNames` continues to enumerate base tables. Use
+`Inspector.ObjectNames` and `Inspector.Object` to enumerate and inspect tables
+and views. Catalog sweeps exclude views unless `catalog.Options.IncludeViews`
+is true. Inspected views default to `schema.OperationRead`; writable view
+operations require explicit authoritative metadata.

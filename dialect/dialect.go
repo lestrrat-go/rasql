@@ -1,8 +1,11 @@
-// Package dialect defines SQL rendering rules for supported databases.
+// Package dialect defines SQL rendering rules for supported databases. A
+// dialect may optionally implement CompilerProvider to extend pagination and
+// expression rendering through the common renderer emitter.
 package dialect
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -66,6 +69,17 @@ const (
 	// — MATCH (cols) AGAINST (expr), not a binary operator — while
 	// PostgreSQL has neither.
 	CapabilityMatchOperator
+	// CapabilityAggregateFilter reports support for aggregate FILTER (WHERE ...).
+	CapabilityAggregateFilter
+	CapabilitySelectForUpdate
+	CapabilitySelectForShare
+	CapabilitySelectLockOf
+	CapabilitySelectLockNoWait
+	CapabilitySelectLockSkipLocked
+	CapabilityUpsertConflictWhere
+	CapabilityUpsertUpdateWhere
+	// CapabilitySavepoint reports whether the dialect supports transactional savepoints.
+	CapabilitySavepoint
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -96,6 +110,22 @@ type Dialect interface {
 	Supports(Capability) bool
 }
 
+// IdentifierComparer is an optional dialect extension for identifier
+// resolution. Dialect implementations do not need to implement it.
+type IdentifierComparer interface {
+	IdentifiersEqual(left, right string) bool
+}
+
+// IdentifiersEqual compares identifiers using the dialect's resolution rule
+// when it provides one, and exact comparison otherwise.
+func IdentifiersEqual(d Dialect, left, right string) bool {
+	comparer, ok := d.(IdentifierComparer)
+	if ok {
+		return comparer.IdentifiersEqual(left, right)
+	}
+	return left == right
+}
+
 // PostgreSQL returns the PostgreSQL dialect.
 func PostgreSQL() Dialect {
 	return builtin{
@@ -103,7 +133,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex | CapabilityAggregateFilter | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere | CapabilitySavepoint,
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
@@ -133,7 +163,7 @@ func MySQL() Dialect {
 		quote:        '`',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertDuplicateKey,
-		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget,
+		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked | CapabilitySavepoint,
 		decimalName:  "DECIMAL",
 		maxPrecision: 65,
 		maxScale:     30,
@@ -162,12 +192,12 @@ func MySQL() Dialect {
 
 // SQLite returns the SQLite dialect.
 func SQLite() Dialect {
-	return builtin{
+	return sqliteBuiltin{builtin: builtin{
 		name:         "sqlite",
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator | CapabilityAggregateFilter | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere | CapabilitySavepoint,
 		decimalName:  "TEXT",
 		// varcharText is left false: SQLite already drops schema.DecimalType's
 		// Precision and Scale for the same reason (see decimalTypeName below),
@@ -189,7 +219,32 @@ func SQLite() Dialect {
 			schema.KindJSON:    "TEXT",
 			schema.KindUUID:    "TEXT",
 		},
+	}}
+}
+
+type sqliteBuiltin struct {
+	builtin
+}
+
+// IdentifiersEqual follows SQLite's identifier comparison for ASCII letters.
+// SQLite does not Unicode-fold quoted identifiers.
+func (d sqliteBuiltin) IdentifiersEqual(left, right string) bool {
+	if len(left) != len(right) {
+		return false
 	}
+	for i := 0; i < len(left); i++ {
+		leftByte, rightByte := left[i], right[i]
+		if leftByte >= 'A' && leftByte <= 'Z' {
+			leftByte += 'a' - 'A'
+		}
+		if rightByte >= 'A' && rightByte <= 'Z' {
+			rightByte += 'a' - 'A'
+		}
+		if leftByte != rightByte {
+			return false
+		}
+	}
+	return true
 }
 
 type builtin struct {
@@ -220,7 +275,8 @@ func (d builtin) QuoteIdentifier(name string) (string, error) {
 	if err := schema.ValidateIdentifier(name); err != nil {
 		return "", fmt.Errorf("dialect %s: invalid identifier: %w", d.name, err)
 	}
-	return string(d.quote) + name + string(d.quote), nil
+	quoted := strings.ReplaceAll(name, string(d.quote), string(d.quote)+string(d.quote))
+	return string(d.quote) + quoted + string(d.quote), nil
 }
 
 func (d builtin) Placeholder(position int) (string, error) {

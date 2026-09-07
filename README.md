@@ -13,7 +13,10 @@ Most applications start with the ORM layer. [Getting started](docs/01-getting-st
 
 ## Features
 
-* **DDL migrations.** Run checked-in SQL migration directories in order with [`rasql migrate apply`](docs/core/07-migrations.md), revert them with [`rasql migrate revert`](docs/core/07-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite migration from desired-schema sources when that helps. See [Migrations](docs/core/07-migrations.md).
+* **DDL migrations.** Run checked-in SQL migration directories in order with [`rasql migrate apply`](docs/core/07-migrations.md),
+  reconcile interrupted MySQL work with [`rasql migrate reconcile`](docs/core/07-migrations.md), revert them with
+  [`rasql migrate revert`](docs/core/07-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite
+  migration from desired-schema sources when that helps. See [Migrations](docs/core/07-migrations.md).
 * **Query builder.** The `query` package builds a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. Both packages import only `schema` and `dialect`, so this layer runs with no database handle and no Go row type. See [The SQL builder](docs/core/02-sql-builder.md).
 * **ORM.** Run `rasql codegen generate` against the database you already have, and it reads the live metadata and writes typed row structs, table types, column accessors, and static query functions as checked-in Go source. `rasql.SelectFrom`, `rasql.Insert`, `rasql.Update`, and `rasql.DeleteFrom` then build statements over those tables and decode results straight into the row type. See [`rasql codegen`](docs/orm/01-codegen.md), [Typed queries](docs/orm/03-typed-queries.md), and [Writing rows](docs/orm/04-writing.md).
 * **Rows without a Go type.** `rasql/dynamic` runs the same statements against a table that has no row type, naming its columns as strings and yielding `dynamic.Row` values. See [Dynamic rows](docs/core/05-dynamic.md).
