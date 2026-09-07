@@ -64,6 +64,14 @@ func TestAcceptanceCatalogReadTransactionFailuresOwnNoPartialResult(t *testing.T
 			}
 			result, err := catalogread.Read(context.Background(), db, transactionAcceptanceProfile(t), catalogread.Scope{})
 			require.Error(t, err)
+			switch {
+			case tc.beginError != nil:
+				require.ErrorIs(t, err, tc.beginError)
+			case tc.queryError != nil:
+				require.ErrorIs(t, err, tc.queryError)
+			case tc.commitError != nil:
+				require.ErrorIs(t, err, tc.commitError)
+			}
 			require.Empty(t, result.Tables)
 			require.Empty(t, result.Unresolved)
 			require.NoError(t, mock.ExpectationsWereMet())

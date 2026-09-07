@@ -115,6 +115,7 @@ func TestAcceptanceQueryCompilesEveryWriteAndOrderedSelectForAllBuiltins(t *test
 		version    engineprofile.Version
 		selectSQL  string
 		writeSQL   []string
+		writeArgs  [][]any
 		selectArgs []any
 	}{
 		{
@@ -126,6 +127,7 @@ func TestAcceptanceQueryCompilesEveryWriteAndOrderedSelectForAllBuiltins(t *test
 				`DELETE FROM "users" WHERE ("users"."id" = $1)`,
 				`INSERT INTO "users" ("id", "name") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name"`,
 			},
+			writeArgs:  [][]any{{7, "Ada"}, {"Grace", 7}, {7}, {7, "Ada"}},
 			selectArgs: []any{3, 5, 2},
 		},
 		{
@@ -137,6 +139,7 @@ func TestAcceptanceQueryCompilesEveryWriteAndOrderedSelectForAllBuiltins(t *test
 				"DELETE FROM `users` WHERE (`users`.`id` = ?)",
 				"INSERT INTO `users` (`id`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)",
 			},
+			writeArgs:  [][]any{{7, "Ada"}, {"Grace", 7}, {7}, {7, "Ada"}},
 			selectArgs: []any{3, 5, 2},
 		},
 		{
@@ -148,6 +151,7 @@ func TestAcceptanceQueryCompilesEveryWriteAndOrderedSelectForAllBuiltins(t *test
 				`DELETE FROM "users" WHERE ("users"."id" = ?)`,
 				`INSERT INTO "users" ("id", "name") VALUES (?, ?) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name"`,
 			},
+			writeArgs:  [][]any{{7, "Ada"}, {"Grace", 7}, {7}, {7, "Ada"}},
 			selectArgs: []any{3, 5, 2},
 		},
 	}
@@ -170,6 +174,7 @@ func TestAcceptanceQueryCompilesEveryWriteAndOrderedSelectForAllBuiltins(t *test
 				compiled, writeErr := compiler.Write(write)
 				require.NoError(t, writeErr)
 				require.Equal(t, testCase.writeSQL[index], compiled.SQL())
+				require.Equal(t, testCase.writeArgs[index], compiled.Args())
 			}
 		})
 	}

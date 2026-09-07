@@ -83,11 +83,15 @@ func TestObserveExternalRowAndCloseFailures(t *testing.T) {
 	require.NoError(t, err)
 	closeErr := errors.New("row close failed")
 	mock.ExpectQuery("SHOW server_version_num").WillReturnRows(
-		sqlmock.NewRows([]string{"version", "extra"}).AddRow("170000", "x").CloseError(closeErr),
+		sqlmock.NewRows([]string{"version"}).AddRow("170000").CloseError(closeErr),
 	).RowsWillBeClosed()
 	mock.ExpectClose()
 	_, err = engineprofile.Observe(t.Context(), db, engineprofile.PostgreSQL)
 	require.ErrorIs(t, err, engineprofile.ErrVersionObservation)
+	var discovery *engineprofile.DiscoveryError
+	require.ErrorAs(t, err, &discovery)
+	// DiscoveryError.Unwrap exposes the observation sentinel; the driver cause is stored in Detail by contract.
+	require.Equal(t, closeErr.Error(), discovery.Detail)
 	require.NoError(t, db.Close())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
