@@ -313,11 +313,29 @@ func newGeneratedBindings(dir, packageName string, tables, allTables []schema.Ta
 			if !ok {
 				continue
 			}
-			if column, ok := parent.Column(firstName(relationship.ReferencedColumns)); ok {
-				add(parent, column)
+			for _, name := range relationship.ReferencedColumns {
+				if column, ok := parent.Column(name); ok {
+					add(parent, column)
+				}
 			}
-			if column, ok := table.Column(firstName(relationship.Columns)); ok {
-				add(table, column)
+			for _, name := range relationship.Columns {
+				if column, ok := table.Column(name); ok {
+					add(table, column)
+				}
+			}
+			for _, name := range parent.PrimaryKey {
+				if column, ok := parent.Column(name); ok {
+					add(parent, column)
+				}
+			}
+			if relationship.Through != nil {
+				if through, ok := relationshipTable(allTables, relationship.Through.Table.Schema, relationship.Through.Table.Name); ok {
+					for _, name := range append(append([]string{}, relationship.Through.SourceColumns...), relationship.Through.TargetColumns...) {
+						if column, ok := through.Column(name); ok {
+							add(through, column)
+						}
+					}
+				}
 			}
 		}
 		for _, child := range allTables {
@@ -325,11 +343,20 @@ func newGeneratedBindings(dir, packageName string, tables, allTables []schema.Ta
 				if relationshipTargetSchema(relationship) != table.Schema || relationship.ReferencedTable != table.Name {
 					continue
 				}
-				if column, ok := table.Column(firstName(relationship.ReferencedColumns)); ok {
-					add(table, column)
+				for _, name := range relationship.ReferencedColumns {
+					if column, ok := table.Column(name); ok {
+						add(table, column)
+					}
 				}
-				if column, ok := child.Column(firstName(relationship.Columns)); ok {
-					add(child, column)
+				for _, name := range relationship.Columns {
+					if column, ok := child.Column(name); ok {
+						add(child, column)
+					}
+				}
+				for _, name := range child.PrimaryKey {
+					if column, ok := child.Column(name); ok {
+						add(child, column)
+					}
 				}
 			}
 		}
@@ -389,13 +416,6 @@ func normalizeBindingAlias(column schema.ColumnDef, aliases map[string]string) s
 	}
 	clone.GoBinding = &binding
 	return clone
-}
-
-func firstName(names []string) string {
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
 }
 
 func bindingKey(table schema.TableDef, column schema.ColumnDef) string {

@@ -36,9 +36,6 @@ type ObjectName struct {
 	Name   string `json:"name"`
 }
 
-// ObjectName returns the physical identity of t.
-func (t TableDef) ObjectName() ObjectName { return ObjectName{Schema: t.Schema, Name: t.Name} }
-
 // ReferenceAction defines the action to take when a referenced row changes.
 type ReferenceAction string
 
@@ -285,10 +282,30 @@ const (
 	// RelationshipBelongsTo identifies a row that points at one related row
 	// through a foreign key.
 	RelationshipBelongsTo RelationshipKind = "belongs_to"
+	RelationshipHasOne    RelationshipKind = "has_one"
 	// RelationshipHasMany identifies the inverse collection of a belongs-to
 	// relationship.
-	RelationshipHasMany RelationshipKind = "has_many"
+	RelationshipHasMany    RelationshipKind = "has_many"
+	RelationshipManyToMany RelationshipKind = "many_to_many"
 )
+
+type RelationshipOptionality string
+
+const (
+	RelationshipOptionalityInferred RelationshipOptionality = ""
+	RelationshipRequired            RelationshipOptionality = "required"
+	RelationshipOptional            RelationshipOptionality = "optional"
+)
+
+type RelationshipThrough struct {
+	Table         ObjectName
+	SourceColumns []string
+	TargetColumns []string
+}
+
+func (r RelationshipThrough) GoString() string {
+	return fmt.Sprintf("schema.RelationshipThrough{Table:schema.ObjectName{Schema:%q, Name:%q}, SourceColumns:%#v, TargetColumns:%#v}", r.Table.Schema, r.Table.Name, r.SourceColumns, r.TargetColumns)
+}
 
 // RelationshipDef describes a navigable relationship derived from a foreign key.
 // The first relationship slice supports belongs-to relationships. The column
@@ -299,6 +316,7 @@ type RelationshipDef struct {
 	// Empty lets the generator derive an unambiguous name. It does not affect DDL.
 	InverseName      string `json:",omitempty"`
 	Kind             RelationshipKind
+	Optionality      RelationshipOptionality `json:",omitempty"`
 	Columns          []string
 	ReferencedSchema string
 	// ResolvedReferencedSchema is the catalog-resolved schema identity used to
@@ -306,6 +324,7 @@ type RelationshipDef struct {
 	ResolvedReferencedSchema string `json:",omitempty"`
 	ReferencedTable          string
 	ReferencedColumns        []string
+	Through                  *RelationshipThrough `json:",omitempty"`
 }
 
 // Clone returns a copy of r that shares no slice with r. Each field keeps
@@ -314,6 +333,12 @@ type RelationshipDef struct {
 func (r RelationshipDef) Clone() RelationshipDef {
 	r.Columns = slices.Clone(r.Columns)
 	r.ReferencedColumns = slices.Clone(r.ReferencedColumns)
+	if r.Through != nil {
+		through := *r.Through
+		through.SourceColumns = slices.Clone(through.SourceColumns)
+		through.TargetColumns = slices.Clone(through.TargetColumns)
+		r.Through = &through
+	}
 	return r
 }
 

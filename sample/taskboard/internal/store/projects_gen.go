@@ -114,3 +114,9 @@ func (r ProjectsTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, p
 func (r ProjectsTableTasksRelation) Load(ctx context.Context, db rasql.DB, parents []ProjectsRow) (map[int64][]TasksRow, error) {
 	return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{})
 }
+
+// SourceKey returns the ordered source relationship key.
+func (r ProjectsTableTasksRelation) SourceKey(row ProjectsRow) int64 { return row.ID }
+
+// TargetKey returns the ordered target relationship key.
+func (r ProjectsTableTasksRelation) TargetKey(row TasksRow) int64 { return row.ProjectID }

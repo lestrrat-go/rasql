@@ -418,7 +418,12 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 		},
 	}, table.ForeignKeys)
 
-	source, err := generate.DescriptorSource("generated", table)
+	accounts := schema.TableDef{
+		Name:       "accounts",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id", "tenant_id"},
+	}
+	source, err := generate.DescriptorSource("generated", table, accounts)
 	require.NoError(t, err)
 	require.Contains(t, string(source), `{Name: "uq_users_email", Columns: []string{"email"}}`)
 	require.Contains(t, string(source), `{Name: "uq_users_tenant_email", Columns: []string{"tenant_id", "email"}}`)
@@ -426,7 +431,7 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 	require.Contains(t, string(source), `{Name: "users_email_idx", Columns: []string{"email"}}`)
 	require.Contains(t, string(source), `{Name: "users_tenant_email_idx", Columns: []string{"tenant_id", "email"}, Unique: true}`)
 	require.Contains(t, string(source), `{Name: "fk_users_account", Columns: []string{"account_id", "tenant_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id", "tenant_id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction}`)
-	require.Contains(t, string(source), `{Name: "Account", Kind: schema.RelationshipBelongsTo, Columns: []string{"account_id", "tenant_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id", "tenant_id"}}`)
+	require.Contains(t, string(source), `{Name: "Account", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("required"), Columns: []string{"account_id", "tenant_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id", "tenant_id"}}`)
 }
 
 // TestPostgreSQLInspectorRecordsNonDefaultIndexMethod proves that a

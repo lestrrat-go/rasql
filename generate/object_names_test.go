@@ -185,7 +185,7 @@ func TestDescriptorOwners(t *testing.T) {
  want.Columns[3].GeneratedExpression = "same-Go-name"
  want.Columns[3].GeneratedStorage = schema.GeneratedStored
  want.ForeignKeys = []schema.ForeignKeyDef{{Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}, DeleteSetColumns: []string{"parent-id"}, OnDelete: schema.SetNull}}
- want.Relationships = []schema.RelationshipDef{{Name: "Parent", Kind: schema.RelationshipBelongsTo, Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}}}
+ want.Relationships = []schema.RelationshipDef{{Name: "Parent", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipRequired, Columns: []string{"parent-id"}, ReferencedTable: "parent", ReferencedColumns: []string{"parent-id"}}}
  matches := 0
  for _, got := range Tables() { if got.Name == "child" { matches++; if !reflect.DeepEqual(want, got) { t.Fatalf("descriptor mismatch: %#v", got) } } }
  if matches != 1 { t.Fatalf("found %d child descriptors", matches) }

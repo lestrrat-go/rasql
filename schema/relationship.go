@@ -18,9 +18,18 @@ func RelationshipsFromForeignKeys(table TableDef) []RelationshipDef {
 		if name == "" {
 			name = relationshipGoName(key.ReferencedTable)
 		}
+		optionality := RelationshipRequired
+		for _, columnName := range key.Columns {
+			column, ok := table.Column(columnName)
+			if ok && column.Nullable {
+				optionality = RelationshipOptional
+				break
+			}
+		}
 		relationships = append(relationships, RelationshipDef{
 			Name: name, Kind: RelationshipBelongsTo,
-			Columns: append([]string(nil), key.Columns...), ReferencedSchema: key.ReferencedSchema,
+			Optionality: optionality,
+			Columns:     append([]string(nil), key.Columns...), ReferencedSchema: key.ReferencedSchema,
 			ReferencedTable: key.ReferencedTable, ReferencedColumns: append([]string(nil), key.ReferencedColumns...),
 		})
 	}

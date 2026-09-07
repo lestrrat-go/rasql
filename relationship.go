@@ -17,6 +17,24 @@ type RelationshipLoadOptions struct {
 	BindLimit      int
 }
 
+// LoadHasOnePlan loads at most one child for each source key and rejects duplicate targets.
+func LoadHasOnePlan[Parent, Child any, Key comparable](ctx context.Context, db DB, childTable ReadTable[Child], childKeyColumns []query.ColumnRef, parents []Parent, parentKey func(Parent) Key, childKey func(Child) Key, keyValues func(Key) ([]any, bool), options RelationshipLoadOptions) (map[Key]Child, error) {
+	grouped, err := LoadHasManyPlan(ctx, db, childTable, childKeyColumns, parents, parentKey, childKey, keyValues, options)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[Key]Child, len(grouped))
+	for key, rows := range grouped {
+		if len(rows) > 1 {
+			return nil, fmt.Errorf("relationship returned duplicate child for key %v", key)
+		}
+		if len(rows) == 1 {
+			result[key] = rows[0]
+		}
+	}
+	return result, nil
+}
+
 // LoadHasManyPlan loads children for parents in bounded key batches.
 func LoadHasManyPlan[Parent, Child any, Key comparable](ctx context.Context, db DB, childTable ReadTable[Child], childKeyColumns []query.ColumnRef, parents []Parent, parentKey func(Parent) Key, childKey func(Child) Key, keyValues func(Key) ([]any, bool), options RelationshipLoadOptions) (map[Key][]Child, error) {
 	if err := validateRelationshipPlan(childTable, childKeyColumns, options); err != nil {
@@ -101,6 +119,163 @@ func LoadBelongsToPlan[Child, Parent any, Key comparable](ctx context.Context, d
 		return nil
 	})
 	return loaded, err
+}
+
+// LoadManyToManyPlan loads target rows through an ordered join table in bounded key batches.
+func LoadManyToManyPlan[Source, Through, Target any, Key comparable](ctx context.Context, db DB, through ReadTable[Through], target ReadTable[Target], throughSourceColumns, throughTargetColumns, targetJoinColumns, targetColumns []query.ColumnRef, sources []Source, sourceKey func(Source) Key, keyValues func(Key) ([]any, bool), decode func(ScanSource) (Key, Target, error), options RelationshipLoadOptions) (map[Key][]Target, error) {
+	if len(throughSourceColumns) == 0 || len(throughSourceColumns) != len(throughTargetColumns) {
+		return nil, fmt.Errorf("many-to-many through key widths must match and be non-empty")
+	}
+	if len(targetColumns) == 0 {
+		return nil, fmt.Errorf("many-to-many target columns must not be empty")
+	}
+	if options.PerParentLimit < 0 || options.BindLimit < 0 {
+		return nil, fmt.Errorf("relationship load limits must not be negative")
+	}
+	if len(throughTargetColumns) != len(targetJoinColumns) {
+		return nil, fmt.Errorf("many-to-many join key widths must match")
+	}
+	for _, column := range append(append(append(append([]query.ColumnRef{}, throughSourceColumns...), throughTargetColumns...), targetJoinColumns...), targetColumns...) {
+		if err := column.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	keys := make([]Key, 0, len(sources))
+	stored := make(map[Key][]any, len(sources))
+	result := make(map[Key][]Target, len(sources))
+	seen := make(map[Key]struct{}, len(sources))
+	for _, source := range sources {
+		key := sourceKey(source)
+		values, present := keyValues(key)
+		if !present {
+			continue
+		}
+		if len(values) != len(throughSourceColumns) {
+			return nil, fmt.Errorf("relationship key has %d values, want %d", len(values), len(throughSourceColumns))
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+		stored[key] = relationshipQueryValues(values)
+		result[key] = nil
+	}
+	if len(keys) == 0 {
+		return result, nil
+	}
+	load := func(values [][]any) error {
+		builder := DecodeFrom[Target](target)
+		projections := make([]query.Projection, 0, len(throughSourceColumns)+len(targetColumns))
+		for _, column := range throughSourceColumns {
+			projections = append(projections, column)
+		}
+		for _, column := range targetColumns {
+			projections = append(projections, column)
+		}
+		builder = builder.Project(projections...).Join(InnerJoin(through, relationshipJoinExpression(equalColumns(throughTargetColumns, targetJoinColumns))))
+		builder = builder.Where(relationshipMembership(throughSourceColumns, values))
+		for _, column := range throughSourceColumns {
+			builder = builder.OrderAsc(column)
+		}
+		for _, order := range options.OrderBy {
+			builder = builder.Order(order)
+		}
+		if options.Where != nil {
+			builder = builder.Where(options.Where)
+		}
+		statement, err := builder.Build(db.Dialect())
+		if err != nil {
+			return err
+		}
+		rows, err := db.QueryRendered(ctx, statement)
+		if err != nil {
+			return err
+		}
+		if rows == nil {
+			return nil
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			key, row, err := decode(rows)
+			if err != nil {
+				return err
+			}
+			if _, ok := result[key]; !ok {
+				continue
+			}
+			if options.PerParentLimit > 0 && len(result[key]) >= options.PerParentLimit {
+				continue
+			}
+			result[key] = append(result[key], row)
+		}
+		return rows.Err()
+	}
+	budget := options.BindLimit
+	if budget == 0 {
+		budget = db.RelationshipBindLimit()
+	}
+	if budget == 0 {
+		budget = relationshipDefaultBindLimit(db)
+	}
+	width := len(throughSourceColumns)
+	probe := DecodeFrom[Target](target)
+	probeProjections := make([]query.Projection, 0, len(throughSourceColumns)+len(targetColumns))
+	for _, column := range throughSourceColumns {
+		probeProjections = append(probeProjections, column)
+	}
+	for _, column := range targetColumns {
+		probeProjections = append(probeProjections, column)
+	}
+	probe = probe.Project(probeProjections...).Join(InnerJoin(through, relationshipJoinExpression(equalColumns(throughTargetColumns, targetJoinColumns))))
+	probe = probe.Where(relationshipMembership(throughSourceColumns, [][]any{stored[keys[0]]}))
+	for _, column := range throughSourceColumns {
+		probe = probe.OrderAsc(column)
+	}
+	for _, order := range options.OrderBy {
+		probe = probe.Order(order)
+	}
+	if options.Where != nil {
+		probe = probe.Where(options.Where)
+	}
+	statement, err := probe.Build(db.Dialect())
+	if err != nil {
+		return nil, err
+	}
+	fixed := len(statement.BoundArgs()) - width
+	if budget-fixed < width {
+		return nil, fmt.Errorf("relationship bind limit %d cannot fit one key", budget)
+	}
+	batchSize := (budget - fixed) / width
+	for start := 0; start < len(keys); start += batchSize {
+		end := start + batchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		values := make([][]any, 0, end-start)
+		for _, key := range keys[start:end] {
+			values = append(values, stored[key])
+		}
+		if err := load(values); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func equalColumns(left, right []query.ColumnRef) []query.Expression {
+	result := make([]query.Expression, len(left))
+	for index := range left {
+		result[index] = query.Equal(left[index], right[index])
+	}
+	return result
+}
+
+func relationshipJoinExpression(expressions []query.Expression) query.Expression {
+	if len(expressions) == 1 {
+		return expressions[0]
+	}
+	return query.And(expressions...)
 }
 
 // LoadHasMany is the compatibility scalar adapter.

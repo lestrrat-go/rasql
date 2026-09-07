@@ -69,6 +69,33 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	require.Equal(t, 4, scale)
 }
 
+func TestObjectNameIdentityAndJSON(t *testing.T) {
+	table := schema.TableDef{Schema: "tenant", Name: "users"}
+	name := table.ObjectName()
+	require.Equal(t, schema.ObjectName{Schema: "tenant", Name: "users"}, name)
+	encoded, err := json.Marshal(name)
+	require.NoError(t, err)
+	require.Equal(t, `{"schema":"tenant","name":"users"}`, string(encoded))
+	var decoded schema.ObjectName
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.Equal(t, name, decoded)
+
+	name = schema.ObjectName{Name: "users"}
+	encoded, err = json.Marshal(name)
+	require.NoError(t, err)
+	require.Equal(t, `{"name":"users"}`, string(encoded))
+}
+
+func TestRelationshipsFromForeignKeysInfersOptionality(t *testing.T) {
+	table := schema.TableDef{
+		Columns:     []schema.ColumnDef{{Name: "user_id", Type: schema.IntegerType{}, Nullable: true}},
+		ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}},
+	}
+	relationships := schema.RelationshipsFromForeignKeys(table)
+	require.Len(t, relationships, 1)
+	require.Equal(t, schema.RelationshipOptional, relationships[0].Optionality)
+}
+
 // TestTableCloneNilSlicesRoundTrip covers the empty descriptor Clone's
 // TestTableCloneCopiesDescriptor case never exercises: a TableDef whose
 // nine slice fields (Columns, PrimaryKey, VirtualTableModuleArguments,
@@ -1795,7 +1822,7 @@ func TestTableValidatesRelationshipMetadata(t *testing.T) {
 	require.ErrorContains(t, err, "relationships[0].columns[0]")
 }
 
-func TestTableRejectsRelationshipWithoutMatchingForeignKey(t *testing.T) {
+func TestTableAllowsRelationshipWithoutMatchingForeignKey(t *testing.T) {
 	table := schema.TableDef{
 		Name: "orders",
 		Columns: []schema.ColumnDef{
@@ -1817,8 +1844,7 @@ func TestTableRejectsRelationshipWithoutMatchingForeignKey(t *testing.T) {
 		}},
 	}
 
-	err := table.Validate()
-	require.ErrorContains(t, err, "relationships[0]: does not match a declared foreign key")
+	require.NoError(t, table.Validate())
 }
 
 func TestValidateIdentifier(t *testing.T) {

@@ -176,13 +176,13 @@ none of those facts has an option-form constructor.
 
 ## Relationships
 
-`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`. The `schema.RelationshipNamed` foreign-key option states one explicitly instead, in the option form. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
+`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`. The `schema.RelationshipNamed` foreign-key option states one explicitly instead, in the option form. Set `Relationships` explicitly for logical direct links or through-table links; direct metadata may match a physical foreign key, while logical metadata does not change DDL. Use `schema.Relationship` with `schema.Through` for many-to-many links.
 
 An inverse method uses the child table shorthand only when that child has one relationship to the parent. Multiple relationships receive names that include the relationship name, so adding a foreign key cannot silently change an existing method's join. Use `schema.InverseNamed` with `schema.RelationshipNamed` to pin a public inverse method across descriptor changes.
 
-The generated API covers one bounded slice: a non-null single-column foreign key that targets a non-null single-column primary key with the same generated Go type. When both tables are generated in the package, the child table exposes a belongs-to method and the parent table exposes the inverse has-many method. Each relation exposes `Join` and `Load`. `Load` fetches all related rows with one secondary `IN` query and groups them by key. Callers must split very large parent slices themselves when they approach the database parameter limit.
+The generated API supports nullable and composite direct links, unique has-one inverses, through-table many-to-many links, bounded `LoadWith` options, and nested `LoadThen` callbacks. When both tables are generated in the package, each relation exposes `Join`, `Load`, and `LoadWith`; collection relations also expose `LoadThen`. Loads omit missing nullable keys, preserve ordered composite keys, group rows by source key, and split binds within the configured relationship budget.
 
-Composite keys, nullable foreign keys, nullable or non-primary target columns, many-to-many links, polymorphic links, nested preloading, and relationships whose target table is not generated in the package remain unsupported. The foreign key and its ordinary SQL join remain available for each of those cases.
+Polymorphic links and relationships whose target table is not generated in the package remain unsupported. The foreign key and its ordinary SQL join remain available for those cases.
 
 ## Name the generated row type
 
