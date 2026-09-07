@@ -330,6 +330,9 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 				}
 				compiled, candidateErr := compileCandidate(candidate)
 				if candidateErr != nil {
+					if end > i && isMutationBindLimit(candidateErr) {
+						break
+					}
 					return nil, candidateErr
 				}
 				if bindLimit > 0 && len(compiled.statement.BoundArgs()) > bindLimit {
@@ -351,7 +354,14 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 		if err != nil {
 			return nil, err
 		}
-		compiled, err := compileMutation(executor, statement)
+		compiledParts, err := compileMutationParts(executor, statement)
+		if err != nil {
+			return nil, err
+		}
+		if bindLimit > 0 && len(compiledParts.statement.BoundArgs()) > bindLimit {
+			return nil, &PlanError{Code: "bind_limit", Path: "args", Detail: "mutation statement exceeds bind parameter limit"}
+		}
+		compiled, err := encodeCompiledMutation(compiledParts, executor)
 		if err != nil {
 			return nil, err
 		}
@@ -359,6 +369,11 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 		i++
 	}
 	return prepared, nil
+}
+
+func isMutationBindLimit(err error) bool {
+	var planErr *PlanError
+	return errors.As(err, &planErr) && planErr.Code == "bind_limit"
 }
 
 func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Statement, error) {

@@ -212,9 +212,6 @@ func (c NullColumn[Row, T]) NullExpr() NullExpr[T] {
 	return NullExpr[T]{node: c.ref, codec: c.codec, source: c.ref.Source().QualifiedName()}
 }
 
-// Expr is an alias for NullExpr for nullable projection construction.
-func (c NullColumn[Row, T]) Expr() NullExpr[T] { return c.NullExpr() }
-
 type GroupKey struct {
 	node   query.Expression
 	source string

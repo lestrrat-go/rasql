@@ -117,7 +117,7 @@ func mutationAcceptanceProjection(t *testing.T, table rasql.Table[mutationAccept
 	require.NoError(t, err)
 	items := []rasql.ProjectionItem{
 		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""), rasql.Item("required_text", required.Expr(), schema.TextType{}, ""),
-		rasql.Item("zero_number", zero.Expr(), schema.IntegerType{}, ""), rasql.NullItem("nullable_text", nullable.Expr(), schema.TextType{}, ""),
+		rasql.Item("zero_number", zero.Expr(), schema.IntegerType{}, ""), rasql.NullItem("nullable_text", nullable.NullExpr(), schema.TextType{}, ""),
 		rasql.Item("default_text", defaults.Expr(), schema.TextType{}, ""), rasql.Item("version", version.Expr(), schema.IntegerType{}, ""),
 		rasql.Item("generated_text", generated.Expr(), schema.TextType{}, ""),
 	}

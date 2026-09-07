@@ -24,10 +24,12 @@ const (
 // MutationField is an opaque generated-plan field. Generated code should use
 // SetField, SetNullableField, ClearField, and DefaultField to create one.
 type MutationField[T any] struct {
-	column query.ColumnRef
-	codec  string
-	state  mutationState
-	value  any
+	column  query.ColumnRef
+	codec   string
+	bound   query.Expression
+	bindErr error
+	state   mutationState
+	value   any
 }
 
 type mutationColumn[R, V any] interface {
@@ -56,12 +58,14 @@ func mutationColumnInfo[C any](column C) (query.ColumnRef, string) {
 
 func SetField[T, V any, C mutationColumn[T, V]](column C, value V) MutationField[T] {
 	ref, codec := mutationColumnInfo(column)
-	return MutationField[T]{column: ref, codec: codec, state: mutationSet, value: value}
+	bound, bindErr := mutationBind(value, codec)
+	return MutationField[T]{column: ref, codec: codec, bound: bound, bindErr: bindErr, state: mutationSet, value: value}
 }
 
 func SetNullableField[T, V any, C mutationNullColumn[T, V]](column C, value V) MutationField[T] {
 	ref, codec := mutationColumnInfo(column)
-	return MutationField[T]{column: ref, codec: codec, state: mutationSet, value: value}
+	bound, bindErr := mutationBind(value, codec)
+	return MutationField[T]{column: ref, codec: codec, bound: bound, bindErr: bindErr, state: mutationSet, value: value}
 }
 
 func ClearField[T, V any, C mutationNullColumn[T, V]](column C) MutationField[T] {
@@ -194,6 +198,9 @@ func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patc
 	}
 	seen := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
+		if field.bindErr != nil {
+			return field.bindErr
+		}
 		if field.state == 0 || field.column.Name() == "" || field.column.Source().QualifiedName() == "" {
 			return fmt.Errorf("rasql: mutation plan contains a zero field")
 		}
@@ -250,15 +257,9 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 		if field.state == mutationDefault {
 			continue
 		}
-		value := field.value
+		var value any = field.bound
 		if field.state == mutationClear {
 			value = nil
-		} else {
-			bound, err := mutationBind(value, field.codec)
-			if err != nil {
-				return normalizedCreate[T]{}, err
-			}
-			value = bound
 		}
 		lowered.columns = append(lowered.columns, p.table.Ref().Column(column.Name))
 		lowered.values = append(lowered.values, value)
@@ -291,15 +292,9 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 		if !ok {
 			continue
 		}
-		value := any(field.value)
+		var value any = field.bound
 		if field.state == mutationClear {
 			value = query.Bind(nil)
-		} else {
-			bound, err := mutationBind(value, field.codec)
-			if err != nil {
-				return query.Update{}, err
-			}
-			value = bound
 		}
 		assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
 	}
@@ -410,7 +405,8 @@ func QueryPatchOne[T any](ctx context.Context, db DB, plan PatchPlan[T]) (T, err
 
 func mutationBind(value any, codec string) (query.Expression, error) {
 	if codec == "" {
-		return Value(value).node, nil
+		bound := Value(value)
+		return bound.node, bound.bindErr
 	}
 	bound, err := ValueWithCodec(value, codec)
 	if err != nil {
