@@ -194,6 +194,34 @@ func TestParentOperationRejectsChildRowsOpen(t *testing.T) {
 	}))
 }
 
+func TestOuterFinalizerRejectsOpenRowsOnCommit(t *testing.T) {
+	executor := sqliteExecutorForScope(t)
+	err := rasql.Within(t.Context(), executor, nil, func(ctx context.Context, tx rasql.Executor) error {
+		rows, err := tx.Query(ctx, stmt.New("SELECT 1"))
+		require.NoError(t, err)
+		require.NotNil(t, rows)
+		return nil
+	})
+	var planErr *rasql.PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "transaction_concurrent_use", planErr.Code)
+}
+
+func TestOuterFinalizerRejectsOpenRowsOnRollback(t *testing.T) {
+	executor := sqliteExecutorForScope(t)
+	callbackErr := errors.New("callback failure")
+	err := rasql.Within(t.Context(), executor, nil, func(ctx context.Context, tx rasql.Executor) error {
+		rows, queryErr := tx.Query(ctx, stmt.New("SELECT 1"))
+		require.NoError(t, queryErr)
+		require.NotNil(t, rows)
+		return callbackErr
+	})
+	var planErr *rasql.PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "transaction_concurrent_use", planErr.Code)
+	require.ErrorIs(t, err, callbackErr)
+}
+
 func sqliteExecutorForScope(t *testing.T) rasql.Executor {
 	t.Helper()
 	database, err := sql.Open("sqlite", ":memory:")

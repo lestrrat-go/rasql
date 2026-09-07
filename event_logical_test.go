@@ -132,6 +132,74 @@ func TestNestedLogicalInvocationUsesOuterParent(t *testing.T) {
 	require.Equal(t, starts[1].LogicalID, starts[2].ParentID)
 }
 
+func TestLogicalInvocationChainsContextsAndReversesCompletions(t *testing.T) {
+	type key string
+	var order []string
+	observed, err := WithEventObservers(capabilityTestExecutor{}, ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) {}),
+		EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) {
+			return context.WithValue(ctx, key("first"), true), EventCompletionFunc(func(ctx context.Context, event Event) error {
+				require.True(t, ctx.Value(key("second")).(bool))
+				order = append(order, "first")
+				return nil
+			})
+		}),
+		EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) {
+			require.True(t, ctx.Value(key("first")).(bool))
+			return context.WithValue(ctx, key("second"), true), EventCompletionFunc(func(ctx context.Context, event Event) error {
+				order = append(order, "second")
+				return nil
+			})
+		}),
+	)
+	require.NoError(t, err)
+	ctx, child, completion := beginLogicalInvocation(context.Background(), observed, EventGraph)
+	_, err = child.Exec(ctx, stmt.New("SELECT 1"))
+	require.NoError(t, err)
+	completion.completeLogicalInvocation(nil, 0, false)
+	require.Equal(t, []string{"second", "first", "second", "first"}, order)
+}
+
+func TestLogicalObserverFailuresDoNotChangeApplicationResult(t *testing.T) {
+	applicationErr := assertionError{}
+	observed, err := WithEventObservers(capabilityTestExecutor{}, ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) { panic("handler") }),
+		EventObserverFunc(func(context.Context, Event) (context.Context, EventCompletion) { panic(applicationErr) }),
+		EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) {
+			return ctx, EventCompletionFunc(func(context.Context, Event) error { panic("completion") })
+		}),
+	)
+	require.NoError(t, err)
+	ctx, child, completion := beginLogicalInvocation(context.Background(), observed, EventGraph)
+	_, err = child.Exec(ctx, stmt.New("SELECT 1"))
+	require.NoError(t, err)
+	completion.completeLogicalInvocation(applicationErr, 0, false)
+}
+
+func TestNestedLogicalInvocationsHaveIndependentIndexes(t *testing.T) {
+	var starts []Event
+	observed, err := WithEventObservers(capabilityTestExecutor{}, ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) {}), EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) {
+		if event.Kind == EventStatement && event.Phase == EventStart {
+			starts = append(starts, event)
+		}
+		return ctx, nil
+	}))
+	require.NoError(t, err)
+	ctx, outer, outerCompletion := beginLogicalInvocation(context.Background(), observed, EventGraph)
+	_, err = outer.Exec(ctx, stmt.New("SELECT 1"))
+	require.NoError(t, err)
+	innerCtx, inner, innerCompletion := beginLogicalInvocation(ctx, outer, EventGraph)
+	_, err = inner.Exec(innerCtx, stmt.New("SELECT 1"))
+	require.NoError(t, err)
+	_, err = inner.Exec(innerCtx, stmt.New("SELECT 1"))
+	require.NoError(t, err)
+	innerCompletion.completeLogicalInvocation(nil, 0, false)
+	_, err = outer.Exec(ctx, stmt.New("SELECT 1"))
+	require.NoError(t, err)
+	outerCompletion.completeLogicalInvocation(nil, 0, false)
+	require.Equal(t, []int{0, 0, 1, 1}, []int{starts[0].StatementIndex, starts[1].StatementIndex, starts[2].StatementIndex, starts[3].StatementIndex})
+	require.Equal(t, starts[0].ParentID, starts[3].ParentID)
+	require.NotEqual(t, starts[0].ParentID, starts[1].ParentID)
+}
+
 type assertionError struct{}
 
 func (assertionError) Error() string { return "assertion error" }

@@ -19,8 +19,8 @@ const (
 	EventStatement
 	EventMutationBatch
 	EventGraph
-	EventKindScope     = EventScope
-	EventKindStatement = EventStatement
+	EventKindScope         = EventScope
+	EventKindStatement     = EventStatement
 	EventKindMutationBatch = EventMutationBatch
 	EventKindGraph         = EventGraph
 )
@@ -214,6 +214,11 @@ func (e eventScopedExecutor) beginScope(ctx context.Context, opts *sql.TxOptions
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
+	if isNilExecutor(child) || isNilScopeFinalizer(finalizer) {
+		err := planError("transaction_scope_invalid", "scope", "begin returned a nil child or finalizer")
+		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		return nil, nil, err
+	}
 	return e.childScope(child, callCtx, logicalID, counter), &observedFinalizer{scopeFinalizer: finalizer, finish: func(err error) {
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 	}}, nil
@@ -234,6 +239,11 @@ func (e eventScopedExecutor) beginSavepoint(ctx context.Context) (Executor, scop
 	}
 	child, finalizer, err := beginner.beginSavepoint(callCtx)
 	if err != nil {
+		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		return nil, nil, err
+	}
+	if isNilExecutor(child) || isNilScopeFinalizer(finalizer) {
+		err := planError("transaction_scope_invalid", "scope", "begin returned a nil child or finalizer")
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
@@ -341,24 +351,29 @@ type observedFinalizer struct {
 	scopeFinalizer
 	finish func(error)
 	cause  error
+	done   atomic.Bool
 }
 
 func (f *observedFinalizer) setCause(err error) { f.cause = err }
 
-func (f observedFinalizer) Commit(ctx context.Context) error {
+func (f *observedFinalizer) Commit(ctx context.Context) error {
 	err := f.scopeFinalizer.Commit(ctx)
 	if f.cause != nil {
 		err = errors.Join(f.cause, err)
 	}
-	f.finish(err)
+	if f.done.CompareAndSwap(false, true) {
+		f.finish(err)
+	}
 	return err
 }
-func (f observedFinalizer) Rollback(ctx context.Context) error {
+func (f *observedFinalizer) Rollback(ctx context.Context) error {
 	err := f.scopeFinalizer.Rollback(ctx)
 	if f.cause != nil {
 		err = errors.Join(f.cause, err)
 	}
-	f.finish(err)
+	if f.done.CompareAndSwap(false, true) {
+		f.finish(err)
+	}
 	return err
 }
 

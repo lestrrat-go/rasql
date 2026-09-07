@@ -105,6 +105,39 @@ func TestLogicalInvocationCapabilityForwardsOnlyFromObservedExecutors(t *testing
 	require.False(t, hasProvider)
 }
 
+func TestLogicalInvocationReturnedChildRetainsCapabilities(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	db, err := New(database, dialect.SQLite())
+	require.NoError(t, err)
+	base, err := AsExecutor(db, profile)
+	require.NoError(t, err)
+	registry := codecRegistry{}
+	observed, err := WithEventObservers(base, ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) {}), EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) { return ctx, nil }))
+	require.NoError(t, err)
+	profiled, err := WithEngineProfile(observed, profile)
+	require.NoError(t, err)
+	wrapped, err := WithCodecs(profiled, registry)
+	require.NoError(t, err)
+	_, child, completion := beginLogicalInvocation(context.Background(), wrapped, EventMutationBatch)
+	defer completion.completeLogicalInvocation(nil, 0, false)
+	_, hasCompiler := child.(compilerProvider)
+	_, hasCodecs := child.(CodecProvider)
+	_, hasScope := child.(transactionBeginner)
+	_, hasSavepoint := child.(savepointBeginner)
+	_, hasEvidence := child.(executionDurabilityProvider)
+	_, hasLogical := child.(logicalInvocationProvider)
+	require.True(t, hasCompiler)
+	require.True(t, hasCodecs)
+	require.True(t, hasScope)
+	require.True(t, hasSavepoint)
+	require.True(t, hasEvidence)
+	require.True(t, hasLogical)
+}
+
 func TestProfiledScopeChildRetainsCompilerIdentity(t *testing.T) {
 	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 	require.NoError(t, err)
@@ -178,6 +211,57 @@ func TestWithinRejectsNilBeginResultsBeforeCallback(t *testing.T) {
 			require.False(t, called)
 		})
 	}
+}
+
+func TestEventWrappersRejectNilBeginResultsBeforeCallback(t *testing.T) {
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	registry := codecRegistry{}
+	for _, test := range []struct {
+		name string
+		kind nilBeginKind
+	}{
+		{name: "nil child", kind: nilChild},
+		{name: "nil finalizer", kind: nilFinalizer},
+		{name: "typed nil child", kind: typedNilChild},
+		{name: "typed nil finalizer", kind: typedNilFinalizerKind},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := Executor(nilBeginExecutor{kind: test.kind})
+			observed, observeErr := WithEventObservers(base, ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) {}), EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) { return ctx, nil }))
+			require.NoError(t, observeErr)
+			profiled, profileErr := WithEngineProfile(observed, profile)
+			require.NoError(t, profileErr)
+			wrapped, codecErr := WithCodecs(profiled, registry)
+			require.NoError(t, codecErr)
+			called := false
+			scopeErr := Within(context.Background(), wrapped, nil, func(context.Context, Executor) error { called = true; return nil })
+			var planErr *PlanError
+			require.ErrorAs(t, scopeErr, &planErr)
+			require.Equal(t, "transaction_scope_invalid", planErr.Code)
+			require.False(t, called)
+		})
+	}
+}
+
+func TestObservedFinalizerEmitsOneScopeTerminal(t *testing.T) {
+	terminals := 0
+	observed, err := WithEventObservers(capabilityScopedExecutor{}, ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) {}), EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) {
+		return ctx, EventCompletionFunc(func(_ context.Context, event Event) error {
+			if event.Kind == EventScope && event.Phase == EventTerminal {
+				terminals++
+			}
+			return nil
+		})
+	}))
+	require.NoError(t, err)
+	beginner, ok := observed.(transactionBeginner)
+	require.True(t, ok)
+	_, finalizer, err := beginner.beginScope(context.Background(), nil)
+	require.NoError(t, err)
+	require.NoError(t, finalizer.Rollback(context.Background()))
+	require.NoError(t, finalizer.Rollback(context.Background()))
+	require.Equal(t, 1, terminals)
 }
 
 func assertScopeCapabilities(t *testing.T, executor Executor, scope, savepoint bool, evidence executionDurabilityEvidence) {

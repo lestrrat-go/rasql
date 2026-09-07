@@ -102,7 +102,7 @@ func (e dbExecutor) beginScope(ctx context.Context, opts *sql.TxOptions) (Execut
 		return nil, nil, err
 	}
 	child := dbExecutor{db: db, compiler: e.compiler, busy: newExecutorBusy()}
-	return child, execScopeFinalizer{finalizer}, nil
+	return child, guardedScopeFinalizer{ScopeFinalizer: finalizer, busy: child.busy}, nil
 }
 
 func (e dbExecutor) beginSavepoint(ctx context.Context) (Executor, scopeFinalizer, error) {
