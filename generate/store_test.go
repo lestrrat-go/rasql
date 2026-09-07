@@ -20,7 +20,7 @@ func TestStoreDefaultOutputCompatibilityGolden(t *testing.T) {
 	store := generate.Store{Package: "store", Root: root, Dir: "generated", Tables: []schema.TableDef{usersTableDef(), ordersTableDef()}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
-	want := map[string]string{"orders_gen.go": "2fe76856289192b44bb0347cbd065fb9f40052b6d070acd1a7741a5938400516", "schema_gen.go": "6c87d0702fc3583b0824cb24cead2ced5dc3a6d1332a0487f5e8a3667f25976e", "schema_gen_test.go": "4acabb011ee498d48d018933c3c54fde7c9009c626bdd5ead9fedc75c1f1d353", "users_gen.go": "1637f93aee523e9ceb36dbf08255eaf835b3deddcc83c7d9a2a44f55abae7b24"}
+	want := map[string]string{"orders_gen.go": "f3e60ee86e681cbf8d8d6cb352b44a31efa05322ea011283a04efe781d3b3c41", "schema_gen.go": "6c87d0702fc3583b0824cb24cead2ced5dc3a6d1332a0487f5e8a3667f25976e", "schema_gen_test.go": "4acabb011ee498d48d018933c3c54fde7c9009c626bdd5ead9fedc75c1f1d353", "users_gen.go": "0f38fb5b035b7917b66f8266f80920d61945b63d43a7bff505aa1514978dcf46"}
 	for _, file := range plan.Files() {
 		name := filepath.Base(file.Path)
 		require.Equal(t, filepath.Join(root, "generated", name), file.Path)
@@ -41,7 +41,7 @@ func TestStoreExtendedDefaultOutputCompatibilityGolden(t *testing.T) {
 	store := generate.Store{Package: "store", Root: root, Dir: "generated", Dialect: dialect.PostgreSQL(), Tables: []schema.TableDef{parent, child}, Queries: []generate.Query{{Input: "event_by_id.sql", Function: "EventByID", Output: "event_by_id_gen.go"}}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
-	want := map[string]string{"event_by_id_gen.go": "8f7f59f3cded22263d220cbece9092e914304983c49423ccd8a77b39ece19f4e", "event_items_gen.go": "213fb998916c2c2c08c6bd906cf319d87feac3cea864ec5459a80df42f739874", "events_gen.go": "265d605882ac69aa22c65b5726c202939225b3ccd71674d46d0757e480cb21f0", "schema_gen.go": "f5995a4ec86cd274f3b764df9ece39d82ab944e9876338970db0748e506ff999", "schema_gen_test.go": "9455ecd97f415ae72dcba77d4129a26d718f3b08fa66a1d8f30c253b7773023b"}
+	want := map[string]string{"event_by_id_gen.go": "8f7f59f3cded22263d220cbece9092e914304983c49423ccd8a77b39ece19f4e", "event_items_gen.go": "a93899a4da16da4fb2a7744f2821853ac36141a2169aaee02b312c551dcd92b2", "events_gen.go": "73b0287ff3c78d5519cc53804eb53f4a7de29a62ba410c3add872b83c5a19b9d", "schema_gen.go": "f5995a4ec86cd274f3b764df9ece39d82ab944e9876338970db0748e506ff999", "schema_gen_test.go": "9455ecd97f415ae72dcba77d4129a26d718f3b08fa66a1d8f30c253b7773023b"}
 	for _, file := range plan.Files() {
 		name := filepath.Base(file.Path)
 		hash := sha256.Sum256(file.Source)

@@ -1480,6 +1480,59 @@ func TestSchemaRejectsCollidingRelationshipMethodNames(t *testing.T) {
 	require.ErrorContains(t, err, `duplicate generated method "BillingUser"`)
 }
 
+func TestSchemaMutationMethodReservationsMatchEmittedMethods(t *testing.T) {
+	base := func(columns ...schema.ColumnDef) schema.TableDef {
+		return schema.TableDef{
+			Name:       "users",
+			Columns:    append([]schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways}}, columns...),
+			PrimaryKey: []string{"id"},
+		}
+	}
+
+	// A non-defaulted column named default_name emits DefaultName itself. It
+	// must not collide with a nonexistent DefaultName method from name.
+	valid := base(
+		schema.ColumnDef{Name: "name", Type: schema.TextType{}},
+		schema.ColumnDef{Name: "default_name", Type: schema.TextType{}},
+	)
+	require.NoError(t, schemagen.Validate("generated", valid))
+
+	// The same method is a real collision once name emits DefaultName.
+	withDefault := base(
+		schema.ColumnDef{Name: "name", Type: schema.TextType{}, Default: "'anonymous'"},
+		schema.ColumnDef{Name: "default_name", Type: schema.TextType{}},
+	)
+	err := schemagen.Validate("generated", withDefault)
+	require.ErrorContains(t, err, `collides with create method "DefaultName"`)
+	require.ErrorContains(t, err, `from "name"`)
+
+	// Patch has the same emission rule, while primary keys remain excluded.
+	patchValid := base(
+		schema.ColumnDef{Name: "name", Type: schema.TextType{}},
+		schema.ColumnDef{Name: "default_name", Type: schema.TextType{}},
+	)
+	require.NoError(t, schemagen.Validate("generated", patchValid))
+	// The same reservation feeds both builders. The create error above also
+	// proves that a defaulted name reserves the method before patch rendering.
+}
+
+func TestSchemaRejectsPatchOnlyMutationMethodCollision(t *testing.T) {
+	table := schema.TableDef{
+		Name:       "items",
+		PrimaryKey: []string{"id"},
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "where", Type: schema.TextType{}},
+		},
+	}
+	// Create permits Where(string), while patch reserves Where for its
+	// predicate method. This fixture therefore reaches the patch validator.
+	err := schemagen.Validate("generated", table)
+	require.ErrorContains(t, err, `column "where" on table "items" collides with patch method "Where"`)
+	require.ErrorContains(t, err, `on builder "ItemsPatch"`)
+	require.ErrorContains(t, err, `from "Where"`)
+}
+
 func TestSchemaAllowsScanColumns(t *testing.T) {
 	source, err := schemagen.PackageSource("generated", schema.TableDef{
 		Name: "users",

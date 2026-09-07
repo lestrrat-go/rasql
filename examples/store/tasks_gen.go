@@ -89,3 +89,39 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 	}
 	return TasksTable{Table: aliased}, nil
 }
+
+type TasksCreate struct {
+	fields []rasql.MutationField[TasksRow]
+}
+
+func NewTasksCreate() TasksCreate { return TasksCreate{} }
+
+func (p TasksCreate) ID(value int64) TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().ID(), value))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) Status(value string) TasksCreate {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().Status(), value))
+	return TasksCreate{fields: fields}
+}
+func (p TasksCreate) Plan() rasql.CreatePlan[TasksRow] {
+	plan, _ := rasql.NewCreatePlan[TasksRow](Tasks(), p.fields...)
+	return plan
+}
+
+type TasksPatch struct {
+	fields []rasql.MutationField[TasksRow]
+}
+
+func NewTasksPatch() TasksPatch { return TasksPatch{} }
+
+func (p TasksPatch) Status(value string) TasksPatch {
+	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
+	fields = append(fields, rasql.SetField[TasksRow](Tasks().Status(), value))
+	return TasksPatch{fields: fields}
+}
+func (p TasksPatch) Where(predicate query.Predicate) (rasql.PatchPlan[TasksRow], error) {
+	return rasql.NewPatchPlan[TasksRow](Tasks(), predicate, p.fields...)
+}

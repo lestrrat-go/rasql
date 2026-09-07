@@ -114,6 +114,12 @@ func PackageLevelNames(packageName string, tables ...schema.TableDef) ([]string,
 		unique[descriptorName(table.Name)] = struct{}{}
 		unique[definitionName(table.Name)] = struct{}{}
 		unique[definitionAccessorName(table.Name)] = struct{}{}
+		if table.EffectiveKind() != schema.ObjectView {
+			unique[mutationPrefix(table)+"Create"] = struct{}{}
+			unique["New"+mutationPrefix(table)+"Create"] = struct{}{}
+			unique[mutationPrefix(table)+"Patch"] = struct{}{}
+			unique["New"+mutationPrefix(table)+"Patch"] = struct{}{}
+		}
 		if tableHasTimeColumn(table) {
 			unique[timeScannerTypeName(table.Name)] = struct{}{}
 		}
@@ -342,6 +348,11 @@ func schemaSourceWithOptions(packageName string, tables, allTables []schema.Tabl
 		source.WriteString("\n")
 		writeTableAs(&source, table, names)
 		source.WriteString("\n")
+		if table.EffectiveKind() != schema.ObjectView {
+			if err := writeMutationFacades(&source, table, names, bindings); err != nil {
+				return nil, err
+			}
+		}
 		if err := writeRelationships(&source, table, allTables, names, bindings); err != nil {
 			return nil, err
 		}
@@ -830,13 +841,22 @@ func validateVariableNames(tables []schema.TableDef) error {
 				return err
 			}
 		}
-		for _, generated := range []string{
+		generatedNames := []string{
 			rowTypeName(table),
 			tableTypeName(table.Name),
 			descriptorName(table.Name),
 			definitionName(table.Name),
 			definitionAccessorName(table.Name),
-		} {
+		}
+		if table.EffectiveKind() != schema.ObjectView {
+			generatedNames = append(generatedNames,
+				mutationPrefix(table)+"Create",
+				"New"+mutationPrefix(table)+"Create",
+				mutationPrefix(table)+"Patch",
+				"New"+mutationPrefix(table)+"Patch",
+			)
+		}
+		for _, generated := range generatedNames {
 			if _, exists := names[generated]; exists {
 				return generatedNameConflict(table.Name, generated)
 			}
@@ -916,6 +936,11 @@ func validateVariableNames(tables []schema.TableDef) error {
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated method %q", relationship.method, table.Name, relationship.method)
 			}
 		}
+		if table.EffectiveKind() != schema.ObjectView {
+			if err := validateMutationMethods(table); err != nil {
+				return err
+			}
+		}
 	}
 	for _, table := range tables {
 		seenMethods := make(map[string]string)
@@ -928,6 +953,64 @@ func validateVariableNames(tables []schema.TableDef) error {
 				return fmt.Errorf("generate: relationship %q on table %q duplicates generated name %q", relationship.method, table.Name, relationship.typeName)
 			}
 			names[relationship.typeName] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validateMutationMethods(table schema.TableDef) error {
+	createMethods := map[string]string{"Plan": "Plan"}
+	patchMethods := map[string]string{"Where": "Where"}
+	createBuilder := mutationPrefix(table) + "Create"
+	patchBuilder := mutationPrefix(table) + "Patch"
+	primary := make(map[string]struct{}, len(table.PrimaryKey))
+	for _, name := range table.PrimaryKey {
+		primary[name] = struct{}{}
+	}
+	for _, column := range table.Columns {
+		if column.GeneratedExpression != "" || column.Identity == schema.IdentityAlways {
+			continue
+		}
+		method := goName(column.Name)
+		if method == "" || !token.IsIdentifier(method) {
+			return fmt.Errorf("generate: column %q on table %q cannot become a mutation method", column.Name, table.Name)
+		}
+		createNames := []string{method}
+		if column.Default != "" {
+			createNames = append(createNames, "Default"+method)
+		}
+		for _, name := range createNames {
+			if owner, exists := createMethods[name]; exists {
+				return fmt.Errorf("generate: column %q on table %q collides with create method %q on builder %q from %q", column.Name, table.Name, name, createBuilder, owner)
+			}
+			createMethods[name] = column.Name
+		}
+		if column.Nullable {
+			name := "Clear" + method
+			if owner, exists := createMethods[name]; exists {
+				return fmt.Errorf("generate: column %q on table %q collides with create method %q on builder %q from %q", column.Name, table.Name, name, createBuilder, owner)
+			}
+			createMethods[name] = column.Name
+		}
+		if _, isPrimary := primary[column.Name]; isPrimary {
+			continue
+		}
+		patchNames := []string{method}
+		if column.Default != "" {
+			patchNames = append(patchNames, "Default"+method)
+		}
+		for _, name := range patchNames {
+			if owner, exists := patchMethods[name]; exists {
+				return fmt.Errorf("generate: column %q on table %q collides with patch method %q on builder %q from %q", column.Name, table.Name, name, patchBuilder, owner)
+			}
+			patchMethods[name] = column.Name
+		}
+		if column.Nullable {
+			name := "Clear" + method
+			if owner, exists := patchMethods[name]; exists {
+				return fmt.Errorf("generate: column %q on table %q collides with patch method %q on builder %q from %q", column.Name, table.Name, name, patchBuilder, owner)
+			}
+			patchMethods[name] = column.Name
 		}
 	}
 	return nil
@@ -1313,6 +1396,99 @@ func writeTableAs(source *bytes.Buffer, table schema.TableDef, names *ResolvedNa
 	} else {
 		source.WriteString("{Table: aliased}, nil\n}\n")
 	}
+}
+
+func writeMutationFacades(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames, bindings generatedBindings) error {
+	object, _ := names.Object(table)
+	row := object.RowType
+	accessor := object.Accessor
+	prefix := mutationPrefix(table, names)
+	create := prefix + "Create"
+	patch := prefix + "Patch"
+	source.WriteString("type " + create + " struct { fields []rasql.MutationField[" + row + "] }\n\n")
+	source.WriteString("func New" + create + "() " + create + " { return " + create + "{} }\n\n")
+	if err := writeMutationMethods(source, table, names, bindings, create, false); err != nil {
+		return err
+	}
+	source.WriteString("func (p " + create + ") Plan() rasql.CreatePlan[" + row + "] { plan, _ := rasql.NewCreatePlan[" + row + "](" + accessor + "(), p.fields...); return plan }\n\n")
+	source.WriteString("type " + patch + " struct { fields []rasql.MutationField[" + row + "] }\n\n")
+	source.WriteString("func New" + patch + "() " + patch + " { return " + patch + "{} }\n\n")
+	if err := writeMutationMethods(source, table, names, bindings, patch, true); err != nil {
+		return err
+	}
+	source.WriteString("func (p " + patch + ") Where(predicate query.Predicate) (rasql.PatchPlan[" + row + "], error) { return rasql.NewPatchPlan[" + row + "](" + accessor + "(), predicate, p.fields...) }\n\n")
+	return nil
+}
+
+func mutationPrefix(table schema.TableDef, optionalNames ...*ResolvedNames) string {
+	row := rowTypeName(table)
+	if len(optionalNames) > 0 && optionalNames[0] != nil {
+		row = resolvedObjectName(optionalNames[0], table).RowType
+	}
+	if strings.HasSuffix(row, "Row") {
+		return strings.TrimSuffix(row, "Row")
+	}
+	return row
+}
+
+func writeMutationMethods(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames, bindings generatedBindings, builder string, patch bool) error {
+	primary := make(map[string]struct{}, len(table.PrimaryKey))
+	for _, name := range table.PrimaryKey {
+		primary[name] = struct{}{}
+	}
+	for _, column := range table.Columns {
+		if column.GeneratedExpression != "" || column.Identity == schema.IdentityAlways {
+			continue
+		}
+		if patch {
+			if _, ok := primary[column.Name]; ok {
+				continue
+			}
+		}
+		fieldType, err := bindings.typeFor(table, column, column.Nullable)
+		if err != nil {
+			return err
+		}
+		method := resolvedColumnName(names, table, column.Name).Accessor
+		writeMutationSetter(source, table, names, builder, method, fieldType, column.Nullable, "set", column.Name)
+		if column.Nullable {
+			writeMutationSetter(source, table, names, builder, "Clear"+method, fieldType, true, "clear", column.Name)
+		}
+		if column.Default != "" {
+			writeMutationSetter(source, table, names, builder, "Default"+method, fieldType, column.Nullable, "default", column.Name)
+		}
+	}
+	return nil
+}
+
+func writeMutationSetter(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames, builder, method, fieldType string, nullable bool, state, columnName string) {
+	object := resolvedObjectName(names, table)
+	row := object.RowType
+	column := object.Accessor + "()." + resolvedColumnName(names, table, columnName).Accessor + "()"
+	source.WriteString("func (p " + builder + ") " + method)
+	if state == "set" {
+		source.WriteString("(value " + fieldType + ")")
+	} else {
+		source.WriteString("()")
+	}
+	source.WriteString(" " + builder + " { fields := append([]rasql.MutationField[" + row + "](nil), p.fields...); fields = append(fields, ")
+	switch state {
+	case "set":
+		helper := "SetField"
+		if nullable {
+			helper = "SetNullableField"
+		}
+		source.WriteString("rasql." + helper + "[" + row + "](" + column + ", value)")
+	case "clear":
+		source.WriteString("rasql.ClearField[" + row + "](" + column + ")")
+	case "default":
+		helper := "DefaultField"
+		if nullable {
+			helper = "DefaultNullableField"
+		}
+		source.WriteString("rasql." + helper + "[" + row + "](" + column + ")")
+	}
+	source.WriteString("); return " + builder + "{fields: fields} }\n")
 }
 
 // writeRowType writes the exported row type: one field per column, in the
