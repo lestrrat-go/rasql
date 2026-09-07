@@ -271,6 +271,11 @@ func (p QueryPlan) Validate() error {
 				return planError("invalid_source", fmt.Sprintf("plan.predicates[%d]", i), "expression source is outside plan")
 			}
 		}
+		if predicate.source2 != "" {
+			if _, ok := allowed[predicate.source2]; !ok {
+				return planError("invalid_source", fmt.Sprintf("plan.predicates[%d]", i), "expression source is outside plan")
+			}
+		}
 	}
 	for i, key := range p.group {
 		if key.node == nil {
@@ -379,6 +384,28 @@ type scalarDecoder[T any] struct{ schema ResultSchema }
 func (d scalarDecoder[T]) ResultSchema() ResultSchema                   { return d.schema }
 func (d scalarDecoder[T]) Presence() []Presence                         { return nil }
 func (d scalarDecoder[T]) DecodeRow(source ScanSource, result *T) error { return source.Scan(result) }
+
+type nullableScalarDecoder[T any] struct{ schema ResultSchema }
+
+func (d nullableScalarDecoder[T]) ResultSchema() ResultSchema { return d.schema }
+func (d nullableScalarDecoder[T]) Presence() []Presence       { return nil }
+func (d nullableScalarDecoder[T]) DecodeRow(source ScanSource, result *Nullable[T]) error {
+	var raw any
+	if err := source.Scan(&raw); err != nil {
+		return err
+	}
+	if raw == nil {
+		result.Valid = false
+		var zero T
+		result.Value = zero
+		return nil
+	}
+	if err := ScanValue(&result.Value, raw); err != nil {
+		return err
+	}
+	result.Valid = true
+	return nil
+}
 func Scalar[T any](name string, value Expr[T], logical schema.ColumnType, codec string) (Projection[T], error) {
 	resultSchema, err := NewResultSchema(ResultColumn{Name: name, Type: logical, Codec: codec})
 	if err != nil {
@@ -391,5 +418,5 @@ func NullableScalar[T any](name string, value NullExpr[T], logical schema.Column
 	if err != nil {
 		return Projection[Nullable[T]]{}, err
 	}
-	return NewProjection([]ProjectionItem{NullItem(name, value, logical, codec)}, scalarDecoder[Nullable[T]]{schema: resultSchema})
+	return NewProjection([]ProjectionItem{NullItem(name, value, logical, codec)}, nullableScalarDecoder[T]{schema: resultSchema})
 }

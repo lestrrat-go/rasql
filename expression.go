@@ -26,6 +26,7 @@ type NullExpr[T any] struct {
 type Predicate struct {
 	node    query.Expression
 	source  string
+	source2 string
 	bindErr error
 }
 type Column[Row, T any] struct {
@@ -128,7 +129,7 @@ func ValueWithCodec[T any](value T, codec string) (Expr[T], error) {
 	return Expr[T]{node: query.Bind(bindToken{id: id, value: snapshot, codec: codec}), codec: codec}, nil
 }
 func EqualExpr[T comparable](left, right Expr[T]) Predicate {
-	return Predicate{node: query.Equal(left.node, right.node), source: left.source}
+	return Predicate{node: query.Equal(left.node, right.node), source: left.source, source2: right.source}
 }
 func EqualValue[T comparable](left Expr[T], right T) Predicate {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
@@ -136,10 +137,10 @@ func EqualValue[T comparable](left Expr[T], right T) Predicate {
 	return Predicate{node: query.Equal(left.node, query.Bind(bindToken{id: id, value: snapshot, codec: left.codec})), source: left.source, bindErr: err}
 }
 func EqualNullable[T comparable](left, right NullExpr[T]) Predicate {
-	return Predicate{node: query.Equal(left.node, right.node), source: left.source}
+	return Predicate{node: query.Equal(left.node, right.node), source: left.source, source2: right.source}
 }
 func EqualOptional[T comparable](left Expr[T], right NullExpr[T]) Predicate {
-	return Predicate{node: query.Equal(left.node, right.node), source: left.source}
+	return Predicate{node: query.Equal(left.node, right.node), source: left.source, source2: right.source}
 }
 func IsNull[T any](value NullExpr[T]) Predicate {
 	return Predicate{node: query.IsNull(value.node), source: value.source}
@@ -353,6 +354,9 @@ func cloneReflectValue(value reflect.Value) reflect.Value {
 	if !value.IsValid() {
 		return value
 	}
+	if value.Type() == reflect.TypeOf(time.Time{}) {
+		return value
+	}
 	switch value.Kind() {
 	case reflect.Pointer:
 		if value.IsNil() {
@@ -395,6 +399,9 @@ func cloneReflectValue(value reflect.Value) reflect.Value {
 		}
 		return copy
 	case reflect.Struct:
+		if value.Type() == reflect.TypeOf(time.Time{}) {
+			return value
+		}
 		if value.Type() == reflect.TypeOf(sql.NamedArg{}) {
 			argument := value.Interface().(sql.NamedArg)
 			argument.Value = cloneBindValue(argument.Value)
@@ -402,11 +409,16 @@ func cloneReflectValue(value reflect.Value) reflect.Value {
 		}
 		copy := reflect.New(value.Type()).Elem()
 		for i := 0; i < value.NumField(); i++ {
+			if value.Type().Field(i).PkgPath != "" {
+				continue
+			}
 			if copy.Field(i).CanSet() && value.Field(i).CanInterface() {
 				copy.Field(i).Set(cloneReflectValue(value.Field(i)))
 				continue
 			}
-			copy.Field(i).Set(value.Field(i))
+			if copy.Field(i).CanSet() {
+				copy.Field(i).Set(value.Field(i))
+			}
 		}
 		return copy
 	default:
