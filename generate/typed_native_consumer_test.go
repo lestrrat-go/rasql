@@ -27,13 +27,18 @@ func TestTypedNativeSQLiteTwoColumnConsumer(t *testing.T) {
 	maybeInput.Function, maybeInput.Result, maybeInput.Decoder, maybeInput.Cardinality = "FindMaybe", "FindMaybeResult", "FindMaybeDecoder", "maybe"
 	maybeGenerated, err := querygen.TypedGoSource(maybeInput)
 	require.NoError(t, err)
+	execInput := querygen.TypedInput{Package: "queries", Function: "Update", Engine: "sqlite", SQL: "UPDATE users SET name = name || '!' WHERE id > ?", Operation: "exec", Parameters: input.Parameters, ArgumentNames: []string{"id"}}
+	execGenerated, err := querygen.TypedGoSource(execInput)
+	require.NoError(t, err)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "queries"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_gen.go"), generated, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_one_gen.go"), oneGenerated, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_maybe_gen.go"), maybeGenerated, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "update_gen.go"), execGenerated, 0o600))
 	consumer := `package queries
 
 import (
+  "context"
   "errors"
   "testing"
   "github.com/lestrrat-go/rasql"
@@ -59,6 +64,11 @@ func TestConsumer(t *testing.T) {
   maybeQuery, err := FindMaybe(2); if err != nil { t.Fatal(err) }; maybe, found, err := rasql.Maybe(t.Context(), executor, maybeQuery); if err != nil || !found || maybe.ID != 3 { t.Fatalf("maybe 1: %#v %t %v", maybe, found, err) }
   maybeQuery, err = FindMaybe(3); if err != nil { t.Fatal(err) }; _, found, err = rasql.Maybe(t.Context(), executor, maybeQuery); if err != nil || found { t.Fatalf("maybe 0: %t %v", found, err) }
   maybeQuery, err = FindMaybe(1); if err != nil { t.Fatal(err) }; _, _, err = rasql.Maybe(t.Context(), executor, maybeQuery); if !errors.Is(err, rasql.ErrMultipleRows) { t.Fatalf("maybe 2: %v", err) }
+  update, err := Update(3); if err != nil { t.Fatal(err) }; outcome, err := rasql.ExecMutation(t.Context(), executor, update); if err != nil || outcome.Affected != 0 { t.Fatalf("exec 0: %#v %v", outcome, err) }
+  update, err = Update(2); if err != nil { t.Fatal(err) }; outcome, err = rasql.ExecMutation(t.Context(), executor, update); if err != nil || outcome.Affected != 1 { t.Fatalf("exec 1: %#v %v", outcome, err) }
+  update, err = Update(1); if err != nil { t.Fatal(err) }; outcome, err = rasql.ExecMutation(t.Context(), executor, update); if err != nil || outcome.Affected != 2 { t.Fatalf("exec 2: %#v %v", outcome, err) }
+  cancelled, cancel := context.WithCancel(t.Context()); cancel(); update, err = Update(0); if err != nil { t.Fatal(err) }; _, err = rasql.ExecMutation(cancelled, executor, update); if !errors.Is(err, context.Canceled) { t.Fatalf("cancel: %v", err) }
+  if err = rasql.Within(t.Context(), executor, nil, func(ctx context.Context, tx rasql.Executor) error { plan, e := Update(2); if e != nil { return e }; _, e = rasql.ExecMutation(ctx, tx, plan); return e }); err != nil { t.Fatalf("transaction: %v", err) }
   _ = query.Bind
 }
 `
