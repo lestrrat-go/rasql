@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 
 	"github.com/lestrrat-go/rasql/schema"
@@ -69,18 +70,19 @@ type OptionalInt struct {
 	Set   bool
 }
 type IntegerTypeFacts struct {
-	Unsigned     bool
-	DisplayWidth OptionalInt
-	ZeroFill     bool
+	Unsigned     bool        `json:"unsigned"`
+	DisplayWidth OptionalInt `json:"display_width"`
+	ZeroFill     bool        `json:"zero_fill"`
 }
 type TextTypeFacts struct {
-	Width OptionalInt
-	Fixed bool
+	Width OptionalInt `json:"width"`
+	Fixed bool        `json:"fixed"`
 }
 type DecimalTypeFacts struct {
-	Precision          int
-	Scale              OptionalInt
-	Unsigned, ZeroFill bool
+	Precision int         `json:"precision"`
+	Scale     OptionalInt `json:"scale"`
+	Unsigned  bool        `json:"unsigned"`
+	ZeroFill  bool        `json:"zero_fill"`
 }
 type NativeType struct {
 	Dialect   string      `json:"dialect"`
@@ -166,8 +168,13 @@ type IdentityInput struct {
 // pointers into the caller's descriptors.
 func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (PhysicalCatalog, []Diagnostic) {
 	c := PhysicalCatalog{Engine: engine}
+	var diagnostics []Diagnostic
 	for _, source := range tables {
 		t := source.Clone()
+		if err := t.Validate(); err != nil {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_table", Path: t.QualifiedName(), Message: err.Error()})
+			continue
+		}
 		o := PhysicalObject{Kind: string(t.EffectiveKind()), Schema: t.Schema, Name: t.Name, Strict: t.Strict, WithoutRowID: t.WithoutRowID, PrimaryKeyAutoincrement: t.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: string(t.PrimaryKeyOnConflict), VirtualTableModule: t.VirtualTableModule, VirtualTableModuleArguments: append([]string(nil), t.VirtualTableModuleArguments...)}
 		for i, col := range t.Columns {
 			pc := PhysicalColumn{Name: col.Name, Ordinal: i, LogicalKind: string(col.Type.Kind()), Nullable: col.Nullable, DefaultSQL: string(col.Default), GeneratedSQL: string(col.GeneratedExpression), GeneratedStorage: string(col.GeneratedStorage), Identity: string(col.Identity), Collation: col.Collation, Hidden: col.Hidden}
@@ -213,6 +220,13 @@ func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (Phy
 			}
 			o.Indexes = append(o.Indexes, pi)
 		}
+		for _, exclusion := range t.ExclusionConstraints {
+			pe := PhysicalExclusionConstraint{Name: exclusion.Name, Method: string(exclusion.Method), PredicateSQL: string(exclusion.Predicate), Deferrability: string(exclusion.Deferrable)}
+			for _, element := range exclusion.Elements {
+				pe.Elements = append(pe.Elements, ExclusionElement{ExpressionSQL: string(element.Expression), Operator: element.Operator})
+			}
+			o.ExclusionConstraints = append(o.ExclusionConstraints, pe)
+		}
 		c.Objects = append(c.Objects, o)
 	}
 	sort.Slice(c.Objects, func(i, j int) bool {
@@ -224,7 +238,7 @@ func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (Phy
 		}
 		return c.Objects[i].Name < c.Objects[j].Name
 	})
-	return c, nil
+	return c, sortDiagnostics(diagnostics)
 }
 
 func nativeType(n *schema.NativeTypeDef) *NativeType {
@@ -351,8 +365,8 @@ func TableDefsFromPhysical(c PhysicalCatalog) ([]schema.TableDef, []Diagnostic) 
 				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticWarning, Code: "opaque_type", Path: object.Name + "." + col.Name, Message: "native type has no legacy schema equivalent"})
 			}
 			var native *schema.NativeTypeDef
-			if col.Native != nil && col.Native.Name != "" {
-				native = &schema.NativeTypeDef{Dialect: col.Native.Dialect, Schema: col.Native.Schema, Name: col.Native.Name, Kind: schema.NativeTypeKind(col.Native.Kind), Arguments: append([]string(nil), col.Native.Arguments...)}
+			if col.Native != nil {
+				native = nativeDef(col.Native)
 			}
 			t.Columns = append(t.Columns, schema.ColumnDef{Name: col.Name, Type: typeValue, Nullable: col.Nullable, Default: sqltext.Text(col.DefaultSQL), Collation: col.Collation, GeneratedExpression: sqltext.Text(col.GeneratedSQL), GeneratedStorage: schema.GeneratedStorage(col.GeneratedStorage), Identity: schema.IdentityGeneration(col.Identity), Hidden: col.Hidden, NativeType: native})
 		}
@@ -381,7 +395,23 @@ func TableDefsFromPhysical(c PhysicalCatalog) ([]schema.TableDef, []Diagnostic) 
 			}
 			t.Indexes = append(t.Indexes, idx)
 		}
+		for _, exclusion := range object.ExclusionConstraints {
+			e := schema.ExclusionDef{Name: exclusion.Name, Method: schema.IndexMethod(exclusion.Method), Predicate: sqltext.Text(exclusion.PredicateSQL), Deferrable: schema.Deferrability(exclusion.Deferrability)}
+			for _, element := range exclusion.Elements {
+				e.Elements = append(e.Elements, schema.ExclusionElementDef{Expression: sqltext.Text(element.ExpressionSQL), Operator: element.Operator})
+			}
+			t.ExclusionConstraints = append(t.ExclusionConstraints, e)
+		}
 		out = append(out, t)
 	}
 	return out, sortDiagnostics(diagnostics)
+}
+
+func nativeDef(n *NativeType) *schema.NativeTypeDef {
+	if n == nil {
+		return nil
+	}
+	out := &schema.NativeTypeDef{Dialect: n.Dialect, Schema: n.Schema, Name: n.Name, Kind: schema.NativeTypeKind(n.Kind), Arguments: slices.Clone(n.Arguments)}
+	out.Element = nativeDef(n.Element)
+	return out
 }

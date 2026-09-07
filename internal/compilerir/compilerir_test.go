@@ -8,6 +8,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 func TestPhysicalFromTableDefsClonesNativeFacts(t *testing.T) {
@@ -70,5 +71,27 @@ func TestCatalogFixturesLoadPhysicalFacts(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestPhysicalRoundTripPreservesCompositeConstraintsAndDefaults(t *testing.T) {
+	table := schema.TableDef{Schema: "public", Name: "orders", Strict: true, WithoutRowID: true, Columns: []schema.ColumnDef{{Name: "tenant", Type: schema.IntegerType{}, Nullable: false, Default: "1"}, {Name: "id", Type: schema.IntegerType{}, Nullable: false}, {Name: "note", Type: schema.TextType{Width: schema.NewTextWidth(0)}, Nullable: true}}, PrimaryKey: []string{"tenant", "id"}, UniqueConstraints: []schema.UniqueDef{{Name: "orders_note_key", Columns: []string{"note"}}}, Checks: []schema.CheckDef{{Name: "note_check", Expression: "note IS NULL OR note <> ''"}}, ForeignKeys: []schema.ForeignKeyDef{{Name: "orders_parent", Columns: []string{"tenant", "id"}, ReferencedSchema: "public", ReferencedTable: "orders", ReferencedColumns: []string{"tenant", "id"}}}, Indexes: []schema.IndexDef{{Name: "orders_note_idx", Expressions: []sqltext.Text{"lower(note)"}}}, ExclusionConstraints: []schema.ExclusionDef{{Name: "orders_excl", Method: "gist", Elements: []schema.ExclusionElementDef{{Expression: "id", Operator: "="}}}}}
+	first, diagnostics := compilerir.PhysicalFromTableDefs(compilerir.EngineIdentity{Dialect: "postgresql"}, []schema.TableDef{table})
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	secondTables, diagnostics := compilerir.TableDefsFromPhysical(first)
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	second, diagnostics := compilerir.PhysicalFromTableDefs(compilerir.EngineIdentity{Dialect: "postgresql"}, secondTables)
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	if len(second.Objects) != 1 || len(second.Objects[0].Constraints) != 4 || len(second.Objects[0].Constraints[0].Columns) != 2 {
+		t.Fatalf("composite facts lost: %#v", second.Objects)
+	}
+	if second.Objects[0].Columns[0].DefaultSQL != "1" || len(second.Objects[0].ExclusionConstraints) != 1 {
+		t.Fatalf("roundtrip facts lost: %#v", second.Objects[0])
 	}
 }

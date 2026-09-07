@@ -72,6 +72,14 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 	if config.Emitter != "" && config.Emitter != "compact" && config.Emitter != "legacy" {
 		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_emitter", Path: "emitter", Message: "emitter must be compact or legacy"})
 	}
+	for _, mapping := range config.Scalars {
+		if !knownScalar(mapping.Name) {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: "scalars." + mapping.Name, Message: "custom scalar mappings are owned by G2"})
+		}
+		for _, imp := range mapping.Imports {
+			out.Imports = append(out.Imports, imp)
+		}
+	}
 	for _, object := range model.Objects {
 		name := object.PhysicalName.Name + "Row"
 		for _, configured := range config.Objects {
@@ -116,6 +124,19 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 	}
 	for _, query := range model.Queries {
 		goQuery := GoQuery{ID: query.ID, Name: query.Name, Cardinality: query.Cardinality}
+		for _, configured := range config.Queries {
+			if configured.ID == query.ID {
+				if configured.Function != "" {
+					goQuery.Name = configured.Function
+				}
+				if configured.Projection != "" {
+					goQuery.ProjectionName = configured.Projection
+				}
+				if configured.Decoder != "" && goQuery.Result != nil {
+					goQuery.Result.DecoderName = configured.Decoder
+				}
+			}
+		}
 		for _, value := range query.Parameters {
 			goQuery.Parameters = append(goQuery.Parameters, GoField{Name: value.Name, Type: goType(value.Scalar, value.Nullable), Nullable: value.Nullable})
 		}

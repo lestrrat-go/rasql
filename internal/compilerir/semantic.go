@@ -62,6 +62,7 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 	if err := ValidatePhysical(c); err != nil {
 		model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_physical", Path: "physical", Message: err.Error()})
 	}
+	objectIDs := map[QualifiedName]ObjectID{}; for _, object := range c.Objects { objectIDs[QualifiedName{Schema:object.Schema,Name:object.Name}] = object.ID }
 	for _, object := range c.Objects {
 		so := SemanticObject{ID: object.ID, Kind: object.Kind, PhysicalName: QualifiedName{Schema: object.Schema, Name: object.Name}}
 		for _, column := range object.Columns {
@@ -79,7 +80,8 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 			if column.GeneratedSQL != "" || column.Identity != "" {
 				state = "generated"
 			}
-			if !column.Nullable && state == "optional" {
+			if column.DefaultSQL != "" && state == "optional" { state = "optional" }
+			if !column.Nullable && state == "optional" && column.DefaultSQL == "" {
 				state = "required"
 			}
 			patchState := "settable"
@@ -95,7 +97,7 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 			if constraint.Kind != "foreign_key" || constraint.Reference == nil {
 				continue
 			}
-			relation := SemanticRelation{Name: constraint.Name, Kind: "belongs_to", From: append([]string(nil), constraint.Columns...), To: append([]string(nil), constraint.Reference.Columns...), Nullable: false}
+				relation := SemanticRelation{Name: constraint.Name, Kind: "belongs_to", Target: objectIDs[QualifiedName{Schema:constraint.Reference.Schema,Name:constraint.Reference.Object}], From: append([]string(nil), constraint.Columns...), To: append([]string(nil), constraint.Reference.Columns...), Nullable: false}
 			for _, column := range object.Columns {
 				for _, from := range constraint.Columns {
 					if column.Name == from && column.Nullable {

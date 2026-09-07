@@ -83,8 +83,15 @@ func restoreLegacy(tables []schema.TableDef, input CompilerInput) ([]schema.Tabl
 			}
 			bindings[column.Name] = column.GoBinding.Clone()
 		}
+		if len(bindings) != len(tables[i].Columns) {
+			return nil, fmt.Errorf("generate: legacy sidecar column coverage mismatch for %q", tables[i].Name)
+		}
 		for j := range tables[i].Columns {
-			tables[i].Columns[j].GoBinding = bindings[tables[i].Columns[j].Name].Clone()
+			binding, ok := bindings[tables[i].Columns[j].Name]
+			if !ok {
+				return nil, fmt.Errorf("generate: legacy sidecar missing column %q", tables[i].Columns[j].Name)
+			}
+			tables[i].Columns[j].GoBinding = binding.Clone()
 		}
 	}
 	return tables, nil

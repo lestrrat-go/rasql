@@ -2,7 +2,7 @@
   "engine": {"dialect": "mysql", "version": "8.0", "profile": "mysql-8"},
   "objects": [{"id": "mysql-orders", "kind": "table", "schema": "shop", "name": "orders", "columns": [
     {"name": "status", "ordinal": 0, "logical_kind": "text", "native": {"dialect": "mysql", "schema": "shop", "name": "status_enum", "kind": "enum", "arguments": ["new", "paid"]}, "nullable": false},
-    {"name": "amount", "ordinal": 1, "logical_kind": "integer", "native": {"dialect": "mysql", "name": "int unsigned", "kind": "builtin", "arguments": ["unsigned"]}, "nullable": false},
-    {"name": "total", "ordinal": 2, "logical_kind": "decimal", "native": {"dialect": "mysql", "name": "decimal", "kind": "builtin", "arguments": ["10", "2"]}, "nullable": false, "generated_sql": "amount * 2", "generated_storage": "stored"}
+    {"name": "amount", "ordinal": 1, "logical_kind": "integer", "native": {"dialect": "mysql", "name": "int unsigned", "kind": "builtin", "arguments": ["unsigned"]}, "integer": {"unsigned": true, "display_width": {"value": 11, "set": true}}, "nullable": false},
+    {"name": "total", "ordinal": 2, "logical_kind": "decimal", "native": {"dialect": "mysql", "name": "decimal", "kind": "builtin", "arguments": ["10", "2"]}, "decimal": {"precision": 10, "scale": {"value": 2, "set": true}}, "nullable": false, "generated_sql": "amount * 2", "generated_storage": "stored"}
   ], "constraints": [{"name": "orders_status_unique", "kind": "unique", "columns": ["status"]}] }]
 }
