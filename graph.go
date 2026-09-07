@@ -184,43 +184,47 @@ func graphUniqueOrder[R any](q Query[R], order []OrderTerm) ([]OrderTerm, bool) 
 		return nil, false
 	}
 	definition := table.Definition()
-	candidate := append([]string(nil), definition.PrimaryKey...)
-	if len(candidate) == 0 {
-		for _, unique := range definition.UniqueConstraints {
-			if unique.Deferrable != "" || len(unique.Columns) == 0 {
+	candidates := make([][]string, 0, 1+len(definition.UniqueConstraints)+len(definition.Indexes))
+	if len(definition.PrimaryKey) > 0 {
+		candidates = append(candidates, definition.PrimaryKey)
+	}
+	for _, unique := range definition.UniqueConstraints {
+		if unique.Deferrable != "" || len(unique.Columns) == 0 {
+			continue
+		}
+		if !unique.NullsNotDistinct && graphAnyNullable(definition.Columns, unique.Columns) {
+			continue
+		}
+		candidates = append(candidates, unique.Columns)
+	}
+	for _, index := range definition.Indexes {
+		if index.Unique && index.Predicate == "" && len(index.Expressions) == 0 && len(index.Columns) > 0 {
+			if graphAnyNullable(definition.Columns, index.Columns) {
 				continue
 			}
-			if !unique.NullsNotDistinct && graphAnyNullable(definition.Columns, unique.Columns) {
-				continue
-			}
-			candidate = append([]string(nil), unique.Columns...)
-			break
+			candidates = append(candidates, index.Columns)
 		}
 	}
-	if len(candidate) == 0 {
-		for _, index := range definition.Indexes {
-			if index.Unique && index.Predicate == "" && len(index.Expressions) == 0 && len(index.Columns) > 0 {
-				if graphAnyNullable(definition.Columns, index.Columns) {
-					continue
-				}
-				candidate = append([]string(nil), index.Columns...)
+	for _, candidate := range candidates {
+		if len(order) < len(candidate) {
+			continue
+		}
+		match := true
+		for index, name := range candidate {
+			column, ok := order[len(order)-len(candidate)+index].node.(query.ColumnRef)
+			if !ok || column.Source().QualifiedName() != q.plan.sources[0].ref.QualifiedName() || column.Name() != name {
+				match = false
 				break
 			}
 		}
-	}
-	if len(candidate) == 0 {
-		return nil, false
-	}
-	if len(order) < len(candidate) {
-		return nil, false
-	}
-	for index, name := range candidate {
-		column, ok := order[len(order)-len(candidate)+index].node.(query.ColumnRef)
-		if !ok || column.Source().QualifiedName() != q.plan.sources[0].ref.QualifiedName() || column.Name() != name {
-			return nil, false
+		if match {
+			return order, true
 		}
 	}
-	return order, true
+	if len(candidates) == 0 {
+		return nil, false
+	}
+	return nil, false
 }
 
 func graphAnyNullable(columns []schema.ColumnDef, names []string) bool {
