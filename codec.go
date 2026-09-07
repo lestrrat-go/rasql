@@ -129,13 +129,6 @@ func codecFor(reg CodecRegistry, id string) (ValueCodec, error) {
 	return codec, nil
 }
 
-func encodeCompiled(compiled compiledQuery, reg CodecRegistry) (stmt.Statement, error) {
-	statement, err := compiled.statementCopy()
-	if err != nil {
-		return stmt.Statement{}, err
-	}
-	return encodeStatement(statement, compiled.BindSlots(), reg)
-}
 func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegistry) (stmt.Statement, error) {
 	args := statement.BoundArgs()
 	if len(args) != len(slots) {
