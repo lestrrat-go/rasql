@@ -111,6 +111,14 @@ func normalizeGraphValue(value any) (driver.Value, error) {
 }
 
 func frameGraphValue(value driver.Value) ([]byte, error) {
+	return frameGraphValueWithNaN(value, false)
+}
+
+func frameGraphFingerprintValue(value driver.Value) ([]byte, error) {
+	return frameGraphValueWithNaN(value, true)
+}
+
+func frameGraphValueWithNaN(value driver.Value, allowNaN bool) ([]byte, error) {
 	var tag byte
 	var payload []byte
 	switch v := value.(type) {
@@ -121,7 +129,7 @@ func frameGraphValue(value driver.Value) ([]byte, error) {
 		payload = make([]byte, 8)
 		binary.BigEndian.PutUint64(payload, uint64(v))
 	case float64:
-		if math.IsNaN(v) {
+		if !allowNaN && math.IsNaN(v) {
 			return nil, fmt.Errorf("NaN is not a graph key")
 		}
 		tag = 2

@@ -63,6 +63,7 @@ type graphQueryOps interface {
 	compile(Executor) (compiledQuery, error)
 	prepare(Executor) (graphPreparedQuery, error)
 	prepareCompiled(Executor, compiledQuery) (graphPreparedQuery, error)
+	prepareCompiledRaw(Executor, compiledQuery) (graphPreparedQuery, error)
 	validateCompiled(Executor, compiledQuery) error
 	run(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
 	mapRow(any) any
@@ -105,6 +106,12 @@ func (q graphQuery[R, G]) prepare(executor Executor) (graphPreparedQuery, error)
 	return q.prepareCompiled(executor, compiled)
 }
 func (q graphQuery[R, G]) prepareCompiled(executor Executor, compiled compiledQuery) (graphPreparedQuery, error) {
+	return q.prepareCompiledMode(executor, compiled, true)
+}
+func (q graphQuery[R, G]) prepareCompiledRaw(executor Executor, compiled compiledQuery) (graphPreparedQuery, error) {
+	return q.prepareCompiledMode(executor, compiled, false)
+}
+func (q graphQuery[R, G]) prepareCompiledMode(executor Executor, compiled compiledQuery, mapRows bool) (graphPreparedQuery, error) {
 	prepared, err := prepareRows(executor, q.value, compiled)
 	if err != nil {
 		return graphPreparedQuery{}, err
@@ -121,7 +128,11 @@ func (q graphQuery[R, G]) prepareCompiled(executor Executor, compiled compiledQu
 				sequenceErr = err
 				return false
 			}
-			result = append(result, graphRow{row: row, graph: q.mapFn(row)})
+			var graph any
+			if mapRows {
+				graph = q.mapFn(row)
+			}
+			result = append(result, graphRow{row: row, graph: graph})
 			_, sequenceErr = count()
 			return sequenceErr == nil
 		})
@@ -390,7 +401,7 @@ func (a graphAttachMany[G, CG]) attach(parent any, value any, _ bool, _ bool) ([
 	}
 	copied := make([]CG, len(rawValues))
 	for i, raw := range rawValues {
-		child, ok := raw.(CG)
+		child, ok := graphCloneValue(raw).(CG)
 		if !ok {
 			return nil, nil, planError("internal_plan", "attach", "child type mismatch")
 		}
@@ -413,7 +424,7 @@ func (a graphAttachOne[G, CG]) attach(parent any, value any, _ bool, present boo
 	if !present {
 		return nil, func() { a.fn(p, LoadedOne[CG]{Loaded: true}) }, nil
 	}
-	child, ok := value.(CG)
+	child, ok := graphCloneValue(value).(CG)
 	if !ok {
 		return nil, nil, planError("internal_plan", "attach", "child type mismatch")
 	}
