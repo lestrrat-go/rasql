@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -16,6 +15,8 @@ import (
 	"github.com/lestrrat-go/rasql/internal/schemasource"
 	"github.com/lestrrat-go/rasql/schema"
 )
+
+var ErrDrift = errors.New("rasql: schema drift")
 
 func (c command) runSchemaUpdate(args []string) error {
 	flags := c.newFlagSet(c.flagSetPrefix + "schema update")
@@ -38,12 +39,16 @@ func (c command) runSchemaUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, markerErr := os.Stat(filepath.Join(root, pendingMarkerName)); markerErr == nil {
-		if err := validatePending(root); err != nil {
-			return err
-		}
+	marker, markerErr := readPending(root)
+	if markerErr != nil && !errors.Is(markerErr, os.ErrNotExist) {
+		return markerErr
 	}
-	request := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: cfg.Engine.Dialect, Profile: cfg.Engine.Profile}, Source: schemasource.SchemaSourceConfig{Kind: cfg.Schema.Kind, Identity: cfg.Schema.Identity, Paths: cfg.Schema.Paths, Inputs: cfg.Schema.Inputs, Command: cfg.Schema.Command, Environment: cfg.Schema.Environment}, BootstrapDSN: *dsn, TempRoot: filepath.Join(root, ".tmp")}
+	request := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: cfg.Engine.Dialect, Profile: cfg.Engine.Profile}, Source: schemasource.SchemaSourceConfig{Kind: cfg.Schema.Kind, Identity: cfg.Schema.Identity, Paths: cfg.Schema.Paths, Inputs: cfg.Schema.Inputs, Command: cfg.Schema.Command, Environment: cfg.Schema.Environment}, TempRoot: filepath.Join(root, ".tmp")}
+	if cfg.Schema.Kind == "live" {
+		request.LiveDSN = *dsn
+	} else {
+		request.BootstrapDSN = *dsn
+	}
 	result, err := schemasource.Materialize(context.Background(), request, schemasource.DefaultDependencies())
 	if err != nil {
 		return fmt.Errorf("schema update: %w", err)
@@ -90,12 +95,8 @@ func (c command) runSchemaUpdate(args []string) error {
 		return fmt.Errorf("schema update: Go model failed")
 	}
 	for i, object := range goModel.Objects {
-		row := object.Row.Name
-		if row != "" {
-			row = strings.ToUpper(row[:1]) + row[1:]
-		}
 		generation.Objects[i].Source = object.SourceName
-		generation.Objects[i].Row = row
+		generation.Objects[i].Row = object.Row.Name
 	}
 	for _, query := range goModel.Queries {
 		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: query.Name, Result: resultName(query), Projection: query.ProjectionName})
@@ -108,6 +109,8 @@ func (c command) runSchemaUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
+	store.Root = root
+	store.Dir = cfg.Output
 	plan, err := store.Plan()
 	if err != nil {
 		return err
@@ -131,46 +134,35 @@ func (c command) runSchemaUpdate(args []string) error {
 		return err
 	}
 	lockPath := filepath.Join(root, "rasql.lock.json")
-	entries := make([]pendingEntry, 0, len(plan.Files())+1)
-	for _, file := range plan.Files() {
-		path, err := filepath.Rel(root, file.Path)
-		if err != nil {
-			return err
-		}
-		old, err := stateFor(file.Path)
-		if err != nil {
-			return err
-		}
-		desiredHash := sha256.Sum256(file.Source)
-		entries = append(entries, pendingEntry{Path: filepath.ToSlash(path), Old: old, Desired: fileState{State: "present", SHA256: hex.EncodeToString(desiredHash[:])}})
-	}
-	for _, orphan := range plan.Orphans() {
-		old, err := stateFor(orphan)
-		if err != nil {
-			return err
-		}
-		path, err := filepath.Rel(root, orphan)
-		if err != nil {
-			return err
-		}
-		entries = append(entries, pendingEntry{Path: filepath.ToSlash(path), Old: old, Desired: fileState{State: "missing"}})
-	}
+	lockHash := sha256.Sum256(encoded)
 	oldLock, err := stateFor(lockPath)
 	if err != nil {
 		return err
 	}
-	lockHash := sha256.Sum256(encoded)
-	entries = append(entries, pendingEntry{Path: "rasql.lock.json", Old: oldLock, Desired: fileState{State: "present", SHA256: hex.EncodeToString(lockHash[:])}})
-	if err := writePending(root, oldLock.SHA256, hex.EncodeToString(lockHash[:]), entries); err != nil {
-		return err
+	recoveries := make([]generate.RecoveryDeletion, 0)
+	if marker != nil {
+		for _, entry := range marker.Entries {
+			if entry.Desired.State == "missing" && entry.Path != "rasql.lock.json" {
+				recoveries = append(recoveries, generate.RecoveryDeletion{Path: entry.Path, OldSHA256: entry.Old.SHA256})
+			}
+		}
 	}
-	if err := plan.Commit(); err != nil {
-		return err
+	publication := generate.Publication{
+		FinalFiles:        []generate.FinalFile{{Path: "rasql.lock.json", Source: encoded, Mode: 0o600}},
+		RecoveryDeletions: recoveries,
+		BeforeWrite: func(_ context.Context, current []generate.PublicationEntry) error {
+			if err := compilerlock.RevalidateSourceFiles(root, result.Snapshots); err != nil {
+				return err
+			}
+			entries := pendingEntries(current)
+			if marker != nil {
+				return validatePendingAgainst(root, *marker, entries, hex.EncodeToString(lockHash[:]))
+			}
+			return writePending(root, oldLock.SHA256, hex.EncodeToString(lockHash[:]), entries)
+		},
+		AfterVerify: func(context.Context, []generate.PublicationEntry) error { return removePending(root) },
 	}
-	if err := os.WriteFile(lockPath, encoded, 0o600); err != nil {
-		return err
-	}
-	if err := removePending(root); err != nil {
+	if err := plan.CommitPublication(context.Background(), publication); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(c.output, "updated schema and generated %s\n", cfg.Output)
@@ -196,7 +188,36 @@ func queryInputs(queries []compilerir.QueryAnalysis) []compilerlock.QueryDigestI
 }
 
 func (c command) runSchemaImport(args []string) error {
-	return c.runSchemaUpdate(args)
+	flags := c.newFlagSet(c.flagSetPrefix + "schema import")
+	configPath := flags.String("config", "", "settings file")
+	dsn := flags.String("dsn", "", "live connection string")
+	baseline := flags.Bool("baseline", false, "record the current database as an explicit baseline")
+	if err := parseCommandFlags(flags, args); err != nil {
+		return err
+	}
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.Schema == nil {
+		return errors.New("schema import: config requires schema")
+	}
+	if cfg.Schema.Kind == "live" && *dsn == "" {
+		return errors.New("schema import: -dsn is required for live sources")
+	}
+	if cfg.Schema.Kind != "live" && !*baseline {
+		return errors.New("schema import: -baseline is required for non-live sources")
+	}
+	if cfg.Schema.Kind == "live" && *baseline {
+		return errors.New("schema import: -baseline is only valid for declared sources")
+	}
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg != "-baseline" {
+			filtered = append(filtered, arg)
+		}
+	}
+	return c.runSchemaUpdate(filtered)
 }
 
 func (c command) runSchemaVerify(args []string) error {
@@ -231,7 +252,7 @@ func (c command) runSchemaVerify(args []string) error {
 		return fmt.Errorf("schema verify: %w", err)
 	}
 	if len(verified.Differences) != 0 {
-		return fmt.Errorf("schema verify: schema drift: %v", verified.Differences)
+		return fmt.Errorf("schema verify: %w: %v", ErrDrift, verified.Differences)
 	}
 	_, _ = fmt.Fprintln(c.output, "schema is verified")
 	return nil

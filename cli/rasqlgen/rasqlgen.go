@@ -7,7 +7,21 @@ import (
 	"flag"
 	"fmt"
 	"io"
+
+	"github.com/lestrrat-go/rasql/generate"
 )
+
+// ExitCode maps command errors to the CLI contract: success, stale/drift, or
+// usage/configuration/engine failure.
+func ExitCode(err error) int {
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	if errors.Is(err, generate.ErrStale) || errors.Is(err, ErrDrift) {
+		return 1
+	}
+	return 2
+}
 
 // Run executes the codegen commands of the unified rasql command with args.
 // Command output -- help text and what a successful command produced -- goes
@@ -137,7 +151,15 @@ func (c command) printUsage() {
 	_, _ = fmt.Fprintf(c.output, "Usage: %s <command> [flags]\n", c.program)
 	_, _ = fmt.Fprintln(c.output)
 	_, _ = fmt.Fprintln(c.output, "Commands:")
-	_, _ = fmt.Fprintln(c.output, "  generate  Generate the store package from a live database")
+	generateDescription := "Generate the store package from a live database"
+	if c.program == "rasql" {
+		generateDescription = "Generate the store package from a live database or schema lock"
+	}
+	_, _ = fmt.Fprintln(c.output, "  generate  "+generateDescription)
+	_, _ = fmt.Fprintln(c.output, "  check     Check generated output without writing")
+	if c.program == "rasql" {
+		_, _ = fmt.Fprintln(c.output, "  schema    Update, import, or verify the declared schema")
+	}
 	_, _ = fmt.Fprintln(c.output)
 	_, _ = fmt.Fprintln(c.output, "Settings live in rasql.json at the module root: the package name, the output")
 	_, _ = fmt.Fprintln(c.output, "directory, the dialect, the table selection, row-type names, and static queries.")

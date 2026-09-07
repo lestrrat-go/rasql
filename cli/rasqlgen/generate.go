@@ -93,6 +93,9 @@ func (c command) runGenerate(args []string) error {
 	if settings.Engine != nil && settings.Schema != nil && *dsn == "" {
 		return c.runOfflineGenerate(settings, *configPath, *check)
 	}
+	if settings.Engine != nil && settings.Schema != nil && *dsn != "" {
+		return errors.New("generate: -dsn is not accepted for schema sources; use schema update or schema import")
+	}
 	if !typed.has("dialect") && settings.Dialect != "" {
 		*dialectName = settings.Dialect
 	}

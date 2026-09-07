@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/lestrrat-go/rasql/cli/rasql"
+	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 )
 
 func main() {
@@ -16,6 +17,10 @@ func main() {
 			return
 		}
 		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		code := rasqlgen.ExitCode(err)
+		if code == 0 {
+			code = 2
+		}
+		os.Exit(code)
 	}
 }
