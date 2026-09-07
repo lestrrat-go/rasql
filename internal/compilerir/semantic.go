@@ -207,14 +207,17 @@ func validateRelationMappings(c PhysicalCatalog, mappings MappingConfig) []Diagn
 		if source.Kind == "view" || target.Kind == "view" || through.Kind == "view" {
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_mapping_object", Path: path, Message: "many-through mappings require physical tables"})
 		}
-		if !hasColumns(source, mapping.From) || !hasColumns(target, mapping.To) || !hasColumns(through, mapping.Through.SourceTo) || !hasColumns(through, mapping.Through.TargetTo) {
+		if !hasColumns(source, mapping.From) || !hasColumns(target, mapping.To) || !hasColumns(through, mapping.Through.SourceFrom) || !hasColumns(through, mapping.Through.TargetFrom) {
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unresolved_mapping_column", Path: path, Message: "mapping references an unknown column"})
 		}
-		if !hasForeignKey(through, mapping.Through.SourceTo, source, mapping.Through.SourceFrom) {
+		if !hasForeignKey(through, mapping.Through.SourceFrom, source, mapping.Through.SourceTo) {
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "missing_mapping_foreign_key", Path: path, Message: "through source path does not reference the source object"})
 		}
-		if !hasForeignKey(through, mapping.Through.TargetTo, target, mapping.Through.TargetFrom) {
+		if !hasForeignKey(through, mapping.Through.TargetFrom, target, mapping.Through.TargetTo) {
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "missing_mapping_foreign_key", Path: path, Message: "through target path does not reference the target object"})
+		}
+		if !compatiblePath(through, mapping.Through.SourceFrom, source, mapping.Through.SourceTo) || !compatiblePath(through, mapping.Through.TargetFrom, target, mapping.Through.TargetTo) {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "mapping_type_mismatch", Path: path, Message: "foreign key path logical types do not match"})
 		}
 	}
 	return diagnostics
@@ -243,6 +246,29 @@ func hasForeignKey(through PhysicalObject, columns []string, target PhysicalObje
 		}
 	}
 	return false
+}
+
+func compatiblePath(left PhysicalObject, leftNames []string, right PhysicalObject, rightNames []string) bool {
+	if len(leftNames) != len(rightNames) {
+		return false
+	}
+	for i := range leftNames {
+		var leftColumn, rightColumn *PhysicalColumn
+		for j := range left.Columns {
+			if left.Columns[j].Name == leftNames[i] {
+				leftColumn = &left.Columns[j]
+			}
+		}
+		for j := range right.Columns {
+			if right.Columns[j].Name == rightNames[i] {
+				rightColumn = &right.Columns[j]
+			}
+		}
+		if leftColumn == nil || rightColumn == nil || leftColumn.LogicalKind != rightColumn.LogicalKind {
+			return false
+		}
+	}
+	return true
 }
 
 func scalarFor(column PhysicalColumn, config MappingConfig) (string, bool, bool) {

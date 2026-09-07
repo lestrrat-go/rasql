@@ -109,8 +109,21 @@ func ValidateMappingConfig(config MappingConfig, packageName string) error {
 		if len(relation.From) == 0 || len(relation.To) == 0 {
 			return fmt.Errorf("%s: from and to paths are required", path)
 		}
-		if len(relation.From) != len(relation.To) || len(relation.From) != len(relation.Through.SourceFrom) || len(relation.From) != len(relation.Through.SourceTo) || len(relation.To) != len(relation.Through.TargetFrom) || len(relation.To) != len(relation.Through.TargetTo) {
-			return fmt.Errorf("%s: relation paths must have equal widths", path)
+		if len(relation.From) != len(relation.Through.SourceFrom) || len(relation.From) != len(relation.Through.SourceTo) {
+			return fmt.Errorf("%s: source paths must have equal widths", path)
+		}
+		if len(relation.To) != len(relation.Through.TargetFrom) || len(relation.To) != len(relation.Through.TargetTo) {
+			return fmt.Errorf("%s: target paths must have equal widths", path)
+		}
+		for j := range relation.From {
+			if relation.From[j] != relation.Through.SourceTo[j] {
+				return fmt.Errorf("%s: source path must equal through source_to", path)
+			}
+		}
+		for j := range relation.To {
+			if relation.To[j] != relation.Through.TargetTo[j] {
+				return fmt.Errorf("%s: target path must equal through target_to", path)
+			}
 		}
 		for _, columns := range [][]string{relation.From, relation.To, relation.Through.SourceFrom, relation.Through.SourceTo, relation.Through.TargetFrom, relation.Through.TargetTo} {
 			seen := map[string]struct{}{}

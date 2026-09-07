@@ -11,7 +11,7 @@ import (
 func TestManyThroughMappingRoundTripPreservesOrderedPaths(t *testing.T) {
 	want := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{
 		Name: "roles", Source: "users", From: []string{"tenant_id", "id"}, Target: "roles", To: []string{"tenant_id", "id"},
-		Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"tenant_id", "id"}, SourceTo: []string{"user_tenant", "user_id"}, TargetFrom: []string{"tenant_id", "id"}, TargetTo: []string{"role_tenant", "role_id"}},
+		Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_tenant", "user_id"}, SourceTo: []string{"tenant_id", "id"}, TargetFrom: []string{"role_tenant", "role_id"}, TargetTo: []string{"tenant_id", "id"}},
 	}}}
 	record := compilerlock.FromMappings(want)
 	got, err := record.MappingConfig()
@@ -32,7 +32,7 @@ func TestManyThroughMappingRoundTripPreservesOrderedPaths(t *testing.T) {
 }
 
 func TestManyThroughMappingDigestIgnoresOrderAndDetectsPathChanges(t *testing.T) {
-	base := compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}}, Mappings: compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "roles", Source: "users", Target: "roles", From: []string{"id"}, To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"id"}, SourceTo: []string{"user_id"}, TargetFrom: []string{"id"}, TargetTo: []string{"role_id"}}}}}, Generation: compilerir.GoConfig{Package: "store", Output: "out", Emitter: "compact"}}
+	base := compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}}, Mappings: compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "roles", Source: "users", Target: "roles", From: []string{"id"}, To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}, Generation: compilerir.GoConfig{Package: "store", Output: "out", Emitter: "compact"}}
 	first, err := compilerlock.BuildDigests(base)
 	if err != nil {
 		t.Fatal(err)

@@ -472,6 +472,21 @@ func ValidateGo(m GoModel) error {
 			if _, ok := knownObjects[relation.Target]; !ok {
 				return invalid(fmt.Sprintf("objects[%d].relations[%d].target", i, j), "unknown target")
 			}
+			if relation.Kind == "many_through" {
+				if relation.Nullable || relation.Through == nil || relation.Through.Object == "" || len(relation.From) != len(relation.Through.SourceFrom) || len(relation.From) != len(relation.Through.SourceTo) || len(relation.To) != len(relation.Through.TargetFrom) || len(relation.To) != len(relation.Through.TargetTo) {
+					return invalid(fmt.Sprintf("objects[%d].relations[%d]", i, j), "invalid many-through metadata")
+				}
+				for k := range relation.From {
+					if relation.From[k] != relation.Through.SourceTo[k] {
+						return invalid(fmt.Sprintf("objects[%d].relations[%d].from", i, j), "must equal through source_to")
+					}
+				}
+				for k := range relation.To {
+					if relation.To[k] != relation.Through.TargetTo[k] {
+						return invalid(fmt.Sprintf("objects[%d].relations[%d].to", i, j), "must equal through target_to")
+					}
+				}
+			}
 		}
 	}
 	queries := map[QueryID]struct{}{}

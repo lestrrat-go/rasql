@@ -19,7 +19,7 @@ func TestManyThroughMappingBuildsSemanticAndGoModels(t *testing.T) {
 		{Kind: "foreign_key", Name: "user_roles_role", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Schema: "public", Object: "roles", Columns: []string{"id"}}},
 	}
 	catalog.Objects = append(catalog.Objects, junction)
-	mapping := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"id"}, SourceTo: []string{"user_id"}, TargetFrom: []string{"id"}, TargetTo: []string{"role_id"}}}}}
+	mapping := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
 	model, diagnostics := compilerir.BuildSemantic(catalog, mapping, nil)
 	if len(diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
