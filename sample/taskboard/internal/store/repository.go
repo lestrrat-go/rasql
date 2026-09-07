@@ -16,77 +16,192 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
 )
 
 // BEGIN(repository)
 
 // Repository reads and writes Taskboard's tables through rasql.
 type Repository struct {
-	db rasql.DB
+	executor rasql.Executor
 }
 
-// New creates a repository over db.
-func New(db rasql.DB) Repository {
-	return Repository{db: db}
+// New creates a repository over executor.
+func New(executor rasql.Executor) Repository {
+	return Repository{executor: executor}
 }
 
 // END(repository)
 
 // BEGIN(opentask)
 
-// OpenTask is one line of the page's list: an open task, the project it
-// sits under, and the member who owns it. AssigneeName is nil when nobody
-// owns the task, and DueOn is nil when it has no due date.
+// OpenTask is one task attached to an open project.
 type OpenTask struct {
-	ProjectID    int64
-	ProjectName  string
-	TaskID       int64
-	Title        string
-	AssigneeName *string
-	DueOn        *time.Time
+	Row      TasksRow
+	Assignee rasql.LoadedOne[MembersRow]
+}
+
+// OpenProject is one project and its bounded open-task graph.
+type OpenProject struct {
+	Row   ProjectsRow
+	Tasks rasql.LoadedMany[OpenTask]
+}
+
+// OpenProjectsPage contains one keyset page of open projects.
+type OpenProjectsPage struct {
+	Values  []OpenProject
+	Next    rasql.Cursor
+	HasMore bool
 }
 
 // END(opentask)
 
-// OpenTasks returns every open task, ordered by project and then by task,
-// which is the order the page prints them in.
-func (repository Repository) OpenTasks(ctx context.Context) ([]OpenTask, error) {
-	tasks := Tasks()
-	projects := Projects()
-	members := Members()
-	rows, err := rasql.DecodeFrom[OpenTask](tasks).
-		// BEGIN(leftjoin)
-		Join(
-			tasks.Project().Join(),
-			rasql.LeftJoin(members, query.Equal(members.ID(), tasks.AssigneeID())),
-		).
-		// END(leftjoin)
-		Project(
-			tasks.ProjectID().As("project_id"),
-			projects.Name().As("project_name"),
-			tasks.ID().As("task_id"),
-			tasks.Title().As("title"),
-			members.Name().As("assignee_name"),
-			tasks.DueOn().As("due_on"),
-		).
-		Where(tasks.Open()).
-		Order(query.Asc(tasks.ProjectID()), query.Asc(tasks.ID())).
-		All(ctx, repository.db)
+func openProjectsPlan() (rasql.GraphPlan[ProjectsRow, openProjectGraph], rasql.TypedRelation[ProjectsRow], error) {
+	projectsSource, err := Projects().Source("project")
 	if err != nil {
-		return nil, fmt.Errorf("read open tasks: %w", err)
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
 	}
-	return rows, nil
+	projectsExpressions, err := (ProjectsColumns{}).Bind(projectsSource)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	projectsProjection, err := ProjectsProjection(projectsExpressions)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	projectsQuery := rasql.Select(projectsSource.Source(), projectsProjection).
+		OrderBy(rasql.AscExpr(projectsExpressions.ID.Expr()))
+
+	tasksSource, err := Tasks().Source("task")
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	tasksExpressions, err := (TasksColumns{}).Bind(tasksSource)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	tasksProjection, err := TasksProjection(tasksExpressions)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	tasksQuery := rasql.Select(tasksSource.Source(), tasksProjection)
+
+	membersSource, err := Members().Source("assignee")
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	membersExpressions, err := (MembersColumns{}).Bind(membersSource)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	membersProjection, err := MembersProjection(membersExpressions)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	membersQuery := rasql.Select(membersSource.Source(), membersProjection)
+	membersPlan, err := rasql.NewGraphPlan(membersQuery, func(row MembersRow) MembersRow { return row })
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	assigneeEdge, err := TasksAssigneeEdge(
+		tasksSource,
+		membersSource,
+		membersPlan,
+		rasql.EdgeOptions{},
+		func(graph *openTaskGraph, loaded rasql.LoadedOne[MembersRow]) { graph.Assignee = loaded },
+	)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	tasksPlan, err := rasql.NewGraphPlan(
+		tasksQuery,
+		func(row TasksRow) openTaskGraph { return openTaskGraph{Row: row} },
+		assigneeEdge,
+	)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	tasksEdge, err := ProjectsTasksEdge(
+		projectsSource,
+		tasksSource,
+		tasksPlan,
+		rasql.EdgeOptions{
+			Where:          rasql.EqualValue(tasksExpressions.IsOpen.Expr(), true),
+			Order:          []rasql.OrderTerm{rasql.AscExpr(tasksExpressions.ID.Expr())},
+			PerParentLimit: 5,
+		},
+		func(graph *openProjectGraph, loaded rasql.LoadedMany[openTaskGraph]) { graph.Tasks = loaded },
+	)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	projectsPlan, err := rasql.NewGraphPlan(
+		projectsQuery,
+		func(row ProjectsRow) openProjectGraph { return openProjectGraph{Row: row} },
+		tasksEdge,
+	)
+	if err != nil {
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
+	}
+	return projectsPlan, projectsSource, nil
+}
+
+type openTaskGraph struct {
+	Row      TasksRow
+	Assignee rasql.LoadedOne[MembersRow]
+}
+
+type openProjectGraph struct {
+	Row   ProjectsRow
+	Tasks rasql.LoadedMany[openTaskGraph]
+}
+
+// OpenProjects returns one page of open projects and their bounded task graph.
+func (repository Repository) OpenProjects(ctx context.Context, request rasql.PageRequest) (OpenProjectsPage, error) {
+	plan, projectsSource, err := openProjectsPlan()
+	if err != nil {
+		return OpenProjectsPage{}, fmt.Errorf("build open project graph: %w", err)
+	}
+	idKey, err := ProjectsIDPageKey(projectsSource, rasql.PageAscending)
+	if err != nil {
+		return OpenProjectsPage{}, fmt.Errorf("build project page key: %w", err)
+	}
+	spec, err := rasql.NewPageSpec([]rasql.PageKey[ProjectsRow]{idKey}, idKey)
+	if err != nil {
+		return OpenProjectsPage{}, fmt.Errorf("build project page: %w", err)
+	}
+	page, err := rasql.PageGraphAfter(ctx, repository.executor, plan, spec,
+		rasql.PagePolicy{DefaultLimit: 10, MaxLimit: 50}, request)
+	if err != nil {
+		return OpenProjectsPage{}, fmt.Errorf("read open projects: %w", err)
+	}
+	result := OpenProjectsPage{Next: page.Next, HasMore: page.HasMore, Values: make([]OpenProject, 0, len(page.Values))}
+	for _, project := range page.Values {
+		value := OpenProject{Row: project.Row, Tasks: rasql.LoadedMany[OpenTask]{Loaded: project.Tasks.Loaded}}
+		if project.Tasks.Loaded {
+			value.Tasks.Values = make([]OpenTask, 0, len(project.Tasks.Values))
+			for _, task := range project.Tasks.Values {
+				value.Tasks.Values = append(value.Tasks.Values, OpenTask{Row: task.Row, Assignee: task.Assignee})
+			}
+		}
+		result.Values = append(result.Values, value)
+	}
+	return result, nil
 }
 
 // AddTask files one open task against projectID. A nil assigneeID files it
 // with nobody on it.
 func (repository Repository) AddTask(ctx context.Context, projectID int64, assigneeID *int64, title string) error {
-	tasks := Tasks()
-	row := TasksRow{ProjectID: projectID, AssigneeID: assigneeID, Title: title}
-	if _, err := rasql.InsertWithOptions(ctx, repository.db, tasks, row,
-		rasql.DefaultColumns("is_open", "created_at"),
-	); err != nil {
+	create := NewTasksCreate().ProjectID(projectID).Title(title).DefaultIsOpen().DefaultCreatedAt()
+	if assigneeID == nil {
+		create = create.ClearAssigneeID()
+	} else {
+		create = create.AssigneeID(*assigneeID)
+	}
+	plan, err := create.Plan()
+	if err != nil {
+		return fmt.Errorf("plan insert task %q: %w", title, err)
+	}
+	if _, err := rasql.ExecMutation(ctx, repository.executor, plan); err != nil {
 		return fmt.Errorf("insert task %q: %w", title, err)
 	}
 	return nil
@@ -97,11 +212,19 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
-	tasks := Tasks()
-	if _, err := rasql.UpdateMany(ctx, repository.db, tasks, TasksRow{IsOpen: false},
-		rasql.UpdateColumns("is_open"),
-		rasql.UpdateWhere(query.Equal(tasks.ID(), query.Bind(taskID))),
-	); err != nil {
+	tasksSource, err := Tasks().Source("")
+	if err != nil {
+		return fmt.Errorf("bind tasks source for close %d: %w", taskID, err)
+	}
+	tasksExpressions, err := (TasksColumns{}).Bind(tasksSource)
+	if err != nil {
+		return fmt.Errorf("bind tasks columns for close %d: %w", taskID, err)
+	}
+	plan, err := NewTasksPatch().IsOpen(false).Where(rasql.EqualValue(tasksExpressions.ID.Expr(), taskID))
+	if err != nil {
+		return fmt.Errorf("plan close task %d: %w", taskID, err)
+	}
+	if _, err := rasql.ExecMutation(ctx, repository.executor, plan); err != nil {
 		return fmt.Errorf("close task %d: %w", taskID, err)
 	}
 	return nil
@@ -113,10 +236,29 @@ func (repository Repository) CloseTask(ctx context.Context, taskID int64) error 
 
 // AllProjects returns every project in id order, for the form's project list.
 func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, error) {
-	projects := Projects()
-	rows, err := rasql.SelectFrom(projects).OrderAsc(projects.ID().Ref()).All(ctx, repository.db)
+	source, err := Projects().Source("project")
+	if err != nil {
+		return nil, fmt.Errorf("bind projects source: %w", err)
+	}
+	expressions, err := (ProjectsColumns{}).Bind(source)
+	if err != nil {
+		return nil, fmt.Errorf("bind projects columns: %w", err)
+	}
+	projection, err := ProjectsProjection(expressions)
+	if err != nil {
+		return nil, fmt.Errorf("build projects projection: %w", err)
+	}
+	q := rasql.Select(source.Source(), projection).OrderBy(rasql.AscExpr(expressions.ID.Expr()))
+	sequence, err := rasql.Rows(ctx, repository.executor, q)
 	if err != nil {
 		return nil, fmt.Errorf("read projects: %w", err)
+	}
+	rows := make([]ProjectsRow, 0)
+	for row, rowErr := range sequence {
+		if rowErr != nil {
+			return nil, fmt.Errorf("read projects: %w", rowErr)
+		}
+		rows = append(rows, row)
 	}
 	return rows, nil
 }
@@ -125,20 +267,34 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 
 // AllMembers returns every member in id order, for the form's member list.
 func (repository Repository) AllMembers(ctx context.Context) ([]MembersRow, error) {
-	members := Members()
-	rows, err := rasql.SelectFrom(members).OrderAsc(members.ID().Ref()).All(ctx, repository.db)
+	source, err := Members().Source("member")
+	if err != nil {
+		return nil, fmt.Errorf("bind members source: %w", err)
+	}
+	expressions, err := (MembersColumns{}).Bind(source)
+	if err != nil {
+		return nil, fmt.Errorf("bind members columns: %w", err)
+	}
+	projection, err := MembersProjection(expressions)
+	if err != nil {
+		return nil, fmt.Errorf("build members projection: %w", err)
+	}
+	q := rasql.Select(source.Source(), projection).OrderBy(rasql.AscExpr(expressions.ID.Expr()))
+	sequence, err := rasql.Rows(ctx, repository.executor, q)
 	if err != nil {
 		return nil, fmt.Errorf("read members: %w", err)
+	}
+	rows := make([]MembersRow, 0)
+	for row, rowErr := range sequence {
+		if rowErr != nil {
+			return nil, fmt.Errorf("read members: %w", rowErr)
+		}
+		rows = append(rows, row)
 	}
 	return rows, nil
 }
 
 // BEGIN(countoverdue)
-
-// overdueRow decodes the single column OverdueCount selects.
-type overdueRow struct {
-	Overdue int64
-}
 
 // CountOverdue returns how many open tasks fell due before the calendar day
 // on names. A task due on that day is not counted, because a task is past its
@@ -147,8 +303,11 @@ type overdueRow struct {
 // caller decides which day it is and the database session's time zone does
 // not.
 func (repository Repository) CountOverdue(ctx context.Context, on time.Time) (int64, error) {
-	statement := OverdueCount(on)
-	row, err := rasql.QueryRenderedOne[overdueRow](ctx, repository.db, statement)
+	q, err := OverdueCount(on)
+	if err != nil {
+		return 0, fmt.Errorf("build overdue query: %w", err)
+	}
+	row, err := rasql.One(ctx, repository.executor, q)
 	if err != nil {
 		return 0, fmt.Errorf("count overdue tasks: %w", err)
 	}

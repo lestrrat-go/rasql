@@ -13,12 +13,14 @@ import (
 
 	"example.com/taskboard/internal/store"
 	"example.com/taskboard/internal/web"
+	"github.com/lestrrat-go/rasql"
 )
 
 // fakeRepository stands in for store.Repository. The handler names what it
 // needs as two interfaces, so this needs no database and no rasql.
 type fakeRepository struct {
-	tasks       []store.OpenTask
+	projects    store.OpenProjectsPage
+	pageRequest rasql.PageRequest
 	overdue     int64
 	addedTitle  string
 	addedOwner  *int64
@@ -26,8 +28,9 @@ type fakeRepository struct {
 	closeCalled bool
 }
 
-func (f *fakeRepository) OpenTasks(context.Context) ([]store.OpenTask, error) {
-	return f.tasks, nil
+func (f *fakeRepository) OpenProjects(_ context.Context, request rasql.PageRequest) (store.OpenProjectsPage, error) {
+	f.pageRequest = request
+	return f.projects, nil
 }
 
 func (f *fakeRepository) AllProjects(context.Context) ([]store.ProjectsRow, error) {
@@ -62,10 +65,13 @@ func newTestHandler(repository *fakeRepository) http.Handler {
 func TestShowPage(t *testing.T) {
 	ada := "Ada Lovelace"
 	repository := &fakeRepository{
-		tasks: []store.OpenTask{
-			{ProjectID: 1, ProjectName: "Website refresh", TaskID: 7, Title: "Draft the rollout plan", AssigneeName: &ada},
-			{ProjectID: 1, ProjectName: "Website refresh", TaskID: 8, Title: "Pick a heading typeface"},
-		},
+		projects: store.OpenProjectsPage{Values: []store.OpenProject{{
+			Row: store.ProjectsRow{ID: 1, Name: "Website refresh"},
+			Tasks: rasql.LoadedMany[store.OpenTask]{Loaded: true, Values: []store.OpenTask{
+				{Row: store.TasksRow{ID: 7, Title: "Draft the rollout plan"}, Assignee: rasql.LoadedOne[store.MembersRow]{Loaded: true, Present: true, Value: &store.MembersRow{Name: ada}}},
+				{Row: store.TasksRow{ID: 8, Title: "Pick a heading typeface"}, Assignee: rasql.LoadedOne[store.MembersRow]{Loaded: true}},
+			}},
+		}}},
 		overdue: 2,
 	}
 	recorder := httptest.NewRecorder()
@@ -79,6 +85,19 @@ func TestShowPage(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("page does not contain %q", want)
 		}
+	}
+}
+
+func TestShowPagePassesCursorRequest(t *testing.T) {
+	repository := &fakeRepository{}
+	request := httptest.NewRequest(http.MethodGet, "/?after=next-token&limit=5", nil)
+	recorder := httptest.NewRecorder()
+	newTestHandler(repository).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET / returned %d, want 200", recorder.Code)
+	}
+	if repository.pageRequest.After != rasql.Cursor("next-token") || repository.pageRequest.Limit != 5 {
+		t.Fatalf("OpenProjects got %#v, want cursor and limit", repository.pageRequest)
 	}
 }
 

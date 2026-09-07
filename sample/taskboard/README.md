@@ -6,9 +6,9 @@ project, prints each task's owner and due date, counts the tasks that are past
 that date, offers a form to add a task, and offers a button to close one.
 
 The database is PostgreSQL. The schema lives in `db/migrations` and is applied
-by `rasql migrate apply`. The Go that reads it is generated from that schema by
-`rasql codegen generate`, and the application is written on top of what the
-generator wrote.
+by `rasql migrate apply`. The checked-in lock and query inputs drive offline
+`rasql generate` and `rasql check`; a separate schema refresh captures a new
+database snapshot.
 
 Taskboard is a module of its own, `example.com/taskboard`, so it reaches
 [rasql](https://github.com/lestrrat-go/rasql) only through the public API a
@@ -52,12 +52,11 @@ needed by a project that depends on a released rasql.
 
 - `db/migrations` holds the schema, one directory per migration.
 - `queries` holds the SQL templates `rasql.json` compiles into Go functions.
-- `internal/store` holds the generated store, the repository built on it, and
-  the one method added to a generated table type.
+- `internal/store` holds the generated store, graph repository, and typed SQL.
 - `internal/taskboard` holds the view model the page is drawn from.
 - `internal/web` holds the handler and the page template.
 - `cmd/taskboard` opens the database and runs the server.
-- `rasql.json` holds the codegen settings, which is everything but the DSN.
+- `rasql.json` holds the engine, migration snapshot, mappings, and typed query.
 - `scripts` wraps the `rasql` calls, so a step is run rather than retyped.
 - `walkthrough` is the nine chapters that produced all of the above, and
   `walkthrough/steps.bundle` is the repository they were followed in, one commit
@@ -112,16 +111,16 @@ INSERT INTO projects (name) VALUES ('Website refresh'), ('Billing cleanup');"
 
 ## Regenerate the store
 
-`internal/store`'s generated files are checked in. Rebuild them after adding a
-migration, against a schema database the script may apply migrations to:
+`internal/store`'s generated files and `rasql.lock.json` are checked in. Normal
+generation is offline:
 
 ```sh
-export TASKBOARD_SCHEMA_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_schema?sslmode=disable'
 ./scripts/generate.sh
 ```
 
-`./scripts/generate.sh -check` reports whether the checked-in package is
-current instead of writing it, which is what CI runs.
+`./scripts/generate.sh -check` reports stale inputs without writing. To refresh
+the lock from a disposable PostgreSQL database, set `TASKBOARD_SCHEMA_DSN` and
+run `./scripts/refresh-schema.sh`.
 
 ## Run the tests
 
